@@ -1,0 +1,180 @@
+/**
+ * Canonical ambient type for preload's contextBridge surface (design
+ * phase-2.md §3.2). Task 2.1.4 (App.tsx) and task 2.1.5 (SessionPicker.tsx)
+ * each declared their own local `declare global` for `window.anycode` while
+ * building in parallel against the same frozen shared/tabs.ts contract —
+ * task 2.1.6 dedupes both into this single ambient module, typed directly
+ * against the real preload implementation (preload/index.ts).
+ *
+ * A `.d.ts` with a top-level `import type` is itself a module, so the
+ * augmentation must be wrapped in `declare global` + a top-level `export {}`
+ * to actually merge into the global `Window` interface.
+ */
+import type {
+  CloseTabResult,
+  CreateTabRequest,
+  CreateTabResult,
+  SessionSummary,
+  WorkspacePickResult,
+} from "../../shared/tabs";
+import type {
+  OAuthStartResult,
+  PermissionRuleAddRequest,
+  SecretKey,
+  SettingsMutationResult,
+  SettingsPatch,
+  SettingsSnapshot,
+} from "../../shared/settings";
+import type {
+  McpConfigDeleteRequest,
+  McpConfigGetRequest,
+  McpConfigMutationResult,
+  McpConfigPromoteCompatRequest,
+  McpConfigSetEnabledRequest,
+  McpConfigSnapshot,
+  McpConfigUpsertRequest,
+  McpImportApplyRequest,
+  McpImportApplyResult,
+  McpImportScanRequest,
+  McpImportScanResult,
+} from "../../shared/mcp-config";
+import type {
+  SkillsCreateRequest,
+  SkillsDeleteRequest,
+  SkillsImportApplyRequest,
+  SkillsImportApplyResult,
+  SkillsImportScanRequest,
+  SkillsImportScanResult,
+  SkillsListRequest,
+  SkillsMutationResult,
+  SkillsRevealRequest,
+  SkillsRevealResult,
+  SkillsSetEnabledRequest,
+  SkillsSnapshot,
+} from "../../shared/skills-config";
+import type {
+  SubagentReadResult,
+  SubagentsCreateRequest,
+  SubagentsDeleteRequest,
+  SubagentsListRequest,
+  SubagentsMutationResult,
+  SubagentsPreviewRequest,
+  SubagentsPreviewResult,
+  SubagentsReadRequest,
+  SubagentsRevealRequest,
+  SubagentsRevealResult,
+  SubagentsSaveRequest,
+  SubagentsSnapshot,
+} from "../../shared/subagents-config";
+import type {
+  ProfileRevealDirResult,
+  ProfileStatsResult,
+  ProfileTelemetrySetResult,
+} from "../../shared/profile-config";
+import type { UpdateActionResult, UpdateStatus } from "../../shared/updates";
+import type { DesktopPlatform, WindowState } from "../../shared/window";
+
+declare global {
+  interface Window {
+    anycode: {
+      createTab(request: CreateTabRequest): Promise<CreateTabResult>;
+      closeTab(tabId: string): Promise<CloseTabResult>;
+      listSessions(): Promise<SessionSummary[]>;
+      pickWorkspace(): Promise<WorkspacePickResult>;
+      // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
+      // secret is never returned — setSecret is the only value-carrying call.
+      settings: {
+        get(): Promise<SettingsSnapshot>;
+        set(patch: SettingsPatch): Promise<SettingsMutationResult>;
+        setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult>;
+        clearSecret(key: SecretKey): Promise<SettingsMutationResult>;
+        addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult>;
+        // Slice 2.5 (design §4.5): interactive OAuth sign-in / cancel. No token
+        // ever returns — oauthStart resolves with a fresh snapshot on success.
+        oauthStart(providerId: string): Promise<OAuthStartResult>;
+        oauthCancel(providerId: string): Promise<void>;
+      };
+      // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config
+      // management invoke-API. `get` returns the joined project/user/compat
+      // view (env/header VALUES never cross — envKeys names only, custody
+      // §3); upsert/delete mutate one scope's config file; setEnabled (W3-FIX)
+      // patches ONLY the `enabled` field — lossless even for a server with a
+      // cwd/secret env values, unlike upsert's full-replace; importScan/
+      // importApply drive the explicit-trust import from foreign harness
+      // configs. Every mutator resolves a fresh snapshot on success.
+      mcpConfig: {
+        get(req?: McpConfigGetRequest): Promise<McpConfigSnapshot>;
+        upsert(req: McpConfigUpsertRequest): Promise<McpConfigMutationResult>;
+        delete(req: McpConfigDeleteRequest): Promise<McpConfigMutationResult>;
+        setEnabled(req: McpConfigSetEnabledRequest): Promise<McpConfigMutationResult>;
+        promoteCompat(req: McpConfigPromoteCompatRequest): Promise<McpConfigMutationResult>;
+        importScan(req?: McpImportScanRequest): Promise<McpImportScanResult>;
+        importApply(req: McpImportApplyRequest): Promise<McpImportApplyResult>;
+      };
+      // P7.20/F23 (design/slice-P7.20-cut.md §5 W2-W3): skills management
+      // invoke-API. `list` returns the joined project/user/plugin view (a
+      // filesystem PATH never crosses back in a request — every mutator/
+      // reveal identifies a skill by name alone, design §4 path custody);
+      // setEnabled/delete/create mutate one scope's catalog; importScan/
+      // importApply drive the explicit-selection import from foreign harness
+      // skill catalogs. Every mutator resolves a fresh snapshot on success.
+      skills: {
+        list(req?: SkillsListRequest): Promise<SkillsSnapshot>;
+        setEnabled(req: SkillsSetEnabledRequest): Promise<SkillsMutationResult>;
+        delete(req: SkillsDeleteRequest): Promise<SkillsMutationResult>;
+        create(req: SkillsCreateRequest): Promise<SkillsMutationResult>;
+        reveal(req: SkillsRevealRequest): Promise<SkillsRevealResult>;
+        importScan(req?: SkillsImportScanRequest): Promise<SkillsImportScanResult>;
+        importApply(req: SkillsImportApplyRequest): Promise<SkillsImportApplyResult>;
+      };
+      // P7.21/F21 (design/slice-P7.21-cut.md §4 W2-W3): subagents editor
+      // invoke-API. `list` returns the joined built-in/project/user/plugin
+      // view (a filesystem PATH never crosses back in a request — every
+      // read/save/delete/reveal identifies a profile by name+sourceKind alone,
+      // design §2-D7 path custody); save/create/delete mutate one own-catalog
+      // profile; preview computes the REAL final child system prompt a draft
+      // would spawn with. Every mutator resolves a fresh snapshot on success.
+      subagents: {
+        list(req?: SubagentsListRequest): Promise<SubagentsSnapshot>;
+        read(req: SubagentsReadRequest): Promise<SubagentReadResult>;
+        save(req: SubagentsSaveRequest): Promise<SubagentsMutationResult>;
+        create(req: SubagentsCreateRequest): Promise<SubagentsMutationResult>;
+        delete(req: SubagentsDeleteRequest): Promise<SubagentsMutationResult>;
+        reveal(req: SubagentsRevealRequest): Promise<SubagentsRevealResult>;
+        preview(req: SubagentsPreviewRequest): Promise<SubagentsPreviewResult>;
+      };
+      // P7.22/F19 (design/slice-P7.22-cut.md §2-D5 W2-W3): Profile-stats
+      // invoke-API. `getStats`/`revealDir` take no argument at all — main
+      // resolves the user-scope dir itself (never a renderer-supplied path);
+      // `setTelemetry` patches ONLY the user-scope `telemetry.enabled` flag
+      // and resolves with a fresh stats view on success.
+      profile: {
+        getStats(): Promise<ProfileStatsResult>;
+        setTelemetry(enabled: boolean): Promise<ProfileTelemetrySetResult>;
+        revealDir(): Promise<ProfileRevealDirResult>;
+      };
+      // Slice 2.6 (design §6): auto-updater. Three fixed no-argument invoke
+      // wrappers (no renderer-supplied URL/channel ever crosses the bridge)
+      // plus a status subscription; `onUpdateStatus` returns an unsubscribe.
+      updates: {
+        check(): Promise<UpdateActionResult>;
+        download(): Promise<UpdateActionResult>;
+        install(): Promise<UpdateActionResult>;
+        onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
+      };
+      // Custom titlebar (design/ui-track custom-titlebar §4): the platform the
+      // renderer branches chrome on + the caption-button invoke-API. First three
+      // take no argument; `onWindowState` returns an unsubscribe.
+      platform: DesktopPlatform;
+      window: {
+        minimize(): Promise<void>;
+        toggleMaximize(): Promise<void>;
+        close(): Promise<void>;
+        getState(): Promise<WindowState>;
+        onWindowState(callback: (state: WindowState) => void): () => void;
+      };
+    };
+  }
+}
+
+export {};

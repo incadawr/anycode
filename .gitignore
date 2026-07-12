@@ -1,0 +1,20 @@
+node_modules/
+.pnpm-store/
+dist/
+out/
+*.tsbuildinfo
+.DS_Store
+coverage/
+*.log
+
+# Claude Code local state (worktrees, local settings)
+.claude/
+
+# JetBrains IDE
+.idea/
+
+# local smoke-test secrets (never commit)
+.smoke-secrets/
+
+# Local agent plans, task tracking, and private references.
+working-docs/

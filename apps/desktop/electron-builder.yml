@@ -1,0 +1,85 @@
+# electron-builder config (design slice-2.6-cut.md §3/§4, spike §1).
+# UNSIGNED by default: mac.identity is null and no notarize block is present, so
+# `package`/`package:dir` always produce a clean build with zero Apple/Windows
+# credentials. Signing/notarization are enabled only when CI secrets are present
+# (CSC_LINK/CSC_KEY_PASSWORD, APPLE_API_* + teamId) — that wiring lives in the CI
+# skeleton (2.6.3); this file stays inert without creds so builds never fail.
+#
+# productName/appId are FROZEN before the first signed release (§0/§2): changing
+# productName invalidates the macOS Keychain safeStorage identity; changing appId
+# makes the OS treat it as a different app.
+appId: com.incadawr.anycode
+productName: AnyCode
+# Do not let electron-builder derive an executable filename from the scoped
+# npm package name (`@anycode/desktop`), which is invalid for AppImage.
+executableName: AnyCode
+
+directories:
+  output: dist
+  buildResources: build
+
+asar: true
+files:
+  - out/**
+  # Dev smoke screenshots live under out/ while a local run is active; release
+  # packaging must never absorb those incidental artifacts.
+  - "!out/**/*smoke*/**"
+  - "!**/*.map"
+
+# Native binaries that must live on the real filesystem, not inside app.asar
+# (they are exec'd/dlopen'd, which the asar virtual FS cannot serve). The
+# @vscode/ripgrep* glob matches both the JS wrapper and the platform binary
+# package (@vscode/ripgrep-<plat>-<arch>). node-pty covers pty.node + spawn-helper
+# (+ win32 conpty.node/winpty-agent.exe). Verified live in spike §2.
+asarUnpack:
+  - "**/node_modules/node-pty/**/*"
+  - "**/node_modules/@vscode/ripgrep*/**/*"
+
+# electron-vite already produced the bundles; no native rebuild over the pnpm
+# tree (darwin/win ship prebuilds; Linux rebuild is an explicit CI step, §4.3).
+npmRebuild: false
+
+mac:
+  identity: null
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip # required by electron-updater on macOS (dmg is human-only)
+      arch:
+        - arm64
+        - x64
+
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+
+linux:
+  icon: build/icon.png
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64
+
+# publish (auto-update feed) is USER-GATED (design §6/§9-U4): git remote is empty,
+# so there is no GitHub repo / hosting decision yet. Enable once U4 lands; the CI
+# skeleton (2.6.3) wires the feed. Example:
+# publish:
+#   provider: github
+#   owner: incadawr
+#   repo: anycode

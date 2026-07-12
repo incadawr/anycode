@@ -1,0 +1,5570 @@
+/*
+ * Shell + conversation + composer + dialog styles for the renderer (design
+ * ui-redesign-direction.md §1–§2). Consumes the semantic token system in
+ * tokens.css (colors, radii, spacing, type, motion) so no literal palette
+ * values live here beyond the theme-neutral backdrop scrims. Settings /
+ * welcome / consent chrome lives in settings.css and the terminal panel in
+ * terminal.css — both on the same tokens. Linked globally from index.html
+ * (after tokens.css), so the document-wide rules below (scrollbars) reach
+ * every scroll region in the app.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+/* ── scrollbars: thin, unobtrusive, theme-aware (UI-9) ──
+   Global so every scroll region reads as one system — the sidebar list, the
+   message list, dialog bodies, permission input wells, and xterm's own
+   viewport. Thumb is a muted --text-3 (→ --text-2 on hover) inset by a
+   transparent border so only a ~4px sliver paints while the full track stays
+   grabbable; the track itself is invisible. Both thumb colors resolve per
+   theme, so this stays legible in light and dark alike. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--text-ghost);
+  background-clip: padding-box;
+  border: 4px solid transparent;
+  border-radius: var(--r-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-2);
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+#root {
+  height: 100%;
+}
+
+/* ── motion foundation (R2): shared keyframes + spin utility ──
+   Motion is information (roadmap §6.3): opacity/transform only (shimmer may
+   move background-position), enter/exit ≤ 320ms (--dur-3), --ease-out default.
+   Enter-from-anchor-edge rule: fade-slide-up = surfaces anchored below
+   (toast), fade-slide-down = surfaces anchored above (banner). Keyframes
+   declare `from` only — the resting state is the element's own computed
+   style, so targets with their own transforms compose correctly. Loops
+   (spin, shimmer, pulse) are the sanctioned indeterminate-progress exception;
+   their period may exceed --dur-3. */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes fade-slide-up {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+@keyframes fade-slide-down {
+  from { opacity: 0; transform: translateY(-4px); }
+}
+
+/* Bottom workspace panels reveal from their anchored edge so opening them
+   reads as expanding the available workspace rather than a surface jumping in. */
+@keyframes panel-height-from-bottom {
+  from { height: 0; opacity: 0.45; }
+}
+
+@keyframes panel-height-to-bottom {
+  to { height: 0; opacity: 0.45; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.98); }
+}
+
+/* R8 exit primitive (slice-R8-cut §3.1): the single sanctioned `to`-form
+   keyframe — R2's doctrine above explicitly anticipated R8 composing exit
+   motion. `to` only: the start state is the element's own computed style,
+   mirroring the `from`-only enter rule. Consumers pair it with
+   animation-fill-mode: forwards + an animationend unmount. */
+@keyframes fade-out-down {
+  to { opacity: 0; transform: translateY(4px); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* R20: liveness breath for connecting-state dots (first mint since R8 —
+   motion = liveness is the one sanctioned motion use, and a dot awaiting a
+   host is liveness). 50%-only form extends the from-only doctrine: BOTH
+   endpoints are the element's own computed style, the keyframe declares only
+   the excursion — so the resting frame, and the reduced-motion frozen frame,
+   is always the element's own solid ink. The 0.45 trough keeps the dot
+   visible at every phase (shimmer's never-below---text-2 discipline). */
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Indeterminate spinner rotation. The 800ms literal is the loop-period
+   single source (matches the pre-R2 spinner cadence); loop periods are
+   exempt from the --dur-3 enter/exit ceiling (§6.3). */
+.icon-spin {
+  animation: spin 800ms linear infinite;
+}
+
+/* Shimmer text treatment (R3 — first consumer of the R2 shimmer keyframe).
+   A --text-1 highlight sweeps over a --text-2 base in reading direction
+   (the frozen 200%→-200% keyframe moves the 200%-wide tile rightward):
+   legibility never drops below --text-2 at any phase, in either theme,
+   because the gradient's floor IS --text-2. The 2400ms period is the
+   shimmer single source (both consumers share this one class) — a loop,
+   exempt from the --dur-3 enter/exit ceiling (§6.3). Reduced motion holds
+   one 0.01ms iteration's final frame: with a repeating 200% tile,
+   -200% ≡ offset 0, showing the 0→50% stops — a quiet static
+   --text-2→--text-1 ramp, fully legible. */
+.shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--text-2) 0%,
+    var(--text-2) 35%,
+    var(--text-1) 50%,
+    var(--text-2) 65%,
+    var(--text-2) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2400ms linear infinite;
+}
+
+/* Transcript block stream-in (R3(c)). Applied per-block by MessageList only
+   to genuine live appends — never bulk hydration or tab-switch mounts (see
+   MessageList's seen/enter bookkeeping), and streaming patches are
+   key-stable so the one-shot never re-fires. Class membership is permanent:
+   it must not flip off mid-animation. */
+.message-enter {
+  animation: fade-slide-up var(--dur-2) var(--ease-out);
+}
+
+/* Disclosure reveal (R4): one-shot height unfold for USER-opened tool-card
+   bodies and reasoning text. height is a layout property — sanctioned by the
+   R4 roadmap letter ("animated height"), one-shot, ≤ --dur-2, content
+   bounded (≤14 result lines). Enter-only by design: collapse unmounts
+   instantly (obedience reads as instant; reveals read as motion) and keeps
+   Shiki diffs/giant pres OUT of the DOM while folded. interpolate-size lets
+   the from-only keyframe interpolate 0 -> natural auto height (Chromium
+   129+; Electron 43 ≈ 138). Reduced motion: the global 0.01ms floor snaps
+   straight to the final (auto-height) frame — never stuck at 0. */
+@keyframes unfold {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.disclosure-open {
+  interpolate-size: allow-keywords;
+  overflow: hidden;
+  animation: unfold var(--dur-2) var(--ease-out);
+}
+
+/* Screen-reader-only utility (R3 status region). The single absolutely
+   positioned element R3 adds: 1px, clipped, non-interactive, inside scroll
+   content — no drag-region/§6.6 exposure. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── shell grid (design §2.1) ── */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  height: 100%;
+  min-height: 0;
+  /* R11 fade handoff (slice-R11-cut §3.4): one opacity-only breath when a
+     <main> mounts — boot, and the keyed welcome→shell remount (App.tsx).
+     Opacity creates no fixed-position containing block, so the titlebar
+     band / update banner stay viewport-pinned. */
+  animation: fade-in var(--dur-3) var(--ease-out);
+}
+
+/* Welcome renders full-window with no sidebar (design §2.1). */
+.app-welcome {
+  display: block;
+}
+
+/* Custom titlebar (design/ui-track custom-titlebar §2): transparent drag band
+   over the Welcome screen — content is centered below it so there's no
+   collision. WindowControls (win/linux, task T3) renders here too. */
+.welcome-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-h);
+  -webkit-app-region: drag;
+}
+
+/* Collapsed sidebar → zero-width first column (design §2.1). */
+.app-sidebar-collapsed {
+  grid-template-columns: 0 1fr;
+}
+
+.main-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Conversation and review are siblings. A review is therefore a stable right
+   workspace, never an overlay that can push or cover the
+   composer. */
+.session-content {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-conversation {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.session-content-review-open {
+  display: grid;
+}
+
+.review-resize-handle {
+  position: relative;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.review-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--border-strong);
+  content: "";
+  transition: background var(--dur-1) var(--ease-out), width var(--dur-1) var(--ease-out), left var(--dur-1) var(--ease-out);
+}
+
+.review-resize-handle:hover::after,
+.review-resize-handle:active::after {
+  left: 2px;
+  width: 3px;
+  background: var(--text-3);
+}
+
+/* ── sidebar (design §2.1/§2.3) ── */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+
+/* Custom titlebar (design/ui-track custom-titlebar §2): quiet empty cap that
+   hosts the macOS traffic lights, inherited --bg-sidebar, no hairline below.
+   Renders 46px on ALL platforms — a uniform grabbable top band. */
+.sidebar-titlebar {
+  flex-shrink: 0;
+  height: var(--header-h);
+  -webkit-app-region: drag;
+}
+
+.app-sidebar-collapsed .sidebar {
+  border-right: none;
+  /* Zero-width column would still leave the sidebar's buttons keyboard-
+     focusable (invisible tab stops); hide them from AT + tab order. */
+  visibility: hidden;
+}
+
+.sidebar-top {
+  flex-shrink: 0;
+  padding: var(--sp-3);
+}
+
+.sidebar-new-session {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  font: inherit;
+  font-weight: var(--w-medium);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.sidebar-new-session:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.sidebar-new-session-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.sidebar-new-session-label {
+  flex: 1;
+  text-align: left;
+}
+
+.sidebar-new-session-enter {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.sidebar-search {
+  position: relative;
+  margin-top: var(--sp-2);
+}
+
+.sidebar-search-icon {
+  position: absolute;
+  left: var(--sp-2);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+/* Padding: left 28px = 8 (--sp-2 icon inset) + 14 (glyph) + 6 (gap);
+   right 26px = 4 (--sp-1 button inset) + 16 (12px glyph + 2×2px pad) + 6 (gap). */
+.sidebar-search-input {
+  width: 100%;
+  padding: var(--sp-1) 26px var(--sp-1) 28px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  font: inherit;
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+
+.sidebar-search-input:hover {
+  border-color: var(--border-strong);
+}
+
+.sidebar-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.sidebar-search-clear {
+  position: absolute;
+  right: var(--sp-1);
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.sidebar-search-clear:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.sidebar-search-clear-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-2) var(--sp-3);
+}
+
+.sidebar-error,
+.sidebar-empty {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.sidebar-group {
+  margin-top: var(--sp-3);
+}
+
+.sidebar-group-label {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.sidebar-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-xs);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.sidebar-group-toggle:hover {
+  color: var(--text-2);
+}
+
+.sidebar-group-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.sidebar-group-toggle[aria-expanded="false"] .sidebar-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.sidebar-filtering .sidebar-group-chevron {
+  visibility: hidden;
+}
+
+.sidebar-filtering .sidebar-group-toggle {
+  cursor: default;
+}
+
+.sidebar-group-icon {
+  flex-shrink: 0;
+}
+
+.sidebar-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── GUI-P1: sidebar project `…` menu trigger (slice-GUI-P1 §2F.2) ──
+   Additive rules only — the .sidebar-group-* blocks above are untouched. The
+   group header becomes a flex row so the hover-revealed trigger sits beside the
+   (still full-bleed, shrinkable) toggle. */
+.sidebar-group-label {
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-group-label > .sidebar-group-toggle {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The `…` trigger: a reserved slot hidden by opacity (never display:none — it
+   must stay focusable), revealed on group hover / focus-within and whenever its
+   own menu is open. */
+.sidebar-group-menu-button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);
+  background: none;
+  border: none;
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
+}
+
+.sidebar-group-label:hover .sidebar-group-menu-button,
+.sidebar-group-label:focus-within .sidebar-group-menu-button,
+.sidebar-group-menu-button[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.sidebar-group-menu-button:hover,
+.sidebar-group-menu-button:focus-visible {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.sidebar-row-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.sidebar-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.sidebar-row[aria-current="true"] {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+.sidebar-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-row-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  color: var(--danger);
+}
+
+/* R10 status vocabulary (slice-R10-cut §3.1): one indicator per open row,
+   urgency descending — danger (dead) > warning (blocked on you) >
+   quiet motion (working) > accent (unseen result). The base .sidebar-row-dot
+   stays the host-exited danger dot; the modifiers recolor the same 6px
+   metric. The spinner is 10px (a 6px arc reads as flicker, not rotation)
+   and rides the shared 800ms icon-spin loop (R2). */
+.sidebar-row-dot-permission {
+  color: var(--warning);
+}
+
+.sidebar-row-dot-attention {
+  color: var(--accent);
+}
+
+.sidebar-row-spinner {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  color: var(--text-ghost);
+}
+
+.sidebar-row-age {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;  /* ages tick + right-align as a column (R15 tabular law) */
+}
+
+.sidebar-row-title mark,
+.sidebar-group-name mark {
+  background: var(--mark-bg);
+  color: inherit;
+  border-radius: var(--r-xs);
+}
+
+.sidebar-row-close {
+  position: absolute;
+  right: var(--sp-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.sidebar-row-wrap:hover .sidebar-row-close:not(:disabled),
+.sidebar-row-close:focus-visible:not(:disabled) {
+  opacity: 1;
+}
+
+.sidebar-row-close:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--bg-active);
+}
+
+.sidebar-row-close:disabled {
+  /* Last-tab guard (design §2.3): affordance stays hidden and inert. */
+  cursor: not-allowed;
+  opacity: 0;
+}
+
+.sidebar-footer {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-settings {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  padding: var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.sidebar-settings:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.sidebar-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.sidebar-collapse:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+/* Compound `.notice-toast.sidebar-notice` (specificity 0,2,0) so these anchor
+   declarations beat the later-defined base `.notice-toast` rule (0,1,0) — a
+   bare `.sidebar-notice` selector ties on specificity and LOSES the cascade to
+   the base's `position: fixed`/corner offsets by source order, which stranded
+   this notice as a fixed bottom bar. Anchored above the sidebar footer slot
+   (`.sidebar-footer` is position: relative), not the global toast corner. */
+.notice-toast.sidebar-notice {
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  bottom: calc(100% + var(--sp-2));
+  max-width: none;
+}
+
+/* ── session header (design §2.1/§2.4) ── */
+
+.session-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--header-h);
+  flex-shrink: 0;
+  padding: 0 var(--sp-3);
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
+  /* drag region — any new interactive child MUST set -webkit-app-region: no-drag */
+  -webkit-app-region: drag;
+}
+
+/* Custom titlebar (design/ui-track custom-titlebar §2): macOS-only traffic-
+   light clearance when the sidebar cap is hidden (collapsed) — the header
+   spans the full width and would otherwise sit under the lights. Fullscreen
+   drops the clearance (no lights while fullscreen). */
+:root[data-platform="darwin"] .app-sidebar-collapsed .session-header {
+  padding-left: var(--titlebar-traffic-clearance);
+}
+
+:root[data-platform="darwin"][data-fullscreen="true"] .app-sidebar-collapsed .session-header {
+  padding-left: var(--sp-3);
+}
+
+/* Custom titlebar (design/ui-track custom-titlebar §4): win/linux — the
+   header always spans the full width (no sidebar cap hosting caption
+   buttons there), so it needs permanent right clearance for the fixed
+   `.window-controls` instead of the darwin collapsed-only rule above. */
+:root:not([data-platform="darwin"]) .session-header {
+  padding-right: calc(var(--window-controls-w) + var(--sp-3));
+}
+
+.session-header-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: var(--sp-1);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.session-header-expand:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.session-header-title {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+}
+
+.session-header-chip {
+  flex-shrink: 0;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.15rem var(--sp-2);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  -webkit-app-region: no-drag;
+}
+
+.session-header-chip-mono {
+  font-family: var(--font-mono);
+}
+
+/* R20: the workspace chip is a copy button. Rest state stays visually
+   identical to the old span — kill the UA button face, keep the chip's own
+   border/padding/type (`.session-header-chip` supplies size, `-mono` the
+   family; author rules beat the UA button font regardless of order — do NOT
+   use the `font:` shorthand here, a later shorthand would clobber both).
+   no-drag re-asserted: the header is the macOS titlebar drag region and a
+   converted button must never regress into dragging the window. */
+.session-header-chip-copy {
+  position: relative;
+  /* Reserve room for the width-stable "Copied" cover so a short basename
+     (`ui`, `web`, `api`…) doesn't clip it to a fragment. 4.5rem clears the
+     6-char word past the `--r-full` end-caps; non-binding once the basename
+     exceeds it (< max-width:22ch), so long chips stay rest-identical.
+     Density-invariant: the cover is inset:0 over the padding box and --fs-xs
+     is unchanged in compact. */
+  min-width: 4.5rem;
+  background: none;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.session-header-chip-copy:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+}
+
+/* Width-stable "Copied" confirmation: an opaque cover over the chip's text,
+   so the titlebar row never shifts (calm chrome). Always mounted as a
+   role="status" live region; opacity (never display/visibility) keeps it in
+   the accessibility tree while empty. --success ink = color encodes the
+   settled state of the user's copy action (md-codeblock-copy precedent).
+   State ink lives on THIS element, hover ink on the button — the R18
+   hover-out-specifies-state specificity trap is structurally impossible. */
+.session-header-chip-copied {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  background: var(--bg-app);
+  color: var(--success);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-header-chip-copied:not(:empty) {
+  opacity: 1;
+}
+
+/* ── repository / environment context ──
+   Git is context, not a primary mode: the header shows one quiet project
+   control and the details live in its menu or the explicitly opened inspector.
+   The same component appears above a brand-new session's composer. */
+
+.environment-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex-shrink: 1;
+  -webkit-app-region: no-drag;
+}
+
+.environment-trigger,
+.environment-more {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.environment-trigger {
+  gap: var(--sp-1);
+  padding: 0.25rem 0.55rem;
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  font-size: var(--fs-sm);
+}
+
+.environment-trigger svg {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+
+.environment-workspace,
+.environment-branch {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-workspace {
+  max-width: 18ch;
+  color: var(--text-1);
+  font-weight: var(--w-medium);
+}
+
+.environment-branch {
+  max-width: 16ch;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.environment-separator {
+  color: var(--text-3);
+}
+
+.environment-more {
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: var(--sp-1);
+  padding: 0;
+  border-radius: var(--r-sm);
+}
+
+.environment-more:hover,
+.environment-trigger:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.environment-menu {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  left: 0;
+  z-index: 22;
+  width: min(22rem, calc(100vw - 2 * var(--sp-4)));
+  padding: var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-menu);
+  animation: fade-slide-down var(--dur-2) var(--ease-out);
+}
+
+.environment-menu-title {
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.environment-menu-row,
+.environment-branch-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.environment-menu-row {
+  min-height: 2.7rem;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.environment-menu-row:hover,
+.environment-branch-row:hover:not(.environment-branch-row-current) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.environment-menu-row > svg,
+.environment-branch-row > svg {
+  flex-shrink: 0;
+}
+
+.environment-menu-spacer {
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.environment-menu-row-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.environment-menu-row-detail {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-menu-chevron,
+.environment-menu-open {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.environment-menu-chevron {
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.environment-menu-chevron-open {
+  transform: rotate(180deg);
+}
+
+.environment-branches {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin: 0 0 var(--sp-1) calc(1rem + var(--sp-2));
+  padding: var(--sp-1);
+  border-left: 1px solid var(--border);
+}
+
+.environment-branch-row {
+  min-height: 2rem;
+  padding: 0.3rem var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.environment-branch-row-current {
+  color: var(--text-1);
+}
+
+.environment-branch-row-current span:last-child {
+  margin-left: auto;
+  color: var(--success);
+}
+
+.environment-menu-note {
+  padding: var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.session-header-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  -webkit-app-region: no-drag;
+}
+
+.session-header-connection-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.session-header-connection-ready .session-header-connection-dot {
+  color: var(--success);
+}
+
+.session-header-connection-awaiting_port .session-header-connection-dot,
+.session-header-connection-awaiting_host_ready .session-header-connection-dot {
+  color: var(--warning);
+}
+
+/* R20: connecting dots breathe — motion = liveness, and a host being awaited
+   IS live in-flight work. Only the two awaiting_* phases move: ready is
+   settled and host_exited is dead (a pulsing corpse would read as an alarm).
+   1600ms literal is the pulse loop-period single source (loops are exempt
+   from the --dur-3 enter/exit ceiling, §6.3): slow enough to read as breath,
+   fast enough to complete a full cycle inside a typical 1–2s connect.
+   Legibility: the static --text-2 label beside the dot carries the state at
+   full contrast at every phase — the breath is redundant-channel motion, and
+   its 0.45 trough never lets the dot vanish. */
+.session-header-connection-awaiting_port .session-header-connection-dot,
+.session-header-connection-awaiting_host_ready .session-header-connection-dot {
+  animation: pulse 1600ms ease-in-out infinite;
+}
+
+.session-header-connection-host_exited .session-header-connection-dot {
+  color: var(--danger);
+}
+
+.session-header-spacer {
+  flex: 1;
+}
+
+.session-header-panel-toggle,
+.session-header-terminal-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.session-header-panel-toggle:hover,
+.session-header-terminal-toggle:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+}
+
+.session-header-panel-toggle-active,
+.session-header-terminal-toggle-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ── window controls (win/linux caption buttons, design/ui-track
+   custom-titlebar §4/§5) — macOS never mounts this (App.tsx's platform
+   gate); the sidebar's traffic-light cap covers that case instead. ── */
+
+.window-controls {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: var(--header-h);
+  display: flex;
+  -webkit-app-region: no-drag;
+  /* One above this file's established overlay z-index (.notice-toast /
+     .mode-menu-popover / .update-banner all use 20) so caption buttons clear
+     any of those floating surfaces. NOTE: .settings-dialog/.consent-dialog/
+     PermissionModal are native <dialog> elements — the UA renders them in
+     the top layer, which always paints above regular stacking contexts
+     regardless of z-index, so this value can't (and needn't) out-rank them;
+     they're expected to visually cover the caption buttons while open. */
+  z-index: 21;
+}
+
+.window-control {
+  width: 46px;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+  cursor: pointer;
+}
+
+.window-control-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.window-control:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.window-control:active {
+  background: var(--bg-active);
+}
+
+/* Close hover breaks from the token-only rule (design §5, intentional): a
+   solid --danger fill reads clearly in both themes, but a --text-2/--text-1
+   glyph on top of it would lose contrast — #fff is the one literal value in
+   this block. */
+.window-control-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ── banners: slim strips, soft fills only, no hard borders (design §2.4) ── */
+
+.banner {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  flex-shrink: 0;
+  animation: fade-slide-down var(--dur-2) var(--ease-out);
+}
+
+.banner-host-exited,
+.banner-fatal {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.banner-info {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* No-active-tab fallback (App.tsx): a quiet, centered holding state rather
+   than a warning strip pinned to an otherwise-empty pane — this is a benign
+   transient (a tab exists but its store/port hasn't attached yet), not an
+   alarm. Fills the pane above the terminal panel and centers its muted line. */
+.main-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+/* ── New Session start screen (slice P7.12 §4.5, intake F5#1a, restyled in
+   slice-start-composer-cut): a composer-styled new-task state — environment
+   chips (project popover) ABOVE the composer card (desktop
+   grammar), reusing `.composer*` classes for the card itself. Tokens-only. ── */
+.start-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  overflow-y: auto;
+}
+
+/* A restrained brand beat and useful first-message starters give an empty
+   session an intentional landing state without competing with the composer. */
+.start-intro {
+  order: -2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  text-align: center;
+}
+
+.start-brand-mark {
+  width: 40px;
+  height: 40px;
+}
+
+.start-intro h1 {
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-xl);
+  font-weight: var(--w-normal);
+  letter-spacing: -0.02em;
+}
+
+.start-presets {
+  order: -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: min(100%, calc(var(--content-measure) + 6rem));
+  gap: 0;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.start-preset {
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-normal);
+  line-height: var(--lh-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.start-preset:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.start-preset:hover,
+.start-preset:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.start-preset:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.start-preset-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--text-3);
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.start-preset:hover .start-preset-icon,
+.start-preset:focus-visible .start-preset-icon {
+  color: var(--accent);
+}
+
+.start-preset span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .start-presets {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .start-preset:nth-child(2) {
+    border-right: none;
+  }
+
+  .start-preset:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 560px) {
+  .start-screen {
+    align-items: stretch;
+    padding: var(--sp-4);
+  }
+
+  .start-intro {
+    align-self: center;
+  }
+
+  .start-intro h1 {
+    font-size: var(--fs-lg);
+  }
+
+  .start-presets {
+    grid-template-columns: 1fr;
+  }
+
+  .start-preset {
+    min-height: 3rem;
+  }
+
+  .start-preset:not(:last-child) {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .start-preset:last-child {
+    border-bottom: none;
+  }
+}
+
+/* slice-start-composer-cut: the start screen reuses `.composer*` classes
+   for the card itself (NOT mounting Composer.tsx — that one is bound to a
+   live session). `.composer` is `align-self:center` + a bottom margin for
+   its normal footer dock; here the card is centered in a column layout with
+   an env-row above it, so the margin is neutralized and a width cap matches
+   `.composer`'s own content-measure math. The footer-left carries
+   `overflow:hidden` by default (clips the live ModelPill popover); here the
+   model chip's popover needs to escape it, so it's opened up (the start
+   composer has no `overflow:hidden` ancestor, so an escaping popover is
+   safe — same reasoning as `.start-project-menu` above). */
+.start-composer {
+  margin: 0;
+  width: min(100%, calc(var(--content-measure) + 6rem));
+}
+
+.start-composer .composer-footer-left {
+  overflow: visible;
+}
+
+.start-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  align-self: flex-start;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.start-folder:hover,
+.start-folder:focus-visible {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.start-folder:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.start-recents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-recent-item {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.start-recent-item:hover,
+.start-recent-item:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.start-recent-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--focus-ring);
+}
+
+/* ── F5#1b environment row: project-picker chip sits ABOVE the start
+   composer. The popover sits `position:
+   absolute` off its own relatively-positioned wrapper (`.start-project`) —
+   unlike `.model-pill-popover`/`.sidebar-project-menu`, `.start-screen` has
+   no `overflow:hidden` ancestor to escape, so plain bottom-anchored
+   `absolute` positioning suffices (ModeMenu's own popover used this
+   convention too, before it was clipped by `.composer-footer-left` and
+   switched to `position:fixed` — see `.mode-menu-popover` below); it drops
+   DOWNWARD since the row sits above the composer. ── */
+.start-env-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  /* This small reserved lane is where the one-time project tooltip opens.
+     It avoids covering a starter card while preserving the familiar
+     above-the-folder tooltip direction. */
+  margin-top: calc(var(--sp-3) * 3 + var(--sp-2));
+}
+
+.start-project {
+  position: relative;
+  display: inline-flex;
+}
+
+/* One-time arrival hint for the selected workspace. It dismisses after four
+   seconds in StartScreen and returns only while the chip is hovered/focused. */
+.start-project-hint {
+  position: absolute;
+  z-index: 21;
+  bottom: calc(100% + var(--sp-2));
+  left: 0;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 2 * var(--sp-4)));
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-menu);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  pointer-events: none;
+  animation: fade-slide-down var(--dur-2) var(--ease-out);
+}
+
+.start-project-menu {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  left: 0;
+  z-index: 20;
+  min-width: 15rem;
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-overlay);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  transform-origin: 0 0;
+  animation: scale-in var(--dur-2) var(--ease-spring);
+}
+
+.start-project-menu-divider {
+  height: 1px;
+  margin: var(--sp-1) 0;
+  background: var(--border);
+}
+
+.start-project-menu-browse {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.start-project-menu-browse:hover,
+.start-project-menu-browse:focus-visible {
+  background: var(--bg-hover);
+}
+
+.start-project-menu-browse:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--focus-ring);
+}
+
+.start-model {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+.start-model-menu {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  left: 0;
+  z-index: 20;
+  min-width: 14rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-overlay);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  transform-origin: 0 0;
+  animation: scale-in var(--dur-2) var(--ease-spring);
+}
+
+.start-model-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.start-model-item:hover,
+.start-model-item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.start-model-item-check {
+  width: 1rem;
+  flex-shrink: 0;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.start-model-item-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.start-model-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+
+.start-model-item-current .start-model-item-name {
+  color: var(--accent);
+}
+
+/* ── transcript (design §2.1/§2.2/§2.4 — UI-6) ── */
+
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-4);
+}
+
+/* ── F1b perpetual todo panel (design/slice-P7.11-cut.md §2): a sticky
+   top-right overlay, first child of .message-list so it sticks against the
+   scroll container itself. height:0 keeps it out of the column's flow — the
+   transcript's own top offset never shifts. ── */
+.todo-panel {
+  position: sticky;
+  top: var(--sp-3);
+  z-index: 6;
+  height: 0;
+  overflow: visible;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+/* Clamped to half the viewport (minus the sticky top offset) so the panel
+   can never grow tall enough to reach the F17 jump-to-latest chip, which is
+   sticky-bottom in the same scroll container (transcript-follow.css) —
+   geometry stays disjoint at any viewport height instead of relying on
+   z-index. The list scrolls internally within that budget (see
+   .todo-panel-list) rather than the card growing past it. */
+.todo-panel-card {
+  pointer-events: auto;
+  width: 16rem;
+  max-width: calc(100% - var(--sp-4) * 2);
+  max-height: calc(50dvh - var(--sp-3));
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  overflow: hidden;
+}
+
+/* Collapsed state reads as a compact pill (design §2), not a shrunken card. */
+.todo-panel-card.todo-panel-collapsed {
+  width: auto;
+  border-radius: 999px;
+}
+
+.todo-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.todo-panel-header:hover,
+.todo-panel-header:focus-visible {
+  background: var(--bg-hover);
+}
+
+.todo-panel-header[aria-expanded="false"] .tool-call-caret svg,
+.todo-panel-completed-toggle[aria-expanded="false"] .tool-call-caret svg {
+  transform: rotate(-90deg);
+}
+
+.todo-panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.todo-panel-completed-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.todo-panel-completed-toggle:hover,
+.todo-panel-completed-toggle:focus-visible {
+  background: var(--bg-hover);
+}
+
+.todo-panel-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-1) 0;
+}
+
+.todo-panel-item-button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-1) var(--sp-3);
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.todo-panel-item-button:hover,
+.todo-panel-item-button:focus-visible {
+  background: var(--bg-hover);
+}
+
+/* Centered measure column: max 76ch, centered via margin auto in the same
+   main-pane the composer is centered in, so the two share one visual
+   column (they are not forced to the same pixel width — the composer
+   card is deliberately wider than the text measure, see its own comment —
+   but both center on the same axis). */
+.message-column {
+  max-width: var(--content-measure);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  /* One-element breath on mount (R3): the transcript arrives as a single
+     fade — tab-switch/hydration acknowledgment without N blocks animating. */
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+/* ── R11 empty transcript (slice-R11-cut §3.2): an invitation, centered in
+   the scroll container (min-height resolves against .message-list's
+   content box, so the padded container never scrolls while empty). The
+   sibling .message-column renders zero-height until the first block. ── */
+
+.transcript-empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  text-align: center;
+  animation: fade-slide-up var(--dur-3) var(--ease-out);
+}
+
+.transcript-empty-workspace {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.transcript-empty-title {
+  font-size: var(--fs-lg);
+  font-weight: var(--w-medium);
+  color: var(--text-2);
+}
+
+.transcript-empty-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.transcript-empty-chip {
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-card);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
+}
+
+.transcript-empty-chip:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.message {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message-text {
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+
+.message-label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+  margin-bottom: 0.2rem;
+}
+
+/* User messages: compact accent-soft card, right-shifted (design §2.1). */
+.message-user {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--text-1);
+}
+
+/* Assistant messages: no bubble — plain prose on the app background at the
+   full column measure (design §1.3/§2.1's "assistant is just text"). */
+.message-assistant {
+  color: var(--text-1);
+}
+
+/* Error: quiet danger-soft strip rather than a hard-bordered alert box. */
+.message-error {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+  color: var(--text-1);
+}
+
+.message-error .message-label {
+  color: var(--danger);
+}
+
+.message-error-name {
+  font-weight: var(--w-medium);
+}
+
+/* Turn-end: a quiet centered divider (hairlines either side of the label)
+   rather than a boxed banner. */
+.message-loop-end {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.message-loop-end::before,
+.message-loop-end::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── working row (R3 turn liveness) ── */
+
+/* The "is it alive?" fixture at the transcript tail. Flush-left in the
+   column, --sp-4 column gap for rhythm — it sits exactly where the next
+   assistant prose will land. Hierarchy: verb = signal (sm/medium/shimmer),
+   elapsed = data (xs/text-3/tabular), hint = instruction (xs/text-3).
+   Root is aria-hidden (announcements live in MessageList's status region). */
+.working-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  animation: fade-in var(--dur-1) var(--ease-out);
+}
+
+.working-verb {
+  font-weight: var(--w-medium);
+}
+
+.working-elapsed {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.working-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* Key name in the app's data voice — mono, no chip border (a bordered kbd
+   at this size is louder than the signal it explains). */
+.working-hint kbd {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+/* ── markdown (R1) ── */
+
+/* Container: markdown manages its own whitespace — cancel .message's pre-wrap. */
+.message-markdown {
+  white-space: normal;
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+/* Vertical rhythm: owl selector; children keep margin 0. */
+.message-markdown > * + * {
+  margin-block-start: var(--sp-3);
+}
+/* Heading proximity (R15): air above a heading must clearly exceed the air
+   below it or sections don't group — sp-5 above the two structural levels,
+   sp-4 above h3, sp-3 default below h4–h6. */
+.message-markdown > * + .md-h1,
+.message-markdown > * + .md-h2 {
+  margin-block-start: var(--sp-5);
+}
+.message-markdown > * + .md-h3 {
+  margin-block-start: var(--sp-4);
+}
+
+/* Headings — ladder 18/16/14/13/13/11 (slice-R15-cut §1.D revised the old
+   "h1 = --fs-lg" pre-agreement: h2 must clear body or ## reads as a bold
+   phrase; 18px stays well under display size). margin: 0 makes the owl the
+   single rhythm owner — real <h1>–<h6> otherwise leak UA margins as phantom
+   space when a message starts/ends with a heading. */
+.md-h1,
+.md-h2,
+.md-h3,
+.md-h4,
+.md-h5,
+.md-h6 {
+  margin: 0;
+  line-height: var(--lh-tight);
+}
+.md-h1 {
+  font-size: var(--fs-lg2);
+  font-weight: var(--w-semibold);
+}
+.md-h2 {
+  font-size: var(--fs-lg);
+  font-weight: var(--w-semibold);
+}
+.md-h3 {
+  font-size: var(--fs-md);
+  font-weight: var(--w-semibold);
+}
+.md-h4 {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+}
+.md-h5 {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+}
+.md-h6 {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-2);
+}
+
+.md-p {
+  margin: 0;
+}
+
+/* Bold prose (R15 weight law): UA <strong> = 700 was the app's one leak past
+   the 400/500/600 restraint (direction §1.3). Clamp to semibold. */
+.message-markdown strong {
+  font-weight: var(--w-semibold);
+}
+
+/* Inline code chip — same inset surface family as the block well. */
+.md-code-inline {
+  font-family: var(--font-mono);
+  /* Chip constant 0.93em (R15 §1.G): ≈ one ladder step below context — 13.0px
+     in body prose (unchanged vs the old absolute --fs-sm), but scales into
+     headings instead of snapping to 13px inside an 18px h1. */
+  font-size: 0.93em;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 0.08em 0.4em;
+}
+
+/* Code block well. */
+.md-codeblock {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.md-codeblock-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  min-height: 1.5rem;
+}
+.md-codeblock-lang {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+.md-codeblock-copy {
+  margin-left: auto;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-3);
+  display: inline-flex;        /* was: font-size: var(--fs-2xs); */
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);        /* was: var(--sp-1) var(--sp-2) — square icon target */
+  border-radius: var(--r-xs);
+  opacity: 0;
+  transition: opacity var(--t-fast), color var(--t-fast);
+}
+.md-codeblock-copy svg {
+  width: 14px;
+  height: 14px;
+}
+.md-codeblock:hover .md-codeblock-copy,
+.md-codeblock-copy:focus-visible {
+  opacity: 1;
+}
+.md-codeblock-copy:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+.md-codeblock-copy[data-copied="true"] {
+  opacity: 1;
+  color: var(--success);
+}
+.md-codeblock-pre {
+  margin: 0;
+  padding: var(--sp-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-code);
+  white-space: pre;
+}
+
+/* Lists. */
+.md-list {
+  margin: 0;
+  padding-inline-start: var(--sp-5);
+}
+.md-li + .md-li {
+  margin-block-start: var(--sp-1);
+}
+.md-li::marker {
+  color: var(--text-ghost);
+}
+.md-li > .md-list {
+  margin-block-start: var(--sp-1);
+}
+.md-task-checkbox {
+  margin-right: var(--sp-2);
+  vertical-align: middle;
+}
+
+/* Blockquote. */
+.md-blockquote {
+  margin: 0;
+  padding-inline-start: var(--sp-3);
+  border-inline-start: 2px solid var(--border-strong);
+  color: var(--text-2);
+}
+.md-blockquote > * + * {
+  margin-block-start: var(--sp-2);
+}
+
+/* Table — scrolls in its own wrapper. */
+.md-table-wrap {
+  overflow-x: auto;
+}
+.md-table {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;  /* data surface — digits align down columns (R15) */
+}
+.md-table th {
+  font-weight: var(--w-semibold);
+  text-align: left;
+  border-bottom: 1px solid var(--border-strong);
+}
+.md-table th,
+.md-table td {
+  padding: var(--sp-1) var(--sp-3);
+}
+.md-table td {
+  border-bottom: 1px solid var(--border);
+}
+
+.md-hr {
+  border: none;
+  height: 1px;
+  background: var(--border);
+  margin-block: var(--sp-4);
+}
+
+/* Links — accent, click-guarded (see slice-R1-cut §6). */
+.md-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--accent-soft);
+  cursor: pointer;
+}
+.md-link:hover {
+  color: var(--accent-hover);
+  text-decoration-color: currentColor;
+}
+.md-copied-hint {
+  font-size: var(--fs-2xs);
+  color: var(--success);
+  margin-inline-start: var(--sp-1);
+}
+
+.md-image-alt {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--bg-hover);
+  border-radius: var(--r-xs);
+  padding: 0.08em 0.4em;
+}
+
+/* ── reasoning ── */
+
+.reasoning-block {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  background: none;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: var(--sp-1) 0;
+  font: inherit;
+  font-weight: var(--w-medium);
+}
+
+.reasoning-toggle:hover {
+  color: var(--text-1);
+}
+
+.reasoning-caret {
+  display: inline-flex;        /* was: display: inline-block; */
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  color: var(--text-ghost);
+}
+.reasoning-caret svg {
+  width: 12px;
+  height: 12px;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+.reasoning-toggle[aria-expanded="false"] .reasoning-caret svg {
+  transform: rotate(-90deg);
+}
+
+.reasoning-text {
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-inset);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* R15 §1.E: reasoning is natural-language prose — the <pre> was silently
+     inheriting the UA fixed font (Menlo/Consolas at platform whim). Prose
+     register; pre-wrap keeps the model's own line breaks. */
+  font-family: var(--font-ui);
+  line-height: var(--lh-body);
+}
+
+/* Live tail preview (R3(d)): shown only while the tail reasoning block is
+   streaming AND user-collapsed. The toggle stretches to the full measure so
+   the preview can breathe; flex-end + overflow-hidden pins the FRESHEST end
+   of the line into view (a flex item aligned to the end overflows at its
+   start edge — the tail stays visible as text streams). */
+.reasoning-toggle-live {
+  display: flex;
+  width: 100%;
+}
+
+.reasoning-live-preview {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  overflow: hidden;
+  margin-left: var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-normal);
+}
+
+.reasoning-live-preview > .shimmer-text {
+  white-space: nowrap;
+}
+
+/* ── tool call card ── */
+
+.tool-call-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+/* Disclosure header (R4): the card header IS the toggle in both states.
+   Collapsed it is the entire card — caret · name · one-line summary · badge
+   (the ledger row); expanded it reads as before (name + badge) with the
+   body below. The header/body divider lives on .tool-call-body's border-top
+   so a collapsed card is a clean single row. */
+.tool-call-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-call-toggle:hover {
+  background: var(--bg-hover);
+}
+
+/* The card clips at its radius (overflow: hidden), which would swallow the
+   default outside focus ring — pull the ring inside the button instead. */
+.tool-call-toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+.tool-call-caret {
+  display: inline-flex;        /* was: display: inline-block; */
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  flex: none;
+  color: var(--text-ghost);
+}
+.tool-call-caret svg {
+  width: 12px;
+  height: 12px;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+.tool-call-toggle[aria-expanded="false"] .tool-call-caret svg,
+.diff-view-toggle[aria-expanded="false"] .tool-call-caret svg,
+.diff-hunk-header[aria-expanded="false"] .tool-call-caret svg {
+  transform: rotate(-90deg);
+}
+
+.tool-call-name {
+  color: var(--text-2);
+  font-weight: var(--w-medium);
+  font-size: var(--fs-sm);
+  flex: none;
+}
+
+/* Collapsed one-line input summary — mono data voice, lowest text tier.
+   Row grammar: verb (name) · object (summary) · outcome (badge). CSS
+   ellipsis is the visual truncator; flattenSummary caps DOM text. */
+.tool-call-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.tool-call-status-badge {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--bg-hover);
+  color: var(--text-3);
+  flex: none;
+  margin-left: auto;
+}
+
+.tool-call-status-running .tool-call-status-badge {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.tool-call-status-success .tool-call-status-badge {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.tool-call-status-error .tool-call-status-badge,
+.tool-call-status-invalid_input .tool-call-status-badge,
+.tool-call-status-denied .tool-call-status-badge,
+.tool-call-status-timed_out .tool-call-status-badge {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.tool-call-input {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-bottom: 1px solid var(--border);
+  line-height: var(--lh-code);
+}
+
+/* Subagent sub-status (Agent tool only; design/phase-3.md §3.3/§4.2 reserved
+   the slot in task 3.1.4 — R14 restyle: shared row atoms, identity grammar). */
+.tool-call-subagent {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tool-call-subagent-line {
+  display: flex;
+  align-items: center;
+}
+
+.tool-call-subagent-counters {
+  margin-top: 0.15rem;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+/* Workflow sub-status (Workflow tool only; slice 3.4.5 mirror of the subagent
+   region — R14 turns line 2 into a flat vertical step checklist). */
+.tool-call-workflow {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tool-call-workflow-line {
+  display: flex;
+  align-items: center;
+}
+
+.tool-call-workflow-counters {
+  margin-top: 0.15rem;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+/* Shared sub-status atoms (R14): one glyph cell + one status→color map serve the
+   agent line, the workflow header, and every step row. Color appears exactly once
+   per row — on this cell. */
+.substatus-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  flex: none;
+  color: var(--text-ghost);            /* cancelled/skipped default */
+}
+.substatus-glyph svg { width: 12px; height: 12px; }
+.substatus-running   > .substatus-glyph { color: var(--accent); }
+.substatus-completed > .substatus-glyph { color: var(--success); }
+.substatus-error     > .substatus-glyph,
+.substatus-failed    > .substatus-glyph { color: var(--danger); }
+.substatus-max_turns > .substatus-glyph { color: var(--warning); }
+
+/* Identity grammar: mono anchor = machine name, ui tail = human context. */
+.tool-call-subagent-line,
+.tool-call-workflow-line { gap: var(--sp-2); }   /* replaces the spinner margin-right hack */
+.tool-call-subagent-persona,
+.tool-call-workflow-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-1);
+}
+.tool-call-subagent-desc {
+  color: var(--text-2);
+  min-width: 0;                    /* wraps; no ellipsis — it's the human meaning */
+  font-size: var(--fs-xs);  /* clause-tail register (R15 §1.F): anchor-sized, quieter by face+tier */
+}
+.tool-call-subagent-counters,
+.tool-call-workflow-counters { font-variant-numeric: tabular-nums; }  /* live digits (R13 precedent) */
+
+/* Workflow step checklist (R14 signature). Rows are ledger lines: no borders,
+   no backgrounds, no hover — this is a record, not a control surface. */
+.workflow-steps {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.workflow-step {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.workflow-step-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);            /* settled record tier */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-step.substatus-running .workflow-step-id { color: var(--text-1); }  /* "where is it now" */
+.workflow-step-agent {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-step-meta {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--sp-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.workflow-step-pending {
+  font-size: var(--fs-2xs);
+  color: var(--text-ghost);
+}
+
+.tool-call-diff-slot:empty {
+  display: none;
+}
+
+/* Expanded-body region (R4): mounts only while expanded; carries the
+   header/body divider. Children keep their own borders untouched. */
+.tool-call-body {
+  border-top: 1px solid var(--border);
+}
+
+.tool-call-result {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inset);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-2);
+  /* R15 §1.E: machine payload — data register. The <pre> was rendering in the
+     UA fixed font (NOT --font-mono): this well and .tool-call-input above it
+     showed two different monospace faces on macOS. */
+  font-family: var(--font-mono);
+  line-height: var(--lh-code);
+}
+
+/* Result-cap expander (R4(b)): a quiet footer row continuing the result
+   well; the copy carries the count ("Show 24 more lines", §6.9). */
+.tool-call-result-expander {
+  display: block;
+  width: 100%;
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-inset);
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-call-result-expander:hover {
+  color: var(--text-2);
+  background: var(--bg-hover);
+}
+
+.tool-call-result-expander:focus-visible {
+  outline-offset: -2px;
+}
+
+/* ── composer (UI-5) ── */
+
+/* Elevated card, centered in the content column (design §2.4). Anchors the
+   slash-command menu (§4.4/P7.23): unlike ModelPill/CtxPopover, no ancestor
+   between `.composer` and `.main-pane` clips edge-adjacent content (only
+   `.main-pane` itself has `overflow:hidden`, a whole-pane clip the popover
+   never reaches in practice), so `position:absolute` anchored here is safe —
+   the `clampMenuLeft` fixed-position fallback those popovers need is not
+   required for this one. */
+.composer {
+  position: relative;
+  flex-shrink: 0;
+  align-self: center;
+  width: min(100% - 2 * var(--sp-4), calc(var(--content-measure) + 6rem));
+  margin: 0 auto var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-composer);
+}
+
+/* Keyboard focus lands on the borderless textarea, whose own outline is
+   suppressed below (an inset rectangle inside the card reads as a bug, not a
+   focus ring). The card carries the affordance instead: an accent border when
+   the textarea is focused — the a11y-equivalent visible focus the design wants
+   (the footer chip/send button keep their own global :focus-visible ring). */
+.composer:has(.composer-textarea:focus) {
+  border-color: var(--accent);
+}
+
+/* New sessions keep their repository context next to the prompt where it is
+   useful, then the strip naturally disappears once the conversation starts. */
+.environment-control-composer {
+  align-self: stretch;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.environment-control-composer .environment-trigger {
+  background: transparent;
+  padding-left: var(--sp-1);
+}
+
+.environment-control-composer .environment-workspace {
+  max-width: 22ch;
+}
+
+.environment-control-composer .environment-menu {
+  top: auto;
+  bottom: calc(100% + var(--sp-2));
+}
+
+/* R7 paste pills (slice-R7-cut §4.4): collapsed >40-line pastes. A pill is a
+   content object — mono face, inset well, hairline — never accent-tinted
+   (color encodes state/permission only). Click expands the block back into
+   the draft at its marker. Enter = fade-slide-down (anchored above the
+   textarea, enter-from-anchor-edge law); exit is an instant unmount. */
+.composer-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.composer-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  cursor: pointer;
+  animation: fade-slide-down var(--dur-1) var(--ease-out);
+  transition: border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.composer-pill:hover {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.composer-image-pill {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: min(26rem, 100%);
+  gap: var(--sp-1);
+  padding: 0.15rem 0.25rem 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  animation: fade-slide-down var(--dur-1) var(--ease-out);
+}
+
+.composer-image-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-image-pill-size {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-image-pill-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.composer-image-pill-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.composer-image-error {
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+}
+
+.composer-file-input {
+  display: none;
+}
+
+/* Transparent, borderless textarea inside the card. `field-sizing: content`
+   auto-grows within min/max; older Chromium without it simply doesn't grow
+   (min-height + overflow-y keep it usable). */
+.composer-textarea {
+  field-sizing: content;
+  resize: none;
+  min-height: 2.5rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  padding: var(--sp-1) var(--sp-1);
+  background: transparent;
+  color: var(--text-1);
+  border: none;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+
+.composer-textarea:focus,
+.composer-textarea:focus-visible {
+  outline: none;
+}
+
+.composer-textarea::placeholder {
+  color: var(--text-3);
+}
+
+.composer-textarea:disabled {
+  opacity: 0.6;
+}
+
+.composer-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.composer-footer-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-self: start;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.composer-footer-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  justify-self: end;
+}
+
+.composer-attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.composer-attach:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.composer-attach:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* R7 footer hint (slice-R7-cut §4.2): always in flow — visibility toggle, so
+   showing/hiding never reflows the footer. The delayed visibility flip lets
+   the opacity fade complete in both directions. */
+.composer-hint {
+  justify-self: center;
+  min-width: 0;
+  max-width: 100%;
+  text-align: center;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity var(--dur-1) var(--ease-out), visibility 0s;
+}
+
+.composer-hint-hidden {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-1) var(--ease-out), visibility 0s var(--dur-1);
+}
+
+/* Context meter (design §2.4). Muted by default; escalates warning ≥80%,
+   danger ≥95%. Slice P7.17 (F12 W3): now a <button> (ctx-popover trigger),
+   so button-reset properties (border/background/padding/font/cursor) are
+   folded into this same rule rather than duplicated on a wrapper. */
+.composer-ctx-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer-ctx-meter-warning {
+  color: var(--warning);
+}
+
+.composer-ctx-meter-danger {
+  color: var(--danger);
+}
+
+/* ── slash-command menu (design slice-P7.23-cut.md §1/§4.1/§4.4, P7.23/F24
+   W2). Floats ABOVE the composer, same width, small gap — `.composer`'s own
+   `position:relative` (added above) is this popover's containing block. */
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% + var(--sp-2));
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: min(60vh, 24rem);
+  overflow-y: auto;
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  transform-origin: 0 100%;
+  animation: scale-in var(--dur-2) var(--ease-spring);
+}
+
+.slash-menu-section {
+  padding: var(--sp-2) var(--sp-2) var(--sp-1);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.slash-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.slash-menu-row-selected {
+  background: var(--bg-active);
+}
+
+.slash-menu-row-disabled {
+  color: var(--text-3);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.slash-menu-row-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.slash-menu-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.slash-menu-row-name {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+/* The unmatched portion of a filtered row's name (cut §1.4: the matched
+   substring stays bold/bright inside a plain <b>, the rest of the name
+   mutes). Unfiltered rows (empty `ranges`) never wrap in this class. */
+.slash-menu-row-name-muted {
+  color: var(--text-3);
+  font-weight: normal;
+}
+
+.slash-menu-row-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.slash-menu-row-source {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+/* ── Ctx-breakdown popover (slice P7.17 · F12 W3, design slice-P7.17-cut.md
+   §2.3/§3). Anti-clip: same R1 lesson as `.model-pill-popover` — the footer's
+   `overflow:hidden` ancestor clips ANY absolutely-positioned popover inside
+   it, so `position:fixed` (containing block = viewport) is the only escape;
+   `left`/`bottom` come from CtxPopover's getBoundingClientRect-computed
+   inline style, not from this stylesheet. Right-anchored (`transform-origin:
+   100% 100%`) since the ctx meter sits at the far right of the footer,
+   mirroring `.model-pill-popover`'s left-anchored `0 100%`. ── */
+.ctx-popover-root {
+  position: relative;
+  display: inline-flex;
+}
+
+.ctx-popover {
+  position: fixed;
+  z-index: 20;
+  width: 280px;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  background: var(--bg-overlay);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  transform-origin: 100% 100%;
+  animation: scale-in var(--dur-2) var(--ease-spring);
+}
+
+.ctx-popover-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.ctx-popover-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+}
+
+.ctx-popover-headline {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ctx-popover-bar {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.ctx-popover-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-2) var(--ease-out);
+}
+
+
+   meter classes"): `.composer-ctx-meter-warning`/`-danger` already set
+   `color` (see above) — applying those SAME classes to `.ctx-popover` lets
+   the fill switch to `currentColor` and inherit that color for free, no new
+   color tokens introduced. */
+.ctx-popover.composer-ctx-meter-warning .ctx-popover-bar-fill,
+.ctx-popover.composer-ctx-meter-danger .ctx-popover-bar-fill {
+  background: currentColor;
+}
+
+.ctx-popover-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.ctx-popover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.ctx-popover-row-percent {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+/* Loading skeleton (breakdown not yet arrived): reuses the sanctioned
+   `pulse` keyframe (§6.3 "motion is information" — loading is liveness,
+   the same class of exception as the R20 connecting-dot breath) rather than
+   inventing a new animation. */
+.ctx-popover-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.ctx-popover-skeleton-row {
+  height: 0.85em;
+  border-radius: var(--r-sm);
+  background: var(--bg-hover);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* Loading-timeout fallback (P2-a UX-robustness fix): shown instead of the
+   skeleton once `CTX_POPOVER_LOAD_TIMEOUT_MS` elapses with no breakdown
+   (a lost `context_breakdown_request`) — `--text-3` is the same muted token
+   the skeleton/headline rows already use, so it reads correctly in both
+   themes without a dedicated override. */
+.ctx-popover-empty {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.ctx-popover-divider {
+  height: 1px;
+  background: var(--border);
+}
+
+.ctx-popover-session {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+/* R7 ctx ring (slice-R7-cut §4.1): track = hairline, fill = currentColor so
+   the meter's warning/danger classes tint ring and number together. The
+   dashoffset transition sweeps between discrete per-turn readings. */
+.composer-ctx-ring {
+  flex-shrink: 0;
+}
+
+.composer-ctx-ring-track {
+  stroke: var(--border);
+}
+
+.composer-ctx-ring-fill {
+  stroke: currentColor;
+  transition: stroke-dashoffset var(--dur-2) var(--ease-out);
+}
+
+/* Circular ~28px send / stop button. */
+.composer-send,
+.composer-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
+}
+
+/* Neutral grey, not an accent fill (owner report: the blue circle clashed
+   with the otherwise neutral chrome) — same recipe as `.composer-attach`
+   right beside it: `--bg-inset` fill + `--border`, escalating to
+   `--border-strong`/`--text-1` on hover. `.start-send` mirrors this exactly. */
+.composer-send {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.composer-send:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.composer-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer-stop {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+.composer-send:active:not(:disabled),
+.composer-stop:active {
+  transform: scale(0.96);
+}
+
+/* R7 running state (slice-R7-cut §4.3): the composer must not read as dimmed
+   while a turn runs — the textarea stays disabled (wire truth: send/set_mode
+   are invalid mid-turn) but keeps full-opacity content; absence of caret +
+   default cursor + the live stop placeholder carry "read-only" quietly. The
+   not-ready dim (bare :disabled, 0.6) is unchanged. */
+.composer-running .composer-textarea:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+/* Stop prominence: a static --danger-soft halo (no motion — motion encodes
+   agent liveness, not controls) and a theme-directional hover (mixing toward
+   --text-1 darkens in light theme, lightens in dark). */
+.composer-stop {
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+.composer-stop:hover {
+  background: color-mix(in srgb, var(--danger) 85%, var(--text-1));
+}
+
+/* ── prompt queue (F15, slice-P7.14-cut.md §4) ── */
+
+.prompt-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.prompt-queue-paused {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-2xs);
+}
+
+.prompt-queue-paused-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+.prompt-queue-resume,
+.prompt-queue-clear {
+  padding: 0.15rem 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.prompt-queue-resume:hover,
+.prompt-queue-clear:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.prompt-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-queue-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  font-size: var(--fs-xs);
+}
+
+.prompt-queue-ordinal {
+  flex-shrink: 0;
+  min-width: 1.25em;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-1);
+}
+
+.prompt-queue-badge {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.prompt-queue-edit-button,
+.prompt-queue-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.15rem 0.4rem;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+
+.prompt-queue-edit-button:hover,
+.prompt-queue-delete:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.prompt-queue-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  width: 100%;
+}
+
+.prompt-queue-edit-textarea {
+  min-height: 4.5rem;
+  max-height: 6rem;
+  padding: var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+  resize: none;
+}
+
+.prompt-queue-save,
+.prompt-queue-cancel {
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+
+.prompt-queue-save:hover,
+.prompt-queue-cancel:hover {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.prompt-queue-edit-actions {
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+}
+
+/* ── mode chip + popover (the signature element, design §1.1/§1.2) ── */
+
+.mode-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--r-full);
+  border: 1px solid transparent;
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  line-height: var(--lh-tight);
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+
+.mode-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.mode-chip-chevron {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+
+/* Escalation ramp — plan → build → edit → auto → yolo (design §1.2 table). */
+.mode-chip-plan {
+  background: transparent;
+  color: var(--text-2);
+  border-color: var(--border);
+}
+
+.mode-chip-build {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+}
+
+.mode-chip-edit {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.mode-chip-auto {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-color: transparent;
+}
+
+.mode-chip-yolo {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+/* Fixed-position (NOT absolute) because `.composer-footer-left` carries
+   `overflow:hidden` (P7.13 narrow-width containment) — a plain `absolute;
+   bottom:100%` popover is clipped by that ancestor regardless of z-index
+   (the owner-reported invisible-on-click bug). `position:fixed` escapes it
+   the same way `.model-pill-popover` does; `left`/`bottom` come from
+   ModeMenu.tsx's getBoundingClientRect-computed inline style, not from this
+   stylesheet. */
+.mode-menu-popover {
+  position: fixed;
+  z-index: 20;
+  min-width: 15rem;
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-overlay);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  transform-origin: 0 100%;
+  animation: scale-in var(--dur-2) var(--ease-spring);
+}
+
+.mode-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mode-menu-item:hover,
+.mode-menu-item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.mode-menu-item-check {
+  width: 1rem;
+  flex-shrink: 0;
+  color: var(--accent);
+  display: inline-flex;        /* was: font-size: var(--fs-xs); text-align: center; */
+  align-items: center;
+  justify-content: center;
+}
+.mode-menu-item-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mode-menu-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mode-menu-item-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  text-transform: capitalize;
+}
+
+.mode-menu-item-desc {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+.mode-menu-item-current .mode-menu-item-name {
+  color: var(--accent);
+}
+
+/* ── GUI-P1: sidebar project menu popover + relocated model chip ── */
+
+/* Fixed-position (NOT absolute) because .sidebar-scroll's overflow-y:auto clips
+   absolutely-positioned descendants — the known dropdown-clipping bug class
+   (§R8). Coordinates come from the trigger's getBoundingClientRect, set inline;
+   visual tokens mirror .mode-menu-popover, but this one drops downward so the
+   transform-origin flips to the top-left. */
+.sidebar-project-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 14rem;
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-overlay);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  transform-origin: 0 0;
+  animation: scale-in var(--dur-2) var(--ease-spring);
+}
+
+.sidebar-project-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sidebar-project-menu-item:hover:not(:disabled),
+.sidebar-project-menu-item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.sidebar-project-menu-item:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+/* Composer model chip (§2F.3, consumed by wave B) — a display-only pill
+   mirroring .session-header-chip's size tokens (--fs-xs, --r-full, 1px --border,
+   capped width + ellipsis). Class name is FROZEN. */
+.composer-model-chip {
+  flex-shrink: 1;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.15rem var(--sp-2);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+/* ── model pill (P7.15/F14) — replaces the old effort-<select> chip +
+   display-only model-<span> above with a single interactive pill (design
+   slice-P7.15-cut.md §2.2). Root chip mirrors .composer-model-chip's
+   ellipsize-first containment (P7.13 §the footer grid never overflows on a
+   long model name); popover + rows/items mirror .mode-menu-popover /
+   .mode-menu-item's visual tokens (same surface, radius, shadow, hover).
+   Positioning: P7.13's `.composer-footer-left { overflow: hidden; }` (the
+   same narrow-width containment fix) clips any absolutely-positioned
+   popover inside it in either direction, so a static `bottom: 100%` renders
+   the popover fully invisible here — `.mode-menu-popover` hit the identical
+   bug and now shares this same fix. `position: fixed` escapes it the same
+   way `.sidebar-project-menu` escapes `.sidebar-scroll`'s overflow-y:auto
+   (§R8) — `left`/`bottom` come from ModelPill.tsx's getBoundingClientRect-
+   computed inline style, not from this stylesheet. ── */
+.model-pill {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.model-pill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  max-width: 22ch;
+  padding: 0.15rem var(--sp-2);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+
+.model-pill-chip:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.model-pill-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.model-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-pill-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.model-pill-popover {
+  position: fixed;
+  z-index: 20;
+  min-width: 15rem;
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-overlay);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  transform-origin: 0 100%;
+  animation: scale-in var(--dur-2) var(--ease-spring);
+}
+
+.model-pill-row,
+.model-pill-back,
+.model-pill-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-pill-row:hover:not(:disabled),
+.model-pill-row:focus-visible,
+.model-pill-back:hover,
+.model-pill-back:focus-visible,
+.model-pill-item:hover,
+.model-pill-item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.model-pill-row:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+.model-pill-row-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-pill-row-value {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.model-pill-row-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.6;
+  transform: rotate(-90deg);
+}
+
+.model-pill-divider {
+  height: 1px;
+  margin: var(--sp-1) 0;
+  background: var(--border);
+}
+
+.model-pill-back {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.model-pill-back-chevron {
+  width: 12px;
+  height: 12px;
+  transform: rotate(90deg);
+}
+
+.model-pill-item-check {
+  width: 1rem;
+  flex-shrink: 0;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.model-pill-item-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.model-pill-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+
+.model-pill-item-current .model-pill-item-name {
+  color: var(--accent);
+}
+
+/* ── command palette (R5) ── */
+
+/* Deliberately breaks from its dialog siblings' geometry: top-anchored at 10vh
+   under a lighter scrim (0.35 vs the modals' 0.55) so it reads as a transient
+   command surface, not a modal decision. UA keeps the native <dialog> fixed +
+   horizontally centered; the margin only overrides the vertical centering. */
+.command-palette {
+  margin: 10vh auto auto;
+  width: min(34rem, 90vw);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  box-shadow: var(--shadow-dialog);
+  overflow: hidden;
+  /* Overlay sweep (custom-titlebar §3): 10vh of a short window reaches the top
+     46px drag band, so the surface must opt out of the drag region. */
+  -webkit-app-region: no-drag;
+}
+
+.command-palette[open] {
+  animation: scale-in var(--dur-2) var(--ease-spring);
+  transform-origin: 50% 0;
+}
+
+.command-palette::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+  -webkit-app-region: no-drag;
+}
+
+.command-palette[open]::backdrop {
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+.command-palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.command-palette-mode-badge {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.command-palette-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  /* The input is the dialog's only real focus target; the card communicates
+     focus context, so its own outline is suppressed. Global :focus-visible law
+     is untouched everywhere else. */
+  outline: none;
+  font: inherit;
+  font-size: var(--fs-md);
+  color: var(--text-1);
+}
+
+.command-palette-input::placeholder {
+  color: var(--text-3);
+}
+
+.command-palette-list {
+  max-height: min(50vh, 22rem);
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--sp-1);
+  list-style: none;
+}
+
+.command-palette-group {
+  padding: var(--sp-3) var(--sp-2) var(--sp-1);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.command-palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+/* Selection follows the mouse (onMouseMove), so there is one affordance, not
+   two — hover carries no separate style. */
+.command-palette-row[aria-selected="true"] {
+  background: var(--bg-active);
+}
+
+.command-palette-row[aria-disabled="true"] {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.command-palette-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-palette-row-label mark {
+  background: var(--mark-bg);
+  color: inherit;
+  border-radius: var(--r-xs);
+}
+
+.command-palette-row-meta {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-palette-age {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Key name in the app's data voice — mono, borderless (.working-hint kbd law). */
+.command-palette-hint {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+.command-palette-empty {
+  padding: var(--sp-5) var(--sp-4);
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+/* ── notice toast (MVP.5) ── */
+
+.notice-toast {
+  position: fixed;
+  bottom: var(--sp-4);
+  right: var(--sp-4);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  max-width: 32rem;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  z-index: 20;
+  /* Overlay sweep (custom-titlebar §3): also covers the `.sidebar-notice`
+     variant, which shares this base class. */
+  -webkit-app-region: no-drag;
+  animation: fade-slide-up var(--dur-2) var(--ease-out);
+}
+
+/* R8 toast stack (slice-R8-cut §3): the fixed corner now belongs to the
+   container; items become static flex children (the base rule's positional
+   declarations are inert here — .sidebar-notice still consumes them plus the
+   shared chrome, untouched). Newest first in DOM = newest on top; bottom
+   pinned, so the column grows upward and entries never shove neighbors.
+   pointer-events: the container and its gaps must never eat clicks; items
+   opt back in; leaving items opt out (no clicking a ghost). */
+.notice-stack {
+  position: fixed;
+  bottom: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.notice-stack .notice-toast {
+  position: static;
+  pointer-events: auto;
+  align-items: flex-start;
+}
+
+/* Kind glyph: quiet on neutral chrome (--text-2, one step under the text),
+   tint-following on toned toasts (inherit beats the descendant default).
+   2px/3px nudges optically center 16px/14px icons on the first fs-md line
+   once items are flex-start (multi-line texts keep the glyph on line one). */
+.notice-toast-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-2);
+}
+
+.notice-stack .notice-toast-dismiss {
+  margin-top: 3px;
+}
+
+/* Tone tints (R8): tone classes replace the old per-kind selectors — the
+   kind class stays in the DOM for harness targeting. Soft fill + text color
+   alone carry it; border drops to transparent (UI-6 pattern, unchanged). */
+.notice-toast-tone-warning {
+  background: var(--warning-soft);
+  border-color: transparent;
+  color: var(--warning);
+}
+
+.notice-toast-tone-danger {
+  background: var(--danger-soft);
+  border-color: transparent;
+  color: var(--danger);
+}
+
+.notice-toast-tone-warning .notice-toast-icon,
+.notice-toast-tone-danger .notice-toast-icon {
+  color: inherit;
+}
+
+/* Exit (slice-R8-cut §3.1): forwards holds the last frame until animationend
+   unmounts. ORDER LAW: this rule must sit AFTER the base .notice-toast rule
+   in the file — equal specificity, later source wins for `animation`. */
+.notice-toast-leaving {
+  animation: fade-out-down var(--dur-2) var(--ease-out) forwards;
+  pointer-events: none;
+}
+
+.notice-toast-text {
+  flex: 1;
+}
+
+.notice-toast-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  display: inline-flex;        /* was: font-size: var(--fs-lg); line-height: 1; */
+  align-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.notice-toast-dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
+.notice-toast-dismiss:hover {
+  color: var(--text-1);
+}
+
+/* ── permission modal (MVP.5) ── */
+
+.permission-modal {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  box-shadow: var(--shadow-dialog);
+  width: min(34rem, 90vw);
+  overflow: hidden;
+  /* Overlay sweep (custom-titlebar §3): native <dialog> UA-positions itself
+     `fixed`, vertically centered — reaches the top 46px on a short window. */
+  -webkit-app-region: no-drag;
+}
+
+.permission-modal[open] {
+  animation: scale-in var(--dur-2) var(--ease-out);
+}
+
+.permission-modal::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-app-region: no-drag;
+}
+
+.permission-modal[open]::backdrop {
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+/* Risk-tinted header strip (design §1.1): background washes per risk level,
+   same escalation ramp the mode chip uses (soft fill, no hard border). */
+.permission-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+
+.permission-modal-header-low {
+  background: var(--success-soft);
+}
+
+.permission-modal-header-medium {
+  background: var(--warning-soft);
+}
+
+.permission-modal-header-high {
+  background: var(--danger-soft);
+}
+
+.permission-modal-header-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.permission-modal-title {
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-lg);
+  color: var(--text-1);
+}
+
+.permission-modal-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  display: inline-flex;        /* was: font-size: var(--fs-xl); line-height: 1; */
+  align-items: center;
+  cursor: pointer;
+  padding: 0 var(--sp-1);
+}
+.permission-modal-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.permission-modal-close:hover {
+  color: var(--text-1);
+}
+
+.permission-modal-body {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* Soft-pill risk badge (UI-6 handoff pattern): bg-soft fill + solid text, no
+   hard border — sits a shade deeper than the header wash it's nested in. */
+.permission-risk-badge {
+  align-self: flex-start;
+  display: inline-flex;
+  gap: var(--sp-2);
+  align-items: center;
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--r-full);
+}
+
+.permission-risk-low {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.permission-risk-medium {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.permission-risk-high {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.permission-destructive-tag {
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  font-size: var(--fs-2xs);
+}
+
+.permission-input-label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+  margin-bottom: var(--sp-1);
+}
+
+.permission-input-value {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 10rem;
+  overflow-y: auto;
+  line-height: var(--lh-code);
+}
+
+.permission-input-value-emphasized {
+  font-size: var(--fs-lg);
+}
+
+.permission-mode {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.permission-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.permission-deny-button,
+.permission-allow-button {
+  padding: 0.4rem 1.1rem;
+  border-radius: var(--r-sm);
+  border: none;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.permission-deny-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.permission-deny-button:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.permission-allow-button {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.permission-allow-button:hover {
+  background: var(--accent-hover);
+}
+
+/* ── R12: verb-first title, previews, keyboard grammar ── */
+
+/* Tool name inside the title sentence: system identifier register (mono),
+   0.95em optical re-leveling against the sans fs-lg around it. */
+.permission-modal-tool {
+  font-family: var(--font-mono);
+  font-weight: var(--w-semibold);
+  font-size: 0.95em;
+}
+
+/* Fail-closed arming must be VISIBLE regardless of Chromium's script-focus
+   :focus-visible heuristic — plain :focus, same geometry as the global ring. */
+.permission-deny-button:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* ⌘⏎ price tag on Allow — quiet, inherits --on-accent. */
+.permission-allow-kbd {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  opacity: 0.7;
+}
+
+/* replace_all qualifier inside the uppercase input label — de-shouted. */
+.permission-preview-note {
+  margin-left: var(--sp-1);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-dim);
+}
+
+/* Truncation / empty-content note — always OUTSIDE the well (§2). */
+.permission-preview-more {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+/* Edit mini-diff well: same material family as .permission-input-value. */
+.permission-diff {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  max-height: 12rem;
+  overflow-y: auto;
+  line-height: var(--lh-code);
+}
+
+/* Hairline seam between old and new groups (only when both render). */
+.permission-diff-old + .permission-diff-new {
+  border-top: 1px solid var(--border);
+}
+
+/* Row = 1.1rem glyph gutter + content column; wrapped lines hang-indent
+   past the gutter so the −/+ rail stays ruler-straight. */
+.permission-diff-line {
+  display: grid;
+  grid-template-columns: 1.1rem 1fr;
+  padding: 0.1rem 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+}
+
+.permission-diff-line::before {
+  font-weight: var(--w-semibold);
+}
+
+.permission-diff-removed {
+  background: var(--danger-soft);
+}
+.permission-diff-removed::before {
+  content: "−"; /* U+2212 */
+  color: var(--danger);
+}
+
+.permission-diff-added {
+  background: var(--success-soft);
+}
+.permission-diff-added::before {
+  content: "+";
+  color: var(--success);
+}
+
+/* ── diff view (design §2.2 — UI-6 token restyle; theme-aware Shiki wiring
+   is in DiffView.tsx via useResolvedTheme(), CSS itself is theme-invariant
+   since every color below is a semantic token) ── */
+
+.diff-view {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-code);  /* R15: diff rows join the unified code leading — was UA normal, the app's densest surface */
+}
+
+.diff-view-placeholder {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.diff-view-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+
+/* The header rule only exists when the hunks container is mounted (the diff is
+   expanded). A default-collapsed large diff shows a clean single header bar
+   instead of a border dangling over empty space. :has() is already used
+   elsewhere in this sheet. */
+.diff-view:has(.diff-view-hunks) .diff-view-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-view-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-view-badge {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.diff-view-badge-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.diff-hunk-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 0.2rem var(--sp-3);
+  border: none;
+  color: var(--text-2);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.diff-hunk-header:hover {
+  background: var(--bg-hover);
+}
+.diff-hunk-header:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Header toggle (R13(b)): caret + path as the whole-diff disclosure — the
+   card's row-as-button grammar one level down. Chips/badges/Copy stay
+   siblings: a button may not nest interactive content, and Copy must work
+   while the diff is folded. */
+.diff-view-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.diff-view-toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Stat chips (R13(a)): the badge recipe on the diff-line tint pairs.
+   tabular-nums — counts update while snapshots stream. */
+.diff-view-stats {
+  display: flex;
+  gap: var(--sp-1);
+  flex: none;
+}
+.diff-stat {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--r-full);
+  font-variant-numeric: tabular-nums;
+}
+.diff-stat-add {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.diff-stat-del {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Copy-after-content (R13(a)): the code-well copy idiom, header edition. */
+.diff-view-copy {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);
+  border-radius: var(--r-xs);
+  opacity: 0;
+  transition: opacity var(--t-fast), color var(--t-fast);
+}
+.diff-view-copy svg {
+  width: 14px;
+  height: 14px;
+}
+.diff-view:hover .diff-view-copy,
+.diff-view-copy:focus-visible,
+.diff-view-copy[data-copied="true"] {
+  opacity: 1;
+}
+.diff-view-copy:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+.diff-view-copy[data-copied="true"] {
+  color: var(--success);
+}
+
+/* Inter-hunk elision band (R13(d')): static, informational — quantifies the
+   unchanged run computeDiff already elided between hunks. Not a control. */
+.diff-hunk-gap {
+  padding: 0.2rem var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  user-select: none;
+}
+
+.diff-line {
+  display: flex;
+  gap: var(--sp-2);
+  min-width: 100%;
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+
+.diff-line-gutter {
+  flex-shrink: 0;
+  width: 2.5rem;
+  text-align: right;
+  color: var(--text-ghost);
+  user-select: none;
+}
+
+.diff-line-marker {
+  flex-shrink: 0;
+  width: 1ch;
+  user-select: none;
+  color: var(--text-ghost);
+}
+
+.diff-line-text {
+  flex: 0 0 auto;
+}
+
+.diff-line-add {
+  background: var(--success-soft);
+}
+
+.diff-line-add .diff-line-marker {
+  color: var(--success);
+}
+
+.diff-line-del {
+  background: var(--danger-soft);
+}
+
+.diff-line-del .diff-line-marker {
+  color: var(--danger);
+}
+
+/* ── GUI-git (design /working-docs/build/design/slice-5.8-cut.md §2.6) ──
+   Quiet environment context + right Review panel (changes/history/diff) + confirm
+   dialog. Reuses the diff-line-*/diff-hunk-* classes above verbatim
+   (GitDiffPane.tsx renders the same recipe as DiffView.tsx) — only the
+   git-diff-pane wrapper classes below are new. ── */
+
+/* -- panel drawer -- */
+
+.git-panel {
+  position: relative;
+  display: flex;
+  width: 100%;
+  justify-self: end;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+}
+
+.session-content-review-open .git-panel {
+  min-width: 0;
+}
+
+.git-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.git-panel-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+  flex-shrink: 0;
+}
+
+.git-panel-refresh {
+  flex-shrink: 0;
+}
+
+.git-panel-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.git-panel-close:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.git-panel-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.git-panel-tab {
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.git-panel-tab:hover {
+  color: var(--text-1);
+}
+
+.git-panel-tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.git-panel-note {
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-3);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.git-panel-error {
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
+.git-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.git-panel-body-diff {
+  overflow: hidden;
+  padding: 0;
+}
+
+.git-panel-diff {
+  min-height: 0;
+}
+
+.git-review-diff {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 32%);
+  height: 100%;
+  min-height: 0;
+}
+
+.git-review-diff .git-panel-diff {
+  min-width: 0;
+  overflow: auto;
+  padding: var(--sp-3);
+}
+
+.git-file-navigator {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg-app);
+}
+
+.git-navigator-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-2);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+}
+
+.git-navigator-search:focus-within {
+  border-color: var(--border-strong);
+  color: var(--text-2);
+}
+
+.git-navigator-search input {
+  min-width: 0;
+  width: 100%;
+  padding: var(--sp-2) 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.git-navigator-search input::placeholder {
+  color: var(--text-3);
+}
+
+.git-navigator-tree {
+  overflow: auto;
+  padding: 0 var(--sp-1) var(--sp-2);
+}
+
+.git-navigator-folder,
+.git-navigator-file {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--sp-1);
+  min-height: 1.9rem;
+  padding-top: 0;
+  padding-right: var(--sp-1);
+  padding-bottom: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-navigator-folder:hover,
+.git-navigator-file:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.git-navigator-folder svg {
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.git-navigator-folder .git-navigator-chevron-open {
+  transform: rotate(0deg);
+}
+
+.git-navigator-file {
+  font-family: var(--font-mono);
+}
+
+.git-navigator-file-selected {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+.git-navigator-file:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.git-navigator-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-navigator-file-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.git-navigator-file-parent {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-navigator-search-result {
+  min-height: 2.5rem;
+}
+
+.git-navigator-mark {
+  flex-shrink: 0;
+  width: 1rem;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-align: center;
+}
+
+.git-navigator-mark-a,
+.git-navigator-mark-u {
+  color: var(--success);
+}
+
+.git-navigator-mark-d {
+  color: var(--danger);
+}
+
+.git-navigator-mark-m,
+.git-navigator-mark-r,
+.git-navigator-mark-c {
+  color: var(--text-3);
+}
+
+.git-navigator-empty {
+  padding: var(--sp-3);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+/* ── LSP status panel (renderer-panels sub-slice A) ── */
+
+.lsp-panel {
+  position: absolute;
+  top: var(--header-h);
+  right: 0;
+  bottom: 0;
+  width: min(26rem, 92vw);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-menu);
+  z-index: 14;
+  animation: fade-slide-up var(--dur-2) var(--ease-out);
+}
+
+.lsp-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.lsp-panel-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+}
+
+.lsp-panel-refresh,
+.lsp-panel-close {
+  flex-shrink: 0;
+}
+
+.lsp-panel-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.lsp-panel-close:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.lsp-panel-summary {
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.lsp-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.lsp-empty {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+.lsp-server-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+
+.lsp-server-main,
+.lsp-server-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.lsp-server-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lsp-server-meta {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.lsp-server-meta span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lsp-state {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+}
+
+.lsp-state-ready {
+  border-color: var(--success);
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.lsp-state-initializing {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.lsp-state-crashed {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-weight: var(--w-semibold);
+}
+
+.lsp-state-disposed,
+.lsp-state-not_started {
+  color: var(--text-3);
+  background: var(--bg-elevated);
+}
+
+.lsp-stderr {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.lsp-stderr summary {
+  cursor: pointer;
+}
+
+.lsp-stderr pre {
+  max-height: 9rem;
+  overflow: auto;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  white-space: pre-wrap;
+}
+
+/* ── Hooks config-list panel (renderer-panels sub-slice B) ── */
+
+.hooks-panel {
+  z-index: 14;
+}
+
+.hooks-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+
+.hooks-row-main,
+.hooks-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.hooks-event {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.hooks-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hooks-row-meta {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.hooks-row-meta span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hooks-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+.hooks-error-icon {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.hooks-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.hooks-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-semibold);
+}
+
+.hooks-group-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.hooks-group-count {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-normal);
+}
+
+/* ── Checkpoint timeline panel (slice P7.26/R2) ── */
+
+.timeline-panel {
+  z-index: 14;
+}
+
+.timeline-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.timeline-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2);
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline-row-main:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.timeline-row-main:disabled {
+  cursor: default;
+}
+
+.timeline-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-reason {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  background: var(--bg-elevated);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+}
+
+.timeline-reason-pre-rewind {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.timeline-age {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.timeline-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.timeline-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.timeline-confirm-cancel,
+.timeline-confirm-confirm {
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.timeline-confirm-cancel {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-2);
+}
+
+.timeline-confirm-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.timeline-confirm-confirm {
+  border: none;
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+.timeline-confirm-confirm:hover {
+  background: color-mix(in srgb, var(--danger) 85%, black);
+}
+
+/* -- branch controls -- */
+
+.git-branch-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.git-branch-select {
+  flex: 1;
+  min-width: 0;
+  padding: 0.2rem var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-1);
+  font-size: var(--fs-xs);
+}
+
+.git-branch-new {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);
+}
+
+.git-branch-new svg {
+  width: 14px;
+  height: 14px;
+}
+
+.git-branch-create-form {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.git-branch-create-input {
+  min-width: 0;
+  width: 9rem;
+  padding: 0.2rem var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-1);
+  font-size: var(--fs-xs);
+}
+
+/* -- changes view -- */
+
+.git-changes-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.git-changes-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.git-changes-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+  padding: 0 0 var(--sp-1);
+}
+
+.git-changes-empty {
+  padding: var(--sp-2) 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.git-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+
+.git-file-row:hover {
+  background: var(--bg-hover);
+}
+
+.git-file-row:last-child {
+  border-bottom: none;
+}
+
+.git-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-1);
+}
+
+.git-file-path-button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-file-path-button:hover {
+  color: var(--accent);
+}
+
+.git-file-badge {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+}
+
+.git-file-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--sp-1);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.git-file-row:hover .git-file-actions,
+.git-file-row:focus-within .git-file-actions {
+  opacity: 1;
+}
+
+/* -- shared small button -- */
+
+.git-btn {
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+
+.git-btn:hover:not(:disabled) {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.git-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.git-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.git-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.git-btn-destructive {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.git-btn-destructive:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.git-btn-link {
+  border: none;
+  padding: 0 0.2rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* -- commit form -- */
+
+.git-commit-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.git-commit-message {
+  resize: vertical;
+  min-height: 3.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.git-commit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* -- stash/reset -- */
+
+.git-stash-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.git-stash-message {
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font-size: var(--fs-xs);
+}
+
+.git-stash-untracked {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+}
+
+.git-stash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* -- history view -- */
+
+.git-history-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.git-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+}
+
+.git-history-sha {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  color: var(--text-3);
+}
+
+.git-history-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+}
+
+.git-history-meta {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+/* -- diff pane (GitDiffPane.tsx, wave D1) -- */
+
+.git-diff-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  font-size: var(--fs-xs);
+}
+
+.git-diff-banner {
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-2xs);
+}
+
+.git-diff-empty {
+  padding: var(--sp-2) 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.git-diff-file {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.git-diff-file-header {
+  padding: 0.3rem var(--sp-3);
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+}
+
+.git-diff-file-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-1);
+}
+
+.git-diff-file-binary {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+/* One horizontal viewport per file. Individual diff rows deliberately never
+   scroll: their content widens this inner code strip instead. */
+.git-diff-file-code {
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--bg-app);
+}
+
+/* The hunk owns the horizontal canvas. Each row then fills that SAME canvas,
+   so an added/deleted background ends on one clean shared vertical edge. */
+.git-diff-file-code .diff-hunk {
+  width: max-content;
+  min-width: 100%;
+}
+
+.git-diff-file-code .diff-line {
+  width: 100%;
+}
+
+/* -- confirm dialog (native <dialog>, PermissionModal precedent) -- */
+
+.git-confirm-dialog {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  box-shadow: var(--shadow-dialog);
+  width: min(28rem, 90vw);
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+
+.git-confirm-dialog[open] {
+  animation: scale-in var(--dur-2) var(--ease-out);
+}
+
+.git-confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-app-region: no-drag;
+}
+
+.git-confirm-dialog[open]::backdrop {
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+.git-confirm-header {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--danger-soft);
+}
+
+.git-confirm-title {
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-lg);
+  color: var(--text-1);
+}
+
+.git-confirm-body {
+  padding: var(--sp-4);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+
+.git-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.git-confirm-cancel,
+.git-confirm-confirm {
+  padding: 0.4rem 1.1rem;
+  border-radius: var(--r-sm);
+  border: none;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.git-confirm-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.git-confirm-cancel:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.git-confirm-cancel:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.git-confirm-confirm {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+.git-confirm-confirm:hover {
+  background: color-mix(in srgb, var(--danger) 85%, black);
+}

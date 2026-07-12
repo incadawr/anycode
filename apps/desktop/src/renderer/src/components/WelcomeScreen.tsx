@@ -1,0 +1,101 @@
+/**
+ * Welcome screen (slice 2.2, ruling reviews/slice-2.2-forks-ruling.md §2 —
+
+ * -> quit` boot path): rendered by App.tsx precisely when the app is
+ * unconfigured (`!providerReady && tabs.length === 0`, `shouldShowWelcome`
+ * in ../App.tsx). There is nothing else on screen in that state — main
+ * opened the window with zero hosts — so this embeds `ProviderSettings`
+ * directly (no dialog chrome) rather than requiring an extra click through a
+ * modal just to reach the only thing there is to do.
+ *
+ * Deliberately owns no readiness logic itself: App.tsx decides WHETHER to
+ * mount this component at all (off the settings-store's `snapshot` +
+ * tabs-store's `tabs.length`, per the gating function it exports). Once the
+ * provider is ready App.tsx shows the normal shell; the user opens the first
+ * session explicitly.
+ *
+ * R11 restage (slice-R11-cut.md §2.2): full first-run redesign — brand beat
+ * (wordmark + mode-ramp motif) + the carved `ProviderSettings` (only the
+ * provider step, not all seven settings sections) + an honest two-beat
+ * progress footer. Auto-advance is still App's declarative unmount above —
+ * this component adds no readiness state of its own.
+ */
+import { useEffect, useRef } from "react";
+import { useStore } from "zustand";
+import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
+import { ProviderSettings } from "./SettingsScreen.js";
+import { BrandMark } from "./icons.js";
+import "../settings.css";
+
+export interface WelcomeScreenProps {
+  /** Injectable for test isolation; defaults to the app's singleton settings-store. */
+  store?: SettingsStoreApi;
+}
+
+export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) {
+  const snapshot = useStore(store, (s) => s.snapshot);
+  const notice = useStore(store, (s) => s.notice);
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Beat 2 of the honest two-beat footer: providerReady flips true just before
+  // App stops rendering Welcome and shows the normal shell.
+  const ready = snapshot?.providerReady === true;
+
+  // R17 a11y: this is the setup screen with nothing else to do — focus the first
+  // provider field on mount so a keyboard/SR user lands directly on the one
+  // actionable control (an intentional focus-steal, scoped here rather than in
+  // the shared ProviderSettings, which the settings dialog also mounts).
+  useEffect(() => {
+    cardRef.current?.querySelector<HTMLElement>("select, input, textarea")?.focus();
+  }, []);
+
+  return (
+    <div className="welcome-screen">
+      <div className="welcome-screen-card" ref={cardRef}>
+        <header className="welcome-brand">
+          <BrandMark className="welcome-mark" />
+          <h1 className="welcome-wordmark">
+            <span className="welcome-wordmark-any">Any</span>Code
+          </h1>
+          {/* The mode-ramp motif: plan → build → edit → auto → yolo, quoting
+              the mode chip's escalation colors. Decorative — aria-hidden. */}
+          <div className="welcome-ramp" aria-hidden="true">
+            <span className="welcome-ramp-dot welcome-ramp-plan" />
+            <span className="welcome-ramp-dot welcome-ramp-build" />
+            <span className="welcome-ramp-dot welcome-ramp-edit" />
+            <span className="welcome-ramp-dot welcome-ramp-auto" />
+            <span className="welcome-ramp-dot welcome-ramp-yolo" />
+          </div>
+          <p className="welcome-promise">
+            A coding agent for any provider — every step legible, every permission yours.
+          </p>
+        </header>
+
+        {snapshot?.readOnly && (
+          <div className="settings-banner-readonly" role="alert">
+            Settings file is a newer version than this app understands — changes are disabled
+            until you upgrade.
+          </div>
+        )}
+
+        <ProviderSettings store={store} />
+
+        {notice && (
+          <div className="settings-notice" role="alert">
+            {notice}
+          </div>
+        )}
+
+        <footer className="welcome-steps" role="status">
+          <span
+            className={`welcome-step-dot ${ready ? "welcome-step-dot-done" : "welcome-step-dot-active"}`}
+            aria-hidden="true"
+          />
+          <span className={`welcome-step-dot${ready ? " welcome-step-dot-active" : ""}`} aria-hidden="true" />
+          <span className="welcome-steps-caption">
+            {ready ? "Provider ready — open a task from the sidebar" : "Connect a provider to begin"}
+          </span>
+        </footer>
+      </div>
+    </div>
+  );
+}

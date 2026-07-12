@@ -1,0 +1,2149 @@
+/*
+ * Welcome screen, Settings screen/dialog, weak-storage consent dialog, and
+ * the "Always allow" affordance on the permission modal (originally slice
+ * 2.2/2.5/2.6/3.2 — see git history for the per-feature design docs; this
+ * header no longer tracks per-slice provenance now that the UI redesign
+ * (ui-redesign-direction.md, UI-2/UI-7) has re-based everything onto the
+ * shared token system).
+ *
+ * Deliberately its OWN stylesheet, imported directly from the components
+ * that need it (`import "../settings.css"`) rather than folded into
+ * app.css. Reuses the semantic tokens declared in `tokens.css`
+ * (--bg-card/--bg-inset/--border/--text-1/--text-2/--accent/--danger/
+ * --warning/--success and their `-soft` fills) so these screens read as part
+ * of the same visual system without redeclaring the palette.
+ */
+
+/* ── welcome screen (ruling §2: unconfigured boot, 0 tabs) ── */
+
+.welcome-screen {
+  display: flex;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--sp-6) var(--sp-4);
+  background: var(--bg-app);
+}
+
+.welcome-screen-card {
+  margin: auto;
+  width: min(100%, 34rem);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-dialog);
+  /* On a short window the card scrolls under the fixed .welcome-titlebar drag
+     band; carve the card out so its inputs stay clickable, not drag-dead. */
+  -webkit-app-region: no-drag;
+  animation: fade-slide-up var(--dur-3) var(--ease-out);
+}
+
+/* ── R11 brand beat (slice-R11-cut §3.4): weight-duet wordmark + the
+   mode-ramp motif as a quiet signature. R21 quotes this at brand scale —
+   keep the classes self-contained. Pure CSS, no assets (CSP/asar law). ── */
+
+.welcome-brand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* R21 brand mark (slice-R21-cut §A): the app icon at splash scale. The svg
+   bakes its own plate/inks — brand constants scoped inside BrandMark, not
+   theme tokens; it renders identically in both themes like a dock icon.
+   Stylesheet's job is sizing only. */
+.welcome-mark {
+  width: 64px;
+  height: 64px;
+}
+
+.welcome-wordmark {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: calc(var(--fs-xl) * 1.6); /* 2rem — derived from the scale, no new token */
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+}
+
+.welcome-wordmark-any {
+  font-weight: var(--w-normal);
+}
+
+/* The escalation ramp, plan → yolo (mode-chip colors quoted verbatim;
+   build/edit are both --accent in the chip ramp — the 55% grade is the same
+   soft-vs-bordered distinction the chips draw, stated as intensity). */
+.welcome-ramp {
+  display: flex;
+  gap: 0.375rem;
+  padding: var(--sp-1) 0;
+}
+
+.welcome-ramp-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  /* Staggered breath on mount — reused fade-in, `backwards` holds opacity:0
+     through each dot's delay so the ramp lights left-to-right. */
+  animation: fade-in var(--dur-3) var(--ease-out) backwards;
+}
+
+.welcome-ramp-plan  { background: var(--text-3); }
+.welcome-ramp-build { background: var(--accent); opacity: 0.55; animation-delay: 40ms; }
+.welcome-ramp-edit  { background: var(--accent); animation-delay: 80ms; }
+.welcome-ramp-auto  { background: var(--warning); animation-delay: 120ms; }
+.welcome-ramp-yolo  { background: var(--danger); animation-delay: 160ms; }
+
+/* tokens.css's global reduced-motion floor zeroes durations but NOT delays —
+   without this, `backwards` fill would blank the later dots for their whole
+   delay. Delays collapse; the floor handles the rest. */
+@media (prefers-reduced-motion: reduce) {
+  .welcome-ramp-dot { animation-delay: 0ms !important; }
+}
+
+.welcome-promise {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+
+/* ── R11 setup progress: an honest two-beat (configure → ready) ── */
+
+.welcome-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.welcome-step-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--text-ghost);
+  transition: background var(--dur-2) var(--ease-out);
+}
+
+.welcome-step-dot-active { background: var(--accent); }
+.welcome-step-dot-done   { background: var(--success); }
+
+.welcome-steps-caption {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+/* ── settings screen (embedded panel, or wrapped by .settings-dialog) ── */
+
+.settings-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-screen-loading {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  padding: var(--sp-4);
+}
+
+/* ── P7.16 fullscreen shell (design/slice-P7.16-cut.md §3/§5 W2): a wide
+   rail — Back to app, Search settings, then the section tablist — and a
+   right content pane with a page-title block above the scrolling tabpanel.
+   Supersedes R16's plain two-pane frame; same tablist/tabpanel roles. ── */
+
+.settings-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;                 /* the sidebar-scroll law: without this the pane can't shrink */
+}
+
+.settings-rail {
+  flex-shrink: 0;
+  width: 13rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+/* Drag band (custom-titlebar law, settings.css:522's `.update-banner`
+   precedent): fullscreen covers the app's own titlebar, so this strip is the
+   window's only grabbable top edge while settings is open. Every
+   interactive child (the Back button) MUST set no-drag. */
+.settings-rail-header {
+  flex-shrink: 0;
+  min-height: var(--header-h);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  -webkit-app-region: drag;
+}
+
+/* macOS traffic-light clearance — same law as `.session-header`'s collapsed-
+   sidebar rule (app.css:750): the native lights sit over this strip's left
+   edge regardless of the dialog's top-layer stacking. */
+:root[data-platform="darwin"] .settings-rail-header {
+  padding-left: var(--titlebar-traffic-clearance);
+}
+
+:root[data-platform="darwin"][data-fullscreen="true"] .settings-rail-header {
+  padding-left: var(--sp-2);
+}
+
+.settings-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.3rem var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.settings-back:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.settings-back-chevron {
+  width: 14px;
+  height: 14px;
+  transform: rotate(90deg);      /* down-chevron -> left-pointing, `.model-pill-back-chevron`'s law */
+}
+
+.settings-search {
+  position: relative;
+  flex-shrink: 0;
+  display: block;
+  margin: 0 var(--sp-3) var(--sp-2);
+}
+
+.settings-search-icon {
+  position: absolute;
+  left: var(--sp-2);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.settings-search-input {
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) 28px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-sm);
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+
+.settings-search-input:hover {
+  border-color: var(--border-strong);
+}
+
+.settings-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.settings-nav {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2);
+  overflow-y: auto;              /* seven items today; never traps on a tiny window */
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0.4rem var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.settings-nav-item svg {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+}
+
+.settings-nav-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+/* State attribute drives the style — same idiom as .sidebar-row[aria-current="true"]. */
+.settings-nav-item[aria-selected="true"] {
+  background: var(--bg-active);
+  color: var(--text-1);
+  font-weight: var(--w-medium);
+}
+
+.settings-nav-item[aria-selected="true"] svg {
+  color: var(--text-1);
+}
+
+.settings-nav-empty {
+  padding: var(--sp-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-content-header {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: 46rem;
+  padding: var(--sp-5) var(--sp-5) 0;
+}
+
+.settings-page-title {
+  margin: 0;
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-xl);
+  color: var(--text-1);
+}
+
+.settings-page-description {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.settings-content-header .settings-banner-readonly,
+.settings-content-header .settings-notice {
+  margin-top: var(--sp-2);
+}
+
+.settings-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  max-width: 46rem;
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;                  /* the old .settings-screen section rhythm, re-homed */
+}
+
+.settings-banner-readonly {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  color: var(--warning);
+  font-size: var(--fs-sm);
+  background: var(--warning-soft);
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.settings-section-title {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.settings-field-label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.settings-field-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.settings-field-input,
+.settings-field-select {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-md);
+  padding: 0.35rem 0.5rem;
+  flex: 1;
+}
+
+.settings-field-input:disabled,
+.settings-field-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* R8 notifications switch (slice-R8-cut §4.4): the app's first toggle.
+   Track = well at rest, accent when on; thumb rides 14px. Button element —
+   the global :focus-visible ring applies as-is. */
+.settings-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.settings-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-full);
+  background: var(--text-3);
+  transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+}
+
+.settings-switch-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-switch-on .settings-switch-thumb {
+  transform: translateX(14px);
+  background: var(--on-accent);
+}
+
+.settings-switch-caption {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.settings-button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  padding: 0.35rem 0.8rem;
+  white-space: nowrap;
+}
+
+.settings-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.settings-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.settings-button-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.settings-button-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.settings-button-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+/* ── secret status badge: soft-pill, no hard border (UI-6 handoff pattern) ── */
+
+.settings-secret-status {
+  font-size: var(--fs-xs);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.settings-secret-status-ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.settings-secret-status-warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.settings-secret-status-muted {
+  color: var(--text-2);
+}
+
+.settings-env-warning {
+  font-size: var(--fs-xs);
+  color: var(--warning);
+}
+
+/* ── OAuth credential block (slice 2.5 §5: Sign in / pending / Signed in) ── */
+
+.settings-oauth-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-oauth-pending {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* ── MCP status row (slice 3.2, design §6, task 3.2.4): status display only, no server-management UI (§5.1) ── */
+
+.settings-mcp-empty {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+/* ── R16 MCP rows: substatus vocabulary (color once per row, on the glyph) ── */
+
+.settings-mcp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings-mcp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.settings-mcp-name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);       /* mono anchor law: 12 / 400 / no track */
+  color: var(--text-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-mcp-transport {
+  flex: none;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+.settings-mcp-detail {
+  flex: none;
+  margin-left: auto;
+  max-width: 55%;
+  font-size: var(--fs-xs);
+  color: var(--text-2);          /* R14 law: state color lives ONLY on the glyph cell */
+  font-variant-numeric: tabular-nums;   /* tool counts align as a right column */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── auto-updater (slice 2.6, design §6): Updates section + global banner ── */
+
+.settings-update-status {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.update-banner {
+  position: fixed;
+  top: var(--sp-2);
+  right: var(--sp-3);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-menu);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-sm);
+  /* Overlay sweep (custom-titlebar §3): pinned to the top edge, squarely inside the drag band. */
+  -webkit-app-region: no-drag;
+}
+
+.update-banner-text {
+  color: var(--text-1);
+}
+
+.update-banner-action {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  color: var(--on-accent);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.55rem;
+  white-space: nowrap;
+}
+
+/* ── always-allow rules list ── */
+
+.settings-rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+}
+
+.settings-rule-tool {
+  font-family: var(--font-mono);
+}
+
+/* ── grouped rule cards (P7.16 §4.1/W3): one card per exact toolName ── */
+
+.settings-rule-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.settings-rule-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.settings-rule-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.settings-rule-group-icon {
+  flex: none;
+  color: var(--text-3);
+}
+
+.settings-rule-group-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+}
+
+.settings-rule-pattern-cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.settings-rule-pattern {
+  color: var(--text-dim);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "all uses" pill (P7.16 §4.1): the pattern-less-rule render — NEVER blank
+   (fixes the old "Edit ✕" bug where a bare {toolName} rule showed nothing
+   between the tool name and the remove button). */
+.settings-rule-allpill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.settings-rule-remove {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;        /* was: font-size: var(--fs-lg); line-height: 1; */
+  align-items: center;
+  padding: 0 0.25rem;
+}
+.settings-rule-remove svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-rule-remove:hover {
+  color: var(--danger);
+}
+
+.settings-rule-empty {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+/* ── manual-add form (P7.16 §4.1/W3): tool + optional pattern + Add, bottom of the pane ── */
+
+.settings-rule-add {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.settings-rule-add-tool {
+  flex: 0 0 9rem;
+}
+
+.settings-rule-add-pattern {
+  flex: 1;
+}
+
+.settings-notice {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--danger-soft);
+  border-left: 2px solid var(--danger);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+}
+
+/* ── R16 About pane (R21 upgrades .settings-about-name to the wordmark) ── */
+
+.settings-about-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.settings-about-mark {
+  width: 32px;
+  height: 32px;
+  flex: none;
+}
+
+.settings-about-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.settings-about-name {
+  font-size: var(--fs-lg);       /* dialog-title register; NOT display size */
+  font-weight: var(--w-semibold);
+  letter-spacing: -0.02em;       /* R21: the weight-duet reads as wordmark — match the hero's tracking */
+  color: var(--text-1);
+}
+
+.settings-about-tag {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.settings-about-ack {
+  margin: 0;                     /* UA <p> margin reset; the section gap owns rhythm */
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  color: var(--text-2);
+}
+
+/* ── settings dialog (App.tsx's ready-state modal wrapper around SettingsScreen) ── */
+
+.settings-dialog {
+  /* P7.16 W2 (design/slice-P7.16-cut.md §3): full-window takeover — the
+     dialog itself IS the page now, not a floating card, so it drops the
+     popup's border/radius/shadow/UA-centered sizing. */
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  box-shadow: none;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  overflow: hidden;
+  display: flex;
+  -webkit-app-region: no-drag;
+}
+
+.settings-dialog[open] {
+  /* A 52rem scale-pop reads wrong at 100vw — a plain fade instead. */
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+.settings-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-app-region: no-drag;
+}
+
+.settings-dialog[open]::backdrop {
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+/* ── weak-storage consent dialog (ruling §1/design §4): neutral dialog chrome
+   — the risk cue lives in the header strip, same pattern as PermissionModal's
+   risk-tinted header rather than a hard-colored dialog border. ── */
+
+.consent-dialog {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  box-shadow: var(--shadow-dialog);
+  width: min(30rem, 90vw);
+  overflow: hidden;
+  /* Overlay sweep (custom-titlebar §3): same native-<dialog> reasoning as .settings-dialog above. */
+  -webkit-app-region: no-drag;
+}
+
+.consent-dialog[open] {
+  animation: scale-in var(--dur-2) var(--ease-out);
+}
+
+.consent-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-app-region: no-drag;
+}
+
+.consent-dialog[open]::backdrop {
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+.consent-dialog-header {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--warning-soft);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+
+.consent-dialog-title {
+  font-weight: var(--w-semibold);
+  color: var(--warning);
+}
+
+.consent-dialog-body {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  color: var(--text-2);
+}
+
+.consent-dialog-body code {
+  font-family: var(--font-mono);
+  background: var(--bg-inset);
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--r-xs);
+  color: var(--text-1);
+  font-size: 0.93em;  /* chip constant (R15 §1.G) — full-size mono inside 14px ui prose reads oversized */
+}
+
+/* R15 weight law: UA <strong> = 700; the consent warning phrase is the one
+   bare <strong> outside markdown — clamp to semibold so no 700 renders anywhere
+   (mirrors .message-markdown strong; direction §1.3). */
+.consent-dialog-body strong {
+  font-weight: var(--w-semibold);
+}
+
+.consent-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.consent-decline-button,
+.consent-accept-button {
+  padding: 0.4rem 1.1rem;
+  border-radius: var(--r-sm);
+  border: none;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.consent-decline-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-1);
+}
+
+.consent-decline-button:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.consent-accept-button {
+  background: var(--warning);
+  color: var(--on-accent);
+}
+
+.consent-accept-button:hover {
+  filter: brightness(1.08);
+}
+
+/* R12 §5: same explicit arming ring as the permission Deny button. */
+.consent-decline-button:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* ── PermissionModal's "Always allow" addition (slice 2.2, ruling §2/design §5) ── */
+
+.permission-remember {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.permission-remember-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.permission-remember-pattern {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  padding: 0.3rem 0.5rem;
+}
+
+/* R12 §4: scope disclosure, shown only while checked. */
+.permission-remember-scope {
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-body);
+  color: var(--text-3);
+}
+
+/* ── P7.19/F22 W3 MCP Servers pane (design/slice-P7.19-cut.md §1/§4 W3):
+   management page replacing the old status-only thin list above
+   (.settings-mcp-list/.settings-mcp-row stay defined for any lingering
+   references but are no longer rendered by SettingsScreen). Row grammar
+   §1.1: dot + name + badges on line 1, muted transport/command on line 2,
+   right-aligned controls §1.2. Reuses settings-field/settings-button/
+   settings-switch/settings-mcp-name tokens throughout — no new design
+   system. ── */
+
+.mcp-pane {
+  gap: 1rem;
+}
+
+.mcp-pane-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mcp-pane-search {
+  flex: 1;
+  margin: 0;
+}
+
+.mcp-pane-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.mcp-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.mcp-icon-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+  border-color: var(--border-strong);
+}
+
+.mcp-icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.mcp-icon-button-danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ── problems[] dismissable strip (design §4 W3) ── */
+
+.mcp-problem-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-sm);
+}
+
+.mcp-problem-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.mcp-problem-dismiss svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ── sections: "Configured servers" / "From .mcp.json" (design §1.5) ── */
+
+.mcp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mcp-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.mcp-section-count {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: var(--w-normal);
+  color: var(--text-dim);
+}
+
+.mcp-section-note {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: var(--w-normal);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* ── row grammar (design §1.1/§1.2) ── */
+
+.mcp-row-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mcp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.mcp-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+}
+
+/* Status dot — colored once, on the dot itself (R14 law), never re-colored on the text beside it. */
+.mcp-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 0.3rem;
+  flex-shrink: 0;
+  border-radius: var(--r-full);
+  background: var(--text-ghost);
+}
+
+.mcp-row.mcp-dot-completed .mcp-dot { background: var(--success); }
+.mcp-row.mcp-dot-running .mcp-dot   { background: var(--accent); }
+.mcp-row.mcp-dot-failed .mcp-dot    { background: var(--danger); }
+.mcp-row.mcp-dot-idle .mcp-dot      { background: var(--text-ghost); }
+.mcp-row.mcp-dot-neutral .mcp-dot   { background: var(--text-3); }
+
+/* "off" (disabled) — hollow ring, not a filled dot: visually distinct from every runtime state. */
+.mcp-row.mcp-dot-off .mcp-dot {
+  background: transparent;
+  border: 1.5px solid var(--text-ghost);
+}
+
+.mcp-row-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-row-line1 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.mcp-row-name {
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+}
+
+/* line 2: "stdio · <full command>" — one line, ellipsis-truncated (design §1.1). */
+.mcp-row-line2 {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-row-hint {
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.mcp-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.mcp-promote-button {
+  white-space: nowrap;
+}
+
+.mcp-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mcp-confirm-text {
+  font-size: var(--fs-xs);
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+/* ── badges: User/Project/Compat + N-tools (design §1.1) ── */
+
+.mcp-badge {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.mcp-badge-project { color: var(--accent); }
+.mcp-badge-user    { color: var(--text-2); }
+.mcp-badge-compat  { color: var(--warning); }
+.mcp-badge-tools   { color: var(--success); }
+
+/* ── add/edit + import dialogs (native <dialog>, same chrome as .consent-dialog) ── */
+
+.mcp-form-dialog {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  width: min(90vw, 30rem);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.mcp-form-dialog[open] {
+  animation: scale-in var(--dur-2) var(--ease-out);
+}
+
+.mcp-form-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-app-region: no-drag;
+}
+
+.mcp-form-dialog[open]::backdrop {
+  animation: fade-in var(--dur-2) var(--ease-out);
+}
+
+.mcp-import-dialog {
+  width: min(92vw, 36rem);
+}
+
+.mcp-dialog-header {
+  flex-shrink: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-dialog-title {
+  font-weight: var(--w-semibold);
+}
+
+.mcp-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.mcp-dialog-actions {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.mcp-radio-row {
+  display: flex;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.mcp-radio-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.mcp-textarea {
+  min-height: 4rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  resize: vertical;
+}
+
+/* ── env editor: locked existing keys (write-only replace) + new key/value rows (design §3 custody) ── */
+
+.mcp-env-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.mcp-env-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mcp-env-key {
+  flex: 0 0 auto;
+  min-width: 6rem;
+  color: var(--text-dim);
+}
+
+.mcp-env-key-input {
+  flex: 0 0 8rem;
+}
+
+/* ── import dialog: candidates grouped by harness, masked env chips (design §4 W3) ── */
+
+.mcp-import-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-import-group:last-of-type {
+  border-bottom: none;
+}
+
+.mcp-import-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+}
+
+.mcp-import-source {
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+.mcp-import-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.mcp-import-name {
+  font-weight: var(--w-medium);
+}
+
+.mcp-env-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  width: 100%;
+  margin-left: 1.5rem;
+}
+
+.mcp-env-chip {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  background: var(--bg-inset);
+  border-radius: var(--r-full);
+  padding: 0.05rem 0.4rem;
+  color: var(--text-2);
+}
+
+.mcp-import-scope {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mcp-consent-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.mcp-import-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+/* ── Skills pane (P7.20/F23 W3, design/slice-P7.20-cut.md §1/§5 W3): reuses
+   the F22 mcp-*/settings-* row/badge/toggle/dialog vocabulary above wholesale
+   (rows carry BOTH a "skills-*" and the matching "mcp-*" class — presentation
+   is shared, "skills-*" exists for anything that needs its own hook/tweak).
+   Only genuinely skills-shaped rules are additive here. ── */
+
+.skills-pane {
+  gap: 1rem;
+}
+
+.skills-pane-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.skills-pane-search {
+  flex: 1;
+  margin: 0;
+}
+
+.skills-source-select {
+  flex-shrink: 0;
+  width: auto;
+}
+
+/* ── problems strip: dismissible AND chevron-expandable (design §1.3 — the
+   one behavioral divergence from the MCP strip, which has no expand). ── */
+
+.skills-problem-strip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: stretch;
+}
+
+.skills-problem-strip-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.skills-problem-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.skills-problem-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  transform: rotate(-90deg);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.skills-problem-chevron-expanded {
+  transform: rotate(0deg);
+}
+
+.skills-problem-list {
+  margin: 0;
+  padding-left: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: var(--fs-xs);
+}
+
+/* ── row grammar (design §1.4/§1.5): icon + name + badge, muted truncated description ── */
+
+.skills-row-icon {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+  color: var(--text-3);
+}
+
+.skills-row-name {
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+}
+
+.skills-plugin-name {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+/* ── badges: Workspace/Personal/Plugin (design §1.4/§1.5) ── */
+
+.skills-badge {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.skills-badge-project { color: var(--accent); }
+.skills-badge-user    { color: var(--text-2); }
+.skills-badge-plugin  { color: var(--text-dim); }
+.skills-badge-incompatible { color: var(--danger); }
+
+/* ── create dialog (design §2 D1: scaffold-only confirmation + Reveal) ── */
+
+.skills-create-confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.skills-create-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--bg-inset);
+  border-radius: var(--r-sm);
+  padding: 0.05rem 0.35rem;
+  word-break: break-all;
+}
+
+.skills-field-invalid {
+  font-size: var(--fs-2xs);
+  color: var(--danger);
+}
+
+/* ── import dialog: an incompatible candidate renders disabled (design §2 D3) ── */
+
+.skills-import-row-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ── Subagents pane (P7.21/F21 W3, design/slice-P7.21-cut.md §1/§4 W3): reuses
+   the F22/F23 mcp-*/settings-*/skills-* row/badge/dialog vocabulary above
+   wholesale (rows carry the shared "skills-row mcp-row" class family) — only
+   genuinely subagent-shaped rules are additive here. ── */
+
+.subagents-row-icon-builtin {
+  color: var(--accent);
+}
+
+/* Tools-count badge ("All tools" / "N tools", ref-PNG §1.3/§1.5) — a distinct
+   tone from the source badges so the two badge kinds read as different facts. */
+.subagents-badge-tools {
+  color: var(--success);
+}
+
+/* Monospace `built-in:<name>` id line under a built-in card's description
+   (ref-PNG §1.3, verbatim format). */
+.subagents-id-line {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+/* ── editor: tool chips (design §4 W3 — "empty selection = inherit all") ── */
+
+.subagents-tools-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.subagents-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: var(--fs-xs);
+  padding: 0.1rem 0.55rem;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.subagents-tool-chip-selected {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.subagents-tools-hint {
+  font-size: var(--fs-2xs);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* ── editor: Edit | Preview tabs (design §4 W3) ── */
+
+.subagents-editor-tabs {
+  display: flex;
+  gap: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.subagents-editor-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.35rem 0.1rem;
+  font: inherit;
+  font-weight: var(--w-medium);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.subagents-editor-tab[aria-selected="true"] {
+  color: var(--text-1);
+  border-bottom-color: var(--accent);
+}
+
+.subagents-body-textarea {
+  min-height: 10rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* ── editor: Preview tab (design §2-D4 — the REAL builder output, not a lookalike) ── */
+
+.subagents-preview-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.subagents-preview-prompt {
+  margin: 0;
+  padding: var(--sp-3);
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--bg-inset);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+}
+
+.subagents-preview-tools {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.subagents-preview-caption {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.subagents-issue-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.25rem;
+  font-size: var(--fs-2xs);
+}
+
+/* ── Profile pane (P7.22/F19 W3, design/slice-P7.22-cut.md §1/§2-D2/§2-D3
+   W3): tiles strip + Token-activity heatmap + two info columns + telemetry
+   toggle + empty-state matrix. Theming rides the SAME `--accent`/`--bg-card`/
+   `--border`/`--text-*` custom properties every other Settings pane above
+   already reads off tokens.css's `[data-theme="dark"|"light"]` blocks — the
+   heatmap buckets use `color-mix(in srgb, var(--accent) N%, var(--bg-card))`
+   (the same mechanism tokens.css's own `--mark-bg` already uses), so both
+   themes fall out of the one ramp with zero duplicated hex and zero new
+   media-query branch. dataviz skill: a single sequential hue (accent),
+   light-to-dark, bucket 0 reserved for empty/zero. ── */
+
+.profile-pane {
+  gap: 1.25rem;
+}
+
+.profile-pane-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.profile-pane-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.profile-refresh-button {
+  flex-shrink: 0;
+}
+
+/* ── tiles row (design §1.1): one bordered strip of 5 equal tiles ── */
+
+.profile-tiles-row {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.profile-tile {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: var(--sp-4) var(--sp-2);
+  text-align: center;
+  border-right: 1px solid var(--border);
+}
+
+.profile-tile:last-child {
+  border-right: none;
+}
+
+.profile-tile-value {
+  font-size: var(--fs-xl);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-tile-caption {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* ── Token activity heatmap (design §1.2/§2-D3.6: daily-only v1, 12 months) ── */
+
+.profile-heatmap-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.profile-heatmap-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.profile-heatmap-mode {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.profile-heatmap-grid {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.profile-heatmap-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.profile-heatmap-cell {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--bg-inset);
+}
+
+/* 5-step sequential ramp (bucket 0 = the bare cell background above): one
+   hue (--accent), light-to-dark, stepped by `color-mix` against the chart
+   surface so it re-derives correctly under both themes automatically. */
+.profile-heatmap-bucket-1 { background: color-mix(in srgb, var(--accent) 25%, var(--bg-card)); }
+.profile-heatmap-bucket-2 { background: color-mix(in srgb, var(--accent) 48%, var(--bg-card)); }
+.profile-heatmap-bucket-3 { background: color-mix(in srgb, var(--accent) 70%, var(--bg-card)); }
+.profile-heatmap-bucket-4 { background: color-mix(in srgb, var(--accent) 92%, var(--bg-card)); }
+
+.profile-heatmap-months {
+  display: flex;
+  gap: 3px;
+}
+
+.profile-heatmap-month {
+  width: 10px;
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  overflow: visible;
+  white-space: nowrap;
+}
+
+/* ── two-column layout below the heatmap (design §1.3) ── */
+
+.profile-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-6);
+}
+
+@media (max-width: 640px) {
+  .profile-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.profile-insights,
+.profile-top-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.profile-insight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-sm);
+  padding: 0.2rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-insight-label {
+  color: var(--text-dim);
+}
+
+.profile-insight-value {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-top-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.profile-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-sm);
+  padding: 0.2rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-top-count {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-top-models-title {
+  margin-top: var(--sp-2);
+}
+
+/* ── telemetry toggle block (design §2-D2) ── */
+
+.profile-telemetry-block {
+  align-items: flex-start;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+}
+
+.profile-telemetry-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.profile-telemetry-note {
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.profile-telemetry-killswitch {
+  color: var(--warning);
+  font-style: normal;
+}
+
+.profile-telemetry-reveal-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: 0.2rem;
+}
+
+.profile-telemetry-dir {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+/* ── empty-state matrix (design §2-D2, all 4 branches) ── */
+
+.profile-empty-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+}
+
+.profile-empty-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+}
+
+.profile-empty-privacy {
+  margin: 0;
+  max-width: 34rem;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.profile-io-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--warning);
+}
+
+.profile-banner {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  color: var(--warning);
+  font-size: var(--fs-sm);
+  background: var(--warning-soft);
+}
+
+.profile-truncated-note {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* ── Keyboard shortcuts pane (P7.24/F20 W3, design/slice-P7.24-cut.md
+   §1.4/§4): a search box above a card list — one row per ACTION_CATALOG
+   entry, action name + description on the left, badge(s) + pencil/× on the
+   right, a row-level trash + conditional Reset. Reuses settings-search-*
+   (SkillsPane/McpServersPane) and mcp-icon-button (row-trash) rather than
+   duplicating those primitives. ── */
+
+.shortcuts-pane-search {
+  margin: 0 0 var(--sp-1) 0;
+}
+
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.shortcuts-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.shortcuts-row-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+}
+
+.shortcuts-row-description {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.shortcuts-row-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.shortcuts-unassigned {
+  font-size: var(--fs-xs);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.shortcuts-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.3rem 0.15rem 0.55rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+}
+
+.shortcuts-badge-chord {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.shortcuts-badge-edit,
+.shortcuts-badge-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0.1rem;
+}
+
+.shortcuts-badge-edit svg,
+.shortcuts-badge-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+.shortcuts-badge-edit:hover {
+  color: var(--text-1);
+}
+
+.shortcuts-badge-remove:hover {
+  color: var(--danger);
+}
+
+.shortcuts-badge-recording {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-inset));
+}
+
+.shortcuts-badge-recording .shortcuts-badge-chord {
+  color: var(--accent);
+  font-style: italic;
+}
+
+.shortcuts-badge-builtin {
+  background: var(--bg-inset);
+}
+
+.shortcuts-builtin-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.shortcuts-add-button,
+.shortcuts-reset-button {
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.55rem;
+}
+
+.shortcuts-row-trash {
+  margin-left: 0.15rem;
+}

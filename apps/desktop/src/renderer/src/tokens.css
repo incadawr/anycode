@@ -1,0 +1,154 @@
+/* ── tokens.css — theme-invariant ───────────────────────────── */
+:root {
+  /* type */
+  --font-ui: system-ui, -apple-system, "Segoe UI", "Helvetica Neue",
+             sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+               "Liberation Mono", monospace;
+  --fs-2xs: 0.6875rem;  /* 11px — micro-labels, timestamps, badges */
+  --fs-xs:  0.75rem;    /* 12px — meta, chips, status */
+  --fs-sm:  0.8125rem;  /* 13px — chrome default: sidebar, header, buttons */
+  --fs-md:  0.875rem;   /* 14px — content: chat, inputs, settings */
+  --fs-lg:  1rem;       /* 16px — dialog titles */
+  --fs-lg2: 1.125rem;   /* 18px — transcript h1 ONLY (R15 content display ceiling; never chrome) */
+  --fs-xl:  1.25rem;    /* 20px — welcome hero */
+  --lh-tight: 1.3;      /* chrome */
+  --lh-body: 1.55;      /* chat/content */
+  --lh-code: 1.45;      /* code wells & diff lines (R15) — data leading between tight and body */
+  --w-normal: 400; --w-medium: 500; --w-semibold: 600;
+  --track-label: 0.05em;          /* uppercase micro-labels */
+
+  /* radii — grow with elevation */
+  --r-xs: 0.1875rem;    /* 3px  — inline code, tiny badges */
+  --r-sm: 0.3125rem;    /* 5px  — buttons, inputs, sidebar rows */
+  --r-md: 0.5rem;       /* 8px  — cards, tool calls, menus */
+  --r-lg: 0.75rem;      /* 12px — composer, dialogs */
+  --r-full: 999px;      /* pills, dots, circular send */
+
+  /* spacing (4px base) */
+  --sp-1: 0.25rem; --sp-2: 0.5rem; --sp-3: 0.75rem;
+  --sp-4: 1rem;    --sp-5: 1.5rem; --sp-6: 2rem;
+
+  /* layout */
+  --sidebar-w: 264px;
+  --header-h: 46px;
+  --content-measure: 76ch;
+  /* custom titlebar (design/ui-track custom-titlebar §1/§2) */
+  --titlebar-traffic-clearance: 80px;  /* macOS: 16 inset + 52 traffic-light group + 12 gap */
+  --window-controls-w: 138px;          /* win/linux: 3 x 46px caption buttons */
+
+  /* motion */
+  --t-fast: 120ms cubic-bezier(0.2, 0, 0, 1);
+  --t-med:  200ms cubic-bezier(0.2, 0, 0, 1);
+  /* R2 motion foundation (ui-roadmap §6.1 pre-authorized set — exactly these five).
+     Durations split from easings; --t-fast/--t-med above stay as legacy compat
+     (--t-fast ≡ --dur-1 --ease-out, --t-med ≡ --dur-2 --ease-out by value) —
+     new rules use the split tokens, existing call sites are not migrated. */
+  --dur-1: 120ms;   /* micro: hover, press, small-control fades */
+  --dur-2: 200ms;   /* standard: popover, dialog, toast, banner entries */
+  --dur-3: 320ms;   /* ceiling: large-surface motion (R3/R4 consume; nothing exceeds this) */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);          /* default deceleration */
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1); /* subtle overshoot — popover enter only */
+}
+
+/* ── dark (designed-first theme) ────────────────────────────── */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app:      #161616;                   /* main pane */
+  --bg-sidebar:  #1c1c1c;                   /* raised vs app */
+  --bg-card:     #222222;                   /* cards, composer, tool calls */
+  --bg-overlay:  #2b2b2b;                   /* dialogs, menus */
+  --bg-inset:    #101010;                   /* code wells, textarea, diff gutter */
+  --bg-hover:    rgba(255, 255, 255, 0.06);
+  --bg-active:   rgba(255, 255, 255, 0.10); /* selected sidebar row */
+  --border:        rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --text-1: #e4e4e4;
+  --text-2: rgba(228, 228, 228, 0.66);
+  --text-3: rgba(228, 228, 228, 0.56);
+  --text-ghost: rgba(228, 228, 228, 0.42);
+  --accent:       #4da3ff;                  /* refined from current #4f9dff */
+  --accent-hover: #6cb4ff;
+  --on-accent:    #0a1626;
+  --accent-soft:  rgba(77, 163, 255, 0.14);
+  --mark-bg:      color-mix(in srgb, var(--accent) 25%, transparent);
+  --success:      #46bf72;  --success-soft: rgba(70, 191, 114, 0.14);
+  --warning:      #e2a33e;  --warning-soft: rgba(226, 163, 62, 0.14);
+  --danger:       #ff5c5c;  --danger-soft:  rgba(255, 92, 92, 0.13);
+  --focus-ring:   rgba(77, 163, 255, 0.75);
+  --shadow-menu:     0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-dialog:   0 12px 40px rgba(0, 0, 0, 0.55);
+  --shadow-composer: 0 2px 12px rgba(0, 0, 0, 0.28);
+}
+
+/* ── light ──────────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-app:      #f8f8f8;                   /* light background */
+  --bg-sidebar:  #f1f1f2;
+  --bg-card:     #ffffff;
+  --bg-overlay:  #ffffff;
+  --bg-inset:    #f1f1f1;
+  --bg-hover:    rgba(10, 10, 10, 0.05);
+  --bg-active:   rgba(10, 10, 10, 0.08);
+  --border:        rgba(10, 10, 10, 0.10);
+  --border-strong: rgba(10, 10, 10, 0.24);
+  --text-1: #262626;
+  --text-2: rgba(38, 38, 38, 0.74);
+  --text-3: rgba(38, 38, 38, 0.65);
+  --text-ghost: rgba(38, 38, 38, 0.52);
+  --accent:       #0e6fc9;                  /* ~4.9:1 on white */
+  --accent-hover: #0b5ca8;
+  --on-accent:    #ffffff;
+  --accent-soft:  rgba(14, 111, 201, 0.10);
+  --mark-bg:      color-mix(in srgb, var(--accent) 32%, transparent);
+  --success:      #187636;  --success-soft: rgba(24, 118, 54, 0.10);
+  --warning:      #8a5c00;  --warning-soft: rgba(138, 92, 0, 0.10);
+  --danger:       #c92a2a;  --danger-soft:  rgba(201, 42, 42, 0.08);
+  --focus-ring:   rgba(14, 111, 201, 0.80);
+  --shadow-menu:     0 4px 16px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(10, 10, 10, 0.04);
+  --shadow-dialog:   0 12px 40px rgba(0, 0, 0, 0.18);
+  --shadow-composer: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+
+/* ── Density ──────────────────────────────────────────────────────────
+   data-density absent = comfortable (default). "compact" remaps the
+   spacing ladder to ×0.75 (floor-pinned at --sp-1: 4px hairline minimum)
+   and steps chrome type 13→12px. Token overrides ONLY — no color (theme-
+   orthogonal), no component rules, no motion. Prose (--fs-md) untouched. */
+:root[data-density="compact"] {
+  --sp-2: 0.375rem;  /* 8px → 6px */
+  --sp-3: 0.5625rem; /* 12px → 9px */
+  --sp-4: 0.75rem;   /* 16px → 12px */
+  --sp-5: 1.125rem;  /* 24px → 18px */
+  --sp-6: 1.5rem;    /* 32px → 24px */
+  --fs-sm: 0.75rem;  /* 13px → 12px: chrome + data wells; equals --fs-xs in compact (accepted) */
+}
+
+/* macOS traffic lights are positioned by the main process for a 46px cap
+   (trafficLightPosition y=17 = (46-12)/2); CSS cannot move them, so the
+   header height only drops on non-darwin platforms. */
+:root[data-density="compact"]:not([data-platform="darwin"]) {
+  --header-h: 40px;
+}
+
+/* ── compat aliases: the old 9-var API keeps resolving ──────── */
+/* --bg / --bg-raised / --text / --text-dim are the four names that need
+   bridging to the new token set below.
+   This is what lets task UI-1 land without touching a single component. */
+:root {
+  --bg:        var(--bg-app);
+  --bg-raised: var(--bg-card);
+  --text:      var(--text-1);
+  --text-dim:  var(--text-2);
+}
+
+/* ── global a11y floor ──────────────────────────────────────── */
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

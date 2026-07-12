@@ -1,0 +1,94 @@
+/**
+ * Collapsible stack of consecutive terminal tool-call cards
+ * (TASK.31, design §5). New classes only — app.css is WIP-locked (same
+ * discipline as tool-cards.css / chrome-select.css / transcript-follow.css).
+ * Tokens only, both themes free. Residual: fold into app.css post-codex.
+ *
+ * The stack header mirrors the single card's disclosure row grammar
+ * (caret · name · summary-ish · badge) so a collapsed stack reads as a peer
+ * of a `.tool-call-card`, just summarizing a run. The aggregate badge reuses
+ * the single-card `.tool-call-status-badge` atom and its existing
+ * `.tool-call-status-success` / `.tool-call-status-error` tints verbatim — no
+ * new badge CSS here.
+ */
+
+.tool-call-stack {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+/* Disclosure header — mirrors `.tool-call-toggle` (app.css): full-width flex
+   row, hover/focus-inset, no native button chrome. */
+.tool-call-stack-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-call-stack-toggle:hover {
+  background: var(--bg-hover);
+}
+
+/* The stack clips at its radius (overflow: hidden), same as the single card —
+   pull the focus ring inside the toggle. */
+.tool-call-stack-toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Caret rotation when collapsed — extends the single-card rule (app.css's
+   `.tool-call-toggle[aria-expanded="false"] .tool-call-caret svg`) to this
+   toggle so the shared Chevron icon behaves identically. */
+.tool-call-stack-toggle[aria-expanded="false"] .tool-call-caret svg {
+  transform: rotate(-90deg);
+}
+
+.tool-call-stack-name {
+  color: var(--text-2);
+  font-weight: var(--w-medium);
+  font-size: var(--fs-sm);
+  flex: none;
+}
+
+/* Count label — mono data voice, same tier as `.tool-call-summary`. */
+.tool-call-stack-count {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* Expanded body: the original cards stacked with a gap. Inner `.tool-call-card`
+   drops its own border/radius so consecutive cards read as rows of one panel
+   rather than nested boxes (single source of the outer border = the stack). */
+.tool-call-stack-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border);
+  border-top: 1px solid var(--border);
+}
+
+.tool-call-stack-body > * {
+  background: var(--bg-card);
+}
+
+/* Collapsed automation anchor — a pure `data-block-id` carrier so
+   automation's rewind count and `jumpToBlock` stay honest while the stack is
+   collapsed (see ToolCallStack.tsx). Never visual. */
+.tool-call-stack-anchor {
+  display: none;
+}
