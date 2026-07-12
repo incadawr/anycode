@@ -1,0 +1,11 @@
+/* Sidebar chrome is UI furniture, not content: drag / Cmd-A must not paint
+   text selection across session rows, group headers, or age badges (A-bug-2).
+   Separate file (not app.css) deliberately — P7.1 lock, codex-WIP disjointness.
+   The Filter-sessions field opts back in: inputs stay selectable. */
+.sidebar {
+  user-select: none;
+}
+
+.sidebar-search-input {
+  user-select: text;
+}

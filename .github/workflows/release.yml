@@ -1,0 +1,265 @@
+# Release workflow (design working-docs/build/design/slice-2.6-cut.md §7, task 2.6.3).
+#
+# ⚠ REVIEWED SKELETON, NOT YET RUNNABLE: `git remote -v` is empty — there is no
+# GitHub repository for this workflow to live in yet (design §9-U4). This file
+# is committed so the CI shape can be reviewed now; it will start executing the
+# moment a GitHub remote exists. Nothing here has been exercised by an actual
+# Actions run.
+#
+
+# (ripgrep ships as a platform optionalDependency, node-pty ships prebuilds per
+# arch) — there is no cross-compilation anywhere in this workflow.
+#
+# Secret-gating contract (design §7 step 6, §4/§5/§9-U2/U3/U4): every signing,
+# notarization, and publish step is switched on ONLY by the presence of the
+# relevant secret(s). Missing secrets must never turn a job red — they just
+# mean the produced artifact is unsigned/unnotarized/not-uploaded. This is why
+# the "compute gates" step below reads secrets into plain booleans instead of
+# letting a later step fail on an empty credential.
+#
+# Secrets referenced (all user-gated, none required for a green run):
+#   MACOS_CSC_LINK / MACOS_CSC_KEY_PASSWORD / MACOS_CSC_NAME  — Developer ID cert (§9-U2)
+#   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER / APPLE_TEAM_ID — notarytool (§9-U2)
+#   WINDOWS_CSC_LINK / WINDOWS_CSC_KEY_PASSWORD               — Windows code-sign cert (§9-U3)
+#   GH_TOKEN                                                  — enables `--publish always` on tag push (§9-U4)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+# A tag push should not race a manual dry-run for the same ref; the tag build
+# is the one that matters, so let a newer run cancel an in-flight dry-run.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # only exercised when GH_TOKEN/publish is actually enabled
+
+jobs:
+  verify:
+    name: verify (linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.0.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      # The unit suite has explicit POSIX process, path, and line-ending
+      # assertions. Run it once on Linux as the required release gate instead
+      # of treating platform-specific test assumptions as packaging failures.
+      - name: Typecheck (workspace)
+        run: pnpm -w typecheck
+
+      - name: Test (root)
+        run: pnpm test
+
+  build:
+    name: package (${{ matrix.id }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native ARM runner ⇒ pnpm installs @vscode/ripgrep-darwin-arm64 by
+          # itself (os/cpu fields in the optionalDependency, spike §1).
+          - id: macos-arm64
+            os: macos-15
+            electron_builder_args: --mac dmg zip --arm64
+          # NOTE: "macos-15-intel" is GitHub's current documented label for an
+          # Intel macOS runner (as of this writing). If GitHub renames/retires
+          # this label before this workflow ever runs (it can't yet — no repo,
+          # see header), update it here; nothing else in the job depends on
+          # the exact label.
+          - id: macos-x64
+            os: macos-15-intel
+            electron_builder_args: --mac dmg zip --x64
+          - id: windows-x64
+            os: windows-2025
+            electron_builder_args: --win nsis --x64
+          - id: linux-x64
+            os: ubuntu-24.04
+            electron_builder_args: --linux AppImage --x64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # ---- 1. checkout + toolchain -----------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.0.0" # matches root package.json#packageManager
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+        # postinstall runs apps/desktop/scripts/fix-node-pty-perms.mjs, which
+        # restores +x on node-pty's spawn-helper prebuild (pnpm strips it when
+        # laying the package into the .pnpm store — spike-node-pty.md §1).
+
+      # ---- 2. perms guard (darwin) ------------------------------------------
+      - name: Assert node-pty spawn-helper is executable (darwin)
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r f; do
+            found=1
+            if [ ! -x "$f" ]; then
+              echo "FAIL: spawn-helper is not executable: $f" >&2
+              exit 1
+            fi
+            echo "OK: $f is executable"
+          done < <(find -L node_modules/node-pty/prebuilds -name spawn-helper 2>/dev/null)
+          if [ "$found" -eq 0 ]; then
+            echo "FAIL: no spawn-helper prebuild found under node_modules/node-pty/prebuilds" >&2
+            exit 1
+          fi
+        # Guards the "chmod BEFORE pack" ordering (design §7 step 2, spike §5
+
+
+      # ---- 3. build (electron-vite → out/) ------------------------------------
+      - name: Build (electron-vite)
+        run: pnpm --filter @anycode/desktop build
+
+      # ---- 4. linux-only native rebuild ----------------------------------------
+      - name: Install Linux native build toolchain
+        if: matrix.id == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3
+        # node-pty ships no Linux prebuild (design §4.3/spike §4) — it must be
+        # compiled from source against the pinned Electron ABI below.
+
+      - name: Rebuild node-pty from source (linux)
+        if: matrix.id == 'linux-x64'
+        working-directory: apps/desktop
+        run: pnpm dlx @electron/rebuild --build-from-source --only node-pty
+        # pnpm dlx runs an ad-hoc install without touching package.json/the
+        # lockfile — this task's lane may not edit apps/desktop/package.json.
+        # @electron/rebuild reads the pinned Electron version from
+        # apps/desktop's own node_modules/electron (installed above).
+
+      # ---- 5. package (sign/notarize/publish gated by secret presence) --------
+      - name: Compute signing/notarize/publish gates
+        id: gates
+        env:
+          HAS_MAC_CERT: ${{ secrets.MACOS_CSC_LINK != '' }}
+          HAS_APPLE_NOTARY: ${{ secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' && secrets.APPLE_TEAM_ID != '' }}
+          HAS_WIN_CERT: ${{ secrets.WINDOWS_CSC_LINK != '' }}
+          HAS_GH_TOKEN: ${{ secrets.GH_TOKEN != '' }}
+        run: |
+          echo "mac_sign=$HAS_MAC_CERT" >> "$GITHUB_OUTPUT"
+          echo "notarize=$HAS_APPLE_NOTARY" >> "$GITHUB_OUTPUT"
+          echo "win_sign=$HAS_WIN_CERT" >> "$GITHUB_OUTPUT"
+          echo "publish=$HAS_GH_TOKEN" >> "$GITHUB_OUTPUT"
+        # These secrets are only ever readable by this workflow on tag-push /
+        # manual-dispatch runs (no pull_request trigger), so comparing them
+        # inline is safe here. Every downstream step keys off these booleans
+        # rather than failing on an absent credential directly.
+
+      - name: Package (electron-builder)
+        working-directory: apps/desktop
+        env:
+          # Prevents electron-builder from auto-discovering an unrelated
+          # system cert on the runner; signing is opt-in only via the
+          # -c.mac.identity override below (spike §5).
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # workflow_dispatch is always a dry-run; a tag push only actually
+          # publishes once a GH_TOKEN secret exists (§9-U4) — until then it
+          # still builds unsigned/unpublished artifacts instead of failing.
+          PUBLISH_ARG=never
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ steps.gates.outputs.publish }}" = "true" ]; then
+            PUBLISH_ARG=always
+          fi
+
+          # electron-builder.yml hard-freezes mac.identity to null (2.6.1) so
+          # local/dev builds are always unsigned by default. Override it here
+          # ONLY when a Developer ID cert secret is present (design §4.1/§9-U2).
+          # MACOS_CSC_NAME is the exact certificate common name, e.g.
+          # "Developer ID Application: NAME (TEAMID)".
+          if [ "${{ runner.os }}" = "macOS" ] && [ "${{ steps.gates.outputs.mac_sign }}" = "true" ]; then
+            pnpm exec electron-builder --config electron-builder.yml ${{ matrix.electron_builder_args }} --publish "$PUBLISH_ARG" -c.mac.identity="${{ secrets.MACOS_CSC_NAME }}"
+          else
+            pnpm exec electron-builder --config electron-builder.yml ${{ matrix.electron_builder_args }} --publish "$PUBLISH_ARG"
+          fi
+          # Notarization and Windows signing need no config override: electron-
+          # builder activates both automatically from the env vars above when
+          # they are non-empty (mac.notarize needs no explicit yaml block as of
+          # electron-builder v24+; Windows picks up WIN_CSC_LINK on its own).
+          # Their absence is a normal, unsigned/unnotarized, green build.
+
+
+      # ---- 6. post-pack asserts + upload ---------------------------------------
+      - name: Assert packaged native binaries (rg / pty.node / spawn-helper)
+        working-directory: apps/desktop
+        run: node scripts/assert-package.mjs dist
+        # assert-package.mjs recursively finds app.asar.unpacked under the
+        # given root, so a bare "dist" works across mac/win/linux output
+        # layouts (design §3.3/§7, spike §4 — this is the ONLY reliable
+        # tripwire for the silent platform-ripgrep-package drop found in the
+        # spike; electron-builder itself emits no warning).
+
+      - name: Verify codesign (macOS, signed builds only)
+        if: runner.os == 'macOS' && steps.gates.outputs.mac_sign == 'true'
+        run: |
+          set -euo pipefail
+          app_path=$(find apps/desktop/dist -maxdepth 3 -name '*.app' -print -quit)
+          if [ -z "$app_path" ]; then
+            echo "FAIL: no .app bundle found under apps/desktop/dist" >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict "$app_path"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: anycode-${{ matrix.id }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/latest*.yml
+            apps/desktop/dist/*.blockmap
+          if-no-files-found: warn
+          retention-days: 14

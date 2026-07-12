@@ -1,0 +1,55 @@
+/* Transcript sticky-follow / jump-to-latest (F17). Separate file (not
+   app.css) deliberately — codex-WIP lock on app.css, same precedent as
+   chrome-select.css (P7.1). Residual: fold into app.css post-codex. */
+
+/* .message-list carries tabIndex=-1 (codex P7.3-F finding 3) so a keyboard
+   jump-to-latest activation has somewhere sane to land focus once the chip
+   itself unmounts; plain :focus is suppressed (programmatic-only target, not
+   a real tab stop) and :focus-visible keeps the standard ring for the rare
+   case a user tabs into it directly. */
+.message-list:focus {
+  outline: none;
+}
+
+.message-list:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.jump-to-latest {
+  position: sticky;
+  bottom: var(--sp-4);
+  left: 50%;
+  transform: translateX(-50%);
+  margin-inline: auto;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-menu);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.jump-to-latest:hover {
+  transform: translateX(-50%) translateY(-2px);
+  background: var(--bg-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jump-to-latest {
+    transition: none;
+  }
+
+  .jump-to-latest:hover {
+    transform: translateX(-50%);
+  }
+}

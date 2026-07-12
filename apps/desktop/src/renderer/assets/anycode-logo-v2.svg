@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+  <title id="title">AnyCode logo v2</title>
+  <desc id="desc">Vector version of the AnyCode v2 app icon with blue code brackets, terminal prompt, underscore cursor, and a small permission check.</desc>
+  <defs>
+    <style>
+      .rim { fill: #29313d; }
+      .bg { fill: #141b24; }
+      .bg-top { fill: #ffffff; opacity: 0.035; }
+      .bg-bottom { fill: #000000; opacity: 0.16; }
+      .prompt { fill: #f4f7fb; }
+      .cursor { fill: #707a8a; }
+      .check { fill: #667082; }
+    </style>
+  </defs>
+
+  <rect width="1254" height="1254" rx="190" fill="transparent"/>
+  <rect x="5" y="5" width="1244" height="1244" rx="190" class="rim"/>
+  <rect x="21" y="21" width="1212" height="1212" rx="176" class="bg"/>
+  <path d="M84 134c25-58 82-93 170-104h746c75 5 129 30 160 77-46-30-104-45-175-45H268c-86 1-147 25-184 72Z" class="bg-top"/>
+  <path d="M56 987c43 150 137 224 282 224h578c132-5 221-70 267-194-57 90-146 135-267 135H341c-130-1-225-56-285-165Z" class="bg-bottom"/>
+
+  <g transform="translate(0 17)" opacity="0.22">
+    <path
+      d="M558 247c18 0 32 14 32 32v74c0 10-4 20-12 27L321 619c-15 14-23 34-23 54s8 40 23 54l257 239c8 7 12 17 12 27v72c0 18-14 32-32 32-8 0-16-3-22-9L257 829c-33-31-52-74-52-120v-72c0-46 19-89 52-120l279-260c6-6 14-10 22-10Z"
+      fill="#000000"
+    />
+    <path
+      d="M696 247c-18 0-32 14-32 32v74c0 10 4 20 12 27l257 239c15 14 23 34 23 54s-8 40-23 54L676 966c-8 7-12 17-12 27v72c0 18 14 32 32 32 8 0 16-3 22-9l279-259c33-31 52-74 52-120v-72c0-46-19-89-52-120L718 257c-6-6-14-10-22-10Z"
+      fill="#000000"
+    />
+  </g>
+  <g>
+    <path
+      d="M558 247c18 0 32 14 32 32v74c0 10-4 20-12 27L321 619c-15 14-23 34-23 54s8 40 23 54l257 239c8 7 12 17 12 27v72c0 18-14 32-32 32-8 0-16-3-22-9L257 829c-33-31-52-74-52-120v-72c0-46 19-89 52-120l279-260c6-6 14-10 22-10Z"
+      fill="#319fff"
+    />
+    <path
+      d="M696 247c-18 0-32 14-32 32v74c0 10 4 20 12 27l257 239c15 14 23 34 23 54s-8 40-23 54L676 966c-8 7-12 17-12 27v72c0 18 14 32 32 32 8 0 16-3 22-9l279-259c33-31 52-74 52-120v-72c0-46-19-89-52-120L718 257c-6-6-14-10-22-10Z"
+      fill="#319fff"
+    />
+  </g>
+
+  <g>
+    <path
+      d="M501 547c17-17 44-17 61 0l85 85c17 17 17 44 0 61l-85 85c-17 17-44 17-61 0s-17-44 0-61l55-55-55-54c-17-17-17-44 0-61Z"
+      class="prompt"
+    />
+    <rect x="617" y="684" width="158" height="34" rx="17" class="cursor"/>
+    <path
+      d="M584 898c12-12 31-12 43 0l30 30 78-82c12-12 31-13 43-1 12 11 13 31 1 43l-100 105c-6 6-14 9-22 9s-16-3-22-9l-51-51c-12-12-12-32 0-44Z"
+      class="check"
+    />
+  </g>
+</svg>

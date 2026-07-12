@@ -1,0 +1,171 @@
+/*
+ * Slice 2.4 styles: the collapsible bottom terminal panel (design
+ * slice-2.4-cut.md §4/§7-U2). Its toggle button used to live here too (a
+ * fixed-position button in App.tsx) — UI-4 relocated it into the session
+ * header (`.session-header-terminal-toggle`, app.css), so this file is now
+ * scoped to the panel itself.
+ *
+ * Deliberately its OWN stylesheet, imported directly from the components that
+ * need it (TerminalPanel.tsx / App.tsx) rather than folded into app.css.
+ * Reuses the semantic tokens declared in `tokens.css` (--bg-card/--bg-inset/
+ * --border/--text-1/--text-2/--accent/--danger) so the panel reads as part of
+ * the same visual system without redeclaring the palette — same approach as
+ * settings.css.
+ *
+ * `@xterm/xterm/css/xterm.css` is imported from TerminalPanel.tsx itself
+ * (JS-side import, xterm's own documented usage), not `@import`-ed here.
+ */
+
+/* ── collapsible bottom panel ── */
+
+.terminal-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 16rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-inset);
+  overflow: hidden;
+  animation: panel-height-from-bottom var(--dur-3) var(--ease-out);
+}
+
+.terminal-panel-closing {
+  pointer-events: none;
+  animation: panel-height-to-bottom var(--dur-3) var(--ease-out) forwards;
+}
+
+.terminal-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.terminal-panel-title {
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  color: var(--text-2);
+}
+
+/* Soft-danger pill (same escalation-ramp language as notice-toast/mode-chip:
+   soft fill, no hard border) that deepens to a solid danger fill on hover —
+   the terminal died and needs a deliberate re-open click. */
+.terminal-panel-reopen {
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--danger-soft);
+  color: var(--danger);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  padding: 0.15rem var(--sp-2);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.terminal-panel-reopen:hover {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+/* R18: top-edge drag-resize handle — 7px hit strip straddling the panel's 1px
+   border-top hairline; invisible until hover/focus/drag, then a 2px accent bar
+   (::after spans local y=2..4 ⇒ global y=-1..+1, covering the hairline).
+   150ms hover-in delay stops flicker on mouse-through; drag/focus show it
+   instantly. Direct manipulation — transitions only, zero keyframes. */
+.terminal-panel-resize {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: ns-resize;
+  z-index: 1;
+}
+
+.terminal-panel-resize::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.terminal-panel-resize:hover::after {
+  opacity: 1;
+  transition-delay: 150ms;
+}
+
+.terminal-panel-resize:focus-visible::after,
+.terminal-panel-resize[data-resizing="true"]::after {
+  opacity: 1;
+  transition-delay: 0ms;
+}
+
+/* R18: header action cluster — Reopen pill (unchanged) + icon actions in the
+   session-header-expand idiom with the code-well 14px glyph sizing; disabled =
+   composer-send's 0.4 dim; data-copied = the Markdown/DiffView success ink. */
+.terminal-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.terminal-panel-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.terminal-panel-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+.terminal-panel-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.terminal-panel-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* `:not(:disabled)` matches the hover rule's specificity so this later,
+   equal-weight rule wins the color cascade — otherwise `:hover:not(:disabled)`
+   (higher specificity than a bare `[data-copied]`) would repaint the success
+   ink as `--text-1` while the pointer rests on the just-clicked button. The
+   hover `background` still applies (this rule only sets `color`). */
+.terminal-panel-action[data-copied="true"]:not(:disabled) {
+  color: var(--success);
+}
+
+.terminal-panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-1) var(--sp-2);
+  overflow: hidden;
+}
+
+/* xterm.js sizes its own canvas/rows to this holder via the fit addon
+   (terminal-view.ts's `attachHolder`/`fitNow`) — full width/height of the
+   scrollable body above. */
+.terminal-holder {
+  width: 100%;
+  height: 100%;
+}

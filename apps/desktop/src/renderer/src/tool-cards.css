@@ -1,0 +1,203 @@
+/**
+ * ToolCallCard additions (design/slice-P7.4-cut.md §3.3): TodoWrite checklist
+ * + compact subagent card. New classes only — app.css is WIP-locked this
+ * slice, so nothing here touches an existing selector. Tokens only, both
+ * themes free. Residual: fold into app.css post-codex (same residual
+ * P7.1/P7.3 css files already carry).
+ */
+
+/* TodoWrite checklist (F1) — replaces the generic JSON input line when the
+   call's input parses as a valid replace-all todo list. */
+.todo-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+  list-style: none;
+  margin: 0;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+}
+
+.todo-content {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.todo-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--text-ghost);
+}
+.todo-glyph svg {
+  width: 14px;
+  height: 14px;
+}
+
+.todo-item-status-in_progress {
+  color: var(--text-1);
+}
+.todo-item-status-in_progress .todo-glyph {
+  color: var(--accent);
+}
+
+.todo-item-status-completed {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+.todo-item-status-completed .todo-glyph {
+  color: var(--success);
+}
+
+/* Compact subagent card (F16) — collapsed-by-default one-liner with a live
+   progress sub-line while running. */
+.subagent-collapsed-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+}
+.subagent-collapsed-line svg {
+  flex: none;
+  color: var(--text-ghost);
+}
+
+.subagent-name {
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  flex: none;
+}
+
+.subagent-persona {
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  flex: none;
+}
+
+/* Wraps to its own full-width row below the header (the header stays a
+   single flex row otherwise; :has() precedent already used in app.css). */
+.tool-call-toggle:has(.subagent-collapsed-progress) {
+  flex-wrap: wrap;
+}
+.subagent-collapsed-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-basis: 100%;
+  padding-left: calc(1em + var(--sp-2));
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+.subagent-collapsed-progress svg {
+  width: 12px;
+  height: 12px;
+  color: var(--accent);
+}
+
+.subagent-prompt {
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+}
+
+.subagent-prompt-label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+
+/* ── F16b (P7.18): RESULT-first Agent-card body ──
+   Two-level PROMPT plaque — the whole box is the button; default shows a
+   hard-truncated (JS-capped, see promptStripText) 2-line strip, click
+   reveals the untruncated prompt. Its own border (not a section divider)
+   keeps it read as a bounded, secondary box — owner ref invariant §1.1 —
+   never the dominant element in the card. */
+.subagent-prompt-plaque {
+  display: block;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.subagent-prompt-plaque:hover {
+  background: var(--bg-hover);
+}
+.subagent-prompt-plaque:focus-visible {
+  outline-offset: -2px;
+}
+
+.subagent-prompt-text {
+  display: block;
+  margin-top: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: var(--lh-code);
+  /* Belt-and-suspenders visual clamp on top of promptStripText's JS-level
+     line+char cap: a collapsed strip whose capped text still wraps past two
+     lines at narrow card widths stays visually bounded. */
+  max-height: calc(var(--fs-sm) * var(--lh-code) * 2);
+  overflow: hidden;
+}
+.subagent-prompt-plaque[aria-expanded="true"] .subagent-prompt-text {
+  max-height: none;
+  overflow: visible;
+}
+
+/* Settled-first RESULT slot (Agent tool only) — the prominent content of the
+   card, styled like an ordinary assistant reply (reuses .message-markdown's
+   typography rhythm) rather than the generic tools' raw code well. */
+.tool-call-agent-result {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Live per-child-tool activity feed — quiet, muted rows; CSS caps the
+   visible height to ~6 rows (ActivityFeed's effect keeps a running card
+   auto-scrolled to the newest row within this well). */
+.subagent-activity-feed {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 8.5rem;
+  overflow-y: auto;
+}
+
+.subagent-activity-row {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-activity-row-dropped {
+  color: var(--text-ghost);
+  font-style: italic;
+}
