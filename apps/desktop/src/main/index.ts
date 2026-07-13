@@ -60,7 +60,9 @@ import { projectCatalogSummary, registerSettingsIpc } from "./settings-ipc.js";
 import { TabHostManager } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc } from "./tab-ipc.js";
-import { ENV_ENGINE, type EngineId } from "../shared/engines.js";
+import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
+import { resolveCodexBinary } from "./codex-binary.js";
+import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater } from "./updater.js";
 
 /** Replaced by electron-vite: true in `dev`, false in production builds. */
@@ -226,6 +228,8 @@ let bootEnv: NodeJS.ProcessEnv = {};
 let settings: AnycodeSettings | null = null;
 /** Current readiness = apiKey(env|vault) && model(env|settings); gates host spawns. */
 let providerReady = false;
+/** Main-validated optional binary; no engine readiness is implied by its presence. */
+let codexBinaryPath: string | null = null;
 /**
  * The host fork env, rebuilt async on every successful mutation and read
 
@@ -535,6 +539,11 @@ void app.whenReady().then(async () => {
   // gate) stay in the live env.
   bootEnv = snapshotBootEnv(process.env);
   scrubSecretEnv(process.env);
+  const codexBinary = resolveCodexBinary(bootEnv[ENV_CODEX_BIN]);
+  codexBinaryPath = codexBinary.path;
+  if (codexBinary.reason !== undefined) {
+    console.warn(`[main] Codex binary unavailable: ${codexBinary.reason}`);
+  }
 
 
   // and migrates once (a read forces open()+migrate()), then hosts open the
@@ -587,11 +596,17 @@ void app.whenReady().then(async () => {
 
     env: () => currentHostEnv,
     providerReady: () => providerReady,
-    // E2 ships no external adapter yet, so non-core engines remain fail-closed
-    // in main. The host still receives an explicit identity on every fork;
-    // E3's reviewed availability probe will widen this gate.
-    engineReady: (engine: EngineId) => engine === "core" && providerReady,
-    engineEnv: (engine: EngineId) => ({ [ENV_ENGINE]: engine }),
+    // Codex has no dependency on AnyCode's provider settings. Its only
+    // main-plane readiness fact is the boot-time validated executable path;
+    // account verification remains inside the owned native session bootstrap.
+    engineReady: (engine: EngineId) =>
+      engine === "core" ? providerReady : engine === "codex" && codexBinaryPath !== null,
+    engineEnv: (engine: EngineId, generation: number) => ({
+      [ENV_ENGINE]: engine,
+      [ENV_HOST_GENERATION]: String(generation),
+      ...(engine === "codex" && codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
+    }),
+    reapEngineProcess: createEngineProcessReaper(),
     // Credential channel (slice 2.5 §3.3): an oauth-mode host asks main for a
     // fresh access token per attempt; resolve it for the selected oauth provider
     // (undefined for api_key / legacy -> the host keeps its static env key).

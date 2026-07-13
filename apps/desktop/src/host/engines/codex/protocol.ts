@@ -72,6 +72,8 @@ export interface ThreadStartResult {
 
 /** W0 only observed command approval acceptance. Do not infer other approval codecs. */
 export const OBSERVED_COMMAND_APPROVAL_METHOD = "item/commandExecution/requestApproval";
+/** W0 observed this file-change approval request; only accept is evidenced. */
+export const OBSERVED_FILE_CHANGE_APPROVAL_METHOD = "item/fileChange/requestApproval";
 
 /** Safe default for an unhandled server request: JSON-RPC error, never an allow. */
 export const UNHANDLED_SERVER_REQUEST_ERROR: JsonRpcError = {

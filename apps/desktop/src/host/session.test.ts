@@ -545,6 +545,7 @@ describe("Session — stream bridge", () => {
         model: "scripted-model",
         sessionId: "test-session",
       });
+      expect(ready.engine).toBeUndefined();
 
       h.send({ type: "user_message", requestId: "r1", text: "hi" });
       const started = await h.waitFor(isTurnStarted);
@@ -687,6 +688,66 @@ describe("Session — cancel", () => {
 });
 
 describe("Session — engine shutdown seam", () => {
+  it("projects a non-core engine's capabilities and gates unsupported core controls", async () => {
+    const setMode = vi.fn();
+    const setReasoningEffort = vi.fn();
+    const switchModel = vi.fn(() => ({ model: "ignored", reasoningEffort: "off" as const }));
+    const engine: SessionEngine = {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: true,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      setMode,
+      reasoningEffort: () => undefined,
+      setReasoningEffort,
+      switchModel,
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+    };
+    const h = createHarness({ steps: [], engine, imageInputEnabled: true });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.engine).toEqual({ id: "codex", capabilities: engine.capabilities });
+
+      h.send({ type: "set_mode", mode: "plan" });
+      const modeRejected = await h.waitFor(isModeChangeRejected);
+      expect(modeRejected.reason).toBe("permission modes are managed by this engine");
+
+      h.send({ type: "set_reasoning_effort", effort: "high" });
+      h.send({ type: "set_model", model: "some-model" });
+      h.send({ type: "context_breakdown_request" });
+      h.send({ type: "task_list_request" });
+      h.send({ type: "checkpoint_list_request" });
+      h.send({ type: "user_message", requestId: "image", text: "look", images: [{ mediaType: "image/png", data: "WA==" }] });
+      const imageRejected = await h.waitFor(isTurnRejected);
+
+      expect(imageRejected).toMatchObject({ requestId: "image", reason: "unsupported_images" });
+      expect(setMode).not.toHaveBeenCalled();
+      expect(setReasoningEffort).not.toHaveBeenCalled();
+      expect(switchModel).not.toHaveBeenCalled();
+      expect(h.received.some(isContextBreakdown)).toBe(false);
+      expect(h.received.some(isTaskList)).toBe(false);
+      expect(h.received.some((message) => message.type === "checkpoint_list")).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
   it("starts engine disposal before awaiting a turn that ignores ordinary abort", async () => {
     let releaseTurn!: () => void;
     const turnGate = new Promise<void>((resolve) => {
@@ -703,10 +764,17 @@ describe("Session — engine shutdown seam", () => {
       capabilities: {
         supportsCorePermissions: false,
         supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
         supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: false,
         supportsModelSelection: false,
         supportsReasoningEffort: false,
         supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
@@ -760,10 +828,17 @@ describe("Session — engine shutdown seam", () => {
       capabilities: {
         supportsCorePermissions: false,
         supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
         supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: false,
         supportsModelSelection: false,
         supportsReasoningEffort: false,
         supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,

@@ -673,7 +673,16 @@ export function Composer() {
   const contextUsage = useTabStore((state) => state.contextUsage);
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
   const sessionTokens = useTabStore((state) => state.sessionTokens);
+  const engine = useTabStore((state) => state.engine);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
+
+  // Core keeps its exact legacy presentation when `engine` is null. External
+  // engines declare only the controls their adapter can honour.
+  const supportsCorePermissions = engine?.capabilities.supportsCorePermissions ?? true;
+  const supportsModelSelection = engine?.capabilities.supportsModelSelection ?? true;
+  const supportsImages = engine?.capabilities.supportsImages ?? true;
+  const supportsContextUsage = engine?.capabilities.supportsContextUsage ?? true;
+  const supportsContextBreakdown = engine?.capabilities.supportsContextBreakdown ?? true;
 
   const running = turn.status === "running";
   const ready = connection === "ready";
@@ -846,7 +855,7 @@ export function Composer() {
 
   async function addImageFiles(files: readonly File[]): Promise<void> {
     const imageFiles = files.filter((file) => file.type.startsWith("image/") || file.name.match(/\.(png|jpe?g|gif|webp)$/i));
-    if (imageFiles.length === 0 || !ready) {
+    if (imageFiles.length === 0 || !ready || !supportsImages) {
       return;
     }
     const slots = COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length;
@@ -991,14 +1000,14 @@ export function Composer() {
   }
 
   function handleDragOver(event: DragEvent<HTMLDivElement>): void {
-    if (ready && hasImageFiles(event)) {
+    if (ready && supportsImages && hasImageFiles(event)) {
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
     }
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>): void {
-    if (!ready || !hasImageFiles(event)) {
+    if (!ready || !supportsImages || !hasImageFiles(event)) {
       return;
     }
     event.preventDefault();
@@ -1143,37 +1152,42 @@ export function Composer() {
               connection isn't `ready`, so the chip is disabled in that window;
               the neutral "plan" fallback is a cosmetic default for the greyed,
               non-interactive chip and never reflects an actionable state. */}
-          <ModeMenu mode={mode ?? "plan"} disabled={running || !ready} onChange={handleModeChange} />
-          <input
-            ref={fileInputRef}
-            className="composer-file-input"
-            type="file"
-            accept={IMAGE_ACCEPT}
-            multiple
-            tabIndex={-1}
-            onChange={(event) => {
-              void addImageFiles(Array.from(event.currentTarget.files ?? []));
-              event.currentTarget.value = "";
-            }}
-          />
-          <button
-            type="button"
-            className="composer-attach"
-            aria-label="Attach image"
-            title="Attach image"
-            disabled={!ready}
-            onClick={openImagePicker}
-          >
-            <ImageIcon />
-          </button>
-          <ModelPill />
+          {engine !== null && <span className="engine-identity">{engine.id === "codex" ? "Codex" : engine.id}</span>}
+          {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={running || !ready} onChange={handleModeChange} />}
+          {supportsImages && (
+            <>
+              <input
+                ref={fileInputRef}
+                className="composer-file-input"
+                type="file"
+                accept={IMAGE_ACCEPT}
+                multiple
+                tabIndex={-1}
+                onChange={(event) => {
+                  void addImageFiles(Array.from(event.currentTarget.files ?? []));
+                  event.currentTarget.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="composer-attach"
+                aria-label="Attach image"
+                title="Attach image"
+                disabled={!ready}
+                onClick={openImagePicker}
+              >
+                <ImageIcon />
+              </button>
+            </>
+          )}
+          {supportsModelSelection && <ModelPill />}
         </div>
         {/* Always rendered; hides via visibility (not unmount) so the footer never reflows.
             id wires the textarea's aria-describedby (R17 a11y) so SR users get the
             send/newline hint; always in the DOM even while visually hidden. */}
         <span id="composer-hint" className={`composer-hint${hintHidden ? " composer-hint-hidden" : ""}`}>{hintText}</span>
         <div className="composer-footer-right">
-          {ctxPercent !== null && (
+          {supportsContextUsage && supportsContextBreakdown && ctxPercent !== null && (
             <CtxPopover
               contextUsage={contextUsage}
               contextBreakdown={contextBreakdown}

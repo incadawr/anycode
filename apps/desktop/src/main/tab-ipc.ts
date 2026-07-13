@@ -18,12 +18,14 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import type { PersistencePort, SessionMeta } from "@anycode/core";
 import {
+  ENGINES_LIST_CHANNEL,
   SESSIONS_LIST_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
 import type {
+  AvailableEngines,
   CloseTabResult,
   CreateTabRequest,
   CreateTabResult,
@@ -50,7 +52,11 @@ export interface TabIpcDeps {
 
 /** exported for tests (tab-ipc.test.ts): the fail-closed request schema. */
 export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("new"), workspace: z.string().min(1).max(4096).optional() }),
+  z.object({
+    kind: z.literal("new"),
+    workspace: z.string().min(1).max(4096).optional(),
+    engine: z.enum(["core", "codex"]).optional(),
+  }),
   z.object({ kind: z.literal("resume"), sessionId: z.string().min(1) }),
 ]);
 
@@ -85,7 +91,8 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // pointless dialog). Renderer maps not_ready to a "configure your provider"
   // notice.
   if (req.kind === "new") {
-    if (!deps.manager.canSpawn("core")) {
+    const engine = req.engine ?? "core";
+    if (!deps.manager.canSpawn(engine)) {
       return { ok: false, reason: "not_ready" };
     }
     // Guard capacity BEFORE prompting: never make the user pick a folder we
@@ -109,7 +116,12 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       workspace = dialogWorkspace;
     }
-    const result = deps.manager.createTab({ workspace, sessionId: randomUUID(), resume: false });
+    const result = deps.manager.createTab({
+      workspace,
+      sessionId: randomUUID(),
+      resume: false,
+      ...(req.engine !== undefined ? { engine } : {}),
+    });
     if (!result.ok) {
       return result;
     }
@@ -185,4 +197,8 @@ export function registerTabIpc(deps: TabIpcDeps): void {
   });
 
   ipcMain.handle(WORKSPACE_PICK_CHANNEL, async (): Promise<WorkspacePickResult> => handleWorkspacePick(deps));
+
+  ipcMain.handle(ENGINES_LIST_CHANNEL, (): AvailableEngines => ({
+    engineIds: (["core", "codex"] as const).filter((engine) => deps.manager.canSpawn(engine)),
+  }));
 }

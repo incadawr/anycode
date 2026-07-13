@@ -149,6 +149,7 @@
  * budget matches its real provider window instead of the generic default.
  */
 
+import { randomUUID } from "node:crypto";
 import { homedir, release } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -169,6 +170,7 @@ import {
   NodeMcpTransportFactory,
   RuleAwarePermissionEngine,
   SafeCommandPermissionEngine,
+  SessionPermissionRules,
   SqlitePersistenceAdapter,
   SwitchableModelPort,
   WriteBehindHistorySink,
@@ -252,7 +254,10 @@ import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
-import { selectEnginePlugin } from "./engines/registry.js";
+import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
+import { resumeCodexEngine, startCodexEngine } from "./engines/codex/codex-engine.js";
+import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
+import { ENV_CODEX_BIN } from "../shared/engines.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
@@ -324,13 +329,107 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Codex deliberately reads only its own explicit bootstrap inputs, never provider env config. */
+function resolveCodexDbPath(env: NodeJS.ProcessEnv): string {
+  const configured = env.ANYCODE_DB_PATH?.trim();
+  return configured && configured.length > 0 ? configured : join(homedir(), ".anycode", "anycode.sqlite");
+}
+
+/**
+ * Native Codex branch. Keep this separate from `boot()` so a subscription-only
+ * host never constructs the provider/core graph just to reach its session.
+ */
+async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin): Promise<void> {
+  const binaryPath = process.env[ENV_CODEX_BIN];
+  if (binaryPath === undefined || binaryPath.trim() === "") {
+    throw new Error("Codex binary is unavailable; configure a validated Codex installation first");
+  }
+  const args = parseHostArgs(process.argv.slice(2));
+  const dbPath = resolveCodexDbPath(process.env);
+  persistence = new SqlitePersistenceAdapter(dbPath);
+  const broker = new IpcPermissionBroker(emit);
+  const processOwnership = readHostProcessOwnership(
+    process.env,
+    process.pid,
+    (message) => process.parentPort.postMessage(message),
+  ) ?? undefined;
+  const options = {
+    bootstrap,
+    broker,
+    binaryPath,
+    cwd: workspace,
+    workspace,
+    sourceEnv: process.env,
+    ...(processOwnership !== undefined ? { processOwnership } : {}),
+  };
+
+  const connected = await (args.resume
+    ? (async () => {
+        if (args.sessionId === undefined || args.sessionId.length === 0) {
+          throw new Error("Codex resume requires a session id");
+        }
+        const existing = await persistence!.getSession(args.sessionId);
+        if (existing === null) throw new Error(`Codex session ${args.sessionId} was not found`);
+        if (existing.engineId !== "codex" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
+          throw new Error(`Codex session ${args.sessionId} has no resumable native thread`);
+        }
+        const resumed = await resumeCodexEngine({ ...options, externalSessionRef: existing.externalSessionRef });
+        // The resumed app-server reports the effective native model. Persist it
+        // only after the native resume and read have both succeeded.
+        if (existing.model !== resumed.model) await persistence!.touchSession(existing.id, { model: resumed.model });
+        return { ...resumed, sessionMeta: existing };
+      })()
+    : (async () => {
+        const created = await startCodexEngine(options);
+        const id = args.sessionId ?? randomUUID();
+        // Product-level transaction ordering: the native thread exists first;
+        // no row is written if the app-server bootstrap failed.
+        const sessionMeta = await persistence!.createSession({
+          id,
+          workspace,
+          model: created.model,
+          mode: "build",
+          engineId: "codex",
+          externalSessionRef: created.threadId,
+        });
+        return { ...created, sessionMeta };
+      })());
+
+  const booted = await plugin.boot({ codexEngine: connected.engine });
+  const fs = new NodeFileSystemAdapter();
+  session = new Session({
+    outbound,
+    engine: booted.engine,
+    broker,
+    fs,
+    workspace,
+    model: connected.model,
+    sessionId: connected.sessionMeta.id,
+    // Codex owns native thread history; never hydrate an AgentLoop history.
+    bootHistory: [],
+    hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
+    rules: new SessionPermissionRules(),
+    imageInputEnabled: () => false,
+    persistence: {
+      touch(patch) {
+        void persistence?.touchSession(connected.sessionMeta.id, patch).catch((error) => {
+          console.error(`[host] touchSession failed: ${describeError(error)}`);
+        });
+      },
+    },
+  });
+  console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
+}
+
 async function boot(): Promise<void> {
   try {
     // Selection/probe is deliberately before loadEnvConfig: an external engine
     // must never require AnyCode provider credentials merely to fail/boot.
-    engineBootstrap = await beginEngineBootstrap(selectEnginePlugin(process.env));
-    if (engineBootstrap.id !== "core") {
-      throw new Error(`Engine ${engineBootstrap.id} has no bootstrap in this build`);
+    const plugin = selectEnginePlugin(process.env);
+    engineBootstrap = await beginEngineBootstrap(plugin);
+    if (engineBootstrap.id === "codex") {
+      await bootCodexSession(engineBootstrap, plugin);
+      return;
     }
     const envConfig = loadEnvConfig(process.env);
     const args = parseHostArgs(process.argv.slice(2));

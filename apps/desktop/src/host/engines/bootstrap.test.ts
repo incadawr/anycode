@@ -3,10 +3,10 @@ import { beginEngineBootstrap } from "./bootstrap.js";
 import { selectEnginePlugin } from "./registry.js";
 
 describe("engine bootstrap boundary", () => {
-  it("fails a requested Codex engine before any AnyCode provider configuration is needed", async () => {
+  it("selects the static Codex bootstrap before any AnyCode provider configuration is needed", async () => {
     const plugin = selectEnginePlugin({ ANYCODE_ENGINE: "codex" });
 
-    await expect(beginEngineBootstrap(plugin)).rejects.toThrow("Codex engine is not installed");
+    await expect(beginEngineBootstrap(plugin)).resolves.toMatchObject({ id: "codex" });
   });
 
   it("owns an adopted init resource even if Session construction never happens", async () => {

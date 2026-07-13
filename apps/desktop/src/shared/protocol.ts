@@ -45,6 +45,7 @@ import type {
   TelemetryStatus,
 } from "@anycode/core";
 import type { LspServerStatus } from "@anycode/core";
+import type { EngineId } from "./engines.js";
 // Slice 5.7 (design slice-5.7-cut.md §2.1): git-domain types for the additive
 // git wire surface. Type-only (verbatimModuleSyntax erases them from the renderer
 // bundle — hard requirement, see this file's header). They ride the ports barrel
@@ -62,6 +63,33 @@ export interface SerializedError {
   name: string;
   message: string;
   stack?: string;
+}
+
+/**
+ * UI-safe, immutable engine feature verdicts. External engines own their own
+ * loop and policy, so this is a presentation/gating projection rather than a
+ * promise that AnyCode's core services exist for the session.
+ */
+export interface EngineCapabilitiesProjection {
+  supportsCorePermissions: boolean;
+  supportsRewind: boolean;
+  supportsWorkflow: boolean;
+  supportsGitMutations: boolean;
+  supportsContextUsage: boolean;
+  supportsContextBreakdown: boolean;
+  supportsInteractiveApprovals: boolean;
+  costAccounting: boolean;
+  supportsModelSelection: boolean;
+  supportsReasoningEffort: boolean;
+  supportsImages: boolean;
+  supportsTasks: boolean;
+  supportsFileSnapshots: boolean;
+}
+
+/** Omitted for legacy core sessions so their historical host_ready wire stays exact. */
+export interface EnginePresentation {
+  id: EngineId;
+  capabilities: EngineCapabilitiesProjection;
 }
 
 /** AgentEvent after sanitization: the {type:"error"} variant carries SerializedError instead of unknown. */
@@ -278,7 +306,17 @@ export type UiToHostMessage =
 export type HostToUiMessage =
   // Phase-2 §3.3: `sessionId` added (host knows it at boot); renderer binds the
   // tab to its session (badge, picker annotation). Additive on the wire.
-  | { type: "host_ready"; workspace: string; mode: PermissionMode; model: string; sessionId: string; reasoningEffort?: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
+  | {
+      type: "host_ready";
+      workspace: string;
+      mode: PermissionMode;
+      model: string;
+      sessionId: string;
+      reasoningEffort?: ReasoningEffort;
+      availableEffortLevels?: ReasoningEffort[];
+      /** Present only for a non-core engine; absent retains legacy core wire exactly. */
+      engine?: EnginePresentation;
+    }
   // Phase-2 §3.3: transcript hydration of a resumed session. Emitted per
   // ui_ready AFTER host_ready and BEFORE Outbound.replay(), only when the boot
   // history is non-empty. The renderer mapping into transcript blocks is task

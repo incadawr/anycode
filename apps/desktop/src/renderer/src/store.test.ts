@@ -126,6 +126,41 @@ describe("desktop store — connection lifecycle", () => {
     expect(store.getState().turn).toEqual(turnBefore);
   });
 
+  it("stores an external engine projection and clears it when legacy core host_ready replaces the session", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "gpt-5.6-terra",
+      sessionId: "codex-session",
+      engine: {
+        id: "codex",
+        capabilities: {
+          supportsCorePermissions: false,
+          supportsRewind: false,
+          supportsWorkflow: false,
+          supportsGitMutations: false,
+          supportsContextUsage: true,
+          supportsContextBreakdown: false,
+          supportsInteractiveApprovals: true,
+          costAccounting: false,
+          supportsModelSelection: false,
+          supportsReasoningEffort: false,
+          supportsImages: false,
+          supportsTasks: false,
+          supportsFileSnapshots: false,
+        },
+      },
+    });
+    expect(store.getState().engine?.id).toBe("codex");
+    expect(store.getState().engine?.capabilities.supportsRewind).toBe(false);
+
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "core-session" });
+    expect(store.getState().engine).toBeNull();
+  });
+
   it("host_ready and reasoning_effort_changed update available effort levels", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
