@@ -173,9 +173,11 @@ export class CodexRpcClient {
       shell: false,
       windowsHide: true,
       // Own process-group leader on POSIX (pid === pgid) so close() below can
-      // signal the WHOLE group, not just the direct child — the exact shape
-      // that reaps a grandchild the app-server itself may have spawned. The
-      // flip side is that this child does NOT die with main, which is why the
+      // signal the WHOLE group, not just the direct child — the shape that
+      // reaps a grandchild the app-server spawned INTO this group. A grandchild
+      // that calls setsid() to leave the group is unreachable this way (a
+      // known, inherent residual of group reaping — see main/codex-children.ts).
+      // The flip side is that this child does NOT die with main, which is why the
       // registration below hands it to the app lifecycle (main/codex-children.ts).
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],

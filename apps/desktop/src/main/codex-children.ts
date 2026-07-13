@@ -24,6 +24,17 @@
  *     uncaught exception, `app.exit()`): one synchronous group SIGKILL each.
  *     A hard `SIGKILL`/power loss remains un-hookable by construction.
  *
+ * POSIX RESIDUAL, DELIBERATELY NOT PAPERED OVER: "reap a whole tree" above
+ * means every descendant that stayed IN the process group, not literally
+ * every descendant. A grandchild that calls `setsid()` (or is otherwise
+ * daemonized) leaves the group on its own and becomes unreachable by a
+ * `kill(-pgid, …)` from here — that is inherent to group-based reaping, not a
+ * bug in this module, and there is no portable way to close it from outside
+ * the process that escaped. The `codex` app-server has never been observed to
+ * daemonize a child this way; if one ever does, its process survives this
+ * registry's teardown exactly like it would survive `kill -9` on any single
+ * ordinary process.
+ *
  * WINDOWS RESIDUAL, DELIBERATELY NOT PAPERED OVER (precedent: the ACL residual
  * in shared/codex-binary-trust.ts): the guarantees above are POSIX guarantees.
  * There is no process GROUP to signal on win32 — `detached` there means a new

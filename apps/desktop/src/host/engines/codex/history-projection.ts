@@ -17,18 +17,36 @@
  * ignored, never rejected (fail-soft: a schema addition upstream must not
  * break resume hydration).
  *
- * Merge (cut §2(e)): the two sources are DISJOINT by protocol — native
- * `thread/read` yields `userMessage|agentMessage|fileChange`; the shadow log
- * holds ONLY `commandExecution`. There is no overlap, so the merge is a pure
- * interleave keyed by `(turnOrdinal, positionInTurn)` — `turnOrdinal` is the
- * turn's own 0-based index in `thread.turns[]`; `positionInTurn` is the
- * absolute index (0-based) the item held among ALL items of that turn as they
- * completed in the LIVE stream (assigned by the host writer, codex-engine.ts).
- * Reconstruction: native items are in their own relative completion order
- * (the server only ever appends in that order) but carry no absolute
- * position; shadow items carry an absolute position. Walking position
- * 0..total-1 and inserting whichever side claims that exact position
- * deterministically reproduces the original interleave.
+ * Merge (cut §2(e), errata W6): the two sources are DISJOINT by protocol —
+ * native `thread/read` yields ONLY `NATIVE_PERSISTED` types
+ * (`userMessage|agentMessage|fileChange` — live-probe-evidenced against
+ * codex-cli 0.144.3, never `reasoning`/`commandExecution`, not even a
+ * successful command); the shadow log holds ONLY `commandExecution`. Because
+ * `thread/read` silently DROPS every non-persisted live item (most
+ * importantly `reasoning`), the native side and the live stream the shadow
+ * writer observed do NOT share one coordinate space — a shadow row's anchor
+ * must be expressed in NATIVE-side coordinates, not live-stream coordinates,
+ * or the interleave drifts by however many dropped items preceded it.
+ *
+ * `turnOrdinal` is the turn's own 0-based index in `thread.turns[]`.
+ * `positionInTurn` means "insert this row BEFORE `native[positionInTurn]`" —
+ * it is the count of NATIVE-PERSISTED live completions observed before the
+ * command completed (codex-engine.ts's `nativeVisibleCompleted`), which is
+ * exactly the native array's own indexing since native items are the ones
+ * `thread/read` kept, in their own relative completion order. `seqInTurn` is
+ * the row's raw live-completion-order tiebreaker (every `item/completed` of
+ * the turn, dropped items included) — it disambiguates two shadow rows that
+ * share one `positionInTurn` (e.g. two commands between the same pair of
+ * native items) and seeds the shadow item's HistoryItem id.
+ *
+ * Reconstruction (`mergeTurnItems`): sort shadow rows by
+ * `(positionInTurn, seqInTurn)`. Walk native index `i = 0..native.length-1`;
+ * before emitting `native[i]`, emit every not-yet-emitted shadow row whose
+ * `positionInTurn <= i` (`<=`, not `==` — a row anchored at or before the
+ * earliest slot is still surfaced there rather than silently deferred by a
+ * data-consistency edge case). After the walk, emit every remaining shadow
+ * row (one anchored at or past `native.length`, e.g. a turn's last item was a
+ * command). Nothing is ever dropped.
  *
  * Mapping rules (cut §3.6):
  *  - `userMessage`/`agentMessage` text projects verbatim into a user/assistant
@@ -113,13 +131,31 @@ export interface CodexThreadRead {
 }
 
 /**
+ * The native `thread/read` item types a live probe (codex-cli 0.144.3, W6)
+ * evidenced the app-server actually persists. `reasoning` and
+ * `commandExecution` are deliberately absent — the live evidence is that
+ * `thread/read` never returns them, not even a successful command. A future
+ * codex-cli that starts persisting a new type must be evidenced by a new
+ * probe before it is added here; until then it stays on the fallback
+ * (`projectFallback`) path rather than being silently assumed native.
+ * Single source of truth for BOTH the writer (codex-engine.ts, which counts
+ * completions against this set) and the merge below (which anchors shadow
+ * rows in the same set's index space) — the coordinate-space drift this
+ * fixes was exactly two independent copies of this list disagreeing.
+ */
+export const NATIVE_PERSISTED: ReadonlySet<string> = new Set(["userMessage", "agentMessage", "fileChange"]);
+
+/**
  * One `commandExecution` completion recorded by the host's live writer (cut
  * §2(e)/§3.6, codex-engine.ts) — the shadow log's sole content, by
  * construction disjoint from every native item type.
  */
 export interface ShadowCommandItem {
   turnOrdinal: number;
+  /** Insert BEFORE `native[positionInTurn]` — a count of NATIVE_PERSISTED completions, not of all live completions. */
   positionInTurn: number;
+  /** Raw live-completion-order tiebreaker (every `item/completed` of the turn) — disambiguates same-`positionInTurn` rows and seeds the shadow HistoryItem id. */
+  seqInTurn: number;
   command: string;
   cwd?: string;
   exitCode?: number;
@@ -206,12 +242,18 @@ function projectCommandExecution(
   return toolPair(`${turnId}:${item.id}`, createdAt, item.id, "Bash", input, status, modelText);
 }
 
-/** One shadow-log row projects the same Bash tool_call/tool_result pair a native commandExecution item would (cut §2(e)). */
+/**
+ * One shadow-log row projects the same Bash tool_call/tool_result pair a
+ * native commandExecution item would (cut §2(e)). The id is keyed on
+ * `seqInTurn`, not `positionInTurn`: two commands can share one
+ * `positionInTurn` (both anchored before the same native item), and
+ * `seqInTurn` is unique within the turn by construction (codex-engine.ts).
+ */
 function projectShadowCommand(turnId: string, item: ShadowCommandItem, createdAt: number): HistoryItem[] {
   const input = { command: item.command, ...(item.cwd !== undefined ? { cwd: item.cwd } : {}) };
   const status = shadowStatusFor(item.exitCode);
   const modelText = item.outputHead ?? "";
-  const idPrefix = `${turnId}:shadow:${item.positionInTurn}`;
+  const idPrefix = `${turnId}:shadow:${item.seqInTurn}`;
   return toolPair(idPrefix, createdAt, idPrefix, "Bash", input, status, modelText);
 }
 
@@ -284,12 +326,14 @@ function projectItem(turnId: string, item: CodexThreadReadItem, createdAt: numbe
 }
 
 /**
- * Interleaves one turn's native items (in their own relative order) with its
- * shadow commands (each carrying an absolute `positionInTurn`) by walking
- * position 0..total-1 and inserting whichever side claims that exact slot.
- * A shadow row whose recorded position never matched (a data-consistency
- * edge case — see cut §8 residual risk) is appended at the turn's end rather
- * than silently dropped.
+ * Interleaves one turn's native items (already in their own relative
+ * completion order — `thread/read` only ever appends) with its shadow
+ * commands, each anchored to a native-side insertion point (`positionInTurn`,
+ * module header). Sorts shadow rows by `(positionInTurn, seqInTurn)`, then for
+ * every native index emits whichever not-yet-emitted shadow rows anchor at or
+ * before it (`<=`) immediately before that native item; any shadow rows left
+ * after the walk (anchored at or past `native.length`) are appended at the
+ * end. Nothing is ever dropped.
  */
 function mergeTurnItems(
   turnId: string,
@@ -297,11 +341,9 @@ function mergeTurnItems(
   shadow: ShadowCommandItem[],
   cursorStart: number,
 ): { items: HistoryItem[]; nextCursor: number } {
-  const sortedShadow = [...shadow].sort((a, b) => a.positionInTurn - b.positionInTurn);
-  const total = native.length + sortedShadow.length;
+  const sortedShadow = [...shadow].sort((a, b) => a.positionInTurn - b.positionInTurn || a.seqInTurn - b.seqInTurn);
   const items: HistoryItem[] = [];
   let cursor = cursorStart;
-  let nativeIndex = 0;
   let shadowIndex = 0;
 
   const emit = (projected: HistoryItem[]): void => {
@@ -309,17 +351,12 @@ function mergeTurnItems(
     cursor += projected.length;
   };
 
-  for (let position = 0; position < total; position += 1) {
-    const candidate = sortedShadow[shadowIndex];
-    if (candidate !== undefined && candidate.positionInTurn === position) {
-      emit(projectShadowCommand(turnId, candidate, cursor));
+  for (let nativeIndex = 0; nativeIndex < native.length; nativeIndex += 1) {
+    while (shadowIndex < sortedShadow.length && sortedShadow[shadowIndex]!.positionInTurn <= nativeIndex) {
+      emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor));
       shadowIndex += 1;
-      continue;
     }
-    const nativeItem = native[nativeIndex];
-    nativeIndex += 1;
-    if (nativeItem === undefined) continue;
-    emit(projectItem(turnId, nativeItem, cursor));
+    emit(projectItem(turnId, native[nativeIndex]!, cursor));
   }
   for (; shadowIndex < sortedShadow.length; shadowIndex += 1) {
     emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor));
