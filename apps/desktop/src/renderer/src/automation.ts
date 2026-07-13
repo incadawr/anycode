@@ -59,6 +59,7 @@ import { slashQueryAt } from "./slash-menu.js";
 import { sortCheckpointsNewestFirst } from "./components/TimelinePanel.js";
 import type { GitCommand, RewindScopeWire, UiToHostMessage, WireEnvStatus } from "../../shared/protocol.js";
 import type { CreateTabRequest, CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
+import type { EngineId } from "../../shared/engines.js";
 import type { McpConfigSource, McpHarnessKind } from "../../shared/mcp-config.js";
 import type { SkillHarnessKind, SkillScope, SkillSourceKind } from "../../shared/skills-config.js";
 import type { SubagentSourceKind } from "../../shared/subagents-config.js";
@@ -184,6 +185,14 @@ export interface TabStateSnapshot {
    */
   promptQueue: readonly { id: string; text: string; imageCount: number }[];
   queuePaused: boolean;
+  /**
+   * Codex-fixes TASK.42 (cut §3.7, additive-optional; frozen in C0b, WIRED in
+   * B5-auto). Present only for a non-core engine session (mirrors
+   * `host_ready.engine`'s "absent = legacy core" projection discipline, cut
+   * §2(f)) — an existing core-session snapshot is byte-untouched until
+   * B5-auto populates this from the live store's `engine`/preset state.
+   */
+  engine?: { id: EngineId; model?: string; activePresetId?: string };
 }
 
 /** Return shape of `snapshot()` (design §3.2). */
@@ -296,6 +305,15 @@ export interface StartScreenState {
   sendEnabled: boolean;
   recentCount: number;
   projectMenuOpen: boolean;
+  /**
+   * Codex-fixes TASK.42 (cut §3.7, additive-optional; frozen in C0b, WIRED in
+   * B5-auto). The draft's current engine pick + the catalog of engines the
+   * start screen offers. Optional so this block's freeze adds no behavior:
+   * `startScreenState()`'s existing implementation is unaffected until B5-auto
+   * populates these two fields from the real draft/registry state.
+   */
+  engine?: EngineId;
+  availableEngines?: EngineId[];
 }
 
 /** DOM accessor DI for the transcript-scroll probe (design §3.3), injectable for tests exactly like `AnycodeBridge`. */
@@ -1355,6 +1373,13 @@ export interface AutomationFacade {
   // own actions, ToggleProjectMenu drives the real chip click. ──
   startScreenSetModel(model: string | null): FacadeResult;
   startScreenSetMode(mode: string): FacadeResult;
+  // Codex-fixes TASK.42 (cut §3.7, additive; frozen in C0b, IMPLEMENTED in
+  // B5-auto): renderer-plane engine pick for a not-yet-created start-screen
+  // draft, same thin no-second-path discipline as startScreenSetModel above.
+  // Optional so this freeze adds zero behavior — createAutomationFacade()'s
+  // existing object literal stays a valid AutomationFacade without this
+  // method until B5-auto wires the real draft action + main-side HTTP route.
+  startScreenSetEngine?(engineId: string): Promise<FacadeResult>;
   startScreenToggleProjectMenu(open: boolean): Promise<FacadeResult>;
   startScreenSubmit(): Promise<{ ok: true; tabId: string } | { ok: false; message: string }>;
   // ── prompt queue (design/slice-P7.14-cut.md §5 W3) — all over the SAME

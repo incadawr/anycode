@@ -1,0 +1,92 @@
+{
+  "fixture": "file-change-accept",
+  "appServerPid": 93914,
+  "stderr": "",
+  "initialize": {
+    "userAgent": "anycode/0.144.1 (Mac OS 15.6.1; arm64) iTerm.app/3.6.10 (anycode; 0.0.0-w0probe)",
+    "codexHome": "/Users/incadawr/.codex-accounts/personal",
+    "platformFamily": "unix",
+    "platformOs": "macos"
+  },
+  "thread": {
+    "thread": {
+      "id": "019f5798-ca2c-7c12-9b30-67eff08b708f",
+      "extra": null,
+      "sessionId": "019f5798-ca2c-7c12-9b30-67eff08b708f",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783881058,
+      "updatedAt": 1783881058,
+      "recencyAt": 1783881058,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/Users/incadawr/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T21-30-58-019f5798-ca2c-7c12-9b30-67eff08b708f.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": []
+    },
+    "model": "gpt-5.6-terra",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "/private/tmp/anycode-codex-w0/repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/anycode-codex-w0/repo"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "untrusted",
+    "approvalsReviewer": "auto_review",
+    "sandbox": {
+      "type": "readOnly",
+      "networkAccess": false
+    },
+    "activePermissionProfile": null,
+    "reasoningEffort": "high",
+    "multiAgentMode": "explicitRequestOnly"
+  },
+  "turn": {
+    "turn": {
+      "id": "019f5798-ca99-7561-a2f8-60a4d32a9480",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+    }
+  },
+  "completed": {
+    "id": "019f5798-ca99-7561-a2f8-60a4d32a9480",
+    "items": [],
+    "itemsView": "notLoaded",
+    "status": "completed",
+    "error": null,
+    "startedAt": 1783881058,
+    "completedAt": 1783881066,
+    "durationMs": 7480
+  },
+  "seen": [
+    {
+      "method": "item/fileChange/requestApproval",
+      "params": {
+        "threadId": "019f5798-ca2c-7c12-9b30-67eff08b708f",
+        "turnId": "019f5798-ca99-7561-a2f8-60a4d32a9480",
+        "itemId": "exec-ac832ab1-6183-4b8c-a040-67a4caacc552",
+        "startedAtMs": 1783881064726,
+        "reason": null,
+        "grantRoot": null
+      }
+    }
+  ]
+}

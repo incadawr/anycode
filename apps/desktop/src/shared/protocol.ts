@@ -86,10 +86,46 @@ export interface EngineCapabilitiesProjection {
   supportsFileSnapshots: boolean;
 }
 
-/** Omitted for legacy core sessions so their historical host_ready wire stays exact. */
+/** One selectable model choice for a non-core engine's draft/mid-session picker (TASK.39, cut §3.1). */
+export interface EngineModelChoice {
+  id: string;
+  label?: string;
+  efforts?: string[];
+}
+
+/** One selectable permission posture for a non-core engine (TASK.39, cut §3.1) — engine-side table, never a raw config payload from the renderer. */
+export interface EnginePermissionPreset {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/**
+ * Omitted for legacy core sessions so their historical host_ready wire stays
+ * exact. `model`/`permissions` (codex-fixes TASK.39, cut §3.1) are additive
+ * and optional: absent for core (and for any engine that has not yet wired a
+ * model/preset catalog) so this projection's core wire shape is unchanged.
+ */
 export interface EnginePresentation {
   id: EngineId;
   capabilities: EngineCapabilitiesProjection;
+  model?: { current: string; available: EngineModelChoice[] };
+  permissions?: { presets: EnginePermissionPreset[]; activePresetId: string };
+}
+
+/**
+ * Shell (AnyCode UI chrome) capabilities, independent of the agent-runtime
+ * capabilities above (codex-fixes TASK.40, cut §3.2/§2(f)). Emitted ONLY
+ * alongside a present `host_ready.engine` (i.e. never for core — core wire
+ * stays byte-identical by construction); a renderer that sees no `shell`
+ * field treats every shell feature as enabled (legacy core behavior).
+ */
+export interface ShellCapabilitiesProjection {
+  /** status / diff / Review / Environment panels. */
+  gitReadOnly: boolean;
+  /** user-triggered commit/branch/stage UI. */
+  gitUserMutations: boolean;
+  terminal: boolean;
 }
 
 /** AgentEvent after sanitization: the {type:"error"} variant carries SerializedError instead of unknown. */
@@ -277,6 +313,13 @@ export type UiToHostMessage =
   // `setModelSchema` below (fail-closed). Honored only between turns (Session
   // silently drops it while busy, mirroring set_reasoning_effort).
   | { type: "set_model"; model: string }
+  // Codex-fixes TASK.39 (cut §3.3): switch a non-core engine's permission
+  // posture. Mirrors set_model's between-turns discipline (a pending-override
+  // the engine applies to the NEXT turn/start, cut §2(d)) — untrusted ->
+  // validated by `setEnginePresetSchema` below (fail-closed); host-authoritative
+  // membership check against the engine's own preset table happens at route()
+  // time, never a raw config payload from the renderer.
+  | { type: "set_engine_preset"; presetId: string }
   // Slice 5.7 (design slice-5.7-cut.md §2.1): one user-initiated git command.
   // Untrusted -> validated by `gitCommandMessageSchema` below (fail-closed). NO
 
@@ -316,6 +359,8 @@ export type HostToUiMessage =
       availableEffortLevels?: ReasoningEffort[];
       /** Present only for a non-core engine; absent retains legacy core wire exactly. */
       engine?: EnginePresentation;
+      /** Present only alongside `engine` (never for core, cut §3.2/§2(f)); absent = every shell feature enabled. */
+      shell?: ShellCapabilitiesProjection;
     }
   // Phase-2 §3.3: transcript hydration of a resumed session. Emitted per
   // ui_ready AFTER host_ready and BEFORE Outbound.replay(), only when the boot
@@ -358,6 +403,15 @@ export type HostToUiMessage =
   // automation byte-snapshots stay untouched (design slice-P7.15-cut.md §2.5).
   | { type: "model_changed"; model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
   | { type: "mode_change_rejected"; reason: string }
+  // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset`
+  // (or a resume-reconcile of the effective policy, cut §2(d) "Ack") — trusted,
+  // no zod, precedent mode_changed/model_changed. `appliesFrom:"next_turn"` is
+  // the ONLY value today (cut §2(d): preset changes apply to the next
+  // turn/start, never mid-turn); a literal, not a boolean, so a future
+  // immediate-apply variant is addable without breaking this shape. No
+  // legacy/byte-locked flow emits one (core never builds an EnginePresentation
+  // with `permissions`), so automation/replay snapshots stay byte-identical.
+  | { type: "engine_settings_changed"; model?: string; activePresetId?: string; appliesFrom: "next_turn" }
   // Phase 4 slice 4.4-T (design feature-session-titles.md §4): emitted once
   // the heuristic derives a title from the first user message, and again if
   // the async tier-2 LLM refinement upgrades it. Like `mode_changed` above,
@@ -508,6 +562,18 @@ export const setModelSchema = z
   })
   .strict();
 
+// Codex-fixes TASK.39 (cut §3.3): untrusted set_engine_preset. Mirrors
+// setModelSchema's bounded-length discipline (defense in depth — the route()
+// handler is the actual membership-against-the-engine's-own-table authority,
+// cut §2(d) "host-authoritative"); a hostile renderer cannot ship more than a
+// short id string, let alone a raw policy/config object.
+export const setEnginePresetSchema = z
+  .object({
+    type: z.literal("set_engine_preset"),
+    presetId: z.string().min(1).max(128),
+  })
+  .strict();
+
 // ── git (slice 5.7): untrusted UiToHostMessage side; semantics FROZEN incl. caps.
 // DRIFT-LOCK: GIT_DIFF_TARGETS is the single source of truth for the diff.target
 // enum AND is `satisfies readonly GitDiffTarget[]`, so if core renames/removes a
@@ -635,6 +701,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   setModeSchema,
   setReasoningEffortSchema,
   setModelSchema,
+  setEnginePresetSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   contextBreakdownRequestSchema,

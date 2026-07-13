@@ -1,0 +1,275 @@
+{
+  "fixture": "basic",
+  "appServerPid": 98043,
+  "stderr": "",
+  "initialize": {
+    "userAgent": "anycode/0.144.1 (Mac OS 15.6.1; arm64) iTerm.app/3.6.10 (anycode; 0.0.0-w0probe)",
+    "codexHome": "/Users/incadawr/.codex-accounts/personal",
+    "platformFamily": "unix",
+    "platformOs": "macos"
+  },
+  "account": {
+    "account": {
+      "type": "chatgpt",
+      "email": "<redacted-personal-email>",
+      "planType": "plus"
+    },
+    "requiresOpenaiAuth": true
+  },
+  "models1": {
+    "data": [
+      {
+        "id": "gpt-5.6-sol",
+        "model": "gpt-5.6-sol",
+        "upgrade": null,
+        "upgradeInfo": null,
+        "availabilityNux": {
+          "message": "Our most capable model yet. GPT-5.6 Sol can tackle complex code changes, dig into research, produce polished documents, and take on your most ambitious work. Sol is highly capable at lower reasoning efforts—try starting lower, then turn it up for harder jobs."
+        },
+        "displayName": "GPT-5.6-Sol",
+        "description": "Latest frontier agentic coding model.",
+        "hidden": false,
+        "supportedReasoningEfforts": [
+          {
+            "reasoningEffort": "low",
+            "description": "Fast responses with lighter reasoning"
+          },
+          {
+            "reasoningEffort": "medium",
+            "description": "Balances speed and reasoning depth for everyday tasks"
+          },
+          {
+            "reasoningEffort": "high",
+            "description": "Greater reasoning depth for complex problems"
+          },
+          {
+            "reasoningEffort": "xhigh",
+            "description": "Extra high reasoning depth for complex problems"
+          },
+          {
+            "reasoningEffort": "max",
+            "description": "Maximum reasoning depth for the hardest problems"
+          },
+          {
+            "reasoningEffort": "ultra",
+            "description": "Maximum reasoning with automatic task delegation"
+          }
+        ],
+        "defaultReasoningEffort": "medium",
+        "inputModalities": [
+          "text",
+          "image"
+        ],
+        "supportsPersonality": false,
+        "additionalSpeedTiers": [
+          "fast"
+        ],
+        "serviceTiers": [
+          {
+            "id": "priority",
+            "name": "Fast",
+            "description": "1.5x speed, increased usage"
+          }
+        ],
+        "defaultServiceTier": null,
+        "isDefault": true
+      }
+    ],
+    "nextCursor": "1"
+  },
+  "models2": {
+    "data": [
+      {
+        "id": "gpt-5.6-terra",
+        "model": "gpt-5.6-terra",
+        "upgrade": null,
+        "upgradeInfo": null,
+        "availabilityNux": null,
+        "displayName": "GPT-5.6-Terra",
+        "description": "Balanced agentic coding model for everyday work.",
+        "hidden": false,
+        "supportedReasoningEfforts": [
+          {
+            "reasoningEffort": "low",
+            "description": "Fast responses with lighter reasoning"
+          },
+          {
+            "reasoningEffort": "medium",
+            "description": "Balances speed and reasoning depth for everyday tasks"
+          },
+          {
+            "reasoningEffort": "high",
+            "description": "Greater reasoning depth for complex problems"
+          },
+          {
+            "reasoningEffort": "xhigh",
+            "description": "Extra high reasoning depth for complex problems"
+          },
+          {
+            "reasoningEffort": "max",
+            "description": "Maximum reasoning depth for the hardest problems"
+          },
+          {
+            "reasoningEffort": "ultra",
+            "description": "Maximum reasoning with automatic task delegation"
+          }
+        ],
+        "defaultReasoningEffort": "medium",
+        "inputModalities": [
+          "text",
+          "image"
+        ],
+        "supportsPersonality": false,
+        "additionalSpeedTiers": [
+          "fast"
+        ],
+        "serviceTiers": [
+          {
+            "id": "priority",
+            "name": "Fast",
+            "description": "1.5x speed, increased usage"
+          }
+        ],
+        "defaultServiceTier": null,
+        "isDefault": false
+      }
+    ],
+    "nextCursor": "2"
+  },
+  "thread": {
+    "thread": {
+      "id": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "extra": null,
+      "sessionId": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783842528,
+      "updatedAt": 1783842528,
+      "recencyAt": 1783842528,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/Users/incadawr/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T10-48-48-019f554c-dd9a-7d42-bcea-0673f965508e.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": []
+    },
+    "model": "gpt-5.6-terra",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "/private/tmp/anycode-codex-w0/repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/anycode-codex-w0/repo"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "untrusted",
+    "approvalsReviewer": "auto_review",
+    "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+    },
+    "activePermissionProfile": null,
+    "reasoningEffort": "high",
+    "multiAgentMode": "explicitRequestOnly"
+  },
+  "turn": {
+    "turn": {
+      "id": "019f554c-ddd9-71b2-a90d-0191ac1e4422",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+    }
+  },
+  "completed": {
+    "id": "019f554c-ddd9-71b2-a90d-0191ac1e4422",
+    "items": [],
+    "itemsView": "notLoaded",
+    "status": "completed",
+    "error": null,
+    "startedAt": 1783842528,
+    "completedAt": 1783842532,
+    "durationMs": 3279
+  },
+  "read": {
+    "thread": {
+      "id": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "extra": null,
+      "sessionId": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "Reply with exactly W0_TEXT_OK. Do not call tools.",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783842528,
+      "updatedAt": 1783842528,
+      "recencyAt": 1783842528,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/Users/incadawr/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T10-48-48-019f554c-dd9a-7d42-bcea-0673f965508e.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": {
+        "sha": "c78ee58db56aed39573fdc28c6090ba705a96496",
+        "branch": "master",
+        "originUrl": null
+      },
+      "name": null,
+      "turns": [
+        {
+          "id": "019f554c-ddd9-71b2-a90d-0191ac1e4422",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "item-1",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Reply with exactly W0_TEXT_OK. Do not call tools.",
+                  "text_elements": []
+                }
+              ]
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-2",
+              "text": "W0_TEXT_OK",
+              "phase": "final_answer",
+              "memoryCitation": null
+            }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1783842528,
+          "completedAt": 1783842532,
+          "durationMs": 3279
+        }
+      ]
+    }
+  },
+  "psAtEnd": "98043 98042 98042 node /Users/incadawr/.npm-global/bin/codex app-server --stdio"
+}

@@ -1,0 +1,164 @@
+{
+  "fixture": "resume-read",
+  "appServerPid": 98308,
+  "stderr": "",
+  "initialize": {
+    "userAgent": "anycode/0.144.1 (Mac OS 15.6.1; arm64) iTerm.app/3.6.10 (anycode; 0.0.0-w0probe)",
+    "codexHome": "/Users/incadawr/.codex-accounts/personal",
+    "platformFamily": "unix",
+    "platformOs": "macos"
+  },
+  "threadId": "019f554c-dd9a-7d42-bcea-0673f965508e",
+  "resumed": {
+    "thread": {
+      "id": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "extra": null,
+      "sessionId": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "Reply with exactly W0_TEXT_OK. Do not call tools.",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783842528,
+      "updatedAt": 1783842528,
+      "recencyAt": 1783842528,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/Users/incadawr/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T10-48-48-019f554c-dd9a-7d42-bcea-0673f965508e.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": {
+        "sha": "c78ee58db56aed39573fdc28c6090ba705a96496",
+        "branch": "master",
+        "originUrl": null
+      },
+      "name": null,
+      "turns": [
+        {
+          "id": "019f554c-ddd9-71b2-a90d-0191ac1e4422",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "item-1",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Reply with exactly W0_TEXT_OK. Do not call tools.",
+                  "text_elements": []
+                }
+              ]
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-2",
+              "text": "W0_TEXT_OK",
+              "phase": "final_answer",
+              "memoryCitation": null
+            }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1783842528,
+          "completedAt": 1783842532,
+          "durationMs": 3279
+        }
+      ]
+    },
+    "model": "gpt-5.6-terra",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "/private/tmp/anycode-codex-w0/repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/anycode-codex-w0/repo"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "auto_review",
+    "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+    },
+    "activePermissionProfile": {
+      "id": ":workspace",
+      "extends": null
+    },
+    "reasoningEffort": "high",
+    "multiAgentMode": "explicitRequestOnly",
+    "initialTurnsPage": null
+  },
+  "read": {
+    "thread": {
+      "id": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "extra": null,
+      "sessionId": "019f554c-dd9a-7d42-bcea-0673f965508e",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "Reply with exactly W0_TEXT_OK. Do not call tools.",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783842528,
+      "updatedAt": 1783842528,
+      "recencyAt": 1783842528,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/Users/incadawr/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T10-48-48-019f554c-dd9a-7d42-bcea-0673f965508e.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": {
+        "sha": "c78ee58db56aed39573fdc28c6090ba705a96496",
+        "branch": "master",
+        "originUrl": null
+      },
+      "name": null,
+      "turns": [
+        {
+          "id": "019f554c-ddd9-71b2-a90d-0191ac1e4422",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "item-1",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Reply with exactly W0_TEXT_OK. Do not call tools.",
+                  "text_elements": []
+                }
+              ]
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-2",
+              "text": "W0_TEXT_OK",
+              "phase": "final_answer",
+              "memoryCitation": null
+            }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1783842528,
+          "completedAt": 1783842532,
+          "durationMs": 3279
+        }
+      ]
+    }
+  }
+}

@@ -114,6 +114,26 @@ export interface AnycodeSettings {
    * entries are ignored fail-soft.
    */
   keybindings?: { overrides: KeybindingOverride[] };
+  /**
+   * Codex engine onboarding metadata (TASK.41, cut §3.5, additive-optional;
+   * version NOT bumped — same forward-compat reasoning as `provider.defaults`/
+   * `keybindings` above: an existing settings.json with no `codex` field
+   * round-trips byte-identically). `binaryPath` is the validated absolute path
+   * the user picked/confirmed (NEVER the `ANYCODE_CODEX_BIN` dev env-override,
+   * which always wins at read time and is never persisted). `lastCheck` is an
+   * advisory cache of the last `codex-doctor` run — it NEVER carries a
+   * credential or token (those stay in CODEX_HOME, cut §2(g) — AnyCode does
+   * not read or store Codex auth state).
+   */
+  codex?: {
+    binaryPath?: string;
+    lastCheck?: {
+      status: "ready" | "not_installed" | "update_required" | "signed_out" | "error";
+      version?: string;
+      /** ISO timestamp; advisory-cache only. */
+      at: string;
+    };
+  };
 }
 
 // ── secret vault status (renderer NEVER receives a decrypted value, only status) ──

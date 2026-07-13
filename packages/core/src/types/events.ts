@@ -146,4 +146,14 @@ export type AgentEvent =
   // surface only when the wiring supplied a capturer (prod REPL); the desktop
   // host and headless print never do, so these are dormant by construction.
   | { type: "checkpoint_created"; id: string; label: string }
-  | { type: "checkpoint_failed"; reason: string };
+  | { type: "checkpoint_failed"; reason: string }
+  /**
+   * External-engine notice (codex-fixes TASK.42, cut §2(i)/§3.4): a warning,
+   * retry, or informational notice from an engine that owns its own runtime
+   * outside AnyCode's core loop (e.g. Codex app-server auth/quota/network
+   * retries). Additive — the core loop itself NEVER emits this variant, so
+   * every existing scripted-model-port core-loop test sequence is unaffected
+   * (cut §7 test-hazard #3); only an external engine's own translator
+   * constructs one.
+   */
+  | { type: "engine_notice"; level: "warning" | "retry" | "info"; message: string };

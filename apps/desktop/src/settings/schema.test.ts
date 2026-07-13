@@ -243,6 +243,71 @@ describe("keybindings.overrides (F20, slice-P7.24-cut.md §1, additive-optional)
   });
 });
 
+describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
+  it("reads an old file with no codex field, round-tripping byte-identically", () => {
+    // A settings.json written before codex-fixes has no codex key at all.
+    const legacy = cloneDefaults();
+    const before = JSON.stringify(legacy);
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.codex).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before); // byte-identical round-trip
+  });
+
+  it("validates a file WITH codex.binaryPath + codex.lastCheck without bumping the version", () => {
+    const withCodex: AnycodeSettings = {
+      ...cloneDefaults(),
+      codex: {
+        binaryPath: "/opt/homebrew/bin/codex",
+        lastCheck: { status: "ready", version: "0.144.1", at: "2026-07-13T00:00:00.000Z" },
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withCodex)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex).toEqual({
+        binaryPath: "/opt/homebrew/bin/codex",
+        lastCheck: { status: "ready", version: "0.144.1", at: "2026-07-13T00:00:00.000Z" },
+      });
+      expect(parsed.data.version).toBe(1); // NOT bumped
+    }
+  });
+
+  it("rejects a corrupt lastCheck.status", () => {
+    const bad = {
+      ...cloneDefaults(),
+      codex: { lastCheck: { status: "bogus", at: "2026-07-13T00:00:00.000Z" } },
+    };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("rejects a lastCheck missing the required `at` timestamp", () => {
+    const bad = { ...cloneDefaults(), codex: { lastCheck: { status: "ready" } } };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("survives a read-modify-write cycle (nested codex fields not stripped on reparse)", () => {
+    const written = mergeSettings(cloneDefaults(), {
+      codex: { binaryPath: "/usr/local/bin/codex" },
+    });
+    const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
+    expect(reloaded.status).toBe("ok");
+    expect(reloaded.settings.codex?.binaryPath).toBe("/usr/local/bin/codex");
+  });
+
+  it("never carries a token/credential field — only path/status metadata is representable", () => {
+    // Type-level guard: attempting to widen the schema shape here (e.g. a
+    // `token`/`apiKey`/`refreshToken` key) would need a code change to this
+    // test, keeping the credential-free invariant (cut §2(g)) visible at review.
+    const withCodex: AnycodeSettings = {
+      ...cloneDefaults(),
+      codex: { binaryPath: "/usr/local/bin/codex", lastCheck: { status: "signed_out", at: "2026-07-13T00:00:00.000Z" } },
+    };
+    expect(Object.keys(withCodex.codex ?? {})).toEqual(["binaryPath", "lastCheck"]);
+    expect(Object.keys(withCodex.codex?.lastCheck ?? {})).toEqual(["status", "at"]);
+  });
+});
+
 describe("cloneDefaults", () => {
   it("returns an independent deep copy (no shared mutable arrays)", () => {
     const a = cloneDefaults();

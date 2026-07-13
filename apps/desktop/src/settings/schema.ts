@@ -112,6 +112,23 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
         overrides: z.array(keybindingOverrideSchema),
       })
       .optional(),
+    // Codex onboarding metadata (TASK.41, cut §3.5, additive-optional; version
+    // NOT bumped, same forward-compat reasoning as `keybindings`/`provider.id`
+    // above). Declared explicitly (not left to .passthrough()) so it validates
+    // and survives a read-modify-write cycle; absent on old files, parses to
+    // undefined — settings.json with no `codex` key round-trips byte-identically.
+    codex: z
+      .object({
+        binaryPath: z.string().optional(),
+        lastCheck: z
+          .object({
+            status: z.enum(["ready", "not_installed", "update_required", "signed_out", "error"]),
+            version: z.string().optional(),
+            at: z.string(),
+          })
+          .optional(),
+      })
+      .optional(),
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

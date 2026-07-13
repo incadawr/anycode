@@ -1574,6 +1574,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         case "checkpoint_failed":
           return;
 
+        // Codex-fixes TASK.42 (cut §2(i)/§3.4): additive AgentEvent variant the
+        // core loop never emits (dormant for every existing core session, same
+        // posture as checkpoint_created/checkpoint_failed above); a later Codex
+        // slice renders it as a system transcript line. No-op here keeps the
+        // transcript + automation snapshots byte-identical while satisfying
+        // exhaustiveness.
+        case "engine_notice":
+          return;
+
         default: {
           const _exhaustive: never = event;
           void _exhaustive;
@@ -1832,6 +1841,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "rewind_result":
             applyRewindResult(message);
+            return;
+          // Codex-fixes TASK.39 (cut §3.3): host ack of a `set_engine_preset`
+          // (or a resume-reconcile). No-op here keeps the store/transcript byte-
+          // identical while satisfying exhaustiveness; a later Codex slice wires
+          // the actual preset-menu "applies next turn" ack state.
+          case "engine_settings_changed":
             return;
           default: {
             const _exhaustive: never = message;

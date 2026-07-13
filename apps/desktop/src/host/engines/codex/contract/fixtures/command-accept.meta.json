@@ -1,0 +1,120 @@
+{
+  "fixture": "command-accept",
+  "appServerPid": 99007,
+  "stderr": "",
+  "initialize": {
+    "userAgent": "anycode/0.144.1 (Mac OS 15.6.1; arm64) iTerm.app/3.6.10 (anycode; 0.0.0-w0probe)",
+    "codexHome": "/Users/incadawr/.codex-accounts/personal",
+    "platformFamily": "unix",
+    "platformOs": "macos"
+  },
+  "thread": {
+    "thread": {
+      "id": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+      "extra": null,
+      "sessionId": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783842543,
+      "updatedAt": 1783842543,
+      "recencyAt": 1783842543,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/Users/incadawr/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T10-49-03-019f554d-16be-7b21-b55e-e9ce5b023a52.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": []
+    },
+    "model": "gpt-5.6-terra",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "/private/tmp/anycode-codex-w0/repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/anycode-codex-w0/repo"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "untrusted",
+    "approvalsReviewer": "auto_review",
+    "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+    },
+    "activePermissionProfile": null,
+    "reasoningEffort": "high",
+    "multiAgentMode": "explicitRequestOnly"
+  },
+  "turn": {
+    "turn": {
+      "id": "019f554d-16fb-7493-bc52-fe8403dbd61c",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+    }
+  },
+  "completed": {
+    "id": "019f554d-16fb-7493-bc52-fe8403dbd61c",
+    "items": [],
+    "itemsView": "notLoaded",
+    "status": "completed",
+    "error": null,
+    "startedAt": 1783842543,
+    "completedAt": 1783842547,
+    "durationMs": 4498
+  },
+  "seen": [
+    {
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+        "turnId": "019f554d-16fb-7493-bc52-fe8403dbd61c",
+        "itemId": "exec-610aebb7-4141-4649-b2e1-8a0bde4134c4",
+        "startedAtMs": 1783842547046,
+        "environmentId": "local",
+        "command": "/bin/zsh -lc \"sh -c 'echo w0-command > w0-command-sentinel.txt'\"",
+        "cwd": "/private/tmp/anycode-codex-w0/repo",
+        "commandActions": [
+          {
+            "type": "unknown",
+            "command": "sh -c 'echo w0-command > w0-command-sentinel.txt'"
+          }
+        ],
+        "proposedExecpolicyAmendment": [
+          "sh",
+          "-c",
+          "echo w0-command > w0-command-sentinel.txt"
+        ],
+        "availableDecisions": [
+          "accept",
+          {
+            "acceptWithExecpolicyAmendment": {
+              "execpolicy_amendment": [
+                "sh",
+                "-c",
+                "echo w0-command > w0-command-sentinel.txt"
+              ]
+            }
+          },
+          "cancel"
+        ]
+      }
+    }
+  ]
+}
