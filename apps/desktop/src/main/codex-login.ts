@@ -68,6 +68,15 @@ function delay(ms: number): Promise<void> {
  * independent codepaths that read `account/read`).
  */
 export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOptions): Promise<CodexLoginOutcome> {
+  // ENTRANCE GATE (W3.5-review Critical): the signal is otherwise first observed
+  // far below — after the child is spawned, initialized, the login started and
+  // the browser opened. A login entered with an already-aborted signal (quit ran
+  // while its caller was parked on a pre-spawn `await`) must therefore produce
+  // NO child and NO browser window at all, rather than one that a `finally`
+  // reaps a moment later: the child is detached, and on win32 nothing reaps it.
+  if (options.signal?.aborted === true) {
+    return { ok: false, reason: "cancelled" };
+  }
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
   const env = buildDoctorChildEnv(options.env ?? process.env, platform);

@@ -26,18 +26,52 @@ const nodeFs: CodexBinaryFs = {
 /** The POSIX identity the trust policy judges ownership against; `undefined` getters on Windows collapse to a value the policy ignores. */
 export interface CodexIdentity {
   uid: number;
+  /** Supplementary groups (`process.getgroups()`). Not read by the trust policy itself (membership is not trust — see shared/codex-binary-trust.ts) but kept as part of the identity snapshot callers pass around. */
   gids: readonly number[];
+  /** `process.getegid()` — judged by the policy's Linux user-private-group case. Optional so an identity built before this field existed still satisfies the type; omitted, it falls back to a sentinel no real gid can match, i.e. that trust case simply never fires. */
+  egid?: number;
 }
 
 function currentIdentity(): CodexIdentity {
   return {
     uid: process.getuid?.() ?? -1,
     gids: process.getgroups?.() ?? [],
+    egid: process.getegid?.() ?? -1,
   };
 }
 
-function toPathStat(stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
-  return { isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+function toPathStat(path: string, stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
+  return { path, isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+}
+
+/**
+ * Every directory that can be used to swap the binary out from under us: the
+ * FULL ancestor chain (up to the filesystem root) of the resolved file's
+ * directory, plus — when the candidate path is a symlink — the same chain
+ * for the directory holding that symlink. A single-level check misses a
+ * writable GRANDPARENT that can rename or replace an otherwise-safe
+ * immediate directory (W5.5-review High), so every ancestor up to `/` is
+ * walked, not just the leaf. Deduplicated: a shared ancestor (the common
+ * case) is only statted and judged once.
+ */
+function ancestorDirectories(resolvedFile: string, originalPath: string): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const walk = (start: string): void => {
+    let current = start;
+    for (;;) {
+      if (!seen.has(current)) {
+        seen.add(current);
+        ordered.push(current);
+      }
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  };
+  walk(dirname(resolvedFile));
+  if (resolvedFile !== originalPath) walk(dirname(originalPath));
+  return ordered;
 }
 
 /**
@@ -58,17 +92,14 @@ export function checkCodexBinaryPathTrust(
   if (platform === "win32") return null;
   try {
     const resolved = fs.realpath(path);
-    const directories = [toPathStat(fs.stat(dirname(resolved)))];
     // A symlink lets an attacker swap the LINK instead of the target, so the
-    // link's own directory is part of the trusted set too.
-    if (resolved !== path) {
-      directories.push(toPathStat(fs.stat(dirname(path))));
-    }
+    // link's own ancestor chain is part of the trusted set too.
+    const directories = ancestorDirectories(resolved, path).map((dir) => toPathStat(dir, fs.stat(dir)));
     return checkCodexBinaryTrust({
-      file: toPathStat(fs.stat(resolved)),
+      file: toPathStat(resolved, fs.stat(resolved)),
       directories,
       uid: identity.uid,
-      gids: identity.gids,
+      egid: identity.egid ?? -1,
       platform,
     });
   } catch {

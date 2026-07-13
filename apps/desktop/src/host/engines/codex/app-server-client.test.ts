@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,6 +69,41 @@ describe("AppServerClient", () => {
   it("fails closed for an unsupported or timed-out version", async () => {
     await expect(makeClient(["--bad-version"]).start()).rejects.toBeInstanceOf(EngineVersionError);
     await expect(makeClient(["--hang-version"], { versionTimeoutMs: 150 }).start()).rejects.toBeInstanceOf(EngineVersionError);
+  });
+
+  // W5.5-review Medium: pre-fix, trust was checked ONCE before `preflightVersion()`
+  // and never again — a binary swapped during the `--version` round-trip was then
+  // executed unchecked as the long-lived app-server. Fails on pre-fix code, where
+  // `binaryTrust` is called exactly once and the app-server spawn always happens.
+  it("re-checks trust immediately before EACH spawn — a swap between preflight and the app-server spawn is caught, not just the first spawn", async () => {
+    let calls = 0;
+    const binaryTrust = vi.fn(() => {
+      calls += 1;
+      return calls === 1 ? null : "binary swapped after preflight";
+    });
+    const spawnSpy = vi.fn((command: string, args: readonly string[], opts: Parameters<typeof spawn>[2]) => spawn(command, args, opts));
+    const client = makeClient([], { binaryTrust, spawnImpl: spawnSpy });
+    try {
+      await expect(client.start()).rejects.toThrow(/binary swapped after preflight/);
+      expect(binaryTrust).toHaveBeenCalledTimes(2);
+      // Only the preflight's own spawn happened; the app-server spawn must
+      // never fire once the re-check right before it refuses.
+      expect(spawnSpy).toHaveBeenCalledTimes(1);
+      expect(client.pid).toBeNull();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("checks trust once per spawn on the happy path — preflight AND the app-server, not the pair combined", async () => {
+    const binaryTrust = vi.fn(() => null);
+    const client = makeClient([], { binaryTrust });
+    try {
+      await client.start();
+      expect(binaryTrust).toHaveBeenCalledTimes(2);
+    } finally {
+      await client.close();
+    }
   });
 
   it("uses a safe JSON-RPC error for an unhandled server request", async () => {

@@ -112,6 +112,16 @@ export interface CodexOnboardingController {
    * whatever is somehow still registered. Idempotent, never rejects, and after
    * it is called the controller refuses to start new work — a late IPC during
    * quit must not spawn a fresh orphan behind the teardown's back.
+   *
+   * INVARIANT (W3.5-review Critical): NO `codex` process is spawned by this
+   * controller once `shutdown()` has begun — not "spawned and later reaped".
+   * That holds only because the refusal is re-read on the far side of EVERY
+   * pre-spawn `await` (the settings read, the file picker), not merely at a
+   * method's entrance: a run parked on one of those awaits when quit lands is
+   * not yet in the registry this drains, so an entrance-only check would let it
+   * resume and spawn after the drain has already finished. The runners hold the
+   * same line from the other side — an already-aborted signal makes
+   * `runCodexDoctor`/`runCodexLogin` return before their first spawn.
    */
   shutdown(): Promise<void>;
 }
@@ -205,6 +215,15 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
   /** Runs the doctor against ONE explicit path+source, persists, notifies, and returns the fresh snapshot. */
   async function checkPath(binaryPath: string | null, source: CodexBinarySource): Promise<CodexOnboardingSnapshot> {
+    // The choke point every doctor spawn in this module funnels through, and
+    // therefore where the shutdown gate has to be re-read — an entrance check is
+    // worth nothing across an `await`. `shutdown()` snapshots `activeRuns` and
+    // then drains the child registry; a caller that was parked on a pre-spawn
+    // `await` while that happened would otherwise resume afterwards and spawn a
+    // detached child BEHIND the completed teardown — an orphan by construction.
+    if (shuttingDown) {
+      return shutdownSnapshot();
+    }
     const report: CodexDoctorReport =
       binaryPath === null
         ? { status: "not_installed" }
@@ -247,6 +266,11 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         await inFlight; // let a concurrent recheck/login settle before opening a picker on top of it
       }
       const picked = await deps.dialog.showOpenDialog({ properties: ["openFile"] });
+      // A picker can sit open across the whole quit: re-read the gate on the far
+      // side of it, before the confirmed path is handed to a doctor run.
+      if (shuttingDown) {
+        return { ok: false, reason: "cancelled" };
+      }
       const filePath = picked.filePaths[0];
       if (picked.canceled || filePath === undefined) {
         return { ok: false, reason: "cancelled" };
@@ -272,6 +296,15 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       activeLoginAbort = controller;
       try {
         const settingsPath = await deps.readBinaryPathSetting();
+        // THE window this gate exists for: a login is not in `activeRuns` until
+        // the spawn below registers it, so a `shutdown()` that lands while this
+        // `await` is parked drains a registry the login is not in, finishes, and
+        // the continuation then spawns a detached child — and opens a browser
+        // window in the user's face — into an app that has already quit. Same
+        // refusal as the entrance check: one shutdown answer per method.
+        if (shuttingDown) {
+          return { ok: false, reason: "busy" };
+        }
         const discovery = discoverCodexBinary({
           envOverride: deps.bootEnv[ENV_CODEX_BIN],
           ...(settingsPath !== undefined ? { settingsPath } : {}),

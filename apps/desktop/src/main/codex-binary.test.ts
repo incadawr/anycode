@@ -1,3 +1,4 @@
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -20,11 +21,28 @@ interface FakeEntry {
   gid?: number;
 }
 
+/** Every directory from `dirname(path)` up to (and including) the filesystem root — mirrors `ancestorDirectories` in codex-binary.ts. */
+function ancestorChain(path: string): string[] {
+  const chain: string[] = [];
+  let current = path;
+  for (;;) {
+    chain.push(current);
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return chain;
+}
+
 /**
  * A fake fs that models a REAL one: a binary has a containing DIRECTORY, and
  * both carry ownership + permission bits. The trust gate reads all of it, so a
  * fake that answered only `isFile`/`mode` for the file alone would be modelling
- * a filesystem that cannot exist.
+ * a filesystem that cannot exist. The reader now walks the FULL ancestor
+ * chain up to `/` (W5.5 HIGH fix), so every ancestor of every declared file —
+ * not just its immediate parent — gets a safe default here unless a test
+ * overrides it explicitly: a real filesystem cannot have `/opt/foo/bin`
+ * without `/opt/foo`, `/opt`, and `/` all existing too.
  */
 function fakeFs(
   files: Readonly<Record<string, FakeEntry>>,
@@ -32,7 +50,9 @@ function fakeFs(
 ): CodexBinaryFs {
   const dirEntries: Record<string, FakeEntry> = { ...dirs };
   for (const file of Object.keys(files)) {
-    dirEntries[dirname(file)] ??= {};
+    for (const dir of ancestorChain(dirname(file))) {
+      dirEntries[dir] ??= {};
+    }
   }
   return {
     realpath: (path) => path,
@@ -82,11 +102,13 @@ describe("checkCodexBinaryPathTrust", () => {
     expect(checkCodexBinaryPathTrust("/usr/local/bin/codex", fs, "darwin", ME)).toBeNull();
   });
 
-  it("accepts the stock Homebrew prefix, which is group-writable BY DESIGN and owned by us", () => {
+  it("accepts the stock Homebrew prefix, which is group-writable BY DESIGN", () => {
     // /opt/homebrew/bin is `drwxrwxr-x <user>:admin` on every Apple-Silicon Mac.
     // Refusing group-writability outright would reject the single most common
-    // real install while buying nothing: the group is `admin`, whose members can
-    // already sudo, and the owner is us.
+    // real install while buying nothing: gid 80 (admin) is trusted by VALUE
+    // (its members already have sudo), not because this identity happens to
+    // belong to it — see shared/codex-binary-trust.test.ts for the fixture
+    // that proves membership is irrelevant here.
     const fs = fakeFs({ "/opt/homebrew/bin/codex": { gid: 80 } }, { "/opt/homebrew/bin": { mode: 0o775, gid: 80 } });
     expect(checkCodexBinaryPathTrust("/opt/homebrew/bin/codex", fs, "darwin", ME)).toBeNull();
   });
@@ -107,26 +129,54 @@ describe("checkCodexBinaryPathTrust", () => {
     expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", ME)).toMatch(/another user/);
   });
 
-  it("refuses a path writable by a group we are not a member of", () => {
+  it("refuses a path writable by a group that is not a darwin root-equivalent one (gid 999) — even though this identity IS a supplementary member of gid 80", () => {
     const fs = fakeFs({ "/opt/codex": { uid: 0, mode: 0o775, gid: 999 } }, { "/opt": { uid: 0 } });
-    expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", ME)).toMatch(/group/);
+    expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", ME)).toMatch(/writable by group 999/);
   });
 
-  it("follows a symlink and judges the TARGET plus BOTH directories (swapping the link is as good as swapping the target)", () => {
+  // W5.5 HIGH fix. Pre-fix, group-writability was judged against SUPPLEMENTARY
+  // GROUP MEMBERSHIP: `!input.gids.includes(entry.gid)`. `ME` above is a member
+  // of BOTH gid 20 (staff — literally everyone's default group on a Mac) and
+  // gid 4000 below, so the pre-fix rule accepted both of the next two cases.
+  // Each assertion here FAILS against that pre-fix rule.
+  it("refuses victim:developers 0775 — self-owned, group-writable, self IS a member, but the group is ordinary", () => {
+    const fs = fakeFs({ "/opt/codex": {} }, { "/opt": { mode: 0o775, gid: 4000 } });
+    const memberOfDevelopers: CodexIdentity = { uid: ME.uid, gids: [...ME.gids, 4000] };
+    expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", memberOfDevelopers)).toMatch(/writable by group 4000/);
+  });
+
+  it("refuses darwin :staff 0775 (gid 20) — staff is the default primary group of every local Mac account, so membership of it proves nothing", () => {
+    const fs = fakeFs({ "/opt/codex": {} }, { "/opt": { mode: 0o775, gid: 20 } });
+    expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", ME)).toMatch(/writable by group 20/);
+  });
+
+  // W5.5 HIGH fix: the reader used to stat only `dirname(resolved)`. A
+  // writable GRANDPARENT can rename/replace an otherwise-safe immediate
+  // directory, so the full ancestor chain up to `/` must be walked. This
+  // fails on the pre-fix reader, which never looked past `/opt/tools/bin`.
+  it("refuses when a GRANDPARENT directory is unsafe even though the immediate directory is safe", () => {
+    const fs = fakeFs(
+      { "/opt/tools/bin/codex": {} },
+      { "/opt/tools/bin": {}, "/opt/tools": { mode: 0o777 } },
+    );
+    expect(checkCodexBinaryPathTrust("/opt/tools/bin/codex", fs, "darwin", ME)).toMatch(/world-writable/);
+  });
+
+  it("follows a symlink and judges the TARGET's full ancestor chain plus the LINK's own full ancestor chain (swapping the link is as good as swapping the target)", () => {
     const fs: CodexBinaryFs = {
       realpath: () => "/lib/node_modules/codex/bin/codex.js",
       stat(path) {
         if (path === "/lib/node_modules/codex/bin/codex.js") {
           return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
         }
-        if (path === "/lib/node_modules/codex/bin") {
-          return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: ME.uid, gid: 20 };
-        }
         if (path === "/home/dev/bin") {
           // The SYMLINK's own directory — world-writable, so anyone can retarget it.
           return { isFile: () => false, isDirectory: () => true, mode: 0o777, uid: ME.uid, gid: 20 };
         }
-        throw new Error("ENOENT");
+        // Every other ancestor on either chain (/lib/node_modules/codex/bin,
+        // /lib/node_modules/codex, /lib/node_modules, /lib, /home/dev, /home,
+        // /) is an ordinary safe, self-owned directory.
+        return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: ME.uid, gid: 20 };
       },
     };
     expect(checkCodexBinaryPathTrust("/home/dev/bin/codex", fs, "darwin", ME)).toMatch(/world-writable/);
@@ -135,6 +185,29 @@ describe("checkCodexBinaryPathTrust", () => {
   it("has no POSIX modes to judge on Windows — the residual is documented, not silently passed off as a check", () => {
     const fs = fakeFs({ "C:\\codex.exe": { mode: 0o777 } });
     expect(checkCodexBinaryPathTrust("C:\\codex.exe", fs, "win32", ME)).toBeNull();
+  });
+
+  // Fixture matrix requirement (W5.5): drive the REAL stat of the machine's
+  // own Homebrew prefix and its full ancestor chain through the policy, with
+  // an identity built from the CAPTURED file owner — not `process.getuid()`
+  // — so the assertion cannot pass merely because the suite happens to run
+  // as the same uid that owns /opt/homebrew.
+  it.runIf(existsSync("/opt/homebrew/bin"))("accepts the REAL stat of /opt/homebrew/bin and its real ancestor chain on this machine", () => {
+    const homebrewBin = "/opt/homebrew/bin";
+    const capturedOwner = statSync(homebrewBin).uid;
+    const capturedGid = statSync(homebrewBin).gid;
+    // egid is irrelevant on darwin (only the linux user-private-group case
+    // reads it) — sentinel value, deliberately not derived from the capture.
+    const identity: CodexIdentity = { uid: capturedOwner, gids: [], egid: -1 };
+    const codexPath = `${homebrewBin}/codex`;
+    const realWithSyntheticBinary: CodexBinaryFs = {
+      realpath: (path) => (path === codexPath ? codexPath : realpathSync(path)),
+      stat: (path) =>
+        path === codexPath
+          ? { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: capturedOwner, gid: capturedGid }
+          : statSync(path),
+    };
+    expect(checkCodexBinaryPathTrust(codexPath, realWithSyntheticBinary, "darwin", identity)).toBeNull();
   });
 });
 
