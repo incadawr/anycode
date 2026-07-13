@@ -1,23 +1,88 @@
-import { statSync } from "node:fs";
-import { isAbsolute, posix, win32 } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, posix, win32 } from "node:path";
+import { checkCodexBinaryTrust, type CodexPathStat } from "../shared/codex-binary-trust.js";
 
 export interface CodexBinaryResolution {
   path: string | null;
   reason?: string;
 }
 
+/** Stat shape mirrors `fs.Stats` exactly, so the production seam below is a straight passthrough. */
 export interface CodexBinaryFs {
-  stat(path: string): { isFile(): boolean; mode: number };
+  stat(path: string): { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number };
+  /** Symlinks resolved: `execve` reads the TARGET, so the target is what must be trusted. */
+  realpath(path: string): string;
 }
 
 const nodeFs: CodexBinaryFs = {
   stat(path) {
     return statSync(path);
   },
+  realpath(path) {
+    return realpathSync(path);
+  },
 };
 
+/** The POSIX identity the trust policy judges ownership against; `undefined` getters on Windows collapse to a value the policy ignores. */
+export interface CodexIdentity {
+  uid: number;
+  gids: readonly number[];
+}
+
+function currentIdentity(): CodexIdentity {
+  return {
+    uid: process.getuid?.() ?? -1,
+    gids: process.getgroups?.() ?? [],
+  };
+}
+
+function toPathStat(stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
+  return { isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+}
+
+/**
+ * The execute-time trust gate (shared/codex-binary-trust.ts owns the policy;
+ * this owns main's filesystem reads for it). Run at DISCOVERY by
+ * `resolveCodexBinary` below AND again immediately before every `spawn()` in
+ * main/codex-doctor.ts — re-validation at spawn is the point: a path validated
+ * once at discovery and executed later is exactly the TOCTOU the policy exists
+ * to narrow. It narrows, and does not close, that window (see the policy
+ * module's header — the residual is real and is not papered over here).
+ */
+export function checkCodexBinaryPathTrust(
+  path: string,
+  fs: CodexBinaryFs = nodeFs,
+  platform: NodeJS.Platform = process.platform,
+  identity: CodexIdentity = currentIdentity(),
+): string | null {
+  if (platform === "win32") return null;
+  try {
+    const resolved = fs.realpath(path);
+    const directories = [toPathStat(fs.stat(dirname(resolved)))];
+    // A symlink lets an attacker swap the LINK instead of the target, so the
+    // link's own directory is part of the trusted set too.
+    if (resolved !== path) {
+      directories.push(toPathStat(fs.stat(dirname(path))));
+    }
+    return checkCodexBinaryTrust({
+      file: toPathStat(fs.stat(resolved)),
+      directories,
+      uid: identity.uid,
+      gids: identity.gids,
+      platform,
+    });
+  } catch {
+    return "Codex binary path does not exist";
+  }
+}
+
 /** Main validates an explicit absolute path; it never searches or shells out. */
-export function resolveCodexBinary(raw: string | undefined, fs: CodexBinaryFs = nodeFs, platform = process.platform): CodexBinaryResolution {
+export function resolveCodexBinary(
+  raw: string | undefined,
+  fs: CodexBinaryFs = nodeFs,
+  platform = process.platform,
+  identity: CodexIdentity = currentIdentity(),
+): CodexBinaryResolution {
   if (raw === undefined || raw.trim() === "") return { path: null };
   const path = raw.trim();
   const isAbsolutePath = platform === "win32" ? win32.isAbsolute(path) : isAbsolute(path);
@@ -28,10 +93,12 @@ export function resolveCodexBinary(raw: string | undefined, fs: CodexBinaryFs = 
     if (platform !== "win32" && (stat.mode & 0o111) === 0) {
       return { path: null, reason: "Codex binary is not executable" };
     }
-    return { path };
   } catch {
     return { path: null, reason: "Codex binary path does not exist" };
   }
+  const untrusted = checkCodexBinaryPathTrust(path, fs, platform, identity);
+  if (untrusted !== null) return { path: null, reason: untrusted };
+  return { path };
 }
 
 // ── discovery ladder (TASK.41, cut §2(g)) ──
@@ -105,6 +172,8 @@ export interface CodexDiscoveryInputs {
   env: NodeJS.ProcessEnv;
   fs?: CodexBinaryFs;
   platform?: NodeJS.Platform;
+  /** Test seam; production reads the live process identity (uid + supplementary groups). */
+  identity?: CodexIdentity;
 }
 
 /**
@@ -119,6 +188,7 @@ export interface CodexDiscoveryInputs {
 export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDiscovery {
   const fs = inputs.fs ?? nodeFs;
   const platform = inputs.platform ?? process.platform;
+  const identity = inputs.identity ?? currentIdentity();
   const rungs: Array<{ source: CodexBinarySource; candidates: string[] }> = [
     { source: "env", candidates: inputs.envOverride !== undefined && inputs.envOverride.trim() !== "" ? [inputs.envOverride] : [] },
     { source: "settings", candidates: inputs.settingsPath !== undefined && inputs.settingsPath.trim() !== "" ? [inputs.settingsPath] : [] },
@@ -128,7 +198,7 @@ export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDi
   let lastReason: string | undefined;
   for (const rung of rungs) {
     for (const candidate of rung.candidates) {
-      const resolved = resolveCodexBinary(candidate, fs, platform);
+      const resolved = resolveCodexBinary(candidate, fs, platform, identity);
       if (resolved.path !== null) {
         return { path: resolved.path, source: rung.source };
       }

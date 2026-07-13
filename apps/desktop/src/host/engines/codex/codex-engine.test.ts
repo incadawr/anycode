@@ -906,11 +906,74 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
 
     expect(applied).toEqual([]);
     // Still pending: the next successful turn/start will carry it and ack then.
+    // `snapshot()` is the APPLIED posture (W3-review): a change no turn/start
+    // ever carried is NOT active, however much the user asked for it — that is
+    // the whole meaning of the two-phase ack. It is reported as pending instead.
+    expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "ask" });
+    expect(engine.pendingSnapshot()).toEqual({ model: "gpt-native", activePresetId: "read-only" });
+  });
+
+  // W3-review: display truth vs enforcement. Enforcement is NOT in question —
+  // every turn/start re-asserts the chosen preset (asserted above) — but until
+  // one has, the UI must not present the choice as active.
+  it("keeps a chosen-but-unapplied change OUT of snapshot() while still enforcing it on the next turn", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, { presetId: "workspace", origin: "draft" });
+    const engine = connected.engine;
+
+    expect(engine.selectPreset("read-only")).toMatchObject({ ok: true, activePresetId: "read-only" });
+    // Displayed: still the old posture. Pending: the new one.
+    expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "workspace" });
+    expect(engine.pendingSnapshot()).toEqual({ model: "gpt-native", activePresetId: "read-only" });
+
+    await runTurn(server, engine);
+
+    // The turn CARRIED the new posture (enforcement, untouched) and only now is
+    // it applied — and therefore only now displayed as active.
+    expect(server.turnStartParams()[0]).toMatchObject({ sandboxPolicy: { type: "readOnly" } });
     expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "read-only" });
+    expect(engine.pendingSnapshot()).toBeNull();
+  });
+
+  it("treats picking back to the applied value as nothing pending", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, { presetId: "ask", origin: "draft" });
+    const engine = connected.engine;
+
+    engine.selectPreset("read-only");
+    expect(engine.pendingSnapshot()).not.toBeNull();
+
+    engine.selectPreset("ask");
+    expect(engine.pendingSnapshot()).toBeNull();
+    expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "ask" });
   });
 });
 
 describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
+  // W3-review test (b): a host RESPAWN boots from the persisted posture, so
+  // chosen === applied by design (cut §2(k).1) — the restored posture is not a
+  // "pending change" that a user has to wait a turn for, and the UI must not
+  // show a pending badge for it. The first turn/start still carries it.
+  it("boots a respawn from the persisted settings with NOTHING pending, and carries that posture on the first turn", async () => {
+    const server = new FakeAppServer();
+    server.modelPages[""]!.data.push({ id: "gpt-resumed", displayName: "Resumed", supportedReasoningEfforts: [{ reasoningEffort: "high" }] });
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, {
+      model: "gpt-resumed",
+      presetId: "read-only",
+      origin: "persisted",
+    });
+
+    expect(connected.engine.snapshot()).toEqual({ model: "gpt-resumed", activePresetId: "read-only" });
+    expect(connected.engine.pendingSnapshot()).toBeNull();
+
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({
+      model: "gpt-resumed",
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "readOnly" },
+    });
+  });
+
   it("restores the persisted preset and model, and re-asserts them on the next turn", async () => {
     const server = new FakeAppServer();
     server.modelPages[""]!.data.push({ id: "gpt-resumed", displayName: "Resumed", supportedReasoningEfforts: [{ reasoningEffort: "high" }] });

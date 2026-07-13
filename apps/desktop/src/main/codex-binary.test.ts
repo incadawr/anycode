@@ -1,25 +1,140 @@
+import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   candidatesFromPath,
+  checkCodexBinaryPathTrust,
   codexBinaryFileName,
   commonInstallLocations,
   discoverCodexBinary,
   resolveCodexBinary,
   type CodexBinaryFs,
+  type CodexIdentity,
 } from "./codex-binary.js";
+
+/** The identity every fake below is judged against: uid 501, in groups 20 (staff) and 80 (admin). */
+const ME: CodexIdentity = { uid: 501, gids: [20, 80] };
+
+interface FakeEntry {
+  mode?: number;
+  uid?: number;
+  gid?: number;
+}
+
+/**
+ * A fake fs that models a REAL one: a binary has a containing DIRECTORY, and
+ * both carry ownership + permission bits. The trust gate reads all of it, so a
+ * fake that answered only `isFile`/`mode` for the file alone would be modelling
+ * a filesystem that cannot exist.
+ */
+function fakeFs(
+  files: Readonly<Record<string, FakeEntry>>,
+  dirs: Readonly<Record<string, FakeEntry>> = {},
+): CodexBinaryFs {
+  const dirEntries: Record<string, FakeEntry> = { ...dirs };
+  for (const file of Object.keys(files)) {
+    dirEntries[dirname(file)] ??= {};
+  }
+  return {
+    realpath: (path) => path,
+    stat(path) {
+      const file = files[path];
+      if (file !== undefined) {
+        return { isFile: () => true, isDirectory: () => false, mode: file.mode ?? 0o755, uid: file.uid ?? ME.uid, gid: file.gid ?? 20 };
+      }
+      const dir = dirEntries[path];
+      if (dir !== undefined) {
+        return { isFile: () => false, isDirectory: () => true, mode: dir.mode ?? 0o755, uid: dir.uid ?? ME.uid, gid: dir.gid ?? 20 };
+      }
+      throw new Error("ENOENT");
+    },
+  };
+}
+
+/** The paths every ladder rung may return, all safely owned by us. */
+function fsWith(executablePaths: readonly string[]): CodexBinaryFs {
+  return fakeFs(Object.fromEntries(executablePaths.map((path) => [path, {}])));
+}
 
 describe("resolveCodexBinary", () => {
   it("requires an absolute executable POSIX file", () => {
-    const fs = { stat: () => ({ isFile: () => true, mode: 0o755 }) };
-    expect(resolveCodexBinary("/opt/codex", fs, "darwin")).toEqual({ path: "/opt/codex" });
-    expect(resolveCodexBinary("codex", fs, "darwin")).toMatchObject({ path: null, reason: expect.stringContaining("absolute") });
-    expect(resolveCodexBinary("/opt/codex", { stat: () => ({ isFile: () => true, mode: 0o644 }) }, "darwin"))
+    expect(resolveCodexBinary("/opt/codex", fsWith(["/opt/codex"]), "darwin", ME)).toEqual({ path: "/opt/codex" });
+    expect(resolveCodexBinary("codex", fsWith(["/opt/codex"]), "darwin", ME)).toMatchObject({ path: null, reason: expect.stringContaining("absolute") });
+    expect(resolveCodexBinary("/opt/codex", fakeFs({ "/opt/codex": { mode: 0o644 } }), "darwin", ME))
       .toMatchObject({ path: null, reason: expect.stringContaining("executable") });
   });
 
   it("does not infer POSIX executable bits on Windows", () => {
-    const fs = { stat: () => ({ isFile: () => true, mode: 0o644 }) };
-    expect(resolveCodexBinary("C:\\Codex\\codex.exe", fs, "win32")).toEqual({ path: "C:\\Codex\\codex.exe" });
+    const fs = fakeFs({ "C:\\Codex\\codex.exe": { mode: 0o644 } });
+    expect(resolveCodexBinary("C:\\Codex\\codex.exe", fs, "win32", ME)).toEqual({ path: "C:\\Codex\\codex.exe" });
+  });
+});
+
+// W2-review Medium. The realistic attack is not "root is careless", it is a
+// binary (or a directory holding one) that a THIRD PARTY can write: they swap
+// it between the check and the spawn, and we execute their file.
+describe("checkCodexBinaryPathTrust", () => {
+  it("accepts a normal user-owned install", () => {
+    expect(checkCodexBinaryPathTrust("/home/dev/.local/bin/codex", fsWith(["/home/dev/.local/bin/codex"]), "darwin", ME)).toBeNull();
+  });
+
+  it("accepts a root-owned install in a root-owned directory (/usr/local/bin)", () => {
+    const fs = fakeFs({ "/usr/local/bin/codex": { uid: 0, gid: 0 } }, { "/usr/local/bin": { uid: 0, gid: 0 } });
+    expect(checkCodexBinaryPathTrust("/usr/local/bin/codex", fs, "darwin", ME)).toBeNull();
+  });
+
+  it("accepts the stock Homebrew prefix, which is group-writable BY DESIGN and owned by us", () => {
+    // /opt/homebrew/bin is `drwxrwxr-x <user>:admin` on every Apple-Silicon Mac.
+    // Refusing group-writability outright would reject the single most common
+    // real install while buying nothing: the group is `admin`, whose members can
+    // already sudo, and the owner is us.
+    const fs = fakeFs({ "/opt/homebrew/bin/codex": { gid: 80 } }, { "/opt/homebrew/bin": { mode: 0o775, gid: 80 } });
+    expect(checkCodexBinaryPathTrust("/opt/homebrew/bin/codex", fs, "darwin", ME)).toBeNull();
+  });
+
+  it("refuses a world-writable binary", () => {
+    const fs = fakeFs({ "/opt/codex": { mode: 0o777 } });
+    expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", ME)).toMatch(/world-writable/);
+  });
+
+  it("refuses a binary in a world-writable directory (the /tmp shape)", () => {
+    const fs = fakeFs({ "/tmp/codex": {} }, { "/tmp": { mode: 0o1777 } });
+    expect(checkCodexBinaryPathTrust("/tmp/codex", fs, "darwin", ME)).toMatch(/world-writable/);
+  });
+
+  it("refuses a binary owned by another user, and one whose directory is", () => {
+    expect(checkCodexBinaryPathTrust("/opt/codex", fakeFs({ "/opt/codex": { uid: 777 } }), "darwin", ME)).toMatch(/another user/);
+    const fs = fakeFs({ "/opt/codex": {} }, { "/opt": { uid: 777 } });
+    expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", ME)).toMatch(/another user/);
+  });
+
+  it("refuses a path writable by a group we are not a member of", () => {
+    const fs = fakeFs({ "/opt/codex": { uid: 0, mode: 0o775, gid: 999 } }, { "/opt": { uid: 0 } });
+    expect(checkCodexBinaryPathTrust("/opt/codex", fs, "darwin", ME)).toMatch(/group/);
+  });
+
+  it("follows a symlink and judges the TARGET plus BOTH directories (swapping the link is as good as swapping the target)", () => {
+    const fs: CodexBinaryFs = {
+      realpath: () => "/lib/node_modules/codex/bin/codex.js",
+      stat(path) {
+        if (path === "/lib/node_modules/codex/bin/codex.js") {
+          return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+        }
+        if (path === "/lib/node_modules/codex/bin") {
+          return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: ME.uid, gid: 20 };
+        }
+        if (path === "/home/dev/bin") {
+          // The SYMLINK's own directory — world-writable, so anyone can retarget it.
+          return { isFile: () => false, isDirectory: () => true, mode: 0o777, uid: ME.uid, gid: 20 };
+        }
+        throw new Error("ENOENT");
+      },
+    };
+    expect(checkCodexBinaryPathTrust("/home/dev/bin/codex", fs, "darwin", ME)).toMatch(/world-writable/);
+  });
+
+  it("has no POSIX modes to judge on Windows — the residual is documented, not silently passed off as a check", () => {
+    const fs = fakeFs({ "C:\\codex.exe": { mode: 0o777 } });
+    expect(checkCodexBinaryPathTrust("C:\\codex.exe", fs, "win32", ME)).toBeNull();
   });
 });
 
@@ -73,17 +188,6 @@ describe("commonInstallLocations", () => {
 });
 
 describe("discoverCodexBinary", () => {
-  function fsWith(executablePaths: readonly string[]): CodexBinaryFs {
-    return {
-      stat(path: string) {
-        if (!executablePaths.includes(path)) {
-          throw new Error("ENOENT");
-        }
-        return { isFile: () => true, mode: 0o755 };
-      },
-    };
-  }
-
   it("prefers the env override when it resolves", () => {
     const fs = fsWith(["/env/codex", "/usr/local/bin/codex"]);
     const result = discoverCodexBinary({
@@ -92,6 +196,7 @@ describe("discoverCodexBinary", () => {
       env: { PATH: "/usr/local/bin", HOME: "/home/dev" },
       fs,
       platform: "darwin",
+      identity: ME,
     });
     expect(result).toEqual({ path: "/env/codex", source: "env" });
   });
@@ -104,6 +209,7 @@ describe("discoverCodexBinary", () => {
       env: { PATH: "" },
       fs,
       platform: "darwin",
+      identity: ME,
     });
     expect(result).toEqual({ path: "/settings/codex", source: "settings" });
   });
@@ -114,6 +220,7 @@ describe("discoverCodexBinary", () => {
       env: { PATH: "/usr/local/bin", HOME: "/home/dev" },
       fs,
       platform: "darwin",
+      identity: ME,
     });
     expect(result).toEqual({ path: "/usr/local/bin/codex", source: "path" });
   });
@@ -124,17 +231,33 @@ describe("discoverCodexBinary", () => {
       env: { PATH: "/usr/bin", HOME: "/home/dev" },
       fs,
       platform: "darwin",
+      identity: ME,
     });
     expect(result).toEqual({ path: "/opt/homebrew/bin/codex", source: "common" });
   });
 
+  it("skips an untrusted rung and keeps walking (a world-writable PATH entry must not win over a safe install)", () => {
+    const fs = fakeFs(
+      { "/usr/local/bin/codex": {}, "/home/dev/.local/bin/codex": {} },
+      { "/usr/local/bin": { mode: 0o777 } }, // world-writable: anyone can swap the binary in it
+    );
+    const result = discoverCodexBinary({
+      env: { PATH: "/usr/local/bin", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: "/home/dev/.local/bin/codex", source: "common" });
+  });
+
   it("returns source none with a diagnostic reason when nothing on the ladder resolves", () => {
     const fs: CodexBinaryFs = {
+      realpath: (path) => path,
       stat() {
         throw new Error("ENOENT");
       },
     };
-    const result = discoverCodexBinary({ env: { PATH: "/usr/bin", HOME: "/home/dev" }, fs, platform: "darwin" });
+    const result = discoverCodexBinary({ env: { PATH: "/usr/bin", HOME: "/home/dev" }, fs, platform: "darwin", identity: ME });
     expect(result.path).toBeNull();
     expect(result.source).toBe("none");
     expect(result.reason).toBeDefined();

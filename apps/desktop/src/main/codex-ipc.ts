@@ -21,11 +21,14 @@ import { ipcMain } from "electron";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
 import { ENV_CODEX_BIN } from "../shared/engines.js";
+import { CODEX_ONBOARDING_SHUTDOWN_BUDGET_MS } from "../shared/codex-timeouts.js";
+import { closeAllCodexChildren } from "./codex-children.js";
 import {
   discoverCodexBinary,
   resolveCodexBinary,
   type CodexBinaryFs,
   type CodexBinarySource,
+  type CodexIdentity,
 } from "./codex-binary.js";
 import { runCodexDoctor, type RunCodexDoctorOptions } from "./codex-doctor.js";
 import { runCodexLogin, type CodexLoginOutcome, type RunCodexLoginOptions } from "./codex-login.js";
@@ -85,6 +88,8 @@ export interface CodexIpcDeps {
   onSnapshot: (snapshot: CodexOnboardingSnapshot) => void;
   platform?: NodeJS.Platform;
   fs?: CodexBinaryFs;
+  /** Test seam for the trust gate's ownership rules; production reads the live process identity. */
+  identity?: CodexIdentity;
   /** DI seams for tests; production defaults to the real doctor/login runners. */
   runDoctor?: (binaryPath: string, options?: RunCodexDoctorOptions) => Promise<CodexDoctorReport>;
   runLogin?: (binaryPath: string, options: RunCodexLoginOptions) => Promise<CodexLoginOutcome>;
@@ -95,6 +100,20 @@ export interface CodexOnboardingController {
   pickBinary(): Promise<CodexPickBinaryResult>;
   loginStart(): Promise<CodexLoginStartResult>;
   loginCancel(): void;
+  /**
+   * App-lifecycle teardown (W2-review Critical). Every child this controller
+   * opened — doctor, login, version preflight — is spawned `detached` (its own
+   * POSIX process group), so it does NOT die with main: an Electron exit that
+   * only stopped the tab hosts left the whole group alive, for up to the login's
+   * five-minute window. Quit MUST call this and MUST await it, exactly as it
+   * awaits `shutdownAllTabHosts()`.
+   *
+   * Aborts every in-flight run, awaits its bounded teardown, and then reaps
+   * whatever is somehow still registered. Idempotent, never rejects, and after
+   * it is called the controller refuses to start new work — a late IPC during
+   * quit must not spawn a fresh orphan behind the teardown's back.
+   */
+  shutdown(): Promise<void>;
 }
 
 /** Only a freshly CONFIRMED, non-dev-override path is worth remembering — an env override never persists (cut §3.5: "не env-override"), and "nothing found" must not clobber a path that may just be transiently unreachable (e.g. an unmounted volume). */
@@ -132,6 +151,26 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
   const runLogin = deps.runLogin ?? runCodexLogin;
   let inFlight: Promise<CodexOnboardingSnapshot> | null = null;
   let activeLoginAbort: AbortController | null = null;
+  /** Aborted once, at quit: every doctor run started by this controller carries this signal. */
+  const lifetime = new AbortController();
+  let shuttingDown = false;
+  /**
+   * Every run currently unwinding. Awaiting these IS awaiting the teardown of
+   * the children they own: each runner closes its child in a `finally` before
+   * its promise settles.
+   */
+  const activeRuns = new Set<Promise<unknown>>();
+
+  function track<T>(promise: Promise<T>): Promise<T> {
+    activeRuns.add(promise);
+    const forget = (): void => {
+      activeRuns.delete(promise);
+    };
+    // `then(forget, forget)` (not `finally`) — it marks a rejection handled here
+    // without deriving a NEW rejected promise that nobody would ever observe.
+    promise.then(forget, forget);
+    return promise;
+  }
 
   function runExclusive(fn: () => Promise<CodexOnboardingSnapshot>): Promise<CodexOnboardingSnapshot> {
     if (inFlight !== null) {
@@ -141,7 +180,17 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       inFlight = null;
     });
     inFlight = promise;
-    return promise;
+    return track(promise);
+  }
+
+  /** No child, no spawn: quit is in progress and the ladder is closed for business. */
+  function shutdownSnapshot(): CodexOnboardingSnapshot {
+    return {
+      report: { status: "error", error: "AnyCode is shutting down" },
+      binaryPath: null,
+      source: "none",
+      checkedAt: new Date().toISOString(),
+    };
   }
 
   function discover(): { path: string | null; source: CodexBinarySource } {
@@ -150,6 +199,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       env: deps.bootEnv,
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+      ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
     });
   }
 
@@ -160,6 +210,9 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         ? { status: "not_installed" }
         : await runDoctor(binaryPath, {
             env: deps.bootEnv,
+            // Quit aborts the doctor and awaits its bounded teardown; without
+            // this signal the child outlives the app (W2-review Critical).
+            signal: lifetime.signal,
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
     const snapshot: CodexOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
@@ -177,14 +230,19 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       env: deps.bootEnv,
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+      ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
     });
     return checkPath(discovery.path, discovery.source);
   }
 
   return {
-    recheck: (): Promise<CodexOnboardingSnapshot> => runExclusive(discoverAndCheck),
+    recheck: (): Promise<CodexOnboardingSnapshot> =>
+      shuttingDown ? Promise.resolve(shutdownSnapshot()) : runExclusive(discoverAndCheck),
 
     async pickBinary(): Promise<CodexPickBinaryResult> {
+      if (shuttingDown) {
+        return { ok: false, reason: "cancelled" };
+      }
       if (inFlight !== null) {
         await inFlight; // let a concurrent recheck/login settle before opening a picker on top of it
       }
@@ -193,7 +251,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       if (picked.canceled || filePath === undefined) {
         return { ok: false, reason: "cancelled" };
       }
-      const resolved = resolveCodexBinary(filePath, deps.fs, deps.platform ?? process.platform);
+      const resolved = resolveCodexBinary(filePath, deps.fs, deps.platform ?? process.platform, deps.identity);
       if (resolved.path === null) {
         return { ok: false, reason: "invalid" };
       }
@@ -203,7 +261,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     },
 
     async loginStart(): Promise<CodexLoginStartResult> {
-      if (inFlight !== null || activeLoginAbort !== null) {
+      if (shuttingDown || inFlight !== null || activeLoginAbort !== null) {
         return { ok: false, reason: "busy" };
       }
       // The lock is claimed HERE, synchronously, before the function's first
@@ -220,17 +278,23 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           env: deps.bootEnv,
           ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
           ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+          ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
         });
         if (discovery.path === null) {
           return { ok: false, reason: "unsupported" };
         }
         const binaryPath = discovery.path;
-        const outcome = await runLogin(binaryPath, {
-          openExternal: deps.openExternal,
-          signal: controller.signal,
-          env: deps.bootEnv,
-          ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
-        });
+        // Quit aborts the login too: `shutdown()` fires this same controller,
+        // and the runner's own `finally` closes the child before the promise
+        // `shutdown()` is awaiting can settle.
+        const outcome = await track(
+          runLogin(binaryPath, {
+            openExternal: deps.openExternal,
+            signal: controller.signal,
+            env: deps.bootEnv,
+            ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+          }),
+        );
         if (!outcome.ok) {
           return { ok: false, reason: outcome.reason };
         }
@@ -246,6 +310,22 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
     loginCancel(): void {
       activeLoginAbort?.abort();
+    },
+
+    async shutdown(): Promise<void> {
+      shuttingDown = true;
+      lifetime.abort();
+      activeLoginAbort?.abort();
+      // Each aborted run tears its own child down (bounded) before its promise
+      // settles, so awaiting the runs IS awaiting the teardown.
+      await Promise.race([
+        Promise.allSettled([...activeRuns]),
+        new Promise<void>((resolve) => setTimeout(resolve, CODEX_ONBOARDING_SHUTDOWN_BUDGET_MS)),
+      ]);
+      // Backstop, and the reason this is a guarantee rather than a hope: any
+      // child still registered (a run that never unwound, a preflight mid-flight)
+      // gets its process GROUP reaped directly. Zero survivors either way.
+      await closeAllCodexChildren();
     },
   };
 }

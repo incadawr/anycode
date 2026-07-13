@@ -71,22 +71,43 @@ class FakeEngine implements SessionEngine, EngineSettingsSeam {
     return this.presetTable.map((id) => ({ id, label: id, description: `${id} posture` }));
   }
 
+  /**
+   * APPLIED, not chosen — the same split CodexEngine implements (cut §2(k).3):
+   * `model`/`presetId` are the CHOSEN values (what the next turn/start carries),
+   * and these are what a turn/start has actually carried. They diverge exactly
+   * while a change is pending.
+   */
+  private applied = { model: this.model, activePresetId: this.presetId };
+
   snapshot(): { model: string; activePresetId: string } {
+    return { ...this.applied };
+  }
+
+  private chosen(): { model: string; activePresetId: string } {
     return { model: this.model, activePresetId: this.presetId };
+  }
+
+  pendingSnapshot(): { model: string; activePresetId: string } | null {
+    return this.pending === null ? null : { ...this.pending };
+  }
+
+  private markPending(): EngineSettingsChange {
+    const chosen = this.chosen();
+    this.pending =
+      chosen.model === this.applied.model && chosen.activePresetId === this.applied.activePresetId ? null : chosen;
+    return { ok: true, ...chosen };
   }
 
   selectModel(id: string): EngineSettingsChange {
     if (!this.catalog.includes(id)) return { ok: false, reason: `Codex model "${id}" is not available for this account.` };
     this.model = id;
-    this.pending = this.snapshot();
-    return { ok: true, ...this.snapshot() };
+    return this.markPending();
   }
 
   selectPreset(id: string): EngineSettingsChange {
     if (!this.presetTable.includes(id)) return { ok: false, reason: `Unknown Codex permission preset "${id}".` };
     this.presetId = id;
-    this.pending = this.snapshot();
-    return { ok: true, ...this.snapshot() };
+    return this.markPending();
   }
 
   onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string }) => void): () => void {
@@ -101,6 +122,7 @@ class FakeEngine implements SessionEngine, EngineSettingsSeam {
     if (this.pending !== null) {
       const applied = this.pending;
       this.pending = null;
+      this.applied = applied;
       for (const listener of this.listeners) listener(applied);
     }
     await new Promise<void>((resolve) => {
@@ -200,7 +222,15 @@ describe("TASK.39 — host_ready presentation", () => {
     });
   });
 
-  it("re-handshakes with the CURRENT settings after a change (a renderer reload sees the new posture)", async () => {
+  /**
+   * REPLACES a test that asserted the opposite (a reload showed the pending,
+   * never-applied posture as CURRENT). That was the W3-review defect, not the
+   * contract: `state:"pending"`/`state:"applied"` is a two-phase ack (cut
+   * §2(k).3), so until a turn/start carries the change, the ACTIVE posture is
+   * still the old one — enforcement (every turn/start re-asserts the chosen
+   * preset) is unaffected and untouched.
+   */
+  it("re-handshakes with the APPLIED settings after a pending change, and re-asserts the pending delta (a renderer reload sees the old posture, still pending)", async () => {
     const ui = fixture();
     ui.send({ type: "ui_ready" });
     ui.send({ type: "set_engine_preset", presetId: "read-only" });
@@ -210,9 +240,45 @@ describe("TASK.39 — host_ready presentation", () => {
 
     const readies = ui.received.filter((message) => message.type === "host_ready");
     expect(readies.at(-1)).toMatchObject({
-      model: "gpt-5.4-mini",
-      engine: { model: { current: "gpt-5.4-mini" }, permissions: { activePresetId: "read-only" } },
+      model: "gpt-5.6-sol",
+      engine: { model: { current: "gpt-5.6-sol" }, permissions: { activePresetId: "ask" } },
     });
+    // ...and the un-applied delta is re-asserted after the handshake, so the
+    // renderer can restore the pending badge it just reset.
+    expect(settings(ui.received).at(-1)).toEqual({
+      type: "engine_settings_changed",
+      model: "gpt-5.4-mini",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+  });
+
+  it("re-handshakes with the new settings once a turn has actually applied them", async () => {
+    const ui = fixture();
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "set_engine_preset", presetId: "read-only" });
+    ui.send({ type: "user_message", requestId: "r1", text: "go" });
+    await ui.settle();
+    ui.engine.finishTurn();
+    await ui.settle();
+
+    ui.send({ type: "ui_ready" });
+    await ui.settle();
+
+    const readies = ui.received.filter((message) => message.type === "host_ready");
+    expect(readies.at(-1)).toMatchObject({ engine: { permissions: { activePresetId: "read-only" } } });
+    // Nothing is pending any more, so no pending re-assert rides this ui_ready.
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "applied", activePresetId: "read-only" });
+  });
+
+  it("emits no pending re-assert on ui_ready when nothing is pending", async () => {
+    const ui = fixture();
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "ui_ready" });
+    await ui.settle();
+
+    expect(settings(ui.received)).toEqual([]);
   });
 });
 

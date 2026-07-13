@@ -61,7 +61,8 @@ import { TabHostManager } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
-import { ENGINES_CHANGED_CHANNEL, registerCodexIpc } from "./codex-ipc.js";
+import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
+import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater } from "./updater.js";
 
@@ -212,6 +213,14 @@ let win: BrowserWindow | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
 /** Multi-host lifecycle manager (§2.2); null until boot wires it. */
 let manager: TabHostManager | null = null;
+/**
+ * Codex onboarding control plane (TASK.41). Held module-level for the SAME
+ * reason `manager` is: quit must be able to tear down what it spawned. Its
+ * doctor/login/preflight children are `detached` process-group leaders, so they
+ * survive an Electron exit that does not await their teardown (W2-review
+ * Critical) — `before-quit`/`will-quit` below await `shutdown()`.
+ */
+let codexOnboarding: CodexOnboardingController | null = null;
 /** Set once quit begins, to gate the before-quit handler's second pass. */
 let quitting = false;
 
@@ -673,7 +682,13 @@ void app.whenReady().then(async () => {
   // `writeCodexSettings` routes through settings-ipc's own `handleSet` (same
   // zod validation / deep-partial merge / read_only guard as every other
   // settings-set patch) rather than a second ad-hoc settings.json writer.
-  const codexOnboarding = registerCodexIpc({
+  // Last-resort reap for the quit paths that never let us await anything (a
+  // crash, an uncaught exception, app.exit()): one synchronous group SIGKILL
+  // per live Codex child, from `process.on("exit")`. The graceful path is
+  // before-quit's awaited `shutdown()` below; this is the floor under it.
+  installCodexChildExitGuard();
+
+  codexOnboarding = registerCodexIpc({
     bootEnv,
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
@@ -795,25 +810,44 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
+/**
+ * Every child this process owns dies BEFORE Electron exits — tab hosts and
+ * Codex onboarding children alike (W2-review Critical: the latter were owned by
+ * nothing, and being `detached`, survived quit; a login held its group for up to
+ * five minutes). The two teardowns are independent, so they run concurrently and
+ * are both awaited; persistence closes last, once every host has drained its
+ * write-behind queue.
+ */
+async function shutdownEverything(): Promise<void> {
+  const activeManager = manager;
+  const activePersistence = persistence;
+  const activeOnboarding = codexOnboarding;
+  await Promise.allSettled([
+    activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
+    activeOnboarding?.shutdown() ?? Promise.resolve(),
+  ]);
+  await activePersistence?.close();
+}
+
 app.on("before-quit", (event) => {
   if (quitting) {
-    // Second pass after shutdownAllTabHosts resolved: let the quit proceed.
+    // Second pass after the teardown resolved: let the quit proceed.
     return;
   }
   quitting = true;
-  if (manager === null || manager.count() === 0) {
-    // Nothing to shut down (e.g. env-validation exit); quit normally.
-    return;
-  }
   event.preventDefault();
-  const activeManager = manager;
-  const activePersistence = persistence;
-  void activeManager
-    .shutdownAllTabHosts()
-    .then(async () => {
-      // Close the picker/migration connection last, after every host has
-      // drained its own write-behind queue and exited.
-      await activePersistence?.close();
-    })
-    .finally(() => app.quit());
+  void shutdownEverything().finally(() => app.quit());
+});
+
+/**
+ * Backstop for a quit that never routed through `before-quit` (or one whose
+ * teardown was interrupted): `will-quit` is the last event that can still hold
+ * the app open. Idempotent — after a completed `before-quit` pass every child is
+ * already gone and `closeAllCodexChildren()` finds an empty registry, so this
+ * costs a microtask on the normal path.
+ */
+app.on("will-quit", (event) => {
+  if (liveCodexChildCount() === 0) return;
+  event.preventDefault();
+  void closeAllCodexChildren().finally(() => app.quit());
 });

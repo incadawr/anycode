@@ -120,3 +120,16 @@ export const CODEX_TEARDOWN_SIGKILL_WAIT_MS = 1_000;
  */
 export const CODEX_TEARDOWN_TOTAL_BUDGET_MS =
   CODEX_TEARDOWN_STDIN_EOF_WAIT_MS + CODEX_TEARDOWN_SIGTERM_WAIT_MS + CODEX_TEARDOWN_SIGKILL_WAIT_MS;
+
+/**
+ * App quit's bound on draining main's onboarding children (doctor/login/
+ * preflight) — the W2-review Critical: those children are `detached`, so an
+ * Electron exit that does not await their teardown leaves the whole process
+ * GROUP alive (a login can hold one for five minutes). Sized above one
+ * `CODEX_TEARDOWN_TOTAL_BUDGET_MS`, because an aborted run first unwinds its
+ * current RPC phase and only THEN runs the teardown recipe. When it expires,
+ * quit does not simply proceed: the registry's synchronous group-SIGKILL
+ * backstop runs (main/codex-children.ts), so "budget exceeded" still means zero
+ * survivors, just less gracefully.
+ */
+export const CODEX_ONBOARDING_SHUTDOWN_BUDGET_MS = 5_000;

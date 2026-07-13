@@ -7,6 +7,15 @@ import { afterAll, describe, expect, it } from "vitest";
 import { CodexRpcClient, buildDoctorChildEnv, runCodexDoctor } from "./codex-doctor.js";
 
 const fixturePath = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mjs", import.meta.url));
+
+/**
+ * These tests drive a FAKE spawner against a synthetic path, so the real
+ * filesystem trust gate (main/codex-binary.ts, W2-review Medium) has nothing to
+ * stat. It is stubbed to "trusted" here and asserted on its own terms in
+ * codex-binary.test.ts (policy) and below (a real world-writable binary IS
+ * refused, end to end).
+ */
+const TRUSTED = (): null => null;
 const scratchDir = mkdtempSync(join(tmpdir(), "anycode-codex-doctor-test-"));
 
 afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
@@ -77,7 +86,7 @@ describe("buildDoctorChildEnv", () => {
 
 describe("runCodexDoctor", () => {
   it("reports ready with account + paginated models on a compatible, signed-in CLI", async () => {
-    const report = await runCodexDoctor("/fake/codex", { spawnImpl: fakeSpawn() });
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
     expect(report.status).toBe("ready");
     expect(report.version).toBe("0.144.3");
     expect(report.account).toEqual({ type: "chatgpt", plan: "plus" });
@@ -88,50 +97,70 @@ describe("runCodexDoctor", () => {
   });
 
   it("never carries the account email — only type/plan cross the doctor boundary (custody)", async () => {
-    const report = await runCodexDoctor("/fake/codex", { spawnImpl: fakeSpawn() });
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
     expect(report.account).toBeDefined();
     expect(Object.keys(report.account ?? {})).toEqual(["type", "plan"]);
     expect(JSON.stringify(report)).not.toContain("@example.com");
   });
 
   it("reports signed_out when account/read returns a null account", async () => {
-    const report = await runCodexDoctor("/fake/codex", { spawnImpl: fakeSpawn(["--signed-out"]) });
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--signed-out"]) });
     expect(report).toEqual({ status: "signed_out", version: "0.144.3" });
   });
 
   it("reports update_required for a version outside the supported range, without spawning app-server at all", async () => {
-    const report = await runCodexDoctor("/fake/codex", { spawnImpl: fakeSpawn(["--bad-version"]) });
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--bad-version"]) });
     expect(report).toEqual({ status: "update_required", version: "0.99.0" });
   });
 
   it("reports error for unparseable version output", async () => {
-    const report = await runCodexDoctor("/fake/codex", { spawnImpl: fakeSpawn(["--malformed-version"]) });
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--malformed-version"]) });
     expect(report.status).toBe("error");
     expect(report.error).toMatch(/version/i);
   });
 
   it("bounds a hung version preflight with its own timeout, never the overall watchdog", async () => {
-    const report = await runCodexDoctor("/fake/codex", {
-      spawnImpl: fakeSpawn(["--hang-version"]),
-      versionTimeoutMs: 150,
-    });
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--hang-version"]),
+      versionTimeoutMs: 150 });
     expect(report.status).toBe("error");
     expect(report.error).toMatch(/timed out/i);
   });
 
   it("caps model/list pagination at the configured page limit against a server that never stops paginating", async () => {
-    const report = await runCodexDoctor("/fake/codex", {
-      spawnImpl: fakeSpawn(["--many-pages"]),
-      maxModelPages: 3,
-    });
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--many-pages"]),
+      maxModelPages: 3 });
     expect(report.status).toBe("ready");
     expect(report.models).toHaveLength(3);
     expect(report.models?.map((m) => m.id)).toEqual(["model-1", "model-2", "model-3"]);
   });
 
+  // W2-review High: this client runs INSIDE THE MAIN PROCESS. A live Codex that
+  // closes fd 0 makes the NEXT write raise an asynchronous EPIPE on the stdin
+  // socket, and an `error` event with no listener is escalated by Node into an
+  // unhandled exception — i.e. it takes the whole app down. The write must
+  // happen AFTER the child's read end is provably gone (hence the marker), or
+  // the data simply sits in the pipe buffer and the defect never fires.
+  // Pre-fix: uncaught `write EPIPE`. Post-fix: a bounded rejection.
+  it("survives a child that closes stdin while a request is in flight (an EPIPE must not kill the main process)", async () => {
+    const client = new CodexRpcClient(fakeSpawn(["--close-stdin"]));
+    const stdinClosed = new Promise<void>((resolve) => {
+      client.onNotification((notification) => {
+        if (notification.method === "test/stdin-closed") resolve();
+      });
+    });
+    try {
+      client.spawn("/fake/codex", {});
+      await stdinClosed;
+      await expect(client.request("initialize", {}, { timeoutMs: 2_000 })).rejects.toThrow(/stdin/i);
+    } finally {
+      await client.close();
+    }
+  }, 20_000);
+
   it("proves zero orphans: a stubborn app-server that ignores stdin+SIGTERM and forks a grandchild is fully reaped, including on the watchdog-timeout path", async () => {
     const pidFile = join(scratchDir, `stubborn-${Date.now()}.pid`);
     const promise = runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
       spawnImpl: fakeSpawn(["--stubborn", `--pid-file=${pidFile}`]),
       // Small watchdog: `initialize` never gets a response from a stubborn
       // server, so the watchdog (not a per-RPC timeout) is what fires here.

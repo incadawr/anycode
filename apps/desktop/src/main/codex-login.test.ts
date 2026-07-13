@@ -5,6 +5,9 @@ import { runCodexLogin } from "./codex-login.js";
 
 const fixturePath = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mjs", import.meta.url));
 
+/** Fake spawner + synthetic path: the real fs trust gate has nothing to stat (see codex-doctor.test.ts). */
+const TRUSTED = (): null => null;
+
 function fakeSpawn(extraFlags: string[] = []) {
   return (_command: string, args: readonly string[], options: SpawnOptions): ChildProcess =>
     spawn(process.execPath, [fixturePath, ...args, ...extraFlags], options);
@@ -14,6 +17,7 @@ describe("runCodexLogin", () => {
   it("opens the returned authUrl and resolves ok once account/login/completed arrives", async () => {
     const openExternal = vi.fn(async () => {});
     const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
       openExternal,
       spawnImpl: fakeSpawn(["--auto-complete-login"]),
       timeoutMs: 5_000,
@@ -24,6 +28,7 @@ describe("runCodexLogin", () => {
 
   it("never reads/returns a token or account material — the outcome carries only ok/reason", async () => {
     const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
       openExternal: async () => {},
       spawnImpl: fakeSpawn(["--auto-complete-login"]),
       timeoutMs: 5_000,
@@ -38,6 +43,7 @@ describe("runCodexLogin", () => {
     });
     const start = Date.now();
     const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
       openExternal,
       signal: controller.signal,
       spawnImpl: fakeSpawn(), // no --auto-complete-login: only cancel can resolve this
@@ -49,6 +55,7 @@ describe("runCodexLogin", () => {
 
   it("times out when nothing completes or cancels the login within the bound", async () => {
     const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
       openExternal: async () => {},
       spawnImpl: fakeSpawn(),
       timeoutMs: 150,
@@ -63,6 +70,7 @@ describe("runCodexLogin", () => {
     // spawning app-server with --stubborn (never responds at all) bounded by
     // a short rpcTimeoutMs, which exercises the same fail-closed `catch` path.
     const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
       openExternal: async () => {},
       spawnImpl: fakeSpawn(["--stubborn"]),
       rpcTimeoutMs: 150,

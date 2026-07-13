@@ -23,6 +23,7 @@
 import type { SpawnOptions, ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { CodexRpcClient, buildDoctorChildEnv } from "./codex-doctor.js";
+import { checkCodexBinaryPathTrust } from "./codex-binary.js";
 import { CODEX_DOCTOR_RPC_TIMEOUT_MS } from "../shared/codex-timeouts.js";
 
 /**
@@ -48,6 +49,8 @@ export interface RunCodexLoginOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+  /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkCodexBinaryPathTrust`). */
+  trust?: (binaryPath: string) => string | null;
 }
 
 function delay(ms: number): Promise<void> {
@@ -93,6 +96,12 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
   });
 
   try {
+    // Re-validated at SPAWN time, not merely at discovery (W2-review Medium) —
+    // login executes the same binary the doctor approved, at a later moment.
+    const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform));
+    if (trust(binaryPath) !== null) {
+      return { ok: false, reason: "failed" };
+    }
     client.spawn(binaryPath, env);
     await client.request(
       "initialize",
