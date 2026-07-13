@@ -74,8 +74,39 @@ export class AppServerClientError extends Error {
   }
 }
 
-function toPathStat(stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
-  return { isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+function toPathStat(path: string, stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
+  return { path, isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+}
+
+/**
+ * Every directory that can be used to swap the binary out from under us: the
+ * FULL ancestor chain (up to the filesystem root) of the resolved file's
+ * directory, plus — when the candidate path is a symlink — the same chain
+ * for the directory holding that symlink. A single-level check misses a
+ * writable GRANDPARENT that can rename or replace an otherwise-safe
+ * immediate directory (W5.5-review High), so every ancestor up to `/` is
+ * walked, not just the leaf. Deduplicated: a shared ancestor (the common
+ * case) is only statted and judged once. Duplicated from main/codex-binary.ts
+ * on purpose — see this file's trust-reader comment below.
+ */
+function ancestorDirectories(resolvedFile: string, originalPath: string): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const walk = (start: string): void => {
+    let current = start;
+    for (;;) {
+      if (!seen.has(current)) {
+        seen.add(current);
+        ordered.push(current);
+      }
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  };
+  walk(dirname(resolvedFile));
+  if (resolvedFile !== originalPath) walk(dirname(originalPath));
+  return ordered;
 }
 
 /**
@@ -85,21 +116,24 @@ function toPathStat(stat: { isFile(): boolean; isDirectory(): boolean; mode: num
  * `stat` plumbing is duplicated across that boundary on purpose — the POLICY,
  * the part whose divergence would actually be dangerous, is not.
  *
- * Called immediately before `spawn()`, NOT only at discovery: a path validated
- * once by main and executed later here is precisely the TOCTOU the policy
- * narrows. It narrows and does not close it (see the policy module's header).
+ * Called immediately before EACH `spawn()` this client makes (see
+ * `assertTrusted`), NOT only once at discovery or once per `start()`: a path
+ * validated once and executed later — even moments later, across a
+ * `--version` round-trip — is precisely the TOCTOU the policy narrows. It
+ * narrows and does not close it (see the policy module's header).
  */
 export function checkCodexBinaryTrustOnDisk(binaryPath: string, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === "win32") return null;
   try {
     const resolved = realpathSync(binaryPath);
-    const directories = [toPathStat(statSync(dirname(resolved)))];
-    if (resolved !== binaryPath) directories.push(toPathStat(statSync(dirname(binaryPath))));
+    // A symlink lets an attacker swap the LINK instead of the target, so the
+    // link's own ancestor chain is part of the trusted set too.
+    const directories = ancestorDirectories(resolved, binaryPath).map((dir) => toPathStat(dir, statSync(dir)));
     return checkCodexBinaryTrust({
-      file: toPathStat(statSync(resolved)),
+      file: toPathStat(resolved, statSync(resolved)),
       directories,
       uid: process.getuid?.() ?? -1,
-      gids: process.getgroups?.() ?? [],
+      egid: process.getegid?.() ?? -1,
       platform,
     });
   } catch {
@@ -255,15 +289,14 @@ export class AppServerClient {
     if (!isAbsolute(this.options.binaryPath)) {
       throw new EngineVersionError("Codex binary path must be absolute");
     }
-    // Re-validated HERE, at spawn time — main's discovery-time validation is a
-    // different moment in wall-clock time, and the binary can be swapped in
-    // between (W2-review Medium). This narrows the TOCTOU window to the
-    // irreducible check->execve gap; it does not close it.
-    const untrusted = (this.options.binaryTrust ?? checkCodexBinaryTrustOnDisk)(this.options.binaryPath);
-    if (untrusted !== null) {
-      throw new EngineVersionError(untrusted);
-    }
     await this.preflightVersion();
+    // Re-validated HERE, immediately before THIS spawn — not merely once
+    // before preflight (W5.5-review Medium). A binary that passed both
+    // discovery and the `--version` preflight can still be swapped in the
+    // interval between that preflight and this long-lived spawn; checking
+    // once before preflight and executing unchecked afterward leaves exactly
+    // that interval open. See `assertTrusted`.
+    this.assertTrusted();
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "app-server", "--stdio"], this.spawnOptions(true));
     this.child = child;
     // Adopt immediately after spawn, before any JSON-RPC initialize/account/thread work.
@@ -379,6 +412,22 @@ export class AppServerClient {
     });
   }
 
+  /**
+   * The spawn-time trust gate, re-run immediately before EACH individual
+   * `spawn()` this client makes (preflight's and the long-lived app-server's)
+   * rather than once for the pair (W5.5-review Medium). A check that ran
+   * once and then covered two spawns separated by a `--version` round-trip
+   * leaves the SECOND spawn executing whatever the FIRST check found,
+   * however long ago that was — precisely the TOCTOU shared/codex-binary-
+   * trust.ts exists to narrow.
+   */
+  private assertTrusted(): void {
+    const untrusted = (this.options.binaryTrust ?? checkCodexBinaryTrustOnDisk)(this.options.binaryPath);
+    if (untrusted !== null) {
+      throw new EngineVersionError(untrusted);
+    }
+  }
+
   private spawnOptions(dedicatedProcessGroup = false): SpawnOptions {
     return {
       cwd: this.options.cwd,
@@ -407,6 +456,9 @@ export class AppServerClient {
    * it started. An already-empty group raises ESRCH, which is the success case.
    */
   private async preflightVersion(): Promise<void> {
+    // Re-validated HERE, immediately before the preflight's OWN spawn — see
+    // `assertTrusted`.
+    this.assertTrusted();
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--version"], this.spawnOptions(true));
     const timeoutMs = this.options.versionTimeoutMs ?? CODEX_VERSION_PREFLIGHT_TIMEOUT_MS;
     const output = await new Promise<string>((resolve, reject) => {

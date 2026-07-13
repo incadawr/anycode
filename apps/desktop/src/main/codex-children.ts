@@ -23,6 +23,18 @@
  *     the paths that give us no chance to await anything (a crash, an
  *     uncaught exception, `app.exit()`): one synchronous group SIGKILL each.
  *     A hard `SIGKILL`/power loss remains un-hookable by construction.
+ *
+ * WINDOWS RESIDUAL, DELIBERATELY NOT PAPERED OVER (precedent: the ACL residual
+ * in shared/codex-binary-trust.ts): the guarantees above are POSIX guarantees.
+ * There is no process GROUP to signal on win32 — `detached` there means a new
+ * console, not a killable group — so `killCodexChildrenSync()` returns without
+ * doing anything, and a `close()` that has to escalate can only reach the DIRECT
+ * child, never a grandchild it spawned. On win32 a crash/`app.exit()` can
+ * therefore leave a `codex` child (and any tree below it) running. The
+ * `taskkill /T /F` equivalent that would close this is NOT implemented: this
+ * track has no win32 rig to prove it against, and an untested reaper that merely
+ * LOOKS like a backstop is worse than a stated gap. Windows is out of scope for
+ * this track; the graceful `before-quit`/`will-quit` drain still runs there.
  */
 import { CODEX_TEARDOWN_TOTAL_BUDGET_MS } from "../shared/codex-timeouts.js";
 
@@ -73,6 +85,11 @@ export async function closeAllCodexChildren(): Promise<void> {
  * Synchronous last resort, safe to call from `process.on("exit")` where no
  * async work can run: SIGKILL each child's process GROUP directly. Best-effort
  * by definition — an already-dead group raises ESRCH, which is the success case.
+ *
+ * POSIX ONLY. On win32 this is a no-op and the registered children SURVIVE the
+ * exit paths that cannot await a graceful close — the residual is stated in the
+ * module header rather than hidden behind a call that would look like a reaper
+ * and reap nothing.
  */
 export function killCodexChildrenSync(): void {
   if (process.platform === "win32") return;

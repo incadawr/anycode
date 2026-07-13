@@ -193,12 +193,26 @@ describe("CodexRpcClient", () => {
     expect(client.pid).toBeNull();
   });
 
-  it("close() reaps a process group even when called twice concurrently (no double signal storm, no throw)", async () => {
+  // W3.5-review Low: the previous shape of this test — `Promise.all([close(),
+  // close()])` — was green on the very bug it claimed to cover. `Promise.all`
+  // awaits BOTH promises, so the first close's real teardown was awaited anyway
+  // and a second close that resolved early on a still-live group was invisible.
+  // Here the first close is deliberately left floating and ONLY the second is
+  // awaited: quit awaits the close it happens to call, and that call must carry
+  // the real teardown, not somebody else's promise. The liveness assertion is
+  // instantaneous on purpose — a settle-window poll would just wait for the
+  // floating first close to finish the job and then report success.
+  it("a concurrent second close() awaits the SAME real teardown — it must not resolve early while the group is still alive", async () => {
     const client = new CodexRpcClient(fakeSpawn());
     client.spawn("/fake/codex", buildDoctorChildEnv(process.env));
     const pid = client.pid;
     expect(pid).toEqual(expect.any(Number));
-    await Promise.all([client.close(), client.close()]);
-    expect(await waitUntilDead(pid!)).toBe(true);
+
+    const first = client.close();
+    first.catch(() => {});
+    await client.close();
+    expect(alive(pid!)).toBe(false);
+
+    await first; // no double signal storm, no throw on the concurrent path either.
   });
 });

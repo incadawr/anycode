@@ -575,12 +575,24 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
 
   const client = new CodexRpcClient(spawnImpl);
   const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform));
+  /** RE-READ at every gate, never captured: an `AbortSignal` flips under a run in progress — that is its entire purpose, and a narrowed snapshot of it would be a lie. */
+  const quitRequested = (): boolean => options.signal?.aborted === true;
 
   const steps = async (): Promise<CodexDoctorReport> => {
+    // ENTRANCE GATE (W3.5-review Critical): the abort below only races a run
+    // that has already started, and the preflight spawn on the next line is the
+    // doctor's FIRST child. A doctor entered with an already-aborted signal
+    // (quit ran while its caller was parked on a pre-spawn `await`) must spawn
+    // nothing at all — that child is detached and is born behind the teardown.
+    if (quitRequested()) {
+      return { status: "error", error: "codex doctor aborted" };
+    }
     // Re-validated at SPAWN time, not merely at discovery (W2-review Medium):
     // the binary discovery approved can be swapped in the interval before it is
     // executed. This narrows the TOCTOU window to the irreducible
-    // check->execve gap; it does not close it.
+    // check->execve gap; it does not close it. Hence "before EVERY spawn", not
+    // once per run: this one guards the preflight child immediately below, and
+    // the app-server spawn further down re-reads the filesystem for itself.
     const untrusted = trust(binaryPath);
     if (untrusted !== null) {
       return { status: "error", error: untrusted };
@@ -601,8 +613,18 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     // An abort that landed during the (bounded) preflight must not go on to
     // spawn a child the caller has already stopped waiting for — that child
     // would be born orphaned, after the teardown below has already run.
-    if (options.signal?.aborted === true) {
+    if (quitRequested()) {
       return { status: "error", error: "codex doctor aborted" };
+    }
+    // The trust check that guards THIS spawn (W3.5-review Medium). The one above
+    // guarded the preflight and is now stale by a whole `--version` round trip:
+    // a binary swapped in that interval would otherwise be executed — as a
+    // long-lived app-server — on the strength of a stat that no longer describes
+    // it. Every spawn site re-reads the filesystem for itself; the irreducible
+    // stat->execve window is the residual (shared/codex-binary-trust.ts header).
+    const untrustedAtSpawn = trust(binaryPath);
+    if (untrustedAtSpawn !== null) {
+      return { status: "error", error: untrustedAtSpawn };
     }
     client.spawn(binaryPath, childEnv);
     await client.request(
