@@ -56,6 +56,10 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
     kind: z.literal("new"),
     workspace: z.string().min(1).max(4096).optional(),
     engine: z.enum(["core", "codex"]).optional(),
+    // W3 join: bounds only (a hostile-length string). IDENTITY is the host's
+    // job (its own live catalog / frozen preset table), never main's.
+    engineModel: z.string().min(1).max(128).optional(),
+    enginePreset: z.string().min(1).max(128).optional(),
   }),
   z.object({ kind: z.literal("resume"), sessionId: z.string().min(1) }),
 ]);
@@ -121,6 +125,11 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       sessionId: randomUUID(),
       resume: false,
       ...(req.engine !== undefined ? { engine } : {}),
+      // W3 join: forwarded verbatim (bounded above); manager.createTab (main/
+      // tabs.ts) re-bounds via argvId and rides them into argv ONLY on this
+      // session-creating spawn.
+      ...(req.engineModel !== undefined ? { engineModel: req.engineModel } : {}),
+      ...(req.enginePreset !== undefined ? { enginePreset: req.enginePreset } : {}),
     });
     if (!result.ok) {
       return result;

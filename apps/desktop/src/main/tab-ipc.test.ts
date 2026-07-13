@@ -110,6 +110,30 @@ describe("createTabRequestSchema — new-tab workspace matrix (§2F.4)", () => {
     // The 4096 boundary itself is accepted.
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/".repeat(4096) }).success).toBe(true);
   });
+
+  it("accepts optional engineModel/enginePreset draft picks (W3 join)", () => {
+    expect(
+      createTabRequestSchema.safeParse({
+        kind: "new",
+        workspace: "/x",
+        engine: "codex",
+        engineModel: "gpt-5.6-mini",
+        enginePreset: "workspace",
+      }).success,
+    ).toBe(true);
+    // Both stay optional — a Core (or bare) draft omits them entirely.
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x" }).success).toBe(true);
+  });
+
+  it("rejects an empty-string engineModel/enginePreset (min(1)) and a value over 128 chars (max)", () => {
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engineModel: "" }).success).toBe(false);
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", enginePreset: "" }).success).toBe(false);
+    const tooLong = "x".repeat(129);
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engineModel: tooLong }).success).toBe(false);
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", enginePreset: tooLong }).success).toBe(false);
+    // The 128 boundary itself is accepted.
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engineModel: "x".repeat(128) }).success).toBe(true);
+  });
 });
 
 describe("handleCreate — dialog skip vs legacy dialog (§2F.4 / §6#6)", () => {
@@ -125,6 +149,28 @@ describe("handleCreate — dialog skip vs legacy dialog (§2F.4 / §6#6)", () =>
     expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ engine: "codex", workspace: "/x", resume: false }));
     expect(showOpenDialog).not.toHaveBeenCalled();
   });
+  it("forwards engineModel/enginePreset verbatim to manager.createTab (W3 join); absent when the request never carried them", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+
+    await handleCreate(deps, {
+      kind: "new",
+      workspace: "/x",
+      engine: "codex",
+      engineModel: "gpt-5.6-mini",
+      enginePreset: "workspace",
+    });
+    expect(createTab).toHaveBeenLastCalledWith(
+      expect.objectContaining({ engineModel: "gpt-5.6-mini", enginePreset: "workspace" }),
+    );
+
+    await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex" });
+    const lastCallParams = createTab.mock.calls[createTab.mock.calls.length - 1]![0] as Record<string, unknown>;
+    expect(lastCallParams).not.toHaveProperty("engineModel");
+    expect(lastCallParams).not.toHaveProperty("enginePreset");
+  });
+
   it("preselected workspace ⇒ dialog NOT called, createTab gets it verbatim", async () => {
     const { manager, createTab, deliverTabPort } = makeManager();
     const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: ["/should/not/be/used"] });
