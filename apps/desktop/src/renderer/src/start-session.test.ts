@@ -45,7 +45,7 @@ describe("submitStartDraft — guards (§4.3)", () => {
 
     expect(res).toEqual({ ok: false, message: "Choose a project first." });
     expect(createTab).not.toHaveBeenCalled();
-    expect(tabsStore.getState().draft).toEqual({ workspace: null, prompt: "hello", model: null, mode: "build" });
+    expect(tabsStore.getState().draft).toEqual({ workspace: null, prompt: "hello", engine: "core", model: null, mode: "build" });
   });
 
   it("empty/whitespace-only prompt -> {ok:false}, createTab never called", async () => {
@@ -69,6 +69,20 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     await submitStartDraft(deps);
 
     expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
+  });
+
+  it("sends Codex as the static create choice and withholds core model/mode setup", async () => {
+    const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftModel("core-only-model");
+    tabsStore.getState().setDraftMode("plan");
+    tabsStore.getState().setDraftEngine("codex");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello");
   });
 
   it("ordering: addTab -> setActive -> queueInitialPrompt -> discardDraft, returns {ok:true, tabId}", async () => {
@@ -145,7 +159,7 @@ describe("submitStartDraft — refusal keeps the draft (§3-D8)", () => {
     const res = await submitStartDraft(deps);
 
     expect(res).toEqual({ ok: false, message: expect.any(String) });
-    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", model: null, mode: "build" });
+    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", engine: "core", model: null, mode: "build" });
     expect(tabsStore.getState().draftActive).toBe(true);
     expect(queueInitialPrompt).not.toHaveBeenCalled();
   });
@@ -158,7 +172,7 @@ describe("submitStartDraft — refusal keeps the draft (§3-D8)", () => {
     const res = await submitStartDraft(deps);
 
     expect(res.ok).toBe(false);
-    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", model: null, mode: "build" });
+    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", engine: "core", model: null, mode: "build" });
   });
 
   it("already_open -> focuses the existing tab via setActiveTab, draft intact, {ok:false}", async () => {
@@ -173,7 +187,7 @@ describe("submitStartDraft — refusal keeps the draft (§3-D8)", () => {
 
     expect(res.ok).toBe(false);
     expect(tabsStore.getState().activeTabId).toBe("existing");
-    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", model: null, mode: "build" });
+    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", engine: "core", model: null, mode: "build" });
   });
 
   it("a rejected createTab IPC call -> {ok:false, message}, not a thrown rejection; draft intact, queue never called (codex P7.12 review fix)", async () => {
@@ -191,7 +205,7 @@ describe("submitStartDraft — refusal keeps the draft (§3-D8)", () => {
     const res = await submitStartDraft(deps);
 
     expect(res).toEqual({ ok: false, message: expect.any(String) });
-    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", model: null, mode: "build" });
+    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", engine: "core", model: null, mode: "build" });
     expect(tabsStore.getState().draftActive).toBe(true);
     expect(queueInitialPrompt).not.toHaveBeenCalled();
   });

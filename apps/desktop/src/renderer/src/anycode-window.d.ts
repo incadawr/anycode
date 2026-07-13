@@ -11,6 +11,7 @@
  * to actually merge into the global `Window` interface.
  */
 import type {
+  AvailableEngines,
   CloseTabResult,
   CreateTabRequest,
   CreateTabResult,
@@ -81,6 +82,7 @@ declare global {
       closeTab(tabId: string): Promise<CloseTabResult>;
       listSessions(): Promise<SessionSummary[]>;
       pickWorkspace(): Promise<WorkspacePickResult>;
+      listAvailableEngines(): Promise<AvailableEngines>;
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
       settings: {

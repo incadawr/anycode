@@ -78,14 +78,21 @@ function readReviewWidth(): number {
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
  * FIRST settings snapshot has actually loaded (`snapshot !== null` — avoids
  * flashing Welcome during the brief unknown-readiness window right after
- * mount), the provider isn't ready, AND no tab is open yet. Once any tab
+ * mount), no engine is ready, AND no tab is open yet. Once any tab
  * exists, Welcome yields to the tab UI even if `providerReady` later flips back
  * to false (e.g. the user clears the secret while a tab is open); that case is
  * handled by `createTab`'s `not_ready` guard/notice instead (shared/tabs.ts),
  * not by hiding an already-open tab.
  */
-export function shouldShowWelcome(snapshot: SettingsSnapshot | null, tabCount: number): boolean {
-  return snapshot !== null && !snapshot.providerReady && tabCount === 0;
+export function shouldShowWelcome(
+  snapshot: SettingsSnapshot | null,
+  tabCount: number,
+  hasExternalEngine: boolean | null = false,
+): boolean {
+  // `null` is deliberately non-blocking while main's narrow availability
+  // snapshot is in flight: never flash a provider-only Welcome over a usable
+  // subscription engine.
+  return snapshot !== null && !snapshot.providerReady && hasExternalEngine === false && tabCount === 0;
 }
 
 export type MainPaneView = "start" | "active" | "empty";
@@ -118,7 +125,10 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
   const workspace = useTabStore((state) => state.workspace);
-  const gitPanelOpen = useTabStore((state) => state.git.panelOpen);
+  const engine = useTabStore((state) => state.engine);
+  const gitPanelOpen = useTabStore((state) => state.git.panelOpen) && (engine?.capabilities.supportsGitMutations ?? true);
+  const supportsCorePanels = engine === null;
+  const supportsRewind = engine?.capabilities.supportsRewind ?? true;
   const tabTitle = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.title);
   const reviewRootRef = useRef<HTMLDivElement>(null);
   const [reviewWidth, setReviewWidth] = useState(readReviewWidth);
@@ -196,10 +206,10 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       {/* Permission modal: self-connecting wrapper, renders only when the
           ACTIVE tab's store has a pending permission request. */}
       <ConnectedPermissionModal />
-      <GitConfirmDialog />
-      <LspPanel />
-      <HooksPanel />
-      <TimelinePanel />
+      {gitPanelOpen && <GitConfirmDialog />}
+      {supportsCorePanels && <LspPanel />}
+      {supportsCorePanels && <HooksPanel />}
+      {supportsRewind && <TimelinePanel />}
       {/* R8: store notice slot → App toast queue (render-less bridge). */}
       <TabNoticeCapture tabId={tabId} onNotice={(notice) => onToast(notice.kind, notice.text)} />
     </>
@@ -225,6 +235,8 @@ export function App() {
   const activeTabId = useTabsStore((state) => state.activeTabId);
   const draftActive = useTabsStore((state) => state.draftActive);
   const settingsSnapshot = useStore(useSettingsStore, (state) => state.snapshot);
+  const [hasExternalEngine, setHasExternalEngine] = useState<boolean | null>(null);
+  const hasExternalEngineRef = useRef<boolean | null>(null);
   // Effective keymap (F20): recompiled only when the settings snapshot changes,
   // never per-keydown — the palette hints and CommandPalette's own matcher both
   // read this, so an override takes effect on the very next render.
@@ -269,6 +281,30 @@ export function App() {
   useEffect(() => {
     const stop = startConnectionManager(tabRegistry);
     return stop;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.anycode
+      .listAvailableEngines()
+      .then(({ engineIds }) => {
+        if (!cancelled) {
+          const available = engineIds.some((engine: "core" | "codex") => engine !== "core");
+          hasExternalEngineRef.current = available;
+          setHasExternalEngine(available);
+        }
+      })
+      .catch(() => {
+        // A bridge failure remains fail-closed: only the configured Core path
+        // can bypass Welcome in this case.
+        if (!cancelled) {
+          hasExternalEngineRef.current = false;
+          setHasExternalEngine(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -396,7 +432,11 @@ export function App() {
         return;
       }
       // Ruling H — combos are dead on the Welcome screen (no sidebar/terminal/sessions).
-      if (shouldShowWelcome(useSettingsStore.getState().snapshot, useTabsStore.getState().tabs.length)) {
+      if (shouldShowWelcome(
+        useSettingsStore.getState().snapshot,
+        useTabsStore.getState().tabs.length,
+        hasExternalEngineRef.current,
+      )) {
         return;
       }
       event.preventDefault();
@@ -606,7 +646,7 @@ export function App() {
     }
   }
 
-  if (shouldShowWelcome(settingsSnapshot, tabs.length)) {
+  if (shouldShowWelcome(settingsSnapshot, tabs.length, hasExternalEngine)) {
     // Welcome renders full-window with no sidebar (design §2.1) — the
     // `app-welcome` modifier drops the shell grid back to a plain column.
     return (

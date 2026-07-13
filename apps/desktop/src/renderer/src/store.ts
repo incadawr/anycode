@@ -98,6 +98,7 @@ import type {
   WireGitStatus,
   WireHistoryItem,
   WireToolMeta,
+  EnginePresentation,
 } from "../../shared/protocol.js";
 import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { parseUsageLimitNotice, type UsageLimitNotice } from "./provider-notices.js";
@@ -445,6 +446,8 @@ export interface DesktopState {
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
+  /** Host-authoritative external-engine projection; null means historical core wire. */
+  engine: EnginePresentation | null;
   reasoningEffort: ReasoningEffort;
   /** Effort levels the current model supports; undefined ⇒ hide the selector. */
   availableEffortLevels: ReasoningEffort[] | undefined;
@@ -640,6 +643,7 @@ export interface RewindResultInfo {
 }
 
 interface SessionSlice {
+  engine: EnginePresentation | null;
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -663,6 +667,7 @@ interface SessionSlice {
 
 function initialSessionSlice(): SessionSlice {
   return {
+    engine: null,
     turn: { status: "idle", turnId: null, requestId: null },
     transcript: [],
     permission: null,
@@ -1629,6 +1634,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               connection: "ready",
               workspace: message.workspace,
               mode: message.mode,
+              engine: message.engine ?? null,
               model: message.model,
               reasoningEffort: message.reasoningEffort ?? "off",
               availableEffortLevels: message.availableEffortLevels,

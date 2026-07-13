@@ -42,6 +42,14 @@ describe("shouldShowWelcome (ruling §2)", () => {
     expect(shouldShowWelcome(snapshot({ providerReady: true }), 0)).toBe(false);
   });
 
+  it("does not show Welcome when a main-validated external engine is available without Core credentials", () => {
+    expect(shouldShowWelcome(snapshot({ providerReady: false }), 0, true)).toBe(false);
+  });
+
+  it("waits for the external-engine verdict rather than flashing provider-only Welcome", () => {
+    expect(shouldShowWelcome(snapshot({ providerReady: false }), 0, null)).toBe(false);
+  });
+
   it("does not show Welcome once any tab is open, even if not ready — Welcome yields to the tab UI by tab count, not by providerReady flipping back", () => {
     expect(shouldShowWelcome(snapshot({ providerReady: false }), 1)).toBe(false);
     expect(shouldShowWelcome(snapshot({ providerReady: true }), 2)).toBe(false);

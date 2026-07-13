@@ -58,6 +58,7 @@ import type {
   McpImportScanRequest,
   McpImportScanResult,
 } from "../shared/mcp-config.js";
+import { ENGINES_LIST_CHANNEL, type AvailableEngines } from "../shared/tabs.js";
 import type {
   SkillsCreateRequest,
   SkillsDeleteRequest,
@@ -189,6 +190,8 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(SESSIONS_LIST_CHANNEL) as Promise<SessionSummary[]>,
   pickWorkspace: (): Promise<WorkspacePickResult> =>
     ipcRenderer.invoke(WORKSPACE_PICK_CHANNEL) as Promise<WorkspacePickResult>,
+  listAvailableEngines: (): Promise<AvailableEngines> =>
+    ipcRenderer.invoke(ENGINES_LIST_CHANNEL) as Promise<AvailableEngines>,
   settings: {
     get: (): Promise<SettingsSnapshot> =>
       ipcRenderer.invoke(SETTINGS_GET_CHANNEL) as Promise<SettingsSnapshot>,

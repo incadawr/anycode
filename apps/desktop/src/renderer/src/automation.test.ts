@@ -1243,7 +1243,7 @@ describe("automation facade — startScreenOpen / startScreenSetWorkspace / star
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 
     expect(facade.startScreenOpen()).toEqual({ ok: true });
-    expect(tabsStore.getState().draft).toEqual({ workspace: null, prompt: "", model: null, mode: "build" });
+    expect(tabsStore.getState().draft).toEqual({ workspace: null, prompt: "", model: null, mode: "build", engine: "core" });
     expect(tabsStore.getState().draftActive).toBe(true);
   });
 
@@ -1252,7 +1252,7 @@ describe("automation facade — startScreenOpen / startScreenSetWorkspace / star
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 
     expect(facade.startScreenOpen("/ws/preset")).toEqual({ ok: true });
-    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/preset", prompt: "", model: null, mode: "build" });
+    expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/preset", prompt: "", model: null, mode: "build", engine: "core" });
   });
 
   it("startScreenSetWorkspace refuses with no_draft when no draft is open, and touches nothing", () => {

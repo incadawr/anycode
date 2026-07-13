@@ -11,9 +11,34 @@ import { describe, expect, it } from "vitest";
 import {
   buildAlwaysAllowRule,
   buildPermissionAllowMessage,
+  canRememberPermission,
   formatPermissionTitle,
   suggestAlwaysAllowPattern,
 } from "./PermissionModal.js";
+
+describe("canRememberPermission", () => {
+  it("keeps core rules available but removes all remember paths for external Codex approvals", () => {
+    expect(canRememberPermission(null)).toBe(true);
+    expect(canRememberPermission({
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: true,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+    })).toBe(false);
+  });
+});
 
 /**
  * Slice P7.16 §4.2 wiring tests (REVISED, W1-FIX): the three "birth points"

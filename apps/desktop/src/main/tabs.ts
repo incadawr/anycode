@@ -24,7 +24,11 @@ import {
 } from "../shared/credentials.js";
 import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import type { CloseTabResult } from "../shared/tabs.js";
-import type { EngineId } from "../shared/engines.js";
+import {
+  ENGINE_PROCESS_REGISTRATION_TYPE,
+  type EngineId,
+  type EngineProcessRegistration,
+} from "../shared/engines.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
 
 /**
@@ -89,13 +93,6 @@ export interface TabHost {
 
    */
   initialResume: boolean;
-}
-
-export interface EngineProcessRegistration {
-  hostPid: number;
-  generation: number;
-  enginePid: number;
-  pgid: number;
 }
 
 /**
@@ -205,7 +202,7 @@ export interface TabHostManagerDeps {
   /** Availability of a reviewed non-core engine; defaults fail-closed. */
   engineReady?: (engine: EngineId) => boolean;
   /** Fresh, engine-specific host-env overlay. It must contain no credentials. */
-  engineEnv?: (engine: EngineId) => NodeJS.ProcessEnv;
+  engineEnv?: (engine: EngineId, generation: number) => NodeJS.ProcessEnv;
   /**
    * Platform-specific group reaper. Not wired until W0 process-tree evidence
    * exists; tests inject it to prove ownership and stale-message rejection.
@@ -367,7 +364,7 @@ export class TabHostManager {
     tab.engineProcess = null;
     const child = this.deps.fork(this.deps.hostEntry, args, {
       cwd: tab.workspace,
-      env: { ...this.env(), ...(this.deps.engineEnv?.(tab.engine) ?? {}) },
+      env: { ...this.env(), ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}) },
       stdio: "inherit",
     });
     tab.proc = child;
@@ -400,7 +397,7 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
-    if (data.type === "anycode:engine-process") {
+    if (data.type === ENGINE_PROCESS_REGISTRATION_TYPE) {
       this.registerEngineProcess(tab, child, message);
       return;
     }
