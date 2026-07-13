@@ -9,6 +9,8 @@ import { isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { SIGKILL_GRACE_MS } from "@anycode/core";
 import type { EngineBootstrap } from "../bootstrap.js";
+import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
+import { ENGINE_PROCESS_REGISTRATION_TYPE } from "../../../shared/engines.js";
 import {
   EngineVersionError,
   type JsonRpcError,
@@ -49,6 +51,12 @@ export interface AppServerClientOptions {
   maxPendingRequests?: number;
   notificationHighWater?: number;
   notificationLowWater?: number;
+  /** Main-owned generation proof; only POSIX dedicated groups are reportable. */
+  processOwnership?: {
+    hostPid: number;
+    generation: number;
+    report(message: EngineProcessRegistrationMessage): void;
+  };
 }
 
 export class AppServerClientError extends Error {
@@ -188,12 +196,13 @@ export class AppServerClient {
       throw new EngineVersionError("Codex binary path must be absolute");
     }
     await this.preflightVersion();
-    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "app-server"], this.spawnOptions());
+    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "app-server", "--stdio"], this.spawnOptions(true));
     this.child = child;
     // Adopt immediately after spawn, before any JSON-RPC initialize/account/thread work.
     this.options.bootstrap?.adopt(() => this.close());
     this.bindChild(child);
     await this.awaitSpawn(child);
+    this.reportOwnedProcess(child);
   }
 
   request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
@@ -225,7 +234,7 @@ export class AppServerClient {
     this.write({ method, ...(params === undefined ? {} : { params }) });
   }
 
-  /** Bounded direct-child teardown; W0 blocks any process-group/orphan claim. */
+  /** Bounded teardown of the POSIX group we created; Windows remains direct-child only. */
   async close(): Promise<void> {
     const child = this.child;
     if (child === null || this.closing) return;
@@ -237,13 +246,13 @@ export class AppServerClient {
     }
     const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
     try {
-      child.kill("SIGTERM");
+      this.signalOwnedProcess(child, "SIGTERM");
     } catch {
       // best effort only; close still waits bounded below.
     }
     const killTimer = setTimeout(() => {
       try {
-        child.kill("SIGKILL");
+        this.signalOwnedProcess(child, "SIGKILL");
       } catch {}
     }, SIGKILL_GRACE_MS);
     await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, SIGKILL_GRACE_MS + 100))]);
@@ -251,13 +260,17 @@ export class AppServerClient {
     this.failTerminal(new AppServerClientError("app-server client closed"));
   }
 
-  private spawnOptions(): SpawnOptions {
+  private spawnOptions(dedicatedProcessGroup = false): SpawnOptions {
     return {
       cwd: this.options.cwd,
       env: this.env,
       shell: false,
       windowsHide: true,
-      detached: false, // W0 parent/process-tree evidence is blocked; no group ownership claim.
+      // C2: POSIX child becomes a dedicated session/process-group leader. W0
+      // showed a non-detached harness shares its caller PGID, so that shape is
+      // never reported to main as reaper-owned. Windows remains deliberately
+      // direct-child-only until equivalent tree evidence exists.
+      detached: dedicatedProcessGroup && process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     };
   }
@@ -426,6 +439,35 @@ export class AppServerClient {
     this.stderr = `${this.stderr}${text}`;
     if (Buffer.byteLength(this.stderr, "utf8") > STDERR_TAIL_BYTES) {
       this.stderr = Buffer.from(this.stderr, "utf8").subarray(-STDERR_TAIL_BYTES).toString("utf8");
+    }
+  }
+
+  private reportOwnedProcess(child: ChildProcess): void {
+    const ownership = this.options.processOwnership;
+    const pid = child.pid;
+    if (ownership === undefined || pid === undefined || process.platform === "win32") return;
+    ownership.report({
+      type: ENGINE_PROCESS_REGISTRATION_TYPE,
+      hostPid: ownership.hostPid,
+      generation: ownership.generation,
+      enginePid: pid,
+      pgid: pid,
+    });
+  }
+
+  private signalOwnedProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {
+        // The group can already be gone; direct child is the narrow fallback.
+      }
+    }
+    try {
+      child.kill(signal);
+    } catch {
+      // best effort only; bounded close remains responsible for returning.
     }
   }
 

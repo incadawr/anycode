@@ -74,6 +74,42 @@ describe("set_reasoning_effort protocol", () => {
   });
 });
 
+describe("external engine host_ready projection", () => {
+  it("is structured-clone-safe and remains absent for the legacy core wire", () => {
+    const core = {
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "m1",
+      sessionId: "core-session",
+    } satisfies HostToUiMessage;
+    const codex = {
+      ...core,
+      engine: {
+        id: "codex",
+        capabilities: {
+          supportsCorePermissions: false,
+          supportsRewind: false,
+          supportsWorkflow: false,
+          supportsGitMutations: false,
+          supportsContextUsage: true,
+          supportsContextBreakdown: false,
+          supportsInteractiveApprovals: true,
+          costAccounting: false,
+          supportsModelSelection: false,
+          supportsReasoningEffort: false,
+          supportsImages: false,
+          supportsTasks: false,
+          supportsFileSnapshots: false,
+        },
+      },
+    } satisfies HostToUiMessage;
+
+    expect("engine" in core).toBe(false);
+    expect(structuredClone(codex)).toEqual(codex);
+  });
+});
+
 // Slice 3.2 (design slice-3.2-cut.md §3.5): the additive `mcp_status`
 // HostToUiMessage variant. This host->renderer direction is trusted and carries
 // NO zod schema (only the untrusted UiToHostMessage direction is validated); the

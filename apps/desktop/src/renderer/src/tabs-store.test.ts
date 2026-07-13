@@ -223,14 +223,14 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
   it("openDraft() with no workspace creates an empty draft and activates it", () => {
     const store = createTabsStore();
     store.getState().openDraft();
-    expect(store.getState().draft).toEqual({ workspace: null, prompt: "", model: null, mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: null, prompt: "", engine: "core", model: null, mode: "build" });
     expect(store.getState().draftActive).toBe(true);
   });
 
   it("openDraft(workspace) seeds the workspace", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");
-    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "", model: null, mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "", engine: "core", model: null, mode: "build" });
   });
 
   it("re-opening an existing draft preserves its prompt/workspace (focus, not reset)", () => {
@@ -243,7 +243,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     store.getState().openDraft("/ws/a");
     store.getState().setDraftPrompt("hello");
     store.getState().openDraft(); // re-focus, no workspace arg
-    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", model: null, mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", engine: "core", model: null, mode: "build" });
     expect(store.getState().draftActive).toBe(true);
   });
 
@@ -252,15 +252,24 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     store.getState().openDraft("/ws/a");
     store.getState().setDraftPrompt("hello");
     store.getState().openDraft("/ws/b");
-    expect(store.getState().draft).toEqual({ workspace: "/ws/b", prompt: "hello", model: null, mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/b", prompt: "hello", engine: "core", model: null, mode: "build" });
   });
 
-  it("setDraftWorkspace/setDraftPrompt/setDraftModel are no-ops while draft is null", () => {
+  it("draft mutators are no-ops while draft is null", () => {
     const store = createTabsStore();
     store.getState().setDraftWorkspace("/ws/a");
     store.getState().setDraftPrompt("hi");
     store.getState().setDraftModel("gpt-5");
+    store.getState().setDraftEngine("codex");
     expect(store.getState().draft).toBeNull();
+  });
+
+  it("setDraftEngine changes only the parked new-session choice", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftPrompt("hello");
+    store.getState().setDraftEngine("codex");
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", engine: "codex", model: null, mode: "build" });
   });
 
   it("setDraftModel sets and clears the draft's model pick, leaving workspace/prompt untouched", () => {
@@ -269,10 +278,10 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     store.getState().setDraftPrompt("hello");
 
     store.getState().setDraftModel("claude-opus-4");
-    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", model: "claude-opus-4", mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", engine: "core", model: "claude-opus-4", mode: "build" });
 
     store.getState().setDraftModel(null);
-    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", model: null, mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", engine: "core", model: null, mode: "build" });
   });
 
   it("setDraftMode preserves the other draft fields and survives re-opening the draft", () => {
@@ -283,7 +292,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     store.getState().setDraftMode("plan");
     store.getState().openDraft();
 
-    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "make a plan", model: null, mode: "plan" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "make a plan", engine: "core", model: null, mode: "plan" });
   });
 
   it("re-opening an existing draft preserves its model pick (focus, not reset)", () => {
@@ -291,7 +300,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     store.getState().openDraft("/ws/a");
     store.getState().setDraftModel("gpt-5");
     store.getState().openDraft(); // re-focus, no workspace arg
-    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "", model: "gpt-5", mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "", engine: "core", model: "gpt-5", mode: "build" });
   });
 
   it("discardDraft clears both draft and draftActive", () => {
@@ -312,7 +321,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     store.getState().setActiveTab("a");
 
     expect(store.getState().draftActive).toBe(false);
-    expect(store.getState().draft).toEqual({ workspace: "/ws/b", prompt: "hello", model: null, mode: "build" });
+    expect(store.getState().draft).toEqual({ workspace: "/ws/b", prompt: "hello", engine: "core", model: null, mode: "build" });
   });
 
   it("setActiveTab for an unknown tabId leaves draftActive untouched (defensive no-op)", () => {

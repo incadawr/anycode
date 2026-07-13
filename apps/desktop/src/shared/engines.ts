@@ -12,3 +12,21 @@ export function isEngineId(value: string | undefined): value is EngineId {
 }
 
 export const ENV_ENGINE = "ANYCODE_ENGINE";
+/** Absolute main-validated Codex CLI path passed only to the host process. */
+export const ENV_CODEX_BIN = "ANYCODE_CODEX_BIN";
+/** Main-owned utility-process generation; never trusted from renderer input. */
+export const ENV_HOST_GENERATION = "ANYCODE_HOST_GENERATION";
+
+export const ENGINE_PROCESS_REGISTRATION_TYPE = "anycode:engine-process";
+
+/** Exact process ownership facts reported from a host to main. */
+export interface EngineProcessRegistration {
+  hostPid: number;
+  generation: number;
+  enginePid: number;
+  pgid: number;
+}
+
+export type EngineProcessRegistrationMessage =
+  & { type: typeof ENGINE_PROCESS_REGISTRATION_TYPE }
+  & EngineProcessRegistration;

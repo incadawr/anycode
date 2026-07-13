@@ -17,6 +17,7 @@ import { handleCreateTabResult } from "./components/SessionPicker.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
 import type { CreateTabRequest, CreateTabResult } from "../../shared/tabs.js";
+import type { SessionDraft } from "./tabs-store.js";
 
 export type StartSubmitResult = { ok: true; tabId: string } | { ok: false; message: string };
 
@@ -37,6 +38,16 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
   };
 }
 
+/** Keeps the historical Core create payload byte-for-byte additive. */
+export function createStartTabRequest(draft: Pick<SessionDraft, "workspace" | "engine">): CreateTabRequest {
+  if (draft.workspace === null) {
+    throw new Error("A workspace is required to create a tab");
+  }
+  return draft.engine === "core"
+    ? { kind: "new", workspace: draft.workspace }
+    : { kind: "new", workspace: draft.workspace, engine: draft.engine };
+}
+
 export async function submitStartDraft(
   deps: StartSubmitDeps = defaultStartSubmitDeps(),
 ): Promise<StartSubmitResult> {
@@ -44,7 +55,7 @@ export async function submitStartDraft(
   if (draft === null) {
     return { ok: false, message: "No draft to submit." };
   }
-  const { workspace, prompt, model, mode } = draft;
+  const { workspace, prompt, model, mode, engine } = draft;
   if (workspace === null) {
     return { ok: false, message: "Choose a project first." };
   }
@@ -54,7 +65,7 @@ export async function submitStartDraft(
 
   let result: CreateTabResult;
   try {
-    result = await deps.createTab({ kind: "new", workspace });
+    result = await deps.createTab(createStartTabRequest(draft));
   } catch (error: unknown) {
     console.warn("[start-session] createTab rejected", error);
     return { ok: false, message: "Failed to create the task." };
@@ -75,7 +86,13 @@ export async function submitStartDraft(
     return { ok: false, message: failure ?? "Failed to create the task." };
   }
 
-  deps.registry.queueInitialPrompt(createdTabId, prompt, model ?? undefined, mode);
+  // Codex owns model and approval policy natively. Do not emit AnyCode's
+  // first-turn model/mode controls for an external engine.
+  if (engine === "core") {
+    deps.registry.queueInitialPrompt(createdTabId, prompt, model ?? undefined, mode);
+  } else {
+    deps.registry.queueInitialPrompt(createdTabId, prompt);
+  }
   deps.tabsStore.getState().discardDraft();
   return { ok: true, tabId: createdTabId };
 }

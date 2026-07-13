@@ -50,6 +50,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
 
   const workspace = useTabStore((state) => state.workspace);
   const connection = useTabStore((state) => state.connection);
+  const engine = useTabStore((state) => state.engine);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
 
   const tab = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId));
@@ -58,6 +59,8 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
   const hooksPanelOpen = tab?.hooksPanelOpen ?? false;
   const timelinePanelOpen = tab?.timelinePanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
+  const externalEngine = engine !== null;
+  const supportsRewind = engine?.capabilities.supportsRewind ?? true;
 
   /**
    * Pure UI flag flip (design §2.4) — absorbs App.tsx's former
@@ -98,6 +101,8 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
 
       <span className="session-header-title" title={title}>{title}</span>
 
+      {externalEngine && <span className="engine-identity session-header-engine">{engine.id === "codex" ? "Codex" : engine.id}</span>}
+
       {!isNewSession && <EnvironmentMenu placement="header" />}
 
       <span
@@ -113,7 +118,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
 
       <span className="session-header-spacer" />
 
-      <button
+      {!externalEngine && <button
         type="button"
         className={`session-header-panel-toggle${lspPanelOpen ? " session-header-panel-toggle-active" : ""}`}
         aria-label="Toggle LSP status"
@@ -122,9 +127,9 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
         onClick={toggleLspPanel}
       >
         <ServerStack />
-      </button>
+      </button>}
 
-      <button
+      {!externalEngine && <button
         type="button"
         className={`session-header-panel-toggle${hooksPanelOpen ? " session-header-panel-toggle-active" : ""}`}
         aria-label="Toggle hooks"
@@ -133,9 +138,9 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
         onClick={toggleHooksPanel}
       >
         <HookIcon />
-      </button>
+      </button>}
 
-      <button
+      <>{supportsRewind && <button
         type="button"
         className={`session-header-panel-toggle${timelinePanelOpen ? " session-header-panel-toggle-active" : ""}`}
         aria-label="Toggle checkpoint timeline"
@@ -144,7 +149,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
         onClick={toggleTimelinePanel}
       >
         <History />
-      </button>
+      </button>}</>
 
       <button
         type="button"

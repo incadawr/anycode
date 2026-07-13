@@ -59,6 +59,7 @@ import { SESSION_TITLE_MAX_LENGTH, deriveSessionTitle, sanitizeTitleSource, with
 import { randomUUID } from "node:crypto";
 import type {
   HostToUiMessage,
+  EnginePresentation,
   UiToHostMessage,
   WireCheckpointMeta,
   WireEnvStatus,
@@ -88,6 +89,34 @@ const ZERO_CONTEXT_BREAKDOWN = {
   metaTokens: 0,
   totalEstimatedTokens: 0,
 };
+
+/** Only external engines carry this additive wire projection; core stays byte-identical. */
+function enginePresentation(engine: SessionEngine): EnginePresentation | undefined {
+  if (engine.id === "core") return undefined;
+  const capabilities = engine.capabilities;
+  return {
+    id: engine.id,
+    capabilities: {
+      supportsCorePermissions: capabilities.supportsCorePermissions,
+      supportsRewind: capabilities.supportsRewind,
+      supportsWorkflow: capabilities.supportsWorkflow,
+      supportsGitMutations: capabilities.supportsGitMutations,
+      supportsContextUsage: capabilities.supportsContextUsage,
+      supportsContextBreakdown: capabilities.supportsContextBreakdown,
+      supportsInteractiveApprovals: capabilities.supportsInteractiveApprovals,
+      costAccounting: capabilities.costAccounting,
+      supportsModelSelection: capabilities.supportsModelSelection,
+      supportsReasoningEffort: capabilities.supportsReasoningEffort,
+      supportsImages: capabilities.supportsImages,
+      supportsTasks: capabilities.supportsTasks,
+      supportsFileSnapshots: capabilities.supportsFileSnapshots,
+    },
+  };
+}
+
+function isGitMutation(command: Extract<UiToHostMessage, { type: "git_command" }>["command"]): boolean {
+  return !["refresh", "branches", "log", "diff"].includes(command.op);
+}
 
 // SESSION_TITLE_MAX_LENGTH and deriveSessionTitle moved to
 // packages/core/src/context/session-title.ts (Phase 4 slice 4.4-T, for CLI
@@ -468,6 +497,7 @@ export class Session {
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
         // below (which already pushes the current lsp_status).
         this.uiReady = true;
+        const presentation = enginePresentation(this.engine);
         this.outbound.sendDirect({
           type: "host_ready",
           workspace: this.workspace,
@@ -476,6 +506,7 @@ export class Session {
           sessionId: this.sessionId,
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
+          ...(presentation !== undefined ? { engine: presentation } : {}),
         });
         // Phase-2 §3.3: session_history (transcript hydration of a resumed
         // session) is emitted AFTER host_ready and BEFORE replay(), only when
@@ -502,7 +533,7 @@ export class Session {
         this.git?.pushSnapshot();
         this.pushLspStatus();
         this.pushHooksList();
-        this.pushTaskList();
+        if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         this.pushEnvStatus();
         break;
       case "user_message":
@@ -512,7 +543,12 @@ export class Session {
         this.onCancel();
         break;
       case "permission_response":
-        this.maybeRemember(message.requestId, message.behavior, message.remember);
+        if (!this.engine.capabilities.supportsInteractiveApprovals) {
+          break;
+        }
+        if (this.engine.capabilities.supportsCorePermissions) {
+          this.maybeRemember(message.requestId, message.behavior, message.remember);
+        }
         this.broker.handleResponse(message.requestId, message.behavior, message.updatedInput);
         break;
       case "set_mode":
@@ -523,6 +559,7 @@ export class Session {
         // stale renderer can't request an unsupported tier; "off" always allowed.
         if (
           !this.busy &&
+          this.engine.capabilities.supportsReasoningEffort &&
           (message.effort === "off" || this.reasoningSupported) &&
           (this.availableEffortLevels === undefined || this.availableEffortLevels.includes(message.effort))
         ) {
@@ -549,7 +586,13 @@ export class Session {
         // wired (legacy tests) -> silent no-op. Every rejection is a silent drop
         // (no reply escape), exactly like set_reasoning_effort.
         const id = message.model.trim();
-        if (this.busy || id.length === 0 || /\s/.test(id) || this.engine.switchModel === undefined) {
+        if (
+          this.busy ||
+          !this.engine.capabilities.supportsModelSelection ||
+          id.length === 0 ||
+          /\s/.test(id) ||
+          this.engine.switchModel === undefined
+        ) {
           break;
         }
         // switchModel runs the full re-budget recipe host-side and returns the
@@ -572,25 +615,27 @@ export class Session {
         // Slice 5.7: user-initiated git command. The bridge validates nothing
         // (the zod schema already ran in `route` above) and never throws into
 
-        this.git?.handleCommand(message);
+        if (!isGitMutation(message.command) || this.engine.capabilities.supportsGitMutations) {
+          this.git?.handleCommand(message);
+        }
         break;
       case "lsp_status_request":
         this.pushLspStatus();
         break;
       case "context_breakdown_request":
-        this.pushContextBreakdown();
+        if (this.engine.capabilities.supportsContextBreakdown) this.pushContextBreakdown();
         break;
       case "task_list_request":
-        this.pushTaskList();
+        if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         break;
       case "task_output_request":
-        this.pushTaskOutput(message.taskId);
+        if (this.engine.capabilities.supportsTasks) this.pushTaskOutput(message.taskId);
         break;
       case "task_kill_request":
-        this.onTaskKillRequest(message.requestId, message.taskId);
+        if (this.engine.capabilities.supportsTasks) this.onTaskKillRequest(message.requestId, message.taskId);
         break;
       case "checkpoint_list_request":
-        void this.pushCheckpointList();
+        if (this.engine.capabilities.supportsRewind) void this.pushCheckpointList();
         break;
       case "rewind_request":
         // Async (awaits store + git spawns); onRewind holds this.busy for its
@@ -723,7 +768,7 @@ export class Session {
       });
       return;
     }
-    if (this.checkpoints === undefined) {
+    if (!this.engine.capabilities.supportsRewind || this.checkpoints === undefined) {
       this.outbound.sendDirect({
         type: "rewind_result",
         requestId,
@@ -818,7 +863,7 @@ export class Session {
       return;
     }
     const attachments = images?.length ? [...images] : undefined;
-    if (attachments !== undefined && this.imageInputEnabled?.() !== true) {
+    if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
       return;
     }
@@ -833,7 +878,7 @@ export class Session {
     // busy gate already returned) — a rejected message drains nothing. A turn
     // with no notices keeps `turnInput === text`, byte-identical to pre-6.DP-2.
     let turnInput = text;
-    if (this.tasks) {
+    if (this.engine.capabilities.supportsTasks && this.tasks) {
       const notices = this.tasks.drainNotices();
       if (notices.length > 0) {
         turnInput = withBackgroundTaskNotices(turnInput, notices);
@@ -853,7 +898,7 @@ export class Session {
       // changed is reflected in the pill. Fire-and-forget — must NEVER block or
       // throw into the turn (the bridge coalesces + swallows failures internally).
       this.git?.refreshAfterTurn();
-      this.pushTaskList();
+      if (this.engine.capabilities.supportsTasks) this.pushTaskList();
       // Codex-P2 fix (slice P7.8): wait for in-flight telemetry appends to
       // settle before reading written/dropped counters, otherwise the panel
       // shows the previous turn's counts (fail-soft: a flush error/timeout
@@ -907,7 +952,7 @@ export class Session {
   }
 
   private captureSnapshotPath(event: AgentEvent): void {
-    if (event.type === "tool_execution_start" && isSnapshotTool(event.toolName)) {
+    if (this.engine.capabilities.supportsFileSnapshots && event.type === "tool_execution_start" && isSnapshotTool(event.toolName)) {
       const path = extractSnapshotPath(event.input);
       if (path !== null) {
         this.snapshotPaths.set(event.toolCallId, path);
@@ -918,7 +963,7 @@ export class Session {
   private async emitAfterSnapshot(outcome: ToolCallOutcome): Promise<void> {
     const path = this.snapshotPaths.get(outcome.toolCallId);
     this.snapshotPaths.delete(outcome.toolCallId);
-    if (!isSnapshotTool(outcome.toolName) || outcome.status !== "success" || path === undefined) {
+    if (!this.engine.capabilities.supportsFileSnapshots || !isSnapshotTool(outcome.toolName) || outcome.status !== "success" || path === undefined) {
       return;
     }
     try {
@@ -980,7 +1025,7 @@ export class Session {
       });
       return;
     }
-    if (this.engine.setMode === undefined) {
+    if (!this.engine.capabilities.supportsCorePermissions || this.engine.setMode === undefined) {
       this.outbound.emit({
         type: "mode_change_rejected",
         reason: "permission modes are managed by this engine",

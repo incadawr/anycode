@@ -12,6 +12,7 @@
  */
 import { create } from "zustand";
 import type { PermissionMode } from "@anycode/core";
+import type { EngineId } from "../../shared/engines.js";
 
 /** One open tab's shell-level metadata (design §4.3: "id, workspace, sessionId?, title?, host-exited flag"). */
 export interface TabInfo {
@@ -54,6 +55,8 @@ export interface TabInfo {
 export interface SessionDraft {
   workspace: string | null;
   prompt: string;
+  /** Static engine selection for a new tab; Core remains the compatibility default. */
+  engine: EngineId;
   /** Task-scoped model pick (slice F5#1b, D3): `null` = provider default (not persisted as a setting). */
   model: string | null;
   /** Permission mode for the first turn. New sessions begin in the safe build mode. */
@@ -85,6 +88,8 @@ export interface TabsState {
   setDraftWorkspace(workspace: string): void;
   /** No-op while `draft === null`. */
   setDraftPrompt(prompt: string): void;
+  /** No-op while `draft === null`. Changing engines never mutates an open tab. */
+  setDraftEngine(engine: EngineId): void;
   /** No-op while `draft === null`. `null` clears back to "provider default" (slice F5#1b, D3). */
   setDraftModel(model: string | null): void;
   /** No-op while `draft === null`. The selected mode is applied before the first message. */
@@ -246,6 +251,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
         draft: {
           workspace: workspace ?? state.draft?.workspace ?? null,
           prompt: state.draft?.prompt ?? "",
+          engine: state.draft?.engine ?? "core",
           model: state.draft?.model ?? null,
           mode: state.draft?.mode ?? "build",
         },
@@ -259,6 +265,10 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftPrompt(prompt): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, prompt } }));
+    },
+
+    setDraftEngine(engine): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, engine } }));
     },
 
     setDraftModel(model): void {

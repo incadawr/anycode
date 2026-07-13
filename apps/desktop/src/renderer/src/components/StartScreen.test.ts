@@ -41,17 +41,17 @@ describe("computeProjectLabel (§2-D2)", () => {
 
 describe("computeSendDisabledReason (§3-D3)", () => {
   it("disabled with 'Choose a project first' while workspace is null, regardless of prompt", () => {
-    expect(computeSendDisabledReason({ workspace: null, prompt: "", model: null, mode: "build" })).toBe("Choose a project first");
-    expect(computeSendDisabledReason({ workspace: null, prompt: "hello", model: null, mode: "build" })).toBe("Choose a project first");
+    expect(computeSendDisabledReason({ workspace: null, prompt: "", engine: "core", model: null, mode: "build" })).toBe("Choose a project first");
+    expect(computeSendDisabledReason({ workspace: null, prompt: "hello", engine: "core", model: null, mode: "build" })).toBe("Choose a project first");
   });
 
   it("disabled with 'Type a message to send' once a folder is chosen but the prompt is blank/whitespace", () => {
-    expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "", model: null, mode: "build" })).toBe("Type a message to send");
-    expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "   ", model: null, mode: "build" })).toBe("Type a message to send");
+    expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "", engine: "core", model: null, mode: "build" })).toBe("Type a message to send");
+    expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "   ", engine: "core", model: null, mode: "build" })).toBe("Type a message to send");
   });
 
   it("enabled (undefined reason) once both a folder and a non-blank prompt are present", () => {
-    expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "hello", model: null, mode: "build" })).toBeUndefined();
+    expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "hello", engine: "core", model: null, mode: "build" })).toBeUndefined();
   });
 });
 
@@ -267,15 +267,15 @@ describe("pickModelForDraft (§3-D3 model-chip wiring)", () => {
 
 describe("seedWorkspaceFromRecents (slice-start-composer-cut §5 — preselect last project)", () => {
   it("returns recents[0] when a draft exists with no workspace chosen yet", () => {
-    expect(seedWorkspaceFromRecents({ workspace: null, prompt: "", model: null, mode: "build" }, ["/ws/a", "/ws/b"])).toBe("/ws/a");
+    expect(seedWorkspaceFromRecents({ workspace: null, prompt: "", engine: "core", model: null, mode: "build" }, ["/ws/a", "/ws/b"])).toBe("/ws/a");
   });
 
   it("does not overwrite an explicit workspace pick", () => {
-    expect(seedWorkspaceFromRecents({ workspace: "/explicit", prompt: "", model: null, mode: "build" }, ["/ws/a"])).toBeNull();
+    expect(seedWorkspaceFromRecents({ workspace: "/explicit", prompt: "", engine: "core", model: null, mode: "build" }, ["/ws/a"])).toBeNull();
   });
 
   it("returns null for empty recents — keeps the 'Choose a project first' gate intact", () => {
-    expect(seedWorkspaceFromRecents({ workspace: null, prompt: "", model: null, mode: "build" }, [])).toBeNull();
+    expect(seedWorkspaceFromRecents({ workspace: null, prompt: "", engine: "core", model: null, mode: "build" }, [])).toBeNull();
   });
 
   it("returns null when there is no draft at all", () => {

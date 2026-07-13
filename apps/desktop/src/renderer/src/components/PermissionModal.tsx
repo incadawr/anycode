@@ -36,6 +36,7 @@ import type { KeyboardEvent } from "react";
 import type { RiskLevel } from "@anycode/core";
 import type { PermissionUiRequest } from "../store.js";
 import type { UiToHostMessage } from "../../../shared/protocol.js";
+import type { EnginePresentation } from "../../../shared/protocol.js";
 import type { PermissionRuleAddRequest } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { X } from "./icons.js";
@@ -49,6 +50,8 @@ export interface PermissionModalProps {
   onAllow(remember?: { pattern?: string }): void;
   /** Called on Deny, the close ("×") button, and Esc (fail-closed). Same non-closing contract as onAllow. */
   onDeny(): void;
+  /** External engines can ask once without ever accepting a core remember rule. */
+  allowRemember?: boolean;
 }
 
 const RISK_LABELS: Record<RiskLevel, string> = {
@@ -215,7 +218,7 @@ export function buildPermissionAllowMessage(
   };
 }
 
-export function PermissionModal({ request, onAllow, onDeny }: PermissionModalProps) {
+export function PermissionModal({ request, onAllow, onDeny, allowRemember = true }: PermissionModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
@@ -295,7 +298,7 @@ export function PermissionModal({ request, onAllow, onDeny }: PermissionModalPro
   const editNewCapped = editNew !== null ? capPreviewLines(editNew, DIFF_SIDE_MAX_LINES) : null;
 
   function fireAllow(): void {
-    onAllow(alwaysAllow ? { pattern: suggestedPattern !== undefined ? pattern : undefined } : undefined);
+    onAllow(allowRemember && alwaysAllow ? { pattern: suggestedPattern !== undefined ? pattern : undefined } : undefined);
   }
 
   function handleDialogKeyDown(event: KeyboardEvent<HTMLDialogElement>): void {
@@ -437,7 +440,7 @@ export function PermissionModal({ request, onAllow, onDeny }: PermissionModalPro
 
         <div className="permission-mode">Mode: {request.mode}</div>
 
-        <div className="permission-remember">
+        {allowRemember && <div className="permission-remember">
           <label className="permission-remember-label">
             <input
               type="checkbox"
@@ -461,7 +464,7 @@ export function PermissionModal({ request, onAllow, onDeny }: PermissionModalPro
               Saves a rule to Settings → Always-allow rules. Applies now and in future tasks.
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       <div className="permission-modal-actions">
@@ -495,20 +498,28 @@ export function PermissionModal({ request, onAllow, onDeny }: PermissionModalPro
 
 
  */
+/** Core's absent presentation retains remember; a non-core engine needs both facts true. */
+export function canRememberPermission(engine: EnginePresentation | null): boolean {
+  return engine === null || (engine.capabilities.supportsCorePermissions && engine.capabilities.supportsInteractiveApprovals);
+}
+
 export function ConnectedPermissionModal() {
   const request = useTabStore((state) => state.permission);
+  const engine = useTabStore((state) => state.engine);
   const sendToHost = useTabSend();
 
   if (!request) {
     return null;
   }
 
+  const allowRemember = canRememberPermission(engine);
+
   function handleAllow(remember?: { pattern?: string }): void {
     if (!request) {
       return;
     }
     sendToHost(buildPermissionAllowMessage(request.requestId, request.toolName, remember));
-    if (remember) {
+    if (allowRemember && remember) {
       const rule = buildAlwaysAllowRule(request.toolName, remember.pattern);
       window.anycode.settings.addRule(rule).catch((error: unknown) => {
         console.warn("[PermissionModal] addRule failed — rule remains session-only", error);
@@ -521,6 +532,7 @@ export function ConnectedPermissionModal() {
       request={request}
       onAllow={handleAllow}
       onDeny={() => sendToHost({ type: "permission_response", requestId: request.requestId, behavior: "deny" })}
+      allowRemember={allowRemember}
     />
   );
 }

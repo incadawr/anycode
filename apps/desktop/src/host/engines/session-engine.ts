@@ -23,10 +23,17 @@ export type { EngineId } from "../../shared/engines.js";
 export interface EngineCapabilities {
   readonly supportsCorePermissions: boolean;
   readonly supportsRewind: boolean;
+  readonly supportsWorkflow: boolean;
+  readonly supportsGitMutations: boolean;
+  readonly supportsContextUsage: boolean;
   readonly supportsContextBreakdown: boolean;
+  readonly supportsInteractiveApprovals: boolean;
+  readonly costAccounting: boolean;
   readonly supportsModelSelection: boolean;
   readonly supportsReasoningEffort: boolean;
   readonly supportsImages: boolean;
+  readonly supportsTasks: boolean;
+  readonly supportsFileSnapshots: boolean;
 }
 
 export interface ModelSwitchResult {
@@ -63,8 +70,15 @@ export interface SessionEngine {
 export const CORE_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsCorePermissions: true,
   supportsRewind: true,
+  supportsWorkflow: true,
+  supportsGitMutations: true,
+  supportsContextUsage: true,
   supportsContextBreakdown: true,
+  supportsInteractiveApprovals: true,
+  costAccounting: true,
   supportsModelSelection: true,
   supportsReasoningEffort: true,
   supportsImages: true,
+  supportsTasks: true,
+  supportsFileSnapshots: true,
 };
