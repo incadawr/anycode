@@ -2546,6 +2546,202 @@ describe("desktop store — rewind_result reducer (slice P7.26/R2, design slice-
   });
 });
 
+describe("desktop store — engine_settings_changed / pendingEngineChange (Codex-fixes TASK.39, cut §2(k).3)", () => {
+  function codexHostReady(overrides?: { model?: string; activePresetId?: string }): HostToUiMessage {
+    return {
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "gpt-5.6-terra",
+      sessionId: "codex-session",
+      engine: {
+        id: "codex",
+        capabilities: {
+          supportsCorePermissions: false,
+          supportsRewind: false,
+          supportsWorkflow: false,
+          supportsGitMutations: false,
+          supportsContextUsage: true,
+          supportsContextBreakdown: false,
+          supportsInteractiveApprovals: true,
+          costAccounting: false,
+          supportsModelSelection: true,
+          supportsReasoningEffort: false,
+          supportsImages: false,
+          supportsTasks: false,
+          supportsFileSnapshots: false,
+        },
+        model: { current: overrides?.model ?? "gpt-5.6-terra", available: [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-mini" }] },
+        permissions: {
+          presets: [
+            { id: "read-only", label: "Read-only", description: "read only" },
+            { id: "ask", label: "Ask", description: "ask" },
+            { id: "workspace", label: "Workspace", description: "workspace" },
+          ],
+          activePresetId: overrides?.activePresetId ?? "ask",
+        },
+      },
+    };
+  }
+
+  it("marks a preset change pending on engine_settings_changed{state:\"pending\"} and does NOT touch the displayed activePresetId yet", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+
+    expect(store.getState().engine?.permissions?.activePresetId).toBe("ask");
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "read-only" });
+  });
+
+  it("does NOT fold a pending change on turn_started alone — turn_started only starts a turn, it is not the applied signal", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+
+    expect(store.getState().engine?.permissions?.activePresetId).toBe("ask");
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "read-only" });
+  });
+
+  it("folds the pending preset into engine.permissions.activePresetId on state:\"applied\" (host/session.ts's onSettingsApplied), and clears pendingEngineChange", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "read-only",
+      state: "applied",
+      appliesFrom: "next_turn",
+    });
+
+    expect(store.getState().engine?.permissions?.activePresetId).toBe("read-only");
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("tracks model and preset pending changes independently, and applies each independently", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-mini", state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ model: "gpt-5.6-mini" });
+
+    store.getState().applyHostMessage({ type: "engine_settings_changed", activePresetId: "workspace", state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ model: "gpt-5.6-mini", activePresetId: "workspace" });
+
+    // Only the model's applied confirmation lands — the preset stays pending.
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-mini", state: "applied", appliesFrom: "next_turn" });
+    expect(store.getState().engine?.model?.current).toBe("gpt-5.6-mini");
+    expect(store.getState().engine?.permissions?.activePresetId).toBe("ask");
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "workspace" });
+
+    store.getState().applyHostMessage({ type: "engine_settings_changed", activePresetId: "workspace", state: "applied", appliesFrom: "next_turn" });
+    expect(store.getState().engine?.permissions?.activePresetId).toBe("workspace");
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("state:\"applied\" (or absent — a future engine with no pending phase) applies immediately even with no prior pending entry", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+
+    store.getState().applyHostMessage({ type: "engine_settings_changed", activePresetId: "workspace", appliesFrom: "next_turn" });
+
+    expect(store.getState().engine?.permissions?.activePresetId).toBe("workspace");
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("treats a resume-time reconcile echoing the ALREADY-active values as a no-op — never shows a phantom pending badge", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady({ activePresetId: "ask" }));
+
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "ask",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("clears a stale pending entry when the user picks back to the currently-active value before the next turn", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady({ activePresetId: "ask" }));
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "read-only" });
+
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "ask",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("model_changed for an engine session is a legacy/core-only path — an engine's own catalog routes set_model through engine_settings_changed instead, per host/session.ts", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+
+    store.getState().applyHostMessage({ type: "model_changed", model: "gpt-5.6-mini", reasoningEffort: "off" });
+
+    expect(store.getState().model).toBe("gpt-5.6-mini"); // the generic pill field still updates
+    expect(store.getState().engine?.model?.current).toBe("gpt-5.6-terra"); // the engine projection is untouched by this message
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("model_changed for a CORE session (engine null) is untouched — no pendingEngineChange concept applies", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({ type: "model_changed", model: "m2", reasoningEffort: "off" });
+
+    expect(store.getState().model).toBe("m2");
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("engine_notice surfaces on the one-slot notice/toast channel (cut §2(k).2 drift warning — surfaced, not swallowed)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "engine_notice", level: "warning", message: "Effective sandbox is weaker than the selected preset." },
+    });
+
+    expect(store.getState().notice).toEqual({
+      kind: "engine_notice",
+      text: "Effective sandbox is weaker than the selected preset.",
+    });
+  });
+});
+
 describe("accumulateSessionTokens (slice P7.17 · F12 W3)", () => {
   it("starts from a null previous total and copies the usage over 1:1", () => {
     expect(accumulateSessionTokens(null, { inputTokens: 10, outputTokens: 5, totalTokens: 15 })).toEqual({

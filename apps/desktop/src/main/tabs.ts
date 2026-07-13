@@ -68,6 +68,23 @@ export const DEFAULT_BREAKER_LIMITS: BreakerLimits = {
   exitDeadlineMs: 2000,
 };
 
+/** Bounds a draft engine id before it becomes argv; mirrors the host-side parser's own bound. */
+const MAX_ENGINE_ARG_LENGTH = 128;
+
+/**
+ * An id-shaped argv value, or null. This is a SHAPE guard, not a validation: main
+ * has no catalog and no preset table, and must not pretend to — an id that
+ * survives this is still checked by the host against the live catalog/table
+ * (host-authoritative, TASK.39 DoD-4). It only refuses values that could not be
+ * an id at all (empty, oversized, whitespace-bearing) so junk never reaches argv.
+ */
+function argvId(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_ENGINE_ARG_LENGTH || /\s/.test(trimmed)) return null;
+  return trimmed;
+}
+
 /** A tab's host process + its lifecycle/breaker state (design §2.2). */
 export interface TabHost {
   /** uuid, lives from createTab to closeTab. */
@@ -78,6 +95,16 @@ export interface TabHost {
   sessionId: string;
   /** Engine choice is main-owned and retained across every host respawn. */
   engine: EngineId;
+  /**
+   * The draft (pre-session) engine model/preset choice, forwarded to the host as
+   * argv on the FIRST spawn of a NEW session only (TASK.39, cut §3.8). Never on a
+   * resume or a respawn: from then on the session row is the authority, and
+   * re-imposing a stale draft would silently undo a mid-session change the user
+   * made. Both are opaque ids here — main validates NOTHING; the host checks them
+   * against the live model catalog / frozen preset table (host-authoritative).
+   */
+  engineModel: string | null;
+  enginePreset: string | null;
   proc: UtilityProcess | null;
   /** Monotonic generation of this tab's utility-process instance. */
   hostGeneration: number;
@@ -319,7 +346,15 @@ export class TabHostManager {
    * session->tab binding (already_open) and MAX_TABS. Does NOT deliver the port
    * — the caller does that once (createTab flow) after the renderer exists.
    */
-  createTab(params: { workspace: string; sessionId: string; resume: boolean; engine?: EngineId }): CreateTabResult {
+  createTab(params: {
+    workspace: string;
+    sessionId: string;
+    resume: boolean;
+    engine?: EngineId;
+    /** Draft engine model/preset ids (TASK.39). Opaque here; the host validates them. */
+    engineModel?: string;
+    enginePreset?: string;
+  }): CreateTabResult {
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
     const engine = params.engine ?? "core";
@@ -338,6 +373,8 @@ export class TabHostManager {
       workspace: params.workspace,
       sessionId: params.sessionId,
       engine,
+      engineModel: argvId(params.engineModel),
+      enginePreset: argvId(params.enginePreset),
       proc: null,
       hostGeneration: 0,
       engineProcess: null,
@@ -360,6 +397,15 @@ export class TabHostManager {
   private spawnTabHost(tab: TabHost, opts: { firstSpawn: boolean }): void {
     const resume = tab.initialResume || !opts.firstSpawn;
     const args = resume ? ["--resume", tab.sessionId] : ["--session", tab.sessionId];
+    // TASK.39: the draft choice rides argv only on the spawn that CREATES the
+    // session. Every later spawn is a `--resume`, where the persisted session row
+    // is the authority — replaying the draft there would resurrect it over a
+    // mid-session change. argv is an array (no shell), and the ids were bounded
+    // at createTab; the host validates them regardless.
+    if (!resume) {
+      if (tab.engineModel !== null) args.push("--engine-model", tab.engineModel);
+      if (tab.enginePreset !== null) args.push("--engine-preset", tab.enginePreset);
+    }
     tab.hostGeneration += 1;
     tab.engineProcess = null;
     const child = this.deps.fork(this.deps.hostEntry, args, {

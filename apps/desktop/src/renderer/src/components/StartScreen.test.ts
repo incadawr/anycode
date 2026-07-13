@@ -7,14 +7,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyStarterPreset,
+  CODEX_DRAFT_PRESETS,
   computeModelChipDisplay,
   computeProjectLabel,
   computeSendDisabledReason,
+  DEFAULT_CODEX_DRAFT_PRESET,
   deriveRecentWorkspaces,
   guardedSubmit,
   isSendKeydown,
   pickFolderForDraft,
   pickModelForDraft,
+  resolveCodexDraftModel,
   resolveProviderDefaultModel,
   seedWorkspaceFromRecents,
   type FolderPickDeps,
@@ -238,6 +241,44 @@ describe("computeModelChipDisplay (§3-D3)", () => {
       label: "custom-model",
       isDefault: false,
     });
+  });
+});
+
+describe("CODEX_DRAFT_PRESETS / DEFAULT_CODEX_DRAFT_PRESET (TASK.39, cut §2(d)/§3.8)", () => {
+  it("mirrors host/engines/codex/presets.ts's three ids, in the same order", () => {
+    expect(CODEX_DRAFT_PRESETS.map((p) => p.id)).toEqual(["read-only", "ask", "workspace"]);
+  });
+
+  it("every preset carries a non-empty label and a plain-language description", () => {
+    for (const preset of CODEX_DRAFT_PRESETS) {
+      expect(preset.label.length).toBeGreaterThan(0);
+      expect(preset.description.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("defaults to \"ask\", matching the host's own default posture", () => {
+    expect(DEFAULT_CODEX_DRAFT_PRESET).toBe("ask");
+    expect(CODEX_DRAFT_PRESETS.some((p) => p.id === DEFAULT_CODEX_DRAFT_PRESET)).toBe(true);
+  });
+});
+
+describe("resolveCodexDraftModel (TASK.39 — cross-engine draft.model leakage guard)", () => {
+  const codexModels = [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-mini" }];
+
+  it("trusts an explicit draft pick that IS a member of the fetched Codex catalog", () => {
+    expect(resolveCodexDraftModel("gpt-5.6-mini", codexModels)).toBe("gpt-5.6-mini");
+  });
+
+  it("falls back to the catalog's first entry when draft.model is null (no pick yet)", () => {
+    expect(resolveCodexDraftModel(null, codexModels)).toBe("gpt-5.6-terra");
+  });
+
+  it("falls back to the catalog's first entry when draft.model is a STALE id left over from a Core pick before switching engines", () => {
+    expect(resolveCodexDraftModel("claude-opus", codexModels)).toBe("gpt-5.6-terra");
+  });
+
+  it("returns an empty string when the catalog itself hasn't loaded yet (defensive — caller gates rendering on a non-empty catalog)", () => {
+    expect(resolveCodexDraftModel(null, [])).toBe("");
   });
 });
 

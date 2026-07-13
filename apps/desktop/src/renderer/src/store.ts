@@ -68,6 +68,27 @@
  * `workflow_end` fills the run-level terminal status. Purely additive: no
  * existing field, action, or the frozen five-kind `TranscriptBlock` union
  * changes.
+ *
+ * Codex-fixes TASK.39 (B2-ui, cut §2(k).3/§3.3) fills in the
+ * `engine_settings_changed` branch that B2-host's contracts left as a
+ * documented no-op: `pendingEngineChange` (new session-slice field) tracks a
+ * `set_model`/`set_engine_preset` the host has ACCEPTED
+ * (`engine_settings_changed{state:"pending"}`) but not yet APPLIED. There is
+ * no server ack channel of its own for a pre-turn override, so host/session.ts
+ * answers in two phases on this SAME message: `state:"pending"` the instant
+ * it validates+records the choice, then a separate `state:"applied"` once a
+ * `turn/start` carrying it was actually accepted by the server (its
+ * `onSettingsApplied` hook) — that second message is the authoritative
+ * "actually active now" signal this reducer folds into
+ * `engine.model.current`/`engine.permissions.activePresetId`, clearing the
+ * matching pending field(s) in the SAME atomic `set()`. (`model_changed`, the
+ * pre-existing core `set_model` ack, stays core-only in practice — an engine
+ * session with its own catalog routes `set_model` entirely through
+ * `engine_settings_changed` instead, host/session.ts's own routing.) Also
+ * fills the `engine_notice` AgentEvent branch (cut §2(k).2's drift warning:
+ * the server's effective posture came back weaker than the persisted preset
+ * claims) into the existing one-slot notice/toast channel — "surface it,
+ * don't swallow it" — via one additive `NoticeKind` variant.
  */
 import { create } from "zustand";
 import type {
@@ -247,7 +268,8 @@ export type NoticeKind =
   | "image_attach_rejected"
   | "background_task_rejected"
   | "rewind_restored"
-  | "rewind_rejected";
+  | "rewind_rejected"
+  | "engine_notice";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
@@ -442,6 +464,20 @@ export interface QueuedPrompt {
   images: readonly QueuedPromptImage[];
 }
 
+/**
+ * Codex-fixes TASK.39 (cut §2(k).3): a `set_model`/`set_engine_preset` the
+ * host has ACCEPTED (an `engine_settings_changed{state:"pending"}` landed)
+ * but not yet APPLIED (the matching `state:"applied"` — host/session.ts's
+ * `onSettingsApplied`, fired only once a `turn/start` carrying the change was
+ * actually accepted by the server — has not landed since). Both fields are
+ * independent — a model pick pending while the preset stays confirmed leaves
+ * `activePresetId` absent, and vice versa.
+ */
+export interface PendingEngineChange {
+  model?: string;
+  activePresetId?: string;
+}
+
 export interface DesktopState {
   connection: ConnectionPhase;
   workspace: string | null;
@@ -449,6 +485,15 @@ export interface DesktopState {
   mode: PermissionMode | null;
   /** Host-authoritative external-engine projection; null means historical core wire. */
   engine: EnginePresentation | null;
+  /**
+   * Codex-fixes TASK.39 (cut §2(k).3): a model/preset change the host has
+   * accepted but not yet applied — see `PendingEngineChange`'s own doc
+   * comment. Null when nothing is queued (the common case: `engine === null`
+   * for core, or an engine session with no outstanding change). Part of the
+   * session slice so a respawn/reset clears it — a fresh host has nothing
+   * pending yet.
+   */
+  pendingEngineChange: PendingEngineChange | null;
   /**
    * Host-authoritative shell (AnyCode chrome) capability projection (design
    * TASK.40 §2(f)/§3.2): null for core (legacy wire) OR whenever the host
@@ -652,6 +697,8 @@ export interface RewindResultInfo {
 
 interface SessionSlice {
   engine: EnginePresentation | null;
+  /** Codex-fixes TASK.39 (cut §2(k).3): see `PendingEngineChange`'s own doc comment. */
+  pendingEngineChange: PendingEngineChange | null;
   /** Design TASK.40 §2(f)/§3.2: mirrors `engine` -- reset alongside it on a respawn/reset. */
   shell: ShellCapabilitiesProjection | null;
   turn: TurnState;
@@ -678,6 +725,7 @@ interface SessionSlice {
 function initialSessionSlice(): SessionSlice {
   return {
     engine: null,
+    pendingEngineChange: null,
     shell: null,
     turn: { status: "idle", turnId: null, requestId: null },
     transcript: [],
@@ -1585,13 +1633,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         case "checkpoint_failed":
           return;
 
-        // Codex-fixes TASK.42 (cut §2(i)/§3.4): additive AgentEvent variant the
-        // core loop never emits (dormant for every existing core session, same
-        // posture as checkpoint_created/checkpoint_failed above); a later Codex
-        // slice renders it as a system transcript line. No-op here keeps the
-        // transcript + automation snapshots byte-identical while satisfying
-        // exhaustiveness.
+        // Codex-fixes TASK.39 (cut §2(k).2): additive AgentEvent variant the
+        // core loop never emits (dormant for every existing core session).
+        // Today's only producer is the host's own drift check — the
+        // server's effective posture on resume came back weaker than the
+        // persisted preset claims — surfaced honestly via the existing
+        // one-slot toast channel ("surface it, don't swallow it"; the
+        // transcript/automation snapshot shape is untouched). TASK.42/B5-eng
+        // may additionally give warning/retry/info notices a dedicated
+        // transcript line later — additive on top of this, not a
+        // replacement.
         case "engine_notice":
+          set({ notice: { kind: "engine_notice", text: event.message } });
           return;
 
         default: {
@@ -1679,6 +1732,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // non-reasoning model); `availableEffortLevels` is undefined for a
             // non-reasoning model, which hides the effort segment of the pill
             // (same predicate the effort selector already uses).
+            //
+            // Codex-fixes TASK.39: host/session.ts's set_model handler routes a
+            // session with `engineSettings` wired (Codex) ENTIRELY through
+            // `onEngineSettingsChange` (-> engine_settings_changed below) and
+            // never falls through to this legacy switchModel path — this
+            // message is core-only in practice. No engine-projection handling
+            // needed here.
             set({
               model: message.model,
               reasoningEffort: message.reasoningEffort,
@@ -1692,6 +1752,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // Slice P7.14: a queued item whose drain this turn_started
             // acknowledges is officially accepted — clear the in-flight slot so
             // the drainer can dispatch the next item on the following turn-end.
+            //
+            // Codex-fixes TASK.39: does NOT fold `pendingEngineChange` here.
+            // `turn_started` only announces that a turn began client-side; the
+            // host's own `engine_settings_changed{state:"applied"}` (below) is
+            // the authoritative "the override actually rode an accepted
+            // turn/start" signal (host/session.ts's `onSettingsApplied` fires
+            // from inside the RPC, which can land after this event) — folding
+            // here would show "active" slightly before the host itself can
+            // honestly claim that.
             const inFlight = get().queueInFlight;
             set({
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId },
@@ -1854,12 +1923,84 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           case "rewind_result":
             applyRewindResult(message);
             return;
-          // Codex-fixes TASK.39 (cut §3.3): host ack of a `set_engine_preset`
-          // (or a resume-reconcile). No-op here keeps the store/transcript byte-
-          // identical while satisfying exhaustiveness; a later Codex slice wires
-          // the actual preset-menu "applies next turn" ack state.
-          case "engine_settings_changed":
+          // Codex-fixes TASK.39 (cut §3.3/§2(k).3): host ack of a
+          // `set_engine_preset`/`set_model`. `state` is the authoritative
+          // two-phase signal host/session.ts now sends (there is no server
+          // ack channel — `onEngineSettingsChange` emits `state:"pending"`
+          // the instant it validates+records the choice; the engine's own
+          // `onSettingsApplied` hook later emits a SEPARATE `state:"applied"`
+          // once a `turn/start` carrying it was actually accepted by the
+          // server — the only honest confirmation that exists).
+          //   "pending"            -> record it, don't touch the displayed
+          //                           engine.model.current/activePresetId yet.
+          //   "applied" | absent   -> fold straight into the displayed
+          //                           projection now. `absent` covers a
+          //                           future engine with no pending phase at
+          //                           all (its ack never sends "pending"
+          //                           either, so there is nothing to defer —
+          //                           the wire comment's own "applies
+          //                           settings immediately" case).
+          // Either way, only a genuine DELTA from what's currently displayed
+          // is ever recorded pending — a field matching what's already
+          // active clears any stale pending entry for that same field
+          // instead of leaving it dangling (covers the user picking back to
+          // the active value before the queued change applies). No-op while
+          // there is no `engine` projection at all (shouldn't happen —
+          // host_ready always precedes this on the same port — defensive).
+          case "engine_settings_changed": {
+            set((state) => {
+              if (state.engine === null) {
+                return {};
+              }
+              if (message.state === "pending") {
+                const nextPending: PendingEngineChange = { ...state.pendingEngineChange };
+                let touched = false;
+                if (message.model !== undefined) {
+                  touched = true;
+                  if (message.model === state.engine.model?.current) {
+                    delete nextPending.model;
+                  } else {
+                    nextPending.model = message.model;
+                  }
+                }
+                if (message.activePresetId !== undefined) {
+                  touched = true;
+                  if (message.activePresetId === state.engine.permissions?.activePresetId) {
+                    delete nextPending.activePresetId;
+                  } else {
+                    nextPending.activePresetId = message.activePresetId;
+                  }
+                }
+                if (!touched) {
+                  return {};
+                }
+                const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined;
+                return { pendingEngineChange: hasPending ? nextPending : null };
+              }
+              // "applied" or absent — actually active now. Clear whichever
+              // fields this message confirms out of any stale pending entry
+              // (model/preset apply independently, cut §2(k).1 — a field
+              // this message doesn't carry is left untouched, still pending
+              // if it was).
+              const nextPending: PendingEngineChange = { ...state.pendingEngineChange };
+              if (message.model !== undefined) delete nextPending.model;
+              if (message.activePresetId !== undefined) delete nextPending.activePresetId;
+              const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined;
+              return {
+                engine: {
+                  ...state.engine,
+                  ...(message.model !== undefined && state.engine.model
+                    ? { model: { ...state.engine.model, current: message.model } }
+                    : {}),
+                  ...(message.activePresetId !== undefined && state.engine.permissions
+                    ? { permissions: { ...state.engine.permissions, activePresetId: message.activePresetId } }
+                    : {}),
+                },
+                pendingEngineChange: hasPending ? nextPending : null,
+              };
+            });
             return;
+          }
           default: {
             const _exhaustive: never = message;
             void _exhaustive;

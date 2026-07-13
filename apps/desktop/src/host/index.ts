@@ -218,6 +218,7 @@ import type {
   MediaCapabilityPort,
   McpServerSpec,
   ModelPort,
+  PermissionMode,
   ReasoningEffort,
   ResolvedTelemetryConfig,
   ResolvedWebSearchBackend,
@@ -256,6 +257,7 @@ import { CoreEngine } from "./engines/core-engine.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
 import { resumeCodexEngine, startCodexEngine } from "./engines/codex/codex-engine.js";
+import { parseCodexEngineArgs } from "./engines/codex/draft-args.js";
 import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
 import { ENV_CODEX_BIN } from "../shared/engines.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
@@ -363,6 +365,12 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     ...(processOwnership !== undefined ? { processOwnership } : {}),
   };
 
+  // TASK.39: the draft (pre-session) model/preset choice arrives as argv from
+  // main. It is untrusted renderer input and is validated inside the engine —
+  // against the LIVE model/list catalog and the frozen preset table — before any
+  // id reaches the wire; nothing here interprets it.
+  const draft = parseCodexEngineArgs(process.argv.slice(2));
+
   const connected = await (args.resume
     ? (async () => {
         if (args.sessionId === undefined || args.sessionId.length === 0) {
@@ -373,22 +381,49 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         if (existing.engineId !== "codex" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Codex session ${args.sessionId} has no resumable native thread`);
         }
-        const resumed = await resumeCodexEngine({ ...options, externalSessionRef: existing.externalSessionRef });
-        // The resumed app-server reports the effective native model. Persist it
-        // only after the native resume and read have both succeeded.
-        if (existing.model !== resumed.model) await persistence!.touchSession(existing.id, { model: resumed.model });
+        const resumed = await resumeCodexEngine({
+          ...options,
+          externalSessionRef: existing.externalSessionRef,
+          // Posture survives the relaunch through the PERSISTED row, never
+          // through the server echo (L8 makes the echo un-mappable): the `mode`
+          // column carries the preset id verbatim (cut §2(k).4). A pre-TASK.39
+          // row holds a core mode there ("build") — the engine treats an
+          // unrecognized id as the default preset, silently.
+          selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
+        });
+        // Persist whatever the resume actually settled on (the stored model may
+        // have been removed from the catalog and fallen back) — only after the
+        // native resume and read have both succeeded.
+        const patch = {
+          ...(existing.model !== resumed.model ? { model: resumed.model } : {}),
+          ...(existing.mode !== resumed.presetId ? { mode: resumed.presetId as PermissionMode } : {}),
+        };
+        if (Object.keys(patch).length > 0) await persistence!.touchSession(existing.id, patch);
         return { ...resumed, sessionMeta: existing };
       })()
     : (async () => {
-        const created = await startCodexEngine(options);
+        const created = await startCodexEngine({
+          ...options,
+          selection: {
+            ...(draft.model !== undefined ? { model: draft.model } : {}),
+            ...(draft.preset !== undefined ? { presetId: draft.preset } : {}),
+            origin: "draft",
+          },
+        });
         const id = args.sessionId ?? randomUUID();
         // Product-level transaction ordering: the native thread exists first;
         // no row is written if the app-server bootstrap failed.
         const sessionMeta = await persistence!.createSession({
           id,
           workspace,
+          // Both values are the SERVER-CONFIRMED ones from the thread/start
+          // response / the validated preset — never the raw draft input.
           model: created.model,
-          mode: "build",
+          // The `mode` TEXT column stores the Codex preset id verbatim (cut
+          // §2(k).4 — no schema migration). The cast is the one place the two
+          // vocabularies meet; nothing reads this column back as a core
+          // PermissionMode for a Codex session (Session's mode() is engine-owned).
+          mode: created.presetId as PermissionMode,
           engineId: "codex",
           externalSessionRef: created.threadId,
         });
@@ -427,6 +462,11 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   session = new Session({
     outbound,
     engine: booted.engine,
+    // TASK.39: the SAME CodexEngine instance, handed to Session as its narrow
+    // model/preset seam. `booted.engine` above is the identical object behind the
+    // neutral SessionEngine interface; this reference is the only place the host
+    // admits it also speaks the engine-settings contract.
+    engineSettings: connected.engine,
     broker,
     fs,
     workspace,
@@ -441,7 +481,12 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     shell,
     persistence: {
       touch(patch) {
-        void persistence?.touchSession(connected.sessionMeta.id, patch).catch((error) => {
+        // The persistence boundary is where a Codex preset id becomes the `mode`
+        // TEXT column (cut §2(k).4). Session keeps the two vocabularies apart in
+        // its own types; the column is shared, and the cast lives here, once.
+        const { enginePreset, ...rest } = patch;
+        const row = { ...rest, ...(enginePreset !== undefined ? { mode: enginePreset as PermissionMode } : {}) };
+        void persistence?.touchSession(connected.sessionMeta.id, row).catch((error) => {
           console.error(`[host] touchSession failed: ${describeError(error)}`);
         });
       },

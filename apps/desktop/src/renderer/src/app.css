@@ -3706,6 +3706,35 @@ body {
   color: var(--accent);
 }
 
+/* ── engine (Codex) model + preset controls (TASK.39, EngineControls.tsx) ──
+   Reuse `.model-pill*` verbatim for the chip/popover/item shell (nothing
+   about that visual language is core-specific); these two rules are the
+   only genuinely new pieces — a preset row's plain-language description
+   line, and the "queued for the next turn" tag a pending row carries. */
+.engine-menu-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.engine-menu-item-desc {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: normal;
+}
+
+.engine-menu-item-pending {
+  flex-shrink: 0;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--r-full);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
 /* ── command palette (R5) ── */
 
 /* Deliberately breaks from its dialog siblings' geometry: top-anchored at 10vh

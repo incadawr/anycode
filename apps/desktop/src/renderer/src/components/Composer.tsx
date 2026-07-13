@@ -29,6 +29,7 @@ import {
 } from "../paste.js";
 import { ModeMenu } from "./ModeMenu.js";
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
+import { EngineModelMenu, EnginePresetMenu, engineControlDisabled } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
@@ -674,6 +675,7 @@ export function Composer() {
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
   const sessionTokens = useTabStore((state) => state.sessionTokens);
   const engine = useTabStore((state) => state.engine);
+  const pendingEngineChange = useTabStore((state) => state.pendingEngineChange);
   const shell = useTabStore((state) => state.shell);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
 
@@ -963,6 +965,24 @@ export function Composer() {
     sendToHost({ type: "set_mode", mode: next });
   }
 
+  // TASK.39 (cut §3.3): the engine picks reuse the SAME between-turns
+  // guard as ModelPill/ModeMenu (engineControlDisabled mirrors
+  // modelPickDisabled) — the host's own busy-check is the real backstop,
+  // this only keeps the UI from offering a pick it knows would be dropped.
+  function handleEngineModelPick(id: string): void {
+    if (engineControlDisabled(turn.status, queueInFlight, ready)) {
+      return;
+    }
+    sendToHost({ type: "set_model", model: id });
+  }
+
+  function handleEnginePresetPick(presetId: string): void {
+    if (engineControlDisabled(turn.status, queueInFlight, ready)) {
+      return;
+    }
+    sendToHost({ type: "set_engine_preset", presetId });
+  }
+
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
     const pastedFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
     if (pastedFiles.length > 0) {
@@ -1173,8 +1193,20 @@ export function Composer() {
               the neutral "plan" fallback is a cosmetic default for the greyed,
               non-interactive chip and never reflects an actionable state.
               Design TASK.40 §2(f)/item 5: the engine badge lives ONLY in
-              SessionHeader now — no duplicate here. */}
+              SessionHeader now — no duplicate here. TASK.39 (cut §2(d)):
+              Codex's own permission-preset menu is a SEPARATE,
+              presentation-driven control — core's ModeMenu/permission
+              vocabulary is never used for it (`supportsCorePermissions`
+              stays false for Codex, so the two are mutually exclusive). */}
           {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={running || !ready} onChange={handleModeChange} />}
+          {engine?.permissions && (
+            <EnginePresetMenu
+              permissions={engine.permissions}
+              pendingPresetId={pendingEngineChange?.activePresetId}
+              disabled={engineControlDisabled(turn.status, queueInFlight, ready)}
+              onPick={handleEnginePresetPick}
+            />
+          )}
           {supportsImages && (
             <>
               <input
@@ -1201,7 +1233,20 @@ export function Composer() {
               </button>
             </>
           )}
-          {supportsModelSelection && <ModelPill />}
+          {/* TASK.39 item 4: Codex's model catalog comes from the engine
+              projection (doctor/app-server), never AnyCode's provider
+              catalog — ModelPill (settings-store-backed) is core-only. */}
+          {supportsModelSelection &&
+            (engine?.model ? (
+              <EngineModelMenu
+                model={engine.model}
+                pendingModel={pendingEngineChange?.model}
+                disabled={engineControlDisabled(turn.status, queueInFlight, ready)}
+                onPick={handleEngineModelPick}
+              />
+            ) : (
+              <ModelPill />
+            ))}
         </div>
         {/* Always rendered; hides via visibility (not unmount) so the footer never reflows.
             id wires the textarea's aria-describedby (R17 a11y) so SR users get the

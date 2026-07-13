@@ -115,6 +115,20 @@ function makeManager(fork: HostForkFn, window: WindowLike, limits = {}) {
   });
 }
 
+/** A manager whose non-core engine is available (the default gate only admits core). */
+function codexManager(fork: HostForkFn) {
+  return new TabHostManager({
+    fork,
+    hostEntry: "/fake/host.js",
+    createChannel: fakeChannel,
+    getWindow: () => windowRig().window,
+    env: () => ({}),
+    engineReady: () => true,
+    logger: silentLogger,
+    limits: {},
+  });
+}
+
 /** Drains the microtask exit-chain (bounded by the breakers). */
 async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -203,6 +217,66 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     manager.createTab({ workspace: "/ws", sessionId: "sess-R", resume: true });
     await flush();
     expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--resume", "sess-R"]);
+  });
+
+  // TASK.39: the draft (pre-session) engine model/preset choice.
+  it("carries the draft engine model/preset on the spawn that CREATES the session — and never again", async () => {
+    const forkSpy = vi.fn<HostForkFn>();
+    const { hosts } = dyingForkRig();
+    forkSpy.mockImplementation(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("exit", 1));
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({
+      workspace: "/ws",
+      sessionId: "sess-D",
+      resume: false,
+      engine: "codex",
+      engineModel: "gpt-5.6-sol",
+      enginePreset: "read-only",
+    });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual([
+      "--session",
+      "sess-D",
+      "--engine-model",
+      "gpt-5.6-sol",
+      "--engine-preset",
+      "read-only",
+    ]);
+    // A respawn resumes the persisted session: replaying the draft here would
+    // silently undo a mid-session model/preset change the user made.
+    expect(forkSpy.mock.calls[1]?.[1]).toEqual(["--resume", "sess-D"]);
+  });
+
+  // Main holds no catalog and no preset table, so it makes no policy decision: it
+  // only refuses values that could not be an id AT ALL (empty/whitespace/oversized).
+  // Anything else rides argv as an opaque string and is refused by the HOST — the
+  // single validation authority (a raw-config string is just an unknown preset id
+  // there, and degrades to the default posture; see codex-engine.test.ts).
+  it("drops a draft value that could not be an id, instead of putting junk on argv", async () => {
+    const { hosts } = liveForkRig();
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({
+      workspace: "/ws",
+      sessionId: "sess-J",
+      resume: false,
+      engine: "codex",
+      engineModel: "  ",
+      enginePreset: "x".repeat(200),
+    });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--session", "sess-J"]);
   });
 });
 

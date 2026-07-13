@@ -28,12 +28,21 @@ import {
   CODEX_TURN_INTERRUPT_TIMEOUT_MS,
   CODEX_TURN_START_TIMEOUT_MS,
 } from "../../../shared/codex-timeouts.js";
+import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
 import type { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js";
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
+import { CodexModelCatalog } from "./catalog.js";
 import { TurnTranslator } from "./event-translator.js";
+import {
+  DEFAULT_CODEX_PRESET,
+  codexPresetChoices,
+  findCodexPreset,
+  isEffectivePostureWeaker,
+  type CodexPermissionPresetDefinition,
+} from "./presets.js";
 import { TurnItemIndex } from "./turn-item-index.js";
 import type { JsonRpcNotification } from "./protocol.js";
 
@@ -56,7 +65,15 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsContextBreakdown: false,
   supportsInteractiveApprovals: false,
   costAccounting: false,
-  supportsModelSelection: false,
+  // TASK.39: a Codex session now selects among the app-server's OWN models
+  // (`model/list`), validated host-side against that catalog. This flag means
+  // "this engine can switch model", NOT "AnyCode's provider catalog applies" —
+  // the provider catalog is never consulted for a Codex session.
+  supportsModelSelection: true,
+  // The effort axis stays engine-internal: Codex efforts are free-form strings
+  // per model (low…ultra), not core's fixed ReasoningEffort union, so no core
+  // effort selector is exposed. The engine still re-asserts the thread's own
+  // effective effort on every turn (see turnSettingsOverride).
   supportsReasoningEffort: false,
   supportsImages: false,
   supportsTasks: false,
@@ -87,7 +104,14 @@ function timeouts(overrides?: Partial<CodexEngineTimeouts>): CodexEngineTimeouts
   return { ...DEFAULT_CODEX_ENGINE_TIMEOUTS, ...overrides };
 }
 
-type ThreadResult = { thread?: { id?: unknown }; model?: unknown };
+type ThreadResult = {
+  thread?: { id?: unknown };
+  model?: unknown;
+  /** Effective-settings echo (cut §2(k).2) — consulted ONLY for the drift check, never reverse-mapped to a preset. */
+  approvalPolicy?: unknown;
+  sandbox?: unknown;
+  reasoningEffort?: unknown;
+};
 type AccountResult = { account?: unknown };
 type TurnResult = { turn?: { id?: unknown } };
 
@@ -100,6 +124,129 @@ export interface ConnectedCodexEngine {
   engine: CodexEngine;
   threadId: string;
   model: string;
+  /** The preset the session is running under; the host persists it verbatim in the session `mode` column (cut §2(k).4). */
+  presetId: string;
+}
+
+/**
+ * The model/preset the session should boot with: the draft argv choice for a new
+ * session, the persisted row for a resumed one. Both are UNVALIDATED opaque
+ * strings at this point (they come from the renderer / an older DB row); every
+ * one of them is checked here, host-side, before any RPC carries it.
+ */
+export interface CodexSessionSelection {
+  model?: string;
+  presetId?: string;
+  /** A resumed session's stored ids predate this slice; an unrecognized one is a silent default, not a user error. */
+  origin?: "draft" | "persisted";
+}
+
+/** Result of a host-side settings change request. `ok:false` never reaches the wire — it becomes a recoverable UI error. */
+export type CodexSettingsChange =
+  | { ok: true; model: string; activePresetId: string }
+  | { ok: false; reason: string };
+
+/** Everything the engine needs to re-assert the full effective posture on every turn (cut §2(k).1). */
+interface CodexEngineSettings {
+  workspace: string;
+  catalog: CodexModelCatalog;
+  model: string;
+  preset: CodexPermissionPresetDefinition;
+  /** Free-form Codex effort string (NOT core's ReasoningEffort); undefined -> `effort` is omitted from the override. */
+  effort?: string;
+  /** Boot-time warnings (unusable draft model, posture drift) — flushed into the first turn's event stream. */
+  notices: AgentEvent[];
+}
+
+function warning(message: string): AgentEvent {
+  return { type: "engine_notice", level: "warning", message };
+}
+
+/**
+ * Resolves the preset id a session boots with. An unknown id can only come from
+ * a stale renderer or a pre-TASK.39 session row (whose `mode` column holds a
+ * CORE permission mode such as "build") — neither is a user-visible error, so
+ * both quietly become the default posture. A DRAFT id the user actually chose is
+ * different: if it does not exist, the user is told.
+ */
+function resolvePreset(selection: CodexSessionSelection | undefined, notices: AgentEvent[]): CodexPermissionPresetDefinition {
+  const fallback = findCodexPreset(DEFAULT_CODEX_PRESET)!;
+  const requested = selection?.presetId;
+  if (requested === undefined) return fallback;
+  const preset = findCodexPreset(requested);
+  if (preset !== undefined) return preset;
+  if (selection?.origin === "draft") {
+    notices.push(warning(`Codex permission preset "${requested}" is unknown; using "${fallback.label}" instead.`));
+  }
+  return fallback;
+}
+
+/**
+ * Resolves the model id to put on `thread/start`. Returns undefined whenever the
+ * choice cannot be POSITIVELY validated against the live catalog — the server's
+ * own default model is then used. This is the L7 fail-closed rule: an id that
+ * cannot be proven to exist is never sent, because the server would accept it,
+ * burn a turn on it, and fail late.
+ */
+function resolveModel(
+  catalog: CodexModelCatalog,
+  selection: CodexSessionSelection | undefined,
+  notices: AgentEvent[],
+): string | undefined {
+  const requested = selection?.model;
+  if (requested === undefined) return undefined;
+  if (!catalog.available) {
+    notices.push(warning(`Codex could not read its model list, so "${requested}" could not be verified; the default model is used.`));
+    return undefined;
+  }
+  if (!catalog.has(requested)) {
+    notices.push(warning(`Codex model "${requested}" is no longer available; the default model is used.`));
+    return undefined;
+  }
+  return requested;
+}
+
+/** Effective settings from the thread echo — the ONLY server-side statement about posture (there is no `thread/settings/updated`, L6). */
+function effectiveSettings(result: ThreadResult): { approvalPolicy?: unknown; sandbox?: unknown; effort?: string } {
+  const effort = typeof result.reasoningEffort === "string" && result.reasoningEffort.length > 0 ? result.reasoningEffort : undefined;
+  return {
+    approvalPolicy: result.approvalPolicy,
+    sandbox: result.sandbox,
+    ...(effort !== undefined ? { effort } : {}),
+  };
+}
+
+/** One warning, at most, when the server's posture is genuinely weaker than the preset promises (cut §2(k).2). */
+function driftNotice(preset: CodexPermissionPresetDefinition, result: ThreadResult, notices: AgentEvent[]): void {
+  if (!isEffectivePostureWeaker(preset, effectiveSettings(result))) return;
+  notices.push(
+    warning(
+      `Codex reports a weaker sandbox than the "${preset.label}" preset; the preset is re-applied on the next turn.`,
+    ),
+  );
+}
+
+/** Boot-time settings assembly, shared by the fresh-start and resume paths. */
+function buildSettings(
+  workspace: string,
+  catalog: CodexModelCatalog,
+  preset: CodexPermissionPresetDefinition,
+  result: ThreadResult,
+  model: string,
+  notices: AgentEvent[],
+): CodexEngineSettings {
+  driftNotice(preset, result, notices);
+  // The model is the SERVER-CONFIRMED one from the thread echo, so the effort is
+  // resolved against what the thread actually runs, not against what was asked for.
+  const effort = catalog.resolveEffort(model, effectiveSettings(result).effort);
+  return {
+    workspace,
+    catalog,
+    model,
+    preset,
+    ...(effort !== undefined ? { effort } : {}),
+    notices,
+  };
 }
 
 /** Narrow transport seam keeps lifecycle tests independent from a real child. */
@@ -124,6 +271,8 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   workspace: string;
   broker: IpcPermissionBroker;
   timeouts?: Partial<CodexEngineTimeouts>;
+  /** Draft (new session) or persisted (resume) model/preset choice; validated host-side, never trusted. */
+  selection?: CodexSessionSelection;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -173,34 +322,63 @@ async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number
   if (account.account === null || account.account === undefined) throw new Error(CODEX_NOT_SIGNED_IN);
 }
 
-/** Testable native ordering: handshake/account are complete before a thread exists. */
+/**
+ * Testable native ordering: handshake/account are complete before a thread
+ * exists, and the model catalog is read before the FIRST id ever reaches the
+ * wire — a draft model that no longer exists is caught here, not by a burned
+ * turn (L7). The `thread/start` response is what confirms the initial values
+ * (TASK.39 DoD-2): the model reported back by the server is the one the session
+ * runs and persists, whatever was asked for.
+ */
 export async function createNativeCodexSession(
   client: CodexClient,
   workspace: string,
   approvals?: CodexApprovalBridge,
   overrides?: Partial<CodexEngineTimeouts>,
+  selection?: CodexSessionSelection,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs);
+  const catalog = await CodexModelCatalog.load(client);
+  const notices: AgentEvent[] = [];
+  const preset = resolvePreset(selection, notices);
+  const model = resolveModel(catalog, selection, notices);
   const result = await client.request<ThreadResult>("thread/start", {
     cwd: workspace,
-    approvalPolicy: "untrusted",
-    sandbox: "workspace-write",
+    approvalPolicy: preset.threadParams.approvalPolicy,
+    sandbox: preset.threadParams.sandbox,
+    ...(model !== undefined ? { model } : {}),
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
-  return { engine: new CodexEngine(client, native.threadId, approvals, overrides), ...native };
+  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices);
+  return {
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings),
+    ...native,
+    presetId: preset.id,
+  };
 }
 
-/** Strict native resume: the stored ref is used verbatim and never replaced. */
+/**
+ * Strict native resume: the stored ref is used verbatim and never replaced.
+ * Posture survives the resume through the PERSISTED preset id (cut §2(k).4), not
+ * through the server echo — L8 makes the echo unusable as a source of truth
+ * (`untrusted` comes back as `on-request`). The posture is then re-asserted in
+ * full on the next `turn/start`, so a resumed thread converges regardless of
+ * what the server currently believes.
+ */
 export async function resumeNativeCodexSession(
   client: CodexClient,
   workspace: string,
   externalSessionRef: string,
   approvals?: CodexApprovalBridge,
   overrides?: Partial<CodexEngineTimeouts>,
+  selection?: CodexSessionSelection,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs);
+  const catalog = await CodexModelCatalog.load(client);
+  const notices: AgentEvent[] = [];
+  const preset = resolvePreset(selection, notices);
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
     cwd: workspace,
@@ -210,7 +388,18 @@ export async function resumeNativeCodexSession(
     throw new Error("Codex thread/resume returned a different native thread");
   }
   await client.request("thread/read", { threadId: native.threadId, includeTurns: true }, { timeoutMs: bounds.bootRpcMs });
-  return { engine: new CodexEngine(client, native.threadId, approvals, overrides), ...native };
+  // A model that vanished from the catalog between sessions must not silently
+  // ride the next turn/start override: fall back to the thread's own model and
+  // say so (recoverable, TASK.39 DoD-2), rather than burning the user's turn.
+  const stored = resolveModel(catalog, selection, notices);
+  const model = stored ?? native.model;
+  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices);
+  return {
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings),
+    threadId: native.threadId,
+    model,
+    presetId: preset.id,
+  };
 }
 
 /** Starts a new native thread before anything is persisted. */
@@ -223,7 +412,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: approvals.handle });
   try {
     await client.start();
-    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts);
+    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection);
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -243,7 +432,14 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: approvals.handle });
   try {
     await client.start();
-    const connected = await resumeNativeCodexSession(client, options.workspace, options.externalSessionRef, approvals, options.timeouts);
+    const connected = await resumeNativeCodexSession(
+      client,
+      options.workspace,
+      options.externalSessionRef,
+      approvals,
+      options.timeouts,
+      options.selection,
+    );
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -265,17 +461,29 @@ export class CodexEngine implements SessionEngine {
   private interruptSent = false;
   private terminalError: Error | null = null;
   private disposed = false;
+  /** Model/preset/effort state; absent only for the bare test-constructed engine (no boot, no catalog). */
+  private readonly settings: CodexEngineSettings | undefined;
+  /**
+   * A validated model/preset change that no `turn/start` has carried yet. There
+   * is NO server-side ack channel (L6: `thread/settings/updated` never arrives),
+   * so an accepted `turn/start` IS the ack — this holds the snapshot to confirm
+   * when that happens (cut §2(k).3).
+   */
+  private pendingSettings: { model: string; activePresetId: string } | null = null;
+  private readonly appliedListeners = new Set<(snapshot: { model: string; activePresetId: string }) => void>();
 
   constructor(
     private readonly client: CodexClient,
     readonly threadId: string,
     private readonly approvals?: CodexApprovalBridge,
     overrides?: Partial<CodexEngineTimeouts>,
+    settings?: CodexEngineSettings,
   ) {
     // Interactive approval is advertised only after the exact W0 bridge is
     // installed; direct/test-only engines retain the fail-closed capability.
     this.capabilities = approvals === undefined ? CODEX_ENGINE_CAPABILITIES : CODEX_BRIDGED_CAPABILITIES;
     this.bounds = timeouts(overrides);
+    this.settings = settings;
     this.unobserve = this.client.observeNotifications?.((notification) => this.indexItem(notification)) ?? (() => {});
   }
 
@@ -286,7 +494,9 @@ export class CodexEngine implements SessionEngine {
   mode(): PermissionMode {
     // Existing wire vocabulary has no native-policy projection yet. `build`
     // is display-only: Session capability gates prevent it becoming a core
-    // permission policy or a mutable Codex setting.
+    // permission policy or a mutable Codex setting. Codex posture lives in its
+    // OWN preset vocabulary (presets.ts) and never touches core's permission
+    // engine or its always-allow rules (TASK.39 §5).
     return "build";
   }
 
@@ -295,11 +505,114 @@ export class CodexEngine implements SessionEngine {
   }
 
   setReasoningEffort(_effort: ReasoningEffort | undefined): void {
-    // Model/effort policy is intentionally deferred to a later Codex slice.
+    // Codex efforts are per-model free-form strings, not core's fixed union;
+    // the thread's effective effort is re-asserted from the catalog instead
+    // (turnSettingsOverride), never set from core's effort vocabulary.
   }
 
   historyItems(): [] {
     return [];
+  }
+
+  // ── engine-owned settings seam (host/session.ts `engineSettings`) ──────────
+  // Session speaks to these structurally; it never imports this class.
+
+  /** Display truth = our OWN state, never the server echo (L8 makes the echo un-mappable). */
+  snapshot(): { model: string; activePresetId: string } {
+    return { model: this.settings?.model ?? "", activePresetId: this.settings?.preset.id ?? DEFAULT_CODEX_PRESET };
+  }
+
+  models(): EngineModelChoice[] {
+    return this.settings?.catalog.choices() ?? [];
+  }
+
+  presets(): EnginePermissionPreset[] {
+    // The preset table is a compile-time constant: it is offered even when the
+    // model catalog could not be read, because posture must never depend on the
+    // model list being reachable.
+    return this.settings === undefined ? [] : codexPresetChoices();
+  }
+
+  /**
+   * Host-side model validation (cut §2(j)) — the whole reason catalog.ts exists.
+   * NOTHING is sent to the server here: the change is recorded and the next
+   * `turn/start` carries it. An id the catalog does not contain is refused
+   * before any RPC, so an unsupported/removed model can never burn a turn (L7).
+   */
+  selectModel(id: string): CodexSettingsChange {
+    const settings = this.settings;
+    if (settings === undefined) return { ok: false, reason: "Codex model selection is unavailable for this session." };
+    if (!settings.catalog.available) {
+      return { ok: false, reason: "Codex could not read its model list; start a new session to retry." };
+    }
+    if (!settings.catalog.has(id)) {
+      return { ok: false, reason: `Codex model "${id}" is not available for this account.` };
+    }
+    settings.model = id;
+    // The held effort may not exist on the new model; the catalog re-resolves it
+    // (falling back to that model's own default) so the override stays valid.
+    const effort = settings.catalog.resolveEffort(id, settings.effort);
+    if (effort === undefined) delete settings.effort;
+    else settings.effort = effort;
+    return this.markPending();
+  }
+
+  /** Membership in the frozen preset table is the ONLY way a posture is expressible — no raw policy/config from the renderer. */
+  selectPreset(id: string): CodexSettingsChange {
+    const settings = this.settings;
+    if (settings === undefined) return { ok: false, reason: "Codex permission presets are unavailable for this session." };
+    const preset = findCodexPreset(id);
+    if (preset === undefined) {
+      return { ok: false, reason: `Unknown Codex permission preset "${id}".` };
+    }
+    settings.preset = preset;
+    return this.markPending();
+  }
+
+  /** Fires when a `turn/start` has actually carried a pending change (the two-phase "applied" ack). */
+  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string }) => void): () => void {
+    this.appliedListeners.add(listener);
+    return () => this.appliedListeners.delete(listener);
+  }
+
+  private markPending(): CodexSettingsChange {
+    const snapshot = this.snapshot();
+    this.pendingSettings = snapshot;
+    return { ok: true, ...snapshot };
+  }
+
+  /**
+   * The full effective posture, re-derived from the persisted preset and put on
+   * EVERY `turn/start` — not merely on the first turn after a change (cut
+   * §2(k).1). The override is documented as applying to "this turn and
+   * subsequent turns" and is idempotent (L3), so re-asserting it costs nothing
+   * and makes the posture self-healing: whatever the server echoes back (L8:
+   * `untrusted` degrades to `on-request`, `writableRoots` empties), the thread is
+   * put back under the user's chosen posture at the start of every single turn.
+   *
+   * `model` rides the override ONLY when the live catalog positively contains it
+   * (L7 fail-closed): an unverifiable id — catalog unreadable, or a thread whose
+   * server-side model has since been removed — is omitted so the server keeps
+   * using its own, rather than accepting ours and failing the turn late.
+   */
+  private turnSettingsOverride(): Record<string, unknown> {
+    const settings = this.settings;
+    if (settings === undefined) return {};
+    const override = settings.preset.turnOverride(settings.workspace);
+    const verifiedModel = settings.catalog.has(settings.model) ? settings.model : undefined;
+    return {
+      ...(verifiedModel !== undefined ? { model: verifiedModel } : {}),
+      ...(verifiedModel !== undefined && settings.effort !== undefined ? { effort: settings.effort } : {}),
+      approvalPolicy: override.approvalPolicy,
+      sandboxPolicy: override.sandboxPolicy,
+    };
+  }
+
+  /** Boot-time warnings (unusable draft model, posture drift) are delivered inside the first turn's stream — the only channel an AgentEvent has. */
+  private drainNotices(): AgentEvent[] {
+    const settings = this.settings;
+    if (settings === undefined || settings.notices.length === 0) return [];
+    return settings.notices.splice(0, settings.notices.length);
   }
 
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
@@ -314,6 +627,9 @@ export class CodexEngine implements SessionEngine {
     }
 
     yield { type: "turn_start", turn };
+    // Boot-time notices (drift / unusable draft model) have no wire of their own:
+    // an AgentEvent only travels inside a turn, so they are flushed here, once.
+    for (const notice of this.drainNotices()) yield notice;
 
     const abort = watchAbort(options.signal);
     const items = new TurnItemIndex();
@@ -335,9 +651,13 @@ export class CodexEngine implements SessionEngine {
     const cancelSettle = (): void => settle?.cancel();
 
     const iterator = this.client.notifications()[Symbol.asyncIterator]();
+    // Captured BEFORE the request is written: this exact set is what the server
+    // is about to be told, so it is also exactly what an "applied" ack may claim.
+    const applying = this.pendingSettings;
     const request = this.client.request<TurnResult>("turn/start", {
       threadId: this.threadId,
       input: [{ type: "text", text: input }],
+      ...this.turnSettingsOverride(),
     }, { timeoutMs: this.bounds.turnStartMs });
     let next = iterator.next();
     const buffered: JsonRpcNotification[] = [];
@@ -384,6 +704,14 @@ export class CodexEngine implements SessionEngine {
 
       const turnId = result.turn?.id;
       if (typeof turnId !== "string" || turnId.length === 0) throw new Error("Codex turn/start returned no turn id");
+      // Phase 2 of the ack (cut §2(k).3): the server ACCEPTED a turn/start that
+      // carried the new posture. That acceptance — not a notification, of which
+      // there is none — is the confirmation. A turn/start that errored or timed
+      // out never reaches here, so `pending` correctly stays pending.
+      if (applying !== null && this.pendingSettings === applying) {
+        this.pendingSettings = null;
+        for (const listener of this.appliedListeners) listener(applying);
+      }
       this.activeTurn = { threadId: this.threadId, turnId, items };
       const translator = new TurnTranslator({ threadId: this.threadId, turnId, turn, items });
       let terminal = false;
@@ -452,6 +780,7 @@ export class CodexEngine implements SessionEngine {
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.disposed = true;
     this.unobserve();
+    this.appliedListeners.clear();
     this.approvals?.denyAll("Codex engine is shutting down", "shutdown");
     void this.sendInterruptOnce();
     return this.client.close();

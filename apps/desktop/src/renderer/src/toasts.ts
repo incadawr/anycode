@@ -53,6 +53,10 @@ export const TOAST_AUTO_HIDE_MS = 5000;
  * Slice P7.26/R2: rewind_restored is neutral (a completed, user-confirmed
  * action — informational, like compaction_end), rewind_rejected is danger
  * (the user's rewind was refused, same tint as mode_change_rejected).
+ * Codex-fixes TASK.39: engine_notice is warning — its only producer today
+ * (cut §2(k).2) is a drift check firing when the server's effective posture
+ * came back weaker than the persisted preset claims, a degraded-but-not-
+ * refused state (same tint family as stream_retry/permission_settled).
  */
 const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   turn_rejected: "warning",
@@ -67,6 +71,7 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   background_task_rejected: "warning",
   rewind_restored: "neutral",
   rewind_rejected: "danger",
+  engine_notice: "warning",
   shell_error: "danger",
 };
 

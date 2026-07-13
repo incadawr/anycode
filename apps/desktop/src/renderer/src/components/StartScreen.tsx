@@ -50,8 +50,10 @@ import { submitStartDraft, type StartSubmitResult } from "../start-session.js";
 import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, Search, Terminal, Warning } from "./icons.js";
 import { modelDisplayName, modelMenuItems, pillLabel, resolvePid } from "./ModelPill.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
+import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
 import type { EngineId } from "../../../shared/engines.js";
+import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
 
 export interface StartScreenProps {
@@ -235,6 +237,57 @@ export function pickModelForDraft(modelId: string, deps: ModelPickDeps = default
 }
 
 /**
+ * TASK.39 (cut §2(d)/§3.8): the draft's own copy of the frozen Codex
+ * permission-preset table. Duplicated on purpose from
+ * `host/engines/codex/presets.ts`'s `codexPresetChoices()` output — the same
+ * "small table crosses the `shared/**` freeze as a documented duplicate"
+ * precedent as `CODEX_SUPPORTED_RANGE`/the onboarding channel literals
+ * elsewhere in this track. There is no host yet at draft time to ask for its
+ * live catalog, and it is harmless: the eventual host re-validates whatever
+ * `presetId` the draft submits against ITS OWN copy of this same table
+ * (host-authoritative membership check, cut §2(d)) — this duplicate can only
+ * ever offer the same three ids the host also knows, never smuggle a raw
+ * config value past that check.
+ */
+export const CODEX_DRAFT_PRESETS: readonly EnginePermissionPreset[] = [
+  {
+    id: "read-only",
+    label: "Read-only",
+    description: "Codex can read files but cannot run commands, write files, or reach the network.",
+  },
+  {
+    id: "ask",
+    label: "Ask",
+    description: "Codex asks before running commands or changing files (default).",
+  },
+  {
+    id: "workspace",
+    label: "Workspace",
+    description: "Codex can write inside the workspace and run commands with fewer prompts.",
+  },
+];
+
+/** Mirrors `DEFAULT_CODEX_PRESET` in `host/engines/codex/presets.ts` (duplicated for the same reason as the table above). */
+export const DEFAULT_CODEX_DRAFT_PRESET = "ask";
+
+/**
+ * Resolves the Codex draft's displayed/selected model id. `draft.model` is a
+ * single field shared with the Core engine's own model chip (tabs-store.ts,
+ * outside this file's zone) and is NOT reset on an engine switch — a Core
+ * model id left over from before switching to Codex must never be displayed
+ * or submitted as if it were a valid Codex id, so this only trusts
+ * `draftModel` when it is actually a member of the fetched Codex catalog,
+ * falling back to the catalog's first entry otherwise. Exported for unit
+ * testing.
+ */
+export function resolveCodexDraftModel(draftModel: string | null, available: readonly EngineModelChoice[]): string {
+  if (draftModel !== null && available.some((m) => m.id === draftModel)) {
+    return draftModel;
+  }
+  return available[0]?.id ?? "";
+}
+
+/**
  * slice-start-composer-cut §5: preselect the last-used workspace once per
  * draft. Returns `recents[0]` ONLY when there IS a draft with no workspace
  * chosen yet AND at least one recent exists — `null` otherwise, so:
@@ -261,6 +314,16 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // Core is always the local compatibility choice. Codex is appended only
   // after main returns its already-validated availability verdict.
   const [availableEngines, setAvailableEngines] = useState<readonly EngineId[]>(["core"]);
+  // TASK.39 (cut §2(d)/§2(g)/§3.8): the doctor-provided Codex model catalog
+  // for the draft picker (see this component's own `codexEngineSelected`
+  // effect and the `CODEX_DRAFT_PRESETS` doc comment above for why the
+  // preset table itself needs no fetch). The preset PICK itself lives on
+  // the shared draft (`draft.enginePreset`, tabs-store.ts), not local
+  // component state (W3 join): `submitStartDraft` and the automation
+  // facade's `startScreenSubmit` both submit off the store alone, with no
+  // access to this component's state, so a local-only pick would never
+  // reach `createStartTabRequest`.
+  const [codexModels, setCodexModels] = useState<readonly EngineModelChoice[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const submitGuardRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -299,6 +362,14 @@ export function StartScreen({ onToast }: StartScreenProps) {
     : modelChip.label;
   const modelItems = modelMenuItems(modelChip.modelId, catalogModels);
   const projectRowCount = recents.length + 1; // +1 for the trailing "Browse…" row
+  // TASK.39: hook-safe boolean (computed ahead of the `draft === null` early
+  // return below, same discipline as the other plain derived values above)
+  // gating the Codex draft catalog fetch effect.
+  const codexEngineSelected = draft?.engine === "codex";
+  const codexDraftModel = resolveCodexDraftModel(draft?.model ?? null, codexModels);
+  // W3 join: displays the draft's own pick once made; falls back to the same
+  // default the picker starts on before the user ever touches it.
+  const codexDraftPreset = draft?.enginePreset ?? DEFAULT_CODEX_DRAFT_PRESET;
 
   useEffect(() => {
     let cancelled = false;
@@ -333,6 +404,52 @@ export function StartScreen({ onToast }: StartScreenProps) {
       cancelled = true;
     };
   }, []);
+
+  // TASK.41 residual (cut §5.5): the one-shot fetch above has no live
+  // listener, so a Codex login/onboarding step completed while a
+  // StartScreen is already mounted would not show up until remount. Wire
+  // the same `engines-changed` push CodexEnginePane already subscribes to
+  // (main fires it after every onboarding step) directly into this
+  // component's own effect, independent of that pane's mount state (Settings
+  // is usually unmounted, so relying solely on it relaying into tabs-store
+  // would be unreliable) — re-fetches and refreshes the Agent selector live.
+  useEffect(() => {
+    return window.anycode.onEnginesChanged(() => {
+      window.anycode
+        .listAvailableEngines()
+        .then(({ engineIds }) => setAvailableEngines(engineIds))
+        .catch((error: unknown) => {
+          console.warn("[StartScreen] listAvailableEngines (live refresh) failed", error);
+        });
+    });
+  }, []);
+
+  // TASK.39 (cut §2(g)/§3.8/§8): the draft's native model catalog comes from
+  // the same bounded "codex doctor" onboarding already uses
+  // (`window.anycode.codex.recheck()`) — fetched once per codex-selected
+  // transition (not on every render: cut §8 residual explicitly calls out
+  // not re-spawning the doctor per render), fail-soft on any error/non-ready
+  // status (the picker then just shows nothing until the next transition or
+  // an onboarding recheck elsewhere flips Codex ready).
+  useEffect(() => {
+    if (!codexEngineSelected) {
+      return;
+    }
+    let cancelled = false;
+    window.anycode.codex
+      .recheck()
+      .then((snapshot) => {
+        if (!cancelled && snapshot.report.status === "ready" && snapshot.report.models) {
+          setCodexModels(snapshot.report.models);
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("[StartScreen] codex.recheck (draft catalog) failed", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [codexEngineSelected]);
 
   // slice-start-composer-cut §5: preselect the last-used workspace once per
   // draft (StartScreen unmounts on discardDraft, so this ref resets per
@@ -710,7 +827,28 @@ export function StartScreen({ onToast }: StartScreenProps) {
         <div className="composer-footer">
           <div className="composer-footer-left">
             {codexDraft ? (
-              <span className="engine-identity" title="Codex uses its native model and approval policy">Codex</span>
+              // TASK.39 item 1: native Codex model + permission-preset pickers
+              // (from the doctor-provided catalog, never AnyCode's provider
+              // catalog) replace the old static "Codex" identity badge.
+              // Selecting either only ever sends a bare presetId/model id —
+              // the eventual host re-validates both against its own tables
+              // regardless (host-authoritative, cut §2(d)/§2(j)).
+              <>
+                <EnginePresetMenu
+                  permissions={{ presets: CODEX_DRAFT_PRESETS, activePresetId: codexDraftPreset }}
+                  pendingPresetId={undefined}
+                  disabled={false}
+                  onPick={(id) => useTabsStore.getState().setDraftEnginePreset(id)}
+                />
+                {codexModels.length > 0 && (
+                  <EngineModelMenu
+                    model={{ current: codexDraftModel, available: codexModels }}
+                    pendingModel={undefined}
+                    disabled={false}
+                    onPick={(id) => useTabsStore.getState().setDraftModel(id)}
+                  />
+                )}
+              </>
             ) : (
               <>
                 <ModeMenu mode={draft.mode} disabled={false} onChange={(mode) => useTabsStore.getState().setDraftMode(mode)} />

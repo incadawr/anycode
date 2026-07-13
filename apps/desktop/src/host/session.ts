@@ -58,6 +58,8 @@ import type {
 import { SESSION_TITLE_MAX_LENGTH, deriveSessionTitle, sanitizeTitleSource, withBackgroundTaskNotices } from "@anycode/core";
 import { randomUUID } from "node:crypto";
 import type {
+  EngineModelChoice,
+  EnginePermissionPreset,
   HostToUiMessage,
   EnginePresentation,
   ShellCapabilitiesProjection,
@@ -91,10 +93,46 @@ const ZERO_CONTEXT_BREAKDOWN = {
   totalEstimatedTokens: 0,
 };
 
+/**
+ * The engine's OWN model/permission controls (TASK.39, cut §3.1/§2(d)), exposed
+ * to Session as a narrow structural seam — exactly like `git`/`checkpoints`/
+ * `tasks` above, and for the same reason: Session must never import an engine
+ * implementation. Only a non-core engine that owns a native catalog and a native
+ * policy vocabulary supplies one; core does not, so the core wire is unchanged.
+ *
+ * The contract that makes this safe (and is asserted by the tests):
+ *  - `selectModel`/`selectPreset` are SYNCHRONOUS and send NOTHING. They only
+ *    validate host-side and record the choice; the engine puts it on the next
+ *    `turn/start`. A rejected choice therefore costs no RPC and no turn.
+ *  - `snapshot()` is the engine's own persisted intent, never a server echo.
+ *  - `onSettingsApplied` fires when a `turn/start` has actually carried the
+ *    change — the only honest "applied" signal that exists (the app-server sends
+ *    no settings-updated notification at all).
+ */
+export type EngineSettingsChange =
+  | { ok: true; model: string; activePresetId: string }
+  | { ok: false; reason: string };
+
+export interface EngineSettingsSeam {
+  models(): EngineModelChoice[];
+  presets(): EnginePermissionPreset[];
+  snapshot(): { model: string; activePresetId: string };
+  selectModel(id: string): EngineSettingsChange;
+  selectPreset(id: string): EngineSettingsChange;
+  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string }) => void): () => void;
+}
+
 /** Only external engines carry this additive wire projection; core stays byte-identical. */
-function enginePresentation(engine: SessionEngine): EnginePresentation | undefined {
+function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam): EnginePresentation | undefined {
   if (engine.id === "core") return undefined;
   const capabilities = engine.capabilities;
+  // The two additive blocks (TASK.39) appear only when the engine actually has a
+  // catalog/preset table: an engine without one keeps the pre-TASK.39 projection
+  // byte-identical, and a renderer that sees no `model`/`permissions` hides the
+  // pickers rather than guessing.
+  const models = settings?.models() ?? [];
+  const presets = settings?.presets() ?? [];
+  const snapshot = settings?.snapshot();
   return {
     id: engine.id,
     capabilities: {
@@ -112,6 +150,10 @@ function enginePresentation(engine: SessionEngine): EnginePresentation | undefin
       supportsTasks: capabilities.supportsTasks,
       supportsFileSnapshots: capabilities.supportsFileSnapshots,
     },
+    ...(snapshot !== undefined && models.length > 0 ? { model: { current: snapshot.model, available: models } } : {}),
+    ...(snapshot !== undefined && presets.length > 0
+      ? { permissions: { presets, activePresetId: snapshot.activePresetId } }
+      : {}),
   };
 }
 
@@ -204,13 +246,28 @@ export class Outbound {
  * Fire-and-forget — it must never throw into or block a turn.
  */
 export interface SessionPersistence {
-  touch(patch: { title?: string; mode?: PermissionMode }): void;
+  /**
+   * `enginePreset` (TASK.39, cut §2(k).4) is deliberately its OWN field rather
+   * than being smuggled through `mode`: a Codex preset id is not a core
+   * PermissionMode, and the two vocabularies must not be conflated in the type
+   * system even though they share the `mode` COLUMN in the session row (which
+   * is a plain TEXT column — no migration, cut §2(k).4). The host maps it to
+   * that column at the persistence boundary, where the cast is visible.
+   */
+  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string }): void;
 }
 
 export interface SessionOptions {
   outbound: Outbound;
   /** The host-selected agent runtime; Session never imports an external engine. */
   engine: SessionEngine;
+  /**
+   * TASK.39: the engine's own model catalog + permission presets. Absent for
+   * core (and for any engine without native controls) -> `set_engine_preset` is
+   * a no-op, `set_model` keeps its legacy core path, and `host_ready.engine`
+   * carries no `model`/`permissions` block.
+   */
+  engineSettings?: EngineSettingsSeam;
   broker: IpcPermissionBroker;
   /** Adapter for reading "after" snapshots (design §5). */
   fs: FileSystemPort;
@@ -351,6 +408,10 @@ export interface SessionOptions {
 export class Session {
   private readonly outbound: Outbound;
   private readonly engine: SessionEngine;
+  /** TASK.39: engine-native model/preset controls; undefined -> the engine has none. */
+  private readonly engineSettings: EngineSettingsSeam | undefined;
+  /** Releases the `onSettingsApplied` subscription at shutdown (no push-after-dispose). */
+  private engineSettingsUnsubscribe: (() => void) | undefined;
   private readonly broker: IpcPermissionBroker;
   private readonly fs: FileSystemPort;
   private readonly workspace: string;
@@ -419,6 +480,7 @@ export class Session {
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
     this.engine = options.engine;
+    this.engineSettings = options.engineSettings;
     this.broker = options.broker;
     this.fs = options.fs;
     this.workspace = options.workspace;
@@ -446,6 +508,20 @@ export class Session {
     // dispose. Absent seam (legacy tests) -> no subscription, pull-only.
     this.lspUnsubscribe = this.lsp?.onStatusChange?.(() => {
       if (this.uiReady) this.pushLspStatus();
+    });
+    // Phase 2 of the settings ack (TASK.39, cut §2(k).3). This fires from inside
+    // the engine's turn/start, i.e. always while a turn is running and therefore
+    // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
+    // survives a renderer reload via replay rather than racing it.
+    this.engineSettingsUnsubscribe = this.engineSettings?.onSettingsApplied((applied) => {
+      this.model = applied.model;
+      this.outbound.emit({
+        type: "engine_settings_changed",
+        model: applied.model,
+        activePresetId: applied.activePresetId,
+        state: "applied",
+        appliesFrom: "next_turn",
+      });
     });
   }
 
@@ -481,6 +557,8 @@ export class Session {
     this.uiReady = false;
     this.lspUnsubscribe?.();
     this.lspUnsubscribe = undefined;
+    this.engineSettingsUnsubscribe?.();
+    this.engineSettingsUnsubscribe = undefined;
     if (this.abort) {
       this.abort.abort();
     }
@@ -515,7 +593,7 @@ export class Session {
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
         // below (which already pushes the current lsp_status).
         this.uiReady = true;
-        const presentation = enginePresentation(this.engine);
+        const presentation = enginePresentation(this.engine, this.engineSettings);
         this.outbound.sendDirect({
           type: "host_ready",
           workspace: this.workspace,
@@ -608,13 +686,19 @@ export class Session {
         // wired (legacy tests) -> silent no-op. Every rejection is a silent drop
         // (no reply escape), exactly like set_reasoning_effort.
         const id = message.model.trim();
-        if (
-          this.busy ||
-          !this.engine.capabilities.supportsModelSelection ||
-          id.length === 0 ||
-          /\s/.test(id) ||
-          this.engine.switchModel === undefined
-        ) {
+        if (this.busy || !this.engine.capabilities.supportsModelSelection || id.length === 0 || /\s/.test(id)) {
+          break;
+        }
+        // TASK.39: an engine with its OWN catalog validates the id against it
+        // (never against AnyCode's provider catalog) and answers on the engine
+        // settings channel. Reusing `set_model` rather than inventing a second
+        // ui->host message keeps one model-switch verb on the wire for every
+        // engine; only the host-side handling differs.
+        if (this.engineSettings !== undefined) {
+          this.onEngineSettingsChange(this.engineSettings.selectModel(id), { model: id });
+          break;
+        }
+        if (this.engine.switchModel === undefined) {
           break;
         }
         // switchModel runs the full re-budget recipe host-side and returns the
@@ -633,6 +717,22 @@ export class Session {
         });
         break;
       }
+      case "set_engine_preset":
+        // TASK.39 (cut §2(d)/§3.3): the ONLY way a Codex permission posture is
+        // expressible from the renderer — a preset id, checked for membership in
+        // the engine's own frozen table. No sandbox object, no approvalPolicy, no
+        // raw config JSON is accepted from the renderer, by construction of this
+        // message (DoD-4). Between-turns discipline mirrors set_model.
+        if (this.engineSettings === undefined) break;
+        if (this.busy) {
+          this.outbound.emit({
+            type: "mode_change_rejected",
+            reason: "cannot change permissions during an active turn",
+          });
+          break;
+        }
+        this.onEngineSettingsChange(this.engineSettings.selectPreset(message.presetId), { presetId: message.presetId });
+        break;
       case "git_command":
         // Slice 5.7 / TASK.40 (design §2(f)): user-initiated git command. The
         // bridge validates nothing (the zod schema already ran in `route`
@@ -1045,6 +1145,48 @@ export class Session {
     // Release parked asks so the dispatcher unblocks; the loop then ends the turn
     // as cancelled (design §4.4 — the broker gets no AbortSignal by contract).
     this.broker.denyAll("turn cancelled", "turn_cancelled");
+  }
+
+  /**
+   * Phase 1 of the two-phase, host-authoritative settings ack (TASK.39, cut
+   * §2(k).3). There IS no server-side ack channel — the app-server never sends a
+   * settings-updated notification (L6) — so the host answers on its own:
+   *
+   *  - REJECT (an id absent from the engine's catalog/preset table) -> a
+   *    `mode_change_rejected` notice. Nothing was sent to the server, so nothing
+   *    has to be undone and no turn was burned (L7): the failure is recoverable
+   *    and the session keeps running on its previous settings. This reuses the
+   *    existing settings-refusal channel the renderer already surfaces as a
+   *    toast, rather than minting a second rejection message.
+   *  - ACCEPT -> `state:"pending"`, because the change is genuinely not in force
+   *    yet: the engine applies it via the per-turn override, so it takes effect
+   *    at the NEXT turn/start (`appliesFrom:"next_turn"`). The matching
+   *    `state:"applied"` is emitted from the engine's onSettingsApplied hook when
+   *    that turn/start is actually accepted.
+   *
+   * The choice is persisted at accept-time (not at apply-time) so that quitting
+   * between the choice and the next turn still resumes under the chosen posture —
+   * the re-assertion on every turn/start then makes it effective (cut §2(k).1).
+   */
+  private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string }): void {
+    if (!result.ok) {
+      this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
+      return;
+    }
+    if (intent.model !== undefined) {
+      this.model = result.model;
+      this.persistence?.touch({ model: result.model });
+    }
+    if (intent.presetId !== undefined) {
+      this.persistence?.touch({ enginePreset: result.activePresetId });
+    }
+    this.outbound.emit({
+      type: "engine_settings_changed",
+      model: result.model,
+      activePresetId: result.activePresetId,
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
   }
 
   private onSetMode(mode: PermissionMode): void {

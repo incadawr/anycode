@@ -318,6 +318,36 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "", engine: "core", model: "gpt-5", mode: "build" });
   });
 
+  it("setDraftEnginePreset sets the draft's preset pick, absent until then (W3 join)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    expect(store.getState().draft?.enginePreset).toBeUndefined();
+
+    store.getState().setDraftEnginePreset("workspace");
+    expect(store.getState().draft).toEqual({
+      workspace: "/ws/a",
+      prompt: "",
+      engine: "core",
+      model: null,
+      mode: "build",
+      enginePreset: "workspace",
+    });
+  });
+
+  it("re-opening an existing draft preserves its preset pick (focus, not reset)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftEnginePreset("read-only");
+    store.getState().openDraft(); // re-focus, no workspace arg
+    expect(store.getState().draft?.enginePreset).toBe("read-only");
+  });
+
+  it("setDraftEnginePreset is a no-op while draft is null", () => {
+    const store = createTabsStore();
+    store.getState().setDraftEnginePreset("workspace");
+    expect(store.getState().draft).toBeNull();
+  });
+
   it("discardDraft clears both draft and draftActive", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");

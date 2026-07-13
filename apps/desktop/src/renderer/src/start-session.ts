@@ -38,14 +38,30 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
   };
 }
 
-/** Keeps the historical Core create payload byte-for-byte additive. */
-export function createStartTabRequest(draft: Pick<SessionDraft, "workspace" | "engine">): CreateTabRequest {
+/**
+ * Keeps the historical Core create payload byte-for-byte additive. For a
+ * non-core (Codex) draft, also forwards the draft's own model/preset picks
+ * (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers both
+ * already existed — this is the missing wire between them). Both are opaque
+ * ids; omitted entirely when never explicitly picked, so the host applies
+ * its own default rather than receiving a stale/invalid id.
+ */
+export function createStartTabRequest(
+  draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset">,
+): CreateTabRequest {
   if (draft.workspace === null) {
     throw new Error("A workspace is required to create a tab");
   }
-  return draft.engine === "core"
-    ? { kind: "new", workspace: draft.workspace }
-    : { kind: "new", workspace: draft.workspace, engine: draft.engine };
+  if (draft.engine === "core") {
+    return { kind: "new", workspace: draft.workspace };
+  }
+  return {
+    kind: "new",
+    workspace: draft.workspace,
+    engine: draft.engine,
+    ...(draft.model !== null ? { engineModel: draft.model } : {}),
+    ...(draft.enginePreset !== undefined ? { enginePreset: draft.enginePreset } : {}),
+  };
 }
 
 export async function submitStartDraft(

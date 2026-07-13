@@ -71,12 +71,31 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
   });
 
-  it("sends Codex as the static create choice and withholds core model/mode setup", async () => {
+  it("W3 join: forwards the draft's Codex model + preset picks as engineModel/enginePreset, but still withholds AnyCode's own first-turn model/mode setup (Codex owns those natively)", async () => {
     const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
-    tabsStore.getState().setDraftModel("core-only-model");
+    tabsStore.getState().setDraftModel("gpt-5.6-mini");
+    tabsStore.getState().setDraftEnginePreset("workspace");
     tabsStore.getState().setDraftMode("plan");
+    tabsStore.getState().setDraftEngine("codex");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({
+      kind: "new",
+      workspace: "/ws/a",
+      engine: "codex",
+      engineModel: "gpt-5.6-mini",
+      enginePreset: "workspace",
+    });
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello");
+  });
+
+  it("a Codex draft with no explicit model/preset pick omits both from createTab, letting the host apply its own defaults", async () => {
+    const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
     tabsStore.getState().setDraftEngine("codex");
 
     await submitStartDraft(deps);

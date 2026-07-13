@@ -52,7 +52,22 @@ export type CreateTabRequest =
   // workspace absent ⇒ main prompts via dialog.showOpenDialog (unchanged);
   // workspace present ⇒ preselected project path, no folder dialog
   // (sidebar project menu, GUI-P1).
-  | { kind: "new"; workspace?: string; engine?: "core" | "codex" }
+  | {
+      kind: "new";
+      workspace?: string;
+      engine?: "core" | "codex";
+      /**
+       * The New Session start screen's Codex draft picks (W3 join, closing
+       * TASK.39's dangling wire: the draft picker existed, main's argv
+       * forwarding existed, nothing connected them). Opaque ids only — main
+       * (tab-ipc.ts) bounds their length, the host validates IDENTITY against
+       * its own live model catalog / frozen preset table before either ever
+       * reaches the wire. Absent ⇒ the host's own default applies. Only read
+       * on the session-CREATING spawn (main/tabs.ts), never a resume/respawn.
+       */
+      engineModel?: string;
+      enginePreset?: string;
+    }
   | { kind: "resume"; sessionId: string };
 
 /**

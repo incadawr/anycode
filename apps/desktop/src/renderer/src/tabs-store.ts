@@ -61,6 +61,15 @@ export interface SessionDraft {
   model: string | null;
   /** Permission mode for the first turn. New sessions begin in the safe build mode. */
   mode: PermissionMode;
+  /**
+   * Codex-only permission-preset pick for a new session's first turn (W3
+   * join, TASK.39 wire-up). Absent until the user actually touches the
+   * Codex draft's preset picker — mirrors `TabInfo.title`'s "unset in this
+   * slice" convention rather than `model`'s always-present `null` sentinel,
+   * since there is no analogous "explicit clear" affordance for a preset.
+   * Never read for a Core draft.
+   */
+  enginePreset?: string;
 }
 
 export interface TabsState {
@@ -107,6 +116,8 @@ export interface TabsState {
   setDraftModel(model: string | null): void;
   /** No-op while `draft === null`. The selected mode is applied before the first message. */
   setDraftMode(mode: PermissionMode): void;
+  /** No-op while `draft === null`. Codex-only; a Core draft never calls this. */
+  setDraftEnginePreset(presetId: string): void;
   /** Discards the draft entirely (Cancel affordance / successful submit). */
   discardDraft(): void;
   setSessionId(tabId: string, sessionId: string): void;
@@ -272,6 +283,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
           engine: state.draft?.engine ?? "core",
           model: state.draft?.model ?? null,
           mode: state.draft?.mode ?? "build",
+          ...(state.draft?.enginePreset !== undefined ? { enginePreset: state.draft.enginePreset } : {}),
         },
         draftActive: true,
       }));
@@ -295,6 +307,10 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftMode(mode): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, mode } }));
+    },
+
+    setDraftEnginePreset(presetId): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, enginePreset: presetId } }));
     },
 
     discardDraft(): void {

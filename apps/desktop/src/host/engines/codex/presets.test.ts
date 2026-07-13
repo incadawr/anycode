@@ -7,7 +7,13 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { CODEX_PERMISSION_PRESETS, DEFAULT_CODEX_PRESET, findCodexPreset } from "./presets.js";
+import {
+  CODEX_PERMISSION_PRESETS,
+  DEFAULT_CODEX_PRESET,
+  codexPresetChoices,
+  findCodexPreset,
+  isEffectivePostureWeaker,
+} from "./presets.js";
 
 describe("CODEX_PERMISSION_PRESETS", () => {
   it("carries exactly the three frozen ids, in order", () => {
@@ -56,5 +62,54 @@ describe("CODEX_PERMISSION_PRESETS", () => {
   it("findCodexPreset returns undefined for an unknown id (host-authoritative membership check)", () => {
     expect(findCodexPreset("danger-full-access")).toBeUndefined();
     expect(findCodexPreset("")).toBeUndefined();
+  });
+});
+
+describe("codexPresetChoices (TASK.39 wire projection)", () => {
+  it("exposes id/label/description only — never a policy object the renderer could edit", () => {
+    const choices = codexPresetChoices();
+    expect(choices).toEqual([
+      { id: "read-only", label: "Read-only", description: expect.any(String) },
+      { id: "ask", label: "Ask", description: expect.any(String) },
+      { id: "workspace", label: "Workspace", description: expect.any(String) },
+    ]);
+    for (const choice of choices) {
+      expect(Object.keys(choice).sort()).toEqual(["description", "id", "label"]);
+    }
+  });
+});
+
+describe("isEffectivePostureWeaker (drift check, cut §2(k).2)", () => {
+  const readOnly = findCodexPreset("read-only")!;
+  const ask = findCodexPreset("ask")!;
+
+  it("is silent on the untrusted -> on-request round-trip loss (L8) — the one asymmetry the server is known not to preserve", () => {
+    expect(isEffectivePostureWeaker(ask, { approvalPolicy: "on-request", sandbox: { type: "workspaceWrite" } })).toBe(false);
+  });
+
+  it("is silent on the empty writableRoots echo (L8)", () => {
+    expect(
+      isEffectivePostureWeaker(ask, {
+        approvalPolicy: "untrusted",
+        sandbox: { type: "workspaceWrite", writableRoots: [] },
+      }),
+    ).toBe(false);
+  });
+
+  it("reports a genuinely weaker sandbox tier", () => {
+    expect(isEffectivePostureWeaker(readOnly, { approvalPolicy: "on-request", sandbox: { type: "workspaceWrite" } })).toBe(true);
+    expect(isEffectivePostureWeaker(ask, { approvalPolicy: "untrusted", sandbox: { type: "dangerFullAccess" } })).toBe(true);
+  });
+
+  it("reports approvals being disabled outright", () => {
+    expect(isEffectivePostureWeaker(ask, { approvalPolicy: "never", sandbox: { type: "workspaceWrite" } })).toBe(true);
+  });
+
+  it("stays silent when the posture is equal or STRONGER than asked, and when the echo is unreadable", () => {
+    expect(isEffectivePostureWeaker(ask, { approvalPolicy: "untrusted", sandbox: { type: "readOnly" } })).toBe(false);
+    expect(isEffectivePostureWeaker(readOnly, { approvalPolicy: "on-request", sandbox: { type: "readOnly" } })).toBe(false);
+    // An unrecognized/absent tier is not comparable — never guess, never warn.
+    expect(isEffectivePostureWeaker(readOnly, {})).toBe(false);
+    expect(isEffectivePostureWeaker(readOnly, { sandbox: { type: "somethingNew" } })).toBe(false);
   });
 });

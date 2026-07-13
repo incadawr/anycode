@@ -403,15 +403,32 @@ export type HostToUiMessage =
   // automation byte-snapshots stay untouched (design slice-P7.15-cut.md §2.5).
   | { type: "model_changed"; model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
   | { type: "mode_change_rejected"; reason: string }
-  // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset`
-  // (or a resume-reconcile of the effective policy, cut §2(d) "Ack") — trusted,
-  // no zod, precedent mode_changed/model_changed. `appliesFrom:"next_turn"` is
-  // the ONLY value today (cut §2(d): preset changes apply to the next
-  // turn/start, never mid-turn); a literal, not a boolean, so a future
-  // immediate-apply variant is addable without breaking this shape. No
-  // legacy/byte-locked flow emits one (core never builds an EnginePresentation
-  // with `permissions`), so automation/replay snapshots stay byte-identical.
-  | { type: "engine_settings_changed"; model?: string; activePresetId?: string; appliesFrom: "next_turn" }
+  // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset` or a
+  // `set_model` for an engine with native controls — trusted, no zod, precedent
+  // mode_changed/model_changed. `appliesFrom:"next_turn"` is the ONLY value today
+  // (cut §2(d): preset/model changes apply to the next turn/start, never
+  // mid-turn); a literal, not a boolean, so a future immediate-apply variant is
+  // addable without breaking this shape. No legacy/byte-locked flow emits one
+  // (core never builds an EnginePresentation with `permissions`), so
+  // automation/replay snapshots stay byte-identical.
+  //
+  // `state` (additive, optional — B2-host carve-out) makes the ack TWO-PHASE,
+  // because the app-server has no ack channel of its own: it never sends a
+  // settings-updated notification (live fact L6), so there is nothing to relay.
+  //   "pending" — the host validated the choice and recorded it; nothing has been
+  //               sent to the server yet and the session still runs the old one.
+  //   "applied" — a `turn/start` carrying the new values was ACCEPTED by the
+  //               server. That acceptance is the only honest confirmation that
+  //               exists; a phantom notification must never be invented for it.
+  // Optional so an older renderer (and any future engine that applies settings
+  // immediately) stays valid without it.
+  | {
+      type: "engine_settings_changed";
+      model?: string;
+      activePresetId?: string;
+      state?: "pending" | "applied";
+      appliesFrom: "next_turn";
+    }
   // Phase 4 slice 4.4-T (design feature-session-titles.md §4): emitted once
   // the heuristic derives a title from the first user message, and again if
   // the async tier-2 LLM refinement upgrades it. Like `mode_changed` above,

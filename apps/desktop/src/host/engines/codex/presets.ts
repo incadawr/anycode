@@ -15,6 +15,8 @@
  * raw sandbox/policy object.
  */
 
+import type { EnginePermissionPreset } from "../../../shared/protocol.js";
+
 export type CodexApprovalPolicy = "untrusted" | "on-request";
 
 /** `ThreadStartParams.sandbox` (cut §1.3) — the coarse posture sent on `thread/start`. */
@@ -91,4 +93,62 @@ export const DEFAULT_CODEX_PRESET = "ask" as const;
 
 export function findCodexPreset(id: string): CodexPermissionPresetDefinition | undefined {
   return CODEX_PERMISSION_PRESETS.find((preset) => preset.id === id);
+}
+
+/** The wire projection consumed by `EnginePresentation.permissions.presets` — labels/descriptions only, never the policy objects. */
+export function codexPresetChoices(): EnginePermissionPreset[] {
+  return CODEX_PERMISSION_PRESETS.map((preset) => ({
+    id: preset.id,
+    label: preset.label,
+    description: preset.description,
+  }));
+}
+
+/**
+ * The settings a `thread/start` / `thread/resume` response echoes back. Only the
+ * two axes worth comparing are modelled; unknown/extra keys are ignored (L9).
+ */
+export interface CodexEffectiveSettings {
+  approvalPolicy?: unknown;
+  /** `{type:"workspaceWrite"|"readOnly"|"dangerFullAccess", …}` on the wire. */
+  sandbox?: unknown;
+}
+
+/** Sandbox confinement, strongest first. An unrecognized tier is `undefined` -> not comparable -> silent. */
+function sandboxTier(sandbox: unknown): number | undefined {
+  const type = sandbox !== null && typeof sandbox === "object" ? (sandbox as { type?: unknown }).type : sandbox;
+  if (type === "readOnly" || type === "read-only") return 2;
+  if (type === "workspaceWrite" || type === "workspace-write") return 1;
+  if (type === "dangerFullAccess" || type === "danger-full-access") return 0;
+  return undefined;
+}
+
+/**
+ * Drift check (cut §2(k).2), NOT a reverse mapping. Reverse-mapping the server's
+ * effective settings back to a preset id is FORBIDDEN — L8 proves it is
+ * impossible: a thread started `untrusted` resumes reporting `on-request`, and
+ * `writableRoots` echoes back `[]`. The persisted `presetId` is the single
+ * source of display truth; the echo is only ever consulted to answer one
+ * question: "is what the server actually has WEAKER than what the user picked?"
+ *
+ * Consequences of L8, both deliberate:
+ *  - The `untrusted` <-> `on-request` pair is treated as EQUIVALENT. It is the
+ *    one asymmetry the server is known not to round-trip, so comparing it would
+ *    fire a warning on literally every resume of the default preset — a warning
+ *    that cries wolf is worse than no warning. `never` (approvals disabled
+ *    outright) is still genuinely weaker than both and IS reported.
+ *  - `writableRoots` is never compared (the echo is `[]` even when a root was
+ *    sent and honoured).
+ *
+ * The sandbox tier, by contrast, does round-trip and is compared in full.
+ */
+export function isEffectivePostureWeaker(
+  preset: CodexPermissionPresetDefinition,
+  effective: CodexEffectiveSettings,
+): boolean {
+  if (effective.approvalPolicy === "never") return true;
+  const expected = sandboxTier(preset.threadParams.sandbox);
+  const actual = sandboxTier(effective.sandbox);
+  if (expected === undefined || actual === undefined) return false;
+  return actual < expected;
 }
