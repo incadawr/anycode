@@ -21,7 +21,7 @@
  * `turn/completed`, which the translator maps to `loop_end:cancelled`.
  */
 
-import type { AgentEvent, PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { AgentEvent, HistoryItem, PermissionMode, ReasoningEffort } from "@anycode/core";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
   CODEX_POST_INTERRUPT_SETTLE_MS,
@@ -36,6 +36,7 @@ import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js"
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
 import { CodexModelCatalog } from "./catalog.js";
 import { TurnTranslator } from "./event-translator.js";
+import { projectCodexHistory, type CodexThreadRead } from "./history-projection.js";
 import {
   DEFAULT_CODEX_PRESET,
   codexPresetChoices,
@@ -43,8 +44,14 @@ import {
   isEffectivePostureWeaker,
   type CodexPermissionPresetDefinition,
 } from "./presets.js";
+import type { CodexShadowLogPort } from "./shadow-log.js";
 import { TurnItemIndex } from "./turn-item-index.js";
 import type { JsonRpcNotification } from "./protocol.js";
+
+/** Resume-history projection cap (cut §2(e)); pagination of `thread/read` beyond this is a documented residual. */
+export const CODEX_HISTORY_MAX_ITEMS = 200;
+/** Cap on a shadow-logged command's captured output (cut §2(e): outputHead capped at 8 KiB). */
+const SHADOW_OUTPUT_HEAD_CAP = 8192;
 
 export const CODEX_NOT_SIGNED_IN = "Codex is not signed in — run `codex login` in a terminal, then start a new Codex session.";
 
@@ -273,6 +280,8 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   timeouts?: Partial<CodexEngineTimeouts>;
   /** Draft (new session) or persisted (resume) model/preset choice; validated host-side, never trusted. */
   selection?: CodexSessionSelection;
+  /** Host-owned shadow command log (cut §2(e)); absent only in tests that do not exercise resume-history. */
+  shadowLog?: CodexShadowLogPort;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -286,6 +295,21 @@ function nativeThread(result: ThreadResult, operation: string): { threadId: stri
     throw new Error(`Codex ${operation} returned no usable thread id and model`);
   }
   return { threadId, model };
+}
+
+/**
+ * Defensively coerces a raw `thread/read` response into `CodexThreadRead`
+ * (cut §2(l) tolerant-decoder convention — an unexpected shape degrades to
+ * "no history", never a boot-time throw). `turns` on the raw value is used
+ * verbatim when present and array-shaped; every item's own field access is
+ * ALREADY duck-typed/optional in history-projection.ts.
+ */
+function asThreadRead(value: unknown, fallbackThreadId: string): CodexThreadRead {
+  const root = record(value);
+  const thread = record(root?.thread);
+  const id = typeof thread?.id === "string" && thread.id.length > 0 ? thread.id : fallbackThreadId;
+  const turns = Array.isArray(thread?.turns) ? (thread.turns as CodexThreadRead["thread"]["turns"]) : [];
+  return { thread: { id, turns } };
 }
 
 /** Resolves once on abort and never rejects; the listener is always removed. */
@@ -336,6 +360,7 @@ export async function createNativeCodexSession(
   approvals?: CodexApprovalBridge,
   overrides?: Partial<CodexEngineTimeouts>,
   selection?: CodexSessionSelection,
+  shadowLog?: CodexShadowLogPort,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs);
@@ -352,7 +377,9 @@ export async function createNativeCodexSession(
   const native = nativeThread(result, "thread/start");
   const settings = buildSettings(workspace, catalog, preset, result, native.model, notices);
   return {
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings),
+    // A fresh thread has zero prior turns: no history to hydrate, and the
+    // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, 0, []),
     ...native,
     presetId: preset.id,
   };
@@ -373,6 +400,7 @@ export async function resumeNativeCodexSession(
   approvals?: CodexApprovalBridge,
   overrides?: Partial<CodexEngineTimeouts>,
   selection?: CodexSessionSelection,
+  shadowLog?: CodexShadowLogPort,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs);
@@ -387,7 +415,27 @@ export async function resumeNativeCodexSession(
   if (native.threadId !== externalSessionRef) {
     throw new Error("Codex thread/resume returned a different native thread");
   }
-  await client.request("thread/read", { threadId: native.threadId, includeTurns: true }, { timeoutMs: bounds.bootRpcMs });
+  // The resume-history hydration (cut §2(e)) runs exactly here, ONCE, before
+  // any new turn: `thread/read` is the only call that ever carries the full
+  // native `turns[]` array (`thread/resume`'s own response does not).
+  const rawRead = await client.request<unknown>(
+    "thread/read",
+    { threadId: native.threadId, includeTurns: true },
+    { timeoutMs: bounds.bootRpcMs },
+  );
+  const threadRead = asThreadRead(rawRead, native.threadId);
+  const shadow = shadowLog !== undefined ? await shadowLog.list(native.threadId) : [];
+  const historyItems = projectCodexHistory(threadRead, shadow, {
+    maxItems: CODEX_HISTORY_MAX_ITEMS,
+    // A thread with turns but zero shadow rows is either pre-slice or
+    // resumed on another machine (cut §2(e) degradation (a)) — the fallback
+    // marker documents the gap rather than silently showing an incomplete
+    // transcript. A brand-new thread (zero turns) has nothing to lose either way.
+    shadowMissing: shadow.length === 0 && (threadRead.thread.turns?.length ?? 0) > 0,
+  });
+  // The live turns THIS launch runs continue the native turns[] sequence —
+  // its current length is exactly the ordinal the next turn will occupy.
+  const baseTurnOrdinal = threadRead.thread.turns?.length ?? 0;
   // A model that vanished from the catalog between sessions must not silently
   // ride the next turn/start override: fall back to the thread's own model and
   // say so (recoverable, TASK.39 DoD-2), rather than burning the user's turn.
@@ -395,7 +443,7 @@ export async function resumeNativeCodexSession(
   const model = stored ?? native.model;
   const settings = buildSettings(workspace, catalog, preset, resumed, model, notices);
   return {
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings),
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems),
     threadId: native.threadId,
     model,
     presetId: preset.id,
@@ -412,7 +460,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: approvals.handle });
   try {
     await client.start();
-    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection);
+    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog);
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -439,6 +487,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       approvals,
       options.timeouts,
       options.selection,
+      options.shadowLog,
     );
     engine = connected.engine;
     return connected;
@@ -492,6 +541,12 @@ export class CodexEngine implements SessionEngine {
     private readonly approvals?: CodexApprovalBridge,
     overrides?: Partial<CodexEngineTimeouts>,
     settings?: CodexEngineSettings,
+    /** Host-owned shadow command log (cut §2(e)); undefined only for bare test-constructed engines. */
+    private readonly shadowLog?: CodexShadowLogPort,
+    /** This thread's turn count as of boot (0 for a fresh thread) — the ordinal the FIRST live turn of this launch occupies. */
+    private readonly baseTurnOrdinal = 0,
+    /** The one-shot resume-history projection (cut §2(e)); `[]` for a fresh session. */
+    private readonly bootHistoryItems: readonly HistoryItem[] = [],
   ) {
     // Interactive approval is advertised only after the exact W0 bridge is
     // installed; direct/test-only engines retain the fail-closed capability.
@@ -525,8 +580,9 @@ export class CodexEngine implements SessionEngine {
     // (turnSettingsOverride), never set from core's effort vocabulary.
   }
 
-  historyItems(): [] {
-    return [];
+  /** The resume projection built ONCE at boot (cut §2(e)) — `[]` for a fresh session. Session hydrates `bootHistory` from exactly this. */
+  historyItems(): readonly HistoryItem[] {
+    return this.bootHistoryItems;
   }
 
   // ── engine-owned settings seam (host/session.ts `engineSettings`) ──────────
@@ -760,8 +816,26 @@ export class CodexEngine implements SessionEngine {
       }
       this.activeTurn = { threadId: this.threadId, turnId, items };
       const translator = new TurnTranslator({ threadId: this.threadId, turnId, turn, items });
+      // This launch's live turns continue the thread's own turns[] sequence
+      // (cut §2(e)) — `turn` is this engine's 1-based in-process counter, so
+      // `turnOrdinal` is 0-based and offset by however many turns already
+      // existed at boot.
+      const turnOrdinal = this.baseTurnOrdinal + (turn - 1);
+      let itemsCompletedInTurn = 0;
       let terminal = false;
+      // Captured (not `this`-bound): `deliver` stays a plain generator
+      // function so `yield*` delegation below is unchanged from before this
+      // shadow-write hook existed.
+      const engine = this;
       const deliver = function* (notification: JsonRpcNotification): Generator<AgentEvent> {
+        // Every item/completed of this turn — command or not — consumes one
+        // position slot (recorded BEFORE incrementing), so the resume merge
+        // can reconstruct the exact live interleave
+        // (history-projection.ts's mergeTurnItems, cut §2(e)).
+        if (notification.method === "item/completed") {
+          engine.recordShadowItem(notification, turnId, turnOrdinal, itemsCompletedInTurn);
+          itemsCompletedInTurn += 1;
+        }
         for (const event of translator.onNotification(notification)) {
           if (event.type === "loop_end") terminal = true;
           yield event;
@@ -864,6 +938,34 @@ export class CodexEngine implements SessionEngine {
     const params = record(notification.params);
     if (params === null || params.threadId !== this.threadId) return;
     this.activeItems.record(params.item);
+  }
+
+  /**
+   * Shadow command log writer (cut §2(e)): the ONLY host-side write of a
+   * `commandExecution` completion, from the SAME `item/completed` notification
+   * the live translator already consumes — `positionInTurn` is the running
+   * per-turn completion counter BEFORE it advances (see `deliver` in
+   * `runTurn()`), so it lands in the same numbering space native items
+   * implicitly occupy. Fire-and-forget: `shadowLog.record` never blocks or
+   * fails a live turn.
+   */
+  private recordShadowItem(notification: JsonRpcNotification, turnId: string, turnOrdinal: number, positionInTurn: number): void {
+    if (this.shadowLog === undefined) return;
+    const params = record(notification.params);
+    if (params === null || params.threadId !== this.threadId || params.turnId !== turnId) return;
+    const item = record(params.item);
+    if (item === null || item.type !== "commandExecution" || typeof item.id !== "string") return;
+    if (typeof item.command !== "string") return;
+    const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
+    const aggregated = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : undefined;
+    this.shadowLog.record(this.threadId, item.id, {
+      turnOrdinal,
+      positionInTurn,
+      command: item.command,
+      ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(aggregated !== undefined ? { outputHead: aggregated.slice(0, SHADOW_OUTPUT_HEAD_CAP) } : {}),
+    });
   }
 
   /** Terminal closure of a turn the user cancelled before any native turn existed. */

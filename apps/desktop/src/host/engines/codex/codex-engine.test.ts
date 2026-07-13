@@ -4,6 +4,8 @@ import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
 import type { JsonRpcNotification, JsonRpcServerRequest } from "./protocol.js";
+import type { ShadowCommandItem } from "./history-projection.js";
+import type { CodexShadowLogPort } from "./shadow-log.js";
 import {
   CODEX_NOT_SIGNED_IN,
   CodexEngine,
@@ -11,6 +13,20 @@ import {
   resumeNativeCodexSession,
   type CodexClient,
 } from "./codex-engine.js";
+
+/** Records every write and answers `list()` from a settable fixture — the shadow-log test double. */
+class RecordingShadowLog implements CodexShadowLogPort {
+  readonly writes: Array<{ threadId: string; itemId: string; item: ShadowCommandItem }> = [];
+  listResult: ShadowCommandItem[] = [];
+
+  record(threadId: string, itemId: string, item: ShadowCommandItem): void {
+    this.writes.push({ threadId, itemId, item });
+  }
+
+  async list(_threadId: string): Promise<ShadowCommandItem[]> {
+    return this.listResult;
+  }
+}
 
 const THREAD = "native-thread";
 
@@ -132,6 +148,8 @@ class FakeAppServer implements CodexClient {
     reasoningEffort: "high",
   };
   threadStartParams: unknown = undefined;
+  /** `thread/read`'s response (TASK.42 resume-history hydration); default has zero turns — an empty resumed thread. */
+  threadReadResult: unknown = { thread: { id: "persisted-thread", turns: [] } };
   private pendingTurnStart: { resolve: (value: unknown) => void } | null = null;
   private turnCount = 0;
   private currentTurnId = "";
@@ -199,6 +217,9 @@ class FakeAppServer implements CodexClient {
     }
     if (method === "thread/resume") {
       return Promise.resolve({ thread: { id: "persisted-thread" }, model: "gpt-resumed", ...this.threadEcho } as T);
+    }
+    if (method === "thread/read") {
+      return Promise.resolve(this.threadReadResult as T);
     }
     if (method === "turn/start") {
       if (this.turnStartMode === "never") return new Promise<T>(() => {});
@@ -1044,5 +1065,180 @@ describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
     // Once — the notice is drained, not re-emitted every turn.
     const second = await runTurn(server, connected.engine, "again");
     expect(notices(second)).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK.42 — resume-history hydration + the command shadow log (cut §2(e)).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("CodexEngine — resume-history hydration (TASK.42)", () => {
+  it("historyItems() is [] for a bare/fresh-started engine", async () => {
+    const server = new FakeAppServer();
+    const created = await createNativeCodexSession(server, "/work");
+    expect(created.engine.historyItems()).toEqual([]);
+  });
+
+  it("resume wires thread/read's turns through projectCodexHistory into historyItems() — a real merged transcript, not []", async () => {
+    const server = new FakeAppServer();
+    server.threadReadResult = {
+      thread: {
+        id: "persisted-thread",
+        turns: [
+          {
+            id: "turn-a",
+            startedAt: 100,
+            items: [
+              { type: "userMessage", id: "u1", content: [{ type: "text", text: "hello" }] },
+              { type: "agentMessage", id: "a1", text: "hi there" },
+            ],
+          },
+        ],
+      },
+    };
+    // Pre-fix: resumeNativeCodexSession discarded the thread/read result
+    // entirely and historyItems() always returned [] — this assertion would
+    // fail with an empty array. No shadowLog was supplied, so the fallback
+    // degradation marker is also expected (asserted separately below) — this
+    // test only cares that the REAL native turn items came through.
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread");
+    const items = connected.engine.historyItems().filter((item) => item.kind !== "compact_summary");
+    expect(items).toEqual([
+      { id: "turn-a:u1", createdAt: 100000, message: { role: "user", content: "hello" } },
+      { id: "turn-a:a1", createdAt: 100001, message: { role: "assistant", content: [{ type: "text", text: "hi there" }] } },
+    ]);
+  });
+
+  it("resume merges shadow-logged commands into the projected history via the injected CodexShadowLogPort", async () => {
+    const server = new FakeAppServer();
+    server.threadReadResult = { thread: { id: "persisted-thread", turns: [{ id: "turn-a", startedAt: 0, items: [] }] } };
+    const shadowLog = new RecordingShadowLog();
+    shadowLog.listResult = [{ turnOrdinal: 0, positionInTurn: 0, command: "echo shadow", exitCode: 0, outputHead: "shadow\n" }];
+
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog);
+    const items = connected.engine.historyItems();
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ message: { content: [{ type: "tool_call", toolName: "Bash", input: { command: "echo shadow" } }] } });
+    expect(items[1]).toMatchObject({ message: { role: "tool", content: [{ status: "success", text: "shadow\n" }] } });
+  });
+
+  it("resume with a shadow log that has zero rows (but the thread has turns) projects the fallback degradation marker", async () => {
+    const server = new FakeAppServer();
+    server.threadReadResult = {
+      thread: { id: "persisted-thread", turns: [{ id: "turn-a", startedAt: 0, items: [{ type: "agentMessage", id: "a1", text: "hi" }] }] },
+    };
+    const shadowLog = new RecordingShadowLog();
+    shadowLog.listResult = [];
+
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog);
+    const items = connected.engine.historyItems();
+    expect(items[0]).toMatchObject({ kind: "compact_summary", message: { content: [{ text: expect.stringContaining("not retained by Codex") }] } });
+  });
+});
+
+describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
+  it("writes a shadow row for a completed commandExecution, with the correct turnOrdinal/positionInTurn", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", cwd: "/work" } } });
+    await tick();
+    server.stream.push({
+      method: "item/completed",
+      // Real wire echoes `command`/`cwd` on the completed item too (fixture
+      // w1-p1-command-decline.jsonl) — the writer reads them from HERE, the
+      // terminal snapshot, not from the earlier item/started.
+      params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", cwd: "/work", status: "completed", exitCode: 0, aggregatedOutput: "hi\n" } },
+    });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    expect(shadowLog.writes[0]).toEqual({
+      threadId: THREAD,
+      itemId: "exec-1",
+      item: { turnOrdinal: 0, positionInTurn: 0, command: "echo hi", cwd: "/work", exitCode: 0, outputHead: "hi\n" },
+    });
+  });
+
+  it("positionInTurn counts EVERY item completion of the turn, not just commands", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    // A text item completes FIRST (position 0), THEN the command (position 1)
+    // — the shadow row must record position 1, not 0, so the resume merge can
+    // reconstruct the command landing AFTER the text.
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "msg-1" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "msg-1", text: "hi" } } });
+    await tick();
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    expect(shadowLog.writes[0]?.item.positionInTurn).toBe(1);
+  });
+
+  it("turnOrdinal is offset by baseTurnOrdinal (a resumed thread's live turns continue its own numbering)", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    // Resumed with 3 prior native turns already persisted — this launch's
+    // FIRST live turn is native turn ordinal 3, not 0.
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 3);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes[0]?.item.turnOrdinal).toBe(3);
+  });
+
+  it("caps outputHead at 8 KiB", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+    const hugeOutput = "x".repeat(20_000);
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "yes x | head -c 20000" } } });
+    server.stream.push({
+      method: "item/completed",
+      params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "yes x | head -c 20000", status: "completed", exitCode: 0, aggregatedOutput: hugeOutput } },
+    });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes[0]?.item.outputHead).toHaveLength(8192);
+  });
+
+  it("never writes a shadow row for a declined command with no exitCode/output — the fields are simply omitted, not written as garbage", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "rm -rf /" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "rm -rf /", status: "declined" } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    expect(shadowLog.writes[0]?.item).toEqual({ turnOrdinal: 0, positionInTurn: 0, command: "rm -rf /" });
+  });
+
+  it("writes nothing when no shadowLog was supplied (undefined stays a no-op, never throws)", async () => {
+    const server = new FakeAppServer();
+    const engine = new CodexEngine(server, THREAD);
+    const events = await runTurn(server, engine);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
   });
 });

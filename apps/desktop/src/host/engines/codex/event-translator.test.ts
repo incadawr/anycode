@@ -160,4 +160,143 @@ describe("TurnTranslator — renderer invariants", () => {
       params: { threadId: "thread", turnId: "turn" },
     })).toEqual([]);
   });
+
+  it("projects a declined commandExecution as denied, not error (C0 review Medium, live side)", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification({ method: "item/started", params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "commandExecution", id: "x", command: "rm -rf /" } } });
+    const events = translator.onNotification({
+      method: "item/completed",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "commandExecution", id: "x", status: "declined" } },
+    });
+    // Pre-fix: statusFor had no "declined" branch, so this fell into the
+    // catch-all `error` case — a user's own deny read as a malfunction.
+    expect(events).toEqual([{ type: "tool_result", outcome: expect.objectContaining({ status: "denied" }) }]);
+  });
+
+  it("projects EVERY file of a multi-file fileChange as its own tool_execution_start/tool_result pair", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const started = translator.onNotification({
+      method: "item/started",
+      params: {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "fileChange", id: "fc", changes: [{ path: "a.txt", diff: "+a" }, { path: "b.txt", diff: "+b" }] },
+      },
+    });
+    // Pre-fix: projectTool() only ever read `item.changes[0]`, so only ONE
+    // tool_execution_start would have been emitted here — b.txt would never
+    // appear.
+    expect(started).toHaveLength(2);
+    expect(started.map((event) => (event as { toolCallId: string }).toolCallId)).toEqual(["fc:0", "fc:1"]);
+
+    const completed = translator.onNotification({
+      method: "item/completed",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "fileChange", id: "fc", status: "completed" } },
+    });
+    expect(completed).toHaveLength(2);
+    expect(completed.map((event) => (event as { outcome: { toolCallId: string } }).outcome.toolCallId)).toEqual(["fc:0", "fc:1"]);
+  });
+
+  it("accumulates live commandExecution output deltas and falls back to them when aggregatedOutput is missing at completion", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification({ method: "item/started", params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "commandExecution", id: "x", command: "echo hi" } } });
+    // Pre-fix: "item/commandExecution/outputDelta" was not in the switch, so
+    // it hit the `default` case and was silently discarded — the deltas
+    // below would be lost, and modelText would be "" at completion.
+    translator.onNotification({ method: "item/commandExecution/outputDelta", params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: "x", delta: "hi" } });
+    translator.onNotification({ method: "item/commandExecution/outputDelta", params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: "x", delta: "\n" } });
+    const events = translator.onNotification({
+      method: "item/completed",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "commandExecution", id: "x", status: "completed", aggregatedOutput: null } },
+    });
+    expect((events[0] as { outcome: { modelText: string } }).outcome.modelText).toBe("hi\n");
+  });
+
+  it("aggregatedOutput still wins over the accumulated delta buffer when both are present", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification({ method: "item/started", params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "commandExecution", id: "x", command: "echo hi" } } });
+    translator.onNotification({ method: "item/commandExecution/outputDelta", params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: "x", delta: "partial" } });
+    const events = translator.onNotification({
+      method: "item/completed",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "commandExecution", id: "x", status: "completed", aggregatedOutput: "full output\n" } },
+    });
+    expect((events[0] as { outcome: { modelText: string } }).outcome.modelText).toBe("full output\n");
+  });
+});
+
+describe("TurnTranslator — errors and retries (cut §2(i))", () => {
+  it("a terminal error notification (willRetry:false) surfaces with its ORIGINAL safe message, followed by an honest loop_end reason", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    // Real fixture shape: contract/fixtures/w1-p6-start-echo-and-error.jsonl.
+    const errorEvents = translator.onNotification({
+      method: "error",
+      params: {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        error: { message: "The 'bogus-model' model is not supported when using Codex with a ChatGPT account.", codexErrorInfo: "other", additionalDetails: null },
+        willRetry: false,
+      },
+    });
+    // Pre-fix: "error" was not in the switch, so this notification was
+    // silently discarded — no {type:"error"} event would ever be emitted here.
+    expect(errorEvents).toEqual([{ type: "error", error: expect.any(Error) }]);
+    expect((errorEvents[0] as { error: Error }).error.message).toBe(
+      "The 'bogus-model' model is not supported when using Codex with a ChatGPT account.",
+    );
+
+    const finishEvents = translator.onNotification({
+      method: "turn/completed",
+      params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed" } },
+    });
+    // Honest reason, not a faceless "error" with no prior explanation — and no
+    // SECOND {type:"error"} duplicating the one already emitted above.
+    expect(finishEvents.filter((event) => event.type === "error")).toHaveLength(0);
+    expect(finishEvents.at(-1)).toEqual({ type: "loop_end", reason: "error", turns: 1 });
+  });
+
+  it("a terminal turn/completed with no preceding error notification still surfaces the error (fallback in finish())", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({
+      method: "turn/completed",
+      params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message: "sandbox denied this operation" } } },
+    });
+    // Pre-fix: finish() never inspected turn.error at all — this would have
+    // been a completely faceless loop_end:"error" with zero explanation.
+    expect(events[0]).toEqual({ type: "error", error: expect.any(Error) });
+    expect((events[0] as { error: Error }).error.message).toBe("sandbox denied this operation");
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "error", turns: 1 });
+  });
+
+  it("willRetry:true routes to engine_notice (level retry), never a terminal error, and the turn keeps running", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({
+      method: "error",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "network hiccup, retrying" }, willRetry: true },
+    });
+    // Pre-fix: unhandled -> []. A retry must never look like a failure.
+    expect(events).toEqual([{ type: "engine_notice", level: "retry", message: "network hiccup, retrying" }]);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+
+    // The turn is still alive afterwards — completes normally.
+    const finishEvents = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "completed" } } });
+    expect(finishEvents.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+  });
+
+  it("a thread-scoped `warning` notification (no turnId on the wire) surfaces as engine_notice level warning", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    // Real fixture shape: contract/fixtures/w1-p6-start-echo-and-error.jsonl —
+    // `warning` carries only {threadId, message}, no turnId at all.
+    const events = translator.onNotification({
+      method: "warning",
+      params: { threadId: THREAD_ID, message: "Model metadata not found; defaulting to fallback metadata." },
+    });
+    // Pre-fix: matchingTurn() required turnId === this turn's id, which a
+    // warning notification never carries — it would be dropped as "foreign".
+    expect(events).toEqual([{ type: "engine_notice", level: "warning", message: "Model metadata not found; defaulting to fallback metadata." }]);
+  });
+
+  it("ignores a warning addressed to a foreign thread", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    expect(translator.onNotification({ method: "warning", params: { threadId: "other-thread", message: "irrelevant" } })).toEqual([]);
+  });
 });

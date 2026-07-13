@@ -84,6 +84,29 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE sessions ADD COLUMN external_session_ref TEXT",
     ],
   },
+  {
+    version: 4,
+    statements: [
+      // Codex shadow command log (codex-fixes TASK.42, cut §2(e)): the native
+      // `thread/read` never persists `commandExecution` items, not even
+      // successful ones, so a relaunch would otherwise lose every command's
+      // output. `(thread_id, item_id)` is the primary key so a duplicate live
+      // write (e.g. a retried notification) can never double a row.
+      `CREATE TABLE codex_thread_items (
+        thread_id TEXT NOT NULL,
+        turn_ordinal INTEGER NOT NULL,
+        position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL,
+        command TEXT NOT NULL,
+        cwd TEXT,
+        exit_code INTEGER,
+        output_head TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (thread_id, item_id)
+      )`,
+      `CREATE INDEX idx_codex_thread_items_thread ON codex_thread_items (thread_id, turn_ordinal, position_in_turn)`,
+    ],
+  },
 ];
 
 /**
@@ -175,6 +198,44 @@ function rowToCheckpointMeta(row: CheckpointRow): CheckpointMeta {
 
 /** Default checkpoint retention per session (design slice-4.7-cut.md §2.1). */
 const CHECKPOINTS_KEEP_PER_SESSION = 50;
+
+// ---------------------------------------------------------------------------
+// Codex shadow command log (migration v4, codex-fixes TASK.42 cut §2(e))
+
+/** One `commandExecution` completion the host observed live, keyed by the native thread it belongs to. */
+export interface CodexShadowCommandItem {
+  itemId: string;
+  turnOrdinal: number;
+  positionInTurn: number;
+  command: string;
+  cwd?: string;
+  exitCode?: number;
+  outputHead?: string;
+}
+
+interface CodexThreadItemRow {
+  thread_id: string;
+  turn_ordinal: number;
+  position_in_turn: number;
+  item_id: string;
+  command: string;
+  cwd: string | null;
+  exit_code: number | null;
+  output_head: string | null;
+  created_at: number;
+}
+
+function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowCommandItem {
+  return {
+    itemId: row.item_id,
+    turnOrdinal: row.turn_ordinal,
+    positionInTurn: row.position_in_turn,
+    command: row.command,
+    ...(row.cwd !== null ? { cwd: row.cwd } : {}),
+    ...(row.exit_code !== null ? { exitCode: row.exit_code } : {}),
+    ...(row.output_head !== null ? { outputHead: row.output_head } : {}),
+  };
+}
 
 export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore {
   private db: DatabaseSync | undefined;
@@ -376,6 +437,39 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       return null;
     }
     return { ...rowToCheckpointMeta(row), historyJson: row.history_json };
+  }
+
+  // -------------------------------------------------------------------------
+  // Codex shadow command log (migration v4, cut §2(e)). Additive to
+  // PersistencePort — host-only usage, never consumed through that interface.
+
+  /** INSERT OR REPLACE keeps a re-delivered notification for the same item idempotent rather than duplicating a row. */
+  async recordCodexThreadItem(threadId: string, item: CodexShadowCommandItem): Promise<void> {
+    const db = this.open();
+    db.prepare(
+      `INSERT OR REPLACE INTO codex_thread_items
+         (thread_id, turn_ordinal, position_in_turn, item_id, command, cwd, exit_code, output_head, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      threadId,
+      item.turnOrdinal,
+      item.positionInTurn,
+      item.itemId,
+      item.command,
+      item.cwd ?? null,
+      item.exitCode ?? null,
+      item.outputHead ?? null,
+      Date.now(),
+    );
+  }
+
+  /** Ordered for direct consumption by `projectCodexHistory`'s merge: (turnOrdinal, then positionInTurn). */
+  async listCodexThreadItems(threadId: string): Promise<CodexShadowCommandItem[]> {
+    const db = this.open();
+    const rows = db
+      .prepare("SELECT * FROM codex_thread_items WHERE thread_id = ? ORDER BY turn_ordinal ASC, position_in_turn ASC")
+      .all(threadId) as unknown as CodexThreadItemRow[];
+    return rows.map(rowToCodexShadowCommandItem);
   }
 
   async close(): Promise<void> {

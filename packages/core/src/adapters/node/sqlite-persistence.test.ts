@@ -407,6 +407,94 @@ describe("SqlitePersistenceAdapter", () => {
       await adapter.close();
     });
   });
+
+  describe("codex shadow command log (migration v4)", () => {
+    it("records and lists items ordered by (turnOrdinal, positionInTurn), not insertion order", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-b",
+        turnOrdinal: 0,
+        positionInTurn: 2,
+        command: "echo b",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        command: "echo a",
+        cwd: "/repo",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-c",
+        turnOrdinal: 1,
+        positionInTurn: 0,
+        command: "echo c",
+        exitCode: 1,
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items.map((i) => i.itemId)).toEqual(["exec-a", "exec-b", "exec-c"]);
+      expect(items[0]).toEqual({
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        command: "echo a",
+        cwd: "/repo",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
+      expect(items[1]).toEqual({ itemId: "exec-b", turnOrdinal: 0, positionInTurn: 2, command: "echo b" });
+    });
+
+    it("scopes items to their own thread", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", { itemId: "x", turnOrdinal: 0, positionInTurn: 0, command: "echo x" });
+      await adapter.recordCodexThreadItem("thread-2", { itemId: "y", turnOrdinal: 0, positionInTurn: 0, command: "echo y" });
+
+      expect((await adapter.listCodexThreadItems("thread-1")).map((i) => i.itemId)).toEqual(["x"]);
+      expect((await adapter.listCodexThreadItems("thread-2")).map((i) => i.itemId)).toEqual(["y"]);
+      expect(await adapter.listCodexThreadItems("thread-missing")).toEqual([]);
+    });
+
+    it("a repeated write for the same (threadId, itemId) replaces the row instead of duplicating it", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, command: "echo a" });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        command: "echo a",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ exitCode: 0, outputHead: "a\n" });
+    });
+
+    it("migration v4 runs on top of an existing v3 database", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-"));
+      const dbPath = join(tmpDir, "v3.sqlite");
+
+      const seed = new DatabaseSync(dbPath);
+      seed.exec("PRAGMA journal_mode = WAL;");
+      seed.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`);
+      seed.exec(
+        `CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT, engine_id TEXT, external_session_ref TEXT)`,
+      );
+      seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0)").run();
+      seed.close();
+
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      // Using the table at all proves the v4 migration applied on top of v3.
+      await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, command: "echo a" });
+      expect((await adapter.listCodexThreadItems("thread-1")).map((i) => i.itemId)).toEqual(["exec-a"]);
+      await adapter.close();
+    });
+  });
 });
 
 describe("WriteBehindHistorySink", () => {

@@ -32,6 +32,10 @@ export type { ShadowGitCheckpointsOptions, RewindScope, RewindResult } from "./c
 // the desktop host's rewind seam (slice P7.26/R2), so Session references the SAME
 // CheckpointMeta the store returns rather than a hand-duplicated wire shape.
 export type { CheckpointMeta, CheckpointReason } from "./ports/checkpoints.js";
+// Codex shadow command log DTO (codex-fixes TASK.42, cut §2(e)): re-exported for
+// the desktop host's `SqliteCodexShadowLog` adapter (host/engines/codex/shadow-log.ts),
+// which wraps this same SqlitePersistenceAdapter — never a hand-duplicated row shape.
+export type { CodexShadowCommandItem } from "./adapters/node/sqlite-persistence.js";
 // Pure string helper (no I/O, no auto-run block — the NOTE about cli/main.ts
 // below does not apply): re-exported for the desktop host's notice injection
 // (slice 6.DP-2), so both wiring paths append byte-identical reminder blocks.

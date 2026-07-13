@@ -1,13 +1,14 @@
 /**
- * Golden tests for the pure `thread/read` -> `HistoryItem[]` projection (cut
- * §2(e)/§3.6). The "resume" case is the literal W0-evidenced shape (scrubbed
- * copy also committed at contract/fixtures/resume-read.jsonl, cut §2(h)) —
- * pinning it here as an inline golden keeps this test independent of that
- * fixture file's exact on-disk path/format.
+ * Golden tests for the pure `thread/read` + shadow-log -> `HistoryItem[]`
+ * projection (cut §2(e)/§3.6). The "resume" case is the literal W0-evidenced
+ * shape (scrubbed copy also committed at contract/fixtures/resume-read.jsonl,
+ * cut §2(h)) — pinning it here as an inline golden keeps this test
+ * independent of that fixture file's exact on-disk path/format.
  */
 
 import { describe, expect, it } from "vitest";
-import { projectCodexHistory, type CodexThreadRead } from "./history-projection.js";
+import type { HistoryItem } from "@anycode/core";
+import { projectCodexHistory, type CodexThreadRead, type ShadowCommandItem } from "./history-projection.js";
 
 const RESUME_READ_THREAD: CodexThreadRead = {
   thread: {
@@ -29,9 +30,18 @@ const RESUME_READ_THREAD: CodexThreadRead = {
   },
 };
 
-describe("projectCodexHistory", () => {
+function toolCallIdsOf(items: HistoryItem[]): string[] {
+  return items
+    .map((item) => item.message)
+    .filter((message): message is Extract<typeof message, { role: "assistant" }> => message.role === "assistant")
+    .flatMap((message) => message.content)
+    .filter((part): part is Extract<typeof part, { type: "tool_call" }> => part.type === "tool_call")
+    .map((part) => part.toolCallId);
+}
+
+describe("projectCodexHistory — native-only projection", () => {
   it("projects the W0 resume-read golden turn verbatim (user + assistant text)", () => {
-    const items = projectCodexHistory(RESUME_READ_THREAD, { maxItems: 200 });
+    const items = projectCodexHistory(RESUME_READ_THREAD, [], { maxItems: 200 });
     expect(items).toEqual([
       {
         id: "019f554c-ddd9-71b2-a90d-0191ac1e4422:item-1",
@@ -46,7 +56,7 @@ describe("projectCodexHistory", () => {
     ]);
   });
 
-  it("projects a commandExecution item into an assistant tool_call + tool tool_result pair (Bash)", () => {
+  it("projects a native commandExecution item into an assistant tool_call + tool tool_result pair (Bash)", () => {
     const thread: CodexThreadRead = {
       thread: {
         id: "t1",
@@ -68,7 +78,7 @@ describe("projectCodexHistory", () => {
         ],
       },
     };
-    const items = projectCodexHistory(thread, { maxItems: 200 });
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
     expect(items).toEqual([
       {
         id: "turn-1:exec-1:call",
@@ -87,6 +97,32 @@ describe("projectCodexHistory", () => {
         },
       },
     ]);
+  });
+
+  it("projects a declined native commandExecution as denied, not error (C0 review Medium)", () => {
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [{ id: "turn-1", startedAt: 0, items: [{ type: "commandExecution", id: "exec-1", command: "rm -rf /", status: "declined" }] }],
+      },
+    };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    const result = items.find((item) => item.message.role === "tool");
+    // Pre-fix: statusFor had no "declined" branch, so this fell into the
+    // catch-all `error` case — a user's own deny read as a malfunction.
+    expect(result?.message).toMatchObject({ content: [{ status: "denied" }] });
+  });
+
+  it("projects a declined native fileChange as denied, not error", () => {
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [{ id: "turn-1", startedAt: 0, items: [{ type: "fileChange", id: "fc-1", status: "declined", changes: [{ path: "a.txt", diff: "+a" }] }] }],
+      },
+    };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    const result = items.find((item) => item.message.role === "tool");
+    expect(result?.message).toMatchObject({ content: [{ status: "denied" }] });
   });
 
   it("projects EVERY file of a multi-file fileChange (not just the first)", () => {
@@ -112,29 +148,98 @@ describe("projectCodexHistory", () => {
         ],
       },
     };
-    const items = projectCodexHistory(thread, { maxItems: 200 });
-    const toolCallIds = items
-      .map((item) => item.message)
-      .filter((message): message is Extract<typeof message, { role: "assistant" }> => message.role === "assistant")
-      .flatMap((message) => message.content)
-      .filter((part): part is Extract<typeof part, { type: "tool_call" }> => part.type === "tool_call")
-      .map((part) => part.toolCallId);
-    expect(toolCallIds).toEqual(["fc-1:0", "fc-1:1"]);
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    expect(toolCallIdsOf(items)).toEqual(["fc-1:0", "fc-1:1"]);
   });
 
-  it("degrades an unmapped item type (e.g. reasoning) to a deterministic text block instead of dropping it", () => {
+  it("degrades an unmapped item type to a deterministic text block instead of dropping it", () => {
+    // A genuinely unhandled item type (not reasoning/plan, which now have
+    // their own dedicated projection below) — the generic fallback path.
     const thread: CodexThreadRead = {
       thread: {
         id: "t1",
-        turns: [{ id: "turn-1", startedAt: 0, items: [{ type: "reasoning", id: "rs-1" }] }],
+        turns: [{ id: "turn-1", startedAt: 0, items: [{ type: "webSearchCall", id: "ws-1" }] }],
       },
     };
-    const items = projectCodexHistory(thread, { maxItems: 200 });
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
     expect(items).toHaveLength(1);
     expect(items[0]?.message).toEqual({
       role: "assistant",
-      content: [{ type: "text", text: "[Codex reasoning item — not represented in AnyCode's transcript format]" }],
+      content: [{ type: "text", text: "[Codex webSearchCall item — not represented in AnyCode's transcript format]" }],
     });
+  });
+
+  it("preserves reasoning summary/content text instead of only the type label (C0 review Medium)", () => {
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 0,
+            items: [{ type: "reasoning", id: "rs-1", summary: ["Checking the file first"], content: ["Then I will run the test suite"] }],
+          },
+        ],
+      },
+    };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    expect(items).toHaveLength(1);
+    const message = items[0]?.message;
+    // Pre-fix: reasoning fell into the generic fallback, which shows ONLY the
+    // bare type label — this text would never appear.
+    expect(message?.role === "assistant" ? message.content[0] : null).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Checking the file first"),
+    });
+    expect(message?.role === "assistant" ? message.content[0] : null).toMatchObject({
+      text: expect.stringContaining("Then I will run the test suite"),
+    });
+  });
+
+  it("degrades an empty reasoning item gracefully, without crashing", () => {
+    const thread: CodexThreadRead = {
+      thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [{ type: "reasoning", id: "rs-1" }] }] },
+    };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    expect(items).toHaveLength(1);
+  });
+
+  it("preserves plan text instead of only the type label (C0 review Medium)", () => {
+    const thread: CodexThreadRead = {
+      thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [{ type: "plan", id: "pl-1", text: "1. Read the file\n2. Fix the bug" }] }] },
+    };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    const message = items[0]?.message;
+    expect(message?.role === "assistant" ? message.content[0] : null).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("1. Read the file\n2. Fix the bug"),
+    });
+  });
+
+  it("preserves a non-text userMessage part (image) as a bracketed reference instead of silently dropping it (C0 review Medium)", () => {
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 0,
+            items: [
+              {
+                type: "userMessage",
+                id: "um-1",
+                content: [{ type: "text", text: "Look at this: " }, { type: "image", url: "https://example.com/x.png" }],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    const message = items[0]?.message;
+    // Pre-fix: textOf() filtered to only parts with a `text` string, so the
+    // image part vanished with no trace at all.
+    expect(message?.role === "user" ? message.content : null).toContain("https://example.com/x.png");
   });
 
   it("caps to the last maxItems and prepends exactly one truncation marker", () => {
@@ -144,7 +249,7 @@ describe("projectCodexHistory", () => {
       text: `msg-${i}`,
     }));
     const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items }] } };
-    const projected = projectCodexHistory(thread, { maxItems: 2 });
+    const projected = projectCodexHistory(thread, [], { maxItems: 2 });
     expect(projected).toHaveLength(3); // 1 marker + 2 kept
     expect(projected[0]?.kind).toBe("compact_summary");
     expect(projected[0]?.message.content).toEqual([
@@ -159,6 +264,113 @@ describe("projectCodexHistory", () => {
   });
 
   it("returns an empty array for a thread with no turns", () => {
-    expect(projectCodexHistory({ thread: { id: "t1" } }, { maxItems: 200 })).toEqual([]);
+    expect(projectCodexHistory({ thread: { id: "t1" } }, [], { maxItems: 200 })).toEqual([]);
+  });
+});
+
+describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => {
+  it("fallback: an empty shadow log with shadowMissing:true prepends the explicit degradation marker", () => {
+    const items = projectCodexHistory(RESUME_READ_THREAD, [], { maxItems: 200, shadowMissing: true });
+    expect(items[0]).toMatchObject({
+      kind: "compact_summary",
+      message: { content: [{ text: "command output from earlier sessions is not retained by Codex" }] },
+    });
+    expect(items).toHaveLength(3); // marker + the 2 native golden items
+  });
+
+  it("an empty shadow log WITHOUT shadowMissing projects natives only — no false-positive marker", () => {
+    const items = projectCodexHistory(RESUME_READ_THREAD, [], { maxItems: 200 });
+    expect(items.some((item) => item.kind === "compact_summary")).toBe(false);
+  });
+
+  it("shadow-only turn: a turn whose only item is a command (never persisted natively) is reconstructed purely from the shadow log", () => {
+    const thread: CodexThreadRead = {
+      thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [] }] },
+    };
+    const shadow: ShadowCommandItem[] = [
+      { turnOrdinal: 0, positionInTurn: 0, command: "echo shadow-only", cwd: "/repo", exitCode: 0, outputHead: "shadow-only\n" },
+    ];
+    const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
+    expect(items).toEqual([
+      {
+        id: "turn-1:shadow:0:call",
+        createdAt: 0,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "turn-1:shadow:0", toolName: "Bash", input: { command: "echo shadow-only", cwd: "/repo" } }],
+        },
+      },
+      {
+        id: "turn-1:shadow:0:result",
+        createdAt: 1,
+        message: {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "turn-1:shadow:0", toolName: "Bash", text: "shadow-only\n", status: "success" }],
+        },
+      },
+    ]);
+  });
+
+  it("native-only turn: a turn with items but zero shadow rows for it projects exactly as the native-only path (regression)", () => {
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 5, positionInTurn: 0, command: "unrelated turn", exitCode: 0 }];
+    const items = projectCodexHistory(RESUME_READ_THREAD, shadow, { maxItems: 200 });
+    // turnOrdinal 5 does not exist in RESUME_READ_THREAD (only turn 0) — the
+    // shadow row is simply never matched to any turn, and turn 0 renders
+    // byte-identical to the native-only golden above.
+    expect(items).toEqual([
+      {
+        id: "019f554c-ddd9-71b2-a90d-0191ac1e4422:item-1",
+        createdAt: 1783842528000,
+        message: { role: "user", content: "Reply with exactly W0_TEXT_OK. Do not call tools." },
+      },
+      {
+        id: "019f554c-ddd9-71b2-a90d-0191ac1e4422:item-2",
+        createdAt: 1783842528001,
+        message: { role: "assistant", content: [{ type: "text", text: "W0_TEXT_OK" }] },
+      },
+    ]);
+  });
+
+  it("interleaved turn: a shadow command between two real (golden) native text items lands in the middle, not before/after both", () => {
+    // Augments the REAL W0 golden turn (userMessage @ native position 0,
+    // agentMessage @ native position 1) with a synthetic shadow command
+    // claiming absolute position 1 — i.e. a command that ran BETWEEN the
+    // user's message and the agent's reply, exactly the case native
+    // `thread/read` can never reconstruct on its own (L4).
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 1, command: "echo between", exitCode: 0, outputHead: "between\n" }];
+    const items = projectCodexHistory(RESUME_READ_THREAD, shadow, { maxItems: 200 });
+
+    const roles = items.map((item) => item.message.role);
+    expect(roles).toEqual(["user", "assistant", "tool", "assistant"]);
+    expect(items[0]).toMatchObject({ message: { role: "user", content: "Reply with exactly W0_TEXT_OK. Do not call tools." } });
+    // The shadow command's tool_call/tool_result pair sits strictly BETWEEN
+    // the user message and the agent's final text reply.
+    expect(items[1]).toMatchObject({ message: { content: [{ type: "tool_call", toolCallId: "019f554c-ddd9-71b2-a90d-0191ac1e4422:shadow:1" }] } });
+    expect(items[2]).toMatchObject({ message: { role: "tool", content: [{ status: "success", text: "between\n" }] } });
+    expect(items[3]).toMatchObject({ message: { role: "assistant", content: [{ type: "text", text: "W0_TEXT_OK" }] } });
+  });
+
+  it("a shadow command with no exitCode (declined/interrupted before completion) degrades to cancelled, not error", () => {
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [] }] } };
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 0, command: "rm -rf /" }];
+    const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
+    const result = items.find((item) => item.message.role === "tool");
+    expect(result?.message).toMatchObject({ content: [{ status: "cancelled" }] });
+  });
+
+  it("truncation at 200 still applies correctly with shadow items merged in", () => {
+    const nativeItems = Array.from({ length: 4 }, (_, i) => ({ type: "agentMessage" as const, id: `item-${i}`, text: `msg-${i}` }));
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: nativeItems }] } };
+    // Interleave a shadow command at position 4 (after all 4 native items):
+    // total items in the turn = 4 native + 1 shadow = 5, each shadow command
+    // projects to 2 HistoryItems -> 6 HistoryItems total, capped to the last 3.
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 4, command: "echo last", exitCode: 0, outputHead: "last\n" }];
+    const projected = projectCodexHistory(thread, shadow, { maxItems: 3 });
+    expect(projected).toHaveLength(4); // 1 marker + 3 kept
+    expect(projected[0]?.kind).toBe("compact_summary");
+    // The 3 kept items are the tail: msg-3, then the shadow command's call+result pair.
+    expect(projected[1]).toMatchObject({ message: { content: [{ type: "text", text: "msg-3" }] } });
+    expect(projected[2]).toMatchObject({ message: { content: [{ type: "tool_call", toolName: "Bash" }] } });
+    expect(projected[3]).toMatchObject({ message: { role: "tool", content: [{ status: "success" }] } });
   });
 });

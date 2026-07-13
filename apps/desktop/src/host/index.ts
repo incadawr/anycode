@@ -259,6 +259,7 @@ import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
 import { resumeCodexEngine, startCodexEngine } from "./engines/codex/codex-engine.js";
 import { parseCodexEngineArgs } from "./engines/codex/draft-args.js";
 import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
+import { SqliteCodexShadowLog } from "./engines/codex/shadow-log.js";
 import { ENV_CODEX_BIN } from "../shared/engines.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session } from "./session.js";
@@ -355,6 +356,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     process.pid,
     (message) => process.parentPort.postMessage(message),
   ) ?? undefined;
+  // Shadow command log (cut §2(e), TASK.42): the HOST is the sole writer,
+  // from the live `item/*` stream inside CodexEngine — never the renderer.
+  const shadowLog = new SqliteCodexShadowLog(persistence);
   const options = {
     bootstrap,
     broker,
@@ -362,6 +366,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     cwd: workspace,
     workspace,
     sourceEnv: process.env,
+    shadowLog,
     ...(processOwnership !== undefined ? { processOwnership } : {}),
   };
 
@@ -472,8 +477,13 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     workspace,
     model: connected.model,
     sessionId: connected.sessionMeta.id,
-    // Codex owns native thread history; never hydrate an AgentLoop history.
-    bootHistory: [],
+    // Codex owns native thread history; never an AgentLoop history — this is
+    // the resume projection built ONCE at boot (TASK.42, cut §2(e)):
+    // native `thread/read` merged with the command shadow log, `[]` for a
+    // fresh session. `booted.engine` is the SAME CodexEngine instance
+    // `connected.engine` already is (registry.ts's codex plugin is a
+    // pass-through), so this is exactly what `historyItems()` returns.
+    bootHistory: booted.engine.historyItems(),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
     rules: new SessionPermissionRules(),
     imageInputEnabled: () => false,
