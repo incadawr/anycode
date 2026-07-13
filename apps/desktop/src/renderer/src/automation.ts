@@ -59,7 +59,7 @@ import { slashQueryAt } from "./slash-menu.js";
 import { sortCheckpointsNewestFirst } from "./components/TimelinePanel.js";
 import type { GitCommand, RewindScopeWire, UiToHostMessage, WireEnvStatus } from "../../shared/protocol.js";
 import type { CreateTabRequest, CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
-import type { EngineId } from "../../shared/engines.js";
+import { ENGINE_IDS, isEngineId, type EngineId } from "../../shared/engines.js";
 import type { McpConfigSource, McpHarnessKind } from "../../shared/mcp-config.js";
 import type { SkillHarnessKind, SkillScope, SkillSourceKind } from "../../shared/skills-config.js";
 import type { SubagentSourceKind } from "../../shared/subagents-config.js";
@@ -2870,6 +2870,15 @@ export function createAutomationFacade(
           envStatus: state.envStatus,
           promptQueue: state.promptQueue.map((item) => ({ id: item.id, text: item.text, imageCount: item.images.length })),
           queuePaused: state.queuePaused,
+          // Codex-fixes TASK.42 (cut §3.7): mirrors host_ready.engine's own
+          // "absent = legacy core" discipline (cut §2(f)) — `state.engine` is
+          // null for every core session, so this key is `undefined` (omitted
+          // from the JSON the executeJavaScript bridge returns) and the
+          // existing core-session byte-snapshot test stays untouched.
+          engine:
+            state.engine !== null
+              ? { id: state.engine.id, model: state.engine.model?.current, activePresetId: state.engine.permissions?.activePresetId }
+              : undefined,
         };
       }
       return { tabs, activeTabId, states, hiddenWorkspaces };
@@ -3232,6 +3241,15 @@ export function createAutomationFacade(
         sendEnabled: workspace !== null && prompt.trim().length > 0,
         recentCount: startScreenDom.recentCount(),
         projectMenuOpen: startScreenDom.projectMenuOpen(),
+        // Codex-fixes TASK.42 (cut §3.7): `engine` mirrors the draft-state
+        // discipline of `workspace`/`prompt`/`model` above — undefined until a
+        // draft exists, then the draft's own pick (defaulted to "core" by
+        // tabsStore.openDraft). `availableEngines` is the compiled-in catalog
+        // (shared/engines.ts ENGINE_IDS), not draft-scoped — it is the set of
+        // engines this build knows how to speak to at all, independent of
+        // whether a start-screen draft happens to be open right now.
+        engine: draft?.engine,
+        availableEngines: [...ENGINE_IDS],
       };
     },
 
@@ -3267,6 +3285,22 @@ export function createAutomationFacade(
         return { ok: false, reason: "no_draft" };
       }
       tabsStore.getState().setDraftModel(model);
+      return { ok: true };
+    },
+
+    // Codex-fixes TASK.42 (cut §3.7, IMPLEMENTED here): same no_draft guard
+    // and write-through-the-store discipline as startScreenSetModel above —
+    // drives the EXISTING setDraftEngine action (tabs-store.ts), no second
+    // path. `async` to match the frozen `Promise<FacadeResult>` signature;
+    // the write itself is synchronous, so this never actually awaits.
+    async startScreenSetEngine(engineId: string): Promise<FacadeResult> {
+      if (tabsStore.getState().draft === null) {
+        return { ok: false, reason: "no_draft" };
+      }
+      if (!isEngineId(engineId)) {
+        return { ok: false, reason: "invalid_engine" };
+      }
+      tabsStore.getState().setDraftEngine(engineId);
       return { ok: true };
     },
 

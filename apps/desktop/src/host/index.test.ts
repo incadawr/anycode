@@ -54,6 +54,7 @@ import {
 } from "@anycode/core";
 import type { AgentEvent, PermissionMode, ResolvedTelemetryConfig, ResolvedWebSearchBackend, TelemetryPort } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
+import type { ShellCapabilitiesProjection } from "../shared/protocol.js";
 import { TerminalManager } from "./terminal.js";
 
 describe("host shutdown order (design slice-3.2-cut.md §6/§9-R1, task 3.2.4)", () => {
@@ -1039,5 +1040,37 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
     expect(out.config.reasoningEffort).toBe("max");
     expect(out.result.reasoningEffort).toBe("max");
     expect(out.result.availableEffortLevels).toEqual(["off", "high", "max"]);
+  });
+});
+
+/**
+ * Design TASK.40 §2(f): bootCodexSession's Git bridge + shell-capability
+ * wiring. index.ts itself is not importable (see file header) — this pins
+ * the SHAPE of the `codexGitEnabled`/`shell` computation as a local pure
+ * mirror of index.ts's `bootCodexSession`, same idiom as every other
+ * describe block in this file.
+ */
+describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () => {
+  /** Mirrors bootCodexSession's `codexGitEnabled`/`shell` computation verbatim. */
+  function computeCodexShell(isGitRepo: boolean, hasRunBinary: boolean): ShellCapabilitiesProjection {
+    const gitEnabled = isGitRepo && hasRunBinary;
+    return { gitReadOnly: gitEnabled, gitUserMutations: gitEnabled, terminal: true };
+  }
+
+  it("enables both shell git capabilities in a git workspace with a spawn-capable exec adapter — same gate core's boot() uses", () => {
+    expect(computeCodexShell(true, true)).toEqual({ gitReadOnly: true, gitUserMutations: true, terminal: true });
+  });
+
+  it("disables both shell git capabilities outside a git workspace, while terminal (engine-independent) stays available", () => {
+    expect(computeCodexShell(false, true)).toEqual({ gitReadOnly: false, gitUserMutations: false, terminal: true });
+  });
+
+  it("disables both shell git capabilities when the exec adapter cannot spawn a binary", () => {
+    expect(computeCodexShell(true, false)).toEqual({ gitReadOnly: false, gitUserMutations: false, terminal: true });
+  });
+
+  it("gitReadOnly and gitUserMutations always move together for Codex — one workspace-level gate, not two independent ones", () => {
+    expect(computeCodexShell(true, true).gitReadOnly).toBe(computeCodexShell(true, true).gitUserMutations);
+    expect(computeCodexShell(false, false).gitReadOnly).toBe(computeCodexShell(false, false).gitUserMutations);
   });
 });

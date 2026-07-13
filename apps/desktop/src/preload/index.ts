@@ -59,6 +59,7 @@ import type {
   McpImportScanResult,
 } from "../shared/mcp-config.js";
 import { ENGINES_LIST_CHANNEL, type AvailableEngines } from "../shared/tabs.js";
+import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type {
   SkillsCreateRequest,
   SkillsDeleteRequest,
@@ -145,6 +146,36 @@ import {
 } from "../shared/window.js";
 import type { DesktopPlatform, WindowState } from "../shared/window.js";
 
+// TASK.41 (design/slice-codex-fixes-cut.md §2(g)/§3.8): Codex onboarding
+// invoke/push channels. Duplicated literals, not `shared/**` exports — every
+// lane in this track froze `shared/**` as read-only after block C0 (design
+// cut §4 disjointness rules); main/codex-ipc.ts holds the byte-identical
+// source of truth, kept in sync by contract (same "duplicated on purpose"
+// precedent as `buildCodexChildEnv` in main/codex-doctor.ts). The result
+// shapes below mirror main/codex-ipc.ts's `CodexOnboardingSnapshot` /
+// `CodexPickBinaryResult` / `CodexLoginStartResult` — `CodexDoctorReport`
+// itself IS a frozen `shared/**` type, imported (never edited) above.
+const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
+const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
+const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
+const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
+const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
+
+export interface CodexOnboardingSnapshot {
+  report: CodexDoctorReport;
+  binaryPath: string | null;
+  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  checkedAt: string;
+}
+
+export type CodexPickBinaryResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "cancelled" | "invalid" };
+
+export type CodexLoginStartResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+
 // §3.1: forward the main-side payload as-is. The port envelope carries
 // { tabId, workspace }, the host-exited envelope carries { tabId }; preload just
 // re-stamps the `type` and re-posts (still window.postMessage, since
@@ -192,6 +223,37 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(WORKSPACE_PICK_CHANNEL) as Promise<WorkspacePickResult>,
   listAvailableEngines: (): Promise<AvailableEngines> =>
     ipcRenderer.invoke(ENGINES_LIST_CHANNEL) as Promise<AvailableEngines>,
+  // TASK.41 (design/slice-codex-fixes-cut.md §5.5): push fired after any
+  // change that could flip `listAvailableEngines()`'s result (today: every
+  // Codex onboarding step). No payload — listeners re-invoke
+  // `listAvailableEngines`/`codex.recheck`, same "thin unsubscribe-returning
+  // wrapper" shape as `updates.onUpdateStatus`/`window.onWindowState` below.
+  onEnginesChanged: (callback: () => void): (() => void) => {
+    function listener(): void {
+      callback();
+    }
+    ipcRenderer.on(ENGINES_CHANGED_CHANNEL, listener);
+    return () => ipcRenderer.removeListener(ENGINES_CHANGED_CHANNEL, listener);
+  },
+  // TASK.41 (design/slice-codex-fixes-cut.md §2(g)/§5.5): Codex onboarding
+  // invoke-API — main owns the discovery ladder, the bounded doctor, and the
+  // native login flow (main/codex-ipc.ts). `recheck` re-runs discovery+
+  // diagnosis now (used both by a "Recheck" button and by the Settings pane
+  // on mount); `pickBinary` opens a native file dialog for the explicit
+  // ladder rung; `loginStart`/`loginCancel` drive the native ChatGPT sign-in.
+  // No token/credential value ever crosses this bridge in either direction
+  // (custody, cut §2(g)) — every result carries only status/version/account
+  // type+plan, never a raw auth value.
+  codex: {
+    recheck: (): Promise<CodexOnboardingSnapshot> =>
+      ipcRenderer.invoke(CODEX_RECHECK_CHANNEL) as Promise<CodexOnboardingSnapshot>,
+    pickBinary: (): Promise<CodexPickBinaryResult> =>
+      ipcRenderer.invoke(CODEX_PICK_BINARY_CHANNEL) as Promise<CodexPickBinaryResult>,
+    loginStart: (): Promise<CodexLoginStartResult> =>
+      ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL) as Promise<CodexLoginStartResult>,
+    loginCancel: (): Promise<void> =>
+      ipcRenderer.invoke(CODEX_LOGIN_CANCEL_CHANNEL) as Promise<void>,
+  },
   settings: {
     get: (): Promise<SettingsSnapshot> =>
       ipcRenderer.invoke(SETTINGS_GET_CHANNEL) as Promise<SettingsSnapshot>,

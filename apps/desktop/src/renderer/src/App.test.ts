@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SettingsSnapshot } from "../../shared/settings.js";
-import { selectMainPaneView, shouldShowWelcome, shouldSuppressEscForDraft } from "./App.js";
+import { computeGitPanelOpen, selectMainPaneView, shouldShowWelcome, shouldSuppressEscForDraft } from "./App.js";
 
 function snapshot(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
@@ -81,5 +81,25 @@ describe("shouldSuppressEscForDraft (slice P7.12 §4.6)", () => {
 
   it("does not suppress Esc when there is no active draft", () => {
     expect(shouldSuppressEscForDraft(false)).toBe(false);
+  });
+});
+
+describe("computeGitPanelOpen (design TASK.40 §2(f)) — shell-owned, not engine.capabilities.supportsGitMutations", () => {
+  it("stays closed when the user never opened it, regardless of shell capability", () => {
+    expect(computeGitPanelOpen(false, true)).toBe(false);
+    expect(computeGitPanelOpen(false, false)).toBe(false);
+    expect(computeGitPanelOpen(false, undefined)).toBe(false);
+  });
+
+  it("opens when requested and shell.gitReadOnly is explicitly true (a Codex session in a git workspace)", () => {
+    expect(computeGitPanelOpen(true, true)).toBe(true);
+  });
+
+  it("stays closed when requested but shell.gitReadOnly is explicitly false (a Codex session with no git workspace)", () => {
+    expect(computeGitPanelOpen(true, false)).toBe(false);
+  });
+
+  it("defaults to open when requested and shell is undefined — byte-identical to core's pre-TASK.40 behavior (no engine gating at all)", () => {
+    expect(computeGitPanelOpen(true, undefined)).toBe(true);
   });
 });

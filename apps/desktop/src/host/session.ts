@@ -60,6 +60,7 @@ import { randomUUID } from "node:crypto";
 import type {
   HostToUiMessage,
   EnginePresentation,
+  ShellCapabilitiesProjection,
   UiToHostMessage,
   WireCheckpointMeta,
   WireEnvStatus,
@@ -254,6 +255,20 @@ export interface SessionOptions {
    */
   git?: GitUiBridge;
   /**
+   * Shell (AnyCode chrome) capability projection (design TASK.40 §2(f)):
+   * independent of the active engine's own tool capabilities. Absent (core,
+   * and any engine that hasn't wired one) defaults every shell feature to
+   * enabled -- byte-identical to the pre-TASK.40 behavior, where a
+   * user-initiated `git_command` mutation was gated on
+   * `engine.capabilities.supportsGitMutations` (always `true` for `CoreEngine`).
+   * That flag now describes ONLY the agent's own tool-mutation capability;
+   * `shell.gitUserMutations` is the genuinely separate, host-computed gate
+   * for the AnyCode-owned Review panel's user-initiated mutations (see the
+   * `git_command` case in `route()` below). Echoed on `host_ready.shell`
+   * ONLY alongside a present `engine` (never for core -- §3.2 contract).
+   */
+  shell?: ShellCapabilitiesProjection;
+  /**
    * Background-task notice seam (slice 6.DP-2, 5.5-R2 host-half): drained at
    * the top of every ACCEPTED turn (strictly after the busy gate and the
    * raw-text title derivation, strictly before runTurn) and appended to the
@@ -345,6 +360,8 @@ export class Session {
   private readonly persistence: SessionPersistence | undefined;
   private readonly rules: SessionPermissionRules;
   private readonly git: GitUiBridge | undefined;
+  /** Design TASK.40 §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
+  private readonly shell: ShellCapabilitiesProjection | undefined;
   private readonly tasks: SessionOptions["tasks"];
   private readonly lsp: SessionOptions["lsp"];
   private readonly hooksList: SessionOptions["hooksList"];
@@ -410,6 +427,7 @@ export class Session {
     this.persistence = options.persistence;
     this.rules = options.rules;
     this.git = options.git;
+    this.shell = options.shell;
     this.tasks = options.tasks;
     this.lsp = options.lsp;
     this.hooksList = options.hooksList;
@@ -507,6 +525,10 @@ export class Session {
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
           ...(presentation !== undefined ? { engine: presentation } : {}),
+          // Design TASK.40 §2(f)/§3.2: shell is emitted ONLY alongside a
+          // present `engine` (never for core), so the core wire stays
+          // byte-identical by construction.
+          ...(presentation !== undefined && this.shell !== undefined ? { shell: this.shell } : {}),
         });
         // Phase-2 §3.3: session_history (transcript hydration of a resumed
         // session) is emitted AFTER host_ready and BEFORE replay(), only when
@@ -612,10 +634,18 @@ export class Session {
         break;
       }
       case "git_command":
-        // Slice 5.7: user-initiated git command. The bridge validates nothing
-        // (the zod schema already ran in `route` above) and never throws into
-
-        if (!isGitMutation(message.command) || this.engine.capabilities.supportsGitMutations) {
+        // Slice 5.7 / TASK.40 (design §2(f)): user-initiated git command. The
+        // bridge validates nothing (the zod schema already ran in `route`
+        // above) and never throws into the session. A MUTATION is gated on
+        // the SHELL's own capability (`shell.gitUserMutations`) -- a
+        // genuinely separate decision from `engine.capabilities.
+        // supportsGitMutations`, which now describes only the active agent's
+        // OWN tool-mutation capability and no longer gates the Review
+        // panel's user-initiated mutations. Absent shell (core, or a future
+        // engine that hasn't wired one) defaults to `true`, byte-identical
+        // to the pre-TASK.40 unconditional-for-core routing (CoreEngine's
+        // supportsGitMutations was always `true`).
+        if (!isGitMutation(message.command) || (this.shell?.gitUserMutations ?? true)) {
           this.git?.handleCommand(message);
         }
         break;

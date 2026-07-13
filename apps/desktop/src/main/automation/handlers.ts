@@ -367,6 +367,17 @@ export function startScreenSetModel(deps: HandlerDeps, model: string | null): Pr
   return deps.callFacade("startScreenSetModel", [model]);
 }
 
+// --- Engine selection (codex-fixes TASK.42, cut §3.7/§5.6 B5-auto): thin
+// wrapper over the frozen facade contract, same discipline as the probes
+// above — the facade owns every guard (no_draft / invalid_engine), this
+// layer only forwards the arg. Read-back rides the EXISTING GET
+// /start-screen route (startScreenState's additive `engine`/
+// `availableEngines` fields) — no dedicated GET route for this. ---
+
+export function startScreenSetEngine(deps: HandlerDeps, engineId: string): Promise<unknown> {
+  return deps.callFacade("startScreenSetEngine", [engineId]);
+}
+
 export function startScreenToggleProjectMenu(deps: HandlerDeps, open: boolean): Promise<unknown> {
   return deps.callFacade("startScreenToggleProjectMenu", [open]);
 }

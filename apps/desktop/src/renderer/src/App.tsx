@@ -110,6 +110,21 @@ export function shouldSuppressEscForDraft(draftActive: boolean): boolean {
   return draftActive;
 }
 
+/**
+ * Whether the Review (Git) panel should actually render (design TASK.40
+ * §2(f)): gated on the SHELL's own read-only Git capability, NOT the active
+ * engine's tool-mutation capability — the Review panel is AnyCode chrome,
+ * independent of which agent is running. `undefined` (core, or a
+ * not-yet-wired engine) defaults to `true`, byte-identical to core's
+ * pre-TASK.40 behavior (the panel was previously gated on
+ * `engine?.capabilities.supportsGitMutations ?? true`, which likewise always
+ * fell back to `true` for a null-engine core session). Exported for unit
+ * testing.
+ */
+export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolean | undefined): boolean {
+  return panelOpen && (shellGitReadOnly ?? true);
+}
+
 interface ActiveTabBodyProps {
   tabId: string;
   sidebarCollapsed: boolean;
@@ -126,7 +141,11 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const lastFatal = useTabStore((state) => state.lastFatal);
   const workspace = useTabStore((state) => state.workspace);
   const engine = useTabStore((state) => state.engine);
-  const gitPanelOpen = useTabStore((state) => state.git.panelOpen) && (engine?.capabilities.supportsGitMutations ?? true);
+  const shell = useTabStore((state) => state.shell);
+  const gitPanelOpenRequested = useTabStore((state) => state.git.panelOpen);
+  // Design TASK.40 §2(f): shell-owned, not engine.capabilities.supportsGitMutations
+  // (that flag now describes only the agent's OWN tool-mutation capability).
+  const gitPanelOpen = computeGitPanelOpen(gitPanelOpenRequested, shell?.gitReadOnly);
   const supportsCorePanels = engine === null;
   const supportsRewind = engine?.capabilities.supportsRewind ?? true;
   const tabTitle = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.title);

@@ -168,6 +168,48 @@ describe("automation facade — snapshot", () => {
     });
   });
 
+  it("engine is undefined for a core session (host_ready carries no engine field)", () => {
+    const { tabsStore, registry, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    expect(facade.snapshot().states[tabId]?.engine).toBeUndefined();
+  });
+
+  it("projects engine metadata (id/model/activePresetId) for a non-core session (codex-fixes TASK.42, cut §3.7)", () => {
+    const { tabsStore, registry, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    port.emit({
+      type: "host_ready",
+      workspace: "/ws/a",
+      mode: "build",
+      model: "m1",
+      sessionId: "sess-a",
+      engine: {
+        id: "codex",
+        capabilities: {
+          supportsCorePermissions: false,
+          supportsRewind: false,
+          supportsWorkflow: false,
+          supportsGitMutations: false,
+          supportsContextUsage: true,
+          supportsContextBreakdown: false,
+          supportsInteractiveApprovals: true,
+          costAccounting: false,
+          supportsModelSelection: false,
+          supportsReasoningEffort: false,
+          supportsImages: false,
+          supportsTasks: false,
+          supportsFileSnapshots: false,
+        },
+        model: { current: "gpt-5.2-codex", available: [{ id: "gpt-5.2-codex" }] },
+        permissions: { presets: [{ id: "ask", label: "Ask", description: "" }], activePresetId: "ask" },
+      },
+    });
+
+    expect(facade.snapshot().states[tabId]?.engine).toEqual({ id: "codex", model: "gpt-5.2-codex", activePresetId: "ask" });
+  });
+
   it("reflects a live env_status push with no mirrored/stale copy", () => {
     const { tabsStore, registry, port, tabId } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
@@ -1184,6 +1226,11 @@ describe("automation facade — startScreenState (design/slice-P7.12-cut.md §5 
       sendEnabled: false,
       recentCount: 0,
       projectMenuOpen: false,
+      // Codex-fixes TASK.42 (cut §3.7, B5-auto): `engine` is undefined until a
+      // draft exists (mirrors workspace/prompt/model's draft-scoped reads);
+      // `availableEngines` is the compiled-in catalog regardless of draft state.
+      engine: undefined,
+      availableEngines: ["core", "codex"],
     });
   });
 
@@ -1206,6 +1253,10 @@ describe("automation facade — startScreenState (design/slice-P7.12-cut.md §5 
       sendEnabled: false, // §3-D3: no workspace yet -> still disabled
       recentCount: 3,
       projectMenuOpen: true,
+      // Codex-fixes TASK.42 (cut §3.7, B5-auto): openDraft() defaults the
+      // draft's engine to "core" (tabs-store.ts) — the catalog is unchanged.
+      engine: "core",
+      availableEngines: ["core", "codex"],
     });
   });
 
@@ -1316,6 +1367,36 @@ describe("automation facade — startScreenSetModel (design/slice-F5-1b-cut.md �
 
     expect(facade.startScreenSetModel(null)).toEqual({ ok: true });
     expect(tabsStore.getState().draft?.model).toBeNull();
+  });
+});
+
+describe("automation facade — startScreenSetEngine (codex-fixes TASK.42, cut §3.7)", () => {
+  it("refuses with no_draft when no draft is open, and touches nothing", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    await expect(facade.startScreenSetEngine?.("codex")).resolves.toEqual({ ok: false, reason: "no_draft" });
+    expect(tabsStore.getState().draft).toBeNull();
+  });
+
+  it("refuses with invalid_engine for an engine id outside the compiled-in catalog, and touches nothing", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    tabsStore.getState().openDraft("/ws/z");
+
+    await expect(facade.startScreenSetEngine?.("not-a-real-engine")).resolves.toEqual({ ok: false, reason: "invalid_engine" });
+    expect(tabsStore.getState().draft?.engine).toBe("core");
+  });
+
+  it("writes through the SAME setDraftEngine store action a real engine picker would call", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, fakeStartScreenDom());
+    tabsStore.getState().openDraft("/ws/z");
+    expect(tabsStore.getState().draft?.engine).toBe("core"); // default before any pick
+
+    await expect(facade.startScreenSetEngine?.("codex")).resolves.toEqual({ ok: true });
+    expect(tabsStore.getState().draft?.engine).toBe("codex");
+    expect(facade.startScreenState().engine).toBe("codex");
   });
 });
 

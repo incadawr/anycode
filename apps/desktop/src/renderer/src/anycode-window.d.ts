@@ -74,6 +74,28 @@ import type {
 } from "../../shared/profile-config";
 import type { UpdateActionResult, UpdateStatus } from "../../shared/updates";
 import type { DesktopPlatform, WindowState } from "../../shared/window";
+import type { CodexDoctorReport } from "../../shared/codex-doctor";
+
+// TASK.41 (design/slice-codex-fixes-cut.md §2(g)/§3.8): mirrors the SAME
+// duplicated shapes declared in preload/index.ts (that file's own header
+// explains why — `shared/**` froze read-only after block C0, so these small
+// wire interfaces are kept in sync by contract, the same "duplicated on
+// purpose" precedent as every channel-name literal in this codebase that
+// crosses a layering boundary shared/** can no longer mediate).
+export interface CodexOnboardingSnapshot {
+  report: CodexDoctorReport;
+  binaryPath: string | null;
+  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  checkedAt: string;
+}
+
+export type CodexPickBinaryResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "cancelled" | "invalid" };
+
+export type CodexLoginStartResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
 
 declare global {
   interface Window {
@@ -83,6 +105,21 @@ declare global {
       listSessions(): Promise<SessionSummary[]>;
       pickWorkspace(): Promise<WorkspacePickResult>;
       listAvailableEngines(): Promise<AvailableEngines>;
+      // TASK.41 (design/slice-codex-fixes-cut.md §5.5): push fired after any
+      // step that could flip `listAvailableEngines()`'s result. No payload —
+      // returns an unsubscribe, same shape as `updates.onUpdateStatus`/
+      // `window.onWindowState` below.
+      onEnginesChanged(callback: () => void): () => void;
+      // TASK.41 (design/slice-codex-fixes-cut.md §2(g)): Codex onboarding
+      // invoke-API. No token/credential value ever crosses this bridge in
+      // either direction — every result carries only status/version/account
+      // type+plan (custody).
+      codex: {
+        recheck(): Promise<CodexOnboardingSnapshot>;
+        pickBinary(): Promise<CodexPickBinaryResult>;
+        loginStart(): Promise<CodexLoginStartResult>;
+        loginCancel(): Promise<void>;
+      };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
       settings: {

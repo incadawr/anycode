@@ -56,12 +56,12 @@ import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
-import { projectCatalogSummary, registerSettingsIpc } from "./settings-ipc.js";
+import { handleSet, projectCatalogSummary, registerSettingsIpc, type SettingsIpcDeps } from "./settings-ipc.js";
 import { TabHostManager } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
-import { resolveCodexBinary } from "./codex-binary.js";
+import { ENGINES_CHANGED_CHANNEL, registerCodexIpc } from "./codex-ipc.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater } from "./updater.js";
 
@@ -228,8 +228,17 @@ let bootEnv: NodeJS.ProcessEnv = {};
 let settings: AnycodeSettings | null = null;
 /** Current readiness = apiKey(env|vault) && model(env|settings); gates host spawns. */
 let providerReady = false;
-/** Main-validated optional binary; no engine readiness is implied by its presence. */
+/**
+ * Codex onboarding state (TASK.41, cut §2(g)): `codexBinaryPath` is the
+ * discovery ladder's last winning candidate (informational — its mere
+ * presence no longer implies readiness); `codexReady` is the doctor-
+ * confirmed gate `engineReady("codex")` actually reads (version-compatible
+ * AND signed in). Both are updated by codex-ipc's `onSnapshot` callback,
+ * fired after every recheck/pick-binary/login-success, so a Codex tab can be
+ * created the moment onboarding completes — no app restart.
+ */
 let codexBinaryPath: string | null = null;
+let codexReady = false;
 /**
  * The host fork env, rebuilt async on every successful mutation and read
 
@@ -539,11 +548,10 @@ void app.whenReady().then(async () => {
   // gate) stay in the live env.
   bootEnv = snapshotBootEnv(process.env);
   scrubSecretEnv(process.env);
-  const codexBinary = resolveCodexBinary(bootEnv[ENV_CODEX_BIN]);
-  codexBinaryPath = codexBinary.path;
-  if (codexBinary.reason !== undefined) {
-    console.warn(`[main] Codex binary unavailable: ${codexBinary.reason}`);
-  }
+  // Codex discovery+diagnosis itself is wired further below (registerCodexIpc
+  // + the fire-and-forget initial recheck), once `settings` is loaded — the
+  // discovery ladder's "settings" rung needs `settings.codex.binaryPath`,
+  // which does not exist yet at this point in boot.
 
 
   // and migrates once (a read forces open()+migrate()), then hosts open the
@@ -596,11 +604,11 @@ void app.whenReady().then(async () => {
 
     env: () => currentHostEnv,
     providerReady: () => providerReady,
-    // Codex has no dependency on AnyCode's provider settings. Its only
-    // main-plane readiness fact is the boot-time validated executable path;
-    // account verification remains inside the owned native session bootstrap.
-    engineReady: (engine: EngineId) =>
-      engine === "core" ? providerReady : engine === "codex" && codexBinaryPath !== null,
+    // Codex has no dependency on AnyCode's provider settings. Its main-plane
+    // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
+    // AND signed in, TASK.41 п.2/п.3) — a merely-discovered-but-unchecked or
+    // stale-cached path is never enough to let a tab spawn.
+    engineReady: (engine: EngineId) => (engine === "core" ? providerReady : engine === "codex" && codexReady),
     engineEnv: (engine: EngineId, generation: number) => ({
       [ENV_ENGINE]: engine,
       [ENV_HOST_GENERATION]: String(generation),
@@ -629,8 +637,10 @@ void app.whenReady().then(async () => {
   // Settings control plane (ruling §4). After every successful mutation main
   // rebuilds the host env + readiness. Normal GUI launch stays at zero tabs;
   // only explicit initial targets (`--resume`/ANYCODE_RESUME or ANYCODE_WORKSPACE)
-  // are started after a readiness flip.
-  registerSettingsIpc({
+  // are started after a readiness flip. Named (not inlined) so codex-ipc's
+  // `writeCodexSettings` below can reuse the EXACT SAME deps bag through
+  // settings-ipc's own exported `handleSet` — one settings.json writer.
+  const settingsIpcDeps: Omit<SettingsIpcDeps, "vault"> & { vault: Vault } = {
     vault,
     bootEnv,
     settingsPath,
@@ -655,6 +665,38 @@ void app.whenReady().then(async () => {
         await startInitialTab({ onNoWorkspace: "stay", deliverNow: true, promptForWorkspace: false });
       }
     },
+  };
+  registerSettingsIpc(settingsIpcDeps);
+
+  // Codex onboarding control plane (TASK.41, cut §2(g)): discovery ladder +
+  // bounded doctor + native login, behind four invoke channels + one push.
+  // `writeCodexSettings` routes through settings-ipc's own `handleSet` (same
+  // zod validation / deep-partial merge / read_only guard as every other
+  // settings-set patch) rather than a second ad-hoc settings.json writer.
+  const codexOnboarding = registerCodexIpc({
+    bootEnv,
+    readBinaryPathSetting: async () => settings?.codex?.binaryPath,
+    writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
+    dialog,
+    openExternal: (url) => shell.openExternal(url),
+    onSnapshot: (snapshot) => {
+      codexBinaryPath = snapshot.binaryPath;
+      codexReady = snapshot.report.status === "ready";
+      // Per-tab session pushes are gated on ui_ready (durable rule); this is
+      // a window-shell-level signal, the same unconditional-send shape as
+      // WINDOW_STATE_CHANNEL/UPDATE_STATUS_CHANNEL — the renderer's listener
+      // is registered at bundle load, well before this can ever fire.
+      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+    },
+  });
+
+  // Kick off the first discovery+doctor pass in the background (TASK.41 п.1:
+  // a compatible CLI on PATH must be found with no env var and no user
+  // action). Never awaited here — a slow or hung Codex CLI must not delay
+  // the window from appearing; `engineReady("codex")` simply stays false
+  // (its safe default) until this resolves.
+  void codexOnboarding.recheck().catch((error: unknown) => {
+    console.warn("[main] initial Codex check failed", error);
   });
 
   // MCP config management control plane (design/slice-P7.19-cut.md §3/§4 W2):

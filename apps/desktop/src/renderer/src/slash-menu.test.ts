@@ -33,7 +33,21 @@ function skillRow(overrides: Partial<SkillRowView> = {}): SkillRowView {
 }
 
 function ctx(overrides: Partial<SlashMenuCtx> = {}): SlashMenuCtx {
-  return { mode: "build", model: "claude-x", running: false, ready: true, modelDisabled: false, ...overrides };
+  return {
+    mode: "build",
+    model: "claude-x",
+    running: false,
+    ready: true,
+    modelDisabled: false,
+    // TASK.40 §2(f): default to core-shaped (every capability enabled) so
+    // every pre-existing test — none of which cares about gating — keeps
+    // seeing the full registry.
+    supportsCorePermissions: true,
+    supportsModelSelection: true,
+    shellGitReadOnly: true,
+    shellTerminal: true,
+    ...overrides,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -387,5 +401,62 @@ describe("SLASH_COMMANDS registry invariants", () => {
     for (const intent of sampleIntents) {
       expect(() => intentKindLabel(intent)).not.toThrow();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Capability gating — no dead actions (design TASK.40 §2(f))
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 §2(f))", () => {
+  /** Every named gate false — mirrors a Codex session before B2 wires model selection. */
+  const codexShapedCtx = ctx({
+    supportsCorePermissions: false,
+    supportsModelSelection: false,
+    shellGitReadOnly: false,
+    shellTerminal: false,
+  });
+
+  it("hides every core-only command (its target control isn't rendered) when the engine lacks the matching capability", () => {
+    const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
+    expect(names).not.toContain("Plan mode");
+    expect(names).not.toContain("Mode");
+    expect(names).not.toContain("Model");
+  });
+
+  it("hides every shell-owned command when its named shell capability is false", () => {
+    const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
+    expect(names).not.toContain("Git changes");
+    expect(names).not.toContain("Terminal");
+  });
+
+  it("keeps engine-independent common commands visible regardless of engine/shell capabilities", () => {
+    const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
+    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Settings"]);
+  });
+
+  it("shows the full registry once every named capability is available (core-shaped ctx, the pre-TASK.40 default)", () => {
+    expect(filterSlashItems(SLASH_COMMANDS, [], "", ctx())).toHaveLength(SLASH_COMMANDS.length);
+  });
+
+  it("each named gate independently hides only its own command(s), not the rest of the registry", () => {
+    const onlyCorePermissionsOff = filterSlashItems(
+      SLASH_COMMANDS,
+      [],
+      "",
+      ctx({ supportsCorePermissions: false }),
+    ).map((item) => item.name);
+    expect(onlyCorePermissionsOff).not.toContain("Plan mode");
+    expect(onlyCorePermissionsOff).not.toContain("Mode");
+    expect(onlyCorePermissionsOff).toEqual(
+      expect.arrayContaining(["Model", "New task", "Tasks", "Git changes", "Terminal", "MCP", "Skills", "Settings"]),
+    );
+
+    const onlyGitReadOnlyOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ shellGitReadOnly: false })).map(
+      (item) => item.name,
+    );
+    expect(onlyGitReadOnlyOff).not.toContain("Git changes");
+    expect(onlyGitReadOnlyOff).toContain("Terminal");
+    expect(onlyGitReadOnlyOff).toContain("Model");
   });
 });

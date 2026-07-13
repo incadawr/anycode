@@ -40,6 +40,7 @@ import {
   startScreenSetWorkspace,
   startScreenSetPrompt,
   startScreenSetModel,
+  startScreenSetEngine,
   startScreenToggleProjectMenu,
   startScreenSubmit,
   queuePrompt,
@@ -530,6 +531,12 @@ describe("start-screen thin facade commands forward method + args (design/slice-
     const deps = fakeDeps();
     await startScreenSetModel(deps, null);
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenSetModel", [null]);
+  });
+
+  it("startScreenSetEngine -> callFacade('startScreenSetEngine', [engineId]) (codex-fixes TASK.42, cut §3.7)", async () => {
+    const deps = fakeDeps();
+    await startScreenSetEngine(deps, "codex");
+    expect(deps.callFacade).toHaveBeenCalledWith("startScreenSetEngine", ["codex"]);
   });
 
   it("startScreenToggleProjectMenu(true) -> callFacade('startScreenToggleProjectMenu', [true])", async () => {

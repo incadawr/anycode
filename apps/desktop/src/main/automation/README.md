@@ -272,13 +272,26 @@ closed (`design/slice-F5-1b-cut.md` §2-D4). Every POST route goes through the
 SAME tabs-store draft actions / `submitStartDraft` the real UI calls — no
 second path, no new `SnapshotJson` field.
 
+`engine`/`availableEngines` (codex-fixes TASK.42, cut §3.7) are the ONE
+exception to "no new `SnapshotJson` field" — the draft's current engine pick
+and the compiled-in engine catalog (`shared/engines.ts` `ENGINE_IDS`, e.g.
+`["core","codex"]`), read the same draft-scoped way as `workspace`/`prompt`/
+`model` (`engine` is `undefined` until a draft exists; `availableEngines` is
+the static catalog regardless of draft state). `POST /start-screen/engine`
+drives the SAME `setDraftEngine` tabs-store action `startScreenSetModel`'s
+`setDraftModel` neighbor uses — validated host-side against `ENGINE_IDS`
+(`isEngineId`), never a raw string trusted from the caller.
+`GET /tabs/:tabId/... state` (below) also gains a per-tab `engine` field —
+see "Engine metadata on the tab snapshot".
+
 | Method / path | Body | Returns |
 |---|---|---|
-| `GET /start-screen` | — | `{ok:true, active, rendered, workspace, prompt, model, sendEnabled, recentCount, projectMenuOpen}` |
+| `GET /start-screen` | — | `{ok:true, active, rendered, workspace, prompt, model, sendEnabled, recentCount, projectMenuOpen, engine?, availableEngines?}` |
 | `POST /start-screen/open` | `{workspace?}` | `{ok:true}` |
 | `POST /start-screen/workspace` | `{workspace}` | `{ok:true}` \| `{ok:false, reason:"no_draft"}` |
 | `POST /start-screen/prompt` | `{text}` | `{ok:true}` \| `{ok:false, reason:"no_draft"}` |
 | `POST /start-screen/model` | `{model: string \| null}` | `{ok:true}` \| `{ok:false, reason:"no_draft"}` |
+| `POST /start-screen/engine` | `{engineId}` | `{ok:true}` \| `{ok:false, reason:"no_draft"\|"invalid_engine"}` |
 | `POST /start-screen/project-menu` | `{open}` | `{ok:true}` \| `{ok:false, reason:"no_draft"\|"did_not_open"\|"did_not_close"}` |
 | `POST /start-screen/submit` | `{}` | `{ok:true, tabId}` \| `{ok:false, message}` |
 
@@ -288,8 +301,23 @@ curl "${A[@]}" "$B/start-screen"
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/prompt -d '{"text":"hello"}'
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/workspace -d '{"workspace":"/tmp/proj-c"}'
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/model -d '{"model":"claude-opus-4"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/engine -d '{"engineId":"codex"}'
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/project-menu -d '{"open":true}'
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/submit -d '{}'
+```
+
+#### Engine metadata on the tab snapshot (codex-fixes TASK.42, cut §3.7)
+
+`GET /state[/:tabId]`'s per-tab snapshot gains an additive, optional `engine`
+field: `{id, model?, activePresetId?}`, mirroring host_ready.engine's own
+"absent = legacy core" discipline (cut §2(f)) — a core session's snapshot is
+BYTE-UNTOUCHED (the key is omitted entirely), so no existing snapshot
+assertion needs updating for core. Present only once a non-core (currently
+`codex`) session reaches `host_ready`:
+
+```bash
+curl "${A[@]}" "$B/state/$TAB" | jq '.snapshot.states[$TAB].engine'
+# {"id":"codex","model":"gpt-5.2-codex","activePresetId":"ask"} — or `null` for a core session
 ```
 
 ### Project routes (GUI-P1)

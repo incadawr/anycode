@@ -59,6 +59,7 @@ import {
   startScreenSetWorkspace,
   startScreenSetPrompt,
   startScreenSetModel,
+  startScreenSetEngine,
   startScreenToggleProjectMenu,
   startScreenSubmit,
   queuePrompt,
@@ -215,6 +216,14 @@ const startScreenWorkspaceBody = z.object({ workspace: z.string().min(1).max(409
 // plain binary toggle, same shape as `ctxPopoverOpenBody` above. ──
 const startScreenModelBody = z.object({ model: z.string().min(1).max(256).nullable() }).strict();
 const startScreenProjectMenuBody = z.object({ open: z.boolean() }).strict();
+
+// ── engine selection body (codex-fixes TASK.42, cut §3.7): `engineId` is a
+// bare string here (not the shared `EngineId` enum) — same "server.ts owns
+// zod, not the shared vocabulary" posture as `skillsNameBody`/`shortcutsActionBody`
+// above; the facade's own `isEngineId` guard is the actual membership check,
+// so an unknown value fails closed as `{ok:false, reason:"invalid_engine"}`
+// rather than a 400 here. ──
+const startScreenEngineBody = z.object({ engineId: z.string().min(1).max(64) }).strict();
 
 // ── prompt-queue bodies (slice-P7.14-cut.md §5 W3): `tabId` rides in the body
 // (not the path) — same posture as `transcriptScrollToBody` above, since the
@@ -647,6 +656,15 @@ async function route(
   if (method === "POST" && pathname === "/start-screen/model") {
     const body = parseBody(rawBody, startScreenModelBody);
     return startScreenSetModel(deps, body.model);
+  }
+  // Engine selection (codex-fixes TASK.42, cut §3.7): mirrors the SAME
+  // tabs-store `setDraftEngine` draft action the (future) start-screen engine
+  // picker will call, through the facade's thin wrapper — no second path.
+  // Read-back rides GET /start-screen (`engine`/`availableEngines`), same
+  // "no dedicated GET route" posture as startScreenSetModel/SetPrompt above.
+  if (method === "POST" && pathname === "/start-screen/engine") {
+    const body = parseBody(rawBody, startScreenEngineBody);
+    return startScreenSetEngine(deps, body.engineId);
   }
   if (method === "POST" && pathname === "/start-screen/project-menu") {
     const body = parseBody(rawBody, startScreenProjectMenuBody);

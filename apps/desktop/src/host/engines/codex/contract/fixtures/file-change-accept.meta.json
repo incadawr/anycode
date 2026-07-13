@@ -4,7 +4,7 @@
   "stderr": "",
   "initialize": {
     "userAgent": "anycode/0.144.1 (Mac OS 15.6.1; arm64) iTerm.app/3.6.10 (anycode; 0.0.0-w0probe)",
-    "codexHome": "/Users/incadawr/.codex-accounts/personal",
+    "codexHome": "/scrubbed-home/.codex-accounts/personal",
     "platformFamily": "unix",
     "platformOs": "macos"
   },
@@ -25,7 +25,7 @@
       "status": {
         "type": "idle"
       },
-      "path": "/Users/incadawr/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T21-30-58-019f5798-ca2c-7c12-9b30-67eff08b708f.jsonl",
+      "path": "/scrubbed-home/.codex-accounts/personal/sessions/2026/07/12/rollout-2026-07-12T21-30-58-019f5798-ca2c-7c12-9b30-67eff08b708f.jsonl",
       "cwd": "/private/tmp/anycode-codex-w0/repo",
       "cliVersion": "0.144.1",
       "source": "vscode",

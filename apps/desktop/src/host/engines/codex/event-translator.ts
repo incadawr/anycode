@@ -6,6 +6,7 @@
 
 import type { AgentEvent, FinishReason, ToolCallOutcome, ToolCallStatus } from "@anycode/core";
 import type { JsonRpcNotification } from "./protocol.js";
+import type { TurnItemIndex } from "./turn-item-index.js";
 
 type ToolProjection = { toolName: "Bash" | "Write"; input: unknown };
 
@@ -13,6 +14,13 @@ export interface TurnTranslatorOptions {
   threadId: string;
   turnId: string;
   turn: number;
+  /**
+   * Approval-correlation index for this turn (cut §2(l)). Every `item/started`
+   * of the turn is recorded here — including item types this renderer adapter
+   * does not project — because an approval request names only an `itemId` and
+   * the modal has to describe what is being approved.
+   */
+  items?: TurnItemIndex;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -101,6 +109,7 @@ export class TurnTranslator {
   private onItemStarted(params: Record<string, unknown>): AgentEvent[] {
     const item = record(params.item);
     if (item === null || typeof item.id !== "string") return [];
+    this.options.items?.record(item);
     if (item.type === "agentMessage") {
       this.openText.add(item.id);
       return [{ type: "text_start", id: item.id }];

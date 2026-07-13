@@ -636,7 +636,19 @@ export function StartScreen({ onToast }: StartScreenProps) {
             </div>
           )}
         </div>
-        <div className="start-engine-switch" role="group" aria-label="Session engine">
+        {/* Design TASK.40 item 4: the selector is a choice of AGENT (which
+            runtime drives the turn), not a product — labelled visibly so it
+            no longer reads as a generic "Session engine" toggle. Group/pressed
+            a11y semantics are unchanged; the visible label doubles as the
+            group's accessible name via aria-labelledby. */}
+        <div className="start-engine-switch" role="group" aria-labelledby="start-engine-switch-label">
+          <span
+            id="start-engine-switch-label"
+            className="start-engine-switch-label"
+            style={{ color: "var(--text-2)", fontSize: "var(--fs-sm)", marginRight: "var(--sp-1)", paddingLeft: "var(--sp-1)" }}
+          >
+            Agent
+          </span>
           <button
             type="button"
             className={`start-engine-choice${draft.engine === "core" ? " start-engine-choice-selected" : ""}`}

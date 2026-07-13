@@ -273,17 +273,48 @@ describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
     }
   });
 
-  it("rejects a corrupt lastCheck.status", () => {
+  it("drops a corrupt lastCheck.status instead of failing the whole document (MED-2 fix)", () => {
+    // `codex` is advisory-cache-only (unlike e.g. `ui.theme`) — a malformed
+    // value here must never sink the rest of the settings document (see the
+    // schema's own `.catch(undefined)` doc comment).
     const bad = {
       ...cloneDefaults(),
       codex: { lastCheck: { status: "bogus", at: "2026-07-13T00:00:00.000Z" } },
     };
-    expect(settingsSchema.safeParse(bad).success).toBe(false);
+    const parsed = settingsSchema.safeParse(bad);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex).toBeUndefined();
+    }
   });
 
-  it("rejects a lastCheck missing the required `at` timestamp", () => {
+  it("drops a lastCheck missing the required `at` timestamp instead of failing the whole document (MED-2 fix)", () => {
     const bad = { ...cloneDefaults(), codex: { lastCheck: { status: "ready" } } };
-    expect(settingsSchema.safeParse(bad).success).toBe(false);
+    const parsed = settingsSchema.safeParse(bad);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex).toBeUndefined();
+    }
+  });
+
+  it("tolerates a foreign/wrong-typed codex value at the file level — every sibling field survives (MED-2 regression, post-C0 review)", () => {
+    // Simulates an old/foreign settings.json where `codex` holds something
+    // this binary does not recognize at all (wrong type, not just a wrong
+    // nested shape). Before the fix this failed `settingsSchema.safeParse`
+    // entirely, so `parseSettings` fell to "corrupt" and replaced the WHOLE
+    // document with defaults — losing the user's real provider/permissions/ui
+    // configuration over one advisory field.
+    const legacy = {
+      ...cloneDefaults(),
+      provider: { model: "claude-x" },
+      permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
+      codex: "legacy-value",
+    };
+    const result = parseSettings(legacy);
+    expect(result.status).toBe("ok");
+    expect(result.settings.codex).toBeUndefined();
+    expect(result.settings.provider.model).toBe("claude-x");
+    expect(result.settings.permissions.alwaysAllow).toEqual([{ toolName: "Bash", pattern: "git *" }]);
   });
 
   it("survives a read-modify-write cycle (nested codex fields not stripped on reparse)", () => {

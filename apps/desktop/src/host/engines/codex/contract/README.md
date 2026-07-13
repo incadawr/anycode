@@ -40,15 +40,50 @@ Treat this as a single reviewed act, landed in ONE commit:
 
 1. Run `codex app-server generate-json-schema --out <tmpdir>` against the new
    minimum supported version.
-2. Regenerate: `node apps/desktop/scripts/codex-contract-extract.mjs <tmpdir> apps/desktop/src/host/engines/codex/contract/pinned-contract.json`.
+2. Regenerate, passing the REAL `codex --version` output of that SAME binary
+   as the third argument (required, never defaulted — see below):
+   ```
+   node apps/desktop/scripts/codex-contract-extract.mjs <tmpdir> \
+     apps/desktop/src/host/engines/codex/contract/pinned-contract.json \
+     "codex-cli 0.144.x"
+   ```
+   The committed pin deliberately keeps the `0.144.x` RANGE placeholder (not
+   a literal patch) — the TS bindings are byte-identical across the observed
+   0.144.x patches, so this string documents "any patch in the supported
+   range produced this", not one exact probe. `contract-drift.test.ts`'s
+   layer 2 passes the exact live `--version` output instead when it
+   regenerates for a real-time comparison (see below).
 3. Review the diff of `pinned-contract.json` — every consumed method/type that
    changed shape needs an explicit adapter review, not just a green test.
 4. Bump `SUPPORTED_CODEX_VERSION` in `host/engines/codex/protocol.ts` to match.
-5. Re-run `contract-drift.test.ts` (layer 1 always; layer 2 if a matching
-   binary is available locally) before committing.
+5. Re-run `contract-drift.test.ts` (layer 1 + the always-on hardening suite
+   always; layer 2 if a matching binary is available locally) before
+   committing.
 
 Extending the CONSUMED vocabulary itself (a new method/type AnyCode starts
 speaking) means adding an entry to `codex-contract-extract.mjs`'s
 `CLIENT_REQUEST_METHODS` / `SERVER_REQUEST_METHODS` /
-`SERVER_NOTIFICATION_METHODS` / `EXTRA_ROOT_REFS` tables, then regenerating —
-the extractor never infers the vocabulary from the schema on its own.
+`SERVER_NOTIFICATION_METHODS` / `EXTRA_ROOT_REFS` tables (a method name +
+result ref only — the params ref is resolved from the live schema's own
+`ClientRequest`/`ServerRequest`/`ServerNotification` method registries, see
+below), then regenerating — the extractor never infers WHICH methods are
+consumed from the schema on its own, but it DOES verify every declared one is
+still real.
+
+## Why the extractor can actually detect a renamed method
+
+Earlier versions of this extractor kept a second hardcoded
+method-name -> params-type-ref table and trusted it unconditionally — a CLI
+release that renamed a consumed method (e.g. `turn/start` -> `turn/begin`)
+while leaving `TurnStartParams`'s own shape untouched would still resolve the
+old params ref by name and produce a byte-identical pinned contract: a
+vacuously green gate. `codex-contract-extract.mjs` now resolves each
+consumed method's params ref by MATCHING ITS NAME against the live schema's
+own `ClientRequest` / `ServerRequest` / `ServerNotification` definitions —
+each a real discriminated union of `{method: {enum:[name]}, params?}`
+variants, the actual dispatch table codex-cli's wire protocol uses. A
+renamed or removed consumed method throws instead of silently extracting.
+`contract-drift.test.ts`'s "hardening" describe block proves this: it
+rebuilds a synthetic schema straight from the committed pin (no live binary
+needed), confirms the unmutated round-trip still passes, then renames one
+method per registry and asserts the extractor throws.

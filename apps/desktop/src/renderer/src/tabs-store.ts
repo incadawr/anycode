@@ -70,6 +70,19 @@ export interface TabsState {
   draft: SessionDraft | null;
   /** Invariant: `draftActive` implies `draft !== null`. Whether the start screen is the thing currently shown. */
   draftActive: boolean;
+  /**
+   * Engine ids main has confirmed spawnable right now (TASK.41, design/
+   * slice-codex-fixes-cut.md §2(g)/§5.5). This store is a passive setter, not
+   * a fetcher — the New Session UI still reads `listAvailableEngines()` on
+   * its own mount; `setAvailableEngines` exists so any caller can push a
+   * fresh main-confirmed list here after an event that could change it (the
+   * Codex onboarding pane does, on the `anycode:engines-changed` push) WITHOUT
+   * that caller needing to know anything about tab-creation UI. Defaults to
+   * `["core"]` (Core never depends on external diagnosis) so a reader before
+   * the first fetch still sees a safe, non-empty list.
+   */
+  availableEngines: readonly EngineId[];
+  setAvailableEngines(engines: readonly EngineId[]): void;
 
   /**
    * Registers a newly-seen tab. Idempotent: re-adding an already-known tabId
@@ -193,6 +206,11 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     draft: null,
     draftActive: false,
     hiddenWorkspaces: readHiddenWorkspaces(storage),
+    availableEngines: ["core"],
+
+    setAvailableEngines(engines): void {
+      set({ availableEngines: engines });
+    },
 
     addTab({ tabId, workspace }): void {
       if (get().tabs.some((t) => t.tabId === tabId)) {

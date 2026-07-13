@@ -99,6 +99,7 @@ import type {
   WireHistoryItem,
   WireToolMeta,
   EnginePresentation,
+  ShellCapabilitiesProjection,
 } from "../../shared/protocol.js";
 import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { parseUsageLimitNotice, type UsageLimitNotice } from "./provider-notices.js";
@@ -448,6 +449,13 @@ export interface DesktopState {
   mode: PermissionMode | null;
   /** Host-authoritative external-engine projection; null means historical core wire. */
   engine: EnginePresentation | null;
+  /**
+   * Host-authoritative shell (AnyCode chrome) capability projection (design
+   * TASK.40 §2(f)/§3.2): null for core (legacy wire) OR whenever the host
+   * omitted it -- every consumer treats null the SAME as "every shell
+   * feature enabled" (`shell?.x ?? true`), never as "everything disabled".
+   */
+  shell: ShellCapabilitiesProjection | null;
   reasoningEffort: ReasoningEffort;
   /** Effort levels the current model supports; undefined ⇒ hide the selector. */
   availableEffortLevels: ReasoningEffort[] | undefined;
@@ -644,6 +652,8 @@ export interface RewindResultInfo {
 
 interface SessionSlice {
   engine: EnginePresentation | null;
+  /** Design TASK.40 §2(f)/§3.2: mirrors `engine` -- reset alongside it on a respawn/reset. */
+  shell: ShellCapabilitiesProjection | null;
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -668,6 +678,7 @@ interface SessionSlice {
 function initialSessionSlice(): SessionSlice {
   return {
     engine: null,
+    shell: null,
     turn: { status: "idle", turnId: null, requestId: null },
     transcript: [],
     permission: null,
@@ -1644,6 +1655,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               workspace: message.workspace,
               mode: message.mode,
               engine: message.engine ?? null,
+              shell: message.shell ?? null,
               model: message.model,
               reasoningEffort: message.reasoningEffort ?? "off",
               availableEffortLevels: message.availableEffortLevels,

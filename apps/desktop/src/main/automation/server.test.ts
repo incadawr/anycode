@@ -1074,6 +1074,43 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("POST /start-screen/engine with an engine id -> startScreenSetEngine([engineId]) (codex-fixes TASK.42, cut §3.7)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/engine"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ engineId: "codex" }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"startScreenSetEngine"');
+    expect(calls[0]).toContain('["codex"]');
+  });
+
+  it("POST /start-screen/engine with a missing engineId field -> 400, facade never invoked", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/engine"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POST /start-screen/engine with an unknown extra field -> 400 (strict body)", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/engine"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ engineId: "codex", extra: true }),
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
   it("POST /start-screen/project-menu with {open:true} -> startScreenToggleProjectMenu([true])", async () => {
     const { window, calls } = fakeWindowCapture({ ok: true });
     const h = await boot({ getWindow: () => window });

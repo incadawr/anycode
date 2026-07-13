@@ -1,0 +1,261 @@
+/**
+ * Codex onboarding control plane (TASK.41, cut §2(g)/§3.8): the invoke-API
+ * behind the Settings Codex card — recheck (discovery ladder + bounded
+ * doctor), explicit file-picker override, and the native login flow
+ * (start/cancel). Wires main/codex-binary.ts (discovery), main/codex-
+ * doctor.ts (diagnosis), and main/codex-login.ts (sign-in) together, persists
+ * ONLY path/status metadata into settings.codex (never a token — cut §2(g)),
+ * and hands the caller a fresh snapshot on every successful step so the
+ * renderer can re-render without a restart (TASK.41 п.5).
+ *
+ * CHANNEL NAMES ARE DUPLICATED LITERALS, not `shared/**` exports: every lane
+ * in this track froze `shared/**` as read-only after block C0 (design cut §4
+ * disjointness rules) specifically so no two parallel lanes fight over the
+ * same file. This mirrors the codebase's existing precedent for a boundary
+ * that can't reach a shared module (e.g. `ENV_WORKSPACE`/`ENV_DB_PATH` in
+ * main/index.ts, `buildCodexChildEnv` duplicated in main/codex-doctor.ts) —
+ * preload/index.ts and renderer/src/anycode-window.d.ts hold byte-identical
+ * copies of these five constants, kept in sync by contract.
+ */
+import { ipcMain } from "electron";
+import type { CodexDoctorReport } from "../shared/codex-doctor.js";
+import type { SettingsMutationResult } from "../shared/settings.js";
+import { ENV_CODEX_BIN } from "../shared/engines.js";
+import {
+  discoverCodexBinary,
+  resolveCodexBinary,
+  type CodexBinaryFs,
+  type CodexBinarySource,
+} from "./codex-binary.js";
+import { runCodexDoctor, type RunCodexDoctorOptions } from "./codex-doctor.js";
+import { runCodexLogin, type CodexLoginOutcome, type RunCodexLoginOptions } from "./codex-login.js";
+
+// ── invoke/push channels (duplicated literals — see file header) ──
+
+export const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
+export const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
+export const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
+export const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
+/** Push: main -> renderer, fired after every snapshot-changing step (TASK.41 п.5). No payload — listeners re-fetch (`listAvailableEngines`/`codex-recheck`), same shape as `updates.onUpdateStatus`/`window.onWindowState`. */
+export const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
+
+// ── wire shapes (duplicated structurally in anycode-window.d.ts; CodexDoctorReport itself is the frozen shared/codex-doctor.ts type, imported read-only) ──
+
+export interface CodexOnboardingSnapshot {
+  report: CodexDoctorReport;
+  /** The winning candidate path, or null when nothing on the ladder resolved. */
+  binaryPath: string | null;
+  source: CodexBinarySource;
+  /** ISO timestamp of this check. */
+  checkedAt: string;
+}
+
+export type CodexPickBinaryResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "cancelled" | "invalid" };
+
+export type CodexLoginStartResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+
+export interface DialogLike {
+  showOpenDialog(options: { properties: Array<"openFile">; defaultPath?: string }): Promise<{ canceled: boolean; filePaths: string[] }>;
+}
+
+export interface CodexIpcDeps {
+  /** Immutable boot-env snapshot (main/index.ts's `bootEnv`) — read for `ANYCODE_CODEX_BIN`/`PATH`/`HOME`/`APPDATA`, and passed through as the doctor/login child's SOURCE env (buildDoctorChildEnv still allowlists it). */
+  bootEnv: NodeJS.ProcessEnv;
+  /** Reads the currently-persisted `settings.codex.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
+  readBinaryPathSetting: () => Promise<string | undefined>;
+  /**
+   * Persists `{binaryPath?, lastCheck}` into `settings.codex` (cut §3.5).
+   * Expected to route through the SAME `settings-set` validation/merge/save
+   * pipeline settings-ipc.ts's `handleSet` already owns (main/index.ts wires
+   * this as a thin closure over it) — one write path, not two. Best-effort
+   * from this module's point of view: a `read_only` refusal must not block
+   * the LIVE snapshot this session already computed from reaching the caller.
+   */
+  writeCodexSettings: (patch: {
+    binaryPath?: string;
+    lastCheck: { status: CodexDoctorReport["status"]; version?: string; at: string };
+  }) => Promise<SettingsMutationResult>;
+  dialog: DialogLike;
+  openExternal: (url: string) => Promise<void> | void;
+  /** Fired after every successful recheck/pick/login with the fresh snapshot — main/index.ts updates its own `codexReady` gate and pushes `ENGINES_CHANGED_CHANNEL`. */
+  onSnapshot: (snapshot: CodexOnboardingSnapshot) => void;
+  platform?: NodeJS.Platform;
+  fs?: CodexBinaryFs;
+  /** DI seams for tests; production defaults to the real doctor/login runners. */
+  runDoctor?: (binaryPath: string, options?: RunCodexDoctorOptions) => Promise<CodexDoctorReport>;
+  runLogin?: (binaryPath: string, options: RunCodexLoginOptions) => Promise<CodexLoginOutcome>;
+}
+
+export interface CodexOnboardingController {
+  recheck(): Promise<CodexOnboardingSnapshot>;
+  pickBinary(): Promise<CodexPickBinaryResult>;
+  loginStart(): Promise<CodexLoginStartResult>;
+  loginCancel(): void;
+}
+
+/** Only a freshly CONFIRMED, non-dev-override path is worth remembering — an env override never persists (cut §3.5: "не env-override"), and "nothing found" must not clobber a path that may just be transiently unreachable (e.g. an unmounted volume). */
+function shouldPersistPath(source: CodexBinarySource, binaryPath: string | null): binaryPath is string {
+  return binaryPath !== null && source !== "env" && source !== "none";
+}
+
+async function persist(deps: CodexIpcDeps, snapshot: CodexOnboardingSnapshot): Promise<void> {
+  try {
+    await deps.writeCodexSettings({
+      ...(shouldPersistPath(snapshot.source, snapshot.binaryPath) ? { binaryPath: snapshot.binaryPath } : {}),
+      lastCheck: {
+        status: snapshot.report.status,
+        ...(snapshot.report.version !== undefined ? { version: snapshot.report.version } : {}),
+        at: snapshot.checkedAt,
+      },
+    });
+  } catch {
+    // Best-effort persistence — see writeCodexSettings's own doc comment.
+  }
+}
+
+/**
+ * Builds the exclusive controller: `recheck`/`pickBinary`/an in-flight
+ * `loginStart` all share ONE `inFlight` slot so this module never spawns two
+ * doctor/login children concurrently from itself (each already has its own
+ * bounded, zero-orphan teardown — this is about not doing needless
+ * concurrent work, not a correctness requirement of the child lifecycle).
+ * Exported (not just `registerCodexIpc`) so main/codex-ipc.test.ts can drive
+ * the handlers directly, off a fake deps bag, the same shape as every other
+ * `main/*-ipc.ts` sibling in this codebase.
+ */
+export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboardingController {
+  const runDoctor = deps.runDoctor ?? runCodexDoctor;
+  const runLogin = deps.runLogin ?? runCodexLogin;
+  let inFlight: Promise<CodexOnboardingSnapshot> | null = null;
+  let activeLoginAbort: AbortController | null = null;
+
+  function runExclusive(fn: () => Promise<CodexOnboardingSnapshot>): Promise<CodexOnboardingSnapshot> {
+    if (inFlight !== null) {
+      return inFlight;
+    }
+    const promise = fn().finally(() => {
+      inFlight = null;
+    });
+    inFlight = promise;
+    return promise;
+  }
+
+  function discover(): { path: string | null; source: CodexBinarySource } {
+    return discoverCodexBinary({
+      envOverride: deps.bootEnv[ENV_CODEX_BIN],
+      env: deps.bootEnv,
+      ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
+      ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+    });
+  }
+
+  /** Runs the doctor against ONE explicit path+source, persists, notifies, and returns the fresh snapshot. */
+  async function checkPath(binaryPath: string | null, source: CodexBinarySource): Promise<CodexOnboardingSnapshot> {
+    const report: CodexDoctorReport =
+      binaryPath === null
+        ? { status: "not_installed" }
+        : await runDoctor(binaryPath, {
+            env: deps.bootEnv,
+            ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+          });
+    const snapshot: CodexOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
+    await persist(deps, snapshot);
+    deps.onSnapshot(snapshot);
+    return snapshot;
+  }
+
+  /** Full ladder: settings rung reads fresh (discovery needs it as an input, unlike the env/PATH/common rungs which read directly off `deps.bootEnv`). */
+  async function discoverAndCheck(): Promise<CodexOnboardingSnapshot> {
+    const settingsPath = await deps.readBinaryPathSetting();
+    const discovery = discoverCodexBinary({
+      envOverride: deps.bootEnv[ENV_CODEX_BIN],
+      ...(settingsPath !== undefined ? { settingsPath } : {}),
+      env: deps.bootEnv,
+      ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
+      ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+    });
+    return checkPath(discovery.path, discovery.source);
+  }
+
+  return {
+    recheck: (): Promise<CodexOnboardingSnapshot> => runExclusive(discoverAndCheck),
+
+    async pickBinary(): Promise<CodexPickBinaryResult> {
+      if (inFlight !== null) {
+        await inFlight; // let a concurrent recheck/login settle before opening a picker on top of it
+      }
+      const picked = await deps.dialog.showOpenDialog({ properties: ["openFile"] });
+      const filePath = picked.filePaths[0];
+      if (picked.canceled || filePath === undefined) {
+        return { ok: false, reason: "cancelled" };
+      }
+      const resolved = resolveCodexBinary(filePath, deps.fs, deps.platform ?? process.platform);
+      if (resolved.path === null) {
+        return { ok: false, reason: "invalid" };
+      }
+      const confirmedPath = resolved.path;
+      const snapshot = await runExclusive(() => checkPath(confirmedPath, "picker"));
+      return { ok: true, snapshot };
+    },
+
+    async loginStart(): Promise<CodexLoginStartResult> {
+      if (inFlight !== null || activeLoginAbort !== null) {
+        return { ok: false, reason: "busy" };
+      }
+      // The lock is claimed HERE, synchronously, before the function's first
+      // `await` — two back-to-back (same-tick) calls must serialize on this
+      // check with no interleaving microtask, or a second call could slip
+      // through while the first is still awaiting `readBinaryPathSetting()`.
+      const controller = new AbortController();
+      activeLoginAbort = controller;
+      try {
+        const settingsPath = await deps.readBinaryPathSetting();
+        const discovery = discoverCodexBinary({
+          envOverride: deps.bootEnv[ENV_CODEX_BIN],
+          ...(settingsPath !== undefined ? { settingsPath } : {}),
+          env: deps.bootEnv,
+          ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
+          ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+        });
+        if (discovery.path === null) {
+          return { ok: false, reason: "unsupported" };
+        }
+        const binaryPath = discovery.path;
+        const outcome = await runLogin(binaryPath, {
+          openExternal: deps.openExternal,
+          signal: controller.signal,
+          env: deps.bootEnv,
+          ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+        });
+        if (!outcome.ok) {
+          return { ok: false, reason: outcome.reason };
+        }
+        // Re-diagnose via the doctor (never trust the login handshake's own
+        // success flag for account/version state) — one source of truth for
+        // "is Codex ready", the same doctor every other path uses.
+        const snapshot = await runExclusive(() => checkPath(binaryPath, discovery.source));
+        return { ok: true, snapshot };
+      } finally {
+        activeLoginAbort = null;
+      }
+    },
+
+    loginCancel(): void {
+      activeLoginAbort?.abort();
+    },
+  };
+}
+
+/** Wires the four invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (TASK.41 п.1: discovery must run without the user visiting Settings first). */
+export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController {
+  const controller = createCodexOnboardingController(deps);
+  ipcMain.handle(CODEX_RECHECK_CHANNEL, () => controller.recheck());
+  ipcMain.handle(CODEX_PICK_BINARY_CHANNEL, () => controller.pickBinary());
+  ipcMain.handle(CODEX_LOGIN_START_CHANNEL, () => controller.loginStart());
+  ipcMain.handle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
+  return controller;
+}

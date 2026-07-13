@@ -674,6 +674,7 @@ export function Composer() {
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
   const sessionTokens = useTabStore((state) => state.sessionTokens);
   const engine = useTabStore((state) => state.engine);
+  const shell = useTabStore((state) => state.shell);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
 
   // Core keeps its exact legacy presentation when `engine` is null. External
@@ -683,6 +684,17 @@ export function Composer() {
   const supportsImages = engine?.capabilities.supportsImages ?? true;
   const supportsContextUsage = engine?.capabilities.supportsContextUsage ?? true;
   const supportsContextBreakdown = engine?.capabilities.supportsContextBreakdown ?? true;
+  // Shell (AnyCode chrome) capabilities (design TASK.40 §2(f)): independent
+  // of the engine above — null (core, or an engine that omitted it) defaults
+  // to every shell feature enabled, mirroring the engine fallbacks.
+  const shellGitReadOnly = shell?.gitReadOnly ?? true;
+  const shellTerminal = shell?.terminal ?? true;
+  // AnyCode's own `$skill` convention is consumed by the AgentLoop's system
+  // prompt / skill port (core-loop-only) — Codex has no native skills wiring
+  // (design TASK.40 §2(f)/residual: Codex-native skills via app-server are
+  // NOT built, so the AnyCode skill list is honestly hidden rather than
+  // shown as a dead insert-and-hope-it-does-something row).
+  const skillsSupported = engine === null;
 
   const running = turn.status === "running";
   const ready = connection === "ready";
@@ -704,21 +716,29 @@ export function Composer() {
     running,
     ready,
     modelDisabled: modelPickDisabled(turn.status, queueInFlight, ready),
+    supportsCorePermissions,
+    supportsModelSelection,
+    shellGitReadOnly,
+    shellTerminal,
   };
   const slashQuery = slashQueryAt(text, caret);
   const slashItems =
-    slashQuery !== null ? filterSlashItems(SLASH_COMMANDS, slashSkills, slashQuery.query, slashCtx) : [];
+    slashQuery !== null
+      ? filterSlashItems(SLASH_COMMANDS, skillsSupported ? slashSkills : [], slashQuery.query, slashCtx)
+      : [];
   const slashOpen = slashQuery !== null && !slashDismissed && slashItems.length > 0;
 
-  // Skills fetch (cut §3): once per closed→open transition, cached in state
-  // for the open's lifetime (deps `[slashOpen, slashTabId]` — the effect
-  // only re-runs when openness flips, not on every filter keystroke), same
-  // "effect keyed on the boolean, not a ref-guard" idiom as CtxPopover's
-  // on-open `context_breakdown_request` fetch above. Never blocks the menu:
-  // a rejected/slow promise just leaves the skills section absent until (or
-  // unless) it resolves; commands render immediately regardless.
+  // Skills fetch (cut §3, gated by skillsSupported per TASK.40 §2(f)): once
+  // per closed→open transition, cached in state for the open's lifetime
+  // (deps `[slashOpen, slashTabId, skillsSupported]` — the effect only
+  // re-runs when openness or engine identity flips, not on every filter
+  // keystroke), same "effect keyed on the boolean, not a ref-guard" idiom as
+  // CtxPopover's on-open `context_breakdown_request` fetch above. Never
+  // blocks the menu: a rejected/slow promise just leaves the skills section
+  // absent until (or unless) it resolves; commands render immediately
+  // regardless.
   useEffect(() => {
-    if (!slashOpen) {
+    if (!slashOpen || !skillsSupported) {
       setSlashSkills((prev) => (prev.length === 0 ? prev : []));
       return;
     }
@@ -738,7 +758,7 @@ export function Composer() {
     return () => {
       cancelled = true;
     };
-  }, [slashOpen, slashTabId]);
+  }, [slashOpen, slashTabId, skillsSupported]);
 
   // Render-time state adjustment (React-sanctioned "reset state when a
   // derived value changes" pattern — avoids the one-frame flicker a
@@ -1151,8 +1171,9 @@ export function Composer() {
           {/* `mode` is null only before host_ready — which is exactly when the
               connection isn't `ready`, so the chip is disabled in that window;
               the neutral "plan" fallback is a cosmetic default for the greyed,
-              non-interactive chip and never reflects an actionable state. */}
-          {engine !== null && <span className="engine-identity">{engine.id === "codex" ? "Codex" : engine.id}</span>}
+              non-interactive chip and never reflects an actionable state.
+              Design TASK.40 §2(f)/item 5: the engine badge lives ONLY in
+              SessionHeader now — no duplicate here. */}
           {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={running || !ready} onChange={handleModeChange} />}
           {supportsImages && (
             <>

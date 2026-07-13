@@ -225,7 +225,7 @@ import type {
   SystemPromptEnv,
   TelemetryPort,
 } from "@anycode/core";
-import type { HostToUiMessage, WireRepoMapStatus } from "../shared/protocol.js";
+import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
   ENV_AUTH_MODE,
@@ -397,6 +397,33 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
 
   const booted = await plugin.boot({ codexEngine: connected.engine });
   const fs = new NodeFileSystemAdapter();
+
+  // Shell wiring (design TASK.40 §2(f)): AnyCode's own repo context (Git
+  // bridge -> branch/status/changes, the read-only Review diff, the
+  // Environment chip) is a property of the WORKSPACE, not the agent
+  // runtime -- wired identically to the core boot path in boot() below
+  // (same gitEnabled gate: is-git-repo AND the exec adapter can spawn a
+  // binary), so a Codex session sees exactly the same repo context a core
+  // session does. This is deliberately NOT surfaced as a Codex tool
+  // capability: `engine.capabilities.supportsGitMutations` stays `false`
+  // (Codex's own tools, not AnyCode's shell, mutate git when Codex itself
+  // runs a git command) -- `shell.gitUserMutations` below is the separate,
+  // shell-owned gate for the Review panel's user-initiated mutations
+  // (design §2(f), Session's `git_command` routing).
+  const codexExecAdapter = new NodeExecutionAdapter();
+  const codexIsGitRepo = await fs.exists(`${workspace}/.git`);
+  const codexGitEnabled = codexIsGitRepo && typeof codexExecAdapter.runBinary === "function";
+  const codexGitService = new NodeGitAdapter({ exec: codexExecAdapter, cwd: workspace, signal: gitAbort.signal });
+  gitBridge = new GitBridge({ git: codexGitEnabled ? codexGitService : null, outbound });
+  // The AnyCode terminal (PTY shell) is wired unconditionally at module
+  // scope (`terminals`, top of this file) regardless of engine -- always
+  // available for a Codex session too.
+  const shell: ShellCapabilitiesProjection = {
+    gitReadOnly: codexGitEnabled,
+    gitUserMutations: codexGitEnabled,
+    terminal: true,
+  };
+
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -410,6 +437,8 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
     rules: new SessionPermissionRules(),
     imageInputEnabled: () => false,
+    git: gitBridge,
+    shell,
     persistence: {
       touch(patch) {
         void persistence?.touchSession(connected.sessionMeta.id, patch).catch((error) => {

@@ -7,6 +7,21 @@
 import { describe, expect, it } from "vitest";
 import { createTabsStore, HIDDEN_WORKSPACES_KEY, type StorageLike } from "./tabs-store.js";
 
+describe("availableEngines (TASK.41, design/slice-codex-fixes-cut.md §2(g)/§5.5)", () => {
+  it("defaults to ['core'] before any fetch — Core never depends on external diagnosis", () => {
+    const store = createTabsStore();
+    expect(store.getState().availableEngines).toEqual(["core"]);
+  });
+
+  it("setAvailableEngines replaces the list wholesale", () => {
+    const store = createTabsStore();
+    store.getState().setAvailableEngines(["core", "codex"]);
+    expect(store.getState().availableEngines).toEqual(["core", "codex"]);
+    store.getState().setAvailableEngines(["core"]);
+    expect(store.getState().availableEngines).toEqual(["core"]);
+  });
+});
+
 describe("tabs-store", () => {
   it("the first tab registered becomes active automatically; later tabs don't steal focus", () => {
     const store = createTabsStore();

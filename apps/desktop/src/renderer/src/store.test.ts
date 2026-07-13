@@ -161,6 +161,74 @@ describe("desktop store — connection lifecycle", () => {
     expect(store.getState().engine).toBeNull();
   });
 
+  it("stores a shell capability projection and clears it when legacy core host_ready replaces the session (design TASK.40 §2(f))", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "gpt-5.6-terra",
+      sessionId: "codex-session",
+      engine: {
+        id: "codex",
+        capabilities: {
+          supportsCorePermissions: false,
+          supportsRewind: false,
+          supportsWorkflow: false,
+          supportsGitMutations: false,
+          supportsContextUsage: true,
+          supportsContextBreakdown: false,
+          supportsInteractiveApprovals: true,
+          costAccounting: false,
+          supportsModelSelection: false,
+          supportsReasoningEffort: false,
+          supportsImages: false,
+          supportsTasks: false,
+          supportsFileSnapshots: false,
+        },
+      },
+      shell: { gitReadOnly: true, gitUserMutations: true, terminal: true },
+    });
+    expect(store.getState().shell).toEqual({ gitReadOnly: true, gitUserMutations: true, terminal: true });
+
+    // A legacy core host_ready (no `shell` field at all) resets it to null,
+    // NOT to a stale prior projection.
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "core-session" });
+    expect(store.getState().shell).toBeNull();
+  });
+
+  it("defaults shell to null when host_ready carries an engine but omitted shell — consumers must treat null as every feature enabled, never as everything disabled", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "gpt-5.6-terra",
+      sessionId: "codex-session",
+      engine: {
+        id: "codex",
+        capabilities: {
+          supportsCorePermissions: false,
+          supportsRewind: false,
+          supportsWorkflow: false,
+          supportsGitMutations: false,
+          supportsContextUsage: true,
+          supportsContextBreakdown: false,
+          supportsInteractiveApprovals: true,
+          costAccounting: false,
+          supportsModelSelection: false,
+          supportsReasoningEffort: false,
+          supportsImages: false,
+          supportsTasks: false,
+          supportsFileSnapshots: false,
+        },
+      },
+    });
+    expect(store.getState().shell).toBeNull();
+  });
+
   it("host_ready and reasoning_effort_changed update available effort levels", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

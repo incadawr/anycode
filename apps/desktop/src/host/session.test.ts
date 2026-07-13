@@ -45,7 +45,10 @@ import type {
   TelemetryStatus,
 } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
-import type { HostToUiMessage, WireEnvStatus } from "../shared/protocol.js";
+import type { HostToUiMessage, ShellCapabilitiesProjection, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
+import type { GitUiBridge } from "./git-bridge.js";
+import { IpcPermissionBroker } from "./permission-broker.js";
+import { Outbound, Session } from "./session.js";
 import {
   MemFs,
   ScriptedModelPort,
@@ -854,6 +857,177 @@ describe("Session — engine shutdown seam", () => {
     } finally {
       h.close();
     }
+  });
+});
+
+/**
+ * Design TASK.40 §2(f): shell (AnyCode chrome) vs engine (agent runtime)
+ * capability split. These construct a minimal Session directly (not via
+ * createHarness's full AgentLoop wiring — unnecessary here, since no turn
+ * ever runs) over a hand-rolled in-memory WirePort, so the wire-shape and
+ * git_command routing assertions below stay independent of the harness's
+ * own option surface.
+ */
+describe("Session — shell capability projection & git-user-mutation gate (design TASK.40 §2(f))", () => {
+  /** Records posted messages and lets a test push a UiToHostMessage in directly, bypassing any real transport. */
+  class FakeWirePort implements WirePort {
+    readonly received: unknown[] = [];
+    private messageCb: ((msg: unknown) => void) | null = null;
+
+    post(msg: unknown): void {
+      this.received.push(msg);
+    }
+
+    onMessage(cb: (msg: unknown) => void): void {
+      this.messageCb = cb;
+    }
+
+    onClose(): void {
+      // Unused by these tests.
+    }
+
+    send(message: UiToHostMessage): void {
+      this.messageCb?.(message);
+    }
+
+    hostReady(): (HostToUiMessage & { type: "host_ready" }) | undefined {
+      return this.received.find(
+        (m): m is HostToUiMessage & { type: "host_ready" } =>
+          typeof m === "object" && m !== null && (m as { type?: unknown }).type === "host_ready",
+      );
+    }
+  }
+
+  /** Records every `handleCommand` call so a test can assert which git_command reached the bridge. */
+  class FakeGitBridge implements GitUiBridge {
+    readonly handled: { requestId: string; command: { op: string } }[] = [];
+
+    handleCommand(message: { requestId: string; command: { op: string } }): void {
+      this.handled.push(message);
+    }
+
+    refreshAfterTurn(): void {
+      // Unused by these tests.
+    }
+
+    pushSnapshot(): void {
+      // Unused by these tests.
+    }
+  }
+
+  /** A non-core external-engine shape (mirrors the "engine shutdown seam" fakes above): `supportsGitMutations: false` throughout, deliberately, so a test proves it does NOT gate the shell's own git_command routing. */
+  function buildFakeEngine(overrides: Partial<SessionEngine> = {}): SessionEngine {
+    return {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+      ...overrides,
+    };
+  }
+
+  function buildTestSession(opts: {
+    engine?: SessionEngine;
+    shell?: ShellCapabilitiesProjection;
+    git?: GitUiBridge;
+  }): { port: FakeWirePort } {
+    const outbound = new Outbound();
+    const broker = new IpcPermissionBroker((message) => outbound.emit(message));
+    const session = new Session({
+      outbound,
+      engine: opts.engine ?? buildFakeEngine(),
+      broker,
+      fs: new MemFs(),
+      workspace: "/workspace",
+      model: "m1",
+      sessionId: "s1",
+      rules: new SessionPermissionRules(),
+      ...(opts.git !== undefined ? { git: opts.git } : {}),
+      ...(opts.shell !== undefined ? { shell: opts.shell } : {}),
+    });
+    const port = new FakeWirePort();
+    session.bindPort(port);
+    return { port };
+  }
+
+  it("never emits host_ready.shell for a core-shaped engine (id \"core\"), even if the host mistakenly supplied one — core wire stays byte-identical", () => {
+    const { port } = buildTestSession({
+      engine: buildFakeEngine({ id: "core" }),
+      shell: { gitReadOnly: true, gitUserMutations: true, terminal: true },
+    });
+    port.send({ type: "ui_ready" });
+    const hostReady = port.hostReady();
+    expect(hostReady?.engine).toBeUndefined();
+    expect(hostReady?.shell).toBeUndefined();
+  });
+
+  it("emits host_ready.shell verbatim for a non-core engine when the host supplied one", () => {
+    const shell: ShellCapabilitiesProjection = { gitReadOnly: true, gitUserMutations: false, terminal: true };
+    const { port } = buildTestSession({ shell });
+    port.send({ type: "ui_ready" });
+    const hostReady = port.hostReady();
+    expect(hostReady?.engine).toBeDefined();
+    expect(hostReady?.shell).toEqual(shell);
+  });
+
+  it("omits host_ready.shell for a non-core engine when the host supplied none — renderer treats absence as every shell feature enabled", () => {
+    const { port } = buildTestSession({});
+    port.send({ type: "ui_ready" });
+    const hostReady = port.hostReady();
+    expect(hostReady?.engine).toBeDefined();
+    expect(hostReady?.shell).toBeUndefined();
+  });
+
+  it("routes a git MUTATION through shell.gitUserMutations, ignoring engine.capabilities.supportsGitMutations entirely (agent-owned vs shell-owned split)", () => {
+    const git = new FakeGitBridge();
+    const { port } = buildTestSession({
+      // supportsGitMutations: false throughout buildFakeEngine() — proves it is NOT consulted.
+      shell: { gitReadOnly: true, gitUserMutations: true, terminal: true },
+      git,
+    });
+    port.send({ type: "ui_ready" });
+    port.send({ type: "git_command", requestId: "r1", command: { op: "stage_all" } });
+    expect(git.handled).toHaveLength(1);
+    expect(git.handled[0]?.requestId).toBe("r1");
+  });
+
+  it("refuses a git MUTATION when shell.gitUserMutations is false, while a read-only op still routes through", () => {
+    const git = new FakeGitBridge();
+    const { port } = buildTestSession({
+      shell: { gitReadOnly: true, gitUserMutations: false, terminal: true },
+      git,
+    });
+    port.send({ type: "ui_ready" });
+    port.send({ type: "git_command", requestId: "r1", command: { op: "stage_all" } });
+    port.send({ type: "git_command", requestId: "r2", command: { op: "refresh" } });
+    expect(git.handled).toHaveLength(1);
+    expect(git.handled[0]?.requestId).toBe("r2");
+  });
+
+  it("defaults gitUserMutations to true when shell is absent — byte-identical to the pre-TASK.40 unconditional-for-core routing", () => {
+    const git = new FakeGitBridge();
+    const { port } = buildTestSession({ git }); // no shell option at all
+    port.send({ type: "ui_ready" });
+    port.send({ type: "git_command", requestId: "r1", command: { op: "stage_all" } });
+    expect(git.handled).toHaveLength(1);
   });
 });
 

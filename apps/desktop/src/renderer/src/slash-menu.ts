@@ -47,8 +47,29 @@ export type SlashRunIntent =
   | { kind: "settings_pane"; pane: string }
   | { kind: "insert"; text: string };
 
-/** Live composer/session state a command's dynamic description/enabled reads. */
-export interface SlashMenuCtx {
+/**
+ * Named engine/shell capability gates a command's structural VISIBILITY reads
+ * (design TASK.40 §2(f)). Distinct from `enabled` below: `enabled` grays out a
+ * row for a transient reason (busy/not-ready) while its target control still
+ * exists; these gates hide a row ENTIRELY when its target control isn't even
+ * rendered for the active engine — never a permanently-disabled row with no
+ * explanation ("no dead actions", TASK.40 DoD). Defaults mirror core (every
+ * capability true) so every pre-existing caller/test that omits an override
+ * keeps seeing the full registry.
+ */
+export interface SlashCapabilityCtx {
+  /** Mirrors `engine.capabilities.supportsCorePermissions` — gates `/mode`, `plan-mode` (ModeMenu isn't rendered without it). */
+  supportsCorePermissions: boolean;
+  /** Mirrors `engine.capabilities.supportsModelSelection` — gates `/model` (ModelPill isn't rendered without it). */
+  supportsModelSelection: boolean;
+  /** Mirrors `shell.gitReadOnly ?? true` — gates `/git-changes` (the Review panel stays closed without it, App.tsx). */
+  shellGitReadOnly: boolean;
+  /** Mirrors `shell.terminal ?? true` — gates `/terminal`. */
+  shellTerminal: boolean;
+}
+
+/** Live composer/session state a command's dynamic description/enabled/visible reads. */
+export interface SlashMenuCtx extends SlashCapabilityCtx {
   mode: string;
   model: string;
   running: boolean;
@@ -57,6 +78,17 @@ export interface SlashMenuCtx {
   modelDisabled: boolean;
 }
 
+/**
+ * Where a command's implementation lives (design TASK.40 §2(f)): `common`
+ * (shell-owned or otherwise engine-independent) works under any engine;
+ * `core` requires an AnyCode-loop-only control (ModeMenu/ModelPill/the
+ * fetched Skills section) and is gated on a named engine capability;
+ * `engine` would route through a specific engine's own native adapter (none
+ * built yet — Codex-native commands/skills are a documented residual,
+ * honestly hidden rather than faked, see Composer.tsx's skills gating).
+ */
+export type SlashCommandSource = "common" | "core" | "engine";
+
 export interface SlashCommand {
   id: string;
   name: string;
@@ -64,6 +96,9 @@ export interface SlashCommand {
   icon: SlashIconId;
   run: SlashRunIntent;
   enabled: (ctx: SlashMenuCtx) => boolean;
+  source: SlashCommandSource;
+  /** Structural visibility gate (design TASK.40 §2(f)) — see `SlashCapabilityCtx` above. A hidden row is filtered out of `filterSlashItems`'s result entirely, never shown disabled. */
+  visible: (ctx: SlashMenuCtx) => boolean;
 }
 
 /** Skills-section input row (W3 maps `SkillRowView` → this before calling `filterSlashItems`). */
@@ -178,6 +213,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "plan",
     run: { kind: "set_mode_toggle" },
     enabled: (ctx) => !(ctx.running || !ctx.ready),
+    source: "core",
+    // set_mode is rejected host-side without supportsCorePermissions (Session.onSetMode) — a dead toggle otherwise.
+    visible: (ctx) => ctx.supportsCorePermissions,
   },
   {
     id: "mode",
@@ -186,6 +224,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "mode",
     run: { kind: "window_event", event: FOCUS_MODE_MENU_EVENT },
     enabled: () => true,
+    source: "core",
+    // Focuses ModeMenu, which Composer only renders when supportsCorePermissions is true.
+    visible: (ctx) => ctx.supportsCorePermissions,
   },
   {
     id: "model",
@@ -194,6 +235,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "model",
     run: { kind: "window_event", event: FOCUS_MODEL_PILL_EVENT },
     enabled: (ctx) => !ctx.modelDisabled,
+    source: "core",
+    // Focuses ModelPill, which Composer only renders when supportsModelSelection is true.
+    visible: (ctx) => ctx.supportsModelSelection,
   },
   {
     id: "new-task",
@@ -202,6 +246,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "new-task",
     run: { kind: "run_action", action: "session.new" },
     enabled: () => true,
+    source: "common",
+    visible: () => true,
   },
   {
     id: "sessions",
@@ -210,6 +256,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "sessions",
     run: { kind: "run_action", action: "palette.sessions" },
     enabled: () => true,
+    source: "common",
+    visible: () => true,
   },
   {
     id: "git-changes",
@@ -218,6 +266,10 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "git",
     run: { kind: "store_git_panel" },
     enabled: () => true,
+    source: "common",
+    // Shell-owned (design TASK.40 §2(f)): the Review panel itself stays
+    // closed under App.tsx's gitPanelOpen gate without shell.gitReadOnly.
+    visible: (ctx) => ctx.shellGitReadOnly,
   },
   {
     id: "terminal",
@@ -226,6 +278,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "terminal",
     run: { kind: "run_action", action: "terminal.toggle" },
     enabled: () => true,
+    source: "common",
+    visible: (ctx) => ctx.shellTerminal,
   },
   {
     id: "mcp",
@@ -234,6 +288,10 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "mcp",
     run: { kind: "settings_pane", pane: "mcp" },
     enabled: () => true,
+    // Settings' MCP pane is engine-independent (always mounted, honest empty
+    // state with zero servers) — common, not core-gated.
+    source: "common",
+    visible: () => true,
   },
   {
     id: "skills",
@@ -242,6 +300,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "skills",
     run: { kind: "settings_pane", pane: "skills" },
     enabled: () => true,
+    // Opens project/personal skill FILE management, independent of which
+    // engine is running (unlike the live skill-insert rows below, which
+    // Composer gates separately — see its skillsSupported comment).
+    source: "common",
+    visible: () => true,
   },
   {
     id: "settings",
@@ -250,6 +313,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "settings",
     run: { kind: "run_action", action: "settings.open" },
     enabled: () => true,
+    source: "common",
+    visible: () => true,
   },
 ];
 
@@ -380,6 +445,13 @@ export function filterSlashItems(
 
   const commandRows: Array<{ item: SlashMenuItem; rank: number; order: number }> = [];
   commands.forEach((command, order) => {
+    // Structural visibility (design TASK.40 §2(f)): filtered out BEFORE
+    // ranking, unconditionally of the query — a command whose target control
+    // the active engine/shell cannot honor never appears, matching/disabled
+    // ("no dead actions").
+    if (!command.visible(ctx)) {
+      return;
+    }
     const description = command.description(ctx);
     let rank = 0;
     let ranges: Array<[number, number]> = [];
