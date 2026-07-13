@@ -1,0 +1,178 @@
+{
+  "fixture": "w0-command-accept-resume-read",
+  "appServerPid": 70127,
+  "stderr": "",
+  "initialize": {
+    "userAgent": "anycode/0.144.3 (Mac OS 15.6.1; arm64) iTerm.app (anycode; 0.0.0-w6capture)",
+    "codexHome": "/scrubbed-home/.codex",
+    "platformFamily": "unix",
+    "platformOs": "macos"
+  },
+  "threadId": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+  "resumed": {
+    "thread": {
+      "id": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+      "extra": null,
+      "sessionId": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "Run exactly: sh -c 'echo w0-command > w0-command-sentinel.txt'. Then state whether it succeeded.",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783842543,
+      "updatedAt": 1783842543,
+      "recencyAt": 1783842547,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/scrubbed-home/.codex/sessions/2026/07/12/rollout-2026-07-12T10-49-03-019f554d-16be-7b21-b55e-e9ce5b023a52.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": {
+        "sha": "c78ee58db56aed39573fdc28c6090ba705a96496",
+        "branch": "master",
+        "originUrl": null
+      },
+      "name": null,
+      "turns": [
+        {
+          "id": "019f554d-16fb-7493-bc52-fe8403dbd61c",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "item-1",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Run exactly: sh -c 'echo w0-command > w0-command-sentinel.txt'. Then state whether it succeeded.",
+                  "text_elements": []
+                }
+              ]
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-2",
+              "text": "Running the specified command exactly as provided.",
+              "phase": "commentary",
+              "memoryCitation": null
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-3",
+              "text": "Succeeded (exit code 0).",
+              "phase": "final_answer",
+              "memoryCitation": null
+            }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1783842543,
+          "completedAt": 1783842547,
+          "durationMs": 4498
+        }
+      ]
+    },
+    "model": "gpt-5.6-terra",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "/private/tmp/anycode-codex-w0/repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/anycode-codex-w0/repo"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "auto_review",
+    "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+    },
+    "activePermissionProfile": {
+      "id": ":workspace",
+      "extends": null
+    },
+    "reasoningEffort": "high",
+    "multiAgentMode": "explicitRequestOnly",
+    "initialTurnsPage": null
+  },
+  "read": {
+    "thread": {
+      "id": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+      "extra": null,
+      "sessionId": "019f554d-16be-7b21-b55e-e9ce5b023a52",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "Run exactly: sh -c 'echo w0-command > w0-command-sentinel.txt'. Then state whether it succeeded.",
+      "ephemeral": false,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "createdAt": 1783842543,
+      "updatedAt": 1783842543,
+      "recencyAt": 1783842547,
+      "status": {
+        "type": "idle"
+      },
+      "path": "/scrubbed-home/.codex/sessions/2026/07/12/rollout-2026-07-12T10-49-03-019f554d-16be-7b21-b55e-e9ce5b023a52.jsonl",
+      "cwd": "/private/tmp/anycode-codex-w0/repo",
+      "cliVersion": "0.144.1",
+      "source": "vscode",
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": {
+        "sha": "c78ee58db56aed39573fdc28c6090ba705a96496",
+        "branch": "master",
+        "originUrl": null
+      },
+      "name": null,
+      "turns": [
+        {
+          "id": "019f554d-16fb-7493-bc52-fe8403dbd61c",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "item-1",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Run exactly: sh -c 'echo w0-command > w0-command-sentinel.txt'. Then state whether it succeeded.",
+                  "text_elements": []
+                }
+              ]
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-2",
+              "text": "Running the specified command exactly as provided.",
+              "phase": "commentary",
+              "memoryCitation": null
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-3",
+              "text": "Succeeded (exit code 0).",
+              "phase": "final_answer",
+              "memoryCitation": null
+            }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1783842543,
+          "completedAt": 1783842547,
+          "durationMs": 4498
+        }
+      ]
+    }
+  }
+}

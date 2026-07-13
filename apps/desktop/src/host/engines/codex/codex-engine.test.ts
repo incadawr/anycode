@@ -1,10 +1,12 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
 import type { JsonRpcNotification, JsonRpcServerRequest } from "./protocol.js";
-import type { ShadowCommandItem } from "./history-projection.js";
+import { NATIVE_PERSISTED, type ShadowCommandItem } from "./history-projection.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import {
   CODEX_NOT_SIGNED_IN,
@@ -13,6 +15,70 @@ import {
   resumeNativeCodexSession,
   type CodexClient,
 } from "./codex-engine.js";
+
+const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
+
+/** Every notification (method + params) line of a captured app-server fixture, in wire order — RPC responses/requests (an `id`) are excluded. */
+function loadFixtureNotifications(file: string): JsonRpcNotification[] {
+  const lines = readFileSync(join(FIXTURES_DIR, file), "utf8").split("\n").filter((line) => line.trim().length > 0);
+  return lines
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((message): message is { method: string; params: unknown } => typeof message.method === "string" && message.id === undefined)
+    .map((message) => ({ method: message.method, params: message.params }));
+}
+
+/** The JSON-RPC `result` of the LAST `id`-carrying line in a fixture (the final response the capture recorded). */
+function lastFixtureResult(file: string): unknown {
+  const lines = readFileSync(join(FIXTURES_DIR, file), "utf8").split("\n").filter((line) => line.trim().length > 0);
+  const responses = lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((message) => message.id !== undefined);
+  const last = responses.at(-1);
+  if (last === undefined) throw new Error(`fixture ${file} carries no id-response line`);
+  return last.result;
+}
+
+/**
+ * A minimal `CodexClient` that replays a REAL captured live notification
+ * stream verbatim, in order, answering `turn/start` with the REAL native turn
+ * id the capture used (so every `item/completed`'s `turnId` matches what the
+ * engine expects). No approval bridge, no settings machinery — this exists
+ * ONLY to drive the REAL writer (`CodexEngine.runTurn`) over REAL wire bytes
+ * for the W6 composition test below.
+ */
+class ReplayClient implements CodexClient {
+  private index = 0;
+
+  constructor(
+    private readonly stream: JsonRpcNotification[],
+    private readonly liveTurnId: string,
+  ) {}
+
+  request<T>(method: string): Promise<T> {
+    if (method === "turn/start") return Promise.resolve({ turn: { id: this.liveTurnId } } as T);
+    return Promise.resolve({} as T);
+  }
+
+  notify(): void {}
+
+  notifications(): AsyncIterable<JsonRpcNotification> {
+    return {
+      [Symbol.asyncIterator]: () => ({
+        next: () => {
+          if (this.index < this.stream.length) {
+            return Promise.resolve({ value: this.stream[this.index++]!, done: false });
+          }
+          // The fixture's own `turn/completed` line always terminates the
+          // real turn before exhaustion is reached; parking here (rather than
+          // signalling `done`) matches a real transport that stays open.
+          return new Promise(() => {});
+        },
+      }),
+    };
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
 
 /** Records every write and answers `list()` from a settable fixture — the shadow-log test double. */
 class RecordingShadowLog implements CodexShadowLogPort {
@@ -1113,7 +1179,7 @@ describe("CodexEngine — resume-history hydration (TASK.42)", () => {
     const server = new FakeAppServer();
     server.threadReadResult = { thread: { id: "persisted-thread", turns: [{ id: "turn-a", startedAt: 0, items: [] }] } };
     const shadowLog = new RecordingShadowLog();
-    shadowLog.listResult = [{ turnOrdinal: 0, positionInTurn: 0, command: "echo shadow", exitCode: 0, outputHead: "shadow\n" }];
+    shadowLog.listResult = [{ turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo shadow", exitCode: 0, outputHead: "shadow\n" }];
 
     const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog);
     const items = connected.engine.historyItems();
@@ -1160,20 +1226,20 @@ describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
     expect(shadowLog.writes[0]).toEqual({
       threadId: THREAD,
       itemId: "exec-1",
-      item: { turnOrdinal: 0, positionInTurn: 0, command: "echo hi", cwd: "/work", exitCode: 0, outputHead: "hi\n" },
+      item: { turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo hi", cwd: "/work", exitCode: 0, outputHead: "hi\n" },
     });
   });
 
-  it("positionInTurn counts EVERY item completion of the turn, not just commands", async () => {
+  it("positionInTurn counts only NATIVE_PERSISTED completions (userMessage/agentMessage/fileChange); seqInTurn counts every completion", async () => {
     const server = new FakeAppServer();
     const shadowLog = new RecordingShadowLog();
     const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
     const turn = drive(engine, "run it", new AbortController().signal);
     await tick();
 
-    // A text item completes FIRST (position 0), THEN the command (position 1)
-    // — the shadow row must record position 1, not 0, so the resume merge can
-    // reconstruct the command landing AFTER the text.
+    // A NATIVE_PERSISTED text item completes FIRST (advances BOTH counters),
+    // THEN the command — the shadow row must record positionInTurn 1 (one
+    // native-visible completion happened first), not 0.
     server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "msg-1" } } });
     server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "msg-1", text: "hi" } } });
     await tick();
@@ -1184,6 +1250,34 @@ describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
 
     expect(shadowLog.writes).toHaveLength(1);
     expect(shadowLog.writes[0]?.item.positionInTurn).toBe(1);
+    expect(shadowLog.writes[0]?.item.seqInTurn).toBe(1);
+  });
+
+  it("a reasoning completion between two native-visible items advances seqInTurn but NOT positionInTurn (W6 — the reviewer's exact defect)", async () => {
+    // Live evidence (contract/fixtures/w0-command-accept.jsonl): a real
+    // gpt-5-codex turn is user -> reasoning -> agent -> command -> agent.
+    // `thread/read` never persists `reasoning` (NATIVE_PERSISTED), so the
+    // command's anchor must be counted in the native-visible space, not the
+    // raw live-completion space, or the resume merge drifts the command past
+    // the agent message that follows it.
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "msg-1", text: "commentary" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "reasoning", id: "rs-1", summary: [] } } });
+    await tick();
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    // Only the agentMessage advanced positionInTurn; the reasoning did not.
+    expect(shadowLog.writes[0]?.item.positionInTurn).toBe(1);
+    // seqInTurn saw all 3 completions (agentMessage, reasoning, command) before it.
+    expect(shadowLog.writes[0]?.item.seqInTurn).toBe(2);
   });
 
   it("turnOrdinal is offset by baseTurnOrdinal (a resumed thread's live turns continue its own numbering)", async () => {
@@ -1200,6 +1294,39 @@ describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
     await turn.done;
 
     expect(shadowLog.writes[0]?.item.turnOrdinal).toBe(3);
+  });
+
+  it("a rejected/early-returned turn does NOT advance the native ordinal shadow rows anchor to (LOW1)", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+
+    // Burned turn: rejected by runTurn()'s early-return guard (unsupported
+    // image attachments) BEFORE any turn/start is ever sent — no native turn
+    // exists. `turnNumber` (the UI-facing counter) still advances; that is
+    // fine and unrelated to shadow-row anchoring.
+    const rejectedEvents: AgentEvent[] = [];
+    for await (const event of engine.runTurn("look at this", {
+      signal: new AbortController().signal,
+      attachments: [{ mediaType: "image/png", data: "AA==" }],
+    })) {
+      rejectedEvents.push(event);
+    }
+    expect(rejectedEvents.some((event) => event.type === "error")).toBe(true);
+    expect(server.calls.some((call) => call.method === "turn/start")).toBe(false);
+
+    // The FIRST real turn must still anchor to native ordinal 0
+    // (baseTurnOrdinal) — a burned runTurn() call must never consume an
+    // ordinal slot, or every shadow row on a resumed thread silently drifts
+    // by one after any rejected turn.
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes[0]?.item.turnOrdinal).toBe(0);
   });
 
   it("caps outputHead at 8 KiB", async () => {
@@ -1232,7 +1359,7 @@ describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
     await turn.done;
 
     expect(shadowLog.writes).toHaveLength(1);
-    expect(shadowLog.writes[0]?.item).toEqual({ turnOrdinal: 0, positionInTurn: 0, command: "rm -rf /" });
+    expect(shadowLog.writes[0]?.item).toEqual({ turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "rm -rf /" });
   });
 
   it("writes nothing when no shadowLog was supplied (undefined stays a no-op, never throws)", async () => {
@@ -1241,4 +1368,106 @@ describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
     const events = await runTurn(server, engine);
     expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
   });
+});
+
+/**
+ * Class-killer composition test (W6): the interleave invariant may ONLY be
+ * asserted through composition — never hand-authored `positionInTurn` values
+ * (forbidden pattern: the OLD history-projection.test.ts:334, now relabelled
+ * as a mechanics-only unit test). Both halves are REAL:
+ *
+ *  - The shadow row comes from running the REAL writer (`CodexEngine.runTurn`,
+ *    the `deliver` closure) over a REAL captured live app-server stream —
+ *    contract/fixtures/w0-command-accept.jsonl — one gpt-5-codex turn whose
+ *    live order is `user -> reasoning -> agent -> commandExecution -> agent`
+ *    (the exact shape the adversarial reviewer proved against codex-cli
+ *    0.144.3 drifts on resume).
+ *  - The native side comes from a REAL `thread/resume` + `thread/read`
+ *    capture of THE SAME SESSION — contract/fixtures/w0-command-accept-resume-read.jsonl
+ *    (captured 2026-07-14 by resuming thread
+ *    019f554d-16be-7b21-b55e-e9ce5b023a52, the exact thread w0-command-accept.jsonl
+ *    ran; no paired read capture for that session existed before this — see
+ *    the sibling meta.json for the capture record). It confirms L4 directly:
+ *    `thread/read` hands back `[userMessage, agentMessage, agentMessage]` —
+ *    `reasoning` and `commandExecution` are both simply gone.
+ *  - The merge is the REAL end-to-end path: `resumeNativeCodexSession` ->
+ *    `asThreadRead` -> `projectCodexHistory` -> `mergeTurnItems`. Nothing
+ *    about the expected interleave is hand-picked; only the OUTPUT sequence
+ *    is asserted.
+ */
+describe("CodexEngine + resumeNativeCodexSession — real interleave composition (W6 class-killer)", () => {
+  const LIVE_THREAD_ID = "019f554d-16be-7b21-b55e-e9ce5b023a52";
+  const LIVE_TURN_ID = "019f554d-16fb-7493-bc52-fe8403dbd61c";
+
+  it("domain-drift sentinel: every item type the paired thread/read capture returns is inside NATIVE_PERSISTED", () => {
+    const read = lastFixtureResult("w0-command-accept-resume-read.jsonl") as {
+      thread: { turns?: Array<{ items?: Array<{ type: string }> }> };
+    };
+    const types = (read.thread.turns ?? []).flatMap((turn) => (turn.items ?? []).map((item) => item.type));
+    // Not vacuous: this session really did run a reasoning item and a command
+    // live (w0-command-accept.jsonl) — if thread/read had persisted either,
+    // this fixture would carry a type outside NATIVE_PERSISTED and the loop
+    // below would need to catch it; the length check proves the loop runs.
+    expect(types.length).toBeGreaterThan(0);
+    for (const type of types) {
+      expect(
+        NATIVE_PERSISTED.has(type),
+        `thread/read persisted a "${type}" item — NATIVE_PERSISTED (history-projection.ts) is stale and must be ` +
+          `re-evidenced by a live probe against the current codex-cli before this type can be trusted native-side`,
+      ).toBe(true);
+    }
+  });
+
+  it(
+    "reproduces the real user->reasoning->agent->CMD->agent resume interleave " +
+      "(RED at 7bce5e9: the reviewer's exact defect — the command jumping to the end of the turn)",
+    async () => {
+      // Step 1 — the REAL writer over the REAL live stream.
+      const liveStream = loadFixtureNotifications("w0-command-accept.jsonl");
+      const writeShadowLog = new RecordingShadowLog();
+      const writer = new CodexEngine(
+        new ReplayClient(liveStream, LIVE_TURN_ID),
+        LIVE_THREAD_ID,
+        undefined,
+        undefined,
+        undefined,
+        writeShadowLog,
+        0,
+      );
+      for await (const _event of writer.runTurn(
+        "Run exactly: sh -c 'echo w0-command > w0-command-sentinel.txt'. Then state whether it succeeded.",
+        { signal: new AbortController().signal },
+      )) {
+        // Draining is the point — only the shadow-log side effect matters here.
+      }
+      expect(writeShadowLog.writes).toHaveLength(1);
+      const shadowRow = writeShadowLog.writes[0]!.item;
+
+      // Step 2 — the REAL merge path, fed the REAL paired thread/read capture
+      // of the SAME session plus the shadow row the REAL writer just produced.
+      const server = new FakeAppServer();
+      server.threadReadResult = lastFixtureResult("w0-command-accept-resume-read.jsonl");
+      const resumeShadowLog = new RecordingShadowLog();
+      resumeShadowLog.listResult = [shadowRow];
+      const connected = await resumeNativeCodexSession(
+        server,
+        "/work",
+        "persisted-thread",
+        undefined,
+        undefined,
+        undefined,
+        resumeShadowLog,
+      );
+
+      const sequence = connected.engine.historyItems().map((item) => {
+        if (item.message.role !== "assistant") return item.message.role;
+        const part = item.message.content[0];
+        return part?.type === "tool_call" ? "assistant:tool_call" : "assistant:text";
+      });
+
+      // THE GOLDEN ASSERTION: the command sits strictly BETWEEN the two agent
+      // messages — matching the real live order — never at the end of the turn.
+      expect(sequence).toEqual(["user", "assistant:text", "assistant:tool_call", "tool", "assistant:text"]);
+    },
+  );
 });

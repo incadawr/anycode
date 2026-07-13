@@ -107,6 +107,31 @@ const MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX idx_codex_thread_items_thread ON codex_thread_items (thread_id, turn_ordinal, position_in_turn)`,
     ],
   },
+  {
+    version: 5,
+    statements: [
+      // codex-fixes W6 errata: every row written by the v4-era host writer
+      // has `position_in_turn` counted in the WRONG coordinate space (it
+      // counted ALL live item completions, including `reasoning`, which
+      // `thread/read` never returns — see history-projection.ts's
+      // NATIVE_PERSISTED doc). Those rows cannot be converted to the new
+      // coordinate space after the fact — the dropped `reasoning`/other
+      // completions that would let us recompute the correct anchor are gone.
+      // Deleting them is the only sound option; the resume-projection's
+      // existing `shadowMissing` marker (history-projection.ts) makes that
+      // one-time degradation honest instead of silently misordering forever.
+      // The DELETE runs BEFORE the ALTER so a mid-migration failure (the
+      // runner's own BEGIN/COMMIT/ROLLBACK, see `migrate()`) undoes it too —
+      // a poisoned second statement must never leave stale rows half-deleted.
+      "DELETE FROM codex_thread_items",
+      // `seq_in_turn`: the raw live-completion-order tiebreaker every future
+      // row carries (history-projection.ts's `ShadowCommandItem.seqInTurn`).
+      // DEFAULT 0 only satisfies SQLite's NOT-NULL-column-add requirement —
+      // the table is empty immediately after the DELETE above, and every
+      // future write supplies a real value explicitly.
+      "ALTER TABLE codex_thread_items ADD COLUMN seq_in_turn INTEGER NOT NULL DEFAULT 0",
+    ],
+  },
 ];
 
 /**
@@ -200,13 +225,18 @@ function rowToCheckpointMeta(row: CheckpointRow): CheckpointMeta {
 const CHECKPOINTS_KEEP_PER_SESSION = 50;
 
 // ---------------------------------------------------------------------------
-// Codex shadow command log (migration v4, codex-fixes TASK.42 cut §2(e))
+// Codex shadow command log (migration v4, codex-fixes TASK.42 cut §2(e);
+// `seq_in_turn` added + all pre-existing rows deleted by migration v5, W6 —
+// v4-era rows were written in a coordinate space `thread/read`'s actual
+// native-item subset cannot be reconciled against, see MIGRATIONS above)
 
 /** One `commandExecution` completion the host observed live, keyed by the native thread it belongs to. */
 export interface CodexShadowCommandItem {
   itemId: string;
   turnOrdinal: number;
   positionInTurn: number;
+  /** Raw live-completion-order tiebreaker (migration v5) — see history-projection.ts's `ShadowCommandItem.seqInTurn`. */
+  seqInTurn: number;
   command: string;
   cwd?: string;
   exitCode?: number;
@@ -217,6 +247,7 @@ interface CodexThreadItemRow {
   thread_id: string;
   turn_ordinal: number;
   position_in_turn: number;
+  seq_in_turn: number;
   item_id: string;
   command: string;
   cwd: string | null;
@@ -230,6 +261,7 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
     itemId: row.item_id,
     turnOrdinal: row.turn_ordinal,
     positionInTurn: row.position_in_turn,
+    seqInTurn: row.seq_in_turn,
     command: row.command,
     ...(row.cwd !== null ? { cwd: row.cwd } : {}),
     ...(row.exit_code !== null ? { exitCode: row.exit_code } : {}),
@@ -440,7 +472,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   // -------------------------------------------------------------------------
-  // Codex shadow command log (migration v4, cut §2(e)). Additive to
+  // Codex shadow command log (migration v4 + v5, cut §2(e)/W6). Additive to
   // PersistencePort — host-only usage, never consumed through that interface.
 
   /** INSERT OR REPLACE keeps a re-delivered notification for the same item idempotent rather than duplicating a row. */
@@ -448,12 +480,13 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     const db = this.open();
     db.prepare(
       `INSERT OR REPLACE INTO codex_thread_items
-         (thread_id, turn_ordinal, position_in_turn, item_id, command, cwd, exit_code, output_head, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (thread_id, turn_ordinal, position_in_turn, seq_in_turn, item_id, command, cwd, exit_code, output_head, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       threadId,
       item.turnOrdinal,
       item.positionInTurn,
+      item.seqInTurn,
       item.itemId,
       item.command,
       item.cwd ?? null,

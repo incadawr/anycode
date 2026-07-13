@@ -408,19 +408,21 @@ describe("SqlitePersistenceAdapter", () => {
     });
   });
 
-  describe("codex shadow command log (migration v4)", () => {
+  describe("codex shadow command log (migration v4 + v5)", () => {
     it("records and lists items ordered by (turnOrdinal, positionInTurn), not insertion order", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.recordCodexThreadItem("thread-1", {
         itemId: "exec-b",
         turnOrdinal: 0,
         positionInTurn: 2,
+        seqInTurn: 3,
         command: "echo b",
       });
       await adapter.recordCodexThreadItem("thread-1", {
         itemId: "exec-a",
         turnOrdinal: 0,
         positionInTurn: 0,
+        seqInTurn: 0,
         command: "echo a",
         cwd: "/repo",
         exitCode: 0,
@@ -430,6 +432,7 @@ describe("SqlitePersistenceAdapter", () => {
         itemId: "exec-c",
         turnOrdinal: 1,
         positionInTurn: 0,
+        seqInTurn: 0,
         command: "echo c",
         exitCode: 1,
       });
@@ -440,18 +443,19 @@ describe("SqlitePersistenceAdapter", () => {
         itemId: "exec-a",
         turnOrdinal: 0,
         positionInTurn: 0,
+        seqInTurn: 0,
         command: "echo a",
         cwd: "/repo",
         exitCode: 0,
         outputHead: "a\n",
       });
-      expect(items[1]).toEqual({ itemId: "exec-b", turnOrdinal: 0, positionInTurn: 2, command: "echo b" });
+      expect(items[1]).toEqual({ itemId: "exec-b", turnOrdinal: 0, positionInTurn: 2, seqInTurn: 3, command: "echo b" });
     });
 
     it("scopes items to their own thread", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
-      await adapter.recordCodexThreadItem("thread-1", { itemId: "x", turnOrdinal: 0, positionInTurn: 0, command: "echo x" });
-      await adapter.recordCodexThreadItem("thread-2", { itemId: "y", turnOrdinal: 0, positionInTurn: 0, command: "echo y" });
+      await adapter.recordCodexThreadItem("thread-1", { itemId: "x", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo x" });
+      await adapter.recordCodexThreadItem("thread-2", { itemId: "y", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo y" });
 
       expect((await adapter.listCodexThreadItems("thread-1")).map((i) => i.itemId)).toEqual(["x"]);
       expect((await adapter.listCodexThreadItems("thread-2")).map((i) => i.itemId)).toEqual(["y"]);
@@ -460,11 +464,12 @@ describe("SqlitePersistenceAdapter", () => {
 
     it("a repeated write for the same (threadId, itemId) replaces the row instead of duplicating it", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
-      await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, command: "echo a" });
+      await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo a" });
       await adapter.recordCodexThreadItem("thread-1", {
         itemId: "exec-a",
         turnOrdinal: 0,
         positionInTurn: 0,
+        seqInTurn: 0,
         command: "echo a",
         exitCode: 0,
         outputHead: "a\n",
@@ -489,10 +494,121 @@ describe("SqlitePersistenceAdapter", () => {
       seed.close();
 
       const adapter = new SqlitePersistenceAdapter(dbPath);
-      // Using the table at all proves the v4 migration applied on top of v3.
-      await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, command: "echo a" });
+      // Using the table at all proves the v4 migration applied on top of v3
+      // (v5 also runs in the same open() call — it is additive and this is a
+      // fresh v3 database with no pre-existing codex_thread_items rows).
+      await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo a" });
       expect((await adapter.listCodexThreadItems("thread-1")).map((i) => i.itemId)).toEqual(["exec-a"]);
       await adapter.close();
+    });
+
+    it("migration v5 runs on top of an existing v4 database and is idempotent across repeated opens", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-"));
+      const dbPath = join(tmpDir, "v4.sqlite");
+
+      const seed = new DatabaseSync(dbPath);
+      seed.exec("PRAGMA journal_mode = WAL;");
+      seed.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`);
+      seed.exec(
+        `CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT, engine_id TEXT, external_session_ref TEXT)`,
+      );
+      seed.exec(`CREATE TABLE codex_thread_items (
+        thread_id TEXT NOT NULL, turn_ordinal INTEGER NOT NULL, position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL, command TEXT NOT NULL, cwd TEXT, exit_code INTEGER, output_head TEXT,
+        created_at INTEGER NOT NULL, PRIMARY KEY (thread_id, item_id)
+      )`);
+      seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0)").run();
+      seed.close();
+
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      // Using the table with a seqInTurn value at all proves the v5 migration
+      // (ADD COLUMN seq_in_turn) applied on top of v4.
+      await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 7, command: "echo a" });
+      expect(await adapter.listCodexThreadItems("thread-1")).toEqual([
+        { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 7, command: "echo a" },
+      ]);
+      await adapter.close();
+
+      // Reopening an already-v5-migrated database must not fail or re-apply v5.
+      const reopened = new SqlitePersistenceAdapter(dbPath);
+      expect((await reopened.listCodexThreadItems("thread-1")).map((i) => i.itemId)).toEqual(["exec-a"]);
+      await reopened.close();
+    });
+
+    it("migration v5 DELETES every pre-existing codex_thread_items row (wrong-coordinate-space v4 data cannot be converted)", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-"));
+      const dbPath = join(tmpDir, "v4-with-rows.sqlite");
+
+      const seed = new DatabaseSync(dbPath);
+      seed.exec("PRAGMA journal_mode = WAL;");
+      seed.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`);
+      seed.exec(
+        `CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT, engine_id TEXT, external_session_ref TEXT)`,
+      );
+      seed.exec(`CREATE TABLE codex_thread_items (
+        thread_id TEXT NOT NULL, turn_ordinal INTEGER NOT NULL, position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL, command TEXT NOT NULL, cwd TEXT, exit_code INTEGER, output_head TEXT,
+        created_at INTEGER NOT NULL, PRIMARY KEY (thread_id, item_id)
+      )`);
+      seed
+        .prepare(
+          `INSERT INTO codex_thread_items (thread_id, turn_ordinal, position_in_turn, item_id, command, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run("thread-1", 0, 3, "exec-old", "echo old", 0);
+      seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0)").run();
+      seed.close();
+
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      // migrate() (including v5's DELETE) runs lazily on this first call.
+      expect(await adapter.listCodexThreadItems("thread-1")).toEqual([]);
+      await adapter.close();
+    });
+
+    it("migration v5 rolls back atomically on a mid-migration error, leaving schema_migrations NOT claiming 5 and the earlier DELETE undone", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-"));
+      const dbPath = join(tmpDir, "v5-poison.sqlite");
+
+      const seed = new DatabaseSync(dbPath);
+      seed.exec("PRAGMA journal_mode = WAL;");
+      seed.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`);
+      seed.exec(
+        `CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT, engine_id TEXT, external_session_ref TEXT)`,
+      );
+      seed.exec(`CREATE TABLE codex_thread_items (
+        thread_id TEXT NOT NULL, turn_ordinal INTEGER NOT NULL, position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL, command TEXT NOT NULL, cwd TEXT, exit_code INTEGER, output_head TEXT,
+        created_at INTEGER NOT NULL, PRIMARY KEY (thread_id, item_id)
+      )`);
+      seed
+        .prepare(
+          `INSERT INTO codex_thread_items (thread_id, turn_ordinal, position_in_turn, item_id, command, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run("thread-1", 0, 0, "exec-a", "echo a", 0);
+      seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0)").run();
+      // Poisons v5's SECOND statement (ALTER TABLE ... ADD COLUMN seq_in_turn)
+      // by pre-creating that exact column — SQLite rejects a duplicate column
+      // name. v5's FIRST statement (the DELETE) still runs, inside the SAME
+      // migration transaction, before the poisoned ALTER throws.
+      seed.exec(`ALTER TABLE codex_thread_items ADD COLUMN seq_in_turn INTEGER`);
+      seed.close();
+
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      // migrate() runs lazily on first use, inside this call.
+      await expect(
+        adapter.recordCodexThreadItem("thread-2", { itemId: "exec-z", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo z" }),
+      ).rejects.toThrow();
+      await adapter.close();
+
+      const raw = new DatabaseSync(dbPath);
+      const versions = (raw.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
+        (row) => row.version,
+      );
+      expect(versions).toEqual([1, 2, 3, 4]); // v5 never committed
+      // The DELETE that ran as v5's first statement was rolled back along
+      // with the failed ALTER — the pre-existing row survives untouched.
+      const rows = raw.prepare("SELECT item_id FROM codex_thread_items").all() as { item_id: string }[];
+      expect(rows.map((row) => row.item_id)).toEqual(["exec-a"]);
+      raw.close();
     });
   });
 });

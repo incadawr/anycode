@@ -288,7 +288,7 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
       thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [] }] },
     };
     const shadow: ShadowCommandItem[] = [
-      { turnOrdinal: 0, positionInTurn: 0, command: "echo shadow-only", cwd: "/repo", exitCode: 0, outputHead: "shadow-only\n" },
+      { turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo shadow-only", cwd: "/repo", exitCode: 0, outputHead: "shadow-only\n" },
     ];
     const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
     expect(items).toEqual([
@@ -312,7 +312,7 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
   });
 
   it("native-only turn: a turn with items but zero shadow rows for it projects exactly as the native-only path (regression)", () => {
-    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 5, positionInTurn: 0, command: "unrelated turn", exitCode: 0 }];
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 5, positionInTurn: 0, seqInTurn: 0, command: "unrelated turn", exitCode: 0 }];
     const items = projectCodexHistory(RESUME_READ_THREAD, shadow, { maxItems: 200 });
     // turnOrdinal 5 does not exist in RESUME_READ_THREAD (only turn 0) — the
     // shadow row is simply never matched to any turn, and turn 0 renders
@@ -331,13 +331,18 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
     ]);
   });
 
-  it("interleaved turn: a shadow command between two real (golden) native text items lands in the middle, not before/after both", () => {
-    // Augments the REAL W0 golden turn (userMessage @ native position 0,
-    // agentMessage @ native position 1) with a synthetic shadow command
-    // claiming absolute position 1 — i.e. a command that ran BETWEEN the
-    // user's message and the agent's reply, exactly the case native
-    // `thread/read` can never reconstruct on its own (L4).
-    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 1, command: "echo between", exitCode: 0, outputHead: "between\n" }];
+  // MECHANICS-ONLY unit test (W6): a hand-authored `positionInTurn` against a
+  // native side with no dropped items. This proves `mergeTurnItems` inserts a
+  // shadow row before the correct native index and nothing else — it is NOT
+  // evidence that a real live turn produces this `positionInTurn`, which is
+  // exactly the class of bug W6 fixes (see the composition test in
+  // codex-engine.test.ts, built from a REAL captured live stream + a REAL
+  // paired `thread/read`, never from hand-authored positions like this one).
+  it("mechanics: a shadow row anchored at positionInTurn:1 is inserted strictly BEFORE native[1], not merged-space position 1", () => {
+    // RESUME_READ_THREAD's turn has exactly 2 native items (userMessage,
+    // agentMessage) — positionInTurn:1 means "insert before native[1]"
+    // (the agentMessage), landing the command between the two.
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 1, seqInTurn: 1, command: "echo between", exitCode: 0, outputHead: "between\n" }];
     const items = projectCodexHistory(RESUME_READ_THREAD, shadow, { maxItems: 200 });
 
     const roles = items.map((item) => item.message.role);
@@ -352,7 +357,7 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
 
   it("a shadow command with no exitCode (declined/interrupted before completion) degrades to cancelled, not error", () => {
     const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [] }] } };
-    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 0, command: "rm -rf /" }];
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "rm -rf /" }];
     const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
     const result = items.find((item) => item.message.role === "tool");
     expect(result?.message).toMatchObject({ content: [{ status: "cancelled" }] });
@@ -364,7 +369,7 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
     // Interleave a shadow command at position 4 (after all 4 native items):
     // total items in the turn = 4 native + 1 shadow = 5, each shadow command
     // projects to 2 HistoryItems -> 6 HistoryItems total, capped to the last 3.
-    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 4, command: "echo last", exitCode: 0, outputHead: "last\n" }];
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 0, positionInTurn: 4, seqInTurn: 4, command: "echo last", exitCode: 0, outputHead: "last\n" }];
     const projected = projectCodexHistory(thread, shadow, { maxItems: 3 });
     expect(projected).toHaveLength(4); // 1 marker + 3 kept
     expect(projected[0]?.kind).toBe("compact_summary");

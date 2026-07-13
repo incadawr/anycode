@@ -36,7 +36,7 @@ import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js"
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
 import { CodexModelCatalog } from "./catalog.js";
 import { TurnTranslator } from "./event-translator.js";
-import { projectCodexHistory, type CodexThreadRead } from "./history-projection.js";
+import { NATIVE_PERSISTED, projectCodexHistory, type CodexThreadRead } from "./history-projection.js";
 import {
   DEFAULT_CODEX_PRESET,
   codexPresetChoices,
@@ -288,6 +288,12 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? value as Record<string, unknown> : null;
 }
 
+/** The `item.type` of an `item/completed` notification, or undefined for a malformed one. */
+function completedItemType(notification: JsonRpcNotification): string | undefined {
+  const item = record(record(notification.params)?.item);
+  return typeof item?.type === "string" ? item.type : undefined;
+}
+
 function nativeThread(result: ThreadResult, operation: string): { threadId: string; model: string } {
   const threadId = result.thread?.id;
   const model = result.model;
@@ -503,6 +509,17 @@ export class CodexEngine implements SessionEngine {
   private readonly bounds: CodexEngineTimeouts;
   private readonly unobserve: () => void;
   private turnNumber = 0;
+  /**
+   * Count of native turns THIS launch has actually started, incremented ONLY
+   * once `turn/start` has returned a real turn id (LOW1 fix) — never at the
+   * top of `runTurn()` alongside `turnNumber`. `turnNumber` is burned by an
+   * early return (closed engine, unsupported attachments) before any native
+   * turn exists; anchoring shadow rows to it would silently skip an ordinal
+   * and misalign every later shadow row's `turnOrdinal` against the resumed
+   * thread's real `turns[]` indexing. This counter cannot drift that way: a
+   * turn that never reaches a confirmed turn id never advances it.
+   */
+  private nativeTurnCount = 0;
   private activeTurn: ActiveCodexTurn | null = null;
   /** Item index of the turn currently being started/run; written by the transport tap. */
   private activeItems: TurnItemIndex | null = null;
@@ -803,6 +820,14 @@ export class CodexEngine implements SessionEngine {
 
       const turnId = result.turn?.id;
       if (typeof turnId !== "string" || turnId.length === 0) throw new Error("Codex turn/start returned no turn id");
+      // A native turn now unambiguously exists — this is the ONLY point that
+      // may advance nativeTurnCount (LOW1 fix): this launch's live turns
+      // continue the thread's own turns[] sequence (cut §2(e)), so the
+      // ordinal shadow rows anchor to must track turns that actually
+      // happened, not `runTurn()` invocations (some of which return before a
+      // native turn ever starts).
+      const turnOrdinal = this.baseTurnOrdinal + this.nativeTurnCount;
+      this.nativeTurnCount += 1;
       // Phase 2 of the ack (cut §2(k).3): the server ACCEPTED a turn/start that
       // carried the new posture. That acceptance — not a notification, of which
       // there is none — is the confirmation. A turn/start that errored or timed
@@ -816,25 +841,36 @@ export class CodexEngine implements SessionEngine {
       }
       this.activeTurn = { threadId: this.threadId, turnId, items };
       const translator = new TurnTranslator({ threadId: this.threadId, turnId, turn, items });
-      // This launch's live turns continue the thread's own turns[] sequence
-      // (cut §2(e)) — `turn` is this engine's 1-based in-process counter, so
-      // `turnOrdinal` is 0-based and offset by however many turns already
-      // existed at boot.
-      const turnOrdinal = this.baseTurnOrdinal + (turn - 1);
-      let itemsCompletedInTurn = 0;
       let terminal = false;
+      // Two independent per-turn counters, both reset to 0 for every turn
+      // (W6 fix — cut §2(e) errata): `seqInTurn` is the raw live-completion
+      // order (every `item/completed`, dropped items included — the OLD,
+      // sole counter, merely renamed). `nativeVisibleCompleted` counts only
+      // completions whose item type is in NATIVE_PERSISTED — the exact subset
+      // `thread/read` will hand back on resume. A shadow row's
+      // `positionInTurn` must be expressed in the SECOND counter's space, not
+      // the first: the merge (history-projection.ts) walks the native array
+      // `thread/read` actually returns, and a `reasoning` item (or any other
+      // dropped type) between two native items must not shift a command's
+      // anchor relative to them.
+      let seqInTurn = 0;
+      let nativeVisibleCompleted = 0;
       // Captured (not `this`-bound): `deliver` stays a plain generator
       // function so `yield*` delegation below is unchanged from before this
       // shadow-write hook existed.
       const engine = this;
       const deliver = function* (notification: JsonRpcNotification): Generator<AgentEvent> {
-        // Every item/completed of this turn — command or not — consumes one
-        // position slot (recorded BEFORE incrementing), so the resume merge
-        // can reconstruct the exact live interleave
-        // (history-projection.ts's mergeTurnItems, cut §2(e)).
         if (notification.method === "item/completed") {
-          engine.recordShadowItem(notification, turnId, turnOrdinal, itemsCompletedInTurn);
-          itemsCompletedInTurn += 1;
+          const itemType = completedItemType(notification);
+          // Recorded with BOTH counters' values BEFORE this notification's own
+          // effect is applied — a command itself is never NATIVE_PERSISTED, so
+          // recording before vs. after nativeVisibleCompleted's own (absent)
+          // increment is equivalent, but seqInTurn's pre-increment value is
+          // load-bearing (matches every other row's "my own position", not
+          // "the next row's position").
+          engine.recordShadowItem(notification, turnId, turnOrdinal, nativeVisibleCompleted, seqInTurn);
+          seqInTurn += 1;
+          if (itemType !== undefined && NATIVE_PERSISTED.has(itemType)) nativeVisibleCompleted += 1;
         }
         for (const event of translator.onNotification(notification)) {
           if (event.type === "loop_end") terminal = true;
@@ -941,15 +977,23 @@ export class CodexEngine implements SessionEngine {
   }
 
   /**
-   * Shadow command log writer (cut §2(e)): the ONLY host-side write of a
-   * `commandExecution` completion, from the SAME `item/completed` notification
-   * the live translator already consumes — `positionInTurn` is the running
-   * per-turn completion counter BEFORE it advances (see `deliver` in
-   * `runTurn()`), so it lands in the same numbering space native items
-   * implicitly occupy. Fire-and-forget: `shadowLog.record` never blocks or
-   * fails a live turn.
+   * Shadow command log writer (cut §2(e), errata W6): the ONLY host-side
+   * write of a `commandExecution` completion, from the SAME `item/completed`
+   * notification the live translator already consumes. `positionInTurn` is
+   * `nativeVisibleCompleted`'s value at the moment this command completed —
+   * the count of NATIVE_PERSISTED completions so far this turn, i.e. the
+   * native array index this row must be inserted before on resume
+   * (history-projection.ts's `mergeTurnItems`). `seqInTurn` is the raw
+   * live-completion order (both counters live in `deliver`, `runTurn()`).
+   * Fire-and-forget: `shadowLog.record` never blocks or fails a live turn.
    */
-  private recordShadowItem(notification: JsonRpcNotification, turnId: string, turnOrdinal: number, positionInTurn: number): void {
+  private recordShadowItem(
+    notification: JsonRpcNotification,
+    turnId: string,
+    turnOrdinal: number,
+    positionInTurn: number,
+    seqInTurn: number,
+  ): void {
     if (this.shadowLog === undefined) return;
     const params = record(notification.params);
     if (params === null || params.threadId !== this.threadId || params.turnId !== turnId) return;
@@ -961,6 +1005,7 @@ export class CodexEngine implements SessionEngine {
     this.shadowLog.record(this.threadId, item.id, {
       turnOrdinal,
       positionInTurn,
+      seqInTurn,
       command: item.command,
       ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
