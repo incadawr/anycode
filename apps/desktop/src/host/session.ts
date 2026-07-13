@@ -116,10 +116,18 @@ export type EngineSettingsChange =
 export interface EngineSettingsSeam {
   models(): EngineModelChoice[];
   presets(): EnginePermissionPreset[];
+  /** The APPLIED settings — what a `turn/start` actually carried. Never a merely-chosen value (see `pendingSnapshot`). */
   snapshot(): { model: string; activePresetId: string };
   selectModel(id: string): EngineSettingsChange;
   selectPreset(id: string): EngineSettingsChange;
   onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string }) => void): () => void;
+  /**
+   * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
+   * `ui_ready` so a renderer reload cannot lose (or mis-fold) the pending badge:
+   * the original `state:"pending"` message is a one-shot in the replay ring.
+   * Optional — an engine with no two-phase ack simply has nothing pending.
+   */
+  pendingSnapshot?(): { model: string; activePresetId: string } | null;
 }
 
 /** Only external engines carry this additive wire projection; core stays byte-identical. */
@@ -635,6 +643,7 @@ export class Session {
         this.pushHooksList();
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         this.pushEnvStatus();
+        this.pushPendingEngineSettings();
         break;
       case "user_message":
         this.onUserMessage(message.requestId, message.text, message.images);
@@ -1168,13 +1177,39 @@ export class Session {
    * between the choice and the next turn still resumes under the chosen posture —
    * the re-assertion on every turn/start then makes it effective (cut §2(k).1).
    */
+  /**
+   * Re-asserts an un-applied model/preset delta on every ui_ready, AFTER
+   * replay() (cut §2(k).3). `sendDirect`, exactly like the git_status snapshot
+   * push above: it is regenerated per connect and must never enter the replay
+   * ring. Without it a renderer reload shows a pending change as ACTIVE — the
+   * announcing message is a one-shot that the ring can evict, and `host_ready`
+   * carries only the applied snapshot. ZERO wire delta: this is the same
+   * `engine_settings_changed{state:"pending"}` the change itself emits.
+   */
+  private pushPendingEngineSettings(): void {
+    const pending = this.engineSettings?.pendingSnapshot?.();
+    if (pending == null) return;
+    this.outbound.sendDirect({
+      type: "engine_settings_changed",
+      model: pending.model,
+      activePresetId: pending.activePresetId,
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+  }
+
   private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string }): void {
     if (!result.ok) {
       this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
       return;
     }
     if (intent.model !== undefined) {
-      this.model = result.model;
+      // `this.model` is the ACTIVE model echoed in host_ready — advancing it
+      // here would present a merely-CHOSEN model as active on the next
+      // handshake. It advances in the `onSettingsApplied` hook instead, when a
+      // turn/start has actually carried it. Persistence is unchanged: the
+      // choice is still recorded at ACCEPT time (cut §2(k).4), so quitting
+      // before the next turn still resumes under the chosen posture.
       this.persistence?.touch({ model: result.model });
     }
     if (intent.presetId !== undefined) {

@@ -470,6 +470,20 @@ export class CodexEngine implements SessionEngine {
    * when that happens (cut §2(k).3).
    */
   private pendingSettings: { model: string; activePresetId: string } | null = null;
+  /**
+   * DISPLAY TRUTH: the settings a `turn/start` has actually carried — what the
+   * UI may legitimately call "active". `this.settings` holds the CHOSEN values
+   * (mutated the instant the user picks one, and the sole source of
+   * `turnSettingsOverride()` + persistence); the two differ exactly while a
+   * change is pending, which is the whole point of the two-phase ack (cut
+   * §2(k).3). Conflating them made `snapshot()` report a never-applied choice as
+   * active on every renderer reload.
+   *
+   * At construction chosen === applied BY DESIGN (cut §2(k).1): a respawn boots
+   * from the PERSISTED posture, which the very first `turn/start` re-asserts, so
+   * there is nothing pending about it.
+   */
+  private applied: { model: string; activePresetId: string };
   private readonly appliedListeners = new Set<(snapshot: { model: string; activePresetId: string }) => void>();
 
   constructor(
@@ -484,6 +498,7 @@ export class CodexEngine implements SessionEngine {
     this.capabilities = approvals === undefined ? CODEX_ENGINE_CAPABILITIES : CODEX_BRIDGED_CAPABILITIES;
     this.bounds = timeouts(overrides);
     this.settings = settings;
+    this.applied = this.chosen();
     this.unobserve = this.client.observeNotifications?.((notification) => this.indexItem(notification)) ?? (() => {});
   }
 
@@ -517,9 +532,30 @@ export class CodexEngine implements SessionEngine {
   // ── engine-owned settings seam (host/session.ts `engineSettings`) ──────────
   // Session speaks to these structurally; it never imports this class.
 
-  /** Display truth = our OWN state, never the server echo (L8 makes the echo un-mappable). */
+  /**
+   * Display truth = our OWN state, never the server echo (L8 makes the echo
+   * un-mappable) — and specifically the APPLIED state, never the merely chosen
+   * one. A pending change is reported through `pendingSnapshot()` and the
+   * `state:"pending"` message, never by pretending it is already active.
+   */
   snapshot(): { model: string; activePresetId: string } {
+    return { ...this.applied };
+  }
+
+  /** The values the user has CHOSEN: what the next `turn/start` will carry and what persistence records. */
+  private chosen(): { model: string; activePresetId: string } {
     return { model: this.settings?.model ?? "", activePresetId: this.settings?.preset.id ?? DEFAULT_CODEX_PRESET };
+  }
+
+  /**
+   * The un-applied delta, or null when chosen === applied. Session re-asserts
+   * this on every `ui_ready` (cut §2(k).3): the pending message that announced
+   * the change is a one-shot in the replay ring, and a renderer that reloads
+   * after it was evicted — or that folds it away because it compares equal to a
+   * wrongly-advanced "current" — would otherwise show the change as active.
+   */
+  pendingSnapshot(): { model: string; activePresetId: string } | null {
+    return this.pendingSettings === null ? null : { ...this.pendingSettings };
   }
 
   models(): EngineModelChoice[] {
@@ -575,10 +611,17 @@ export class CodexEngine implements SessionEngine {
     return () => this.appliedListeners.delete(listener);
   }
 
+  /**
+   * Pending is a DELTA, not a flag: choosing a value back to what is already
+   * applied leaves nothing pending (the user undid their own change before it
+   * ever rode a turn). The returned change always carries the CHOSEN values —
+   * that is what the `state:"pending"` message announces.
+   */
   private markPending(): CodexSettingsChange {
-    const snapshot = this.snapshot();
-    this.pendingSettings = snapshot;
-    return { ok: true, ...snapshot };
+    const chosen = this.chosen();
+    this.pendingSettings =
+      chosen.model === this.applied.model && chosen.activePresetId === this.applied.activePresetId ? null : chosen;
+    return { ok: true, ...chosen };
   }
 
   /**
@@ -710,6 +753,9 @@ export class CodexEngine implements SessionEngine {
       // out never reaches here, so `pending` correctly stays pending.
       if (applying !== null && this.pendingSettings === applying) {
         this.pendingSettings = null;
+        // The server accepted a turn/start carrying these values: they are now
+        // — and only now — the APPLIED posture the UI may display as active.
+        this.applied = applying;
         for (const listener of this.appliedListeners) listener(applying);
       }
       this.activeTurn = { threadId: this.threadId, turnId, items };

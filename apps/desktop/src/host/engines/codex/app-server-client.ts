@@ -5,11 +5,13 @@
  */
 
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { isAbsolute } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
 import { ENGINE_PROCESS_REGISTRATION_TYPE } from "../../../shared/engines.js";
+import { checkCodexBinaryTrust, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
 import {
   CODEX_TEARDOWN_SIGKILL_WAIT_MS,
   CODEX_TEARDOWN_SIGTERM_WAIT_MS,
@@ -50,6 +52,8 @@ export interface AppServerClientOptions {
   /** May await a future UI approval; safe denial happens only after it settles. */
   onServerRequest?: (request: JsonRpcServerRequest, respond: ServerRequestResponder) => void | Promise<void>;
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+  /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkCodexBinaryTrustOnDisk`). */
+  binaryTrust?: (binaryPath: string) => string | null;
   versionTimeoutMs?: number;
   maxLineBytes?: number;
   maxPendingRequests?: number;
@@ -67,6 +71,39 @@ export class AppServerClientError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AppServerClientError";
+  }
+}
+
+function toPathStat(stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
+  return { isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+}
+
+/**
+ * The host's OWN filesystem read for the SHARED trust policy
+ * (shared/codex-binary-trust.ts). A host->main import is architecturally
+ * forbidden (cut §2(g)), so main/codex-binary.ts holds a sibling reader: the
+ * `stat` plumbing is duplicated across that boundary on purpose — the POLICY,
+ * the part whose divergence would actually be dangerous, is not.
+ *
+ * Called immediately before `spawn()`, NOT only at discovery: a path validated
+ * once by main and executed later here is precisely the TOCTOU the policy
+ * narrows. It narrows and does not close it (see the policy module's header).
+ */
+export function checkCodexBinaryTrustOnDisk(binaryPath: string, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform === "win32") return null;
+  try {
+    const resolved = realpathSync(binaryPath);
+    const directories = [toPathStat(statSync(dirname(resolved)))];
+    if (resolved !== binaryPath) directories.push(toPathStat(statSync(dirname(binaryPath))));
+    return checkCodexBinaryTrust({
+      file: toPathStat(statSync(resolved)),
+      directories,
+      uid: process.getuid?.() ?? -1,
+      gids: process.getgroups?.() ?? [],
+      platform,
+    });
+  } catch {
+    return "Codex binary path does not exist";
   }
 }
 
@@ -163,6 +200,8 @@ export class AppServerClient {
   private lineBuffer = "";
   private stderr = "";
   private closing = false;
+  /** The one in-flight teardown; every later `close()` awaits this same promise. */
+  private closePromise: Promise<void> | null = null;
   private terminalError: Error | null = null;
   private stdoutPaused = false;
 
@@ -216,6 +255,14 @@ export class AppServerClient {
     if (!isAbsolute(this.options.binaryPath)) {
       throw new EngineVersionError("Codex binary path must be absolute");
     }
+    // Re-validated HERE, at spawn time — main's discovery-time validation is a
+    // different moment in wall-clock time, and the binary can be swapped in
+    // between (W2-review Medium). This narrows the TOCTOU window to the
+    // irreducible check->execve gap; it does not close it.
+    const untrusted = (this.options.binaryTrust ?? checkCodexBinaryTrustOnDisk)(this.options.binaryPath);
+    if (untrusted !== null) {
+      throw new EngineVersionError(untrusted);
+    }
     await this.preflightVersion();
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "app-server", "--stdio"], this.spawnOptions(true));
     this.child = child;
@@ -263,12 +310,19 @@ export class AppServerClient {
    * the SAME constants: two independently-drifting teardown state machines is
    * precisely how the probe harness once stranded a child for >300s.
    *
-   * Idempotent: a second call while one is in flight is a no-op, never a second
+   * Idempotent AND awaitable: a second call while one is in flight returns the
+   * SAME in-flight teardown promise rather than resolving early. Callers that
+   * must not outlive the child (app quit, host shutdown) therefore always await
+   * the real teardown, never a no-op — and the child still never sees a second
    * signal storm.
    */
-  async close(): Promise<void> {
-    const child = this.child;
-    if (child === null || this.closing) return;
+  close(): Promise<void> {
+    if (this.child === null) return Promise.resolve();
+    this.closePromise ??= this.teardown(this.child);
+    return this.closePromise;
+  }
+
+  private async teardown(child: ChildProcess): Promise<void> {
     this.closing = true;
     const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
     try {
@@ -283,7 +337,34 @@ export class AppServerClient {
       this.signalOwnedProcess(child, "SIGKILL");
       await this.exitedWithin(closed, CODEX_TEARDOWN_SIGKILL_WAIT_MS);
     } finally {
+      // The stage races above all key off the DIRECT CHILD's `close` event —
+      // but a child exiting does not mean its GROUP is empty. A grandchild that
+      // ignores SIGTERM outlives a parent that honours it, and every early
+      // return above would then leave that grandchild running with nothing left
+      // to reap it. The group is therefore swept once more, unconditionally.
+      this.sweepOwnedGroup(child);
       this.failTerminal(new AppServerClientError("app-server client closed"));
+    }
+  }
+
+  /**
+   * SIGKILLs any process still alive in the group we created. `kill(-pgid, 0)`
+   * is a pure existence probe: a group with no members raises ESRCH, which is
+   * the success case. Anything still answering it after `close()` is by
+   * definition an orphan of a client that no longer exists.
+   */
+  private sweepOwnedGroup(child: ChildProcess): void {
+    const pid = child.pid;
+    if (process.platform === "win32" || pid === undefined) return;
+    try {
+      process.kill(-pid, 0);
+    } catch {
+      return; // empty group — nothing survived.
+    }
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Raced us to exit; either way the group is gone.
     }
   }
 
@@ -313,8 +394,20 @@ export class AppServerClient {
     };
   }
 
+  /**
+   * The version preflight owns a process GROUP of its own, exactly like the
+   * long-lived app-server child does (W2-review High). A `--version` that is
+   * really a wrapper script can fork a grandchild and hang; killing only the
+   * direct wrapper on timeout strands that grandchild permanently, because this
+   * spawn happens BEFORE the client exists and nothing else will ever reap it.
+   *
+   * The group is reaped on EVERY settle path, not just the timeout: a wrapper
+   * that exits 0 having left a background helper behind is just as much of an
+   * orphan, and once preflight has answered we have no further use for anything
+   * it started. An already-empty group raises ESRCH, which is the success case.
+   */
   private async preflightVersion(): Promise<void> {
-    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--version"], this.spawnOptions());
+    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--version"], this.spawnOptions(true));
     const timeoutMs = this.options.versionTimeoutMs ?? CODEX_VERSION_PREFLIGHT_TIMEOUT_MS;
     const output = await new Promise<string>((resolve, reject) => {
       let stdout = "";
@@ -324,12 +417,19 @@ export class AppServerClient {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        this.signalOwnedProcess(child, "SIGKILL");
         fn();
       };
       const timer = setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch {}
         settle(() => reject(new EngineVersionError(`Codex version preflight timed out after ${timeoutMs}ms`)));
       }, timeoutMs);
+      // Same unhandled-stream-error hazard as the long-lived child's stdio
+      // (bindStdioErrors): a pipe error here must not escalate into a process
+      // kill. The outcome is decided by `close`/`error`/the timeout below, so a
+      // broken pipe needs no action beyond not being fatal.
+      child.stdin?.on("error", () => {});
+      child.stdout?.on("error", () => {});
+      child.stderr?.on("error", () => {});
       child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
       child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
       child.once("error", (error) => settle(() => reject(new EngineVersionError(`Codex version preflight failed: ${error.message}`))));
@@ -347,7 +447,31 @@ export class AppServerClient {
     }
   }
 
+  /**
+   * A broken pipe is a TRANSPORT failure, never a process-killing throw
+   * (W2-review High). A still-running Codex that closes fd 0 makes the next
+   * `.write()` raise an asynchronous EPIPE on the stdin socket; an `error`
+   * event with no listener is escalated by Node into an unhandled exception
+   * that terminates the OWNING process (here: the whole host). Every stdio
+   * stream therefore carries a listener that routes the failure into the same
+   * bounded terminal path as any other transport death: pending RPCs reject,
+   * the child is torn down, the process lives.
+   */
+  private bindStdioErrors(child: ChildProcess): void {
+    const onStreamError = (stream: "stdin" | "stdout" | "stderr") => (error: Error): void => {
+      // A pipe breaking DURING our own bounded teardown is the expected
+      // consequence of ending stdin, not a new failure to act on.
+      if (this.closing) return;
+      this.failTerminal(new AppServerClientError(`app-server ${stream} failed: ${error.message}`));
+      void this.close();
+    };
+    child.stdin?.on("error", onStreamError("stdin"));
+    child.stdout?.on("error", onStreamError("stdout"));
+    child.stderr?.on("error", onStreamError("stderr"));
+  }
+
   private bindChild(child: ChildProcess): void {
+    this.bindStdioErrors(child);
     child.stdout?.on("data", (chunk: Buffer) => this.onStdout(chunk));
     child.stderr?.on("data", (chunk: Buffer) => this.appendStderr(chunk.toString("utf8")));
     child.once("error", (error) => this.failTerminal(new AppServerClientError(`app-server spawn error: ${error.message}`)));

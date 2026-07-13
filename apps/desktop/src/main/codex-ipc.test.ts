@@ -5,10 +5,14 @@ import { createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardin
 
 /** Rejects every path — no rung of the discovery ladder resolves. */
 const noBinaryFs: CodexBinaryFs = {
+  realpath: (path) => path,
   stat() {
     throw new Error("ENOENT");
   },
 };
+
+/** uid/gids the fake fs below is owned by; pinned so the suite does not depend on the real uid of whoever runs it. */
+const ME = { uid: 501, gids: [20] };
 
 function makeDeps(overrides: Partial<CodexIpcDeps> = {}): CodexIpcDeps & { writtenPatches: unknown[]; snapshots: CodexOnboardingSnapshot[] } {
   const writtenPatches: unknown[] = [];
@@ -25,7 +29,19 @@ function makeDeps(overrides: Partial<CodexIpcDeps> = {}): CodexIpcDeps & { writt
     onSnapshot: (snapshot) => {
       snapshots.push(snapshot);
     },
-    fs: { stat: () => ({ isFile: () => true, mode: 0o755 }) },
+    // Models a real filesystem: a trusted, user-owned binary in a user-owned
+    // directory (the trust gate stats both — see codex-binary.test.ts).
+    fs: {
+      realpath: (path) => path,
+      stat: (path) => ({
+        isFile: () => path.endsWith("codex"),
+        isDirectory: () => !path.endsWith("codex"),
+        mode: 0o755,
+        uid: ME.uid,
+        gid: 20,
+      }),
+    },
+    identity: ME,
     platform: "darwin",
     runDoctor: async () => ({ status: "ready", version: "0.144.3", account: { type: "chatgpt", plan: "plus" }, models: [] }),
     runLogin: async () => ({ ok: true }),

@@ -243,6 +243,47 @@ describe("AppServerClient", () => {
     }
   });
 
+  // W2-review High: a live Codex process that closes fd 0 makes the NEXT write
+  // raise an asynchronous EPIPE on the parent's stdin socket. With no `error`
+  // listener on that stream, Node escalates it to an unhandled stream error and
+  // terminates the HOST process. Pre-fix this test kills the vitest worker with
+  // an unhandled EPIPE; post-fix the dead pipe is just a bounded RPC failure.
+  it("survives a child that closes stdin while a request is in flight", async () => {
+    const client = makeClient(["--close-stdin"]);
+    try {
+      await client.start();
+      const marker = await nextNotification(client);
+      expect(marker.method).toBe("test/stdin-closed");
+
+      await expect(client.request("echo", { ping: true }, { timeoutMs: 2_000 })).rejects.toThrow(AppServerClientError);
+      // The failure must be the pipe itself, not the request deadline quietly
+      // expiring while the process dies underneath it.
+      await expect(client.request("echo", { ping: true }, { timeoutMs: 2_000 })).rejects.toThrow(/stdin/i);
+    } finally {
+      await client.close();
+    }
+  });
+
+  // W2-review High: preflight runs BEFORE any long-lived client exists, so a
+  // grandchild it strands can never be reaped by the client's later group
+  // teardown. It must own a process group of its own.
+  it.skipIf(process.platform === "win32")("version preflight group-kills a wrapper's grandchild on timeout", async () => {
+    const pidFile = join(fixtureDir, `preflight-${Date.now()}.pid`);
+    const client = makeClient(["--version-grandchild", `--pid-file=${pidFile}`], { versionTimeoutMs: 500 });
+
+    await expect(client.start()).rejects.toThrow(EngineVersionError);
+
+    await waitForFile(pidFile);
+    const grandchildPid = Number(readFileSync(pidFile, "utf8"));
+    // Settle window (cut §2(l)): an instantaneous check catches the grandchild
+    // mid-reap and flakes; "0 survivors" is asserted at the END of the window.
+    const end = Date.now() + 5_000;
+    while (alive(grandchildPid) && Date.now() < end) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(alive(grandchildPid)).toBe(false);
+  }, 15_000);
+
   it.skipIf(process.platform === "win32")("SIGKILL escalation reaps a stubborn dedicated child group", async () => {
     const pidFile = join(fixtureDir, `stubborn-${Date.now()}.pid`);
     const client = makeClient(["--stubborn-group", `--pid-file=${pidFile}`]);

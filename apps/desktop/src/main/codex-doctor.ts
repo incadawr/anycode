@@ -18,6 +18,8 @@
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { checkCodexBinaryPathTrust } from "./codex-binary.js";
+import { registerCodexChild } from "./codex-children.js";
 import {
   CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
   CODEX_DOCTOR_RPC_TIMEOUT_MS,
@@ -104,6 +106,26 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * SIGKILLs anything still alive in a process group we created. `kill(-pgid, 0)`
+ * is a pure existence probe: an empty group raises ESRCH, which is the success
+ * case. Anything still answering it after a bounded teardown is by definition an
+ * orphan — a grandchild that ignored the SIGTERM its parent honoured.
+ */
+function sweepGroup(pid: number | undefined): void {
+  if (pid === undefined || process.platform === "win32") return;
+  try {
+    process.kill(-pid, 0);
+  } catch {
+    return; // empty group — nothing survived.
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // Raced us to exit; either way the group is gone.
+  }
+}
+
 /** `true` if `exited` settles before the timeout, `false` otherwise. Always clears its own timer. */
 function raceExitOrTimeout(exited: Promise<void>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -129,6 +151,10 @@ export class CodexRpcClient {
   private nextId = 1;
   private terminalError: Error | null = null;
   private closing = false;
+  /** The one in-flight teardown; every later `close()` awaits this same promise (quit must await the REAL teardown). */
+  private closePromise: Promise<void> | null = null;
+  /** Removes this child from the app-lifecycle registry once it is fully torn down. */
+  private unregister: (() => void) | null = null;
   private readonly notificationHandlers: Array<(notification: CodexRpcNotification) => void> = [];
 
   constructor(private readonly spawnImpl: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess = spawn) {}
@@ -148,16 +174,41 @@ export class CodexRpcClient {
       windowsHide: true,
       // Own process-group leader on POSIX (pid === pgid) so close() below can
       // signal the WHOLE group, not just the direct child — the exact shape
-      // that reaps a grandchild the app-server itself may have spawned.
+      // that reaps a grandchild the app-server itself may have spawned. The
+      // flip side is that this child does NOT die with main, which is why the
+      // registration below hands it to the app lifecycle (main/codex-children.ts).
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
+    this.unregister = registerCodexChild({ pid: () => this.child?.pid, close: () => this.close() });
+    this.bindStdioErrors(child);
     child.stdout?.on("data", (chunk: Buffer) => this.onStdout(chunk));
     child.once("error", (error) => this.fail(new Error(`codex doctor spawn error: ${error.message}`)));
     child.once("close", () => {
       if (!this.closing) this.fail(new Error("codex process exited unexpectedly"));
     });
+  }
+
+  /**
+   * A broken pipe is a TRANSPORT failure, never a process-killing throw
+   * (W2-review High). A still-running Codex that closes fd 0 makes the next
+   * `.write()` raise an asynchronous EPIPE on the stdin socket; an `error`
+   * event with no listener is escalated by Node into an unhandled exception
+   * that terminates the OWNING process — and this client runs INSIDE THE MAIN
+   * PROCESS, so that is the whole app. The failure is routed into the same
+   * bounded terminal path as any other transport death instead.
+   */
+  private bindStdioErrors(child: ChildProcess): void {
+    const onStreamError = (stream: "stdin" | "stdout" | "stderr") => (error: Error): void => {
+      // A pipe breaking DURING our own bounded teardown is expected, not news.
+      if (this.closing) return;
+      this.fail(new Error(`codex ${stream} failed: ${error.message}`));
+      void this.close();
+    };
+    child.stdin?.on("error", onStreamError("stdin"));
+    child.stdout?.on("error", onStreamError("stdout"));
+    child.stderr?.on("error", onStreamError("stderr"));
   }
 
   onNotification(handler: (notification: CodexRpcNotification) => void): void {
@@ -261,36 +312,48 @@ export class CodexRpcClient {
    * Bounded, idempotent teardown of the process group this client spawned
    * (shared/codex-timeouts.ts recipe, EXACTLY): stdin-EOF wait -> group
    * SIGTERM -> group SIGKILL, each stage racing the child's own `close`
-   * event. Safe to call when `spawn()` was never invoked (no-op) and safe to
-   * call more than once concurrently (the `closing` latch makes every call
-   * after the first a no-op).
+   * event. Safe to call when `spawn()` was never invoked (no-op).
+   *
+   * Idempotent AND awaitable: a concurrent second call returns the SAME
+   * in-flight teardown promise rather than resolving early — app quit awaits
+   * this, and an early no-op resolve would let Electron exit while the detached
+   * group was still alive (the very orphan this whole lane exists to kill).
    */
-  async close(): Promise<void> {
-    const child = this.child;
-    if (child === null || this.closing) return;
+  close(): Promise<void> {
+    if (this.child === null) return Promise.resolve();
+    this.closePromise ??= this.teardown(this.child);
+    return this.closePromise;
+  }
+
+  private async teardown(child: ChildProcess): Promise<void> {
     this.closing = true;
     const pid = child.pid;
     const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
     try {
-      child.stdin?.end();
-    } catch {
-      // direct child may have already exited.
-    }
-    if (await raceExitOrTimeout(exited, CODEX_TEARDOWN_STDIN_EOF_WAIT_MS)) {
-      this.fail(new Error("codex rpc client closed"));
-      return;
-    }
+      try {
+        child.stdin?.end();
+      } catch {
+        // direct child may have already exited.
+      }
+      if (await raceExitOrTimeout(exited, CODEX_TEARDOWN_STDIN_EOF_WAIT_MS)) return;
 
-    this.signalGroup(pid, "SIGTERM");
-    if (await raceExitOrTimeout(exited, CODEX_TEARDOWN_SIGTERM_WAIT_MS)) {
-      this.fail(new Error("codex rpc client closed"));
-      return;
-    }
+      this.signalGroup(pid, "SIGTERM");
+      if (await raceExitOrTimeout(exited, CODEX_TEARDOWN_SIGTERM_WAIT_MS)) return;
 
-    this.signalGroup(pid, "SIGKILL");
-    await raceExitOrTimeout(exited, CODEX_TEARDOWN_SIGKILL_WAIT_MS);
-    this.fail(new Error("codex rpc client closed"));
+      this.signalGroup(pid, "SIGKILL");
+      await raceExitOrTimeout(exited, CODEX_TEARDOWN_SIGKILL_WAIT_MS);
+    } finally {
+      // The stage races above all key off the DIRECT CHILD's `close` event —
+      // but a child exiting does not mean its GROUP is empty. A grandchild that
+      // ignores SIGTERM outlives a parent that honours it, and every early
+      // return above would then leave that grandchild running with nothing left
+      // to reap it. The group is therefore swept once more, unconditionally.
+      sweepGroup(pid);
+      this.fail(new Error("codex rpc client closed"));
+      this.unregister?.();
+      this.unregister = null;
+    }
   }
 
   private signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
@@ -318,6 +381,37 @@ interface PreflightResult {
   error?: string;
 }
 
+/** SIGKILLs the preflight child's whole process GROUP; an already-empty group raises ESRCH, which is the success case. */
+function killPreflightGroup(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid !== undefined && process.platform !== "win32") {
+    try {
+      process.kill(-pid, "SIGKILL");
+      return;
+    } catch {
+      // The group is gone already; the direct kill below is the narrow fallback.
+    }
+  }
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // best effort
+  }
+}
+
+/**
+ * The version preflight owns a process GROUP of its own, exactly like the
+ * long-lived app-server child (W2-review High). A `--version` that is really a
+ * wrapper script can fork a grandchild and hang; killing only the direct
+ * wrapper on timeout strands that grandchild permanently, because preflight
+ * runs BEFORE any client exists and nothing else will ever reap it.
+ *
+ * The group is reaped on EVERY settle path (not just the timeout): a wrapper
+ * that exits 0 having left a helper behind is just as orphaned, and once
+ * preflight has answered, nothing it started is of any further use. The child
+ * is registered with the app lifecycle for the duration, so a quit landing
+ * inside this 3s window reaps it too.
+ */
 function preflightVersion(
   binaryPath: string,
   env: NodeJS.ProcessEnv,
@@ -327,21 +421,36 @@ function preflightVersion(
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
-    const child = spawnImpl(binaryPath, ["--version"], { env, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnImpl(binaryPath, ["--version"], {
+      env,
+      shell: false,
+      windowsHide: true,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const unregister = registerCodexChild({
+      pid: () => child.pid,
+      close: async () => {
+        killPreflightGroup(child);
+      },
+    });
     const settle = (result: PreflightResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      killPreflightGroup(child);
+      unregister();
       resolve(result);
     };
     const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // best effort
-      }
       settle({ error: `Codex version check timed out after ${timeoutMs}ms` });
     }, timeoutMs);
+    // An unhandled `error` on a child stdio stream terminates the owning
+    // process (see CodexRpcClient.bindStdioErrors); the outcome here is decided
+    // by `close`/`error`/the timeout, so a broken pipe just must not be fatal.
+    child.stdin?.on("error", () => {});
+    child.stdout?.on("error", () => {});
+    child.stderr?.on("error", () => {});
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
@@ -432,6 +541,14 @@ export interface RunCodexDoctorOptions {
   platform?: NodeJS.Platform;
   /** DI seam for tests (fake/adversarial children). */
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+  /**
+   * Aborts the run (app quit): the in-flight phase gives up and the `finally`
+   * below tears the child down — bounded — before this promise settles. The
+   * caller awaiting it therefore cannot outlive the child.
+   */
+  signal?: AbortSignal;
+  /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkCodexBinaryPathTrust`). */
+  trust?: (binaryPath: string) => string | null;
   versionTimeoutMs?: number;
   rpcTimeoutMs?: number;
   modelPageTimeoutMs?: number;
@@ -457,8 +574,17 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
   const maxModelPages = options.maxModelPages ?? CODEX_MODEL_LIST_MAX_PAGES;
 
   const client = new CodexRpcClient(spawnImpl);
+  const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform));
 
   const steps = async (): Promise<CodexDoctorReport> => {
+    // Re-validated at SPAWN time, not merely at discovery (W2-review Medium):
+    // the binary discovery approved can be swapped in the interval before it is
+    // executed. This narrows the TOCTOU window to the irreducible
+    // check->execve gap; it does not close it.
+    const untrusted = trust(binaryPath);
+    if (untrusted !== null) {
+      return { status: "error", error: untrusted };
+    }
     const preflight = await preflightVersion(binaryPath, childEnv, spawnImpl, versionTimeoutMs);
     if (preflight.error !== undefined) {
       return { status: "error", error: preflight.error };
@@ -472,6 +598,12 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
       return { status: "update_required", version };
     }
 
+    // An abort that landed during the (bounded) preflight must not go on to
+    // spawn a child the caller has already stopped waiting for — that child
+    // would be born orphaned, after the teardown below has already run.
+    if (options.signal?.aborted === true) {
+      return { status: "error", error: "codex doctor aborted" };
+    }
     client.spawn(binaryPath, childEnv);
     await client.request(
       "initialize",
@@ -488,8 +620,26 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     return { status: "ready", version, account, models };
   };
 
+  // The abort (app quit) races the whole run. Whichever side wins, the `finally`
+  // below tears the child down — bounded — BEFORE this function's promise
+  // settles, so a caller that awaits it can never outlive the child it started.
+  // Both racers get a no-op catch: the loser settles later, unobserved, and an
+  // unhandled rejection in the main process is not an acceptable way to find out.
+  const run = withTimeout(steps(), watchdogMs, `codex doctor exceeded its ${watchdogMs}ms watchdog`);
+  run.catch(() => {});
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const signal = options.signal;
+    if (signal === undefined) return;
+    if (signal.aborted) {
+      reject(new Error("codex doctor aborted"));
+      return;
+    }
+    signal.addEventListener("abort", () => reject(new Error("codex doctor aborted")), { once: true });
+  });
+  aborted.catch(() => {});
+
   try {
-    return await withTimeout(steps(), watchdogMs, `codex doctor exceeded its ${watchdogMs}ms watchdog`);
+    return await Promise.race([run, aborted]);
   } catch (error) {
     return { status: "error", error: error instanceof Error ? error.message : String(error) };
   } finally {

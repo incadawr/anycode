@@ -2703,6 +2703,58 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
     expect(store.getState().pendingEngineChange).toBeNull();
   });
 
+  // W3-review: the renderer-reload cycle. The host emits, in this exact order
+  // on a fresh ui_ready: host_ready (carrying the APPLIED snapshot), then
+  // replay() of the ring, then the direct pending re-assert (host/session.ts's
+  // `pushPendingEngineSettings`). Fed that, a FRESH store must show the OLD
+  // values as active and the NEW ones as pending — never the reverse.
+  it("a renderer reload holding a pending preset+model change shows the OLD values active and the NEW ones pending", () => {
+    const store = createDesktopStore();
+
+    // host_ready carries the applied (old) posture — NOT the chosen one.
+    store.getState().applyHostMessage(codexHostReady({ model: "gpt-5.6-terra", activePresetId: "ask" }));
+    // The replayed one-shot that announced the change...
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      model: "gpt-5.6-mini",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+    // ...and the per-connect direct re-assert, which is byte-identical and must
+    // therefore be idempotent (it is the SAME message type — zero wire delta).
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      model: "gpt-5.6-mini",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+
+    expect(store.getState().engine?.model?.current).toBe("gpt-5.6-terra");
+    expect(store.getState().engine?.permissions?.activePresetId).toBe("ask");
+    expect(store.getState().pendingEngineChange).toEqual({ model: "gpt-5.6-mini", activePresetId: "read-only" });
+  });
+
+  it("host_ready clears a stale pendingEngineChange (a host respawn under a surviving renderer has nothing pending until it says so)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      activePresetId: "read-only",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "read-only" });
+
+    // A fresh host process: its own re-assert (if anything is still pending)
+    // arrives right after this handshake, so the badge must not survive on its
+    // own — a stale one would otherwise never clear.
+    store.getState().applyHostMessage(codexHostReady());
+
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
   it("model_changed for an engine session is a legacy/core-only path — an engine's own catalog routes set_model through engine_settings_changed instead, per host/session.ts", () => {
     const store = createDesktopStore();
     store.getState().applyHostMessage(codexHostReady());

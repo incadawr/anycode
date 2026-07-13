@@ -8,8 +8,18 @@
  * reaps the WHOLE process group, not just its direct child.
  */
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { closeSync, writeFileSync } from "node:fs";
 import readline from "node:readline";
+
+/** A grandchild that ignores SIGTERM: only a process-GROUP SIGKILL ends it. Its pid is published so a test can assert it actually died. */
+const forkStubbornGrandchild = (pidFile) => {
+  const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);"], {
+    stdio: "ignore",
+  });
+  if (pidFile && grandchild.pid !== undefined) {
+    writeFileSync(pidFile, String(grandchild.pid));
+  }
+};
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -20,9 +30,15 @@ const value = (name) => {
 };
 
 if (args[0] === "--version") {
-  if (flag("--hang-version")) {
-    // Never exits on its own — the doctor's version-preflight timeout must
-    // SIGKILL it directly (no process group involved at this stage).
+  if (flag("--version-grandchild")) {
+    // The W2-review Critical for the preflight lane: a version wrapper that
+    // forks a grandchild and then hangs. Killing only the direct child on
+    // timeout strands the grandchild forever — this preflight runs BEFORE any
+    // long-lived client exists, so no later group teardown can ever reap it.
+    forkStubbornGrandchild(value("--pid-file"));
+    setInterval(() => {}, 1_000);
+  } else if (flag("--hang-version")) {
+    // Never exits on its own — the version-preflight timeout must end it.
     setInterval(() => {}, 1_000);
   } else if (flag("--bad-version")) {
     process.stdout.write("codex-cli 0.99.0\n");
@@ -38,20 +54,32 @@ if (args[0] === "--version") {
   if (flag("--stubborn")) {
     // Ignore SIGTERM on purpose — only a process-GROUP SIGKILL ends this.
     process.on("SIGTERM", () => {});
-    const grandchild = spawn(
-      process.execPath,
-      ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);"],
-      { stdio: "ignore" },
-    );
-    const pidFile = value("--pid-file");
-    if (pidFile && grandchild.pid !== undefined) {
-      writeFileSync(pidFile, String(grandchild.pid));
-    }
+    forkStubbornGrandchild(value("--pid-file"));
     // Never reads/responds to stdin — every request the doctor sends hangs
     // until its own per-RPC timeout or the overall watchdog fires.
+  } else if (flag("--close-stdin")) {
+    // A LIVE app-server that closes fd 0 under us (W2-review High): the next
+    // write to it raises an asynchronous EPIPE on the parent's stdin socket.
+    // With no `error` listener installed there, Node turns that into an
+    // unhandled stream error and kills the OWNING process. The marker line is
+    // written first so the test knows the read end is gone before it writes.
+    process.stdout.write(`${JSON.stringify({ method: "test/stdin-closed" })}\n`);
+    closeSync(0);
+    setInterval(() => {}, 1_000);
   } else {
     const signedOut = flag("--signed-out");
     const manyPages = flag("--many-pages");
+    // A fully FUNCTIONAL app-server that also forks a stubborn helper — the
+    // real shape of a live login: it answers RPC and holds the login window
+    // open (no --auto-complete-login) while owning a grandchild. Quit must reap
+    // the whole group, not just the process it can see.
+    if (flag("--fork-helper")) {
+      forkStubbornGrandchild(value("--pid-file"));
+    }
+    const selfPidFile = value("--self-pid-file");
+    if (selfPidFile) {
+      writeFileSync(selfPidFile, String(process.pid));
+    }
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     rl.on("line", (line) => {
       let request;
