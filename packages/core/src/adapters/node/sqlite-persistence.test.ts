@@ -462,7 +462,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect(await adapter.listCodexThreadItems("thread-missing")).toEqual([]);
     });
 
-    it("a repeated write for the same (threadId, itemId) replaces the row instead of duplicating it", async () => {
+    it("a repeated write for the same (threadId, itemId) is idempotent — no duplicate row (basic shape)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo a" });
       await adapter.recordCodexThreadItem("thread-1", {
@@ -477,7 +477,37 @@ describe("SqlitePersistenceAdapter", () => {
 
       const items = await adapter.listCodexThreadItems("thread-1");
       expect(items).toHaveLength(1);
-      expect(items[0]).toMatchObject({ exitCode: 0, outputHead: "a\n" });
+    });
+
+    it("a repeated write for the same (threadId, itemId) never lets a conflicting second write move the FIRST write's anchor (W7 HIGH-2 — first-write-wins, not last-write-wins)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 1,
+        seqInTurn: 1,
+        command: "echo a",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
+      // A conflicting second write for the SAME (threadId, itemId) — different
+      // positionInTurn/seqInTurn, exactly what a re-delivered terminal
+      // notification racing a later turn would carry (codex-engine.ts's own
+      // per-turn dedupe Set is a separate, host-side belt; this is the
+      // persistence-layer suspenders). It must never win the anchor.
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 2,
+        seqInTurn: 3,
+        command: "echo a",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ positionInTurn: 1, seqInTurn: 1 });
     });
 
     it("migration v4 runs on top of an existing v3 database", async () => {

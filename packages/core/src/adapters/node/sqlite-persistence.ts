@@ -475,11 +475,21 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   // Codex shadow command log (migration v4 + v5, cut §2(e)/W6). Additive to
   // PersistencePort — host-only usage, never consumed through that interface.
 
-  /** INSERT OR REPLACE keeps a re-delivered notification for the same item idempotent rather than duplicating a row. */
+  /**
+   * INSERT OR IGNORE (W7 HIGH-2): first-write-wins, not last-write-wins. The
+   * ONLY writer (codex-engine.ts's `deliver`) already dedupes a re-delivered
+   * terminal `item/completed` for the same item id within one turn, but this
+   * is the persistence-layer's own belt-and-suspenders — a re-delivered
+   * notification for the same (threadId, itemId) must never let a later,
+   * conflicting write move an anchor already recorded (and already
+   * potentially merged into a resumed history). A no-op on conflict, not a
+   * silent overwrite: the row this thread/item pair first recorded is
+   * permanent for the life of the shadow log.
+   */
   async recordCodexThreadItem(threadId: string, item: CodexShadowCommandItem): Promise<void> {
     const db = this.open();
     db.prepare(
-      `INSERT OR REPLACE INTO codex_thread_items
+      `INSERT OR IGNORE INTO codex_thread_items
          (thread_id, turn_ordinal, position_in_turn, seq_in_turn, item_id, command, cwd, exit_code, output_head, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(

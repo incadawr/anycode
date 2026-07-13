@@ -48,6 +48,17 @@
  * row (one anchored at or past `native.length`, e.g. a turn's last item was a
  * command). Nothing is ever dropped.
  *
+ * A shadow row can also anchor to a `turnOrdinal` `thread/read` returned NO
+ * turn for at all (distinct from the above — that is a row anchored past the
+ * END of a turn that exists; this is a row whose whole turn does not, e.g. a
+ * resume window narrower than the shadow log's own history) — `W7 HIGH-3`:
+ * these are likewise never dropped, appended by `projectCodexHistory` as a
+ * deterministic tail after every real turn, sorted by
+ * `(turnOrdinal, positionInTurn, seqInTurn)`, each projected via
+ * `projectShadowCommand` with a synthetic turn id
+ * (`` `${thread.id}:orphan-turn-${turnOrdinal}` ``) so it can never collide
+ * with a real (server-opaque) native turn id.
+ *
  * Mapping rules (cut §3.6):
  *  - `userMessage`/`agentMessage` text projects verbatim into a user/assistant
  *    `ChatMessage`. A `userMessage` content part that is not `{type:"text"}`
@@ -385,11 +396,37 @@ export function projectCodexHistory(
   }
 
   const items: HistoryItem[] = [];
+  let cursor = 0;
   turns.forEach((turn, turnOrdinal) => {
     const turnStartedAtMs = typeof turn.startedAt === "number" ? turn.startedAt * 1000 : 0;
     const merged = mergeTurnItems(turn.id, turn.items ?? [], shadowByTurn.get(turnOrdinal) ?? [], turnStartedAtMs);
     items.push(...merged.items);
+    cursor = merged.nextCursor;
+    shadowByTurn.delete(turnOrdinal);
   });
+
+  // Orphan shadow rows (W7 HIGH-3): any turnOrdinal `thread/read` returned no
+  // turn for (a resume window narrower than the shadow log's own history, or
+  // a future ordinal-numbering drift) — everything `shadowByTurn` still holds
+  // once every real turn has been walked, since each matched ordinal was
+  // deleted above. The module header's "Nothing is ever dropped" applies to
+  // these exactly as to in-bounds rows: appended as a deterministic tail,
+  // sorted by (turnOrdinal, positionInTurn, seqInTurn), each row keyed to a
+  // synthetic turn id derived from its own ordinal — deterministic and unable
+  // to collide with any real native turn id (those are opaque server ids,
+  // never this literal shape) — with createdAt continuing the cursor left by
+  // the last emitted item.
+  const orphanRows = [...shadowByTurn.entries()]
+    .flatMap(([turnOrdinal, rows]) => rows.map((row) => ({ turnOrdinal, row })))
+    .sort(
+      (a, b) =>
+        a.turnOrdinal - b.turnOrdinal || a.row.positionInTurn - b.row.positionInTurn || a.row.seqInTurn - b.row.seqInTurn,
+    );
+  for (const { turnOrdinal, row } of orphanRows) {
+    const projected = projectShadowCommand(`${thread.thread.id}:orphan-turn-${turnOrdinal}`, row, cursor);
+    items.push(...projected);
+    cursor += projected.length;
+  }
 
   const capped =
     items.length <= opts.maxItems

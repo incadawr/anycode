@@ -1370,6 +1370,115 @@ describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
   });
 });
 
+describe("CodexEngine — shadow counters ignore foreign/stale item/completed (W7 HIGH-1)", () => {
+  it("a stale item/completed from an earlier turn of the SAME thread does not tick the counters or move the anchor", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    // Trailing item/completed of a PREVIOUS, already-finished turn of the same
+    // thread (e.g. an interrupted turn's late notification arriving after the
+    // next turn/start) — threadId matches, turnId does not. Phase B (deliver)
+    // does not filter by turnId today, so this ticks nativeVisibleCompleted.
+    server.stream.push({
+      method: "item/completed",
+      params: { threadId: THREAD, turnId: "stale-turn-id", item: { type: "agentMessage", id: "stale-msg", text: "leftover" } },
+    });
+    await tick();
+
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi" } } });
+    server.stream.push({
+      method: "item/completed",
+      params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } },
+    });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    expect(shadowLog.writes[0]?.item.positionInTurn).toBe(0);
+    expect(shadowLog.writes[0]?.item.seqInTurn).toBe(0);
+  });
+
+  it("a foreign-thread item/completed does not tick the counters or move the anchor", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    server.stream.push({
+      method: "item/completed",
+      params: { threadId: "other-thread", turnId: server.turnId, item: { type: "agentMessage", id: "foreign-msg", text: "leftover" } },
+    });
+    await tick();
+
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi" } } });
+    server.stream.push({
+      method: "item/completed",
+      params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } },
+    });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    expect(shadowLog.writes[0]?.item.positionInTurn).toBe(0);
+    expect(shadowLog.writes[0]?.item.seqInTurn).toBe(0);
+  });
+});
+
+describe("CodexEngine — per-turn item-id dedupe stops a re-delivered terminal notification from moving the anchor (W7 HIGH-2)", () => {
+  it("a duplicate terminal item/completed for the same commandExecution id is a no-op — only the FIRST delivery ticks the counters and writes a row", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    // agent(before) -> command(cmd) -> agent(after) -> duplicate command(cmd)
+    // (reviewer's exact repro).
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "before", text: "before" } } });
+    await tick();
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "cmd", command: "echo hi" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "cmd", command: "echo hi", status: "completed", exitCode: 0 } } });
+    await tick();
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "after", text: "after" } } });
+    await tick();
+    // Re-delivered terminal notification for the SAME command id.
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "cmd", command: "echo hi", status: "completed", exitCode: 0 } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    expect(shadowLog.writes[0]?.item).toMatchObject({ positionInTurn: 1, seqInTurn: 1 });
+  });
+
+  it("an item/completed with no string id is never dedup'd — it ticks the counters on every delivery, as before", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    // Two id-less agentMessage completions (malformed, but must not be
+    // conflated as "the same item" by an id-based dedupe).
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", text: "one" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", text: "two" } } });
+    await tick();
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi" } } });
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(1);
+    // Both id-less completions ticked nativeVisibleCompleted (agentMessage is
+    // NATIVE_PERSISTED) — the command anchors at positionInTurn 2, not 0.
+    expect(shadowLog.writes[0]?.item.positionInTurn).toBe(2);
+    expect(shadowLog.writes[0]?.item.seqInTurn).toBe(2);
+  });
+});
+
 /**
  * Class-killer composition test (W6): the interleave invariant may ONLY be
  * asserted through composition — never hand-authored `positionInTurn` values
