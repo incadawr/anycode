@@ -7,10 +7,15 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { SIGKILL_GRACE_MS } from "@anycode/core";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
 import { ENGINE_PROCESS_REGISTRATION_TYPE } from "../../../shared/engines.js";
+import {
+  CODEX_TEARDOWN_SIGKILL_WAIT_MS,
+  CODEX_TEARDOWN_SIGTERM_WAIT_MS,
+  CODEX_TEARDOWN_STDIN_EOF_WAIT_MS,
+  CODEX_VERSION_PREFLIGHT_TIMEOUT_MS,
+} from "../../../shared/codex-timeouts.js";
 import {
   EngineVersionError,
   type JsonRpcError,
@@ -22,7 +27,6 @@ import {
   parseCodexVersion,
 } from "./protocol.js";
 
-export const CODEX_VERSION_TIMEOUT_MS = 3_000;
 export const CODEX_MAX_LINE_BYTES = 10 * 1024 * 1024;
 export const CODEX_MAX_PENDING_REQUESTS = 64;
 export const CODEX_NOTIFICATION_HIGH_WATER = 512;
@@ -153,6 +157,7 @@ export class AppServerClient {
   private readonly maxLineBytes: number;
   private readonly maxPendingRequests: number;
   private readonly queue: NotificationQueue;
+  private readonly observers = new Set<(notification: JsonRpcNotification) => void>();
   private child: ChildProcess | null = null;
   private nextRequestId = 1;
   private lineBuffer = "";
@@ -187,6 +192,22 @@ export class AppServerClient {
 
   notifications(): AsyncIterable<JsonRpcNotification> {
     return this.queue;
+  }
+
+  /**
+   * Synchronous tap on the notification stream, in wire order, invoked at
+   * dispatch time — i.e. BEFORE the pull-based `notifications()` consumer can
+   * observe the same line. A server request (an approval) dispatched in the
+   * same stdout chunk as the `item/started` that describes it would otherwise
+   * race the consumer; this is the ordering guarantee the approval-correlation
+   * index depends on. Observers are diagnostic-only: one that throws is
+   * isolated and can never break the transport.
+   */
+  observeNotifications(observe: (notification: JsonRpcNotification) => void): () => void {
+    this.observers.add(observe);
+    return () => {
+      this.observers.delete(observe);
+    };
   }
 
   /** Preflight + spawn only. Caller sends initialize after the bootstrap owns disposal. */
@@ -234,30 +255,47 @@ export class AppServerClient {
     this.write({ method, ...(params === undefined ? {} : { params }) });
   }
 
-  /** Bounded teardown of the POSIX group we created; Windows remains direct-child only. */
+  /**
+   * Bounded teardown of the POSIX group we created (Windows stays direct-child
+   * only), in the exact three-stage recipe frozen in shared/codex-timeouts.ts:
+   * stdin EOF -> SIGTERM -> SIGKILL, each stage exiting early the moment the
+   * child actually closes. main's onboarding doctor runs the SAME recipe from
+   * the SAME constants: two independently-drifting teardown state machines is
+   * precisely how the probe harness once stranded a child for >300s.
+   *
+   * Idempotent: a second call while one is in flight is a no-op, never a second
+   * signal storm.
+   */
   async close(): Promise<void> {
     const child = this.child;
     if (child === null || this.closing) return;
     this.closing = true;
-    try {
-      child.stdin?.end();
-    } catch {
-      // direct child may have already exited.
-    }
     const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
     try {
-      this.signalOwnedProcess(child, "SIGTERM");
-    } catch {
-      // best effort only; close still waits bounded below.
-    }
-    const killTimer = setTimeout(() => {
       try {
-        this.signalOwnedProcess(child, "SIGKILL");
-      } catch {}
-    }, SIGKILL_GRACE_MS);
-    await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, SIGKILL_GRACE_MS + 100))]);
-    clearTimeout(killTimer);
-    this.failTerminal(new AppServerClientError("app-server client closed"));
+        child.stdin?.end();
+      } catch {
+        // direct child may have already exited.
+      }
+      if (await this.exitedWithin(closed, CODEX_TEARDOWN_STDIN_EOF_WAIT_MS)) return;
+      this.signalOwnedProcess(child, "SIGTERM");
+      if (await this.exitedWithin(closed, CODEX_TEARDOWN_SIGTERM_WAIT_MS)) return;
+      this.signalOwnedProcess(child, "SIGKILL");
+      await this.exitedWithin(closed, CODEX_TEARDOWN_SIGKILL_WAIT_MS);
+    } finally {
+      this.failTerminal(new AppServerClientError("app-server client closed"));
+    }
+  }
+
+  /** Resolves true if the child closed inside the stage budget, false on stage timeout. */
+  private exitedWithin(closed: Promise<void>, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), ms);
+      void closed.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
   }
 
   private spawnOptions(dedicatedProcessGroup = false): SpawnOptions {
@@ -277,7 +315,7 @@ export class AppServerClient {
 
   private async preflightVersion(): Promise<void> {
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--version"], this.spawnOptions());
-    const timeoutMs = this.options.versionTimeoutMs ?? CODEX_VERSION_TIMEOUT_MS;
+    const timeoutMs = this.options.versionTimeoutMs ?? CODEX_VERSION_PREFLIGHT_TIMEOUT_MS;
     const output = await new Promise<string>((resolve, reject) => {
       let stdout = "";
       let stderr = "";
@@ -380,7 +418,18 @@ export class AppServerClient {
       return;
     }
     if (typeof message.method === "string") {
-      this.queue.push({ method: message.method, ...(message.params === undefined ? {} : { params: message.params }) });
+      const notification: JsonRpcNotification = {
+        method: message.method,
+        ...(message.params === undefined ? {} : { params: message.params }),
+      };
+      for (const observe of this.observers) {
+        try {
+          observe(notification);
+        } catch {
+          // An observer is a side-channel; it can never fail the transport.
+        }
+      }
+      this.queue.push(notification);
       return;
     }
     this.failTerminal(new AppServerClientError("app-server emitted an invalid JSON-RPC frame"));
@@ -388,17 +437,21 @@ export class AppServerClient {
 
   private onServerRequest(request: JsonRpcServerRequest): void {
     let settled = false;
+    // A dead transport must not turn a settled decision into an unhandled
+    // rejection: the answer is simply undeliverable, and the request is marked
+    // settled regardless so no second answer is ever attempted.
+    const answer = (payload: Record<string, unknown>): void => {
+      if (settled) return;
+      settled = true;
+      try {
+        this.write(payload);
+      } catch {
+        // stdin is gone; the request dies with the child.
+      }
+    };
     const respond: ServerRequestResponder = {
-      result: (result) => {
-        if (settled) return;
-        settled = true;
-        this.write({ id: request.id, result });
-      },
-      error: (error = UNHANDLED_SERVER_REQUEST_ERROR) => {
-        if (settled) return;
-        settled = true;
-        this.write({ id: request.id, error });
-      },
+      result: (result) => answer({ id: request.id, result }),
+      error: (error = UNHANDLED_SERVER_REQUEST_ERROR) => answer({ id: request.id, error }),
     };
     if (this.options.onServerRequest === undefined) {
       respond.error();

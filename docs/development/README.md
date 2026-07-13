@@ -14,6 +14,9 @@ It intentionally differs from local `working-docs/`:
 
 - [Automation smoke](automation-smoke.md) — dev-only loopback automation,
   GUI smoke execution, and release-boundary verification.
+- [Codex onboarding](codex-onboarding.md) — how a user enables the Codex
+  Agent engine from Settings (no env var), and the `ANYCODE_CODEX_BIN`
+  developer/diagnostic override.
 - [Release policy](release.md) — versioning, alpha/beta stages, and the changelog.
 
 ## Basic change cycle

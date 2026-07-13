@@ -70,10 +70,26 @@ export interface ThreadStartResult {
   approvalPolicy: string;
 }
 
-/** W0 only observed command approval acceptance. Do not infer other approval codecs. */
+/** W0 observed command approval; W1 additionally evidenced decline/cancel (L1/L2). */
 export const OBSERVED_COMMAND_APPROVAL_METHOD = "item/commandExecution/requestApproval";
-/** W0 observed this file-change approval request; only accept is evidenced. */
+/** W0 observed this file-change approval request; W1 evidenced decline for it too (L1). */
 export const OBSERVED_FILE_CHANGE_APPROVAL_METHOD = "item/fileChange/requestApproval";
+
+/**
+ * The only approval decisions AnyCode ever sends (live-evidenced, cut §2(c)):
+ *
+ *  - `accept`  — user allowed the request.
+ *  - `decline` — user denied it. The server accepts `decline` for BOTH approval
+ *    families and continues the turn to a normal `completed` (L1), and it does
+ *    so even when `decline` is absent from that request's `availableDecisions`.
+ *    No `availableDecisions` intersection/fallback logic exists, deliberately.
+ *  - `cancel`  — the user pressed Stop while an approval was parked: denies the
+ *    request AND interrupts the turn (L2). Never sent for a plain deny.
+ *
+ * `acceptForSession` and the execpolicy/network amendments are never sent
+ * automatically (residual, cut §8).
+ */
+export type CodexApprovalDecision = "accept" | "decline" | "cancel";
 
 /** Safe default for an unhandled server request: JSON-RPC error, never an allow. */
 export const UNHANDLED_SERVER_REQUEST_ERROR: JsonRpcError = {

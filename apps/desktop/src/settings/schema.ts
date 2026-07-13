@@ -117,6 +117,15 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // above). Declared explicitly (not left to .passthrough()) so it validates
     // and survives a read-modify-write cycle; absent on old files, parses to
     // undefined — settings.json with no `codex` key round-trips byte-identically.
+    // `.catch(undefined)` (post-C0 review MED-2 fix): `codex` is an ADVISORY
+    // cache field, not a functional setting — a foreign/wrong-shaped value at
+    // this key (e.g. a future/other binary having written something
+    // unrecognized here) must never fail the WHOLE document and fall the
+    // loader through to `parseSettings`'s "corrupt -> replace with defaults"
+    // path, which would silently drop every OTHER section (provider,
+    // permissions, ...) the user actually configured. An invalid `codex`
+    // value is dropped to `undefined` (same outcome as it being absent) while
+    // every sibling field keeps validating normally.
     codex: z
       .object({
         binaryPath: z.string().optional(),
@@ -128,7 +137,8 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
           })
           .optional(),
       })
-      .optional(),
+      .optional()
+      .catch(undefined),
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

@@ -8,6 +8,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
+  CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
+  CODEX_DOCTOR_RPC_TIMEOUT_MS,
   CODEX_DOCTOR_WATCHDOG_MS,
   CODEX_MODEL_LIST_MAX_PAGES,
   CODEX_MODEL_LIST_PAGE_TIMEOUT_MS,
@@ -29,6 +31,8 @@ const ALL_CONSTANTS = {
   CODEX_MODEL_LIST_MAX_PAGES,
   CODEX_POST_INTERRUPT_SETTLE_MS,
   CODEX_VERSION_PREFLIGHT_TIMEOUT_MS,
+  CODEX_DOCTOR_RPC_TIMEOUT_MS,
+  CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
   CODEX_DOCTOR_WATCHDOG_MS,
   CODEX_TEARDOWN_STDIN_EOF_WAIT_MS,
   CODEX_TEARDOWN_SIGTERM_WAIT_MS,
@@ -65,5 +69,23 @@ describe("codex-timeouts", () => {
 
   it("SIGTERM wait is strictly less than the total teardown budget (SIGKILL stage always has budget left)", () => {
     expect(CODEX_TEARDOWN_SIGTERM_WAIT_MS).toBeLessThan(CODEX_TEARDOWN_TOTAL_BUDGET_MS);
+  });
+
+  it("the doctor's watchdog covers the worst-case sum of every RPC phase it wraps (MED-1, post-C0 review fix)", () => {
+    // version preflight -> initialize -> account/read -> up to
+    // CODEX_MODEL_LIST_MAX_PAGES pages of model/list. An outer watchdog
+    // smaller than this sum would kill a legitimately slow-but-valid call
+    // before that call's own per-RPC deadline ever gets a chance to fire —
+    // exactly the contradiction this test pins shut.
+    const worstCasePhaseSum =
+      CODEX_VERSION_PREFLIGHT_TIMEOUT_MS +
+      CODEX_DOCTOR_RPC_TIMEOUT_MS * 2 + // initialize + account/read
+      CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS * CODEX_MODEL_LIST_MAX_PAGES;
+    expect(CODEX_DOCTOR_WATCHDOG_MS).toBeGreaterThanOrEqual(worstCasePhaseSum);
+  });
+
+  it("the doctor's own per-RPC bounds are tighter than the engine's patient boot bounds (doctor is an interactive Settings diagnostic, not a boot sequence)", () => {
+    expect(CODEX_DOCTOR_RPC_TIMEOUT_MS).toBeLessThan(CODEX_BOOT_RPC_TIMEOUT_MS);
+    expect(CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS).toBeLessThan(CODEX_MODEL_LIST_PAGE_TIMEOUT_MS);
   });
 });

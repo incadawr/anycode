@@ -85,6 +85,7 @@ import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { applyThemePreference } from "../theme.js";
 import { tabRegistry } from "../tab-registry.js";
 import { useTabsStore } from "../tabs-store.js";
+import { CodexEnginePane } from "./CodexEnginePane.js";
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
 import { McpServersPane } from "./McpServersPane.js";
@@ -92,7 +93,7 @@ import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane } from "./SubagentsPane.js";
 import { ProfilePane } from "./ProfilePane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
-import { BrandMark, Check, Chevron, FileIcon, Gear, ImageIcon, Info, Keyboard, Person, Robot, Search, ServerStack, Terminal } from "./icons.js";
+import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, ImageIcon, Info, Keyboard, Person, Robot, Search, ServerStack, Terminal } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
@@ -102,7 +103,7 @@ import "../settings.css";
 const LEGACY_API_KEY: SecretKey = "provider.apiKey";
 const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 
-export type SettingsPaneId = "profile" | "provider" | "permissions" | "tools" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "permissions" | "tools" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -122,6 +123,7 @@ type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; description: string; icon: SettingsIcon }> = [
   { id: "profile", label: "Profile", description: "Your usage stats from local telemetry.", icon: Person },
   { id: "provider", label: "Provider", description: "Choose a provider, model, and credentials.", icon: Gear },
+  { id: "codex", label: "Codex", description: "Discover, verify, and sign in to the Codex agent engine.", icon: Cube },
   { id: "permissions", label: "Permissions", description: "Rules that let tools run without asking.", icon: Check },
   { id: "tools", label: "Tools", description: "Concurrency, stall timeout, and turn limits.", icon: Terminal },
   { id: "mcp", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
@@ -152,6 +154,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
 export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = {
   profile: ["profile", "usage", "stats", "tokens", "streak", "heatmap"],
   provider: ["api key", "model", "base url", "oauth", "sign in", "credentials"],
+  codex: ["codex", "agent", "engine", "sign in", "chatgpt", "cli", "binary", "install", "update"],
   permissions: ["always allow", "rules", "bash", "pattern", "tool"],
   tools: ["concurrency", "stall timeout", "max turns", "tool"],
   mcp: ["mcp", "server", "status"],
@@ -988,6 +991,8 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
             {activePane === "profile" && <ProfilePane />}
 
             {activePane === "provider" && <ProviderSettings store={store} />}
+
+            {activePane === "codex" && <CodexEnginePane />}
 
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 

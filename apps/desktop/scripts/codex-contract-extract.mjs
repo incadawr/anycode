@@ -30,51 +30,59 @@ import { join } from "node:path";
 
 /**
  * The consumed vocabulary (design cut §2(h)/§3.1-3.8): every method/type
- * AnyCode's Codex adapter actually speaks. This list is a deliberate, reviewed
- * act — NOT something the extractor infers from the schema on its own; the
- * cut's own minor-strategy note (§2(h)) is that widening it requires a
- * regen+extract+review of the diff in ONE commit.
+ * AnyCode's Codex adapter actually speaks. The METHOD NAMES and RESULT refs
+ * below are a deliberate, reviewed act — NOT something the extractor infers
+ * from the schema on its own; the cut's own minor-strategy note (§2(h)) is
+ * that widening it requires a regen+extract+review of the diff in ONE commit.
+ *
+ * Deliberately absent: a hardcoded `paramsRef`. A JSON-RPC schema has no
+ * per-method link from a method name to its RESULT type (`JSONRPCResponse`'s
+ * `result` is untyped `true` — every codebase pairing method->response is a
+ * maintained convention, not something the wire format encodes), so
+ * `resultRef` stays declared here. The PARAMS type, however, genuinely IS
+ * encoded, in the `ClientRequest`/`ServerRequest`/`ServerNotification`
+ * discriminated-union registries the live schema ships (each variant carries
+ * both `properties.method.enum[0]` and `properties.params.$ref`) — so
+ * `resolveMethodParamsRef` below looks it up from THOSE registries by
+ * matching on the method name, instead of trusting a second hardcoded ref
+ * string. This is load-bearing: a CLI that renames `turn/start` while leaving
+ * `TurnStartParams`'s shape untouched must make this extractor throw (its
+ * variant search finds no method named `turn/start` left in the union), not
+ * silently keep resolving the old params type by name and emit a byte-identical
+ * pinned contract.
  */
 const CLIENT_REQUEST_METHODS = [
-  { method: "initialize", paramsRef: "InitializeParams", resultRef: "InitializeResponse" },
-  { method: "account/read", paramsRef: "v2/GetAccountParams", resultRef: "v2/GetAccountResponse" },
-  { method: "model/list", paramsRef: "v2/ModelListParams", resultRef: "v2/ModelListResponse" },
-  { method: "thread/start", paramsRef: "v2/ThreadStartParams", resultRef: "v2/ThreadStartResponse" },
-  { method: "thread/resume", paramsRef: "v2/ThreadResumeParams", resultRef: "v2/ThreadResumeResponse" },
-  { method: "thread/read", paramsRef: "v2/ThreadReadParams", resultRef: "v2/ThreadReadResponse" },
-  { method: "turn/start", paramsRef: "v2/TurnStartParams", resultRef: "v2/TurnStartResponse" },
-  { method: "turn/interrupt", paramsRef: "v2/TurnInterruptParams", resultRef: "v2/TurnInterruptResponse" },
-  { method: "account/login/start", paramsRef: "v2/LoginAccountParams", resultRef: "v2/LoginAccountResponse" },
-  { method: "account/login/cancel", paramsRef: "v2/CancelLoginAccountParams", resultRef: "v2/CancelLoginAccountResponse" },
-  { method: "account/logout", paramsRef: null, resultRef: "v2/LogoutAccountResponse" },
+  { method: "initialize", resultRef: "InitializeResponse" },
+  { method: "account/read", resultRef: "v2/GetAccountResponse" },
+  { method: "model/list", resultRef: "v2/ModelListResponse" },
+  { method: "thread/start", resultRef: "v2/ThreadStartResponse" },
+  { method: "thread/resume", resultRef: "v2/ThreadResumeResponse" },
+  { method: "thread/read", resultRef: "v2/ThreadReadResponse" },
+  { method: "turn/start", resultRef: "v2/TurnStartResponse" },
+  { method: "turn/interrupt", resultRef: "v2/TurnInterruptResponse" },
+  { method: "account/login/start", resultRef: "v2/LoginAccountResponse" },
+  { method: "account/login/cancel", resultRef: "v2/CancelLoginAccountResponse" },
+  { method: "account/logout", resultRef: "v2/LogoutAccountResponse" },
 ];
 
-/** Both approval families (cut §1.1): command-execution AND file-change. */
+/** Both approval families (cut §1.1): command-execution AND file-change. `paramsRef` derived, same rationale as CLIENT_REQUEST_METHODS above. */
 const SERVER_REQUEST_METHODS = [
-  {
-    method: "item/commandExecution/requestApproval",
-    paramsRef: "CommandExecutionRequestApprovalParams",
-    resultRef: "CommandExecutionRequestApprovalResponse",
-  },
-  {
-    method: "item/fileChange/requestApproval",
-    paramsRef: "FileChangeRequestApprovalParams",
-    resultRef: "FileChangeRequestApprovalResponse",
-  },
+  { method: "item/commandExecution/requestApproval", resultRef: "CommandExecutionRequestApprovalResponse" },
+  { method: "item/fileChange/requestApproval", resultRef: "FileChangeRequestApprovalResponse" },
 ];
 
-/** Notification families the translator/pre-turn buffer/doctor observe or must not mis-count (cut §1.6/§2(i)). */
+/** Notification families the translator/pre-turn buffer/doctor observe or must not mis-count (cut §1.6/§2(i)). `paramsRef` derived from the `ServerNotification` registry, same rationale as the request tables above — this is the MOST safety-critical of the three (a renamed `turn/completed` or `error` notification silently stops reaching TurnTranslator, with no wire-level error). */
 const SERVER_NOTIFICATION_METHODS = [
-  { method: "error", paramsRef: "v2/ErrorNotification" },
-  { method: "item/started", paramsRef: "v2/ItemStartedNotification" },
-  { method: "item/completed", paramsRef: "v2/ItemCompletedNotification" },
-  { method: "item/agentMessage/delta", paramsRef: "v2/AgentMessageDeltaNotification" },
-  { method: "thread/tokenUsage/updated", paramsRef: "v2/ThreadTokenUsageUpdatedNotification" },
-  { method: "turn/completed", paramsRef: "v2/TurnCompletedNotification" },
-  { method: "thread/settings/updated", paramsRef: "v2/ThreadSettingsUpdatedNotification" },
-  { method: "account/login/completed", paramsRef: "v2/AccountLoginCompletedNotification" },
-  { method: "account/updated", paramsRef: "v2/AccountUpdatedNotification" },
-  { method: "account/rateLimits/updated", paramsRef: "v2/AccountRateLimitsUpdatedNotification" },
+  { method: "error" },
+  { method: "item/started" },
+  { method: "item/completed" },
+  { method: "item/agentMessage/delta" },
+  { method: "thread/tokenUsage/updated" },
+  { method: "turn/completed" },
+  { method: "thread/settings/updated" },
+  { method: "account/login/completed" },
+  { method: "account/updated" },
+  { method: "account/rateLimits/updated" },
 ];
 
 /** Standalone defs pulled in beyond what the method table's BFS already reaches: the error shape and the turn-status enum (cut §2(h) layer-1: "error/turn-status/notification-families"). */
@@ -102,6 +110,17 @@ function lookupDef(schema, ref) {
   return def;
 }
 
+/** `#/definitions/(v2/)?Name` -> our flat `"Name"` / `"v2/Name"` ref form. Shared by `collectRefs` (below) and `resolveMethodParamsRef` (method-registry lookup). */
+const DOLLAR_REF_PATTERN = /^#\/definitions\/(?:(v2)\/)?(.+)$/;
+
+function dollarRefToOurForm(dollarRef) {
+  const m = DOLLAR_REF_PATTERN.exec(dollarRef);
+  if (!m) {
+    throw new Error(`codex-contract-extract: unrecognized $ref shape "${dollarRef}"`);
+  }
+  return m[1] === "v2" ? `v2/${m[2]}` : m[2];
+}
+
 /** Every `$ref` string reachable anywhere inside `value`, normalized to the same `"Name"` / `"v2/Name"` form used above. */
 function collectRefs(value, out) {
   if (Array.isArray(value)) {
@@ -111,13 +130,48 @@ function collectRefs(value, out) {
   if (value !== null && typeof value === "object") {
     for (const [key, child] of Object.entries(value)) {
       if (key === "$ref" && typeof child === "string") {
-        const m = /^#\/definitions\/(?:(v2)\/)?(.+)$/.exec(child);
+        const m = DOLLAR_REF_PATTERN.exec(child);
         if (m) out.add(m[1] === "v2" ? `v2/${m[2]}` : m[2]);
         continue;
       }
       collectRefs(child, out);
     }
   }
+}
+
+/**
+ * Resolves a CONSUMED method's params ref by matching its name against the
+ * live schema's OWN method registry (`ClientRequest` / `ServerRequest` /
+ * `ServerNotification` — each a `oneOf` of `{method:{enum:[name]}, params?}`
+ * variants, the real discriminated unions the codex-cli wire protocol uses to
+ * dispatch by method string). This is the structural drift check (cut §2(h)
+ * harden): a CLI that renames a consumed method — even leaving its params/
+ * result TYPE names untouched — has no variant left whose `method` matches,
+ * so this throws instead of the extractor silently trusting a hardcoded
+ * params-ref string that would still happen to resolve.
+ */
+function resolveMethodParamsRef(schema, registryName, method) {
+  const registry = schema.definitions[registryName];
+  if (!registry || !Array.isArray(registry.oneOf)) {
+    throw new Error(
+      `codex-contract-extract: schema has no "${registryName}" method-registry union — cannot verify consumed method "${method}"`,
+    );
+  }
+  const variant = registry.oneOf.find((candidate) => candidate?.properties?.method?.enum?.[0] === method);
+  if (!variant) {
+    throw new Error(
+      `codex-contract-extract: consumed method "${method}" is no longer present in the schema's ${registryName} union ` +
+        `(renamed or removed) — this is real protocol drift, review before widening the pin (contract/README.md)`,
+    );
+  }
+  const paramsSchema = variant.properties?.params;
+  // Some variants declare `params: {"type":"null"}` for a zero-argument
+  // request/notification (e.g. `account/logout`) rather than omitting the
+  // property outright — either shape means "no params type to track".
+  if (paramsSchema === undefined || typeof paramsSchema.$ref !== "string") {
+    return null;
+  }
+  return dollarRefToOurForm(paramsSchema.$ref);
 }
 
 /** BFS closure of every definition transitively reachable from `rootRefs`. */
@@ -175,12 +229,28 @@ function canonicalize(value) {
 }
 
 export function extractContract(schema, generatedFrom) {
+  // Resolve each consumed method's params ref AGAINST THE LIVE SCHEMA's own
+  // registry first (throws on a renamed/removed method — see
+  // resolveMethodParamsRef) — only then do we know which refs need closing.
+  const resolvedClient = CLIENT_REQUEST_METHODS.map((entry) => ({
+    ...entry,
+    paramsRef: resolveMethodParamsRef(schema, "ClientRequest", entry.method),
+  }));
+  const resolvedServerRequests = SERVER_REQUEST_METHODS.map((entry) => ({
+    ...entry,
+    paramsRef: resolveMethodParamsRef(schema, "ServerRequest", entry.method),
+  }));
+  const resolvedNotifications = SERVER_NOTIFICATION_METHODS.map((entry) => ({
+    ...entry,
+    paramsRef: resolveMethodParamsRef(schema, "ServerNotification", entry.method),
+  }));
+
   const rootRefs = new Set();
-  for (const entry of [...CLIENT_REQUEST_METHODS, ...SERVER_REQUEST_METHODS]) {
+  for (const entry of [...resolvedClient, ...resolvedServerRequests]) {
     if (entry.paramsRef) rootRefs.add(entry.paramsRef);
     if (entry.resultRef) rootRefs.add(entry.resultRef);
   }
-  for (const entry of SERVER_NOTIFICATION_METHODS) if (entry.paramsRef) rootRefs.add(entry.paramsRef);
+  for (const entry of resolvedNotifications) if (entry.paramsRef) rootRefs.add(entry.paramsRef);
   for (const ref of EXTRA_ROOT_REFS) rootRefs.add(ref);
   for (const ref of Object.values(DECISION_ENUM_REFS)) rootRefs.add(ref);
 
@@ -189,19 +259,19 @@ export function extractContract(schema, generatedFrom) {
 
   const methods = {
     clientRequests: Object.fromEntries(
-      CLIENT_REQUEST_METHODS.map((entry) => [
+      resolvedClient.map((entry) => [
         entry.method,
         { params: refResultShape(schema, entry.paramsRef), result: refResultShape(schema, entry.resultRef) },
       ]),
     ),
     serverRequests: Object.fromEntries(
-      SERVER_REQUEST_METHODS.map((entry) => [
+      resolvedServerRequests.map((entry) => [
         entry.method,
         { params: refResultShape(schema, entry.paramsRef), result: refResultShape(schema, entry.resultRef) },
       ]),
     ),
     serverNotifications: Object.fromEntries(
-      SERVER_NOTIFICATION_METHODS.map((entry) => [entry.method, { params: refResultShape(schema, entry.paramsRef) }]),
+      resolvedNotifications.map((entry) => [entry.method, { params: refResultShape(schema, entry.paramsRef) }]),
     ),
   };
 
@@ -213,14 +283,21 @@ export function extractContract(schema, generatedFrom) {
 }
 
 function main() {
-  const [, , schemaDir, outFile] = process.argv;
-  if (!schemaDir) {
-    console.error("usage: codex-contract-extract.mjs <schemaDir> [outFile]");
+  const [, , schemaDir, outFile, generatedFrom] = process.argv;
+  // `generatedFrom` is REQUIRED, no hardcoded default (cut §2(h) harden):
+  // the caller must supply the string a real binary actually reported (e.g.
+  // `codex --version`), never a stamped literal — see contract-drift.test.ts's
+  // layer 2 for the live-binary recipe and contract/README.md for the pin
+  // recipe.
+  if (!schemaDir || !generatedFrom) {
+    console.error("usage: codex-contract-extract.mjs <schemaDir> [outFile] <generatedFrom>");
+    console.error('  <generatedFrom> is a required, EXPLICIT provenance string (e.g. the real `codex --version` output) —');
+    console.error("  never inferred or defaulted, so a stale/wrong value cannot silently ride along.");
     process.exit(1);
   }
   const schemaPath = join(schemaDir, "codex_app_server_protocol.schemas.json");
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
-  const contract = extractContract(schema, "codex-cli 0.144.x");
+  const contract = extractContract(schema, generatedFrom);
   const json = JSON.stringify(contract, null, 2) + "\n";
   if (outFile) writeFileSync(outFile, json);
   else process.stdout.write(json);

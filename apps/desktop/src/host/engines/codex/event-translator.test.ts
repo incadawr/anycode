@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { TurnTranslator } from "./event-translator.js";
 import type { JsonRpcNotification } from "./protocol.js";
+import { TurnItemIndex, fileChangesOf } from "./turn-item-index.js";
 
 const THREAD_ID = "synthetic-thread";
 const TURN_ID = "synthetic-turn";
@@ -118,6 +119,30 @@ describe("TurnTranslator — renderer invariants", () => {
     ];
     expect(types(events)).toEqual(["text_start", "tool_execution_start", "text_end", "tool_result", "turn_end", "loop_end"]);
     expect(events.find((event) => event.type === "tool_result")).toMatchObject({ outcome: { toolCallId: "tool", status: "cancelled" } });
+  });
+
+  it("records every started item of THIS turn into the approval-correlation index", () => {
+    const items = new TurnItemIndex();
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, items });
+    // Everything the live turn announces BEFORE its approval request lands.
+    for (const message of fileChangeFixture.filter((entry) => entry.method === "item/started")) {
+      translator.onNotification(message);
+    }
+    // An item type this renderer adapter does not project must still be indexed:
+    // approvals name an itemId, not a projection.
+    translator.onNotification({
+      method: "item/started",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "reasoning", id: "rs_1", summary: [] } },
+    });
+    // A foreign turn's item must never leak into this turn's index.
+    translator.onNotification({
+      method: "item/started",
+      params: { threadId: THREAD_ID, turnId: "other-turn", item: { type: "fileChange", id: "foreign", changes: [] } },
+    });
+
+    expect(fileChangesOf(items.get("write"))).toEqual([{ path: "synthetic-file.txt", diff: "SYNTHETIC_FILE_OK\n" }]);
+    expect(items.get("rs_1")).toMatchObject({ type: "reasoning" });
+    expect(items.get("foreign")).toBeUndefined();
   });
 
   it("ignores foreign and unrecognized notifications without inventing cards or grants", () => {
