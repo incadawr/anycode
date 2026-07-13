@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,18 @@ writeFileSync(
 );
 
 afterAll(() => rmSync(fixtureDir, { recursive: true, force: true }));
+
+async function waitForFile(path: string, timeoutMs = 1_000): Promise<void> {
+  const end = Date.now() + timeoutMs;
+  while (!existsSync(path) && Date.now() < end) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (!existsSync(path)) throw new Error(`timed out waiting for ${path}`);
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
 
 function makeClient(args: string[] = [], overrides: Partial<ConstructorParameters<typeof AppServerClient>[0]> = {}) {
   return new AppServerClient({
@@ -208,5 +220,42 @@ describe("AppServerClient", () => {
     } finally {
       await client.close();
     }
+  });
+
+  it("reports only the dedicated POSIX app-server group with host generation proof", async () => {
+    const report = vi.fn();
+    const client = makeClient([], { processOwnership: { hostPid: 4242, generation: 7, report } });
+    try {
+      await client.start();
+      if (process.platform === "win32") {
+        expect(report).not.toHaveBeenCalled();
+      } else {
+        expect(report).toHaveBeenCalledWith(expect.objectContaining({
+          type: "anycode:engine-process",
+          hostPid: 4242,
+          generation: 7,
+          enginePid: client.pid,
+          pgid: client.pid,
+        }));
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("SIGKILL escalation reaps a stubborn dedicated child group", async () => {
+    const pidFile = join(fixtureDir, `stubborn-${Date.now()}.pid`);
+    const client = makeClient(["--stubborn-group", `--pid-file=${pidFile}`]);
+    await client.start();
+    await waitForFile(pidFile);
+    const grandchildPid = Number(readFileSync(pidFile, "utf8"));
+    expect(alive(grandchildPid)).toBe(true);
+
+    await client.close();
+    const end = Date.now() + 1_500;
+    while (alive(grandchildPid) && Date.now() < end) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(alive(grandchildPid)).toBe(false);
   });
 });

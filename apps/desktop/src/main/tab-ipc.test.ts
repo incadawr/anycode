@@ -91,6 +91,11 @@ describe("createTabRequestSchema — new-tab workspace matrix (§2F.4)", () => {
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x" }).success).toBe(true);
   });
 
+  it("accepts only reviewed engine identities for a new tab", () => {
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engine: "codex" }).success).toBe(true);
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engine: "unreviewed" }).success).toBe(false);
+  });
+
   it("rejects an empty-string workspace (min(1))", () => {
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "" }).success).toBe(false);
   });
@@ -108,6 +113,18 @@ describe("createTabRequestSchema — new-tab workspace matrix (§2F.4)", () => {
 });
 
 describe("handleCreate — dialog skip vs legacy dialog (§2F.4 / §6#6)", () => {
+  it("passes an explicit Codex engine through main only after its own readiness gate", async () => {
+    const { manager, canSpawn, createTab } = makeManager();
+    const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: [] });
+
+    await expect(handleCreate({ manager, persistence: persistenceStub, dialog }, {
+      kind: "new", workspace: "/x", engine: "codex",
+    })).resolves.toEqual({ ok: true, tabId: "tab-1", workspace: "/x" });
+
+    expect(canSpawn).toHaveBeenCalledWith("codex");
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ engine: "codex", workspace: "/x", resume: false }));
+    expect(showOpenDialog).not.toHaveBeenCalled();
+  });
   it("preselected workspace ⇒ dialog NOT called, createTab gets it verbatim", async () => {
     const { manager, createTab, deliverTabPort } = makeManager();
     const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: ["/should/not/be/used"] });

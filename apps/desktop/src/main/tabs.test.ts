@@ -238,6 +238,31 @@ describe("TabHostManager — engine identity and process ownership", () => {
     ]);
   });
 
+  it("threads the monotonic host generation into each engine env overlay", () => {
+    const { hosts } = liveForkRig();
+    const generations: number[] = [];
+    const manager = new TabHostManager({
+      fork: () => {
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      engineReady: () => true,
+      engineEnv: (_engine, generation) => {
+        generations.push(generation);
+        return { ANYCODE_HOST_GENERATION: String(generation) };
+      },
+      logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s-generation", resume: false, engine: "codex" });
+    expect(created.ok).toBe(true);
+    hosts[0]!.emit("exit", 1);
+    expect(generations).toEqual([1, 2]);
+  });
+
   it("reaps only the matching host generation and rejects stale registrations", () => {
     const { hosts } = liveForkRig();
     const reaped: number[] = [];

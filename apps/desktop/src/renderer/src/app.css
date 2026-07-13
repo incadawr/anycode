@@ -1485,6 +1485,57 @@ body {
   display: inline-flex;
 }
 
+.start-engine-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+
+.start-engine-choice {
+  border: 0;
+  border-radius: calc(var(--r-sm) - 2px);
+  padding: calc(var(--sp-1) + 1px) var(--sp-2);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.start-engine-choice:hover,
+.start-engine-choice:focus-visible {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.start-engine-choice:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.start-engine-choice-selected {
+  background: var(--bg-raised);
+  color: var(--text-1);
+}
+
+.engine-identity {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1;
+}
+
+.session-header-engine {
+  margin-left: var(--sp-2);
+}
+
 /* One-time arrival hint for the selected workspace. It dismisses after four
    seconds in StartScreen and returns only while the chip is hovered/focused. */
 .start-project-hint {

@@ -35,12 +35,24 @@ export const SESSIONS_LIST_CHANNEL = "anycode:sessions-list";
 /** invoke channel: open the folder-picker dialog for the New Session start screen (slice P7.12 §4.4). No request payload. */
 export const WORKSPACE_PICK_CHANNEL = "anycode:workspace-pick";
 
+/** IPC channel returning engines that main has already validated as spawnable. */
+export const ENGINES_LIST_CHANNEL = "anycode:engines-list";
+
+/**
+ * Main-owned availability snapshot. This is deliberately only an identity
+ * list: paths, diagnostics, account data, and raw environment never cross the
+ * preload boundary.
+ */
+export interface AvailableEngines {
+  engineIds: readonly ("core" | "codex")[];
+}
+
 /** Request to open a tab: a brand-new session (workspace chosen by main) or a resume. */
 export type CreateTabRequest =
   // workspace absent ⇒ main prompts via dialog.showOpenDialog (unchanged);
   // workspace present ⇒ preselected project path, no folder dialog
   // (sidebar project menu, GUI-P1).
-  | { kind: "new"; workspace?: string }
+  | { kind: "new"; workspace?: string; engine?: "core" | "codex" }
   | { kind: "resume"; sessionId: string };
 
 /**

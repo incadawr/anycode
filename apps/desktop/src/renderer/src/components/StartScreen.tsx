@@ -51,6 +51,7 @@ import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, Search, Terminal
 import { modelDisplayName, modelMenuItems, pillLabel, resolvePid } from "./ModelPill.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
+import type { EngineId } from "../../../shared/engines.js";
 import type { ToastKind } from "../toasts.js";
 
 export interface StartScreenProps {
@@ -257,6 +258,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const hiddenWorkspaces = useTabsStore((state) => state.hiddenWorkspaces);
   const snapshot = useSettingsStore((state) => state.snapshot);
   const [sessions, setSessions] = useState<readonly SessionSummary[]>([]);
+  // Core is always the local compatibility choice. Codex is appended only
+  // after main returns its already-validated availability verdict.
+  const [availableEngines, setAvailableEngines] = useState<readonly EngineId[]>(["core"]);
   const [submitting, setSubmitting] = useState(false);
   const submitGuardRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -307,6 +311,23 @@ export function StartScreen({ onToast }: StartScreenProps) {
       })
       .catch((error: unknown) => {
         console.warn("[StartScreen] listSessions failed", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.anycode
+      .listAvailableEngines()
+      .then(({ engineIds }) => {
+        if (!cancelled) setAvailableEngines(engineIds);
+      })
+      .catch((error: unknown) => {
+        // Absence/failure is fail-closed for optional engines, while the
+        // historical Core start flow remains available.
+        console.warn("[StartScreen] listAvailableEngines failed", error);
       });
     return () => {
       cancelled = true;
@@ -414,6 +435,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
   const sendDisabledReason = submitting ? "Sending…" : computeSendDisabledReason(draft);
   const canSend = sendDisabledReason === undefined;
+  const codexDraft = draft.engine === "codex";
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
   async function submit(): Promise<void> {
@@ -614,6 +636,26 @@ export function StartScreen({ onToast }: StartScreenProps) {
             </div>
           )}
         </div>
+        <div className="start-engine-switch" role="group" aria-label="Session engine">
+          <button
+            type="button"
+            className={`start-engine-choice${draft.engine === "core" ? " start-engine-choice-selected" : ""}`}
+            aria-pressed={draft.engine === "core"}
+            onClick={() => useTabsStore.getState().setDraftEngine("core")}
+          >
+            AnyCode
+          </button>
+          {availableEngines.includes("codex") && (
+            <button
+              type="button"
+              className={`start-engine-choice${codexDraft ? " start-engine-choice-selected" : ""}`}
+              aria-pressed={codexDraft}
+              onClick={() => useTabsStore.getState().setDraftEngine("codex")}
+            >
+              Codex
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="start-intro">
@@ -655,8 +697,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
         />
         <div className="composer-footer">
           <div className="composer-footer-left">
-            <ModeMenu mode={draft.mode} disabled={false} onChange={(mode) => useTabsStore.getState().setDraftMode(mode)} />
-            <div className="model-pill start-model" ref={modelRootRef}>
+            {codexDraft ? (
+              <span className="engine-identity" title="Codex uses its native model and approval policy">Codex</span>
+            ) : (
+              <>
+                <ModeMenu mode={draft.mode} disabled={false} onChange={(mode) => useTabsStore.getState().setDraftMode(mode)} />
+                <div className="model-pill start-model" ref={modelRootRef}>
               <button
                 ref={modelChipRef}
                 type="button"
@@ -697,7 +743,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   })}
                 </div>
               )}
-            </div>
+                </div>
+              </>
+            )}
           </div>
           <span className="composer-hint composer-hint-hidden" />
           <div className="composer-footer-right">

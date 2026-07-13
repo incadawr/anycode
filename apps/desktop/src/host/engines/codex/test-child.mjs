@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import readline from "node:readline";
 
 const args = process.argv.slice(2);
@@ -14,6 +15,14 @@ if (args.includes("--version")) {
   if (fixture) process.stdout.write(readFileSync(fixture.slice("--fixture=".length), "utf8"));
   if (args.includes("--env")) {
     process.stdout.write(`${JSON.stringify({ method: "test/env", params: process.env })}\n`);
+  }
+  if (args.includes("--stubborn-group")) {
+    process.on("SIGTERM", () => {});
+    const pidFile = args.find((arg) => arg.startsWith("--pid-file="));
+    const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], {
+      stdio: "ignore",
+    });
+    if (pidFile && grandchild.pid !== undefined) writeFileSync(pidFile.slice("--pid-file=".length), String(grandchild.pid));
   }
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on("line", (line) => {

@@ -18,8 +18,10 @@ export interface EngineAvailability {
 export interface EngineProbeContext {}
 
 export interface EngineBootContext {
-  /** E1 only wires the existing CoreEngine; E2 replaces this with dedicated bootstraps. */
+  /** Core composition retains the existing AgentLoop-owned engine. */
   coreEngine?: SessionEngine;
+  /** Codex composition supplies an already-connected native lifecycle owner. */
+  codexEngine?: SessionEngine;
 }
 
 export interface BootedEngine {
@@ -45,14 +47,21 @@ const corePlugin: EnginePlugin = {
   },
 };
 
-/** Placeholder registration keeps selection validation explicit before E3 ships. */
+/**
+ * Statically linked first-party adapter. Process construction stays in the host
+ * composition root, after its bootstrap scope exists, so a failed native start
+ * has an owned cleanup path.
+ */
 const codexPlugin: EnginePlugin = {
   id: "codex",
   async probe(): Promise<EngineAvailability> {
-    return { available: false, reason: "Codex engine is not installed in this build" };
+    return { available: true };
   },
-  async boot(): Promise<BootedEngine> {
-    throw new Error("Codex engine is not installed in this build");
+  async boot(ctx: EngineBootContext): Promise<BootedEngine> {
+    if (ctx.codexEngine?.id !== "codex") {
+      throw new Error("Codex engine bootstrap was not provided");
+    }
+    return { engine: ctx.codexEngine };
   },
 };
 
