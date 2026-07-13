@@ -855,22 +855,48 @@ export class CodexEngine implements SessionEngine {
       // anchor relative to them.
       let seqInTurn = 0;
       let nativeVisibleCompleted = 0;
+      // Per-turn dedupe of already-counted item ids (W7 HIGH-2), reset
+      // alongside the two counters above: a re-delivered terminal
+      // `item/completed` for an item already counted this turn must not tick
+      // either counter or write a second row, or the anchor a LATER command
+      // records against silently drifts past where the first delivery put it.
+      const seenItemIds = new Set<string>();
       // Captured (not `this`-bound): `deliver` stays a plain generator
       // function so `yield*` delegation below is unchanged from before this
       // shadow-write hook existed.
       const engine = this;
       const deliver = function* (notification: JsonRpcNotification): Generator<AgentEvent> {
         if (notification.method === "item/completed") {
-          const itemType = completedItemType(notification);
-          // Recorded with BOTH counters' values BEFORE this notification's own
-          // effect is applied — a command itself is never NATIVE_PERSISTED, so
-          // recording before vs. after nativeVisibleCompleted's own (absent)
-          // increment is equivalent, but seqInTurn's pre-increment value is
-          // load-bearing (matches every other row's "my own position", not
-          // "the next row's position").
-          engine.recordShadowItem(notification, turnId, turnOrdinal, nativeVisibleCompleted, seqInTurn);
-          seqInTurn += 1;
-          if (itemType !== undefined && NATIVE_PERSISTED.has(itemType)) nativeVisibleCompleted += 1;
+          // The counters may only move for THIS turn's own completions (W7
+          // HIGH-1): unlike Phase A's threadId-only buffering, Phase B does
+          // not otherwise filter `deliver`'s input by turnId, so a trailing
+          // `item/completed` from an earlier, already-finished turn of the
+          // SAME thread (e.g. an interrupted turn's late notification
+          // arriving after the next turn/start) would otherwise tick these
+          // counters and misalign every later command's anchor. Same
+          // predicate event-translator.ts's `matchingTurn` already applies on
+          // the live-event side.
+          const params = record(notification.params);
+          if (params !== null && params.threadId === engine.threadId && params.turnId === turnId) {
+            const item = record(params.item);
+            const itemId = typeof item?.id === "string" ? item.id : undefined;
+            // An item with no string id cannot be deduped (nothing to key on)
+            // and ticks on every delivery, exactly as before this fix.
+            if (itemId === undefined || !seenItemIds.has(itemId)) {
+              if (itemId !== undefined) seenItemIds.add(itemId);
+              const itemType = completedItemType(notification);
+              // Recorded with BOTH counters' values BEFORE this notification's
+              // own effect is applied — a command itself is never
+              // NATIVE_PERSISTED, so recording before vs. after
+              // nativeVisibleCompleted's own (absent) increment is
+              // equivalent, but seqInTurn's pre-increment value is
+              // load-bearing (matches every other row's "my own position",
+              // not "the next row's position").
+              engine.recordShadowItem(notification, turnId, turnOrdinal, nativeVisibleCompleted, seqInTurn);
+              seqInTurn += 1;
+              if (itemType !== undefined && NATIVE_PERSISTED.has(itemType)) nativeVisibleCompleted += 1;
+            }
+          }
         }
         for (const event of translator.onNotification(notification)) {
           if (event.type === "loop_end") terminal = true;

@@ -311,13 +311,12 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
     ]);
   });
 
-  it("native-only turn: a turn with items but zero shadow rows for it projects exactly as the native-only path (regression)", () => {
-    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 5, positionInTurn: 0, seqInTurn: 0, command: "unrelated turn", exitCode: 0 }];
+  it("native-only turn: a turn with items but zero shadow rows for it renders turn 0 byte-identical to the native-only golden — the extra ordinal is a tail, not a drop", () => {
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 5, positionInTurn: 0, seqInTurn: 0, command: "unrelated turn", exitCode: 0, outputHead: "out\n" }];
     const items = projectCodexHistory(RESUME_READ_THREAD, shadow, { maxItems: 200 });
-    // turnOrdinal 5 does not exist in RESUME_READ_THREAD (only turn 0) — the
-    // shadow row is simply never matched to any turn, and turn 0 renders
-    // byte-identical to the native-only golden above.
-    expect(items).toEqual([
+    // turnOrdinal 5 does not exist in RESUME_READ_THREAD (only turn 0) — turn 0
+    // renders byte-identical to the native-only golden above...
+    expect(items.slice(0, 2)).toEqual([
       {
         id: "019f554c-ddd9-71b2-a90d-0191ac1e4422:item-1",
         createdAt: 1783842528000,
@@ -329,6 +328,43 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
         message: { role: "assistant", content: [{ type: "text", text: "W0_TEXT_OK" }] },
       },
     ]);
+    // ...and the out-of-bounds row is NEVER silently dropped (module header's
+    // "Nothing is ever dropped" invariant, W7 HIGH-3): it is appended as a
+    // tail pair on a synthetic turn id that can never collide with a real
+    // native turn id, with createdAt continuing the cursor.
+    expect(items).toHaveLength(4);
+    expect(items[2]).toMatchObject({
+      id: "019f554c-dd9a-7d42-bcea-0673f965508e:orphan-turn-5:shadow:0:call",
+      createdAt: 1783842528002,
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_call", toolCallId: "019f554c-dd9a-7d42-bcea-0673f965508e:orphan-turn-5:shadow:0", toolName: "Bash", input: { command: "unrelated turn" } }],
+      },
+    });
+    expect(items[3]).toMatchObject({
+      id: "019f554c-dd9a-7d42-bcea-0673f965508e:orphan-turn-5:shadow:0:result",
+      createdAt: 1783842528003,
+      message: { role: "tool", content: [{ type: "tool_result", status: "success", text: "out\n" }] },
+    });
+  });
+
+  it("multiple orphan turnOrdinals are appended sorted by (turnOrdinal, positionInTurn, seqInTurn), each on its own synthetic turn id, with a monotonically increasing createdAt across the whole tail", () => {
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-0", startedAt: 0, items: [] }] } };
+    const shadow: ShadowCommandItem[] = [
+      { turnOrdinal: 2, positionInTurn: 0, seqInTurn: 1, command: "second-later-seq", exitCode: 0 },
+      { turnOrdinal: 1, positionInTurn: 0, seqInTurn: 0, command: "first-turn", exitCode: 0 },
+      { turnOrdinal: 2, positionInTurn: 0, seqInTurn: 0, command: "second-earlier-seq", exitCode: 0 },
+    ];
+    const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
+
+    expect(toolCallIdsOf(items)).toEqual([
+      "t1:orphan-turn-1:shadow:0",
+      "t1:orphan-turn-2:shadow:0",
+      "t1:orphan-turn-2:shadow:1",
+    ]);
+    const createdAts = items.map((item) => item.createdAt);
+    expect(createdAts).toEqual([...createdAts].sort((a, b) => a - b));
+    expect(new Set(createdAts).size).toBe(createdAts.length);
   });
 
   // MECHANICS-ONLY unit test (W6): a hand-authored `positionInTurn` against a
