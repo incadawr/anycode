@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { makeTrustedScratchDir } from "../../../shared/test-scratch.js";
 import {
   AppServerClient,
   AppServerClientError,
@@ -12,7 +13,30 @@ import {
 import { EngineVersionError } from "./protocol.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
+// Data files only (JSONL fixtures, pid files): nothing here is ever EXECUTED as
+// the Codex binary, so the trust policy never stats this directory.
 const fixtureDir = mkdtempSync(join(tmpdir(), "anycode-codex-test-"));
+// Executables, i.e. paths the real trust gate DOES stat — see test-scratch.ts.
+const scratchDir = makeTrustedScratchDir("codex-app-server-client");
+
+/**
+ * The trust gate, stubbed for every test whose subject is the TRANSPORT.
+ *
+ * The binary those tests spawn is the test runner's own `node`
+ * (`process.execPath`), and its permissions are a property of the machine, not
+ * of anything under test: a developer's Node is 0755 under a private prefix,
+ * while the Node a GitHub runner puts in `/opt/hostedtoolcache/…` is 0777 —
+ * genuinely world-writable, and the production gate is RIGHT to refuse it. Left
+ * un-stubbed, that turns the whole file red on CI and green on a laptop,
+ * proving nothing about the JSON-RPC transport either way.
+ *
+ * The gate itself keeps its own coverage: as policy in shared/codex-binary-
+ * trust.ts, and — because a stub everywhere would leave the client's PRODUCTION
+ * default (`checkCodexBinaryTrustOnDisk`) pinned by nothing — end to end in
+ * "refuses an untrusted binary through the REAL on-disk gate" below, which omits
+ * this seam entirely.
+ */
+const TRUSTED = (): null => null;
 const basicFixture = join(fixtureDir, "basic.jsonl");
 writeFileSync(
   basicFixture,
@@ -47,7 +71,10 @@ writeFileSync(
   ].join("\n") + "\n",
 );
 
-afterAll(() => rmSync(fixtureDir, { recursive: true, force: true }));
+afterAll(() => {
+  rmSync(fixtureDir, { recursive: true, force: true });
+  rmSync(scratchDir, { recursive: true, force: true });
+});
 
 async function waitForFile(path: string, timeoutMs = 1_000): Promise<void> {
   const end = Date.now() + timeoutMs;
@@ -67,6 +94,7 @@ function makeClient(args: string[] = [], overrides: Partial<ConstructorParameter
     binaryArgs: [childPath, ...args],
     cwd: process.cwd(),
     sourceEnv: { HOME: "/home/test", PATH: process.env.PATH, CODEX_HOME: "/codex-home" },
+    binaryTrust: TRUSTED,
     ...overrides,
   });
 }
@@ -128,6 +156,40 @@ describe("AppServerClient", () => {
     } finally {
       await client.close();
     }
+  });
+
+  // The ONE test in this file that omits the `binaryTrust` seam, so the client's
+  // production default — the real on-disk `checkCodexBinaryTrustOnDisk` — is what
+  // decides. Without it, every test here injects a trusted stub and nothing pins
+  // the default at all: a client that simply never called the gate would pass the
+  // whole suite.
+  //
+  // The binary is world-writable while its directory is not, so the refusal must
+  // name the FILE. A fixture under `os.tmpdir()` could not discriminate that: on
+  // Linux the ancestor `/tmp` is world-writable too, so the same refusal would
+  // fire even if the file-mode rule were deleted outright. Windows is skipped
+  // because the policy has no POSIX mode bits to judge there (it returns null by
+  // design — an unchecked path, not a verified-safe one).
+  it.skipIf(process.platform === "win32")("refuses an untrusted binary through the REAL on-disk gate, and spawns nothing", async () => {
+    const binary = join(scratchDir, "world-writable-codex");
+    writeFileSync(binary, "#!/bin/sh\nexit 0\n");
+    chmodSync(binary, 0o777);
+    const spawnImpl = vi.fn((): never => {
+      throw new Error("an untrusted binary must be refused BEFORE anything is spawned");
+    });
+
+    const client = new AppServerClient({
+      binaryPath: binary,
+      cwd: process.cwd(),
+      sourceEnv: { HOME: "/home/test", PATH: process.env.PATH },
+      spawnImpl,
+    });
+
+    const failure = await client.start().then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(EngineVersionError);
+    expect((failure as Error).message).toBe(`Codex binary (${realpathSync(binary)}) is world-writable`);
+    expect(spawnImpl).not.toHaveBeenCalled();
+    expect(client.pid).toBeNull();
   });
 
   // TASK.38 (W12): the rejection a failed request carries is the ONLY place a

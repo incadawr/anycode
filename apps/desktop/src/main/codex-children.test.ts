@@ -7,17 +7,20 @@
  * call. Each check polls to the end of a settle window (cut §2(l)): an
  * instantaneous check catches a grandchild mid-reap and flakes.
  */
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { makeTrustedScratchDir } from "../shared/test-scratch.js";
+import { checkCodexBinaryPathTrust } from "./codex-binary.js";
 import { closeAllCodexChildren, liveCodexChildCount } from "./codex-children.js";
 import { createCodexOnboardingController, type CodexIpcDeps } from "./codex-ipc.js";
 import { runCodexDoctor } from "./codex-doctor.js";
 
 const fixture = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mjs", import.meta.url));
-const workDir = mkdtempSync(join(tmpdir(), "anycode-codex-children-"));
+// NOT os.tmpdir(): the production trust gate refuses a binary under a
+// world-writable ancestor, which on Linux is `/tmp` itself. See test-scratch.ts.
+const workDir = makeTrustedScratchDir("codex-children");
 
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 afterEach(async () => {
@@ -28,12 +31,17 @@ afterEach(async () => {
 /**
  * A REAL executable at a REAL path, so the production trust gate and the
  * production spawn path both run exactly as they would against a user's
- * `codex`. `mkdtemp` gives a 0700 directory we own — trusted by construction.
+ * `codex`. The gate is asked, right here, whether the path we just wrote is one
+ * it would execute: a scratch location it refuses would otherwise surface as
+ * every test in this file timing out waiting for a child that was never spawned
+ * — the CI failure this guard exists to name in one line.
  */
 function writeCodexShim(name: string, extraArgs: readonly string[]): string {
   const shim = join(workDir, name);
   writeFileSync(shim, `#!/bin/sh\nexec ${process.execPath} ${fixture} "$@" ${extraArgs.join(" ")}\n`);
   chmodSync(shim, 0o755);
+  const untrusted = checkCodexBinaryPathTrust(shim, undefined, process.platform);
+  if (untrusted !== null) throw new Error(`test scratch is not an executable location the trust gate accepts: ${untrusted}`);
   return shim;
 }
 
