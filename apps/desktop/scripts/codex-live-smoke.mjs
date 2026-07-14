@@ -626,6 +626,79 @@ async function step8QuitRelaunch(ctx) {
   pass(8, `app quit cleanly (0 orphans) and relaunched on the SAME profile (pid=${appPid}, port=${port})`);
 }
 
+// ── pure transcript-order predicates (W13: close a "green-by-construction" gap) ──
+//
+// Step 9's original two assertions (still below, unchanged) only checked
+// "some content exists" and "some tool block exists" — both stay green even
+// if W6 (30da16b: a shadow-logged command keeps ITS OWN place relative to
+// agent messages) or W8 (895b380: a re-delivered command must not evict the
+// turn's own last message) regressed, because neither predicate looks at
+// POSITION. These three close that gap by checking ORDER.
+//
+// Block shape comes from GET /state/:tabId's `transcript`
+// (renderer/src/store.ts `TranscriptBlock`, confirmed at
+// apps/desktop/src/renderer/src/store.ts:214-236): real `kind` values are
+// "user_text" / "assistant_text" / "reasoning" / "tool_call" / "error" /
+// "usage_limit" / "output_truncated" / "loop_end" — there is NO separate
+// "tool_result" kind. A tool call AND its outcome are the SAME "tool_call"
+// block (the outcome lives in its `status` field, store.ts:224). The
+// existing `hasToolOutcome` check below ORs in a "tool_result" the store
+// never emits — a harmless dead disjunct, left alone (out of this wave's
+// one-file scope).
+//
+// Each predicate is a pure function of a plain TranscriptBlock[] (only
+// `.kind` is read), so it can be exercised on synthetic arrays without a
+// live run.
+
+function lastIndexOfKind(blocks, kind) {
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    if (blocks[i]?.kind === kind) return i;
+  }
+  return -1;
+}
+
+function firstIndexOfKind(blocks, kind) {
+  return blocks.findIndex((b) => b?.kind === kind);
+}
+
+/**
+ * W8 invariant: the turn's own last message must survive a re-delivery, not
+ * get evicted/truncated by a stale shadow-logged command. True iff an
+ * "assistant_text" block exists strictly AFTER the last "tool_call" block —
+ * i.e. the transcript is not left ending on a command. Vacuously true when
+ * there is no tool_call at all (nothing for a message to be cut off after).
+ */
+function turnHasAssistantTail(blocks) {
+  const lastTool = lastIndexOfKind(blocks, "tool_call");
+  if (lastTool === -1) return true;
+  return lastIndexOfKind(blocks, "assistant_text") > lastTool;
+}
+
+/**
+ * W6 invariant: a shadow-logged command keeps ITS OWN place between agent
+ * messages instead of sinking to the end on re-delivery. True iff the FIRST
+ * "tool_call" sits strictly before the LAST "assistant_text" (the command is
+ * not stranded after every reply), AND the FIRST "user_text" precedes the
+ * FIRST "tool_call" (the prompt that triggered it still comes first).
+ */
+function commandKeepsItsPlace(blocks) {
+  const firstTool = firstIndexOfKind(blocks, "tool_call");
+  const firstUser = firstIndexOfKind(blocks, "user_text");
+  const lastAssistant = lastIndexOfKind(blocks, "assistant_text");
+  if (firstTool === -1 || firstUser === -1 || lastAssistant === -1) return false;
+  return firstTool < lastAssistant && firstUser < firstTool;
+}
+
+/**
+ * The eviction bug this smoke exists to catch would leave stale
+ * shadow-logged commands as the very FIRST thing a resumed transcript shows.
+ * True iff the transcript is non-empty and its first block is not a
+ * "tool_call".
+ */
+function transcriptDoesNotOpenOnTool(blocks) {
+  return blocks.length > 0 && blocks[0]?.kind !== "tool_call";
+}
+
 // ── step 9: resume the codex session, check the transcript ──
 
 async function step9ResumeAndCheckTranscript(ctx) {
@@ -657,6 +730,33 @@ async function step9ResumeAndCheckTranscript(ctx) {
     hasToolOutcome,
     `resumed transcript shows no tool_call/tool_result block for the earlier allow/deny commands (tab ${resumedTabId})`,
     "B5-eng (TASK.42 history-projection shadow-log, cut §2(e))",
+  );
+
+  const kindOrder = transcript.map((b) => b?.kind ?? "?").join(", ");
+
+  // W8: the turn's own last message must not be evicted by a re-delivered
+  // stale shadow-logged command — the transcript must not end mid-command.
+  assertLane(
+    9,
+    turnHasAssistantTail(transcript),
+    `resumed transcript ends on a tool_call with no assistant_text after it (turn cut off on a command) — kind order: [${kindOrder}]`,
+    "W8 (895b380: let a re-delivered command enrich its row, and stop old commands from evicting live history)",
+  );
+  // W6: the command must keep ITS OWN place between the agent messages that
+  // surround it, not sink to the tail of the transcript on re-delivery.
+  assertLane(
+    9,
+    commandKeepsItsPlace(transcript),
+    `resumed transcript's first tool_call is not strictly between the first user_text and the last assistant_text (command lost its place) — kind order: [${kindOrder}]`,
+    "W6 (30da16b: anchor the shadow command log to the domain thread/read actually returns)",
+  );
+  // The eviction bug this smoke exists to catch would leave stale
+  // shadow-logged commands as the very first thing a resumed transcript shows.
+  assertLane(
+    9,
+    transcriptDoesNotOpenOnTool(transcript),
+    `resumed transcript opens with a tool_call block instead of the original user/assistant history — kind order: [${kindOrder}]`,
+    "W8 (895b380: stop old commands from evicting live history)",
   );
 
   await saveScreenshot(ctx, "step-9-resumed-transcript");
