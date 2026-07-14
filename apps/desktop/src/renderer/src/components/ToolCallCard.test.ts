@@ -161,6 +161,7 @@ describe("shouldAutoCollapse", () => {
       "invalid_input",
       "denied",
       "timed_out",
+      "max_turns",
     ];
     for (const status of stayExpanded) {
       expect(shouldAutoCollapse(status)).toBe(false);
@@ -649,6 +650,7 @@ describe("defaultExpanded", () => {
       "invalid_input",
       "denied",
       "timed_out",
+      "max_turns",
       "cancelled",
     ];
     for (const status of statuses) {
@@ -665,6 +667,7 @@ describe("defaultExpanded", () => {
       "invalid_input",
       "denied",
       "timed_out",
+      "max_turns",
       "cancelled",
     ];
     for (const status of statuses) {
@@ -890,6 +893,25 @@ describe("AgentCardBody (SSR component render)", () => {
     expect(html).not.toContain('class="tool-call-result"');
   });
 
+  // TASK.44: max_turns is an incomplete outcome. The external card status is
+  // "max_turns" (the dispatcher maps errorKind:"max_turns"), the internal
+  // subagent.final.status is "max_turns", and the RESULT slot carries the limit
+  // notice + partial — all three agree, no green "Success" badge.
+  it("max_turns status shows the limit notice + partial in the RESULT slot (TASK.44)", () => {
+    const block = mkAgentBlock({
+      status: "max_turns",
+      modelText:
+        "Agent: the subagent reached its max turn limit (8 turns) without finishing. Partial result:\n\nFound 3 files.",
+      subagent: mkSubagent({ final: { status: "max_turns", durationMs: 4200 } }),
+    });
+    const html = renderAgentBody(block, false);
+    expect(html).toContain("tool-call-agent-result");
+    expect(html).toContain("max turn limit");
+    expect(html).toContain("8 turns");
+    expect(html).toContain("Found 3 files.");
+    expect(html).not.toContain('class="tool-call-result"');
+  });
+
   it("activityDropped > 0 renders the '+N earlier' affordance", () => {
     const block = mkAgentBlock({
       status: "running",
@@ -969,5 +991,27 @@ describe("ToolCallCard (SSR component render) — generic non-Agent path stays u
     expect(html).not.toContain("subagent-activity-feed");
     expect(html).not.toContain("subagent-prompt-plaque");
     expect(html).not.toContain("tool-call-agent-result");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.44 — honest external badge. A max_turns Agent tool_call must show the
+// "Max turns reached" badge (not "Success") and the warning status class, so
+// the external badge, the internal substatus, and the model-visible text all
+// agree in one terminal state.
+
+describe("ToolCallCard (SSR) — max_turns external badge (TASK.44)", () => {
+  it("renders the 'Max turns reached' badge and warning status class — never 'Success'", () => {
+    const block = mkAgentBlock({
+      status: "max_turns",
+      modelText:
+        "Agent: the subagent reached its max turn limit (8 turns) without finishing and produced no partial result.",
+      subagent: mkSubagent({ final: { status: "max_turns", durationMs: 4200 }, turns: 8 }),
+    });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    // External badge is the warning-tinted "Max turns reached", NOT green Success.
+    expect(html).toContain(">Max turns reached<");
+    expect(html).not.toContain(">Success<");
+    expect(html).toContain("tool-call-status-max_turns");
   });
 });

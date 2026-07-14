@@ -478,6 +478,25 @@ describe("executeToolCall — B(2) errorKind mapping & grace", () => {
     expect(outcome.status).toBe("cancelled");
   });
 
+  // TASK.44: max_turns errorKind (set by the Agent tool for a subagent that hit
+  // its turn budget) maps to a max_turns outcome — never success.
+  it("maps a max_turns errorKind to a max_turns outcome (never success)", async () => {
+    const tool = makeTool({
+      handler: async () => ({
+        ok: false,
+        errorKind: "max_turns",
+        output: { status: "max_turns", finalText: "partial" },
+        error: "Agent: the subagent reached its max turn limit (8 turns) without finishing.",
+      }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.result?.errorKind).toBe("max_turns");
+    // The partial output rides along, same as the timed_out case above.
+    expect((outcome.result?.output as { finalText: string }).finalText).toBe("partial");
+  });
+
   it("falls back to error when the handler fails without an errorKind", async () => {
     const tool = makeTool({ handler: async () => ({ ok: false, error: "boom" }) });
     const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });

@@ -136,9 +136,11 @@ export interface ToolResult<Out = unknown> {
    * outcome status as `ok ? "success" : (errorKind ?? "error")` (design §2.10, B2).
    * "invalid_input" lets a handler classify a bad argument it can only validate
    * itself — e.g. the Agent tool's agent_type checked against the persona
-   * registry (design §3.4), which is deliberately not a zod-enum.
+   * registry (design §3.4), which is deliberately not a zod-enum. "max_turns"
+   * lets the Agent tool surface a subagent that hit its turn budget as an
+   * honest incomplete outcome rather than masquerading as success (TASK.44).
    */
-  errorKind?: "timed_out" | "cancelled" | "invalid_input";
+  errorKind?: "timed_out" | "cancelled" | "max_turns" | "invalid_input";
 }
 
 /**
@@ -157,6 +159,7 @@ export type ToolCallStatus =
   | "invalid_input"
   | "denied"
   | "timed_out"
+  | "max_turns"
   | "cancelled";
 
 /** Final outcome of one dispatched tool call; always produced, never thrown. */

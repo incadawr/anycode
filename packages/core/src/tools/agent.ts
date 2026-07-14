@@ -4,6 +4,12 @@
  * result. The tool lives BELOW loop/ and never imports AgentLoop — the port is
  * the only seam (§3.1).
  *
+ * Outcome mapping (TASK.44): only `completed` is a full success. `max_turns`
+ * returns an explicit incomplete errorKind so the dispatcher, renderer badge
+ * and model-visible text all agree the delegation did NOT succeed; a non-empty
+ * partial finalText rides the error message, an empty one never reads as
+ * success. `cancelled` and `error` are likewise never success.
+ *
 
  * spawn itself is side-effect-free, and every effectful child tool call passes
  * the SAME inherited permission gate, so gating the spawn too would only add
@@ -94,6 +100,32 @@ export const agentTool: ToolDefinition<AgentInput, AgentOutput> = {
 
     if (outcome.status === "error") {
       return { ok: false, error: outcome.finalText || "Agent: the subagent failed." };
+    }
+    // max_turns (TASK.44): the child hit its turn budget — this is NOT a
+    // success. Return an explicit incomplete errorKind so the dispatcher maps
+    // the tool_call to status "max_turns" (not "success"), the parent model
+    // receives a clear message naming the limit and the turns spent, and any
+    // partial finalText the child did produce is forwarded (after the limit
+    // notice) so it is not lost. An EMPTY partial must not read as success:
+    // the error message is always non-empty here, so an empty-finalText
+    // max_turns outcome can never provoke a blind re-delegation.
+    if (outcome.status === "max_turns") {
+      const partial = outcome.finalText.trim();
+      const error = partial
+        ? `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing. Partial result:\n\n${partial}`
+        : `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing and produced no partial result. The task was not completed — refine the prompt, narrow the scope, or raise maxTurns.`;
+      return { ok: false, errorKind: "max_turns", error, output: { ...outcome } };
+    }
+    // cancelled (TASK.44): preserve cancellation semantics — never success.
+    // The dispatcher maps errorKind "cancelled" to status "cancelled", so the
+    // card's external badge and the internal subagent_end status agree.
+    if (outcome.status === "cancelled") {
+      return {
+        ok: false,
+        errorKind: "cancelled",
+        error: "Agent: the subagent was cancelled.",
+        output: { ...outcome },
+      };
     }
     // The runner already capped finalText and set truncated; forward the outcome
     // verbatim (finalText/truncated/status/counters) as the tool payload.

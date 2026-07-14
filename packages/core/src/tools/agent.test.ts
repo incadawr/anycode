@@ -137,6 +137,186 @@ describe("agentTool", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TASK.44 — honest outcome mapping. Only `completed` is success; max_turns and
+// cancelled must NOT pass as ok:true. Covers all four terminal outcomes with
+// empty and non-empty partial finalText, the regression scenario (8 turns,
+// empty finalText), and the model-visible text the parent receives.
+
+describe("agentTool — honest outcome mapping (TASK.44)", () => {
+  function portReturning(outcome: SubagentOutcome): SubagentPort {
+    return { run: async () => outcome };
+  }
+
+  it("max_turns with a NON-empty partial result → ok:false, errorKind max_turns, partial rides the error", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "max_turns",
+          finalText: "I found three files but did not finish the analysis.",
+          truncated: false,
+          turns: 8,
+          toolCalls: 7,
+          durationMs: 42,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("max_turns");
+    // The partial result is forwarded so it is not lost...
+    expect(result.error).toContain("I found three files but did not finish the analysis.");
+    // ...and the message names the limit explicitly so the model cannot mistake
+    // this for success.
+    expect(result.error).toContain("max turn limit");
+    expect(result.error).toContain("8 turns");
+    // The model-visible text is the error (non-empty), never an empty success.
+    expect(agentTool.formatResultForModel?.(result)).toBe(result.error);
+  });
+
+  it("REGRESSION: max_turns with an EMPTY finalText → ok:false, non-empty error, never a silent success", async () => {
+    // The original incident: 8 turns, empty finalText → parent saw an empty
+    // successful tool result and re-delegated blindly.
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "max_turns",
+          finalText: "",
+          truncated: false,
+          turns: 8,
+          toolCalls: 7,
+          durationMs: 42,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("max_turns");
+    // The error is non-empty and actionable even with no partial text.
+    expect(result.error).toContain("max turn limit");
+    expect(result.error).toContain("8 turns");
+    expect(result.error).toContain("not completed");
+    // The model-visible text is non-empty — a blind re-delegation would now
+    // see the limit message, not an empty success.
+    const modelText = agentTool.formatResultForModel?.(result) ?? "";
+    expect(modelText.length).toBeGreaterThan(0);
+  });
+
+  it("cancelled → ok:false, errorKind cancelled, never success", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "cancelled",
+          finalText: "",
+          truncated: false,
+          turns: 0,
+          toolCalls: 0,
+          durationMs: 1,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("cancelled");
+    expect(result.error).toContain("cancelled");
+  });
+
+  it("cancelled with a NON-empty partial preserves it in output but remains cancelled", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "cancelled",
+          finalText: "partial before cancellation",
+          truncated: false,
+          turns: 2,
+          toolCalls: 1,
+          durationMs: 3,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("cancelled");
+    expect(result.output?.finalText).toBe("partial before cancellation");
+  });
+
+  it("error → ok:false, no errorKind (falls back to dispatcher 'error')", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "error",
+          finalText: "boom",
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 1,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toBe("boom");
+  });
+
+  it("error with an EMPTY finalText → ok:false with a non-empty fallback", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "error",
+          finalText: "",
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 1,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toBe("Agent: the subagent failed.");
+  });
+
+  it("completed → ok:true (the only success)", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: "all done",
+          truncated: false,
+          turns: 2,
+          toolCalls: 1,
+          durationMs: 3,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.errorKind).toBeUndefined();
+    expect(agentTool.formatResultForModel?.(result)).toBe("all done");
+  });
+
+  it("completed with an EMPTY finalText remains the only successful empty result", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: "",
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 1,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.errorKind).toBeUndefined();
+    expect(agentTool.formatResultForModel?.(result)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // listAgentTypes-driven validation (slice 3.3.3, design §2.3): the Agent tool
 // delegates the set of runnable agent types to the port so md-profiles are
 // reachable and listed WITHOUT touching the frozen agentInputSchema.

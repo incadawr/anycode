@@ -2411,6 +2411,14 @@ body {
   color: var(--danger);
 }
 
+/* max_turns (TASK.44): a subagent that hit its turn budget — incomplete, not
+   failed. Warning tint, mirroring the internal substatus-max_turns glyph color
+   so the external badge and the internal sub-line speak one status vocabulary. */
+.tool-call-status-max_turns .tool-call-status-badge {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
 .tool-call-input {
   padding: var(--sp-2) var(--sp-3);
   background: var(--bg-inset);
