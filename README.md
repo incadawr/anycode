@@ -19,8 +19,13 @@ but require further practical validation before they are release-ready.
 Installers for macOS, Windows, and Linux are published on the
 [Releases](https://github.com/incadawr/anycode/releases) page.
 
-The Windows installer is not code-signed: SmartScreen reports an unknown
-publisher on first run, and you continue through **More info → Run anyway**.
+Alpha builds are not code-signed; signing arrives with the beta. Until then the
+operating system asks you to confirm the first launch:
+
+- **Windows** — SmartScreen reports an unknown publisher: **More info → Run
+  anyway**.
+- **macOS** — the first launch is refused: open **System Settings → Privacy &
+  Security**, find AnyCode near the bottom, and press **Open Anyway**.
 
 ## Repository layout
 
