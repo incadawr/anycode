@@ -175,6 +175,15 @@ class FakeAppServer implements CodexClient {
    * fake exactly: the first interrupt is accepted.
    */
   interruptRejections = 0;
+  /**
+   * `code`/message of every rejected `turn/interrupt` (TASK.38 W14): broken out
+   * so a test can prove the engine classifies a rejection by `code` ALONE —
+   * never by prose. Defaults reproduce the live wire error exactly (W12's
+   * fixture value and its code), so no existing test that leaves these alone
+   * observes any change.
+   */
+  interruptRejectionCode = -32600;
+  interruptRejectionMessage = "app-server request failed: no active turn to interrupt";
   private rejectedInterrupts = 0;
   private acceptedInterrupts = 0;
   account: unknown = { type: "chatgpt" };
@@ -318,7 +327,7 @@ class FakeAppServer implements CodexClient {
       if (this.acceptedInterrupts === 0 && this.rejectedInterrupts < this.interruptRejections) {
         this.rejectedInterrupts += 1;
         return Promise.reject(
-          Object.assign(new Error("app-server request failed: no active turn to interrupt"), { code: -32600 }),
+          Object.assign(new Error(this.interruptRejectionMessage), { code: this.interruptRejectionCode }),
         );
       }
       this.acceptedInterrupts += 1;
@@ -666,6 +675,74 @@ describe("CodexEngine — Stop (TASK.38 blocker)", () => {
     const lastInterrupt = server.calls.map((call) => call.method).lastIndexOf("turn/interrupt");
     expect(lastInterrupt).toBeLessThan(secondStart);
     expect(second.events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
+  });
+
+  // TASK.38 (W14): `isNoActiveTurnRejection` classifies ONLY on the numeric
+  // JSON-RPC `code` (codex-engine.ts ~line 133) — the message is free-form
+  // server prose and must never be pattern-matched. The two tests below pin
+  // that rule at the seams a code+text-matching fake could otherwise hide: the
+  // ORIGINAL retry tests above always pair -32600 with the exact "no active
+  // turn" text, so a regression to text-matching stays green against them.
+  it("retries an interrupt rejected with code -32600 even when its message names something else entirely", async () => {
+    const server = new FakeAppServer();
+    server.interruptRejections = 2;
+    // Deliberately NOT "no active turn": a text-matching classifier would fail
+    // to recognize this as the retryable rejection and give up after one try.
+    server.interruptRejectionMessage = "turn is not yet interruptible";
+    server.turnStartMode = "deferred";
+    const engine = new CodexEngine(server, THREAD, undefined, {
+      interruptRetryDelaysMs: [5, 10, 20],
+      postInterruptSettleMs: 200,
+    });
+    const controller = new AbortController();
+    const turn = drive(engine, "stop me instantly", controller.signal);
+    await tick();
+
+    controller.abort();
+    await tick();
+    server.releaseTurnStart();
+    await turn.done;
+
+    const interrupts = server.calls.filter((call) => call.method === "turn/interrupt");
+    expect(server.interrupts).toBe(3); // 2 rejected + 1 accepted — the code alone earns the retry.
+    expect(interrupts).toHaveLength(3);
+    expect(turn.events.at(-1)).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
+    expect(turn.events.some((event) => event.type === "error")).toBe(false);
+    expect(server.closeCount).toBe(0);
+  });
+
+  it("never retries an interrupt rejection whose message resembles \"no active turn\" but whose code is not -32600", async () => {
+    const server = new FakeAppServer();
+    // The prose a text-matching classifier would key on — paired with a code
+    // that is NOT -32600. A rejection budget of 1 means that IF a second
+    // (retried) attempt reaches the server, it is ACCEPTED: the retry itself
+    // is the tell that separates a text-matching classifier (wrongly retries,
+    // interrupts=2, turn cancelled) from a code-only one (never retries,
+    // interrupts=1, turn completes normally).
+    server.interruptRejectionCode = -32000;
+    server.interruptRejections = 1;
+    server.turnStartMode = "deferred";
+    const engine = new CodexEngine(server, THREAD, undefined, { interruptRetryDelaysMs: [5, 10, 20] });
+    const controller = new AbortController();
+    const turn = drive(engine, "stop me instantly", controller.signal);
+    await tick();
+
+    controller.abort();
+    await tick();
+    server.releaseTurnStart();
+    await tick();
+
+    // Longer than the whole retry schedule (5 + 10 + 20ms): a correct,
+    // code-only classifier sends exactly one interrupt and never retries a
+    // rejection whose code is not -32600, no matter what its message says.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    // The server never saw a Stop it was obliged to honor, so the turn runs to
+    // its own ordinary completion.
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(server.interrupts).toBe(1);
+    expect(turn.events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
   });
 });
 
