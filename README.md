@@ -14,6 +14,10 @@ Manual end-to-end validation has so far covered only Z.AI (GLM). Anthropic and
 custom Anthropic-compatible endpoints are supported in the configuration model,
 but require further practical validation before they are release-ready.
 
+## Demo
+
+![AnyCode showing an agent exploring and summarizing a codebase](docs/assets/anycode-demo.png)
+
 ## Download
 
 Installers for macOS, Windows, and Linux are published on the
