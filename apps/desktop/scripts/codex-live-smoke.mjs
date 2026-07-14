@@ -296,10 +296,14 @@ class SmokeFailure extends Error {
   }
 }
 
-let passCount = 0;
+// Counts DISTINCT steps, not pass() calls: step 8 reports twice (its own
+// checkpoint plus the shared assertZeroOrphans helper, which also runs as
+// step 10), which used to inflate the tally to "11/10 steps passed". A smoke
+// that miscounts its own steps is a smoke nobody can read a verdict off.
+const passedSteps = new Set();
 
 function pass(step, detail) {
-  passCount += 1;
+  passedSteps.add(step);
   console.log(`[step ${step}] PASS ${detail ?? ""}`.trimEnd());
 }
 
@@ -1420,7 +1424,7 @@ async function runStep10Teardown(ctx, failedStep) {
   }
 
   const verdict = failedStep === null ? "ALL GREEN" : `STOPPED at step ${failedStep}`;
-  console.log(`\n[codex-live-smoke] ${passCount}/${TOTAL_STEPS} steps passed — ${verdict}`);
+  console.log(`\n[codex-live-smoke] ${passedSteps.size}/${TOTAL_STEPS} steps passed — ${verdict}`);
   return failedStep;
 }
 
