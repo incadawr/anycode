@@ -9,9 +9,8 @@ AnyCode starts its public version line at **0.0.1 Alpha**.
 | Alpha | `0.0.x` | Active development; API, storage, and UI may change. |
 | Beta | `0.1.x` and later | Begins after the primary user journey stabilizes; changes are documented for users. |
 
-Version `0.0.1` must match in the root manifest and all workspace packages that
-ship together (`@anycode/desktop`, `@anycode/core`,
-`@anycode/cli`).
+The version must match in the root manifest and in every workspace package that
+ships together (`@anycode/desktop`, `@anycode/core`, `@anycode/cli`).
 
 ## Releasing a change
 
