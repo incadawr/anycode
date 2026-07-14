@@ -71,6 +71,19 @@ function projectTools(item: Record<string, unknown>): ToolProjection[] {
 /** A one-turn translator; callers must construct a fresh one for every native turn. */
 export class TurnTranslator {
   private readonly openText = new Set<string>();
+  /**
+   * Every native item id this translator has ever seen via `item/started`
+   * (W18, external review MEDIUM — REAL post-W17): a native `item/started`
+   * can be redelivered for an id already started. Pre-W17 that redelivery
+   * was a harmless no-op (`onItemStarted` never created a block at all);
+   * post-W17 it would append a SECOND `text_start`/`tool_call` for the same
+   * id, and every later patch keyed by that id
+   * (`text_delta`/`text_end`/`tool_execution_start`/`tool_result`) updates
+   * ALL blocks sharing it — a live duplicate card, not merely a wasted
+   * event. Never cleared: a completed item redelivering `item/started`
+   * afterwards must stay a no-op too.
+   */
+  private readonly startedItemIds = new Set<string>();
   /** Keyed by the SUB toolCallId (`itemId` for commandExecution, `itemId:index` for each fileChange file). */
   private readonly tools = new Map<string, ToolProjection>();
   /** One native item can own several sub-tool-calls (multi-file fileChange) — tracked to close them all together. */
@@ -127,6 +140,10 @@ export class TurnTranslator {
     const item = record(params.item);
     if (item === null || typeof item.id !== "string") return [];
     this.options.items?.record(item);
+    // Idempotency guard: a redelivered item/started for an id already
+    // started must create zero new blocks (see startedItemIds' own comment).
+    if (this.startedItemIds.has(item.id)) return [];
+    this.startedItemIds.add(item.id);
     if (item.type === "agentMessage") {
       this.openText.add(item.id);
       return [{ type: "text_start", id: item.id }];

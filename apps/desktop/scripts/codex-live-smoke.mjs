@@ -538,7 +538,8 @@ function step1BootstrapWorkspaces(ctx) {
   try {
     ctx.bootWs = mkdtempSync(join(tmpdir(), "anycode-codex-smoke-boot-"));
     ctx.codexWs = mkdtempSync(join(tmpdir(), "anycode-codex-smoke-ws-"));
-    ctx.sentinelAllow = join(ctx.codexWs, "smoke-allow.txt");
+    ctx.sentinelAllow1 = join(ctx.codexWs, "smoke-allow-1.txt");
+    ctx.sentinelAllow2 = join(ctx.codexWs, "smoke-allow-2.txt");
     ctx.sentinelDeny = join(ctx.codexWs, "smoke-deny.txt");
   } catch (err) {
     fail(1, `bootstrap error: ${err?.message ?? err}`);
@@ -595,8 +596,26 @@ async function step4CreateCodexSession(ctx) {
   // that, so the discriminating agentMessage -> commandExecution ->
   // agentMessage shape was structurally unreachable through this turn, and
   // the W6 invariant (30da16b) went unexercised live). The three-part form
-  // below forces two non-empty assistant_text blocks around the tool_call.
-  const allowPrompt = `First write one short sentence saying you are about to run the command. Then run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelAllow)}. After it finishes, write one short sentence confirming it ran. All three parts are required - do not skip the sentences.`;
+  // forces two non-empty assistant_text blocks around a tool_call — this
+  // prompt shape is a proven live compliance precedent (W16/W17).
+  //
+  // W18: step 7's structural predicate (capturePreStopSnapshot) needs TWO
+  // separate approved commands in this same turn, not one, to discriminate a
+  // live W6 rollback without depending on whether the model happens to think
+  // out loud (reasoning is empty on the wire, per this wave's diagnosis —
+  // see twoCommandFormGaps's own header comment). The prompt is
+  // explicit that the two `touch` invocations must stay SEPARATE tool calls
+  // (never joined with `&&`/`;`/a single shell line) — reusing one process
+  // step for both commands would collapse the very shape this scenario
+  // exists to produce.
+  const allowPrompt =
+    `First write one short sentence saying you are about to run the first command. ` +
+    `Then run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelAllow1)}. ` +
+    `After it finishes, write one short sentence between the two commands. ` +
+    `Then run exactly this second shell command and nothing else: touch ${JSON.stringify(ctx.sentinelAllow2)}. ` +
+    `These must be two separate commands - never combine them into a single shell invocation (no && or ; or one process substitution for both). ` +
+    `After the second command finishes, write one final short sentence confirming both ran. ` +
+    `All five parts are required - do not skip any sentence and do not merge the two commands.`;
   await apiAction(ctx, 4, "/start-screen/prompt", { text: allowPrompt });
   // Poll-retries on the real main-process readiness gate rather than a single
   // shot — see submitCodexDraftWhenReady's own header comment for why (the
@@ -614,15 +633,26 @@ async function step4CreateCodexSession(ctx) {
   pass(4, `codex session created (tab ${ctx.codexTabId}), engine picker round-tripped, initial ALLOW-flow prompt queued`);
 }
 
-// ── step 5: ALLOW the queued command approval, verify the sentinel file landed on disk ──
+// ── step 5: ALLOW both queued command approvals (W18: the step-4 prompt now
+// runs two separate commands in one turn), verify BOTH sentinel files landed
+// on disk ──
 
 async function step5AllowCommand(ctx) {
   await waitUntilTabLane(ctx, 5, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS, "B1 (TASK.38 approval-bridge, cut §2(c))");
   await apiAction(ctx, 5, `/tabs/${ctx.codexTabId}/permission`, { behavior: "allow" });
+
+  // Second approval round: the turn is not done after the first accept — it
+  // is still running toward the second command's approval request. Reuses
+  // the same waitUntilTabLane({permissionPending:true}) paradigm as the
+  // first round rather than inventing a new one.
+  await waitUntilTabLane(ctx, 5, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS, "B1 (TASK.38 approval-bridge, cut §2(c))");
+  await apiAction(ctx, 5, `/tabs/${ctx.codexTabId}/permission`, { behavior: "allow" });
+
   await waitUntilTabLane(ctx, 5, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS, "B1 (TASK.38 accept mapping, cut §2(c))");
 
-  assertLane(5, existsSync(ctx.sentinelAllow), `allowed command's sentinel file was not created: ${ctx.sentinelAllow}`, "B1 (TASK.38 accept -> {decision:\"accept\"} mapping, cut §2(c))");
-  pass(5, `command approval ALLOWED — sentinel file confirmed on disk: ${ctx.sentinelAllow}`);
+  assertLane(5, existsSync(ctx.sentinelAllow1), `first allowed command's sentinel file was not created: ${ctx.sentinelAllow1}`, "B1 (TASK.38 accept -> {decision:\"accept\"} mapping, cut §2(c))");
+  assertLane(5, existsSync(ctx.sentinelAllow2), `second allowed command's sentinel file was not created: ${ctx.sentinelAllow2}`, "B1 (TASK.38 accept -> {decision:\"accept\"} mapping, cut §2(c))");
+  pass(5, `both command approvals ALLOWED — sentinel files confirmed on disk: ${ctx.sentinelAllow1}, ${ctx.sentinelAllow2}`);
 }
 
 // ── step 6: send a second prompt, DENY its command approval, verify the sentinel file was NOT created ──
@@ -676,7 +706,6 @@ async function capturePreStopSnapshot(ctx, step) {
   const state = await getTabState(ctx, step, ctx.codexTabId);
   const transcript = Array.isArray(state?.transcript) ? state.transcript : [];
   const kindOrder = normalizedKindOrder(transcript);
-  const reasoningCount = transcript.filter((b) => b?.kind === "reasoning").length;
 
   // The scenario must itself elicit assistant_text -> tool_call ->
   // assistant_text before any W6/W8 regression can be told apart from a
@@ -690,15 +719,26 @@ async function capturePreStopSnapshot(ctx, step) {
     hasAdjacentAssistantToolAssistant(kindOrder),
     `scenario did not produce the discriminating form (assistant_text -> tool_call -> assistant_text) in the ALLOW turn; normalized kind order: [${kindOrder.join(", ")}]`,
   );
-  // Live-only discriminator (this wave's spec, fact 16): the ALLOW turn must
-  // contain at least one reasoning block, or a live W6 rollback cannot be
-  // told apart from a healthy transcript here — reasoning is what pushes the
-  // shadow log's positionInTurn past native.length, which is what would sink
-  // the tool_call to the turn's tail if the W6 anchor (30da16b) regressed.
+  // W18: the reasoning-count discriminator this replaces was diagnosed WRONG
+  // by the architect — reasoning is empty on the wire for this model/version
+  // (`summary:[]`, `content:[]` on both item/started and item/completed; the
+  // rollout logs carry only `encrypted_content`, zero `item/reasoning/*`
+  // deltas), so ">=1 reasoning block" could never pass live regardless of
+  // engine health, and normalizedKindOrder already strips "reasoning" out of
+  // the very order this predicate inspects — it could not have discriminated
+  // a W6 rollback even when non-vacuous. The structural replacement measures
+  // the layer that actually carries the W6 anchor risk (codex-engine.ts's
+  // nativeVisibleCompleted vs. native.length, see twoCommandFormGaps):
+  // the step-4 prompt (W18) now runs TWO separate approved commands with
+  // narrative text before/between/after them, so a live W6 rollback (which
+  // sinks the SECOND command to the turn's tail once its anchor reaches
+  // native.length) is visible here as a form gap, independent of whether the
+  // model chose to reason at all.
+  const formGaps = twoCommandFormGaps(kindOrder);
   assert(
     step,
-    reasoningCount >= 1,
-    `pre-Stop transcript shows zero reasoning blocks in the ALLOW turn — a live run needs >=1 reasoning block to discriminate a W6 rollback (positionInTurn vs native.length); normalized kind order: [${kindOrder.join(", ")}]`,
+    formGaps.length === 0,
+    `ALLOW turn did not produce the two-command discriminating form (assistant_text, tool_call, assistant_text, tool_call, assistant_text) — missing: ${formGaps.join("; ")}; normalized kind order: [${kindOrder.join(", ")}]`,
   );
 
   ctx.preStopKindOrder = kindOrder;
@@ -833,17 +873,36 @@ function transcriptDoesNotOpenOnTool(blocks) {
 // an empty agentMessage server-side, but a local live turn can still emit
 // one transiently before the server round-trip settles). Shape comparisons
 // below are noise-blind to `reasoning` (narration, not part of the
-// discriminating shape) and to EMPTY `assistant_text` blocks — everything
-// else, including block ORDER, is preserved exactly. ──
+// discriminating shape), to `loop_end` (W18 — see normalizedKindOrder's own
+// comment), and to EMPTY `assistant_text` blocks — everything else,
+// including block ORDER, is preserved exactly. ──
 
 function isBlankText(block) {
   const combined = `${block?.text ?? ""}${block?.modelText ?? ""}`.trim();
   return combined.length === 0;
 }
 
+/**
+ * W18: also strips `loop_end` blocks. A live completed turn appends its own
+ * `loop_end` footer block (store.ts:1461-1469), one per turn — this smoke
+ * runs several turns (steps 4/5/6/7) before step 9's resume, so the live
+ * pre-Stop transcript step 7 snapshots carries multiple `loop_end` entries.
+ * The resume-hydration path (history-projection.ts's `projectHistoryToBlocks`,
+ * store.ts:830-887) builds ONLY user_text/assistant_text/tool_call blocks
+ * from `thread/read` by construction — it never emits `loop_end` at all, native
+ * or shadow-sourced. Left unfiltered, step 9's pre-Stop-vs-post-resume
+ * kind-order comparison would red on a HEALTHY run purely from this
+ * structural asymmetry, falsely indicting the W6/W8 anchor this smoke
+ * actually exists to police. Filtering `loop_end` out of BOTH sides of that
+ * comparison (one function, reused symmetrically) removes the false
+ * mismatch without weakening what step 9 checks: the two-command
+ * discriminating shape from twoCommandFormGaps is untouched by
+ * this filter, since it never inspects `loop_end` either.
+ */
 function normalizedKindOrder(blocks) {
   return blocks
     .filter((b) => b?.kind !== "reasoning")
+    .filter((b) => b?.kind !== "loop_end")
     .filter((b) => b?.kind !== "assistant_text" || !isBlankText(b))
     .map((b) => b?.kind ?? "?");
 }
@@ -866,6 +925,50 @@ function hasAdjacentAssistantToolAssistant(kindOrder) {
     }
   }
   return false;
+}
+
+/**
+ * W18: the two-command ALLOW turn's discriminating shape — replaces the
+ * architect-retired ">=1 reasoning block" check (reasoning is empty on the
+ * wire for this model/version; see capturePreStopSnapshot's comment). True
+ * iff the normalized kind order contains the subsequence assistant_text,
+ * tool_call, assistant_text, tool_call, assistant_text: EXACTLY two
+ * "tool_call" entries, with a non-blank assistant_text before the first,
+ * strictly BETWEEN the two, and strictly AFTER the second. The trailing
+ * assistant_text is load-bearing, not an optional flourish: without it, a
+ * live W6 rollback that sinks the second tool_call to the turn's tail (its
+ * shadow-log anchor reaching native.length, codex-engine.ts's
+ * `nativeVisibleCompleted`) produces a kind order — [..., tool_call,
+ * tool_call] — that is indistinguishable from a healthy run with no trailing
+ * reply at all, unless a reply after the second command is required to
+ * exist in the first place.
+ *
+ * Returns the list of missing parts (empty = the form is fully present) so
+ * the caller can fail closed with a specific diagnosis rather than a bare
+ * boolean — no "harness gap, not a production defect" style excuse: the W17
+ * incident was exactly that claim turning out to be false.
+ */
+function twoCommandFormGaps(kindOrder) {
+  const gaps = [];
+  const toolIndices = [];
+  kindOrder.forEach((kind, index) => {
+    if (kind === "tool_call") toolIndices.push(index);
+  });
+  if (toolIndices.length !== 2) {
+    gaps.push(`expected exactly 2 tool_call blocks, found ${toolIndices.length}`);
+    return gaps;
+  }
+  const [firstTool, secondTool] = toolIndices;
+  if (!kindOrder.slice(0, firstTool).includes("assistant_text")) {
+    gaps.push("no assistant_text before the first tool_call");
+  }
+  if (!kindOrder.slice(firstTool + 1, secondTool).includes("assistant_text")) {
+    gaps.push("no assistant_text strictly between the two tool_call blocks");
+  }
+  if (!kindOrder.slice(secondTool + 1).includes("assistant_text")) {
+    gaps.push("no assistant_text strictly after the second tool_call (missing trailing summary)");
+  }
+  return gaps;
 }
 
 // ── step 9: resume the codex session, check the transcript ──
@@ -1053,7 +1156,8 @@ async function run() {
     codexVersion: rawVersion,
     bootWs: null,
     codexWs: null,
-    sentinelAllow: null,
+    sentinelAllow1: null,
+    sentinelAllow2: null,
     sentinelDeny: null,
     port: undefined,
     token: undefined,

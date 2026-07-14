@@ -1804,3 +1804,129 @@ describe("CodexEngine + resumeNativeCodexSession — real interleave composition
     },
   );
 });
+
+/**
+ * W18: the same composition discipline as the W6 class-killer above (the
+ * REAL writer, over a REAL notification stream, merged through the REAL
+ * `resumeNativeCodexSession` -> `projectCodexHistory` -> `mergeTurnItems`
+ * path — no hand-authored `positionInTurn`), but for a turn with TWO
+ * shadow-logged commands and ZERO reasoning items anywhere. This proves the
+ * W6 anchor (codex-engine.ts's `nativeVisibleCompleted`) holds the order on
+ * its own arithmetic, not on a reasoning item's dropped-completion offset
+ * happening to save it — the live model's choice to think out loud or not
+ * must never be load-bearing for transcript order.
+ *
+ * RED-first (verified by hand, then reverted): a local revert of
+ * codex-engine.ts:933's anchor expression from `nativeVisibleCompleted` back
+ * to `seqInTurn` sinks the second command to the tail. With zero dropped
+ * items in this turn, `positionInTurn` and `seqInTurn` coincide for the
+ * FIRST command (both count 1 prior completion — A1), but diverge for the
+ * SECOND: the fix anchors C2 at `nativeVisibleCompleted` 2 (A1+A2 native
+ * completions), while the revert anchors it at `seqInTurn` 3 (A1+C1+A2 — EVERY
+ * completion, shadow included) — 3 >= native.length (3), so the merge walk
+ * never places it before any native item and it falls into the orphan tail:
+ * [A1, C1, A2, A3, C2] instead of [A1, C1, A2, C2, A3].
+ */
+describe("CodexEngine + resumeNativeCodexSession — resume-merge holds the W6 order with ZERO reasoning items (W18)", () => {
+  const SYNTH_THREAD_ID = "w18-synthetic-thread";
+  const SYNTH_TURN_ID = "w18-synthetic-turn";
+
+  function agentMessageNotifications(id: string, text: string): JsonRpcNotification[] {
+    return [
+      { method: "item/started", params: { threadId: SYNTH_THREAD_ID, turnId: SYNTH_TURN_ID, item: { type: "agentMessage", id } } },
+      { method: "item/completed", params: { threadId: SYNTH_THREAD_ID, turnId: SYNTH_TURN_ID, item: { type: "agentMessage", id, text } } },
+    ];
+  }
+
+  function commandNotifications(id: string, command: string): JsonRpcNotification[] {
+    return [
+      { method: "item/started", params: { threadId: SYNTH_THREAD_ID, turnId: SYNTH_TURN_ID, item: { type: "commandExecution", id, command } } },
+      {
+        method: "item/completed",
+        params: {
+          threadId: SYNTH_THREAD_ID,
+          turnId: SYNTH_TURN_ID,
+          item: { type: "commandExecution", id, command, status: "completed", aggregatedOutput: `${id}-out`, durationMs: 0 },
+        },
+      },
+    ];
+  }
+
+  it("reproduces [A1, C1, A2, C2, A3] from a turn with two commands and no reasoning items at all", async () => {
+    // Step 1 — the REAL writer over a REAL (synthetic, but wire-shaped)
+    // notification stream: agentMessage, command, agentMessage, command,
+    // agentMessage — no reasoning item anywhere in this turn.
+    const liveStream: JsonRpcNotification[] = [
+      ...agentMessageNotifications("a1", "A1"),
+      ...commandNotifications("c1", "echo c1"),
+      ...agentMessageNotifications("a2", "A2"),
+      ...commandNotifications("c2", "echo c2"),
+      ...agentMessageNotifications("a3", "A3"),
+      { method: "turn/completed", params: { threadId: SYNTH_THREAD_ID, turn: { id: SYNTH_TURN_ID, status: "completed" } } },
+    ];
+    const writeShadowLog = new RecordingShadowLog();
+    const writer = new CodexEngine(
+      new ReplayClient(liveStream, SYNTH_TURN_ID),
+      SYNTH_THREAD_ID,
+      undefined,
+      undefined,
+      undefined,
+      writeShadowLog,
+      0,
+    );
+    for await (const _event of writer.runTurn("run two independent commands", { signal: new AbortController().signal })) {
+      // Draining is the point — only the shadow-log side effect matters here.
+    }
+    expect(writeShadowLog.writes).toHaveLength(2);
+
+    // Step 2 — the REAL merge path, fed a `thread/read` result with the
+    // NATIVE side only (3 agentMessage items — thread/read never persists
+    // commandExecution, cut §2(e) L4) plus the shadow rows the REAL writer
+    // above just produced.
+    const server = new FakeAppServer();
+    server.threadReadResult = {
+      thread: {
+        id: "persisted-thread",
+        turns: [
+          {
+            id: "resume-turn-0",
+            startedAt: 0,
+            items: [
+              { type: "agentMessage", id: "a1", text: "A1" },
+              { type: "agentMessage", id: "a2", text: "A2" },
+              { type: "agentMessage", id: "a3", text: "A3" },
+            ],
+          },
+        ],
+      },
+    };
+    const resumeShadowLog = new RecordingShadowLog();
+    resumeShadowLog.listResult = writeShadowLog.writes.map((write) => write.item);
+    const connected = await resumeNativeCodexSession(
+      server,
+      "/work",
+      "persisted-thread",
+      undefined,
+      undefined,
+      undefined,
+      resumeShadowLog,
+    );
+
+    const sequence = connected.engine.historyItems().map((item) => {
+      if (item.message.role !== "assistant") return item.message.role;
+      const part = item.message.content[0];
+      return part?.type === "tool_call" ? "assistant:tool_call" : "assistant:text";
+    });
+
+    // [A1, C1, A2, C2, A3] — each "C" expands to its own tool_call/tool_result pair.
+    expect(sequence).toEqual([
+      "assistant:text",
+      "assistant:tool_call",
+      "tool",
+      "assistant:text",
+      "assistant:tool_call",
+      "tool",
+      "assistant:text",
+    ]);
+  });
+});
