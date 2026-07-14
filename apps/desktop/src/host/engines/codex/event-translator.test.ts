@@ -400,3 +400,44 @@ describe("TurnTranslator — live wire: tool_call precedes tool_execution_start 
     expect(result?.outcome).toMatchObject({ toolCallId: toolCall.toolCall.id, status: "denied" });
   });
 });
+
+/**
+ * W18 (external review MEDIUM, REAL post-W17): a redelivered `item/started`
+ * for an id this translator has already started must create ZERO new
+ * blocks. Pre-W17 the redelivery was a harmless no-op (onItemStarted never
+ * created anything); post-W17 it would append a SECOND tool_call/text_start
+ * for the same id — a live duplicate card, since the store appends
+ * tool_call without dedup and every later patch keyed by that id updates
+ * ALL blocks sharing it.
+ */
+describe("TurnTranslator — onItemStarted redelivery is idempotent (W18)", () => {
+  it("a re-delivered commandExecution item/started creates ZERO additional tool_call/tool_execution_start events", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const startNotification: JsonRpcNotification = {
+      method: "item/started",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "commandExecution", id: "x", command: "echo hi" } },
+    };
+    const first = translator.onNotification(startNotification);
+    const redelivered = translator.onNotification(startNotification);
+
+    expect(types(first)).toEqual(["tool_call", "tool_execution_start"]);
+    // The redelivery is a pure no-op — not a second tool_call/tool_execution_start pair.
+    expect(redelivered).toEqual([]);
+
+    const all = [...first, ...redelivered];
+    expect(all.filter((event) => event.type === "tool_call")).toHaveLength(1);
+  });
+
+  it("a re-delivered agentMessage item/started creates ZERO additional text_start events", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const startNotification: JsonRpcNotification = {
+      method: "item/started",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: "agentMessage", id: "message" } },
+    };
+    const first = translator.onNotification(startNotification);
+    const redelivered = translator.onNotification(startNotification);
+
+    expect(first).toEqual([{ type: "text_start", id: "message" }]);
+    expect(redelivered).toEqual([]);
+  });
+});
