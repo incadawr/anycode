@@ -420,40 +420,62 @@ async function getTabState(ctx, step, tabId) {
 // with `not_ready`, rendered as this exact prose by
 // `SessionPicker.tsx`'s `describeCreateTabFailure`.
 //
+// The SAME probe re-runs from scratch after every relaunch (main/index.ts
+// re-kicks it at boot, `codexReady` resets to false until it resolves again),
+// so step 9's post-relaunch resume (`POST /tabs {kind:"resume"}` ->
+// tab-ipc.ts's `handleCreate`) goes through the identical
+// `manager.canSpawn("codex")` check and can race it exactly like step 4's
+// create does (W20) — same cause, same fix, two call sites below.
+//
 // The automation snapshot has no read-only signal for this: `GET
 // /start-screen`'s `availableEngines` (automation.ts's `startScreenState`) is
 // deliberately the STATIC compiled-in engine catalog (`[...ENGINE_IDS]`),
 // not draft-scoped and not readiness-gated (codex-fixes TASK.42 cut §3.7) —
 // it says "this build knows how to speak Codex", never "Codex is ready right
 // now". `GET /settings` and `GET /state` carry no codex-onboarding field
-// either. Lacking a proper readiness read, this polls the one thing that DOES
-// reflect the real main-process gate: `POST /start-screen/submit` itself,
-// which resolves through the SAME `manager.canSpawn("codex")` check as any
-// other create path. A `not_ready` refusal leaves the draft untouched by
-// design (start-session.ts's own doc comment, §3-D8), so retrying it is
-// side-effect-free. Any OTHER failure message is treated as a real,
-// non-transient failure and reported immediately — only the exact known
-// not-ready prose is retried.
+// either. Lacking a proper readiness read, both call sites below poll the one
+// thing that DOES reflect the real main-process gate: the create/resume
+// endpoint itself, which resolves through the SAME `manager.canSpawn("codex")`
+// check either way. A `not_ready` refusal leaves its target (draft or
+// session) untouched by design (start-session.ts's own doc comment, §3-D8;
+// tab-ipc.ts's `handleCreate` resume branch checks readiness before doing
+// anything else), so retrying it is side-effect-free. Any OTHER failure is
+// treated as a real, non-transient failure and reported immediately — only
+// the exact known not-ready shape is retried.
 const CODEX_DOCTOR_WATCHDOG_MS = 20_000; // mirrors apps/desktop/src/shared/codex-timeouts.ts
 const CODEX_READY_POLL_TIMEOUT_MS = CODEX_DOCTOR_WATCHDOG_MS + 10_000;
 const CODEX_READY_POLL_INTERVAL_MS = 500;
 const CODEX_NOT_READY_MESSAGE = "Configure a provider (API key + model) before opening a tab.";
 
-async function submitCodexDraftWhenReady(ctx, step) {
-  const deadline = Date.now() + CODEX_READY_POLL_TIMEOUT_MS;
+/**
+ * Polls `send()` until its response no longer matches `isRetryable`, or until
+ * `deadlineMs` from now elapses — whichever comes first. Shared by both
+ * codex-doctor-race call sites (step 4's create, step 9's post-relaunch
+ * resume): each supplies its own narrow `isRetryable` so a real, non-transient
+ * rejection still fails on the very first attempt instead of being retried
+ * away.
+ */
+async function pollUntilNotRetryable(deadlineMs, intervalMs, send, isRetryable) {
+  const deadline = Date.now() + deadlineMs;
   let attempts = 0;
-  let submitted;
+  let response;
   for (;;) {
     attempts += 1;
-    submitted = await apiOk(ctx, step, "POST", "/start-screen/submit", {});
-    if (submitted?.ok === true) {
-      return submitted;
+    response = await send();
+    if (!isRetryable(response) || Date.now() >= deadline) {
+      return { response, attempts };
     }
-    if (submitted?.message !== CODEX_NOT_READY_MESSAGE || Date.now() >= deadline) {
-      break;
-    }
-    await sleep(CODEX_READY_POLL_INTERVAL_MS);
+    await sleep(intervalMs);
   }
+}
+
+async function submitCodexDraftWhenReady(ctx, step) {
+  const { response: submitted, attempts } = await pollUntilNotRetryable(
+    CODEX_READY_POLL_TIMEOUT_MS,
+    CODEX_READY_POLL_INTERVAL_MS,
+    () => apiOk(ctx, step, "POST", "/start-screen/submit", {}),
+    (r) => r?.message === CODEX_NOT_READY_MESSAGE,
+  );
   assertLane(
     step,
     submitted?.ok === true,
@@ -461,6 +483,30 @@ async function submitCodexDraftWhenReady(ctx, step) {
     "B2-host (TASK.39 thread/start engine-aware wiring, cut §5.3)",
   );
   return submitted;
+}
+
+/**
+ * Same codex-doctor race as `submitCodexDraftWhenReady` above, hitting after
+ * step 8's relaunch restarts the probe from scratch: polls the resume
+ * endpoint itself and retries ONLY the exact `{ok:false, reason:"not_ready"}`
+ * shape tab-ipc.ts's `handleCreate` returns from the same
+ * `manager.canSpawn("codex")` check. Any other rejection — `session_not_found`,
+ * `already_open`, or any other shape — is a real failure and is reported on
+ * the first attempt, not masked by a retry.
+ */
+async function resumeCodexSessionWhenReady(ctx, step, sessionId) {
+  const { response: resumed, attempts } = await pollUntilNotRetryable(
+    CODEX_READY_POLL_TIMEOUT_MS,
+    CODEX_READY_POLL_INTERVAL_MS,
+    () => apiOk(ctx, step, "POST", "/tabs", { kind: "resume", sessionId }),
+    (r) => r?.ok === false && r?.reason === "not_ready",
+  );
+  assert(
+    step,
+    resumed?.ok === true,
+    `resume of session ${sessionId} rejected after ${attempts} attempt(s) polling up to ${CODEX_READY_POLL_TIMEOUT_MS}ms for main's async codex-doctor readiness gate (main/index.ts codexReady, main/codex-doctor.ts) — server said: ${JSON.stringify(resumed)}`,
+  );
+  return resumed;
 }
 
 async function saveScreenshot(ctx, name) {
@@ -1059,8 +1105,7 @@ function selfCheckTwoCommandFormGaps() {
 // ── step 9: resume the codex session, check the transcript ──
 
 async function step9ResumeAndCheckTranscript(ctx) {
-  const resumed = await apiOk(ctx, 9, "POST", "/tabs", { kind: "resume", sessionId: ctx.codexSessionId });
-  assertLane(9, resumed?.ok === true, `resume of session ${ctx.codexSessionId} was rejected: ${JSON.stringify(resumed)}`, "B1/B2 (thread/resume wiring)");
+  const resumed = await resumeCodexSessionWhenReady(ctx, 9, ctx.codexSessionId);
   const resumedTabId = resumed.tabId;
 
   await waitUntilTabLane(ctx, 9, resumedTabId, { connection: "ready" }, TURN_WAIT_TIMEOUT_MS, "B1/B2 (thread/resume wiring)");
