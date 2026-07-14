@@ -418,6 +418,113 @@ describe("executeToolCall — timeout & abort", () => {
     }
   });
 
+  it("aborts a timed-out terminal-control handler but stays pending until it settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let handlerSignal: AbortSignal | undefined;
+      let settle!: (result: ToolResult) => void;
+      const tool = makeTool({
+        metadata: { ...baseMetadata, terminalControl: true, timeoutMs: 500 },
+        handler: (_input, ctx: ToolContext) => {
+          handlerSignal = ctx.abortSignal;
+          return new Promise<ToolResult>((resolve) => {
+            settle = resolve;
+          });
+        },
+      });
+      const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+      let completed = false;
+      const pending = executeToolCall(ctx, call()).then((value) => {
+        completed = true;
+        return value;
+      });
+
+      await vi.advanceTimersByTimeAsync(500 + DISPATCH_TIMEOUT_GRACE_MS);
+
+      expect(handlerSignal?.aborted).toBe(true);
+      expect(handlerSignal?.reason).toBe("timeout");
+      expect(completed).toBe(false);
+
+      settle({ ok: false, errorKind: "cancelled", error: "entry cancelled before commit" });
+      await expect(pending).resolves.toMatchObject({ status: "timed_out" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets terminal-control success win when the commit settles after the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let settle!: (result: ToolResult) => void;
+      const tool = makeTool({
+        metadata: { ...baseMetadata, terminalControl: true, timeoutMs: 500 },
+        handler: () => new Promise<ToolResult>((resolve) => {
+          settle = resolve;
+        }),
+      });
+      const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+      const pending = executeToolCall(ctx, call());
+
+      await vi.advanceTimersByTimeAsync(500 + DISPATCH_TIMEOUT_GRACE_MS);
+      settle({ ok: true, output: { committed: true } });
+
+      await expect(pending).resolves.toMatchObject({
+        status: "success",
+        result: { ok: true, output: { committed: true } },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("maps terminal-control pre-commit failure to cancelled when the parent aborts", async () => {
+    const controller = new AbortController();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const tool = makeTool({
+      metadata: { ...baseMetadata, terminalControl: true },
+      handler: (_input, ctx: ToolContext) => new Promise<ToolResult>((resolve) => {
+        markStarted();
+        ctx.abortSignal.addEventListener("abort", () => {
+          resolve({ ok: false, errorKind: "cancelled", error: "entry cancelled before commit" });
+        }, { once: true });
+      }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const pending = executeToolCall(ctx, call(), controller.signal);
+
+    await started;
+    controller.abort("user-cancel");
+
+    await expect(pending).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("lets terminal-control success win when the parent aborts after commit starts", async () => {
+    const controller = new AbortController();
+    let markStarted!: () => void;
+    let settle!: (result: ToolResult) => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const tool = makeTool({
+      metadata: { ...baseMetadata, terminalControl: true },
+      handler: () => new Promise<ToolResult>((resolve) => {
+        settle = resolve;
+        markStarted();
+      }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const pending = executeToolCall(ctx, call(), controller.signal);
+
+    await started;
+    controller.abort("user-cancel");
+    settle({ ok: true, output: { committed: true } });
+
+    await expect(pending).resolves.toMatchObject({ status: "success" });
+  });
+
   it("classifies a parent-signal abort during handler execution as cancelled", async () => {
     const controller = new AbortController();
     const tool = makeTool({

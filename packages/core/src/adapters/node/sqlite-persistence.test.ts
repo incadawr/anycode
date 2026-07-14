@@ -151,6 +151,7 @@ describe("SqlitePersistenceAdapter", () => {
           ownedByAnyCode: true,
         },
         continuationPending: true,
+        worktreeExitNoticePending: true,
         worktreeTransition: {
           origin: "tool" as const,
           kind: "enter_worktree" as const,
@@ -174,6 +175,47 @@ describe("SqlitePersistenceAdapter", () => {
       expect(created).toEqual({ ...input, createdAt: 1_000, updatedAt: 1_000 });
       expect(await adapter.getSession("s-wt")).toEqual(created);
       expect(await adapter.listSessions({ workspace: input.workspace })).toEqual([created]);
+
+      await adapter.touchSession("s-wt", { worktreeExitNoticePending: false });
+      expect((await adapter.getSession("s-wt"))?.worktreeExitNoticePending).toBeUndefined();
+    });
+
+    it("round-trips the exact cleanup branch through create/get/list", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const input = {
+        id: "s-cleanup-branch",
+        workspace: "/repo",
+        continuationPending: true,
+        continuationMode: "none" as const,
+        worktreeCleanup: {
+          path: "/repo/.anycode/worktrees/task-5",
+          mode: "auto" as const,
+          ownedByAnyCode: true,
+          branch: "anycode-wt/task-5",
+        },
+        model: "m",
+        mode: "build" as const,
+      };
+
+      const created = await adapter.createSession(input);
+
+      expect(created).toEqual({ ...input, createdAt: 1_000, updatedAt: 1_000 });
+      expect(await adapter.getSession(input.id)).toEqual(created);
+      expect(await adapter.listSessions({ workspace: input.workspace })).toEqual([created]);
+
+      vi.setSystemTime(2_000);
+      await adapter.touchSession(input.id, {
+        worktreeCleanup: {
+          path: input.worktreeCleanup.path,
+          mode: input.worktreeCleanup.mode,
+          ownedByAnyCode: input.worktreeCleanup.ownedByAnyCode,
+        },
+      });
+      expect((await adapter.getSession(input.id))?.worktreeCleanup).toEqual({
+        path: input.worktreeCleanup.path,
+        mode: input.worktreeCleanup.mode,
+        ownedByAnyCode: input.worktreeCleanup.ownedByAnyCode,
+      });
     });
 
     it("atomically enters and exits a worktree, clearing false/default metadata on exit", async () => {
@@ -221,6 +263,7 @@ describe("SqlitePersistenceAdapter", () => {
           path: "/repo/.anycode/worktrees/task-5",
           mode: "auto",
           ownedByAnyCode: true,
+          branch: "anycode-wt/task-5",
         },
       });
       expect(await adapter.getSession("s1")).toEqual({
@@ -231,6 +274,7 @@ describe("SqlitePersistenceAdapter", () => {
           path: "/repo/.anycode/worktrees/task-5",
           mode: "auto",
           ownedByAnyCode: true,
+          branch: "anycode-wt/task-5",
         },
         model: "m",
         mode: "build",
@@ -279,11 +323,109 @@ describe("SqlitePersistenceAdapter", () => {
         projectRoot: "/repo",
         continuationPending: true,
         continuationMode: "none",
-        worktreeCleanup: { path: reserved, mode: "auto", ownedByAnyCode: true },
+        worktreeCleanup: {
+          path: reserved,
+          mode: "auto",
+          ownedByAnyCode: true,
+          branch: "anycode-wt/reserved",
+        },
       });
       const reservations = await Promise.all([reserve("claim-a"), reserve("claim-b")]);
       expect(reservations.filter(Boolean)).toHaveLength(1);
-      expect((await adapter.listSessions()).filter((meta) => meta.worktreeCleanup?.path === reserved)).toHaveLength(1);
+      expect((await adapter.listSessions()).filter((meta) => meta.worktreeCleanup?.path === reserved)).toEqual([
+        expect.objectContaining({
+          worktreeCleanup: {
+            path: reserved,
+            mode: "auto",
+            ownedByAnyCode: true,
+            branch: "anycode-wt/reserved",
+          },
+        }),
+      ]);
+    });
+
+    it("does not let one session overwrite its own pending cleanup ledger with a retry", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "self", workspace: "/repo", model: "m", mode: "build" });
+      const first = "/repo/.anycode/worktrees/first";
+      const second = "/repo/.anycode/worktrees/second";
+      const reserve = (target: string) => adapter.claimWorktree("self", target, {
+        projectRoot: "/repo",
+        continuationPending: true,
+        continuationMode: "none",
+        worktreeCleanup: {
+          path: target,
+          mode: "auto",
+          ownedByAnyCode: true,
+          branch: `anycode-wt/${target.endsWith("first") ? "first" : "second"}`,
+        },
+      });
+
+      await expect(reserve(first)).resolves.toBe(true);
+      await expect(reserve(second)).resolves.toBe(false);
+      expect((await adapter.getSession("self"))?.worktreeCleanup).toEqual({
+        path: first,
+        mode: "auto",
+        ownedByAnyCode: true,
+        branch: "anycode-wt/first",
+      });
+
+      // The intended same-target creation-intent -> active transition remains
+      // legal and atomically clears that exact cleanup reservation.
+      await expect(adapter.claimWorktree("self", first, {
+        workspace: first,
+        projectRoot: "/repo",
+        worktree: {
+          id: "first",
+          path: first,
+          branch: "anycode-wt/first",
+          baseRef: "HEAD",
+          ownedByAnyCode: true,
+        },
+        continuationPending: true,
+        worktreeCleanup: null,
+      })).resolves.toBe(true);
+      expect((await adapter.getSession("self"))?.worktree).toMatchObject({ path: first, branch: "anycode-wt/first" });
+      expect((await adapter.getSession("self"))?.worktreeCleanup).toBeUndefined();
+    });
+
+    it("treats an unconfirmed exit transition as an atomic path claim", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const target = "/repo/.anycode/worktrees/pending-exit";
+      const worktree = {
+        id: "pending-exit",
+        path: target,
+        branch: "anycode-wt/pending-exit",
+        baseRef: "HEAD",
+        ownedByAnyCode: true,
+      };
+      await adapter.createSession({
+        id: "exiting",
+        workspace: "/repo",
+        projectRoot: "/repo",
+        continuationPending: true,
+        continuationMode: "none",
+        worktreeTransition: {
+          origin: "chrome",
+          kind: "exit_worktree",
+          projectRoot: "/repo",
+          fromWorkspace: target,
+          toWorkspace: "/repo",
+          worktree,
+          cleanup: "keep",
+        },
+        model: "m",
+        mode: "build",
+      });
+      await adapter.createSession({ id: "contender", workspace: "/repo", model: "m", mode: "build" });
+
+      await expect(adapter.claimWorktree("contender", target, {
+        workspace: target,
+        projectRoot: "/repo",
+        worktree,
+        continuationPending: true,
+      })).resolves.toBe(false);
+      expect((await adapter.getSession("contender"))?.worktree).toBeUndefined();
     });
   });
 
@@ -381,7 +523,7 @@ describe("SqlitePersistenceAdapter", () => {
     await adapter.close();
   });
 
-  it("migrates v5 sessions through worktree schema v7 and is idempotent across opens", async () => {
+  it("migrates v5 sessions through worktree/notice/cleanup-branch schema v9 and is idempotent across opens", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v5-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const old = new DatabaseSync(dbPath);
@@ -415,10 +557,18 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(
-      migrated.prepare("SELECT project_root, continuation_pending FROM sessions WHERE id = ?").get("legacy-v5"),
-    ).toEqual({ project_root: "/repo", continuation_pending: 0 });
+      migrated.prepare(
+        `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
+         FROM sessions WHERE id = ?`,
+      ).get("legacy-v5"),
+    ).toEqual({
+      project_root: "/repo",
+      continuation_pending: 0,
+      worktree_exit_notice_pending: 0,
+      worktree_cleanup_branch: null,
+    });
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(
@@ -434,6 +584,60 @@ describe("SqlitePersistenceAdapter", () => {
       ]),
     );
     migrated.close();
+  });
+
+  it("backfills a v8 cleanup branch only from an exact path-matching AnyCode transition", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v8-cleanup-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const old = new DatabaseSync(dbPath);
+    old.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at) VALUES (8, 8);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        engine_id TEXT, external_session_ref TEXT, project_root TEXT,
+        worktree_id TEXT, worktree_path TEXT, worktree_branch TEXT, worktree_base_ref TEXT,
+        worktree_owned_by_anycode INTEGER, continuation_pending INTEGER NOT NULL DEFAULT 0,
+        continuation_mode TEXT, worktree_exit_notice_pending INTEGER NOT NULL DEFAULT 0,
+        worktree_cleanup_path TEXT, worktree_cleanup_mode TEXT,
+        worktree_cleanup_owned_by_anycode INTEGER, worktree_transition_json TEXT
+      );
+    `);
+    const target = "/repo/.anycode/worktrees/legacy";
+    const transition = (branch: string, worktreePath = target) => JSON.stringify({
+      origin: "tool",
+      kind: "exit_worktree",
+      projectRoot: "/repo",
+      fromWorkspace: worktreePath,
+      toWorkspace: "/repo",
+      worktree: {
+        id: "legacy",
+        path: worktreePath,
+        branch,
+        baseRef: "HEAD",
+        ownedByAnyCode: true,
+      },
+      cleanup: "auto",
+      toolCallId: "exit-v8",
+    });
+    const insert = old.prepare(
+      `INSERT INTO sessions (
+         id, workspace, model, mode, created_at, updated_at, project_root,
+         continuation_pending, continuation_mode, worktree_cleanup_path,
+         worktree_cleanup_mode, worktree_cleanup_owned_by_anycode, worktree_transition_json
+       ) VALUES (?, '/repo', 'm', 'build', 1, 2, '/repo', 1, 'none', ?, 'auto', 1, ?)`,
+    );
+    insert.run("exact", target, transition("anycode-wt/legacy"));
+    insert.run("foreign", target, transition("user/precious"));
+    insert.run("mismatch", target, transition("anycode-wt/other", "/repo/.anycode/worktrees/other"));
+    old.close();
+
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    expect((await adapter.getSession("exact"))?.worktreeCleanup?.branch).toBe("anycode-wt/legacy");
+    expect((await adapter.getSession("foreign"))?.worktreeCleanup?.branch).toBeUndefined();
+    expect((await adapter.getSession("mismatch"))?.worktreeCleanup?.branch).toBeUndefined();
+    await adapter.close();
   });
 
   it("migrates a pre-engine database and preserves its implicit core metadata", async () => {

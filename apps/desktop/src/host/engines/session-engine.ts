@@ -45,6 +45,8 @@ export interface ModelSwitchResult {
 export interface RunTurnOptions {
   signal: AbortSignal;
   attachments?: ImageAttachment[];
+  /** Ephemeral host context for this real turn; never persisted as a user frame. */
+  systemContext?: string;
 }
 
 /**

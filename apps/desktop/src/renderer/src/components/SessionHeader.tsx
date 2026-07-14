@@ -21,6 +21,7 @@
 import { useContext } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import type { ConnectionPhase, TurnState } from "../store.js";
 import { Collapse, Dot, History, HookIcon, ServerStack, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 
@@ -34,6 +35,38 @@ function basename(path: string): string {
 /** "awaiting_port" -> "awaiting port" — cheap readability pass for the connection label. */
 function formatConnectionLabel(connection: string): string {
   return connection.replace(/_/g, " ");
+}
+
+export interface WorktreeExitControlState {
+  disabled: boolean;
+  title: string;
+  ariaLabel: string;
+}
+
+/** Pure projection shared by the real button and its node-environment tests. */
+export function worktreeExitControlState(
+  turnStatus: TurnState["status"],
+  connection: ConnectionPhase,
+): WorktreeExitControlState {
+  if (connection !== "ready") {
+    return {
+      disabled: true,
+      title: "Exit worktree is unavailable until the host connection is ready",
+      ariaLabel: "Exit worktree unavailable until the host connection is ready",
+    };
+  }
+  if (turnStatus === "running") {
+    return {
+      disabled: true,
+      title: "Exit worktree is unavailable while a turn is running",
+      ariaLabel: "Exit worktree unavailable while a turn is running",
+    };
+  }
+  return {
+    disabled: false,
+    title: "Exit worktree; clean AnyCode-owned worktrees are removed automatically",
+    ariaLabel: "Exit worktree",
+  };
 }
 
 export interface SessionHeaderProps {
@@ -51,6 +84,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
 
   const workspace = useTabStore((state) => state.workspace);
   const connection = useTabStore((state) => state.connection);
+  const turnStatus = useTabStore((state) => state.turn.status);
   const engine = useTabStore((state) => state.engine);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
 
@@ -63,6 +97,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
   const worktree = tab?.worktree;
   const externalEngine = engine !== null;
   const supportsRewind = engine?.capabilities.supportsRewind ?? true;
+  const exitControl = worktreeExitControlState(turnStatus, connection);
 
   /**
    * Pure UI flag flip (design §2.4) — absorbs App.tsx's former
@@ -110,7 +145,9 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
             type="button"
             className="session-header-worktree-exit"
             onClick={() => send({ type: "exit_worktree", cleanup: "auto" })}
-            title="Exit worktree; clean AnyCode-owned worktrees are removed automatically"
+            disabled={exitControl.disabled}
+            title={exitControl.title}
+            aria-label={exitControl.ariaLabel}
           >
             Exit
           </button>

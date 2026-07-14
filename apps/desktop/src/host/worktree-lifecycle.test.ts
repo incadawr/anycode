@@ -43,10 +43,15 @@ function fileSystem(overrides: Partial<WorktreeFileSystem> = {}): WorktreeFileSy
 function git(overrides: Partial<WorktreeGitPort> = {}): WorktreeGitPort {
   return {
     status: async () => ({ ok: true, value: cleanStatus() }),
+    listBranches: async () => ({
+      ok: true,
+      value: [{ name: "anycode-wt/feature", current: false, sha: "deadbeef" }],
+    }),
     worktreeIsPristine: async () => ({ ok: true, value: true }),
     worktreeAdd: async ({ path: target }) => ({ ok: true, value: { path: target } }),
-    worktreeList: async () => ({ ok: true, value: [] }),
+    worktreeList: async () => ({ ok: true, value: [registered()] }),
     worktreeRemove: async () => ({ ok: true, value: null }),
+    deleteBranch: async () => ({ ok: true, value: null }),
     ...overrides,
   };
 }
@@ -123,7 +128,7 @@ describe("WorktreeLifecycleService", () => {
         },
       },
     });
-    expect(ensured).toHaveBeenCalledWith(ROOT, WORKTREE_EXCLUDE_PATTERN);
+    expect(ensured).toHaveBeenCalledWith(ROOT, WORKTREE_EXCLUDE_PATTERN, undefined);
     expect(added).toHaveBeenCalledWith({ path: TARGET, branch: "anycode-wt/feature", baseRef: "main" });
     expect(db.touchSession).toHaveBeenCalledWith("session-12345678", {
       projectRoot: ROOT,
@@ -171,6 +176,32 @@ describe("WorktreeLifecycleService", () => {
       ok: false,
       reason: "Cannot create a clean worktree namespace: common git dir is unavailable",
     });
+    expect(added).not.toHaveBeenCalled();
+  });
+
+  it("threads cancellation through namespace setup and never reaches worktree add after abort", async () => {
+    const setupStarted = deferred<void>();
+    const setupResult = deferred<{ ok: true; value: null }>();
+    const added = vi.fn<NonNullable<GitPort["worktreeAdd"]>>();
+    const controller = new AbortController();
+    const service = new WorktreeLifecycleService({
+      session: session(),
+      persistence: persistence().port,
+      gitForWorkspace: () => git({ worktreeAdd: added }),
+      ensureNamespaceIgnored: async (_projectRoot, _pattern, signal) => {
+        expect(signal).toBe(controller.signal);
+        setupStarted.resolve();
+        return setupResult.promise;
+      },
+      fs: fileSystem(),
+    });
+
+    const pending = service.enter({ name: "feature" }, "enter-setup", controller.signal);
+    await setupStarted.promise;
+    controller.abort("user-cancel");
+    setupResult.resolve({ ok: true, value: null });
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: "Worktree entry was cancelled." });
     expect(added).not.toHaveBeenCalled();
   });
 
@@ -285,11 +316,88 @@ describe("WorktreeLifecycleService", () => {
       projectRoot: ROOT,
       continuationPending: true,
       continuationMode: "none",
-      worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true },
+      worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true, branch: "anycode-wt/feature" },
     });
     expect(db.touchSession).toHaveBeenLastCalledWith("session-12345678", expect.objectContaining({
       worktreeTransition: expect.objectContaining({ toolCallId: "enter-call-1" }),
     }));
+  });
+
+  it("rolls back a checkout completed after the enter signal times out without persisting a transition", async () => {
+    const db = persistence();
+    const addStarted = deferred<void>();
+    const addResult = deferred<{ ok: true; value: { path: string } }>();
+    const removed = vi.fn<NonNullable<GitPort["worktreeRemove"]>>(async () => ({ ok: true, value: null }));
+    const service = new WorktreeLifecycleService({
+      session: session(),
+      persistence: db.port,
+      gitForWorkspace: (_workspace, signal) => git({
+        worktreeAdd: async () => {
+          expect(signal).toBe(controller.signal);
+          addStarted.resolve();
+          return addResult.promise;
+        },
+        worktreeRemove: removed,
+      }),
+      ensureNamespaceIgnored: async () => ({ ok: true, value: null }),
+      fs: fileSystem(),
+    });
+    const controller = new AbortController();
+
+    const pending = service.enter({ name: "feature" }, "enter-timeout", controller.signal);
+    await addStarted.promise;
+    controller.abort("timeout");
+    addResult.resolve({ ok: true, value: { path: TARGET } });
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: "Worktree entry was cancelled." });
+    expect(removed).toHaveBeenCalledWith({ path: TARGET });
+    expect(db.touchSession).not.toHaveBeenCalledWith(
+      "session-12345678",
+      expect.objectContaining({ workspace: TARGET, worktreeTransition: expect.anything() }),
+    );
+    expect(db.touchSession).toHaveBeenLastCalledWith("session-12345678", {
+      continuationPending: false,
+      continuationMode: null,
+      worktreeCleanup: null,
+    });
+  });
+
+  it("lets a successful final enter claim win when cancellation arrives after commit starts", async () => {
+    const db = persistence();
+    const commitStarted = deferred<void>();
+    const commitResult = deferred<void>();
+    let claims = 0;
+    db.port.claimWorktree = async (id, _path, patch) => {
+      claims++;
+      if (claims === 2) {
+        commitStarted.resolve();
+        await commitResult.promise;
+      }
+      await (db.touchSession as unknown as PersistencePort["touchSession"])(id, patch);
+      return true;
+    };
+    const controller = new AbortController();
+    const service = new WorktreeLifecycleService({
+      session: session(),
+      persistence: db.port,
+      gitForWorkspace: () => git(),
+      ensureNamespaceIgnored: async () => ({ ok: true, value: null }),
+      fs: fileSystem(),
+    });
+
+    const pending = service.enter({ name: "feature" }, "enter-commit", controller.signal);
+    await commitStarted.promise;
+    controller.abort("timeout");
+    commitResult.resolve();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      value: { transition: { kind: "enter_worktree", toWorkspace: TARGET, toolCallId: "enter-commit" } },
+    });
+    expect(db.touchSession).toHaveBeenLastCalledWith(
+      "session-12345678",
+      expect.objectContaining({ workspace: TARGET, worktreeTransition: expect.anything() }),
+    );
   });
 
   it("retains the ledger when a failed add leaves an ambiguous registered checkout", async () => {
@@ -315,7 +423,7 @@ describe("WorktreeLifecycleService", () => {
     expect(remove).toHaveBeenCalledWith({ path: TARGET });
     expect(db.touchSession).toHaveBeenCalledTimes(1);
     expect(db.touchSession).toHaveBeenLastCalledWith("session-12345678", expect.objectContaining({
-      worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true },
+      worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true, branch: "anycode-wt/feature" },
     }));
   });
 
@@ -327,6 +435,38 @@ describe("WorktreeLifecycleService", () => {
       workspace: external,
       projectRoot: ROOT,
       worktree: { ...ownedWorktree(), path: external },
+    })];
+    const service = new WorktreeLifecycleService({
+      session: session(),
+      persistence: db.port,
+      gitForWorkspace: () => git({ worktreeList: async () => ({ ok: true, value: [registered(external, "topic")] }) }),
+      ensureNamespaceIgnored: async () => ({ ok: true, value: null }),
+      fs: fileSystem(),
+    });
+
+    await expect(service.enter({ existing: external })).resolves.toEqual({
+      ok: false,
+      reason: "Worktree is already owned by active session other-session.",
+    });
+  });
+
+  it("refuses an existing worktree held only by another session's pending exit transition", async () => {
+    const external = path.join(ROOT, "external-wt");
+    const transitionWorktree = { ...ownedWorktree(), path: external, branch: "topic", ownedByAnyCode: false };
+    const db = persistence();
+    db.port.listSessions = async () => [session({
+      id: "other-session",
+      workspace: ROOT,
+      projectRoot: ROOT,
+      worktreeTransition: {
+        origin: "chrome",
+        kind: "exit_worktree",
+        projectRoot: ROOT,
+        fromWorkspace: external,
+        toWorkspace: ROOT,
+        worktree: transitionWorktree,
+        cleanup: "keep",
+      },
     })];
     const service = new WorktreeLifecycleService({
       session: session(),
@@ -375,19 +515,104 @@ describe("WorktreeLifecycleService", () => {
     });
   });
 
+  it("refuses exit when the registered checkout no longer matches the exact persisted branch", async () => {
+    const db = persistence();
+    const service = exitService(db.port, (workspace) => workspace === TARGET
+      ? git()
+      : git({ worktreeList: async () => ({ ok: true, value: [registered(TARGET, "other-branch")] }) }));
+
+    await expect(service.exit({ cleanup: "auto" })).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining("branch changed"),
+    });
+    expect(db.touchSession).not.toHaveBeenCalled();
+  });
+
+  it("durably marks a direct chrome exit for the next real model turn", async () => {
+    const db = persistence();
+    const service = exitService(db.port, (workspace) => workspace === TARGET
+      ? git({ worktreeIsPristine: async () => ({ ok: true, value: false }) })
+      : git({ worktreeList: async () => ({ ok: true, value: [registered()] }) }));
+
+    await service.exit({ cleanup: "keep", continueAfterRehost: false });
+
+    expect(db.touchSession).toHaveBeenCalledWith("session-12345678", expect.objectContaining({
+      workspace: ROOT,
+      continuationMode: "none",
+      worktreeExitNoticePending: true,
+    }));
+  });
+
+  it("leaves the active worktree metadata untouched when exit is cancelled during preparation", async () => {
+    const db = persistence();
+    const pristineStarted = deferred<void>();
+    const pristineResult = deferred<{ ok: true; value: boolean }>();
+    const service = exitService(db.port, (workspace) => workspace === TARGET
+      ? git({
+          worktreeIsPristine: async () => {
+            pristineStarted.resolve();
+            return pristineResult.promise;
+          },
+        })
+      : git({ worktreeList: async () => ({ ok: true, value: [registered()] }) }));
+    const controller = new AbortController();
+
+    const pending = service.exit({ cleanup: "auto" }, "exit-cancel", controller.signal);
+    await pristineStarted.promise;
+    controller.abort("user-cancel");
+    pristineResult.resolve({ ok: true, value: true });
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: "Worktree exit was cancelled." });
+    expect(db.touchSession).not.toHaveBeenCalled();
+  });
+
+  it("lets a successful final exit write win when cancellation arrives after commit starts", async () => {
+    const commitStarted = deferred<void>();
+    const commitResult = deferred<void>();
+    const touchSession = vi.fn(async () => {
+      commitStarted.resolve();
+      await commitResult.promise;
+      return undefined;
+    });
+    const db = persistence(touchSession);
+    const controller = new AbortController();
+    const service = exitService(db.port, (workspace) => workspace === TARGET
+      ? git()
+      : git({ worktreeList: async () => ({ ok: true, value: [registered()] }) }));
+
+    const pending = service.exit({ cleanup: "auto" }, "exit-commit", controller.signal);
+    await commitStarted.promise;
+    controller.abort("user-cancel");
+    commitResult.resolve();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      value: { transition: { kind: "exit_worktree", toWorkspace: ROOT, toolCallId: "exit-commit" } },
+    });
+    expect(db.touchSession).toHaveBeenLastCalledWith(
+      "session-12345678",
+      expect.objectContaining({ workspace: ROOT, worktreeTransition: expect.anything() }),
+    );
+  });
+
   it("defers clean auto removal until post-rehost, then rechecks and clears continuation", async () => {
     const db = persistence();
     const remove = vi.fn<NonNullable<GitPort["worktreeRemove"]>>(async () => ({ ok: true, value: null }));
+    const deleteBranch = vi.fn<NonNullable<GitPort["deleteBranch"]>>(async () => ({ ok: true, value: null }));
     const factory = (workspace: string) => workspace === TARGET
       ? git()
-      : git({ worktreeList: async () => ({ ok: true, value: [registered()] }), worktreeRemove: remove });
+      : git({
+          worktreeList: async () => ({ ok: true, value: [registered()] }),
+          worktreeRemove: remove,
+          deleteBranch,
+        });
     const service = exitService(db.port, factory);
     const prepared = await service.exit({ cleanup: "auto" });
     expect(prepared).toMatchObject({ ok: true, value: { cleanup: { kind: "remove_clean" } } });
     expect(remove).not.toHaveBeenCalled();
     expect(db.touchSession).toHaveBeenCalledWith("session-12345678", expect.objectContaining({
       continuationPending: true,
-      worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true },
+      worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true, branch: "anycode-wt/feature" },
     }));
     if (!prepared.ok) throw new Error(prepared.reason);
 
@@ -395,10 +620,54 @@ describe("WorktreeLifecycleService", () => {
 
     expect(finalized).toEqual({ ok: true, value: { removed: true, message: `Removed worktree: ${TARGET}` } });
     expect(remove).toHaveBeenCalledWith({ path: TARGET });
+    expect(deleteBranch).toHaveBeenCalledWith("anycode-wt/feature");
     expect(db.touchSession).toHaveBeenLastCalledWith("session-12345678", {
       worktreeCleanup: null,
       worktreeTransition: null,
     });
+  });
+
+  it("keeps the exact cleanup ledger without failing continuation when merged-only branch deletion is refused", async () => {
+    const db = persistence();
+    const remove = vi.fn<NonNullable<GitPort["worktreeRemove"]>>(async () => ({ ok: true, value: null }));
+    const deleteBranch = vi.fn<NonNullable<GitPort["deleteBranch"]>>(async () => ({
+      ok: false,
+      reason: "branch is not fully merged",
+    }));
+    const service = exitService(db.port, (workspace) => workspace === TARGET
+      ? git()
+      : git({
+          worktreeList: async () => ({ ok: true, value: [registered()] }),
+          worktreeRemove: remove,
+          deleteBranch,
+        }));
+    const prepared = await service.exit({ cleanup: "auto" });
+    if (!prepared.ok) throw new Error(prepared.reason);
+
+    await expect(service.finalizePostRehost({ projectRoot: ROOT, cleanup: prepared.value.cleanup })).resolves.toEqual({
+      ok: true,
+      value: {
+        removed: true,
+        message: expect.stringContaining("retained for cleanup"),
+      },
+    });
+    expect(remove).toHaveBeenCalledWith({ path: TARGET });
+    expect(deleteBranch).toHaveBeenCalledWith("anycode-wt/feature");
+    expect(db.touchSession).not.toHaveBeenCalledWith(
+      "session-12345678",
+      expect.objectContaining({ worktreeCleanup: null }),
+    );
+    expect(db.touchSession).toHaveBeenLastCalledWith(
+      "session-12345678",
+      expect.objectContaining({
+        worktreeCleanup: {
+          path: TARGET,
+          mode: "auto",
+          ownedByAnyCode: true,
+          branch: "anycode-wt/feature",
+        },
+      }),
+    );
   });
 
   it("uses force only for explicit remove and only after rehost", async () => {
@@ -416,7 +685,7 @@ describe("WorktreeLifecycleService", () => {
     expect(remove).toHaveBeenCalledWith({ path: TARGET, force: true });
   });
 
-  it("clears a durable cleanup ledger when a prior boot already removed the target", async () => {
+  it("retains a legacy path-only ledger when the checkout is absent and its exact branch is unknowable", async () => {
     const db = persistence();
     const service = new WorktreeLifecycleService({
       session: session({ projectRoot: ROOT, workspace: ROOT, continuationPending: true }),
@@ -432,15 +701,60 @@ describe("WorktreeLifecycleService", () => {
     });
     await expect(service.finalizePostRehost({
       projectRoot: ROOT,
+      // Legacy v8 path-only ledger: the checkout is already absent, so there
+      // is no exact branch authority to infer and no branch deletion attempt.
       cleanup: { kind: "remove_clean", target: TARGET, ownedByAnyCode: true },
     })).resolves.toEqual({
       ok: true,
-      value: { removed: true, message: `Worktree already removed: ${TARGET}` },
+      value: {
+        removed: true,
+        message: "Worktree is absent; legacy cleanup ledger retained because its exact branch is unknown.",
+      },
     });
-    expect(db.touchSession).toHaveBeenLastCalledWith("session-12345678", {
-      worktreeCleanup: null,
-      worktreeTransition: null,
+    expect(db.touchSession).not.toHaveBeenCalled();
+  });
+
+  it("recovers the exact branch from a registered checkout for a legacy path-only ledger", async () => {
+    const db = persistence();
+    const remove = vi.fn<NonNullable<GitPort["worktreeRemove"]>>(async () => ({ ok: true, value: null }));
+    const deleteBranch = vi.fn<NonNullable<GitPort["deleteBranch"]>>(async () => ({ ok: true, value: null }));
+    const service = exitService(db.port, (workspace) => workspace === ROOT
+      ? git({
+          worktreeList: async () => ({ ok: true, value: [registered()] }),
+          worktreeRemove: remove,
+          deleteBranch,
+        })
+      : git());
+
+    await expect(service.finalizePostRehost({
+      projectRoot: ROOT,
+      cleanup: { kind: "remove_clean", target: TARGET, ownedByAnyCode: true },
+    })).resolves.toEqual({
+      ok: true,
+      value: { removed: true, message: `Removed worktree: ${TARGET}` },
     });
+    expect(remove).toHaveBeenCalledWith({ path: TARGET });
+    expect(deleteBranch).toHaveBeenCalledWith("anycode-wt/feature");
+  });
+
+  it("retains a registered foreign worktree referenced by a legacy path-only ledger", async () => {
+    const db = persistence();
+    const remove = vi.fn<NonNullable<GitPort["worktreeRemove"]>>(async () => ({ ok: true, value: null }));
+    const service = exitService(db.port, (workspace) => workspace === ROOT
+      ? git({
+          worktreeList: async () => ({ ok: true, value: [registered(TARGET, "user/precious")] }),
+          worktreeRemove: remove,
+        })
+      : git());
+
+    await expect(service.finalizePostRehost({
+      projectRoot: ROOT,
+      cleanup: { kind: "remove_clean", target: TARGET, ownedByAnyCode: true },
+    })).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining("no exact AnyCode-owned branch"),
+    });
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it("retains a clean-auto candidate that became dirty after relocation", async () => {
@@ -488,6 +802,36 @@ describe("WorktreeLifecycleService", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("never removes a cleanup target held by another session's pending transition", async () => {
+    const db = persistence();
+    const remove = vi.fn<NonNullable<GitPort["worktreeRemove"]>>();
+    const service = exitService(db.port, (workspace) => workspace === ROOT
+      ? git({ worktreeList: async () => ({ ok: true, value: [registered()] }), worktreeRemove: remove })
+      : git());
+    const prepared = await service.exit({ cleanup: "auto" }, "exit-call");
+    if (!prepared.ok) throw new Error(prepared.reason);
+    db.port.listSessions = async () => [session({
+      id: "other-session",
+      projectRoot: ROOT,
+      workspace: ROOT,
+      worktreeTransition: {
+        origin: "chrome",
+        kind: "exit_worktree",
+        projectRoot: ROOT,
+        fromWorkspace: TARGET,
+        toWorkspace: ROOT,
+        worktree: ownedWorktree(),
+        cleanup: "keep",
+      },
+    })];
+
+    await expect(service.finalizePostRehost({ projectRoot: ROOT, cleanup: prepared.value.cleanup })).resolves.toEqual({
+      ok: true,
+      value: { removed: false, message: `Cleanup retained a worktree claimed by another session: ${TARGET}` },
+    });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it("refuses cleanup when the target resolves outside the project root", async () => {
     const db = persistence();
     const service = exitService(db.port, () => git({ worktreeList: async () => ({ ok: true, value: [registered()] }) }), {
@@ -520,4 +864,14 @@ function exitService(
     ensureNamespaceIgnored: async () => ({ ok: true, value: null }),
     fs: fileSystem(fsOverrides),
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

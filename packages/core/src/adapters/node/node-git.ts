@@ -882,4 +882,23 @@ export class NodeGitAdapter implements GitPort {
     if (NodeGitAdapter.failed(res)) return this.fail(args, res);
     return { ok: true, value: null };
   }
+
+  async worktreePrune(): Promise<GitOpResult<null>> {
+    if (!this.hasRunBinary) return unavailable();
+    const args = ["worktree", "prune"];
+    const res = await this.runGit(args);
+    if (NodeGitAdapter.failed(res)) return this.fail(args, res);
+    return { ok: true, value: null };
+  }
+
+  async deleteBranch(name: string): Promise<GitOpResult<null>> {
+    if (!this.hasRunBinary) return unavailable();
+    if (this.rejectsUnsafeRef(name)) return { ok: false, reason: UNSAFE_REF_REASON };
+    // `-d` deliberately asks git to prove the branch is merged. Keep `--`
+    // even after the pre-spawn guard so the ref can never become an option.
+    const args = ["branch", "-d", "--", name];
+    const res = await this.runGit(args);
+    if (NodeGitAdapter.failed(res)) return this.fail(args, res);
+    return { ok: true, value: null };
+  }
 }

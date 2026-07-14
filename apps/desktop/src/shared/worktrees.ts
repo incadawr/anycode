@@ -13,6 +13,8 @@ export interface WorktreeCleanupIntent {
   path: string;
   mode: "auto" | "keep" | "remove";
   ownedByAnyCode: boolean;
+  /** Exact AnyCode-owned local branch paired with this cleanup resource. */
+  branch?: string;
 }
 
 export interface WorktreeTransitionMessage {

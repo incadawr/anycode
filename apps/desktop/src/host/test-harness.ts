@@ -281,6 +281,14 @@ export interface HarnessOptions {
    * their tools never spawn a real child, `ports.exec` is a stub).
    */
   cwd?: string;
+  /** Durable ephemeral system context queued by a direct UI exit from a worktree. */
+  worktreeExitNoticePending?: boolean;
+  /** Clears the durable marker only after a core model stream accepts the augmented turn. */
+  consumeWorktreeExitNotice?: () => Promise<void>;
+  continuationPending?: boolean;
+  continuationMode?: "model" | "none";
+  onContinuationReady?: () => Promise<void>;
+  onContinuationComplete?: () => Promise<void>;
 }
 
 export interface Harness {
@@ -399,6 +407,7 @@ export function createHarness(options: HarnessOptions): Harness {
     broker,
     fs: toolFs,
     workspace: "/workspace",
+    projectRoot: "/workspace",
     model: "scripted-model",
     sessionId: "test-session",
     bootHistory: options.bootHistory,
@@ -427,6 +436,16 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.reasoningSupported !== undefined ? { reasoningSupported: options.reasoningSupported } : {}),
     ...(options.availableEffortLevels !== undefined ? { availableEffortLevels: options.availableEffortLevels } : {}),
     ...(options.selectedEffort !== undefined ? { selectedEffort: options.selectedEffort } : {}),
+    ...(options.worktreeExitNoticePending !== undefined
+      ? { worktreeExitNoticePending: options.worktreeExitNoticePending }
+      : {}),
+    ...(options.consumeWorktreeExitNotice !== undefined
+      ? { consumeWorktreeExitNotice: options.consumeWorktreeExitNotice }
+      : {}),
+    ...(options.continuationPending !== undefined ? { continuationPending: options.continuationPending } : {}),
+    ...(options.continuationMode !== undefined ? { continuationMode: options.continuationMode } : {}),
+    ...(options.onContinuationReady !== undefined ? { onContinuationReady: options.onContinuationReady } : {}),
+    ...(options.onContinuationComplete !== undefined ? { onContinuationComplete: options.onContinuationComplete } : {}),
   });
   session.bindPort(nodeWirePort(hostPort));
 

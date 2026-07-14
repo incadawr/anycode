@@ -279,6 +279,7 @@ import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
 import { createWirePort } from "./wire.js";
 import {
+  cleanupOwnedWorktreeResource,
   WorktreeLifecycleService,
   type WorktreeCleanupIntent,
 } from "./worktree-lifecycle.js";
@@ -356,7 +357,8 @@ function parseCleanupIntent(raw: string | undefined): WireWorktreeCleanupIntent 
       typeof value.path === "string" &&
       value.path.length > 0 &&
       (value.mode === "auto" || value.mode === "keep" || value.mode === "remove") &&
-      typeof value.ownedByAnyCode === "boolean"
+      typeof value.ownedByAnyCode === "boolean" &&
+      (value.branch === undefined || (typeof value.branch === "string" && value.branch.length > 0))
     ) {
       return value as WireWorktreeCleanupIntent;
     }
@@ -368,10 +370,24 @@ function parseCleanupIntent(raw: string | undefined): WireWorktreeCleanupIntent 
 
 function toLifecycleCleanup(intent: WireWorktreeCleanupIntent): WorktreeCleanupIntent {
   if (intent.mode === "auto") {
-    return { kind: "remove_clean", target: intent.path, ownedByAnyCode: true };
+    if (!intent.ownedByAnyCode) throw new Error("Automatic cleanup cannot target an external worktree.");
+    return {
+      kind: "remove_clean",
+      target: intent.path,
+      ownedByAnyCode: true,
+      ...(intent.branch !== undefined ? { branch: intent.branch } : {}),
+    };
   }
   if (intent.mode === "remove") {
-    return { kind: "remove_force", target: intent.path, ownedByAnyCode: intent.ownedByAnyCode };
+    if (intent.ownedByAnyCode) {
+      return {
+        kind: "remove_force",
+        target: intent.path,
+        ownedByAnyCode: true,
+        ...(intent.branch !== undefined ? { branch: intent.branch } : {}),
+      };
+    }
+    return { kind: "remove_force", target: intent.path, ownedByAnyCode: false };
   }
   return { kind: "none", reason: `Retained worktree: ${intent.path}` };
 }
@@ -647,12 +663,21 @@ async function boot(): Promise<void> {
         // Metadata was staged before the terminal tool result reached durable
         // history. Restore the source workspace; for a newly-created owned
         // checkout, prove it clean through GitPort before removing it.
-        let retainedCleanup: { path: string; mode: "auto"; ownedByAnyCode: true } | undefined;
+        let retainedCleanup:
+          | { path: string; mode: "auto"; ownedByAnyCode: true; branch: string }
+          | undefined;
         if (pending.kind === "enter_worktree" && pending.worktree.ownedByAnyCode) {
-          const removed = await new NodeGitAdapter({ exec: execAdapter, cwd: pending.projectRoot })
-            .worktreeRemove?.({ path: pending.toWorkspace });
-          if (!removed?.ok) {
-            retainedCleanup = { path: pending.toWorkspace, mode: "auto", ownedByAnyCode: true };
+          const removed = await cleanupOwnedWorktreeResource(
+            new NodeGitAdapter({ exec: execAdapter, cwd: pending.projectRoot }),
+            { path: pending.toWorkspace, branch: pending.worktree.branch },
+          );
+          if (!removed.ok) {
+            retainedCleanup = {
+              path: pending.toWorkspace,
+              mode: "auto",
+              ownedByAnyCode: true,
+              branch: pending.worktree.branch,
+            };
           }
         }
         await persistence.touchSession(sessionMeta.id, {
@@ -661,6 +686,7 @@ async function boot(): Promise<void> {
           worktree: pending.kind === "exit_worktree" ? pending.worktree : null,
           continuationPending: retainedCleanup !== undefined,
           continuationMode: retainedCleanup !== undefined ? "none" : null,
+          worktreeExitNoticePending: false,
           worktreeCleanup: retainedCleanup ?? null,
           worktreeTransition: null,
         });
@@ -670,6 +696,7 @@ async function boot(): Promise<void> {
           workspace: pending.fromWorkspace,
           ...(pending.kind === "exit_worktree" ? { worktree: pending.worktree } : { worktree: undefined }),
           continuationPending: retainedCleanup !== undefined,
+          worktreeExitNoticePending: false,
           worktreeCleanup: retainedCleanup,
           continuationMode: retainedCleanup !== undefined ? "none" : undefined,
           worktreeTransition: undefined,
@@ -724,14 +751,20 @@ async function boot(): Promise<void> {
       };
     }
     const projectRoot = sessionMeta.projectRoot ?? sessionMeta.workspace;
-    const gitForWorkspace = (cwd: string) =>
-      new NodeGitAdapter({ exec: execAdapter, cwd, signal: gitAbort.signal });
+    const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
+      new NodeGitAdapter({
+        exec: execAdapter,
+        cwd,
+        signal: operationSignal === undefined
+          ? gitAbort.signal
+          : AbortSignal.any([gitAbort.signal, operationSignal]),
+      });
     const worktreeLifecycle = new WorktreeLifecycleService({
       session: sessionMeta,
       persistence,
       gitForWorkspace,
-      ensureNamespaceIgnored: async (projectRoot) => {
-        const git = gitForWorkspace(projectRoot);
+      ensureNamespaceIgnored: async (projectRoot, _pattern, signal) => {
+        const git = gitForWorkspace(projectRoot, signal);
         if (!git.ensureWorktreeNamespaceIgnored) {
           return { ok: false, reason: "Git adapter cannot maintain the worktree exclude." };
         }
@@ -747,15 +780,23 @@ async function boot(): Promise<void> {
     const worktreeControl: WorktreeControlPort = {
       async enter(request, options) {
         if (options.signal.aborted) return { ok: false, error: "Worktree entry was cancelled.", errorKind: "cancelled" };
-        const result = await worktreeLifecycle.enter(request, options.toolCallId);
-        if (!result.ok) return { ok: false, error: result.reason, errorKind: "invalid_input" };
+        const result = await worktreeLifecycle.enter(request, options.toolCallId, options.signal);
+        if (!result.ok) {
+          return options.signal.aborted
+            ? { ok: false, error: "Worktree entry was cancelled.", errorKind: "cancelled" }
+            : { ok: false, error: result.reason, errorKind: "invalid_input" };
+        }
         preparedCleanup = result.value.cleanup;
         return { ok: true, transition: result.value.transition };
       },
       async exit(request, options) {
         if (options.signal.aborted) return { ok: false, error: "Worktree exit was cancelled.", errorKind: "cancelled" };
-        const result = await worktreeLifecycle.exit(request, options.toolCallId);
-        if (!result.ok) return { ok: false, error: result.reason, errorKind: "invalid_input" };
+        const result = await worktreeLifecycle.exit(request, options.toolCallId, options.signal);
+        if (!result.ok) {
+          return options.signal.aborted
+            ? { ok: false, error: "Worktree exit was cancelled.", errorKind: "cancelled" }
+            : { ok: false, error: result.reason, errorKind: "invalid_input" };
+        }
         preparedCleanup = result.value.cleanup;
         const message = result.value.cleanup.kind === "none"
           ? result.value.cleanup.reason
@@ -1298,6 +1339,10 @@ async function boot(): Promise<void> {
       ...(sessionMeta.worktree !== undefined ? { worktree: sessionMeta.worktree } : {}),
       continuationPending: sessionMeta.continuationPending === true,
       continuationMode: sessionMeta.continuationMode ?? "model",
+      worktreeExitNoticePending: sessionMeta.worktreeExitNoticePending === true,
+      consumeWorktreeExitNotice: async () => {
+        await persistence!.touchSession(sessionId, { worktreeExitNoticePending: false });
+      },
       worktreeControl: worktreeAvailable ? worktreeControl : undefined,
       onContinuationReady: async () => {
         if (cleanupHandoff !== undefined) {
@@ -1324,7 +1369,10 @@ async function boot(): Promise<void> {
           // Before durable history success, the source host is authoritative.
           if (transition.kind === "enter_worktree") {
             const removed = transition.worktree.ownedByAnyCode
-              ? await gitForWorkspace(transition.projectRoot).worktreeRemove?.({ path: transition.toWorkspace })
+              ? await cleanupOwnedWorktreeResource(
+                  gitForWorkspace(transition.projectRoot),
+                  { path: transition.toWorkspace, branch: transition.worktree.branch },
+                )
               : { ok: true as const, value: null };
             await persistence!.touchSession(sessionId, {
               projectRoot: transition.projectRoot,
@@ -1333,7 +1381,12 @@ async function boot(): Promise<void> {
               continuationPending: removed?.ok === false,
               continuationMode: removed?.ok === false ? "none" : null,
               worktreeCleanup: removed?.ok === false
-                ? { path: transition.toWorkspace, mode: "auto", ownedByAnyCode: true }
+                ? {
+                    path: transition.toWorkspace,
+                    mode: "auto",
+                    ownedByAnyCode: true,
+                    branch: transition.worktree.branch,
+                  }
                 : null,
               worktreeTransition: null,
             });
@@ -1344,6 +1397,7 @@ async function boot(): Promise<void> {
               worktree: transition.worktree,
               continuationPending: false,
               continuationMode: null,
+              worktreeExitNoticePending: false,
               worktreeCleanup: null,
               worktreeTransition: null,
             });
@@ -1387,9 +1441,19 @@ async function boot(): Promise<void> {
           const cleanup = preparedCleanup;
           const wireCleanup: WireWorktreeCleanupIntent | undefined =
             cleanup?.kind === "remove_clean"
-              ? { path: cleanup.target, mode: "auto", ownedByAnyCode: true }
+              ? {
+                  path: cleanup.target,
+                  mode: "auto",
+                  ownedByAnyCode: true,
+                  ...(cleanup.branch !== undefined ? { branch: cleanup.branch } : {}),
+                }
               : cleanup?.kind === "remove_force"
-                ? { path: cleanup.target, mode: "remove", ownedByAnyCode: cleanup.ownedByAnyCode }
+                ? {
+                    path: cleanup.target,
+                    mode: "remove",
+                    ownedByAnyCode: cleanup.ownedByAnyCode,
+                    ...(cleanup.ownedByAnyCode && cleanup.branch !== undefined ? { branch: cleanup.branch } : {}),
+                  }
                 : undefined;
           process.parentPort.postMessage({
             type: WORKTREE_TRANSITION_MESSAGE_TYPE,

@@ -20,6 +20,8 @@ export interface SessionWorktreeCleanup {
   path: string;
   mode: "auto" | "remove";
   ownedByAnyCode: boolean;
+  /** Exact branch owned by this resource ledger, when known. */
+  branch?: string;
 }
 
 /** Crash-recovery journal spanning terminal tool history and workspace metadata. */
@@ -47,6 +49,8 @@ export interface SessionMeta {
   continuationPending?: boolean;
   /** `model` resumes the terminal tool turn; `none` is a chrome-only relocation. */
   continuationMode?: "model" | "none";
+  /** Direct UI exit notice waiting for the next real model turn. */
+  worktreeExitNoticePending?: boolean;
   /** Deferred removal ledger, consumed only after rehost at projectRoot. */
   worktreeCleanup?: SessionWorktreeCleanup;
   /** Cleared only after the successful terminal tool result is durably flushed. */
@@ -73,6 +77,7 @@ export type SessionMetaPatch = Partial<
     | "workspace"
     | "projectRoot"
     | "continuationPending"
+    | "worktreeExitNoticePending"
   >
 > & {
   /** `null` atomically clears the active worktree identity fields. */

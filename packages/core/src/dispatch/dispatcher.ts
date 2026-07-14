@@ -7,7 +7,8 @@
  *   4. permission gate            (engine.check; "ask" -> broker; deny -> "denied";
  *                                  fail-closed via DenyPermissionBroker)
  *   5. timeout + linked abort     (fresh AbortController linked to parentSignal;
- *                                  raceWithTimeout(metadata.timeoutMs))
+ *                                  generic tools race the timeout; terminal
+ *                                  controls abort then await commit settlement)
  *   6. handler(input, ctx)        (ports-only side effects)
  * Invariant: never throws — every failure path becomes a ToolCallOutcome so the
  * loop always appends a tool result message for the model.
@@ -279,25 +280,60 @@ export async function executeToolCall(
         emit,
       };
 
+      let terminalTimedOut = false;
       try {
         // 6. handler
-        const race = await raceWithTimeout(
-          tool.handler(input, handlerCtx),
-          timeoutMs + DISPATCH_TIMEOUT_GRACE_MS,
-          controller,
-        );
-        if (race.timedOut) {
-          return outcome("timed_out", `Tool ${toolName} timed out after ${timeoutMs}ms.`);
+        const handlerPromise = tool.handler(input, handlerCtx);
+        let result: ToolResult;
+        if (metadata.terminalControl === true) {
+          // A workspace transition has a durable commit boundary. Once its
+          // handler starts, timeout/cancel may request abort, but the dispatcher
+          // must not publish a losing outcome while the commit can still win.
+          // Keep waiting for settlement; a successful commit is authoritative.
+          const timer = setTimeout(() => {
+            terminalTimedOut = true;
+            controller.abort("timeout");
+          }, timeoutMs + DISPATCH_TIMEOUT_GRACE_MS);
+          try {
+            result = await handlerPromise;
+          } finally {
+            clearTimeout(timer);
+          }
+        } else {
+          const race = await raceWithTimeout(
+            handlerPromise,
+            timeoutMs + DISPATCH_TIMEOUT_GRACE_MS,
+            controller,
+          );
+          if (race.timedOut) {
+            return outcome("timed_out", `Tool ${toolName} timed out after ${timeoutMs}ms.`);
+          }
+          result = race.value as ToolResult;
         }
-        const result = race.value as ToolResult;
+
+        if (metadata.terminalControl === true) {
+          if (result.ok) {
+            return outcome("success", formatModelText(tool, result), result);
+          }
+          if (parentSignal?.aborted) {
+            return outcome("cancelled", `Tool ${toolName} was cancelled.`, result);
+          }
+          if (terminalTimedOut) {
+            return outcome("timed_out", `Tool ${toolName} timed out after ${timeoutMs}ms.`, result);
+          }
+        }
         // B(2): the handler's own failure classification wins deterministically, so
         // a Bash timeout/cancel keeps its captured stdout/stderr on the outcome.
         const status: ToolCallStatus = result.ok ? "success" : (result.errorKind ?? "error");
         return outcome(status, formatModelText(tool, result), result);
       } catch (error) {
-        if (parentSignal?.aborted || controller.signal.aborted) {
+        if (parentSignal?.aborted) {
           return outcome("cancelled", `Tool ${toolName} was cancelled.`);
         }
+        if (metadata.terminalControl === true && terminalTimedOut) {
+          return outcome("timed_out", `Tool ${toolName} timed out after ${timeoutMs}ms.`);
+        }
+        if (controller.signal.aborted) return outcome("cancelled", `Tool ${toolName} was cancelled.`);
         return outcome("error", `Tool ${toolName} threw: ${errorMessage(error)}`);
       } finally {
         dispose();

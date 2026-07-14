@@ -161,6 +161,30 @@ const MIGRATIONS: readonly Migration[] = [
     version: 7,
     statements: ["ALTER TABLE sessions ADD COLUMN worktree_transition_json TEXT"],
   },
+  {
+    version: 8,
+    statements: ["ALTER TABLE sessions ADD COLUMN worktree_exit_notice_pending INTEGER NOT NULL DEFAULT 0"],
+  },
+  {
+    version: 9,
+    statements: [
+      "ALTER TABLE sessions ADD COLUMN worktree_cleanup_branch TEXT",
+      // v7/v8 cleanup ledgers were path-only. Backfill solely when the durable
+      // transition journal supplies an exact, path-matching AnyCode branch;
+      // malformed/mismatched/foreign JSON remains NULL and is retained by the
+      // runtime rather than guessed from a directory basename.
+      `UPDATE sessions
+       SET worktree_cleanup_branch = json_extract(worktree_transition_json, '$.worktree.branch')
+       WHERE worktree_cleanup_branch IS NULL
+         AND worktree_cleanup_owned_by_anycode = 1
+         AND worktree_cleanup_path IS NOT NULL
+         AND json_valid(worktree_transition_json)
+         AND json_type(worktree_transition_json, '$.worktree.path') = 'text'
+         AND json_type(worktree_transition_json, '$.worktree.branch') = 'text'
+         AND json_extract(worktree_transition_json, '$.worktree.path') = worktree_cleanup_path
+         AND json_extract(worktree_transition_json, '$.worktree.branch') LIKE 'anycode-wt/%'`,
+    ],
+  },
 ];
 
 /**
@@ -219,16 +243,18 @@ interface SessionRow {
   worktree_owned_by_anycode: number | null;
   continuation_pending: number;
   continuation_mode: string | null;
+  worktree_exit_notice_pending: number;
   worktree_cleanup_path: string | null;
   worktree_cleanup_mode: string | null;
   worktree_cleanup_owned_by_anycode: number | null;
+  worktree_cleanup_branch: string | null;
   worktree_transition_json: string | null;
 }
 
-function rowToWorktreeTransition(row: SessionRow): SessionMeta["worktreeTransition"] {
-  if (typeof row.worktree_transition_json !== "string") return undefined;
+function parseWorktreeTransitionJson(raw: string | null): SessionMeta["worktreeTransition"] {
+  if (typeof raw !== "string") return undefined;
   try {
-    const value = JSON.parse(row.worktree_transition_json) as Partial<NonNullable<SessionMeta["worktreeTransition"]>>;
+    const value = JSON.parse(raw) as Partial<NonNullable<SessionMeta["worktreeTransition"]>>;
     if (
       (value.kind !== "enter_worktree" && value.kind !== "exit_worktree") ||
       (value.origin !== "tool" && value.origin !== "chrome") ||
@@ -248,6 +274,10 @@ function rowToWorktreeTransition(row: SessionRow): SessionMeta["worktreeTransiti
   }
 }
 
+function rowToWorktreeTransition(row: SessionRow): SessionMeta["worktreeTransition"] {
+  return parseWorktreeTransitionJson(row.worktree_transition_json);
+}
+
 function rowToWorktreeCleanup(row: SessionRow): SessionWorktreeCleanup | undefined {
   if (
     typeof row.worktree_cleanup_path !== "string" ||
@@ -261,6 +291,9 @@ function rowToWorktreeCleanup(row: SessionRow): SessionWorktreeCleanup | undefin
     path: row.worktree_cleanup_path,
     mode: row.worktree_cleanup_mode,
     ownedByAnyCode: row.worktree_cleanup_owned_by_anycode === 1,
+    ...(typeof row.worktree_cleanup_branch === "string" && row.worktree_cleanup_branch.length > 0
+      ? { branch: row.worktree_cleanup_branch }
+      : {}),
   };
 }
 
@@ -308,6 +341,7 @@ function rowToSessionMeta(row: SessionRow): SessionMeta {
     ...(row.continuation_mode === "model" || row.continuation_mode === "none"
       ? { continuationMode: row.continuation_mode }
       : {}),
+    ...(row.worktree_exit_notice_pending === 1 ? { worktreeExitNoticePending: true } : {}),
     ...(worktreeCleanup !== undefined ? { worktreeCleanup } : {}),
     ...(worktreeTransition !== undefined ? { worktreeTransition } : {}),
     ...(row.engine_id !== null && row.engine_id !== undefined ? { engineId: row.engine_id } : {}),
@@ -432,8 +466,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
          id, workspace, model, mode, created_at, updated_at, title, engine_id, external_session_ref,
          project_root, worktree_id, worktree_path, worktree_branch, worktree_base_ref, worktree_owned_by_anycode,
          continuation_pending, continuation_mode, worktree_cleanup_path, worktree_cleanup_mode, worktree_cleanup_owned_by_anycode,
-         worktree_transition_json
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         worktree_cleanup_branch,
+         worktree_transition_json, worktree_exit_notice_pending
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       full.id,
       full.workspace,
@@ -455,7 +490,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       full.worktreeCleanup?.path ?? null,
       full.worktreeCleanup?.mode ?? null,
       full.worktreeCleanup === undefined ? null : full.worktreeCleanup.ownedByAnyCode ? 1 : 0,
+      full.worktreeCleanup?.branch ?? null,
       full.worktreeTransition === undefined ? null : JSON.stringify(full.worktreeTransition),
+      full.worktreeExitNoticePending === true ? 1 : 0,
     );
     // Return the same backward-compatible projection as get/list.
     return rowToSessionMeta(
@@ -542,16 +579,22 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       sets.push("continuation_mode = ?");
       params.push(patch.continuationMode);
     }
+    if (patch?.worktreeExitNoticePending !== undefined) {
+      sets.push("worktree_exit_notice_pending = ?");
+      params.push(patch.worktreeExitNoticePending ? 1 : 0);
+    }
     if (patch?.worktreeCleanup !== undefined) {
       sets.push(
         "worktree_cleanup_path = ?",
         "worktree_cleanup_mode = ?",
         "worktree_cleanup_owned_by_anycode = ?",
+        "worktree_cleanup_branch = ?",
       );
       params.push(
         patch.worktreeCleanup?.path ?? null,
         patch.worktreeCleanup?.mode ?? null,
         patch.worktreeCleanup === null ? null : patch.worktreeCleanup.ownedByAnyCode ? 1 : 0,
+        patch.worktreeCleanup?.branch ?? null,
       );
     }
     if (patch?.worktreeTransition !== undefined) {
@@ -574,12 +617,32 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // read, so two sessions can never both observe an unclaimed canonical path.
     db.exec("BEGIN IMMEDIATE");
     try {
-      const claimed = db.prepare(
-        `SELECT id FROM sessions
-         WHERE id <> ? AND (worktree_path = ? OR worktree_cleanup_path = ?)
-         LIMIT 1`,
-      ).get(id, target, target);
-      if (claimed !== undefined) {
+      const claims = db.prepare(
+        `SELECT id, worktree_path, worktree_cleanup_path, worktree_transition_json
+         FROM sessions`,
+      ).all() as Array<{
+        id: string;
+        worktree_path: string | null;
+        worktree_cleanup_path: string | null;
+        worktree_transition_json: string | null;
+      }>;
+      const conflict = claims.some((candidate) => {
+        const transition = parseWorktreeTransitionJson(candidate.worktree_transition_json);
+        // A malformed non-null transition is an unknown durable claim. Refuse
+        // every new owner rather than risk overwriting an unparseable resource.
+        if (candidate.worktree_transition_json !== null && transition === undefined) return true;
+        if (candidate.id === id) {
+          // The only legal self-upgrade is creation-intent -> active identity
+          // for the exact same target. Active or transitioning sessions cannot
+          // overwrite their own ledger with a retry.
+          if (candidate.worktree_path !== null || transition !== undefined) return true;
+          return candidate.worktree_cleanup_path !== null && candidate.worktree_cleanup_path !== target;
+        }
+        return candidate.worktree_path === target ||
+          candidate.worktree_cleanup_path === target ||
+          transition?.worktree.path === target;
+      });
+      if (conflict) {
         db.exec("ROLLBACK");
         return false;
       }
@@ -589,7 +652,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
              updated_at = ?, project_root = ?, workspace = ?,
              worktree_id = ?, worktree_path = ?, worktree_branch = ?, worktree_base_ref = ?, worktree_owned_by_anycode = ?,
              continuation_pending = ?, continuation_mode = ?,
-             worktree_cleanup_path = ?, worktree_cleanup_mode = ?, worktree_cleanup_owned_by_anycode = ?,
+             worktree_cleanup_path = ?, worktree_cleanup_mode = ?, worktree_cleanup_owned_by_anycode = ?, worktree_cleanup_branch = ?,
              worktree_transition_json = ?
            WHERE id = ?`,
         ).run(
@@ -600,6 +663,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           patch.worktreeCleanup?.path ?? null, patch.worktreeCleanup?.mode ?? null,
           patch.worktreeCleanup === undefined || patch.worktreeCleanup === null
             ? null : patch.worktreeCleanup.ownedByAnyCode ? 1 : 0,
+          patch.worktreeCleanup?.branch ?? null,
           patch.worktreeTransition === undefined || patch.worktreeTransition === null
             ? null : JSON.stringify(patch.worktreeTransition),
           id,
@@ -608,7 +672,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
         db.prepare(
           `UPDATE sessions SET updated_at = ?, project_root = ?,
              continuation_pending = ?, continuation_mode = ?,
-             worktree_cleanup_path = ?, worktree_cleanup_mode = ?, worktree_cleanup_owned_by_anycode = ?,
+             worktree_cleanup_path = ?, worktree_cleanup_mode = ?, worktree_cleanup_owned_by_anycode = ?, worktree_cleanup_branch = ?,
              worktree_transition_json = ?
            WHERE id = ?`,
         ).run(
@@ -616,6 +680,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           patch.continuationPending === true ? 1 : 0, patch.continuationMode ?? null,
           patch.worktreeCleanup!.path, patch.worktreeCleanup!.mode,
           patch.worktreeCleanup!.ownedByAnyCode ? 1 : 0,
+          patch.worktreeCleanup!.branch ?? null,
           patch.worktreeTransition === undefined || patch.worktreeTransition === null
             ? null : JSON.stringify(patch.worktreeTransition),
           id,
