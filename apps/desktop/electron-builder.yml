@@ -39,6 +39,11 @@ asarUnpack:
 # tree (darwin/win ship prebuilds; Linux rebuild is an explicit CI step, §4.3).
 npmRebuild: false
 
+# Unsigned macOS bundles are ad-hoc signed here (see the script header): without
+# it a downloaded build is rejected by macOS as "damaged" rather than as merely
+# unidentified. The hook is inert for signed builds and on non-macOS targets.
+afterPack: ./scripts/adhoc-sign-mac.mjs
+
 mac:
   identity: null
   icon: build/icon.icns
