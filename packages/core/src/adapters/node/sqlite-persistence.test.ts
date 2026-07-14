@@ -727,6 +727,64 @@ describe("SqlitePersistenceAdapter", () => {
       expect(items[0]).toMatchObject({ outputHead: "head\uFFFDtail" });
     });
 
+    it("output_head growth is measured in UTF-8 BYTES, not JS string length \u2014 a 1-char/2-byte value survives a 2-char/2-byte redelivery (W10 byte-length KEEP, catches a revert to length(TEXT))", async () => {
+      // "\u00E9" (e-acute, precomposed) is 1 UTF-16 code unit but 2 UTF-8
+      // bytes. A code-unit-count comparison (the pre-W10 `length(TEXT)`)
+      // would see "ab" (2 chars) as strictly longer than "\u00E9" (1 char)
+      // and wrongly let the redelivery overwrite it, even though both are 2
+      // bytes \u2014 no growth actually occurred.
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+        outputHead: "\u00E9",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+        outputHead: "ab",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ outputHead: "\u00E9" });
+    });
+
+    it("output_head growth is measured in UTF-8 BYTES, not JS string length \u2014 a 2-char/4-byte redelivery still replaces an equal-char-count 2-byte value (W10 byte-length REPLACE, catches a revert to length(TEXT))", async () => {
+      // Mirror of the KEEP case above: "ab" (2 chars, 2 bytes) is already
+      // recorded, then "\u00E9\u00E9" (2 chars, 4 bytes) arrives. A
+      // code-unit-count comparison sees 2 vs 2 \u2014 not strictly greater \u2014 and
+      // would wrongly keep the stale "ab" instead of growing to the
+      // byte-longer value.
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+        outputHead: "ab",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+        outputHead: "\u00E9\u00E9",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ outputHead: "\u00E9\u00E9" });
+    });
+
     it("migration v4 runs on top of an existing v3 database", async () => {
       tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-"));
       const dbPath = join(tmpDir, "v3.sqlite");
