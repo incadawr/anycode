@@ -505,14 +505,40 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    *     — unknown (NULL) is filled by the first value learned; an already-
    *     known value is never replaced (a terminal exit code is a fact, it
    *     only ever transitions from unknown to known).
-   *   - `output_head`: MONOTONIC GROWTH — updates only when the incoming
-   *     value is non-null AND strictly longer than what is already stored
-   *     (or nothing is stored yet). An empty or shorter redelivery can never
-   *     shrink a longer recorded output; an equal-length redelivery keeps the
-   *     already-stored value (deterministic tie-break).
+   *   - `output_head`: NUL-SANITIZED, then MONOTONIC GROWTH BY BYTE LENGTH
+   *     (W10 — supersedes W9's `length(TEXT)` comparison, which two NUL
+   *     hazards defeat together). Before binding, every NUL (U+0000) in the
+   *     incoming `outputHead` is replaced with U+FFFD (REPLACEMENT
+   *     CHARACTER) at this single write site, so the column is NUL-free by
+   *     construction and every prior write already went through the same
+   *     substitution. This is required because (a) the `node:sqlite` driver
+   *     does not round-trip a NUL through a TEXT column on read — it
+   *     truncates the returned JS string at the first NUL even though the
+   *     full bytes reached storage — so an unsanitized value reads back
+   *     truncated regardless of what is stored; and (b) SQLite's
+   *     `length(TEXT)` is itself NUL-terminated (`length('a\0') ==
+   *     length('a\0b')`), which independently defeats the growth comparison
+   *     below for any value containing a NUL. The comparison itself measures
+   *     BYTES, via `length(CAST(col AS BLOB))` — not `octet_length()`, which
+   *     requires SQLite >= 3.43 and the SQLite version bundled with the
+   *     Electron runtime is not under this codebase's control — so
+   *     multi-byte UTF-8 (including the replacement character just
+   *     substituted in) is measured correctly. Updates only when the
+   *     incoming value is non-null AND strictly longer in bytes than what is
+   *     already stored (or nothing is stored yet). An empty or shorter
+   *     redelivery can never shrink a longer recorded output; an
+   *     equal-length redelivery keeps the already-stored value
+   *     (deterministic tie-break).
    */
   async recordCodexThreadItem(threadId: string, item: CodexShadowCommandItem): Promise<void> {
     const db = this.open();
+    // NUL-free by construction: SQLite's length(TEXT) is NUL-terminated and
+    // node:sqlite truncates TEXT on read at the first NUL, so a raw NUL
+    // byte would both defeat the growth comparison below and read back
+    // silently shortened. Substituting (not stripping) keeps the column
+    // 1:1 with the incoming code units, so cap/length math elsewhere is
+    // unaffected and the substitution is visible rather than silent.
+    const outputHead = item.outputHead == null ? null : item.outputHead.replaceAll("\u0000", "\uFFFD");
     db.prepare(
       `INSERT INTO codex_thread_items
          (thread_id, turn_ordinal, position_in_turn, seq_in_turn, item_id, command, cwd, exit_code, output_head, created_at)
@@ -522,7 +548,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
          exit_code = COALESCE(exit_code, excluded.exit_code),
          output_head = CASE
            WHEN excluded.output_head IS NOT NULL
-             AND (output_head IS NULL OR length(excluded.output_head) > length(output_head))
+             AND (output_head IS NULL OR length(CAST(excluded.output_head AS BLOB)) > length(CAST(output_head AS BLOB)))
            THEN excluded.output_head
            ELSE output_head
          END`,
@@ -535,7 +561,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       item.command,
       item.cwd ?? null,
       item.exitCode ?? null,
-      item.outputHead ?? null,
+      outputHead,
       Date.now(),
     );
   }

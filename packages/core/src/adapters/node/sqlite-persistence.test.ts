@@ -668,6 +668,65 @@ describe("SqlitePersistenceAdapter", () => {
       expect(items[0]).toMatchObject({ positionInTurn: 1, seqInTurn: 1 });
     });
 
+    it("a NUL byte inside outputHead no longer defeats monotonic growth (W10 — SQLite's length(TEXT) is NUL-terminated AND node:sqlite truncates TEXT on read)", async () => {
+      // codex-cli's aggregatedOutput can legitimately contain a NUL byte (a
+      // valid JSON string escape that JSON.parse preserves). Pre-W10, two
+      // independent hazards conspire against this: SQLite's length(TEXT) is
+      // NUL-terminated (length('a\0') == length('a\0b')), so the W9
+      // monotonic-growth comparison silently refuses to grow past the first
+      // NUL; and separately, node:sqlite's TEXT-column read truncates the JS
+      // string at the first NUL even though the full bytes made it into
+      // storage. A NUL-sanitizing write is the only fix that makes BOTH
+      // layers correct at once.
+      const NUL = "\u0000";
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "printf 'head\\0tail'",
+        outputHead: `head${NUL}tail`,
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "printf 'head\\0tail'",
+        outputHead: `head${NUL}tail-more`,
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ outputHead: "head\uFFFDtail-more" });
+    });
+
+    it("a NUL byte inside an already-recorded outputHead still cannot be shrunk by a later redelivery (W10 shrink-shield)", async () => {
+      const NUL = "\u0000";
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "printf 'head\\0tail'",
+        outputHead: `head${NUL}tail`,
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "printf 'head\\0tail'",
+        outputHead: "x",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ outputHead: "head\uFFFDtail" });
+    });
+
     it("migration v4 runs on top of an existing v3 database", async () => {
       tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-"));
       const dbPath = join(tmpDir, "v3.sqlite");
