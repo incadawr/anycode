@@ -81,15 +81,24 @@ linux:
       arch:
         - x64
 
-# Publish target for `electron-builder --publish always`, which CI passes on a
-# `v*` tag push (.github/workflows/release.yml). Every matrix job uploads into
-# the SAME release for the tag; the first one creates it, the rest reuse it.
+# Publish target. CI now runs electron-builder with `--publish never` on every
+# platform (a separate `release` job in .github/workflows/release.yml assembles
+# ONE draft release from the built artifacts via `gh`, instead of racing four
+# electron-builder publishers against the same tag) — this block's ONLY live
+# effect today is what it writes into app-update.yml inside the packaged app,
+# which is where electron-updater looks for updates at runtime (TASK.47).
 #
-# releaseType: draft — a tag push never publishes to users on its own. CI fills
-# the draft with all four platform artifacts and its release notes (taken from
-# the tag's CHANGELOG.md section); a human presses Publish.
+# releaseType: release (TASK.47 defect 1) — electron-updater reads this value
+# from the BUNDLED app-update.yml, not from how CI happened to publish. A tag
+# still lands in a human-reviewed draft first (owner presses Publish on
+# GitHub); "release" here only tells running clients to check the PUBLISHED
+# releases feed once one exists — draft releases are already invisible to
+# them without a token, so this is not a bypass of the human gate. The
+# previous `draft` value pointed every client's update check at the invisible
+# draft feed forever, i.e. no user could ever discover an update — the packaged
+# assert in scripts/assert-package.mjs fails the build if this regresses.
 publish:
   provider: github
   owner: incadawr
   repo: anycode
-  releaseType: draft
+  releaseType: release

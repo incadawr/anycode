@@ -9,12 +9,24 @@
  *   - pty.node         — node-pty native addon (dlopen'd, not exec'd)
  *   - spawn-helper     — node-pty unix helper, must be executable (+x)
  *
+ * TASK.47 defect 1: it ALSO asserts `app-update.yml` (electron-builder writes
+ * this into the packaged resources dir whenever `publish:` is configured,
+ * regardless of whether the build itself actually publishes — release.yml's
+ * `--publish never` build still gets one) carries `releaseType: release`. A
+ * `draft` value there makes electron-updater poll GitHub's draft-releases
+ * endpoint, which is invisible without a token — i.e. no user's client EVER
+ * finds an update, silently, with a fully green CI gate. This is the ONLY
+ * tripwire for that regression: it lives in the built artifact, not in
+ * source (a reverted `electron-builder.yml` line is invisible to every other
+ * test in the repo).
+ *
  * Usage:  node scripts/assert-package.mjs [<path-to-.app | dist dir | app.asar.unpacked>]
  * Default target: dist/mac-arm64/AnyCode.app (darwin-arm64 `package:dir` output).
- * Exits non-zero with a clear message on any missing/non-executable binary.
+ * Exits non-zero with a clear message on any missing/non-executable binary,
+ * a missing app-update.yml, or a releaseType other than "release".
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
@@ -45,6 +57,51 @@ function findUnpackedDir(root, depth = 6) {
     if (nested) return nested;
   }
   return null;
+}
+
+/**
+ * Depth-limited search for a FILE named `name` under `root` (same walk shape
+ * as `findUnpackedDir` above, generalized past one hardcoded macOS shortcut —
+ * `app-update.yml` lives directly in the resources dir on every platform:
+ * `Contents/Resources/` on mac, `resources/` on win/linux-unpacked).
+ */
+function findFile(root, name, depth = 6) {
+  if (!existsSync(root)) return null;
+  const rootStat = statSync(root);
+  if (rootStat.isFile()) {
+    return basename(root) === name ? root : null;
+  }
+  if (!rootStat.isDirectory() || depth <= 0) return null;
+  for (const entry of readdirSync(root)) {
+    const p = join(root, entry);
+    let entryStat;
+    try {
+      entryStat = statSync(p);
+    } catch {
+      continue;
+    }
+    if (entryStat.isFile()) {
+      if (entry === name) return p;
+      continue;
+    }
+    if (entryStat.isDirectory()) {
+      const nested = findFile(p, name, depth - 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+/**
+ * Minimal top-level `key: value` scalar reader for the flat YAML
+ * electron-builder writes into `app-update.yml` (owner/repo/provider/
+ * releaseType, no nesting) — reading one field doesn't earn a yaml
+ * dependency. Strips a matching pair of quotes if the value carries any.
+ */
+function readYamlScalar(content, key) {
+  const match = content.match(new RegExp(`^${key}:\\s*(.+?)\\s*$`, "m"));
+  if (!match) return undefined;
+  return match[1].replace(/^["']|["']$/g, "");
 }
 
 /** Collect every file path (recursively) under `dir`. */
@@ -104,14 +161,33 @@ function main() {
     }
   }
 
+  // TASK.47 defect 1: app-update.yml lives beside app.asar (Resources/ on mac,
+  // resources/ on win/linux), NOT inside app.asar.unpacked — search from
+  // `target`, not from `unpacked` above.
+  const updateYmlPath = findFile(target, "app-update.yml");
+  let releaseType;
+  if (!updateYmlPath) {
+    problems.push(
+      `app-update.yml not found under ${target} — electron-builder.yml's publish: block is missing, or this target wasn't built with it configured`,
+    );
+  } else {
+    releaseType = readYamlScalar(readFileSync(updateYmlPath, "utf8"), "releaseType");
+    if (releaseType !== "release") {
+      problems.push(
+        `app-update.yml at ${updateYmlPath} has releaseType=${JSON.stringify(releaseType ?? null)} (expected "release") — electron-updater will poll GitHub's DRAFT releases, invisible without a token, so no user's client will EVER find an update`,
+      );
+    }
+  }
+
   if (problems.length > 0) {
-    fail(`packaged app is missing/broken native binaries under ${unpacked}:\n  - ${problems.join("\n  - ")}`);
+    fail(`packaged app has broken native binaries and/or update feed under ${target}:\n  - ${problems.join("\n  - ")}`);
   }
 
   console.log(`[assert-package] OK: ${unpacked}`);
   console.log(`  rg           ${rg}`);
   console.log(`  pty.node     ${ptyNode}`);
   if (!IS_WINDOWS) console.log(`  spawn-helper ${spawnHelper} (executable)`);
+  console.log(`  app-update.yml ${updateYmlPath} (releaseType: ${releaseType})`);
 }
 
 main();
