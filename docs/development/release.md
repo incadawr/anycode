@@ -12,17 +12,32 @@ AnyCode starts its public version line at **0.0.1 Alpha**.
 The version must match in the root manifest and in every workspace package that
 ships together (`@anycode/desktop`, `@anycode/core`, `@anycode/cli`).
 
+## Where work lands
+
+From 0.0.3 on, `master` holds only released state. Feature work accumulates on
+the integration branch **`next`**, and `next` is merged into `master` when the
+maintainer decides the set of changes is worth a release — not when the last
+task happens to be finished. The version number is chosen at that moment, so a
+task landing on `next` does not commit anyone to shipping it next.
+
+This keeps the tag honest: every commit reachable from `master` is either
+released or about to be, and a half-finished task on `next` can never reach a
+user by accident.
+
 ## Releasing a change
 
-1. Choose the next SemVer number and update package manifests together.
-2. Add a concise user-facing entry to [`CHANGELOG.md`](../../CHANGELOG.md):
+1. Merge `next` into `master`.
+2. Choose the next SemVer number and update package manifests together.
+3. Add a concise user-facing entry to [`CHANGELOG.md`](../../CHANGELOG.md):
    `Added`, `Changed`, `Fixed`, `Removed`, or `Security`.
-3. Run typecheck, targeted tests, and the desktop build; for UI flows, run the
+4. Run typecheck, targeted tests, and the desktop build; for UI flows, run the
    appropriate smoke from the [automation guide](automation-smoke.md).
-4. Create annotated tag `v<version>` only after the verified commit has been
+5. Create annotated tag `v<version>` only after the verified commit has been
    merged and pushed.
-5. Push the tag. Pushing is what starts the release — the tag alone does
+6. Push the tag. Pushing is what starts the release — the tag alone does
    nothing until it reaches the remote.
+7. Install the draft's own artifact and open it before pressing Publish. A green
+   run is not a working release; only the artifact is.
 
 `CHANGELOG.md` records functional changes, not internal refactor-only noise.
 Detailed implementation notes and private research remain outside Git in
