@@ -69,7 +69,22 @@ interface OpenAICompatibleReasoningOptions {
   providerOptions?: { openaiCompatible: { reasoningEffort: string } };
 }
 
-type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOptions;
+/**
+ * Return shape on the openai-responses transport. Unlike the other two
+ * transports, `providerOptions` is NON-optional: `store: false` (TASK.43 §0.2)
+ * must ride on EVERY openai-responses request regardless of whether reasoning
+ * was requested — real OpenAI defaults `store` to `true` server-side when the
+ * field is absent from the body, which would silently start a second,
+ * AnyCode-external persistence of the conversation on OpenAI's servers. There
+ * is no token-budget arithmetic here either (§4.3, mirrors chat-completions):
+ * `reasoning_effort` is an enum on this transport too.
+ */
+interface OpenAIResponsesReasoningOptions {
+  maxOutputTokens?: number;
+  providerOptions: { openai: { store: false; reasoningEffort?: string } };
+}
+
+type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOptions | OpenAIResponsesReasoningOptions;
 
 /**
  * Provider-aware reasoning-effort mapping. GLM uses the Anthropic-compatible
@@ -103,9 +118,18 @@ type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOpt
  * (TASK.43 §4.2/§4.3): `@ai-sdk/openai-compatible` reads that exact key
  * unconditionally and serializes it as top-level `reasoning_effort` in the
  * request body. `"max"` collapses to `"high"` — chat-completions has no `xhigh`/
- * `max` tier of its own, unlike GLM's Anthropic-proxied enum above. openai-responses
- * has no mapping yet (W3) and says so loudly rather than emitting options no
- * Responses endpoint would read.
+ * `max` tier of its own, unlike GLM's Anthropic-proxied enum above.
+ *
+ * openai-responses maps to `providerOptions.openai.{reasoningEffort, store}`
+ * (TASK.43 §0.2/§0.7). `store: false` is UNCONDITIONAL — it rides on every
+ * request on this transport, reasoning or not (see `OpenAIResponsesReasoningOptions`
+ * above). `reasoningEffort`, when present, is passed through VERBATIM
+ * (including `"max"`) rather than collapsed the way chat-completions collapses
+ * it: unlike chat-completions' fixed enum, real OpenAI reasoning models keep
+ * gaining tiers (`minimal`, and whatever ships after this was written), and
+ * which values a given model actually accepts is a capability-layer/catalog
+ * question (`effortLevels`), not something this wire-mapping function should
+ * guess or narrow ahead of time.
  *
  * Overloaded so a caller that passes a literal `"anthropic-messages"` transport
  * (or omits it) keeps `providerOptions.anthropic` as a NON-optional key on the
@@ -127,7 +151,7 @@ export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
   transport: "openai-responses",
-): never;
+): OpenAIResponsesReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
@@ -138,11 +162,23 @@ export function reasoningRequestOptions(
   providerName?: string,
   transport: ProviderTransport = "anthropic-messages",
 ): ReasoningOptions {
-  if (transport === "openai-responses") {
-    throw new Error(`Reasoning options for provider transport "${transport}" are not implemented yet`);
-  }
-
   const effort = request.reasoningEffort;
+
+  if (transport === "openai-responses") {
+    // store:false is unconditional (§0.2): AnyCode owns history end-to-end, and
+    // leaving `store` absent defaults the real API to `store: true` server-side
+    // — a hidden second persistence this transport must never create.
+    if (effort === undefined || effort === "off") {
+      return {
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+        providerOptions: { openai: { store: false } },
+      };
+    }
+    return {
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      providerOptions: { openai: { store: false, reasoningEffort: effort } },
+    };
+  }
 
   if (transport === "openai-chat-completions") {
     if (effort === undefined || effort === "off") {

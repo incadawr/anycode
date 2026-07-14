@@ -1,10 +1,11 @@
 /**
  * Transport dispatcher tests (TASK.43 §0.3). `createLanguageModel` is the ONE
- * place that maps a transport onto a client factory. Two branches are live
- * (anthropic-messages, openai-chat-completions); the still-unimplemented
- * openai-responses transport must fail LOUDLY rather than silently POST an
- * Anthropic (or chat-completions) body to a Responses endpoint — the exact
- * failure the transport discriminant exists to prevent.
+ * place that maps a transport onto a client factory. All three branches are
+ * live (anthropic-messages, openai-chat-completions, openai-responses); an
+ * unknown transport smuggled in past the type system must still fail LOUDLY
+ * rather than silently POST a body shaped for one protocol at an endpoint
+ * speaking another — the exact failure the transport discriminant exists to
+ * prevent.
  */
 
 import { describe, expect, it } from "vitest";
@@ -49,10 +50,18 @@ describe("createLanguageModel", () => {
     ).not.toThrow();
   });
 
-  it("throws not-implemented for openai-responses instead of falling back to another transport", () => {
-    const transport: ProviderTransport = "openai-responses";
-    expect(() => createLanguageModel(config({ transport }))).toThrow(/not implemented/i);
-    expect(() => createLanguageModel(config({ transport }))).toThrow(new RegExp(transport));
+  it("builds an OpenAI Responses model for the openai-responses transport", () => {
+    const model = createLanguageModel(
+      config({ transport: "openai-responses", baseUrl: "https://api.openai.com/v1", model: "gpt-5.1" }),
+    );
+    expect(model).toBeDefined();
+    expect(typeof model === "string" ? model : model.modelId).toBe("gpt-5.1");
+  });
+
+  it("builds an openai-responses model even without an api key (construction is side-effect free)", () => {
+    expect(() =>
+      createLanguageModel(config({ transport: "openai-responses", apiKey: undefined })),
+    ).not.toThrow();
   });
 
   it("throws on an unknown transport smuggled in past the type system", () => {

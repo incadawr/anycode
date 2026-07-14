@@ -19,6 +19,10 @@ export {
   createOpenAICompatibleLanguageModel,
   OPENAI_COMPATIBLE_PROVIDER_NAME,
 } from "./openai-compatible.js";
+export {
+  createOpenAIResponsesLanguageModel,
+  OPENAI_RESPONSES_PROVIDER_NAME,
+} from "./openai-responses.js";
 export { translateStreamPart } from "./stream-translator.js";
 export { AiSdkModelPort } from "./model-port.js";
 export { OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE, toSdkMessages, toSdkTools } from "./sdk-mapping.js";

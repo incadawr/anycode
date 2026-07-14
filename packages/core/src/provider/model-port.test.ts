@@ -621,11 +621,26 @@ describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () =
     );
   });
 
-  it("refuses to shape reasoning for openai-responses instead of emitting Anthropic thinking options", () => {
-    expect(() =>
-      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "high" }, "Z.AI (GLM)", "openai-responses"),
-    ).toThrow(/not implemented/i);
+  it("always carries store:false on openai-responses, even with no reasoning requested", () => {
+    expect(reasoningRequestOptions({ ...baseRequest }, "OpenAI", "openai-responses")).toEqual({
+      providerOptions: { openai: { store: false } },
+    });
+    expect(
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "off", maxOutputTokens: 4096 }, undefined, "openai-responses"),
+    ).toEqual({ maxOutputTokens: 4096, providerOptions: { openai: { store: false } } });
   });
+
+  it.each(["low", "medium", "high", "max"] as const)(
+    "passes openai-responses effort %s through VERBATIM (no chat-completions-style max->high collapse), alongside store:false",
+    (effort) => {
+      expect(
+        reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 4096, reasoningEffort: effort }, "OpenAI", "openai-responses"),
+      ).toEqual({
+        maxOutputTokens: 4096,
+        providerOptions: { openai: { store: false, reasoningEffort: effort } },
+      });
+    },
+  );
 
   it("is byte-dormant on openai-chat-completions when effort is off, regardless of providerName", () => {
     expect(
