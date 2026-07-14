@@ -22,18 +22,23 @@
  * runners drive the real teardown.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { makeTrustedScratchDir } from "../shared/test-scratch.js";
+import { checkCodexBinaryPathTrust } from "./codex-binary.js";
 import { closeAllCodexChildren, liveCodexChildCount } from "./codex-children.js";
 import { runCodexDoctor } from "./codex-doctor.js";
 import { runCodexLogin } from "./codex-login.js";
 import { createCodexOnboardingController, type CodexIpcDeps } from "./codex-ipc.js";
 
 const fixture = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mjs", import.meta.url));
-const workDir = mkdtempSync(join(tmpdir(), "anycode-codex-spawn-race-"));
+// NOT os.tmpdir(): the trust gate under test refuses a binary under a
+// world-writable ancestor, which on Linux is `/tmp` itself — the poisoning
+// below would then never be reached, because the FIRST check already refuses.
+// See test-scratch.ts.
+const workDir = makeTrustedScratchDir("codex-spawn-race");
 
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 afterEach(async () => {
@@ -52,9 +57,11 @@ interface CodexShim {
 }
 
 /**
- * A REAL executable at a REAL path — `mkdtemp` gives a 0700 directory we own, so
- * the production trust gate passes on its own terms and the production spawn
- * path runs exactly as it would against a user's `codex`.
+ * A REAL executable at a REAL path the production trust gate accepts — asserted
+ * here, not assumed, because THE ENTIRE POINT of the poison test below is that
+ * the first check passes and the second one refuses. A scratch location the gate
+ * rejects outright would still leave that test red, but for the opposite reason
+ * (zero spawns instead of one), and the assertion would not say so.
  *
  * `poisonOnVersion` makes the binary world-writable from INSIDE its own
  * `--version` run: a genuine TOCTOU against the real filesystem, not a stubbed
@@ -68,6 +75,8 @@ function writeCodexShim(name: string, options: { poisonOnVersion?: boolean } = {
   const poison = options.poisonOnVersion === true ? `if [ "$1" = "--version" ]; then chmod 0777 "$0"; fi\n` : "";
   writeFileSync(path, `#!/bin/sh\necho "$$" >> ${log}\n${poison}exec ${process.execPath} ${fixture} "$@"\n`);
   chmodSync(path, 0o755);
+  const untrusted = checkCodexBinaryPathTrust(path, undefined, process.platform);
+  if (untrusted !== null) throw new Error(`test scratch is not an executable location the trust gate accepts: ${untrusted}`);
   const spawnCalls: string[][] = [];
   return {
     path,
