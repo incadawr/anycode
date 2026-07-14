@@ -174,6 +174,7 @@ describe("boot() env-scrub integration (mirrors index.ts's try/catch/finally)", 
       // Mirrors index.ts:120-124 — the key is read from process.env and
       // captured into AiSdkModelPort's constructor-held config BEFORE scrub.
       modelPort = new AiSdkModelPort({
+        transport: "anthropic-messages",
         baseUrl: "https://example.com",
         apiKey: process.env.ANYCODE_API_KEY,
         model: "test-model",
@@ -212,6 +213,7 @@ describe("boot() env-scrub integration (mirrors index.ts's try/catch/finally)", 
         // Mirrors a mid-boot failure AFTER the model port has already captured
         // the key (e.g. persistence open failure further down boot()).
         new AiSdkModelPort({
+          transport: "anthropic-messages",
           baseUrl: "https://example.com",
           apiKey: process.env.ANYCODE_API_KEY,
           model: "test-model",
@@ -246,6 +248,7 @@ describe("boot() env-scrub integration (mirrors index.ts's try/catch/finally)", 
         fallbackApiKey: process.env.ANYCODE_API_KEY,
       });
       modelPort = new AiSdkModelPort({
+        transport: "anthropic-messages",
         baseUrl: "https://example.com",
         apiKey: process.env.ANYCODE_API_KEY,
         model: "test-model",
@@ -288,6 +291,7 @@ describe("boot() env-scrub integration (mirrors index.ts's try/catch/finally)", 
           fallbackApiKey: process.env.ANYCODE_API_KEY,
         });
         new AiSdkModelPort({
+          transport: "anthropic-messages",
           baseUrl: "https://example.com",
           apiKey: process.env.ANYCODE_API_KEY,
           model: "test-model",

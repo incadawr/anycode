@@ -91,6 +91,7 @@ describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)
   it("drops the unparsable `tool_result` artifact and still delivers start / text / finish", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const config: AnthropicEndpointConfig = {
+      transport: "anthropic-messages",
       baseUrl,
       apiKey: "test-key",
       model: "glm-5.2",

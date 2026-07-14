@@ -48,18 +48,18 @@ const PRE_SLICE_SNAPSHOT = [
 
 describe("toSdkMessages image-free lock (slice 6.2 L5)", () => {
   it("deep-equals the pre-slice snapshot for image-free messages", () => {
-    expect(toSdkMessages(IMAGE_FREE_INPUT)).toEqual(PRE_SLICE_SNAPSHOT);
+    expect(toSdkMessages(IMAGE_FREE_INPUT, "anthropic-messages")).toEqual(PRE_SLICE_SNAPSHOT);
   });
 
   it("keeps the bare-string user content when images is an empty array", () => {
-    const [userMsg] = toSdkMessages([{ role: "user", content: "hi", images: [] }]);
+    const [userMsg] = toSdkMessages([{ role: "user", content: "hi", images: [] }], "anthropic-messages");
     expect(userMsg).toEqual({ role: "user", content: "hi" });
   });
 });
 
 describe("toSdkMessages with images (slice 6.2 §2-B1)", () => {
   it("maps a user message to [TextPart, ...FilePart] with the bare-base64 shorthand", () => {
-    const [userMsg] = toSdkMessages([{ role: "user", content: "look", images: [IMG] }]);
+    const [userMsg] = toSdkMessages([{ role: "user", content: "look", images: [IMG] }], "anthropic-messages");
     expect(userMsg).toEqual({
       role: "user",
       content: [
@@ -70,14 +70,17 @@ describe("toSdkMessages with images (slice 6.2 §2-B1)", () => {
   });
 
   it("maps a tool result to a content output with the tagged FileData shape", () => {
-    const [toolMsg] = toSdkMessages([
-      {
-        role: "tool",
-        content: [
-          { type: "tool_result", toolCallId: "call_9", toolName: "Read", text: "[image attached]", images: [IMG], status: "success" },
-        ],
-      },
-    ]);
+    const [toolMsg] = toSdkMessages(
+      [
+        {
+          role: "tool",
+          content: [
+            { type: "tool_result", toolCallId: "call_9", toolName: "Read", text: "[image attached]", images: [IMG], status: "success" },
+          ],
+        },
+      ],
+      "anthropic-messages",
+    );
     expect(toolMsg).toEqual({
       role: "tool",
       content: [
@@ -99,7 +102,7 @@ describe("toSdkMessages with images (slice 6.2 §2-B1)", () => {
 
   it("preserves every image in order for a multi-image user message", () => {
     const jpeg: ImageAttachment = { mediaType: "image/jpeg", data: "SkpK" };
-    const [userMsg] = toSdkMessages([{ role: "user", content: "two", images: [IMG, jpeg] }]);
+    const [userMsg] = toSdkMessages([{ role: "user", content: "two", images: [IMG, jpeg] }], "anthropic-messages");
     expect(userMsg).toEqual({
       role: "user",
       content: [

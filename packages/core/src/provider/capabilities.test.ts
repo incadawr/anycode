@@ -17,7 +17,8 @@ const VISION_ENTRY: CatalogProviderEntry = {
   id: "anthropic",
   name: "Anthropic",
   baseUrl: "https://api.anthropic.com",
-  defaultKind: "anthropic",
+  defaultTransport: "anthropic-messages",
+  supportedTransports: ["anthropic-messages"],
   auth: { kind: "api_key" },
   models: [
     { id: "claude-vision", name: "Claude Vision", contextWindow: 200_000, imageInput: true },
@@ -58,7 +59,8 @@ describe("resolveImageInput (slice 6.2 §2-B4, fail-closed)", () => {
       id: "custom",
       name: "Custom",
       baseUrl: "",
-      defaultKind: "anthropic",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
       auth: { kind: "api_key" },
       models: [],
     };
@@ -68,7 +70,7 @@ describe("resolveImageInput (slice 6.2 §2-B4, fail-closed)", () => {
 });
 
 describe("output and reasoning capability resolution", () => {
-  const entry: CatalogProviderEntry = { id: "z-ai", name: "Z.AI", baseUrl: "https://api.z.ai/api/anthropic", defaultKind: "anthropic", auth: { kind: "api_key" }, models: [
+  const entry: CatalogProviderEntry = { id: "z-ai", name: "Z.AI", baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
     { id: "glm-5.2", contextWindow: 200_000, maxOutputTokens: 32_768, reasoning: true, effortLevels: ["off", "high", "max"] },
     { id: "claude-test", contextWindow: 200_000, reasoning: true },
     { id: "glm-basic", contextWindow: 128_000, maxOutputTokens: 16_384 },
@@ -102,7 +104,8 @@ const Z_AI_ENTRY: CatalogProviderEntry = {
   id: "z-ai",
   name: "Z.AI (GLM)",
   baseUrl: "https://api.z.ai/api/anthropic",
-  defaultKind: "anthropic",
+  defaultTransport: "anthropic-messages",
+  supportedTransports: ["anthropic-messages"],
   auth: { kind: "api_key" },
   models: [
     { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200_000 },
@@ -139,7 +142,8 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
       id: "custom",
       name: "Custom",
       baseUrl: "",
-      defaultKind: "anthropic",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
       auth: { kind: "api_key" },
       models: [],
     };

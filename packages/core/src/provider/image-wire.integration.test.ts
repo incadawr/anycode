@@ -117,6 +117,7 @@ describe("image mapping over the real @ai-sdk/anthropic wire (slice 6.2 B6)", ()
 
   function portFor(): AiSdkModelPort {
     const config: AnthropicEndpointConfig = {
+      transport: "anthropic-messages",
       baseUrl,
       apiKey: "test-key",
       model: "claude-x",

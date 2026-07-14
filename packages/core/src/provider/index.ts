@@ -3,7 +3,7 @@ export type {
   CatalogModel,
   CatalogProviderEntry,
   ProviderCatalog,
-  ProviderKind,
+  ProviderTransport,
   ResolvedEndpoint,
 } from "./catalog.js";
 export { resolveEndpoint } from "./catalog.js";
@@ -12,7 +12,9 @@ export {
   createAnthropicLanguageModel,
   normalizeAnthropicBaseUrl,
 } from "./anthropic.js";
-export type { AnthropicEndpointConfig } from "./anthropic.js";
+export { normalizeExplicitBaseUrl } from "./endpoint.js";
+export type { AnthropicEndpointConfig, EndpointConfig } from "./endpoint.js";
+export { createLanguageModel } from "./language-model.js";
 export { translateStreamPart } from "./stream-translator.js";
 export { AiSdkModelPort } from "./model-port.js";
 export { toSdkMessages, toSdkTools } from "./sdk-mapping.js";

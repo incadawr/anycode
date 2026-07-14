@@ -72,6 +72,7 @@ function retryableError(): APICallError {
 
 function config(overrides: Partial<AnthropicEndpointConfig>): AnthropicEndpointConfig {
   return {
+    transport: "anthropic-messages",
     baseUrl: "https://api.example.com",
     apiKey: "static-key",
     model: "claude-test",

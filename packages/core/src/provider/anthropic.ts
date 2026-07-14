@@ -6,34 +6,9 @@
 
 import { createAnthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
-import type { RetryPolicy } from "./retry.js";
+import type { EndpointConfig } from "./endpoint.js";
 
-export interface AnthropicEndpointConfig {
-  /** Raw base URL, possibly without the /v1 suffix; normalized before use. */
-  baseUrl: string;
-  apiKey: string;
-  /** Extra headers merged over the dual-auth defaults. */
-  headers?: Record<string, string>;
-  /** Model id to request from the endpoint. */
-  model: string;
-  /** Overrides over DEFAULT_RETRY_POLICY; maxRetries 0 disables retries (design §2.9). */
-  retry?: Partial<RetryPolicy>;
-  /**
-   * Optional per-attempt api-key resolver (slice 2.5 §3.3; additive-optional, by
-   * the precedent of `ExecutionPort.runBinary?` in 2.3). When set, AiSdkModelPort
-   * calls it at the START of every attempt to pick up a mid-session-refreshed
-   * OAuth token; a rejection or empty result falls back to the static `apiKey`.
-   * When unset, behaviour is byte-for-byte the 2.2 static-key path.
-   */
-  resolveApiKey?: () => Promise<string>;
-  /**
-   * Catalog provider name (e.g. "Z.AI (GLM)", "Anthropic") used by the model
-   * port to branch reasoning-effort mapping: GLM expects a `reasoning_effort`
-   * enum at the top level, real Anthropic uses `providerOptions.anthropic.
-   * thinking.budgetTokens`. Absent ⇒ Anthropic path (legacy behaviour).
-   */
-  providerName?: string;
-}
+export type { AnthropicEndpointConfig } from "./endpoint.js";
 
 /**
  * Ensures the base URL path ends with "/v1" (idempotent, trailing slashes
@@ -71,12 +46,22 @@ export function buildDualAuthHeaders(
 /**
  * Builds a LanguageModel via createAnthropic({ baseURL, apiKey, headers })
  * using the normalized base URL and dual-auth headers.
+ *
+ * `EndpointConfig.apiKey` is optional across transports (no-auth local OpenAI
+ * endpoints), but this one stays FAIL-CLOSED: every Anthropic-compatible endpoint
+ * authenticates, and an unauthenticated call would leave the SDK to fall back to
+ * an ambient ANTHROPIC_API_KEY or emit a keyless request. A missing key is a
+ * mis-resolved config and must surface as such.
  */
-export function createAnthropicLanguageModel(config: AnthropicEndpointConfig): LanguageModel {
+export function createAnthropicLanguageModel(config: EndpointConfig): LanguageModel {
+  const { apiKey } = config;
+  if (apiKey === undefined) {
+    throw new Error("The anthropic-messages transport requires an API key");
+  }
   const provider = createAnthropic({
     baseURL: normalizeAnthropicBaseUrl(config.baseUrl),
-    apiKey: config.apiKey,
-    headers: buildDualAuthHeaders(config.apiKey, config.headers),
+    apiKey,
+    headers: buildDualAuthHeaders(apiKey, config.headers),
   });
   return provider(config.model);
 }
