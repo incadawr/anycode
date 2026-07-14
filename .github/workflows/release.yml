@@ -17,11 +17,17 @@
 # the "compute gates" step below reads secrets into plain booleans instead of
 # letting a later step fail on an empty credential.
 #
+# Publishing needs no user-provided credential: the built-in Actions token
+# (`permissions: contents: write` below) is what fills the draft release.
+#
 # Secrets referenced (all user-gated, none required for a green run):
 #   MACOS_CSC_LINK / MACOS_CSC_KEY_PASSWORD / MACOS_CSC_NAME  — Developer ID cert (§9-U2)
-#   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER / APPLE_TEAM_ID — notarytool (§9-U2)
+#   APPLE_API_KEY_P8 / APPLE_API_KEY_ID / APPLE_API_ISSUER / APPLE_TEAM_ID — notarytool (§9-U2)
 #   WINDOWS_CSC_LINK / WINDOWS_CSC_KEY_PASSWORD               — Windows code-sign cert (§9-U3)
-#   GH_TOKEN                                                  — enables `--publish always` on tag push (§9-U4)
+#
+# Absent Apple secrets are a normal state, not a degraded one: the macOS bundle
+# is then ad-hoc signed by the afterPack hook (electron-builder.yml) so it stays
+# openable, just not notarized.
 
 name: Release
 
@@ -38,7 +44,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write # only exercised when GH_TOKEN/publish is actually enabled
+  contents: write # lets the built-in GITHUB_TOKEN create and fill the draft release
 
 jobs:
   verify:
@@ -262,8 +268,13 @@ jobs:
         # tripwire for the silent platform-ripgrep-package drop found in the
         # spike; electron-builder itself emits no warning).
 
-      - name: Verify codesign (macOS, signed builds only)
-        if: runner.os == 'macOS' && steps.gates.outputs.mac_sign == 'true'
+      # Runs for signed AND unsigned macOS builds. An unsigned bundle is ad-hoc
+      # signed by the afterPack hook precisely so that this check can hold for
+      # it: a bundle whose signature does not verify is reported by macOS as
+      # "damaged" and cannot be opened at all, which is how a broken release
+      # ships unnoticed. Both paths must produce a bundle that verifies.
+      - name: Verify codesign (macOS)
+        if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           app_path=$(find apps/desktop/dist -maxdepth 3 -name '*.app' -print -quit)
