@@ -136,6 +136,304 @@ describe("SqlitePersistenceAdapter", () => {
         updatedAt: 5_000,
       });
     });
+
+    it("round-trips project/worktree metadata and a pending rehost through create/get/list", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const input = {
+        id: "s-wt",
+        workspace: "/repo/.anycode/worktrees/task-5",
+        projectRoot: "/repo",
+        worktree: {
+          id: "task-5",
+          path: "/repo/.anycode/worktrees/task-5",
+          branch: "anycode/task-5",
+          baseRef: "main",
+          ownedByAnyCode: true,
+        },
+        continuationPending: true,
+        worktreeTransition: {
+          origin: "tool" as const,
+          kind: "enter_worktree" as const,
+          projectRoot: "/repo",
+          fromWorkspace: "/repo",
+          toWorkspace: "/repo/.anycode/worktrees/task-5",
+          worktree: {
+            id: "task-5",
+            path: "/repo/.anycode/worktrees/task-5",
+            branch: "anycode/task-5",
+            baseRef: "main",
+            ownedByAnyCode: true,
+          },
+          toolCallId: "call-1",
+        },
+        model: "m",
+        mode: "build" as const,
+      };
+
+      const created = await adapter.createSession(input);
+      expect(created).toEqual({ ...input, createdAt: 1_000, updatedAt: 1_000 });
+      expect(await adapter.getSession("s-wt")).toEqual(created);
+      expect(await adapter.listSessions({ workspace: input.workspace })).toEqual([created]);
+    });
+
+    it("atomically enters and exits a worktree, clearing false/default metadata on exit", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "s1", workspace: "/repo", model: "m", mode: "build" });
+
+      vi.setSystemTime(2_000);
+      await adapter.touchSession("s1", {
+        workspace: "/repo/.anycode/worktrees/task-5",
+        projectRoot: "/repo",
+        worktree: {
+          id: "task-5",
+          path: "/repo/.anycode/worktrees/task-5",
+          branch: "anycode/task-5",
+          baseRef: "main",
+          ownedByAnyCode: false,
+        },
+        continuationPending: true,
+      });
+      expect(await adapter.getSession("s1")).toEqual({
+        id: "s1",
+        workspace: "/repo/.anycode/worktrees/task-5",
+        projectRoot: "/repo",
+        worktree: {
+          id: "task-5",
+          path: "/repo/.anycode/worktrees/task-5",
+          branch: "anycode/task-5",
+          baseRef: "main",
+          ownedByAnyCode: false,
+        },
+        continuationPending: true,
+        model: "m",
+        mode: "build",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      });
+
+      vi.setSystemTime(3_000);
+      await adapter.touchSession("s1", {
+        workspace: "/repo",
+        projectRoot: "/repo",
+        worktree: null,
+        continuationPending: true,
+        worktreeCleanup: {
+          path: "/repo/.anycode/worktrees/task-5",
+          mode: "auto",
+          ownedByAnyCode: true,
+        },
+      });
+      expect(await adapter.getSession("s1")).toEqual({
+        id: "s1",
+        workspace: "/repo",
+        continuationPending: true,
+        worktreeCleanup: {
+          path: "/repo/.anycode/worktrees/task-5",
+          mode: "auto",
+          ownedByAnyCode: true,
+        },
+        model: "m",
+        mode: "build",
+        createdAt: 1_000,
+        updatedAt: 3_000,
+      });
+
+      vi.setSystemTime(4_000);
+      await adapter.touchSession("s1", { continuationPending: false, worktreeCleanup: null });
+      expect(await adapter.getSession("s1")).toEqual({
+        id: "s1",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        createdAt: 1_000,
+        updatedAt: 4_000,
+      });
+    });
+
+    it("atomically grants a canonical worktree path to only one session", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "claim-a", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({ id: "claim-b", workspace: "/repo", model: "m", mode: "build" });
+      const target = "/repo/.anycode/worktrees/shared";
+      const claim = (id: string) => adapter.claimWorktree(id, target, {
+        workspace: target,
+        projectRoot: "/repo",
+        worktree: {
+          id: "shared",
+          path: target,
+          branch: "anycode-wt/shared",
+          baseRef: "main",
+          ownedByAnyCode: true,
+        },
+        continuationPending: true,
+      });
+
+      const outcomes = await Promise.all([claim("claim-a"), claim("claim-b")]);
+
+      expect(outcomes.filter(Boolean)).toHaveLength(1);
+      const sessions = await adapter.listSessions();
+      expect(sessions.filter((meta) => meta.worktree?.path === target)).toHaveLength(1);
+
+      const reserved = "/repo/.anycode/worktrees/reserved";
+      const reserve = (id: string) => adapter.claimWorktree(id, reserved, {
+        projectRoot: "/repo",
+        continuationPending: true,
+        continuationMode: "none",
+        worktreeCleanup: { path: reserved, mode: "auto", ownedByAnyCode: true },
+      });
+      const reservations = await Promise.all([reserve("claim-a"), reserve("claim-b")]);
+      expect(reservations.filter(Boolean)).toHaveLength(1);
+      expect((await adapter.listSessions()).filter((meta) => meta.worktreeCleanup?.path === reserved)).toHaveLength(1);
+    });
+  });
+
+  it("fails closed for partial or malformed persisted worktree columns", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-malformed-worktree-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const seed = new SqlitePersistenceAdapter(dbPath);
+    await seed.createSession({ id: "partial", workspace: "/wt-partial", model: "m", mode: "build" });
+    await seed.createSession({ id: "malformed", workspace: "/wt-malformed", model: "m", mode: "build" });
+    await seed.close();
+
+    const raw = new DatabaseSync(dbPath);
+    raw.prepare("UPDATE sessions SET project_root = ?, worktree_id = ? WHERE id = ?").run(
+      "/repo",
+      "partial",
+      "partial",
+    );
+    raw.prepare(
+      `UPDATE sessions SET project_root = ?, worktree_id = ?, worktree_path = ?, worktree_branch = ?,
+         worktree_base_ref = ?, worktree_owned_by_anycode = ? WHERE id = ?`,
+    ).run("/repo", "bad", "/wt-malformed", "branch", "main", 7, "malformed");
+    raw.close();
+
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    for (const id of ["partial", "malformed"]) {
+      const session = await adapter.getSession(id);
+      expect(session).toMatchObject({ id, projectRoot: "/repo" });
+      expect(session?.worktree).toBeUndefined();
+    }
+    await adapter.close();
+  });
+
+  it("rolls back every relocation field together when enter or exit persistence fails", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-atomic-relocation-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const worktree = {
+      id: "task-5",
+      path: "/repo/.anycode/worktrees/task-5",
+      branch: "anycode/task-5",
+      baseRef: "main",
+      ownedByAnyCode: true,
+    };
+
+    const seed = new SqlitePersistenceAdapter(dbPath);
+    const original = await seed.createSession({ id: "s1", workspace: "/repo", model: "m", mode: "build" });
+    await seed.close();
+
+    let raw = new DatabaseSync(dbPath);
+    raw.exec(`CREATE TRIGGER reject_enter BEFORE UPDATE ON sessions
+      WHEN NEW.continuation_pending = 1
+      BEGIN SELECT RAISE(ABORT, 'reject enter'); END`);
+    raw.close();
+
+    let adapter = new SqlitePersistenceAdapter(dbPath);
+    await expect(
+      adapter.touchSession("s1", {
+        workspace: worktree.path,
+        projectRoot: "/repo",
+        worktree,
+        continuationPending: true,
+      }),
+    ).rejects.toThrow("reject enter");
+    expect(await adapter.getSession("s1")).toEqual(original);
+    await adapter.close();
+
+    raw = new DatabaseSync(dbPath);
+    raw.exec("DROP TRIGGER reject_enter");
+    raw.close();
+    adapter = new SqlitePersistenceAdapter(dbPath);
+    await adapter.touchSession("s1", {
+      workspace: worktree.path,
+      projectRoot: "/repo",
+      worktree,
+      continuationPending: true,
+    });
+    const entered = await adapter.getSession("s1");
+    await adapter.close();
+
+    raw = new DatabaseSync(dbPath);
+    raw.exec(`CREATE TRIGGER reject_exit BEFORE UPDATE ON sessions
+      WHEN OLD.continuation_pending = 1 AND NEW.continuation_pending = 0
+      BEGIN SELECT RAISE(ABORT, 'reject exit'); END`);
+    raw.close();
+
+    adapter = new SqlitePersistenceAdapter(dbPath);
+    await expect(
+      adapter.touchSession("s1", {
+        workspace: "/repo",
+        projectRoot: "/repo",
+        worktree: null,
+        continuationPending: false,
+      }),
+    ).rejects.toThrow("reject exit");
+    expect(await adapter.getSession("s1")).toEqual(entered);
+    await adapter.close();
+  });
+
+  it("migrates v5 sessions through worktree schema v7 and is idempotent across opens", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v5-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const old = new DatabaseSync(dbPath);
+    old.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at) VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        engine_id TEXT, external_session_ref TEXT
+      );
+      INSERT INTO sessions VALUES ('legacy-v5', '/repo', 'm', 'build', 1, 2, NULL, NULL, NULL);
+    `);
+    old.close();
+
+    for (let open = 0; open < 2; open += 1) {
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      expect(await adapter.getSession("legacy-v5")).toEqual({
+        id: "legacy-v5",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        createdAt: 1,
+        updatedAt: 2,
+      });
+      await adapter.close();
+    }
+
+    const migrated = new DatabaseSync(dbPath);
+    expect(
+      (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
+        ({ version }) => version,
+      ),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(
+      migrated.prepare("SELECT project_root, continuation_pending FROM sessions WHERE id = ?").get("legacy-v5"),
+    ).toEqual({ project_root: "/repo", continuation_pending: 0 });
+    expect(
+      (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
+    ).toEqual(
+      expect.arrayContaining([
+        "project_root",
+        "worktree_id",
+        "worktree_path",
+        "worktree_branch",
+        "worktree_base_ref",
+        "worktree_owned_by_anycode",
+        "continuation_pending",
+        "worktree_transition_json",
+      ]),
+    );
+    migrated.close();
   });
 
   it("migrates a pre-engine database and preserves its implicit core metadata", async () => {
@@ -922,6 +1220,7 @@ describe("WriteBehindHistorySink", () => {
   class RecordingPersistence implements PersistencePort {
     readonly calls: { op: "append" | "replaceHistory"; items: readonly HistoryItem[] }[] = [];
     rejectNextAppend = false;
+    rejectNextReplace = false;
     private readonly delaysMs: number[];
 
     constructor(delaysMs: number[] = []) {
@@ -947,6 +1246,10 @@ describe("WriteBehindHistorySink", () => {
     async replaceHistory(_sessionId: string, items: readonly HistoryItem[]): Promise<void> {
       await this.settle();
       this.calls.push({ op: "replaceHistory", items });
+      if (this.rejectNextReplace) {
+        this.rejectNextReplace = false;
+        throw new Error("boom: replace failed");
+      }
     }
 
     createSession(): Promise<SessionMeta> {
@@ -1063,5 +1366,54 @@ describe("WriteBehindHistorySink", () => {
     const persistence = new RecordingPersistence();
     const sink = new WriteBehindHistorySink(persistence, "s1");
     await expect(sink.flush()).resolves.toBeUndefined();
+  });
+
+  it("flushChecked() detects a swallowed queued failure even after legacy flush()", async () => {
+    const persistence = new RecordingPersistence();
+    persistence.rejectNextAppend = true;
+    const sink = new WriteBehindHistorySink(persistence, "s1", { logger: { error: () => {} } });
+
+    sink.append([makeItem({ id: "fails" })]);
+    await expect(sink.flush()).resolves.toBeUndefined();
+    await expect(sink.flushChecked()).rejects.toMatchObject({
+      message: "WriteBehindHistorySink: persistence failed for session s1",
+      cause: expect.objectContaining({ message: "boom: append failed" }),
+    });
+  });
+
+  it("flushChecked() resets its failure window between checked barriers", async () => {
+    const persistence = new RecordingPersistence();
+    persistence.rejectNextAppend = true;
+    const sink = new WriteBehindHistorySink(persistence, "s1", { logger: { error: () => {} } });
+
+    sink.append([makeItem({ id: "append-fails" })]);
+    await expect(sink.flushChecked()).rejects.toThrow("persistence failed");
+    await expect(sink.flushChecked()).resolves.toBeUndefined();
+
+    persistence.rejectNextReplace = true;
+    sink.replaceAll([makeItem({ id: "replace-fails" })]);
+    await expect(sink.flushChecked()).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: "boom: replace failed" }),
+    });
+    await expect(sink.flushChecked()).resolves.toBeUndefined();
+  });
+
+  it("flushChecked() preserves queue ordering and waits through its captured barrier", async () => {
+    const persistence = new RecordingPersistence([20, 0, 0]);
+    const sink = new WriteBehindHistorySink(persistence, "s1");
+    const first = makeItem({ id: "first" });
+    const replacement = makeItem({ id: "replacement" });
+    const last = makeItem({ id: "last" });
+
+    sink.append([first]);
+    sink.replaceAll([replacement]);
+    sink.append([last]);
+    await sink.flushChecked();
+
+    expect(persistence.calls).toEqual([
+      { op: "append", items: [first] },
+      { op: "replaceHistory", items: [replacement] },
+      { op: "append", items: [last] },
+    ]);
   });
 });

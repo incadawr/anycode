@@ -21,8 +21,8 @@ const HEADER_LINES = [
   "Available skills (load full instructions with the Skill tool by name):",
 ];
 
-/** project > user > everything else (plugin:<name>, ...); ties fall through to the source string. */
-const KNOWN_SOURCE_RANK: Record<string, number> = { project: 0, user: 1 };
+/** project > user > plugin/other > builtin; ties fall through to the source string. */
+const KNOWN_SOURCE_RANK: Record<string, number> = { project: 0, user: 1, builtin: 3 };
 
 function sourceRank(source: string): number {
   return KNOWN_SOURCE_RANK[source] ?? 2;

@@ -21,6 +21,7 @@ import type { SkillMeta, SkillPort } from "../ports/skills.js";
 import type { WorkflowDefinition, WorkflowMeta } from "../ports/workflow.js";
 import type { PersonaDefinition } from "../subagents/personas.js";
 import { createSkillPort, discoverSkills, type SkillRoot } from "../skills/discovery.js";
+import type { BuiltinSkillDefinition } from "../skills/builtin.js";
 import { buildSkillRoots } from "../skills/admin-scan.js";
 import { loadDisabledSkills } from "../skills/settings.js";
 import { buildSkillsPromptSection } from "../skills/prompt-section.js";
@@ -87,6 +88,11 @@ export interface DiscoverExtensionsOptions {
   repoMapConfig?: RepoMapConfig | null;
   repoMapMaxFiles?: number;
   repoMapMaxDepth?: number;
+  /**
+   * Optional application capabilities advertised as lowest-precedence,
+   * in-memory skills. Omit on surfaces that do not register their tools.
+   */
+  builtinSkills?: readonly BuiltinSkillDefinition[];
 }
 
 function describeError(error: unknown): string {
@@ -235,13 +241,16 @@ export async function discoverExtensions(
 
   let skillMetas: SkillMeta[] = [];
   try {
-    const result = await discoverSkills(fs, skillRoots, { disabled: disabledSkills });
+    const result = await discoverSkills(fs, skillRoots, {
+      disabled: disabledSkills,
+      builtins: opts.builtinSkills,
+    });
     skillMetas = result.metas;
     problems.push(...result.problems);
   } catch (error) {
     problems.push(`skills discovery failed: ${describeError(error)}`);
   }
-  const skills = createSkillPort(fs, skillMetas);
+  const skills = createSkillPort(fs, skillMetas, { builtins: opts.builtinSkills });
   const skillsPromptSection = buildSkillsPromptSection(skillMetas);
 
   // Roots recipe shared with the admin scan (buildAgentProfileRoots) so the two

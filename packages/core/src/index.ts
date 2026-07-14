@@ -32,6 +32,15 @@ export type { ShadowGitCheckpointsOptions, RewindScope, RewindResult } from "./c
 // the desktop host's rewind seam (slice P7.26/R2), so Session references the SAME
 // CheckpointMeta the store returns rather than a hand-duplicated wire shape.
 export type { CheckpointMeta, CheckpointReason } from "./ports/checkpoints.js";
+export type {
+  EnterWorktreeRequest,
+  ExitWorktreeRequest,
+  WorkspaceTransition,
+  WorktreeCleanup,
+  WorktreeControlPort,
+  WorktreeControlResult,
+  WorktreeIdentity,
+} from "./ports/worktrees.js";
 // Codex shadow command log DTO (codex-fixes TASK.42, cut §2(e)): re-exported for
 // the desktop host's `SqliteCodexShadowLog` adapter (host/engines/codex/shadow-log.ts),
 // which wraps this same SqlitePersistenceAdapter — never a hand-duplicated row shape.

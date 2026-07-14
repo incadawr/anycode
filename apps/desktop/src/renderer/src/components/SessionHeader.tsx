@@ -19,7 +19,7 @@
  * the header shows nothing in that state.
  */
 import { useContext } from "react";
-import { TabContext, useTabStore } from "../tab-context.js";
+import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { Collapse, Dot, History, HookIcon, ServerStack, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
@@ -47,6 +47,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
     throw new Error("SessionHeader must be used within a <TabContext.Provider>");
   }
   const { tabId } = ctx;
+  const send = useTabSend();
 
   const workspace = useTabStore((state) => state.workspace);
   const connection = useTabStore((state) => state.connection);
@@ -59,6 +60,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
   const hooksPanelOpen = tab?.hooksPanelOpen ?? false;
   const timelinePanelOpen = tab?.timelinePanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
+  const worktree = tab?.worktree;
   const externalEngine = engine !== null;
   const supportsRewind = engine?.capabilities.supportsRewind ?? true;
 
@@ -100,6 +102,20 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar }: SessionHead
       )}
 
       <span className="session-header-title" title={title}>{title}</span>
+
+      {worktree && (
+        <span className="session-header-worktree" title={worktree.path} aria-label={`Worktree: ${worktree.branch}`}>
+          Worktree · {worktree.id} · {worktree.branch}
+          <button
+            type="button"
+            className="session-header-worktree-exit"
+            onClick={() => send({ type: "exit_worktree", cleanup: "auto" })}
+            title="Exit worktree; clean AnyCode-owned worktrees are removed automatically"
+          >
+            Exit
+          </button>
+        </span>
+      )}
 
       {externalEngine && <span className="engine-identity session-header-engine">{engine.id === "codex" ? "Codex" : engine.id}</span>}
 

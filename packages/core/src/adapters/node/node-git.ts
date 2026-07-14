@@ -14,6 +14,10 @@
  * port boundary — all outcomes are GitOpResult.
  */
 
+import { constants as fsConstants } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
+import * as path from "node:path";
+import { isWithinWorkspace } from "../../permissions/workspace-policy.js";
 import type { ExecResult, ExecutionPort } from "../../ports/execution.js";
 import type {
   GitBranchInfo,
@@ -26,6 +30,7 @@ import type {
   GitOpResult,
   GitPort,
   GitStatusSummary,
+  GitWorktreeInfo,
 } from "../../ports/git.js";
 
 /** Per-operation timeout; a hung git call is reaped by runBinary's kill discipline. */
@@ -40,6 +45,9 @@ export const GIT_OP_TIMEOUT_MS = 30_000;
 
  */
 export const GIT_DIFF_MAX_OUTPUT_BYTES = 2_097_152;
+
+/** A full checkout may legitimately take longer than a normal git metadata operation. */
+export const GIT_WORKTREE_ADD_TIMEOUT_MS = 120_000;
 
 const DEFAULT_LOG_LIMIT = 20;
 
@@ -78,6 +86,7 @@ const SAFE_GIT_ENV: Record<string, string | undefined> = {
   // Neutralize inherited env that could relocate the repo or execute code.
   GIT_CONFIG_COUNT: "0", // kills GIT_CONFIG_KEY_n/VALUE_n ad-hoc injection (→ fsmonitor/sshCommand)
   GIT_DIR: undefined, // relocation
+  GIT_COMMON_DIR: undefined,
   GIT_WORK_TREE: undefined,
   GIT_INDEX_FILE: undefined,
   GIT_OBJECT_DIRECTORY: undefined,
@@ -308,6 +317,54 @@ function diffArgsForTarget(target: GitDiffTarget): string[] {
   }
 }
 
+const REFS_HEADS_PREFIX = "refs/heads/";
+
+/** Parses `git worktree list --porcelain -z` without path quoting or locale dependence. */
+export function parseWorktreeListZ(raw: string): GitWorktreeInfo[] {
+  const result: GitWorktreeInfo[] = [];
+  let current: Partial<GitWorktreeInfo> | null = null;
+
+  const flush = (): void => {
+    if (current?.path !== undefined) {
+      result.push({
+        path: current.path,
+        head: current.head ?? null,
+        branch: current.branch ?? null,
+        detached: current.detached ?? false,
+        isMain: result.length === 0,
+        locked: current.locked ?? false,
+        prunable: current.prunable ?? false,
+      });
+    }
+    current = null;
+  };
+
+  for (const token of raw.split("\0")) {
+    if (token.length === 0) {
+      flush();
+      continue;
+    }
+    current ??= {};
+    if (token.startsWith("worktree ")) {
+      current.path = token.slice("worktree ".length);
+    } else if (token.startsWith("HEAD ")) {
+      current.head = token.slice("HEAD ".length);
+    } else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length);
+      current.branch = ref.startsWith(REFS_HEADS_PREFIX) ? ref.slice(REFS_HEADS_PREFIX.length) : ref;
+    } else if (token === "detached") {
+      current.detached = true;
+    } else if (token === "locked" || token.startsWith("locked ")) {
+      current.locked = true;
+    } else if (token === "prunable" || token.startsWith("prunable ")) {
+      current.prunable = true;
+    }
+    // `bare` and unknown future attributes have no field in GitWorktreeInfo.
+  }
+  flush();
+  return result;
+}
+
 export interface NodeGitAdapterOptions {
   exec: ExecutionPort;
   /** Absolute workspace path; the repo is resolved from here. */
@@ -336,12 +393,12 @@ export class NodeGitAdapter implements GitPort {
   }
 
   /** Runs one git command via runBinary with SAFE_GIT_ENV (neutralizes the GIT_DIR family). */
-  private async runGit(args: string[], opts?: { maxOutputBytes?: number }): Promise<ExecResult> {
+  private async runGit(args: string[], opts?: { maxOutputBytes?: number; timeoutMs?: number }): Promise<ExecResult> {
     return this.exec.runBinary!({
       file: this.gitBinary,
       args,
       cwd: this.cwd,
-      timeoutMs: GIT_OP_TIMEOUT_MS,
+      timeoutMs: opts?.timeoutMs ?? GIT_OP_TIMEOUT_MS,
       // SAFE_GIT_ENV carries `undefined` values (to UNSET inherited GIT_* in the
       // child). The port's env type is Record<string,string>; this local cast
       // accommodates the unset sentinel without changing the port contract.
@@ -363,6 +420,76 @@ export class NodeGitAdapter implements GitPort {
     return { ok: false, reason: describeGitFailure(args, res) };
   }
 
+  async ensureWorktreeNamespaceIgnored(): Promise<GitOpResult<null>> {
+    if (!this.hasRunBinary) return unavailable();
+    const args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+    const resolved = await this.runGit(args);
+    if (NodeGitAdapter.failed(resolved) || resolved.stdoutTruncated) return this.fail(args, resolved);
+    const commonDir = resolved.stdout.trim();
+    if (!path.isAbsolute(commonDir)) {
+      return { ok: false, reason: "git rev-parse returned a non-absolute common directory" };
+    }
+    const pattern = "/.anycode/worktrees/";
+    try {
+      const commonReal = await realpath(commonDir);
+      const infoDir = path.join(commonReal, "info");
+      await mkdir(infoDir, { recursive: true });
+      const infoStat = await lstat(infoDir);
+      if (infoStat.isSymbolicLink() || (await realpath(infoDir)) !== infoDir) {
+        return { ok: false, reason: "repository info directory is symlinked" };
+      }
+      const excludePath = path.join(infoDir, "exclude");
+      let existing = "";
+      try {
+        const handle = await open(excludePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        try {
+          existing = await handle.readFile("utf8");
+        } finally {
+          await handle.close();
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (existing.split(/\r?\n/).some((line) => line.trim() === pattern)) return { ok: true, value: null };
+      const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+      const handle = await open(
+        excludePath,
+        fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
+        0o666,
+      );
+      try {
+        await handle.writeFile(`${prefix}${pattern}\n`, "utf8");
+      } finally {
+        await handle.close();
+      }
+      return { ok: true, value: null };
+    } catch (error) {
+      return { ok: false, reason: `could not update repository-local exclude: ${String(error)}` };
+    }
+  }
+
+  async worktreeIsPristine(): Promise<GitOpResult<boolean>> {
+    return this.checkPristineAt(this.cwd);
+  }
+
+  private async checkPristineAt(target: string): Promise<GitOpResult<boolean>> {
+    if (!this.hasRunBinary) return unavailable();
+    const args = ["-C", target, "status", "--porcelain=v2", "--ignored=matching", "--untracked-files=all", "-z"];
+    const result = await this.runGit(args);
+    if (NodeGitAdapter.failed(result) || result.stdoutTruncated) return this.fail(args, result);
+    const dirty = result.stdout
+      .split("\0")
+      .some((record) => /^(?:1 |2 |u |\? |! )/.test(record));
+    if (dirty) return { ok: true, value: false };
+    const hiddenArgs = ["-C", target, "ls-files", "-v", "-z"];
+    const hidden = await this.runGit(hiddenArgs);
+    if (NodeGitAdapter.failed(hidden) || hidden.stdoutTruncated) return this.fail(hiddenArgs, hidden);
+    const hiddenIndexBit = hidden.stdout
+      .split("\0")
+      .some((record) => record.length > 0 && (/^[a-z]/.test(record) || record.startsWith("S ")));
+    return { ok: true, value: !hiddenIndexBit };
+  }
+
   /**
    * Rejects ref names that could inject a flag or corrupt the argv position:
    * empty, leading '-', or any control character. Returns true when the name
@@ -382,6 +509,57 @@ export class NodeGitAdapter implements GitPort {
       }
     }
     return false;
+  }
+
+  /**
+   * Resolves a worktree target against cwd and refuses escapes, cwd itself,
+   * `.git`, and existing symlink prefixes before spawning git.
+   */
+  private async resolveConfinedWorktreePath(
+    candidate: string,
+  ): Promise<{ ok: true; abs: string } | { ok: false; reason: string }> {
+    const root = path.resolve(this.cwd);
+    const abs = path.resolve(root, candidate);
+    if (!isWithinWorkspace(abs, root)) {
+      return { ok: false, reason: "worktree path is outside the workspace" };
+    }
+    if (abs === root) {
+      return { ok: false, reason: "worktree path must not be the workspace root" };
+    }
+    if (isWithinWorkspace(abs, path.join(root, ".git"))) {
+      return { ok: false, reason: "worktree path must not be inside .git" };
+    }
+
+    const segments = path
+      .relative(root, abs)
+      .split(path.sep)
+      .filter((segment) => segment.length > 0);
+    let cursor = root;
+    for (const segment of segments) {
+      cursor = path.join(cursor, segment);
+      try {
+        if ((await lstat(cursor)).isSymbolicLink()) {
+          return { ok: false, reason: "worktree path traverses a symlink" };
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+        return { ok: false, reason: "worktree path could not be verified" };
+      }
+    }
+    return { ok: true, abs };
+  }
+
+  /** Removes a just-created worktree that failed post-add confinement verification. */
+  private async teardownWorktree(
+    abs: string,
+    branch: string,
+  ): Promise<{ removed: boolean; branchDeleted: boolean }> {
+    const pristine = await this.checkPristineAt(abs);
+    if (!pristine.ok || !pristine.value) return { removed: false, branchDeleted: false };
+    const remove = await this.runGit(["worktree", "remove", "--", abs]);
+    if (NodeGitAdapter.failed(remove)) return { removed: false, branchDeleted: false };
+    const deleteBranch = await this.runGit(["branch", "-d", "--", branch]);
+    return { removed: true, branchDeleted: !NodeGitAdapter.failed(deleteBranch) };
   }
 
   /**
@@ -622,6 +800,86 @@ export class NodeGitAdapter implements GitPort {
     if (NodeGitAdapter.failed(res)) {
       return this.fail(args, res);
     }
+    return { ok: true, value: null };
+  }
+
+  async worktreeAdd(spec: {
+    path: string;
+    branch: string;
+    baseRef?: string;
+  }): Promise<GitOpResult<{ path: string }>> {
+    if (!this.hasRunBinary) return unavailable();
+    if (this.rejectsUnsafeRef(spec.branch)) return { ok: false, reason: UNSAFE_REF_REASON };
+    if (spec.baseRef !== undefined && this.rejectsUnsafeRef(spec.baseRef)) {
+      return { ok: false, reason: UNSAFE_REF_REASON };
+    }
+    const confined = await this.resolveConfinedWorktreePath(spec.path);
+    if (!confined.ok) return confined;
+
+    const root = path.resolve(this.cwd);
+    let realRoot: string;
+    try {
+      realRoot = await realpath(root);
+    } catch {
+      return { ok: false, reason: "workspace root could not be verified before worktree add" };
+    }
+
+    const args = ["worktree", "add", "-b", spec.branch, "--", confined.abs];
+    if (spec.baseRef !== undefined) args.push(spec.baseRef);
+    const res = await this.runGit(args, { timeoutMs: GIT_WORKTREE_ADD_TIMEOUT_MS });
+    if (NodeGitAdapter.failed(res)) return this.fail(args, res);
+
+    let realWorktree: string;
+    try {
+      realWorktree = await realpath(confined.abs);
+    } catch {
+      const cleanup = await this.teardownWorktree(confined.abs, spec.branch);
+      return {
+        ok: false,
+        reason: cleanup.removed
+          ? `worktree path could not be verified after add; worktree removed${
+              cleanup.branchDeleted ? "" : `; orphan branch ${spec.branch} left behind`
+            }`
+          : `worktree path could not be verified after add and could not be removed; manual cleanup required: ${confined.abs}`,
+      };
+    }
+    if (!isWithinWorkspace(realWorktree, realRoot)) {
+      const cleanup = await this.teardownWorktree(confined.abs, spec.branch);
+      return {
+        ok: false,
+        reason: cleanup.removed
+          ? `worktree path escaped the workspace and was removed${
+              cleanup.branchDeleted ? "" : `; orphan branch ${spec.branch} left behind`
+            }`
+          : `worktree path escaped the workspace and could not be removed; manual cleanup required: ${confined.abs}`,
+      };
+    }
+    return { ok: true, value: { path: confined.abs } };
+  }
+
+  async worktreeList(): Promise<GitOpResult<GitWorktreeInfo[]>> {
+    if (!this.hasRunBinary) return unavailable();
+    const args = ["worktree", "list", "--porcelain", "-z"];
+    const res = await this.runGit(args);
+    if (NodeGitAdapter.failed(res)) return this.fail(args, res);
+    if (res.stdoutTruncated) return { ok: false, reason: "git worktree list output truncated" };
+    return { ok: true, value: parseWorktreeListZ(res.stdout) };
+  }
+
+  async worktreeRemove(spec: { path: string; force?: boolean }): Promise<GitOpResult<null>> {
+    if (!this.hasRunBinary) return unavailable();
+    const confined = await this.resolveConfinedWorktreePath(spec.path);
+    if (!confined.ok) return confined;
+    if (spec.force !== true) {
+      const pristine = await this.checkPristineAt(confined.abs);
+      if (!pristine.ok) return pristine;
+      if (!pristine.value) {
+        return { ok: false, reason: "worktree content is not provably pristine; explicit force is required" };
+      }
+    }
+    const args = ["worktree", "remove", ...(spec.force === true ? ["--force"] : []), "--", confined.abs];
+    const res = await this.runGit(args);
+    if (NodeGitAdapter.failed(res)) return this.fail(args, res);
     return { ok: true, value: null };
   }
 }

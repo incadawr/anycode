@@ -82,8 +82,9 @@ export type CreateTabResult =
   | { ok: true; tabId: string; workspace: string }
   | {
       ok: false;
-      reason: "cancelled" | "max_tabs" | "session_not_found" | "already_open" | "not_ready";
+      reason: "cancelled" | "max_tabs" | "session_not_found" | "already_open" | "not_ready" | "worktree_unavailable";
       focusTabId?: string; // already_open -> renderer focuses this tab
+      worktreePath?: string; // actionable recovery detail for worktree_unavailable
     };
 
 /** Result of a close-tab request; main refuses to close the last remaining tab or an id it doesn't know about. */
@@ -99,6 +100,14 @@ export type WorkspacePickResult = { workspace: string | null };
 export interface SessionSummary {
   id: string;
   workspace: string;
+  projectRoot?: string;
+  worktree?: {
+    id: string;
+    path: string;
+    branch: string;
+    baseRef: string;
+    ownedByAnyCode: boolean;
+  };
   model: string;
   mode: string;
   createdAt: number;

@@ -16,6 +16,7 @@ import type { MediaCapabilityPort } from "../ports/media.js";
 import type { ImageAttachment } from "./images.js";
 import type { PlanModeControl } from "./permissions.js";
 import type { AgentEvent } from "./events.js";
+import type { WorkspaceTransition, WorktreeControlPort } from "../ports/worktrees.js";
 
 export type RiskLevel = "low" | "medium" | "high";
 
@@ -28,6 +29,8 @@ export interface ToolMetadata {
   readOnly: boolean;
   destructive: boolean;
   concurrentSafe: boolean;
+  /** Successful handler result terminates this loop segment (always solo). */
+  terminalControl?: boolean;
   riskLevel: RiskLevel;
   sideEffectScope: SideEffectScope;
   /** Baseline approval requirement; the permission engine combines it with the session mode. */
@@ -120,6 +123,12 @@ export interface ToolContext {
    * this port), so a child can never escalate the parent's mode.
    */
   planMode?: PlanModeControl;
+  /**
+   * Host-owned workspace relocation seam. It is deliberately optional: only
+   * the parent desktop host registers the paired worktree tools and supplies
+   * this port; child loops and other clients fail closed.
+   */
+  worktrees?: WorktreeControlPort;
 }
 
 /** Handler-level result. Dispatcher-level failures (denied/timeout/...) live on ToolCallOutcome. */
@@ -141,6 +150,12 @@ export interface ToolResult<Out = unknown> {
    * honest incomplete outcome rather than masquerading as success (TASK.44).
    */
   errorKind?: "timed_out" | "cancelled" | "max_turns" | "invalid_input";
+  /**
+   * Successful terminal control result. The scheduler stops before every
+   * later proposal and AgentLoop ends the current host segment after pairing
+   * all proposed calls in history.
+   */
+  control?: { type: "workspace_transition"; transition: WorkspaceTransition };
 }
 
 /**
@@ -176,6 +191,12 @@ export interface ToolCallOutcome {
 
 export interface ToolDefinition<In = unknown, Out = unknown> {
   metadata: ToolMetadata;
+  /**
+   * Resolve input-sensitive safety metadata after zod + hook rewriting. The
+   * dispatcher uses this result for permission, checkpoint and timeout gates.
+   * It must be pure and must not weaken the declared concurrency contract.
+   */
+  resolveMetadata?(input: In): ToolMetadata;
   /** Zod schema; converted to JSON Schema and wrapped with the SDK's jsonSchema() for the model. */
   inputSchema: z.ZodType<In>;
   /**

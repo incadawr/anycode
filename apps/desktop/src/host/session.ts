@@ -280,6 +280,23 @@ export interface SessionOptions {
   /** Adapter for reading "after" snapshots (design §5). */
   fs: FileSystemPort;
   workspace: string;
+  /** Stable project identity while workspace may be a relocated worktree. */
+  projectRoot?: string;
+  /** Persisted worktree identity, emitted before any resumed continuation. */
+  worktree?: import("../shared/protocol.js").WorktreeProjection;
+  /** Durable boot token set by a terminal transition. */
+  continuationPending?: boolean;
+  continuationMode?: "model" | "none";
+  /** Called once after host_ready, before the resumed model segment starts. */
+  onContinuationReady?: () => Promise<void>;
+  /** Clears the durable continuation claim only after its segment completes. */
+  onContinuationComplete?: () => Promise<void>;
+  /** Durability-gated handoff to desktop main. */
+  onWorkspaceTransition?: (
+    transition: import("@anycode/core").WorkspaceTransition,
+  ) => Promise<void>;
+  /** Same host-owned port used by ExitWorktree; chrome exposes auto/keep only. */
+  worktreeControl?: import("@anycode/core").WorktreeControlPort;
   model: string;
   /** Persistence session id, known at boot; echoed in host_ready (design §3.3). */
   sessionId: string;
@@ -423,6 +440,14 @@ export class Session {
   private readonly broker: IpcPermissionBroker;
   private readonly fs: FileSystemPort;
   private readonly workspace: string;
+  private readonly projectRoot: string;
+  private readonly worktree: import("../shared/protocol.js").WorktreeProjection | undefined;
+  private continuationPending: boolean;
+  private readonly continuationMode: "model" | "none";
+  private readonly onContinuationReady: (() => Promise<void>) | undefined;
+  private readonly onContinuationComplete: (() => Promise<void>) | undefined;
+  private readonly onWorkspaceTransition: SessionOptions["onWorkspaceTransition"];
+  private readonly worktreeControl: SessionOptions["worktreeControl"];
   // Slice P7.15 (F14): mutable — a mid-session set_model updates the live model.
   private model: string;
   private readonly sessionId: string;
@@ -471,6 +496,8 @@ export class Session {
   private readonly snapshotPaths = new Map<string, string>();
 
   private busy = false;
+  /** Permanent source-host latch once a durable relocation handoff begins. */
+  private relocating = false;
   private abort: AbortController | null = null;
   private turnId: string | null = null;
   private currentTurn: Promise<void> | null = null;
@@ -492,6 +519,14 @@ export class Session {
     this.broker = options.broker;
     this.fs = options.fs;
     this.workspace = options.workspace;
+    this.projectRoot = options.projectRoot ?? options.workspace;
+    this.worktree = options.worktree;
+    this.continuationPending = options.continuationPending ?? false;
+    this.continuationMode = options.continuationMode ?? "model";
+    this.onContinuationReady = options.onContinuationReady;
+    this.onContinuationComplete = options.onContinuationComplete;
+    this.onWorkspaceTransition = options.onWorkspaceTransition;
+    this.worktreeControl = options.worktreeControl;
     this.model = options.model;
     this.sessionId = options.sessionId;
     this.persistence = options.persistence;
@@ -605,6 +640,8 @@ export class Session {
         this.outbound.sendDirect({
           type: "host_ready",
           workspace: this.workspace,
+          ...(this.projectRoot !== this.workspace ? { projectRoot: this.projectRoot } : {}),
+          ...(this.worktree !== undefined ? { worktree: this.worktree } : {}),
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
@@ -644,12 +681,45 @@ export class Session {
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         this.pushEnvStatus();
         this.pushPendingEngineSettings();
+        if (this.continuationPending) {
+          this.continuationPending = false;
+          this.currentTurn = this.startContinuation().catch((error) => {
+            this.outbound.emit({ type: "fatal", message: `worktree continuation failed: ${describeError(error)}` });
+          });
+        }
         break;
       case "user_message":
         this.onUserMessage(message.requestId, message.text, message.images);
         break;
       case "cancel_turn":
         this.onCancel();
+        break;
+      case "exit_worktree":
+        if (!this.busy && !this.relocating && this.worktreeControl !== undefined) {
+          this.busy = true;
+          const controller = new AbortController();
+          this.abort = controller;
+          this.currentTurn = this.worktreeControl
+            .exit({ cleanup: message.cleanup, continueAfterRehost: false }, { signal: controller.signal })
+            .then(async (result) => {
+              if (!result.ok) throw new Error(result.error);
+              if (result.message !== undefined) {
+                this.outbound.sendDirect({ type: "worktree_notice", message: result.message });
+              }
+              this.relocating = true;
+              if (this.onWorkspaceTransition === undefined) throw new Error("workspace transition handoff is unavailable");
+              await this.onWorkspaceTransition(result.transition);
+            })
+            .catch((error) => {
+              this.relocating = false;
+              this.outbound.emit({ type: "fatal", message: `exit worktree failed: ${describeError(error)}` });
+            })
+            .finally(() => {
+              this.busy = false;
+              this.abort = null;
+              this.currentTurn = null;
+            });
+        }
         break;
       case "permission_response":
         if (!this.engine.capabilities.supportsInteractiveApprovals) {
@@ -996,6 +1066,10 @@ export class Session {
   }
 
   private onUserMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
+    if (this.relocating) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
+      return;
+    }
     if (this.busy) {
       // Protocol guard (the UI also blocks the composer): one turn at a time.
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "busy" });
@@ -1060,7 +1134,7 @@ export class Session {
     });
   }
 
-  private async runTurn(requestId: string, text: string, attachments?: ImageAttachment[]): Promise<void> {
+  private async runTurn(requestId: string, text: string | undefined, attachments?: ImageAttachment[]): Promise<void> {
     const turnId = randomUUID();
     const controller = new AbortController();
     this.turnId = turnId;
@@ -1068,10 +1142,26 @@ export class Session {
     this.outbound.emit({ type: "turn_started", requestId, turnId });
 
     try {
-      for await (const event of this.engine.runTurn(text, {
+      const options = {
         signal: controller.signal,
         ...(attachments?.length ? { attachments } : {}),
-      })) {
+      };
+      const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
+      if (stream === undefined) {
+        throw new Error("active engine cannot continue a relocated turn");
+      }
+      for await (const event of stream) {
+        if (event.type === "workspace_transition") {
+          this.relocating = true;
+          try {
+            if (this.onWorkspaceTransition === undefined) throw new Error("workspace transition handoff is unavailable");
+            await this.onWorkspaceTransition(event.transition);
+          } catch (error) {
+            this.relocating = false;
+            throw error;
+          }
+          continue;
+        }
         this.captureSnapshotPath(event);
         this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
         if (event.type === "error") {
@@ -1087,6 +1177,26 @@ export class Session {
       // runTurn is designed never to throw (it maps failures to loop_end), so
       // this is a defensive net; the host must not crash on a rogue turn.
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
+    }
+  }
+
+  private async startContinuation(): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.onContinuationReady?.();
+      if (this.continuationMode === "model") {
+        await this.runTurn(randomUUID(), undefined);
+      }
+      if (!this.relocating) {
+        await this.onContinuationComplete?.();
+      }
+    } finally {
+      this.busy = false;
+      this.abort = null;
+      this.turnId = null;
+      this.snapshotPaths.clear();
+      this.currentTurn = null;
     }
   }
 

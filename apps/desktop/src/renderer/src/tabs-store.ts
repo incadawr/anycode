@@ -13,11 +13,16 @@
 import { create } from "zustand";
 import type { PermissionMode } from "@anycode/core";
 import type { EngineId } from "../../shared/engines.js";
+import type { WorktreeProjection } from "../../shared/protocol.js";
 
 /** One open tab's shell-level metadata (design §4.3: "id, workspace, sessionId?, title?, host-exited flag"). */
 export interface TabInfo {
   tabId: string;
   workspace: string;
+  /** Stable grouping identity; defaults to workspace for legacy sessions. */
+  projectRoot?: string;
+  /** Active worktree identity, restored by host_ready before the first turn. */
+  worktree?: WorktreeProjection;
   /** Bound once `host_ready.sessionId` lands for this tab (§3.3); null before the handshake completes. */
   sessionId: string | null;
   /**
@@ -121,6 +126,10 @@ export interface TabsState {
   /** Discards the draft entirely (Cancel affordance / successful submit). */
   discardDraft(): void;
   setSessionId(tabId: string, sessionId: string): void;
+  setWorkspaceIdentity(
+    tabId: string,
+    identity: { workspace: string; projectRoot?: string; worktree?: WorktreeProjection },
+  ): void;
   setTitle(tabId: string, title: string): void;
   setHostExited(tabId: string, exited: boolean): void;
   /** Flips the tab's terminal-panel visibility flag (tab-registry.ts's `openTerminal` sets it true; the panel-close affordance sets it false directly — closing never has a connection side-effect). */
@@ -320,6 +329,21 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     setSessionId(tabId, sessionId): void {
       set((state) => ({
         tabs: state.tabs.map((t) => (t.tabId === tabId ? { ...t, sessionId } : t)),
+      }));
+    },
+
+    setWorkspaceIdentity(tabId, identity): void {
+      set((state) => ({
+        tabs: state.tabs.map((tab) => {
+          if (tab.tabId !== tabId) return tab;
+          const projectRoot = identity.projectRoot ?? identity.workspace;
+          return {
+            ...tab,
+            workspace: identity.workspace,
+            ...(projectRoot !== identity.workspace ? { projectRoot } : { projectRoot: undefined }),
+            ...(identity.worktree !== undefined ? { worktree: identity.worktree } : { worktree: undefined }),
+          };
+        }),
       }));
     },
 

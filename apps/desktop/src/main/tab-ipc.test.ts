@@ -214,6 +214,39 @@ describe("handleCreate — dialog skip vs legacy dialog (§2F.4 / §6#6)", () =>
 });
 
 describe("handleCreate — persisted engine identity", () => {
+  it("blocks resume when the authoritative worktree validator rejects registration or branch identity", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const workspace = process.cwd();
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => ({
+        id: "worktree-session",
+        workspace,
+        projectRoot: workspace,
+        worktree: {
+          id: "task-5",
+          path: workspace,
+          branch: "anycode-wt/task-5",
+          baseRef: "main",
+          ownedByAnyCode: true,
+        },
+        model: "m",
+        mode: "build",
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+      listSessions: async () => [],
+    };
+    const validateWorktreeResume = vi.fn(async () => false);
+
+    await expect(handleCreate(
+      { manager, persistence, dialog, validateWorktreeResume },
+      { kind: "resume", sessionId: "worktree-session" },
+    )).resolves.toEqual({ ok: false, reason: "worktree_unavailable", worktreePath: workspace });
+    expect(validateWorktreeResume).toHaveBeenCalledOnce();
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
   it("selects the resumed engine from SessionMeta, never from renderer input", async () => {
     const { manager, createTab } = makeManager();
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });

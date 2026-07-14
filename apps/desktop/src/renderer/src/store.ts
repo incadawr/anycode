@@ -269,7 +269,8 @@ export type NoticeKind =
   | "background_task_rejected"
   | "rewind_restored"
   | "rewind_rejected"
-  | "engine_notice";
+  | "engine_notice"
+  | "worktree_notice";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
@@ -1647,6 +1648,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           set({ notice: { kind: "engine_notice", text: event.message } });
           return;
 
+        // Session consumes this control-plane event before it reaches the UI;
+        // keep a defensive no-op for structural completeness on a rogue wire.
+        case "workspace_transition":
+          return;
+
         default: {
           const _exhaustive: never = event;
           void _exhaustive;
@@ -1747,6 +1753,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "mode_change_rejected":
             set({ notice: { kind: "mode_change_rejected", text: message.reason } });
+            return;
+          case "worktree_notice":
+            set({ notice: { kind: "worktree_notice", text: message.message } });
             return;
           case "turn_started": {
             // Slice P7.14: a queued item whose drain this turn_started

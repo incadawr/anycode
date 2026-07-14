@@ -19,6 +19,13 @@ export { bashKillTool } from "./bash-kill.js";
 export { diagnosticsEditTool, diagnosticsWriteTool, formatDiagnostics } from "./diagnostics.js";
 export type { WithDiagnostics } from "./diagnostics.js";
 export { imageCapableReadTool } from "./read-image.js";
+export {
+  enterWorktreeInputSchema,
+  enterWorktreeTool,
+  exitWorktreeInputSchema,
+  exitWorktreeTool,
+} from "./worktrees.js";
+export type { EnterWorktreeInput, ExitWorktreeInput } from "./worktrees.js";
 export { InMemoryTodoStore } from "./todo-store.js";
 export type { TodoItem, TodoStore } from "./todo-store.js";
 export {

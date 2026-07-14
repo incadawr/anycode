@@ -106,6 +106,8 @@ export interface SidebarRow {
   hostExited?: boolean;
   tabId?: string;
   sessionId?: string;
+  /** Persistent non-color worktree state; full identity is exposed by tooltip. */
+  worktree?: { id: string; branch: string; path: string };
 }
 
 export interface SidebarGroup {
@@ -168,16 +170,16 @@ export function buildSidebarGroups(
     }
   };
   for (const tab of tabs) {
-    remember(tab.workspace);
+    remember(tab.projectRoot ?? tab.workspace);
   }
   for (const session of sessions ?? []) {
-    remember(session.workspace);
+    remember(session.projectRoot ?? session.workspace);
   }
 
   const groups: SidebarGroup[] = [];
   for (const workspace of order) {
     const openRows: SidebarRow[] = tabs
-      .filter((t) => t.workspace === workspace)
+      .filter((t) => (t.projectRoot ?? t.workspace) === workspace)
       .map((t) => ({
         kind: "open" as const,
         key: t.tabId,
@@ -185,12 +187,13 @@ export function buildSidebarGroups(
         age: null,
         hostExited: t.hostExited,
         tabId: t.tabId,
+        ...(t.worktree !== undefined ? { worktree: t.worktree } : {}),
       }));
 
     const resumableRows: SidebarRow[] = (sessions ?? [])
       .filter(
         (s) =>
-          s.workspace === workspace &&
+          (s.projectRoot ?? s.workspace) === workspace &&
           // Dedupe: a session already open in a live tab is represented by that tab's open row.
           !(s.openInTabId !== undefined && liveTabIds.has(s.openInTabId)),
       )
@@ -200,6 +203,7 @@ export function buildSidebarGroups(
         title: s.title ?? UNTITLED,
         age: formatAge(s.updatedAt, now),
         sessionId: s.id,
+        ...(s.worktree !== undefined ? { worktree: s.worktree } : {}),
       }));
 
     const rows = [...openRows, ...resumableRows];
@@ -795,6 +799,15 @@ export function Sidebar({
                           onClick={() => onSelectTab(row.tabId!)}
                         >
                           <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
+                          {row.worktree && (
+                            <span
+                              className="sidebar-row-worktree"
+                              title={`${row.worktree.branch}\n${row.worktree.path}`}
+                              aria-label={`Worktree ${row.worktree.id}, branch ${row.worktree.branch}`}
+                            >
+                              WT · {row.worktree.id}
+                            </span>
+                          )}
                           <RowStatusIndicator kind={statusKind} />
                         </button>
                         <button
@@ -817,6 +830,15 @@ export function Sidebar({
                         onClick={() => void resumeSession(row.sessionId!)}
                       >
                         <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
+                        {row.worktree && (
+                          <span
+                            className="sidebar-row-worktree"
+                            title={`${row.worktree.branch}\n${row.worktree.path}`}
+                            aria-label={`Worktree ${row.worktree.id}, branch ${row.worktree.branch}`}
+                          >
+                            WT · {row.worktree.id}
+                          </span>
+                        )}
                         {row.age && <span className="sidebar-row-age">{row.age}</span>}
                       </button>
                     </div>

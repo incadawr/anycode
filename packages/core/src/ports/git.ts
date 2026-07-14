@@ -75,6 +75,21 @@ export interface GitDiffResult {
   truncated: boolean;
 }
 
+/** One worktree of the user repo (`worktree list --porcelain -z`). */
+export interface GitWorktreeInfo {
+  /** Absolute path of the worktree root. */
+  path: string;
+  /** HEAD sha; null for a bare worktree. */
+  head: string | null;
+  /** Short branch name (`refs/heads/` stripped); null when detached or bare. */
+  branch: string | null;
+  detached: boolean;
+  /** True for the main working tree (the first porcelain record). */
+  isMain: boolean;
+  locked: boolean;
+  prunable: boolean;
+}
+
 export interface GitPort {
   /** read: a single `status --porcelain=v2 --branch -z` spawn yields head + all three lists. */
   status(): Promise<GitOpResult<GitStatusSummary>>;
@@ -107,4 +122,18 @@ export interface GitPort {
   /** `git reset --mixed|--hard HEAD` — the target is PINNED to the literal "HEAD" argv element:
    *  no commit-ish parameter exists in v1, so no history rewrite and no ref-injection surface. */
   resetHead?(mode: "mixed" | "hard"): Promise<GitOpResult<null>>;
+  /** Creates a new branch checked out in a new, workspace-confined worktree. */
+  worktreeAdd?(spec: {
+    path: string;
+    branch: string;
+    baseRef?: string;
+  }): Promise<GitOpResult<{ path: string }>>;
+  /** Lists all registered worktrees using porcelain output. */
+  worktreeList?(): Promise<GitOpResult<GitWorktreeInfo[]>>;
+  /** Removes a registered worktree. Without `force`, git refuses dirty trees. */
+  worktreeRemove?(spec: { path: string; force?: boolean }): Promise<GitOpResult<null>>;
+  /** Ensures AnyCode's project-local worktree namespace stays invisible to the main checkout. */
+  ensureWorktreeNamespaceIgnored?(): Promise<GitOpResult<null>>;
+  /** True only when tracked, untracked, and ignored content are all absent. */
+  worktreeIsPristine?(): Promise<GitOpResult<boolean>>;
 }

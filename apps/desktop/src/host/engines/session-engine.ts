@@ -61,6 +61,8 @@ export interface SessionEngine {
   setReasoningEffort(effort: ReasoningEffort | undefined): void;
   switchModel?(id: string, effort: ReasoningEffort): ModelSwitchResult;
   runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent>;
+  /** Continue a terminal-control turn after rehost without a synthetic user frame. */
+  continueTurn?(options: RunTurnOptions): AsyncIterable<AgentEvent>;
   historyItems(): readonly HistoryItem[];
   replaceHistory?(items: HistoryItem[]): void;
   contextBreakdown?(): ContextBreakdown;

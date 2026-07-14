@@ -39,6 +39,7 @@ import type { WorkflowPort } from "../ports/workflow.js";
 import type { BackgroundTaskPort } from "../ports/tasks.js";
 import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
+import type { WorktreeControlPort } from "../ports/worktrees.js";
 import type { TurnCheckpointControl } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { DISPATCH_TIMEOUT_GRACE_MS } from "../types/config.js";
@@ -104,6 +105,8 @@ export interface DispatchContext {
    * can never escalate the parent's mode).
    */
   planMode?: PlanModeControl;
+  /** Host-owned terminal workspace relocation; absent in child/headless loops. */
+  worktrees?: WorktreeControlPort;
   /**
    * Lazy per-turn workspace checkpoint control (design slice-4.7-cut.md §2.4).
    * Optional: absent => the auto-checkpoint arc sleeps (a child loop's
@@ -195,11 +198,15 @@ export async function executeToolCall(
         effectiveInput = input;
       }
 
+      // Resolve input-sensitive safety metadata only after zod validation and
+      // hook rewriting. Resolver failures are caught by the defensive net.
+      let metadata = tool.resolveMetadata?.(input) ?? tool.metadata;
+
       // 4. permission gate: engine ruling merged with any hook decision (deny > ask > allow).
       const request: PermissionRequest = {
         toolName,
         input,
-        metadata: tool.metadata,
+        metadata,
         mode: ctx.mode,
         toolCallId,
       };
@@ -230,6 +237,7 @@ export async function executeToolCall(
           }
           input = revalidated.data;
           effectiveInput = input;
+          metadata = tool.resolveMetadata?.(input) ?? tool.metadata;
         }
       }
 
@@ -239,7 +247,7 @@ export async function executeToolCall(
       // wrapped in the handler's raceWithTimeout: each git spawn carries its own
 
       // notice rides the same emit channel as subagent_*/workflow_* progress.
-      if (ctx.checkpoint !== undefined && checkpointRequired(tool.metadata)) {
+      if (ctx.checkpoint !== undefined && checkpointRequired(metadata)) {
         const notice = await ctx.checkpoint.ensure();
         if (notice !== null && notice.kind === "created") {
           emit?.({ type: "checkpoint_created", id: notice.id, label: notice.label });
@@ -254,7 +262,7 @@ export async function executeToolCall(
       // the reported message still cites the original timeoutMs (design §2.10).
       const controller = new AbortController();
       const dispose = parentSignal ? linkAbortSignal(parentSignal, controller) : () => {};
-      const timeoutMs = resolveTimeoutMs(tool.metadata, input);
+      const timeoutMs = resolveTimeoutMs(metadata, input);
       const handlerCtx: ToolContext = {
         toolCallId,
         abortSignal: controller.signal,
@@ -267,6 +275,7 @@ export async function executeToolCall(
         lsp: ctx.lsp,
         media: ctx.media,
         planMode: ctx.planMode,
+        worktrees: ctx.worktrees,
         emit,
       };
 

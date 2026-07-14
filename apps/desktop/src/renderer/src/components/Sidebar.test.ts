@@ -52,6 +52,19 @@ describe("buildSidebarGroups", () => {
     expect(groups[0]!.label).toBe("project-alpha");
   });
 
+  it("groups relocated worktree tabs and sessions under their stable projectRoot", () => {
+    const target = "/repo/.anycode/worktrees/task-5";
+    const worktree = { id: "task-5", path: target, branch: "anycode-wt/task-5", baseRef: "HEAD", ownedByAnyCode: true };
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: target, projectRoot: "/repo", worktree })],
+      [session({ id: "s2", workspace: target, projectRoot: "/repo", worktree })],
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ workspace: "/repo", label: "repo" });
+    expect(groups[0]!.rows.map((row) => row.kind)).toEqual(["open", "resumable"]);
+    expect(groups[0]!.rows.map((row) => row.worktree)).toEqual([worktree, worktree]);
+  });
+
   it("derives the basename from the trailing path segment, tolerating trailing slashes and Windows separators", () => {
     const groups = buildSidebarGroups(
       [tab({ tabId: "t1", workspace: "/home/me/alpha/" }), tab({ tabId: "t2", workspace: "C:\\Users\\me\\beta" })],

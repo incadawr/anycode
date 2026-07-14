@@ -127,3 +127,75 @@ describe("TabHostManager — fresh env per fork (I3, key rotation)", () => {
     expect(key0).not.toBe(key1);
   });
 });
+
+describe("TabHostManager — worktree relocation", () => {
+  it("gracefully rehosts the same tab/session in the worktree and forwards deferred cleanup", async () => {
+    const hosts: FakeHost[] = [];
+    const forkSpy = vi.fn(liveFork(hosts));
+    const manager = new TabHostManager({
+      fork: forkSpy,
+      hostEntry: "/fake/host.js",
+      createChannel: () => ({ port1: {} as never, port2: {} as never }),
+      getWindow: () => window(),
+      env: () => ({}),
+      logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/repo", sessionId: "s1", resume: false });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const first = hosts[0]!;
+    first.postMessage.mockImplementation((message: { type?: string }) => {
+      if (message.type === "shutdown") queueMicrotask(() => first.emit("exit", 0));
+    });
+
+    first.emit("message", {
+      type: "anycode:worktree-transition",
+      sessionId: "s1",
+      fromWorkspace: "/repo",
+      toWorkspace: "/repo/.anycode/worktrees/task-5",
+      projectRoot: "/repo",
+      worktree: {
+        id: "task-5",
+        path: "/repo/.anycode/worktrees/task-5",
+        branch: "anycode-wt/task-5",
+        baseRef: "HEAD",
+        ownedByAnyCode: true,
+      },
+    });
+    await flush();
+
+    expect(hosts).toHaveLength(2);
+    expect(forkSpy.mock.calls[1]?.[0]).toBe("/fake/host.js");
+    expect(forkSpy.mock.calls[1]?.[1]).toEqual(["--resume", "s1"]);
+    expect(forkSpy.mock.calls[1]?.[2]?.cwd).toBe("/repo/.anycode/worktrees/task-5");
+    expect(manager.getTab(created.tab.tabId)).toMatchObject({
+      sessionId: "s1",
+      workspace: "/repo/.anycode/worktrees/task-5",
+      projectRoot: "/repo",
+      state: "running",
+    });
+
+    const second = hosts[1]!;
+    second.postMessage.mockImplementation((message: { type?: string }) => {
+      if (message.type === "shutdown") queueMicrotask(() => second.emit("exit", 0));
+    });
+    second.emit("message", {
+      type: "anycode:worktree-transition",
+      sessionId: "s1",
+      fromWorkspace: "/repo/.anycode/worktrees/task-5",
+      toWorkspace: "/repo",
+      projectRoot: "/repo",
+      cleanup: {
+        path: "/repo/.anycode/worktrees/task-5",
+        mode: "auto",
+        ownedByAnyCode: true,
+      },
+    });
+    await flush();
+
+    expect(forkSpy.mock.calls[2]?.[2]?.cwd).toBe("/repo");
+    expect(forkSpy.mock.calls[2]?.[2]?.env?.ANYCODE_WORKTREE_CLEANUP_JSON).toContain('"mode":"auto"');
+    expect(manager.getTab(created.tab.tabId)).toMatchObject({ workspace: "/repo", projectRoot: "/repo" });
+    expect(manager.getTab(created.tab.tabId)?.worktree).toBeUndefined();
+  });
+});
