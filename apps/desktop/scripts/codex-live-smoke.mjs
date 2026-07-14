@@ -28,13 +28,19 @@
  * `[codex-live-smoke] SKIP: …` line and exit 0 — never a silent green pass
  * (cut §7 hazard #11).
  *
- * Some steps exercise engine behavior other lanes are landing concurrently
- * (B1: approve/deny/stop; B2: engine-aware `thread/start`; B5-eng:
- * resume-history projection). Each such assertion's failure message names
- * the lane it depends on, per this block's brief: a step that cannot pass
- * yet because its lane has not landed says so explicitly rather than
- * skipping silently — this driver is meant to be re-run at the join, once
- * every lane has merged.
+ * All lanes this smoke exercises (B1/B2/B5-eng/W6/W8/W17/W20/…) have long
+ * since merged into this same branch — every assertion below runs against
+ * the one, current engine. Earlier waves tagged each failure with the lane
+ * it supposedly "depended on" and a canned "re-run this smoke at the join"
+ * suggestion; that hardcoded prose was wrong twice (W17: an assertion
+ * labeled a real production defect — the engine not emitting `tool_call` at
+ * all — as someone else's unlanded work; W20: a resume readiness race got
+ * the same treatment). A failure message may still name the INVARIANT being
+ * checked (e.g. "W6: a shadow-logged command keeps its own place") — that is
+ * a description of what was measured, not a claim about whose fault a
+ * failure is. It never assigns blame to a lane or suggests a re-run; see
+ * codex-fixes-HANDOFF.md's "Уроки этого трека" for the incidents this
+ * removal is paying down.
  *
  * Plain node >=22, ZERO npm deps (only node:child_process/fs/os/path/url +
  * the global `fetch`), matching the `scripts/` precedent (assert-package.mjs,
@@ -308,13 +314,6 @@ function assert(step, cond, detail) {
   }
 }
 
-/** Same as `assert`, but the failure message is tagged with which lane the checked behavior depends on (this block's brief: name the dependency, do not skip silently). */
-function assertLane(step, cond, detail, lane) {
-  if (!cond) {
-    fail(step, `${detail} — depends on ${lane}; if that lane has not landed yet, re-run this smoke at the join`);
-  }
-}
-
 // ── HTTP helpers against the automation channel (README.md routes) ──
 
 async function api(ctx, method, path, body) {
@@ -367,17 +366,6 @@ async function waitUntilTab(ctx, step, tabId, until, timeoutMs) {
   if (result.matched !== true) {
     fail(step, `/wait ${JSON.stringify(until)} for tab ${tabId} did not match: ${JSON.stringify(result)}`);
   }
-  return result;
-}
-
-/** Same as `waitUntilTab`, but a non-match fails with a lane-tagged message instead of a generic one. */
-async function waitUntilTabLane(ctx, step, tabId, until, timeoutMs, lane) {
-  const body = { tabId, until };
-  if (timeoutMs !== undefined) {
-    body.timeoutMs = timeoutMs;
-  }
-  const result = await apiOk(ctx, step, "POST", "/wait", body);
-  assertLane(step, result.matched === true, `/wait ${JSON.stringify(until)} for tab ${tabId} did not match within ${timeoutMs ?? "default"}ms: ${JSON.stringify(result)}`, lane);
   return result;
 }
 
@@ -476,11 +464,10 @@ async function submitCodexDraftWhenReady(ctx, step) {
     () => apiOk(ctx, step, "POST", "/start-screen/submit", {}),
     (r) => r?.message === CODEX_NOT_READY_MESSAGE,
   );
-  assertLane(
+  assert(
     step,
     submitted?.ok === true,
     `/start-screen/submit rejected for the codex draft after ${attempts} attempt(s) polling up to ${CODEX_READY_POLL_TIMEOUT_MS}ms for main's async codex-doctor readiness gate (main/index.ts codexReady, main/codex-doctor.ts): ${JSON.stringify(submitted)}`,
-    "B2-host (TASK.39 thread/start engine-aware wiring, cut §5.3)",
   );
   return submitted;
 }
@@ -670,10 +657,10 @@ async function step4CreateCodexSession(ctx) {
   const submitted = await submitCodexDraftWhenReady(ctx, 4);
   ctx.codexTabId = submitted.tabId;
 
-  await waitUntilTabLane(ctx, 4, ctx.codexTabId, { connection: "ready" }, TURN_WAIT_TIMEOUT_MS, "B2-host (TASK.39 thread/start, cut §5.3)");
+  await waitUntilTab(ctx, 4, ctx.codexTabId, { connection: "ready" }, TURN_WAIT_TIMEOUT_MS);
 
   const state = await getTabState(ctx, 4, ctx.codexTabId);
-  assertLane(4, state?.engine?.id === "codex", `tab snapshot's engine.id is not "codex" after host_ready: ${JSON.stringify(state?.engine)}`, "B2-host (EnginePresentation on host_ready, cut §3.1)");
+  assert(4, state?.engine?.id === "codex", `tab snapshot's engine.id is not "codex" after host_ready: ${JSON.stringify(state?.engine)}`);
 
   await saveScreenshot(ctx, "step-4-codex-session-created");
   pass(4, `codex session created (tab ${ctx.codexTabId}), engine picker round-tripped, initial ALLOW-flow prompt queued`);
@@ -684,36 +671,47 @@ async function step4CreateCodexSession(ctx) {
 // on disk ──
 
 async function step5AllowCommand(ctx) {
-  await waitUntilTabLane(ctx, 5, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS, "B1 (TASK.38 approval-bridge, cut §2(c))");
+  await waitUntilTab(ctx, 5, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS);
   await apiAction(ctx, 5, `/tabs/${ctx.codexTabId}/permission`, { behavior: "allow" });
 
   // Second approval round: the turn is not done after the first accept — it
   // is still running toward the second command's approval request. Reuses
-  // the same waitUntilTabLane({permissionPending:true}) paradigm as the
+  // the same waitUntilTab({permissionPending:true}) paradigm as the
   // first round rather than inventing a new one.
-  await waitUntilTabLane(ctx, 5, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS, "B1 (TASK.38 approval-bridge, cut §2(c))");
+  await waitUntilTab(ctx, 5, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS);
   await apiAction(ctx, 5, `/tabs/${ctx.codexTabId}/permission`, { behavior: "allow" });
 
-  await waitUntilTabLane(ctx, 5, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS, "B1 (TASK.38 accept mapping, cut §2(c))");
+  await waitUntilTab(ctx, 5, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS);
 
-  assertLane(5, existsSync(ctx.sentinelAllow1), `first allowed command's sentinel file was not created: ${ctx.sentinelAllow1}`, "B1 (TASK.38 accept -> {decision:\"accept\"} mapping, cut §2(c))");
-  assertLane(5, existsSync(ctx.sentinelAllow2), `second allowed command's sentinel file was not created: ${ctx.sentinelAllow2}`, "B1 (TASK.38 accept -> {decision:\"accept\"} mapping, cut §2(c))");
+  assert(5, existsSync(ctx.sentinelAllow1), `first allowed command's sentinel file was not created: ${ctx.sentinelAllow1}`);
+  assert(5, existsSync(ctx.sentinelAllow2), `second allowed command's sentinel file was not created: ${ctx.sentinelAllow2}`);
   pass(5, `both command approvals ALLOWED — sentinel files confirmed on disk: ${ctx.sentinelAllow1}, ${ctx.sentinelAllow2}`);
 }
 
 // ── step 6: send a second prompt, DENY its command approval, verify the sentinel file was NOT created ──
 
 async function step6DenyCommand(ctx) {
-  const denyPrompt = `Run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelDeny)}. Do not explain, just run it.`;
+  // W21: a two-part MANDATORY form, same compliance precedent as step 4's
+  // ALLOW prompt (W16/W18) — the old prompt ("Do not explain, just run it")
+  // let the model emit an EMPTY agentMessage after the decline, which
+  // `thread/read` never returns (fact 16), making a missing trailing
+  // assistant_text after a DENY indistinguishable from a genuine defect. The
+  // closing sentence is now required, not merely permitted, so its absence
+  // after resume is evidence of something, not scenario noise.
+  const denyPrompt =
+    `Run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelDeny)}. ` +
+    `Do not write anything before running it. ` +
+    `After the command finishes, fails, or is rejected, write exactly one short sentence stating what happened. ` +
+    `Both parts are required - do not skip the final sentence.`;
   await apiAction(ctx, 6, `/tabs/${ctx.codexTabId}/prompt`, { text: denyPrompt });
 
-  await waitUntilTabLane(ctx, 6, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS, "B1 (TASK.38 approval-bridge, cut §2(c))");
+  await waitUntilTab(ctx, 6, ctx.codexTabId, { permissionPending: true }, PERMISSION_WAIT_TIMEOUT_MS);
   await apiAction(ctx, 6, `/tabs/${ctx.codexTabId}/permission`, { behavior: "deny" });
   // L1 (cut §1a): decline continues the turn to `completed` rather than
   // ending it — the client is reusable, no close/terminal-denial machinery.
-  await waitUntilTabLane(ctx, 6, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS, "B1 (TASK.38 §2(c) decline-continuation, L1)");
+  await waitUntilTab(ctx, 6, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS);
 
-  assertLane(6, !existsSync(ctx.sentinelDeny), `denied command's sentinel file WAS created (deny did not block execution): ${ctx.sentinelDeny}`, "B1 (TASK.38 deny -> {decision:\"decline\"} mapping, cut §2(c))");
+  assert(6, !existsSync(ctx.sentinelDeny), `denied command's sentinel file WAS created (deny did not block execution): ${ctx.sentinelDeny}`);
 
   // W17: the LIVE tab (not just the post-resume projection checked in step 9)
   // must actually render the denied command as a tool_call block — the
@@ -726,17 +724,15 @@ async function step6DenyCommand(ctx) {
   const deniedBlock = transcript.find(
     (b) => b?.kind === "tool_call" && typeof b?.input?.command === "string" && b.input.command.includes(ctx.sentinelDeny),
   );
-  assertLane(
+  assert(
     6,
     deniedBlock !== undefined,
     `live transcript has no tool_call block for the denied command (sentinel ${ctx.sentinelDeny}); transcript kinds: [${transcript.map((b) => b?.kind ?? "?").join(", ")}]`,
-    "W17 (event-translator.ts onItemStarted tool_call emission)",
   );
-  assertLane(
+  assert(
     6,
     deniedBlock?.status === "denied",
     `live tool_call block for the denied command has status ${JSON.stringify(deniedBlock?.status)}, expected "denied"`,
-    "W17 (statusFor declined -> denied mapping)",
   );
 
   pass(6, `command approval DENIED — sentinel file confirmed ABSENT: ${ctx.sentinelDeny}; live transcript shows a tool_call block with status=denied`);
@@ -772,20 +768,47 @@ async function capturePreStopSnapshot(ctx, step) {
   // deltas), so ">=1 reasoning block" could never pass live regardless of
   // engine health, and normalizedKindOrder already strips "reasoning" out of
   // the very order this predicate inspects — it could not have discriminated
-  // a W6 rollback even when non-vacuous. The structural replacement measures
-  // the layer that actually carries the W6 anchor risk (codex-engine.ts's
-  // nativeVisibleCompleted vs. native.length, see twoCommandFormGaps):
-  // the step-4 prompt (W18) now runs TWO separate approved commands with
-  // narrative text before/between/after them, so a live W6 rollback (which
-  // sinks the SECOND command to the turn's tail once its anchor reaches
-  // native.length) is visible here as a form gap, independent of whether the
-  // model chose to reason at all.
+  // a W6 rollback even when non-vacuous. The structural replacement (W18)
+  // makes the step-4 prompt run TWO separate approved commands with
+  // narrative text before/between/after them.
+  //
+  // W21 (2 MEDIUM findings, external codex-review, both REAL): this
+  // assertion is a PRECONDITION for step 9's equality check below, not
+  // itself a W6 discriminator, and the comment used to claim otherwise. It
+  // runs on the LIVE, pre-resume transcript, which never goes through the
+  // shadow-log anchor/merge machinery at all — codex-engine.ts:933's
+  // `nativeVisibleCompleted` anchor only feeds `recordShadowItem`, a write
+  // consumed exclusively by history-projection's resume-time merge; a live
+  // turn's blocks come straight from the translator's own events. A live W6
+  // rollback cannot sink the second command "here" — there is no merge for
+  // it to be sunk by, this early. What this assertion actually buys is
+  // upstream of that: without a trailing assistant_text after the second
+  // command, a healthy anchor and a rolled-back one both land the second
+  // command at or past the resumed turn's shrunken native.length, so the
+  // two post-resume kind orders would coincide — step 9's equality check
+  // (see twoCommandFormGaps's own header, and the comment above
+  // commandKeepsItsPlace in step 9) would be BLIND to the very rollback it
+  // exists to catch.
   const allowSegment = firstTurnSegment(kindOrder);
   const formGaps = twoCommandFormGaps(allowSegment);
   assert(
     step,
     formGaps.length === 0,
     `ALLOW turn did not produce the two-command discriminating form (assistant_text, tool_call, assistant_text, tool_call, assistant_text) — missing: ${formGaps.join("; ")}; normalized ALLOW-turn kind order: [${allowSegment.join(", ")}]`,
+  );
+
+  // W21: the DENY turn's prompt (step 6) now REQUIRES a closing sentence
+  // after the command finishes/fails/is rejected, and this snapshot is taken
+  // AFTER step 6 reaches idle, so kindOrder already spans both turns. The
+  // scenario only complied with its own prompt if the whole pre-Stop order
+  // ends on assistant_text — this names only what was observed, not why: a
+  // RED here does not guess whether the model skipped the sentence or
+  // something downstream dropped it (that class of pre-written guess is
+  // exactly what cost this track W17/W20, see this file's header comment).
+  assert(
+    step,
+    kindOrder[kindOrder.length - 1] === "assistant_text",
+    `scenario did not produce the required closing form: pre-Stop normalized kind order does not end on assistant_text; normalized kind order: [${kindOrder.join(", ")}]`,
   );
 
   ctx.preStopKindOrder = kindOrder;
@@ -802,9 +825,9 @@ async function step7StopTurn(ctx) {
     "Count out loud from one to fifty. For EVERY single number, write a full separate paragraph of at least three sentences describing something interesting about that number before moving to the next one. Do not use any tools.";
   await apiAction(ctx, 7, `/tabs/${ctx.codexTabId}/prompt`, { text: slowPrompt });
 
-  await waitUntilTabLane(ctx, 7, ctx.codexTabId, { turnStatus: "running" }, TURN_WAIT_TIMEOUT_MS, "B1 (TASK.38 turn/start response handling, cut §2(b))");
+  await waitUntilTab(ctx, 7, ctx.codexTabId, { turnStatus: "running" }, TURN_WAIT_TIMEOUT_MS);
   await apiAction(ctx, 7, `/tabs/${ctx.codexTabId}/stop`, {});
-  await waitUntilTabLane(ctx, 7, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS, "B1 (TASK.38 single-fire abort-promise / sendInterruptOnce, cut §2(b))");
+  await waitUntilTab(ctx, 7, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS);
 
   pass(7, `Stop mid-turn returned the session to idle without a tab restart (pre-Stop discriminating shape confirmed: [${preStopKindOrder.join(", ")}])`);
 }
@@ -892,11 +915,17 @@ function turnHasAssistantTail(blocks) {
 }
 
 /**
- * W6 invariant: a shadow-logged command keeps ITS OWN place between agent
- * messages instead of sinking to the end on re-delivery. True iff the FIRST
- * "tool_call" sits strictly before the LAST "assistant_text" (the command is
- * not stranded after every reply), AND the FIRST "user_text" precedes the
+ * Coarse displacement sanity: a shadow-logged command is not stranded outside
+ * the conversation entirely. True iff the FIRST "tool_call" sits strictly
+ * before the LAST "assistant_text", AND the FIRST "user_text" precedes the
  * FIRST "tool_call" (the prompt that triggered it still comes first).
+ *
+ * NOT a W6 anchor guard, despite what this predicate used to claim: rolling
+ * back codex-engine.ts:933 sinks only the SECOND command (C2) of the ALLOW
+ * turn, and this looks solely at the FIRST tool_call, which the anchor never
+ * moves. Every RED here is also a RED in the step-9 kindOrdersMatch equality,
+ * so this is strictly subsumed by it. The single live guard of that rollback
+ * is the equality; the production-side guard is the W18 unit test.
  */
 function commandKeepsItsPlace(blocks) {
   const firstTool = firstIndexOfKind(blocks, "tool_call");
@@ -955,15 +984,35 @@ function normalizedKindOrder(blocks) {
 }
 
 /**
+ * W21: extracted so step 9's pre-Stop-vs-post-resume comparison and its own
+ * self-check exercise the identical code — pure equality of two normalized
+ * kind-order string arrays (same length, same element at every index). This
+ * is the ONE live guard against a W6/W8 rollback surviving a real
+ * quit/relaunch/resume: see the self-check cases below for a documented
+ * rollback form this function is proven to flag as a MISMATCH.
+ */
+function sameKindOrder(a, b) {
+  return a.length === b.length && a.every((k, i) => k === b[i]);
+}
+
+/**
  * The W6/W8 discriminating shape (fact 16): an assistant reply, then a
  * command, then another assistant reply, ADJACENT in the normalized order.
- * Neither a W6 rollback (command sinks to the turn's tail) nor a W8
- * rollback (tail message evicted) can produce this exact triple — the
- * two-prompt scenario prior waves shipped never emitted it at all (both
- * prompts said "do not explain", so agentMessage was empty and therefore
- * ABSENT, fact 16), which is WHY the W6 invariant went unexercised through
- * the GUI until this wave's three-part ALLOW prompt (step 4) made it
- * reachable.
+ * This runs on the LIVE pre-Stop order (capturePreStopSnapshot), upstream of
+ * any resume/shadow-merge — it cannot see, and is not evidence about, the W6
+ * anchor at codex-engine.ts:933 at all (that anchor only feeds the
+ * RESUME-side merge step 9's equality check judges; a live turn's blocks
+ * come straight from the translator's own events, never through it).
+ *
+ * W21 (external codex-review, REAL): an earlier version of this comment
+ * claimed "neither a W6 rollback nor a W8 rollback can produce this exact
+ * triple", implying this predicate discriminates that rollback — it does
+ * not, and structurally cannot, this early in the pipeline. What it actually
+ * verifies: the two-prompt scenario prior waves shipped never emitted this
+ * shape at all (both prompts said "do not explain", so agentMessage was
+ * empty and therefore ABSENT, fact 16) — this wave's three-part ALLOW
+ * prompt (step 4) is what made the shape reachable through the GUI, a
+ * precondition for the W6 invariant being exercised live at all.
  */
 function hasAdjacentAssistantToolAssistant(kindOrder) {
   for (let i = 0; i + 2 < kindOrder.length; i += 1) {
@@ -1007,14 +1056,21 @@ function firstTurnSegment(kindOrder) {
  * iff the normalized kind order contains the subsequence assistant_text,
  * tool_call, assistant_text, tool_call, assistant_text: EXACTLY two
  * "tool_call" entries, with a non-blank assistant_text before the first,
- * strictly BETWEEN the two, and strictly AFTER the second. The trailing
- * assistant_text is load-bearing, not an optional flourish: without it, a
- * live W6 rollback that sinks the second tool_call to the turn's tail (its
- * shadow-log anchor reaching native.length, codex-engine.ts's
- * `nativeVisibleCompleted`) produces a kind order — [..., tool_call,
- * tool_call] — that is indistinguishable from a healthy run with no trailing
- * reply at all, unless a reply after the second command is required to
- * exist in the first place.
+ * strictly BETWEEN the two, and strictly AFTER the second.
+ *
+ * W21 (external codex-review, REAL): the trailing assistant_text is
+ * load-bearing, but not for the reason an earlier version of this comment
+ * gave — it does not make a live W6 rollback "visible here"; this function
+ * runs on the LIVE pre-Stop order, which the shadow-log anchor at
+ * codex-engine.ts:933 (`nativeVisibleCompleted`) never touches (see
+ * capturePreStopSnapshot's own comment). It is load-bearing on the RESUME
+ * side instead: without a reply after the second command, step 9's
+ * post-resume kind order would coincide with the pre-Stop one whether the
+ * anchor placed the second command correctly or not, once native.length
+ * shrinks to match the missing summary — leaving step 9's equality check
+ * (sameKindOrder) blind to the very rollback it exists to catch. Requiring
+ * the trailing reply here, live and pre-resume, is what makes that later
+ * equality check meaningful in the first place.
  *
  * Returns the list of missing parts (empty = the form is fully present) so
  * the caller can fail closed with a specific diagnosis rather than a bare
@@ -1102,84 +1158,192 @@ function selfCheckTwoCommandFormGaps() {
   console.log(`[codex-live-smoke] self-check OK: ${SELF_CHECK_CASES.length}/${SELF_CHECK_CASES.length} synthetic form-gap cases matched expectations`);
 }
 
+// The healthy shape both self-check groups below check against: the pre-Stop
+// order (ALLOW turn's 2 commands, then the DENY turn's 1) plus the trailing
+// "user_text" step 9 always expects (the interrupted step-7 turn's own
+// userMessage, fact 13) — exactly what step9ResumeAndCheckTranscript's
+// `expectedKindOrder` computes on a clean run.
+const HEALTHY_POST_RESUME_KIND_ORDER = [
+  "user_text", "assistant_text", "tool_call", "assistant_text", "tool_call", "assistant_text",
+  "user_text", "tool_call", "assistant_text", "user_text",
+];
+
+function toBlocks(kindOrder) {
+  return kindOrder.map((kind) => ({ kind }));
+}
+
+// ── self-check (W21): turnHasAssistantTail is a pure function of a plain
+// TranscriptBlock[] (only `.kind` is read, per this file's own block-shape
+// comment above `lastIndexOfKind`) — proven here on synthetic blocks built
+// from a bare kind string via `toBlocks`, unconditionally, before any live
+// step runs. Case (a) is HEALTHY_POST_RESUME_KIND_ORDER itself; cases (b)
+// and (c) are two DIFFERENT single-field mutations of that SAME healthy
+// order, each isolating one observed failure mode: (b) is the W8 eviction
+// shape (the DENY turn's own trailing assistant_text is gone, so the resumed
+// transcript ends on the interrupted turn's bare user_text right after a
+// tool_call) and (c) is a W6-style reorder inside the DENY turn itself (its
+// tool_call sinks behind its own assistant_text, so the last assistant_text
+// again precedes the last tool_call). Pairing each RED case against the same
+// healthy baseline is what proves the RED is about the one field that
+// differs, not a coincidence of the fixture.
+const ASSISTANT_TAIL_SELF_CHECK_CASES = [
+  {
+    name: "(a) healthy post-resume order (pre-Stop shape + trailing user_text) must PASS",
+    kindOrder: HEALTHY_POST_RESUME_KIND_ORDER,
+    expectPass: true,
+  },
+  {
+    name: "(b) W8 eviction: DENY turn's trailing assistant_text is gone, transcript ends on bare user_text right after its tool_call must RED",
+    kindOrder: [
+      "user_text", "assistant_text", "tool_call", "assistant_text", "tool_call", "assistant_text",
+      "user_text", "tool_call", "user_text",
+    ],
+    expectPass: false,
+  },
+  {
+    name: "(c) W6-style reorder: DENY turn's tool_call sinks behind its own assistant_text, then the interrupted turn's user_text must RED",
+    kindOrder: [
+      "user_text", "assistant_text", "tool_call", "assistant_text", "tool_call", "assistant_text",
+      "user_text", "assistant_text", "tool_call", "user_text",
+    ],
+    expectPass: false,
+  },
+];
+
+function selfCheckTurnHasAssistantTail() {
+  for (const { name, kindOrder, expectPass } of ASSISTANT_TAIL_SELF_CHECK_CASES) {
+    const got = turnHasAssistantTail(toBlocks(kindOrder));
+    if (got !== expectPass) {
+      console.error(
+        `[codex-live-smoke] SELF-CHECK FAILED: "${name}" — expected ${expectPass ? "PASS" : "RED"}, got ${got ? "PASS" : "RED"}`,
+      );
+      process.exit(1);
+    }
+  }
+  console.log(`[codex-live-smoke] self-check OK: ${ASSISTANT_TAIL_SELF_CHECK_CASES.length}/${ASSISTANT_TAIL_SELF_CHECK_CASES.length} synthetic turnHasAssistantTail cases matched expectations`);
+}
+
+// ── self-check (W21): sameKindOrder is a pure equality of two plain
+// string[] — proven against a documented W6 rollback SHAPE (the ALLOW turn's
+// second command, C2, sinks behind its own reply A3 instead of preceding
+// it — the same tail-drift shape twoCommandFormGaps's own self-check cases
+// already exercise, here checked at the whole-transcript equality layer
+// step 9 actually gates on) compared to HEALTHY_POST_RESUME_KIND_ORDER, and
+// against that healthy order compared to itself.
+const SAME_KIND_ORDER_ROLLBACK = [
+  "user_text", "assistant_text", "tool_call", "assistant_text", "assistant_text", "tool_call",
+  "user_text", "tool_call", "assistant_text", "user_text",
+];
+
+function selfCheckSameKindOrder() {
+  const cases = [
+    {
+      name: "documented W6 rollback form (C2 sinks behind A3) vs the healthy expected order must MISMATCH",
+      a: SAME_KIND_ORDER_ROLLBACK,
+      b: HEALTHY_POST_RESUME_KIND_ORDER,
+      expectMatch: false,
+    },
+    {
+      name: "healthy expected order vs itself must MATCH",
+      a: HEALTHY_POST_RESUME_KIND_ORDER,
+      b: HEALTHY_POST_RESUME_KIND_ORDER,
+      expectMatch: true,
+    },
+  ];
+  for (const { name, a, b, expectMatch } of cases) {
+    const got = sameKindOrder(a, b);
+    if (got !== expectMatch) {
+      console.error(
+        `[codex-live-smoke] SELF-CHECK FAILED: "${name}" — expected ${expectMatch ? "MATCH" : "MISMATCH"}, got ${got ? "MATCH" : "MISMATCH"}`,
+      );
+      process.exit(1);
+    }
+  }
+  console.log(`[codex-live-smoke] self-check OK: ${cases.length}/${cases.length} synthetic sameKindOrder cases matched expectations`);
+}
+
 // ── step 9: resume the codex session, check the transcript ──
 
 async function step9ResumeAndCheckTranscript(ctx) {
   const resumed = await resumeCodexSessionWhenReady(ctx, 9, ctx.codexSessionId);
   const resumedTabId = resumed.tabId;
 
-  await waitUntilTabLane(ctx, 9, resumedTabId, { connection: "ready" }, TURN_WAIT_TIMEOUT_MS, "B1/B2 (thread/resume wiring)");
+  await waitUntilTab(ctx, 9, resumedTabId, { connection: "ready" }, TURN_WAIT_TIMEOUT_MS);
 
   const state = await getTabState(ctx, 9, resumedTabId);
   const transcript = Array.isArray(state?.transcript) ? state.transcript : [];
   const text = transcript.map((b) => `${b.text ?? ""} ${b.modelText ?? ""}`).join(" | ");
 
   // Native `thread/read` persists userMessage/agentMessage unconditionally
-  // (cut §1a L4) — this half does NOT depend on the shadow-log lane.
-  assertLane(
+  // (cut §1a L4).
+  assert(
     9,
     text.includes("touch") || text.length > 0,
     `resumed transcript shows no prior user/assistant content at all (tab ${resumedTabId}): ${JSON.stringify(transcript).slice(0, 500)}`,
-    "B1/B2 (host boot-history wiring, cut §3.6 bootHistory)",
   );
   // Tool OUTCOMES (the command executions from steps 5/6) are the part cut
   // §2(e) reroutes through the engine-owned shadow-log (native thread/read
-  // never persists commandExecution at all, L4) — this half is the one most
-  // likely to still be red before B5-eng lands.
+  // never persists commandExecution at all, L4).
   const hasToolOutcome = transcript.some((b) => b.kind === "tool_call" || b.kind === "tool_result");
-  assertLane(
+  assert(
     9,
     hasToolOutcome,
     `resumed transcript shows no tool_call/tool_result block for the earlier allow/deny commands (tab ${resumedTabId})`,
-    "B5-eng (TASK.42 history-projection shadow-log, cut §2(e))",
   );
 
   const kindOrder = transcript.map((b) => b?.kind ?? "?").join(", ");
 
-  // W8: the turn's own last message must not be evicted by a re-delivered
-  // stale shadow-logged command — the transcript must not end mid-command.
-  // (W16: the failure prose used to claim the transcript "ends on a
-  // tool_call", which is false whenever a later turn appends more history
-  // after that tool_call without ever adding an assistant_text of its own
-  // (fact 13) — the actual invariant this checks is narrower: no
+  // W8 invariant: the turn's own last message must not be evicted by a
+  // re-delivered stale shadow-logged command — the transcript must not end
+  // mid-command. (W16: the failure prose used to claim the transcript "ends
+  // on a tool_call", which is false whenever a later turn appends more
+  // history after that tool_call without ever adding an assistant_text of
+  // its own (fact 13) — the actual invariant this checks is narrower: no
   // assistant_text anywhere after the LAST tool_call.)
-  assertLane(
+  assert(
     9,
     turnHasAssistantTail(transcript),
     `resumed transcript has no assistant_text after the last tool_call — kind order: [${kindOrder}]`,
-    "W8 (895b380: let a re-delivered command enrich its row, and stop old commands from evicting live history)",
   );
-  // W6: the command must keep ITS OWN place between the agent messages that
-  // surround it, not sink to the tail of the transcript on re-delivery.
-  assertLane(
+  // W21: gross-displacement sanity check, not the discriminator. Any
+  // transcript that fails this also fails the kindOrdersMatch equality check
+  // below (a RED here is always a RED there too — this check is SUBSUMED by
+  // it), and it does NOT catch the shadow-log anchor rollback this smoke is
+  // built to detect (codex-engine.ts:933): that rollback sinks the SECOND
+  // command (C2), while this predicate only looks at the FIRST tool_call's
+  // position, which the anchor never moves. Left in as a coarse,
+  // human-readable diagnosis for the common case (a command displaced
+  // entirely out of the turn), not as an independent W6 verification.
+  assert(
     9,
     commandKeepsItsPlace(transcript),
     `resumed transcript's first tool_call is not strictly between the first user_text and the last assistant_text (command lost its place) — kind order: [${kindOrder}]`,
-    "W6 (30da16b: anchor the shadow command log to the domain thread/read actually returns)",
   );
   // The eviction bug this smoke exists to catch would leave stale
   // shadow-logged commands as the very first thing a resumed transcript shows.
-  assertLane(
+  assert(
     9,
     transcriptDoesNotOpenOnTool(transcript),
     `resumed transcript opens with a tool_call block instead of the original user/assistant history — kind order: [${kindOrder}]`,
-    "W8 (895b380: stop old commands from evicting live history)",
   );
   // W16 (facts 13+16): the post-resume normalized order must equal the
   // pre-Stop normalized order (captured in step 7, before the Stop) PLUS a
   // trailing "user_text" — fact 13: the interrupted step-7 turn persists
   // ONLY its userMessage (zero agent-items). Any other delta — a shifted
   // tool_call, a dropped assistant_text, a mismatched length anywhere but
-  // the expected tail — is a live W6/W8 rollback.
+  // the expected tail — is a live W6/W8 rollback. This is the ONE assertion
+  // in this file that actually discriminates the shadow-log anchor rollback
+  // (codex-engine.ts:933, see twoCommandFormGaps's and
+  // capturePreStopSnapshot's own comments for why the trailing summary
+  // requirement upstream is what makes it discriminating) — proven by
+  // construction in selfCheckSameKindOrder above, not by prose.
   const postKindOrder = normalizedKindOrder(transcript);
   const expectedKindOrder = [...(ctx.preStopKindOrder ?? []), "user_text"];
-  const kindOrdersMatch =
-    postKindOrder.length === expectedKindOrder.length && postKindOrder.every((k, i) => k === expectedKindOrder[i]);
-  assertLane(
+  const kindOrdersMatch = sameKindOrder(postKindOrder, expectedKindOrder);
+  assert(
     9,
     kindOrdersMatch,
     `resumed normalized kind order != pre-Stop normalized kind order + trailing "user_text" (fact 13: an interrupted turn persists only userMessage) — pre-Stop: [${(ctx.preStopKindOrder ?? []).join(", ")}], post-resume: [${postKindOrder.join(", ")}]`,
-    "W6/W8 (fact 13 interrupted-turn persistence, fact 16 empty-agentMessage projection)",
   );
 
   await saveScreenshot(ctx, "step-9-resumed-transcript");
@@ -1280,6 +1444,8 @@ function installSignalTeardown(ctx) {
 
 async function run() {
   selfCheckTwoCommandFormGaps();
+  selfCheckTurnHasAssistantTail();
+  selfCheckSameKindOrder();
   const { bin, rawVersion } = preflight();
 
   const ctx = {
