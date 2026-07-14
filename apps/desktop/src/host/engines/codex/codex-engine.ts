@@ -855,12 +855,16 @@ export class CodexEngine implements SessionEngine {
       // anchor relative to them.
       let seqInTurn = 0;
       let nativeVisibleCompleted = 0;
-      // Per-turn dedupe of already-counted item ids (W7 HIGH-2), reset
-      // alongside the two counters above: a re-delivered terminal
-      // `item/completed` for an item already counted this turn must not tick
-      // either counter or write a second row, or the anchor a LATER command
-      // records against silently drifts past where the first delivery put it.
-      const seenItemIds = new Set<string>();
+      // Per-turn anchor of already-counted item ids (W7 HIGH-2 + W8
+      // MEDIUM-1), reset alongside the two counters above: a re-delivered
+      // terminal `item/completed` for an item already counted this turn must
+      // not tick either counter, or the anchor a LATER command records
+      // against silently drifts past where the first delivery put it. Unlike
+      // W7's `Set<string>`, this keeps the FIRST delivery's own anchor value
+      // — the redelivery still writes (payload enrichment, e.g. a sparse
+      // first snapshot followed by a rich terminal one), just with the
+      // SAVED anchor rather than the (by-then-stale) current counters.
+      const itemAnchors = new Map<string, { positionInTurn: number; seqInTurn: number }>();
       // Captured (not `this`-bound): `deliver` stays a plain generator
       // function so `yield*` delegation below is unchanged from before this
       // shadow-write hook existed.
@@ -880,21 +884,36 @@ export class CodexEngine implements SessionEngine {
           if (params !== null && params.threadId === engine.threadId && params.turnId === turnId) {
             const item = record(params.item);
             const itemId = typeof item?.id === "string" ? item.id : undefined;
-            // An item with no string id cannot be deduped (nothing to key on)
-            // and ticks on every delivery, exactly as before this fix.
-            if (itemId === undefined || !seenItemIds.has(itemId)) {
-              if (itemId !== undefined) seenItemIds.add(itemId);
-              const itemType = completedItemType(notification);
-              // Recorded with BOTH counters' values BEFORE this notification's
-              // own effect is applied — a command itself is never
-              // NATIVE_PERSISTED, so recording before vs. after
-              // nativeVisibleCompleted's own (absent) increment is
+            // An item with no string id cannot be anchored (nothing to key
+            // on) and ticks the counters on every delivery, exactly as
+            // before this fix — the lookup below is skipped for it, so
+            // `existingAnchor` stays undefined and it always takes the
+            // "first delivery" branch.
+            const existingAnchor = itemId !== undefined ? itemAnchors.get(itemId) : undefined;
+            if (existingAnchor === undefined) {
+              // FIRST delivery of this item id: the anchor is fixed here,
+              // forever (W7 HIGH-2) — recorded with BOTH counters' values
+              // BEFORE this notification's own effect is applied (a command
+              // itself is never NATIVE_PERSISTED, so recording before vs.
+              // after nativeVisibleCompleted's own (absent) increment is
               // equivalent, but seqInTurn's pre-increment value is
-              // load-bearing (matches every other row's "my own position",
-              // not "the next row's position").
-              engine.recordShadowItem(notification, turnId, turnOrdinal, nativeVisibleCompleted, seqInTurn);
+              // load-bearing: it matches every other row's "my own
+              // position", not "the next row's position").
+              const anchor = { positionInTurn: nativeVisibleCompleted, seqInTurn };
+              if (itemId !== undefined) itemAnchors.set(itemId, anchor);
+              const itemType = completedItemType(notification);
+              engine.recordShadowItem(notification, turnId, turnOrdinal, anchor.positionInTurn, anchor.seqInTurn);
               seqInTurn += 1;
               if (itemType !== undefined && NATIVE_PERSISTED.has(itemType)) nativeVisibleCompleted += 1;
+            } else {
+              // REDELIVERY of an already-anchored item id (W8 MEDIUM-1): the
+              // counters do NOT tick again — the anchor stays exactly where
+              // the first delivery put it. `recordShadowItem` re-reads
+              // `item` from THIS `notification`, so it always writes the
+              // CURRENT (possibly richer) payload — enrich-only, never
+              // degrading, is the other half of this fix
+              // (sqlite-persistence.ts's COALESCE-based upsert).
+              engine.recordShadowItem(notification, turnId, turnOrdinal, existingAnchor.positionInTurn, existingAnchor.seqInTurn);
             }
           }
         }

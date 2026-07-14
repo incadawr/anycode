@@ -1428,8 +1428,8 @@ describe("CodexEngine — shadow counters ignore foreign/stale item/completed (W
   });
 });
 
-describe("CodexEngine — per-turn item-id dedupe stops a re-delivered terminal notification from moving the anchor (W7 HIGH-2)", () => {
-  it("a duplicate terminal item/completed for the same commandExecution id is a no-op — only the FIRST delivery ticks the counters and writes a row", async () => {
+describe("CodexEngine — per-turn item-id dedupe stops a re-delivered terminal notification from moving the anchor (W7 HIGH-2 / W8 MEDIUM-1)", () => {
+  it("a duplicate terminal item/completed for the same commandExecution id never moves the anchor — the counters tick only once, but BOTH deliveries write (the second enriches, W8 MEDIUM-1)", async () => {
     const server = new FakeAppServer();
     const shadowLog = new RecordingShadowLog();
     const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
@@ -1450,8 +1450,15 @@ describe("CodexEngine — per-turn item-id dedupe stops a re-delivered terminal 
     server.completeTurn("completed");
     await turn.done;
 
-    expect(shadowLog.writes).toHaveLength(1);
+    // W8 MEDIUM-1: the redelivery is no longer skipped entirely — it writes
+    // again (payload enrichment, see the dedicated describe block below) —
+    // but the ANCHOR (positionInTurn/seqInTurn) it writes with is identical
+    // to the first delivery's, exactly the W7 HIGH-2 invariant this test
+    // guards: a re-delivered notification must never move a command past
+    // where its FIRST delivery placed it.
+    expect(shadowLog.writes).toHaveLength(2);
     expect(shadowLog.writes[0]?.item).toMatchObject({ positionInTurn: 1, seqInTurn: 1 });
+    expect(shadowLog.writes[1]?.item).toMatchObject({ positionInTurn: 1, seqInTurn: 1 });
   });
 
   it("an item/completed with no string id is never dedup'd — it ticks the counters on every delivery, as before", async () => {
@@ -1476,6 +1483,49 @@ describe("CodexEngine — per-turn item-id dedupe stops a re-delivered terminal 
     // NATIVE_PERSISTED) — the command anchors at positionInTurn 2, not 0.
     expect(shadowLog.writes[0]?.item.positionInTurn).toBe(2);
     expect(shadowLog.writes[0]?.item.seqInTurn).toBe(2);
+  });
+});
+
+describe("CodexEngine — a re-delivered item/completed enriches the shadow row's payload without moving its anchor (W8 MEDIUM-1)", () => {
+  it("a sparse-then-rich redelivery of the same commandExecution id keeps the FIRST anchor but enriches the row with the later payload", async () => {
+    // W7's fix (per-turn Set<string> of seen item ids) swung the pendulum too
+    // far: it made the ANCHOR immovable by skipping the whole block on
+    // redelivery — including the write itself. If the FIRST terminal
+    // notification for a command arrived sparse (exitCode/aggregatedOutput
+    // both nullable per the pinned contract) and a LATER redelivery of the
+    // SAME item id carries the real exitCode/output, that enrichment must
+    // not be silently dropped — only the anchor (positionInTurn/seqInTurn)
+    // must stay pinned to the first delivery.
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
+    const turn = drive(engine, "run it", new AbortController().signal);
+    await tick();
+
+    server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "cmd-1", command: "echo hi" } } });
+    // First (terminal) delivery: sparse — no exitCode/aggregatedOutput.
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "cmd-1", command: "echo hi" } } });
+    await tick();
+    // An unrelated native completion moves the counters on in between.
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "agentMessage", id: "msg-1", text: "still working" } } });
+    await tick();
+    // Re-delivered terminal notification for the SAME item id, now rich.
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "cmd-1", command: "echo hi", status: "completed", exitCode: 0, aggregatedOutput: "hi\n" } } });
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(shadowLog.writes).toHaveLength(2);
+    const [first, second] = shadowLog.writes;
+    // Both writes anchor at the FIRST delivery's counters — the redelivery
+    // must never move positionInTurn/seqInTurn (W7 HIGH-2, unchanged).
+    expect(first?.item).toMatchObject({ positionInTurn: 0, seqInTurn: 0 });
+    expect(second?.item).toMatchObject({ positionInTurn: 0, seqInTurn: 0 });
+    // The FIRST write carries no exitCode/outputHead (sparse).
+    expect(first?.item.exitCode).toBeUndefined();
+    expect(first?.item.outputHead).toBeUndefined();
+    // The SECOND write enriches the SAME row with the later payload.
+    expect(second?.item.exitCode).toBe(0);
+    expect(second?.item.outputHead).toBe("hi\n");
   });
 });
 

@@ -186,6 +186,9 @@ export interface ProjectCodexHistoryOptions {
 }
 
 const TRUNCATION_MARKER_TEXT = "… earlier history truncated (native thread retains full history)";
+/** Used instead of TRUNCATION_MARKER_TEXT when the cap (W8 MEDIUM-2) drops at least one shadow-sourced item — "native thread retains full history" would be a lie for command output, which only ever lived in AnyCode's own shadow log. */
+const COMMAND_OUTPUT_TRUNCATED_MARKER_TEXT =
+  "… earlier history truncated (some command output was discarded and is not retained by Codex)";
 const SHADOW_MISSING_MARKER_TEXT = "command output from earlier sessions is not retained by Codex";
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -336,6 +339,12 @@ function projectItem(turnId: string, item: CodexThreadReadItem, createdAt: numbe
   }
 }
 
+/** One projected `HistoryItem` tagged with whether it originated from a shadow (command-log) row rather than a native one — the cap (W8 MEDIUM-2) needs this to tell an honest "some command output was discarded" marker from the plain native-truncation one. */
+interface TaggedItem {
+  item: HistoryItem;
+  shadow: boolean;
+}
+
 /**
  * Interleaves one turn's native items (already in their own relative
  * completion order — `thread/read` only ever appends) with its shadow
@@ -351,26 +360,26 @@ function mergeTurnItems(
   native: CodexThreadReadItem[],
   shadow: ShadowCommandItem[],
   cursorStart: number,
-): { items: HistoryItem[]; nextCursor: number } {
+): { items: TaggedItem[]; nextCursor: number } {
   const sortedShadow = [...shadow].sort((a, b) => a.positionInTurn - b.positionInTurn || a.seqInTurn - b.seqInTurn);
-  const items: HistoryItem[] = [];
+  const items: TaggedItem[] = [];
   let cursor = cursorStart;
   let shadowIndex = 0;
 
-  const emit = (projected: HistoryItem[]): void => {
-    items.push(...projected);
+  const emit = (projected: HistoryItem[], shadowOrigin: boolean): void => {
+    for (const item of projected) items.push({ item, shadow: shadowOrigin });
     cursor += projected.length;
   };
 
   for (let nativeIndex = 0; nativeIndex < native.length; nativeIndex += 1) {
     while (shadowIndex < sortedShadow.length && sortedShadow[shadowIndex]!.positionInTurn <= nativeIndex) {
-      emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor));
+      emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor), true);
       shadowIndex += 1;
     }
-    emit(projectItem(turnId, native[nativeIndex]!, cursor));
+    emit(projectItem(turnId, native[nativeIndex]!, cursor), false);
   }
   for (; shadowIndex < sortedShadow.length; shadowIndex += 1) {
-    emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor));
+    emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor), true);
   }
 
   return { items, nextCursor: cursor };
@@ -381,6 +390,39 @@ function mergeTurnItems(
  * `HistoryItem[]` (cut §2(e)/§3.6). Deterministic given the same input — no
  * I/O, no clock reads (every `createdAt` is derived from the turn's own
  * `startedAt`).
+ *
+ * Capping (W8 MEDIUM-2 — pre-fix, an orphan tail (W7 HIGH-3) longer than
+ * `maxItems` could evict every in-bounds item, native turns included: the old
+ * cap concatenated the orphan tail AFTER the real turns and kept the LAST
+ * `maxItems` of that single combined list, so a long-enough orphan tail
+ * pushed the actual conversation entirely out of the window — the exact GUI
+ * failure "after relaunch the whole conversation is gone, only old commands
+ * remain"). The fix caps the two sources SEPARATELY and asymmetrically,
+ * because they are not equally trustworthy: in-bounds items (native text +
+ * shadow commands actually anchored inside a real turn) are never evicted in
+ * favor of the orphan tail.
+ *  1. `inBounds` = every item the turn walk above produced, in order. If it
+ *     already fits `maxItems`, nothing is dropped from it and the leftover
+ *     `maxItems - inBounds.length` becomes the orphan tail's budget. If it
+ *     does not fit, only its LAST `maxItems` items are kept (oldest evicted
+ *     first, same rule as before this fix) and the orphan budget is 0.
+ *  2. `orphanRows` (ascending `(turnOrdinal, positionInTurn, seqInTurn)`,
+ *     same ordering as before this fix) fills that budget from its OWN end
+ *     (newest orphans first) — but only in WHOLE rows: each row is the
+ *     `tool_call`/`tool_result` pair one shadow command projects to (always
+ *     exactly 2 `HistoryItem`s), so `Math.floor(budget / 2)` whole rows fit;
+ *     an odd leftover slot is left unused rather than splitting a pair (a
+ *     lone `tool_result` with no matching `tool_call` would otherwise render
+ *     as a broken transcript). A budget of 0 emits no orphan tail at all.
+ * The leading truncation marker is chosen honestly: if EVERY dropped item
+ * (from either source) was a native one, the existing
+ * `TRUNCATION_MARKER_TEXT` stands (native thread retains full history — still
+ * true). If at least one dropped item was shadow-sourced — an orphan row, or
+ * a shadow command that was anchored inside an in-bounds turn but fell out of
+ * the in-bounds cap — that claim is false, so the honest
+ * `COMMAND_OUTPUT_TRUNCATED_MARKER_TEXT` is used instead. Exactly one leading
+ * marker either way, never two (the separate `shadowMissing` marker below is
+ * an orthogonal concern and can still stack on top).
  */
 export function projectCodexHistory(
   thread: CodexThreadRead,
@@ -395,12 +437,12 @@ export function projectCodexHistory(
     else list.push(row);
   }
 
-  const items: HistoryItem[] = [];
+  const inBounds: TaggedItem[] = [];
   let cursor = 0;
   turns.forEach((turn, turnOrdinal) => {
     const turnStartedAtMs = typeof turn.startedAt === "number" ? turn.startedAt * 1000 : 0;
     const merged = mergeTurnItems(turn.id, turn.items ?? [], shadowByTurn.get(turnOrdinal) ?? [], turnStartedAtMs);
-    items.push(...merged.items);
+    inBounds.push(...merged.items);
     cursor = merged.nextCursor;
     shadowByTurn.delete(turnOrdinal);
   });
@@ -410,37 +452,57 @@ export function projectCodexHistory(
   // a future ordinal-numbering drift) — everything `shadowByTurn` still holds
   // once every real turn has been walked, since each matched ordinal was
   // deleted above. The module header's "Nothing is ever dropped" applies to
-  // these exactly as to in-bounds rows: appended as a deterministic tail,
+  // these exactly as to in-bounds rows: projected as a deterministic tail,
   // sorted by (turnOrdinal, positionInTurn, seqInTurn), each row keyed to a
   // synthetic turn id derived from its own ordinal — deterministic and unable
   // to collide with any real native turn id (those are opaque server ids,
   // never this literal shape) — with createdAt continuing the cursor left by
-  // the last emitted item.
-  const orphanRows = [...shadowByTurn.entries()]
+  // the last emitted item. Grouped per-ROW (not flattened) so the cap below
+  // can never keep half of a `tool_call`/`tool_result` pair.
+  const orphanRows: HistoryItem[][] = [...shadowByTurn.entries()]
     .flatMap(([turnOrdinal, rows]) => rows.map((row) => ({ turnOrdinal, row })))
     .sort(
       (a, b) =>
         a.turnOrdinal - b.turnOrdinal || a.row.positionInTurn - b.row.positionInTurn || a.row.seqInTurn - b.row.seqInTurn,
-    );
-  for (const { turnOrdinal, row } of orphanRows) {
-    const projected = projectShadowCommand(`${thread.thread.id}:orphan-turn-${turnOrdinal}`, row, cursor);
-    items.push(...projected);
-    cursor += projected.length;
+    )
+    .map(({ turnOrdinal, row }) => {
+      const projected = projectShadowCommand(`${thread.thread.id}:orphan-turn-${turnOrdinal}`, row, cursor);
+      cursor += projected.length;
+      return projected;
+    });
+
+  let kept = inBounds;
+  let droppedInBoundsShadow = false;
+  let orphanBudget = opts.maxItems - inBounds.length;
+  if (orphanBudget < 0) {
+    const dropCount = -orphanBudget;
+    droppedInBoundsShadow = inBounds.slice(0, dropCount).some((tagged) => tagged.shadow);
+    kept = inBounds.slice(dropCount);
+    orphanBudget = 0;
   }
 
-  const capped =
-    items.length <= opts.maxItems
-      ? items
-      : (() => {
-          const kept = items.slice(items.length - opts.maxItems);
-          const marker: HistoryItem = {
-            id: `${thread.thread.id}:truncation-marker`,
-            createdAt: (kept[0]?.createdAt ?? 0) - 1,
-            kind: "compact_summary",
-            message: { role: "assistant", content: [{ type: "text", text: TRUNCATION_MARKER_TEXT }] },
-          };
-          return [marker, ...kept];
-        })();
+  const orphanRowsFit = Math.floor(orphanBudget / 2);
+  const keptOrphanRows = orphanRowsFit > 0 ? orphanRows.slice(orphanRows.length - orphanRowsFit) : [];
+  const droppedOrphanRows = orphanRows.length - keptOrphanRows.length;
+
+  const finalItems = [...kept.map((tagged) => tagged.item), ...keptOrphanRows.flat()];
+  const anyDropped = kept.length < inBounds.length || droppedOrphanRows > 0;
+  const anyShadowDropped = droppedInBoundsShadow || droppedOrphanRows > 0;
+
+  const capped = !anyDropped
+    ? finalItems
+    : (() => {
+        const marker: HistoryItem = {
+          id: `${thread.thread.id}:truncation-marker`,
+          createdAt: (finalItems[0]?.createdAt ?? 0) - 1,
+          kind: "compact_summary",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: anyShadowDropped ? COMMAND_OUTPUT_TRUNCATED_MARKER_TEXT : TRUNCATION_MARKER_TEXT }],
+          },
+        };
+        return [marker, ...finalItems];
+      })();
 
   if (opts.shadowMissing !== true) return capped;
   const missingMarker: HistoryItem = {

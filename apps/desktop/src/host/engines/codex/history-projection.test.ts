@@ -399,6 +399,104 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
     expect(result?.message).toMatchObject({ content: [{ status: "cancelled" }] });
   });
 
+  it("100 orphan rows never evict an actual native user/assistant pair under a maxItems:200 cap (architect's repro, W8 MEDIUM-2)", () => {
+    // Pre-fix: orphan rows were appended AFTER real turns and the cap took
+    // the LAST maxItems of that combined list — an orphan tail long enough
+    // to exceed maxItems on its own evicted the real turns entirely. This is
+    // the exact GUI failure mode ("after relaunch the whole conversation is
+    // gone, only old commands remain").
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 0,
+            items: [
+              { type: "userMessage", id: "u1", content: [{ type: "text", text: "hello" }] },
+              { type: "agentMessage", id: "a1", text: "hi there" },
+            ],
+          },
+        ],
+      },
+    };
+    // 100 orphan rows, each on its own out-of-bounds turnOrdinal (turns.length is 1).
+    const shadow: ShadowCommandItem[] = Array.from({ length: 100 }, (_, i) => ({
+      turnOrdinal: i + 1,
+      positionInTurn: 0,
+      seqInTurn: 0,
+      command: `orphan-${i}`,
+      exitCode: 0,
+    }));
+
+    const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
+
+    // Both native messages survive the cap.
+    const roles = items.map((item) => item.message.role);
+    expect(roles).toContain("user");
+    expect(roles).toContain("assistant");
+    expect(items.some((item) => item.message.role === "user" && item.message.content === "hello")).toBe(true);
+
+    // Only 99 of the 100 orphan rows fit the remaining budget
+    // (200 - 2 native = 198 slots = 99 whole tool_call/tool_result pairs).
+    const orphanCallIds = toolCallIdsOf(items).filter((id) => id.includes(":orphan-turn-"));
+    expect(orphanCallIds).toHaveLength(99);
+
+    // The leading marker must honestly say command output was discarded — it
+    // is a LIE to claim "native thread retains full history" once a shadow
+    // command was dropped from the projection.
+    expect(items[0]?.kind).toBe("compact_summary");
+    expect(items[0]?.message).toMatchObject({ content: [{ type: "text", text: expect.stringContaining("not retained by Codex") }] });
+    const markerPart = items[0]?.message.role === "assistant" ? items[0].message.content[0] : undefined;
+    expect(markerPart?.type === "text" ? markerPart.text : "").not.toContain("native thread retains full history");
+  });
+
+  it("a fully-consumed in-bounds budget (0 remaining) emits no orphan tail at all (W8 MEDIUM-2)", () => {
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 0,
+            items: [
+              { type: "userMessage", id: "u1", content: [{ type: "text", text: "hi" }] },
+              { type: "agentMessage", id: "a1", text: "hello" },
+            ],
+          },
+        ],
+      },
+    };
+    const shadow: ShadowCommandItem[] = [{ turnOrdinal: 5, positionInTurn: 0, seqInTurn: 0, command: "orphan-cmd", exitCode: 0 }];
+    const items = projectCodexHistory(thread, shadow, { maxItems: 2 });
+
+    // budget = maxItems(2) - inBounds(2) = 0 — the orphan row must not be
+    // emitted at all, not even partially.
+    expect(toolCallIdsOf(items)).toEqual([]);
+    const roles = items.filter((item) => item.kind !== "compact_summary").map((item) => item.message.role);
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+
+  it("an odd leftover budget never splits a tool_call/tool_result pair — the row that doesn't fully fit is dropped whole (W8 MEDIUM-2)", () => {
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [] }] } };
+    const shadow: ShadowCommandItem[] = [
+      { turnOrdinal: 1, positionInTurn: 0, seqInTurn: 0, command: "older", exitCode: 0 },
+      { turnOrdinal: 2, positionInTurn: 0, seqInTurn: 0, command: "newer", exitCode: 0 },
+    ];
+    const items = projectCodexHistory(thread, shadow, { maxItems: 3 });
+
+    // budget = maxItems(3) - inBounds(0) = 3; only ONE whole row (2 items)
+    // fits. A naive flat slice of the last 3 raw items (older's tool_call,
+    // older's tool_result, newer's tool_call, newer's tool_result -> last 3)
+    // would instead keep [older.tool_result, newer.tool_call,
+    // newer.tool_result] — stranding a tool_result with no matching
+    // tool_call. The newer (more recent) row must survive whole; the older
+    // row must be dropped whole.
+    expect(toolCallIdsOf(items)).toEqual(["t1:orphan-turn-2:shadow:0"]);
+    const toolResultCount = items.filter((item) => item.message.role === "tool").length;
+    expect(toolResultCount).toBe(1);
+  });
+
   it("truncation at 200 still applies correctly with shadow items merged in", () => {
     const nativeItems = Array.from({ length: 4 }, (_, i) => ({ type: "agentMessage" as const, id: `item-${i}`, text: `msg-${i}` }));
     const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: nativeItems }] } };

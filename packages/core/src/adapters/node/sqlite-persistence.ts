@@ -476,22 +476,33 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   // PersistencePort — host-only usage, never consumed through that interface.
 
   /**
-   * INSERT OR IGNORE (W7 HIGH-2): first-write-wins, not last-write-wins. The
-   * ONLY writer (codex-engine.ts's `deliver`) already dedupes a re-delivered
-   * terminal `item/completed` for the same item id within one turn, but this
-   * is the persistence-layer's own belt-and-suspenders — a re-delivered
-   * notification for the same (threadId, itemId) must never let a later,
-   * conflicting write move an anchor already recorded (and already
-   * potentially merged into a resumed history). A no-op on conflict, not a
-   * silent overwrite: the row this thread/item pair first recorded is
-   * permanent for the life of the shadow log.
+   * First-write-wins for the ANCHOR, enrich-never-degrade for the PAYLOAD
+   * (W8 MEDIUM-1 — W7's plain `INSERT OR IGNORE` swung the pendulum too far:
+   * it made the anchor immovable by also freezing the payload, so a sparse
+   * first delivery's row could never pick up a later, richer terminal
+   * notification for the same item — the command's real exitCode/output was
+   * lost FOREVER). `turn_ordinal`/`position_in_turn`/`seq_in_turn`/
+   * `created_at` are NEVER in the `DO UPDATE SET` clause — the anchor and the
+   * row's first-recorded time are permanent for the life of the shadow log,
+   * exactly like the old `INSERT OR IGNORE`'s guarantee (see the W7
+   * regression test below, which this upsert must keep green unmodified:
+   * a conflicting second write's anchor must never win). `command`/`cwd`/
+   * `exit_code`/`output_head` use `COALESCE(excluded.col, col)`: a non-null
+   * new value enriches the row, a NULL/absent one (e.g. a stale sparse
+   * redelivery arriving after a rich one) never nulls out data already
+   * recorded — enrich-only, never a downgrade.
    */
   async recordCodexThreadItem(threadId: string, item: CodexShadowCommandItem): Promise<void> {
     const db = this.open();
     db.prepare(
-      `INSERT OR IGNORE INTO codex_thread_items
+      `INSERT INTO codex_thread_items
          (thread_id, turn_ordinal, position_in_turn, seq_in_turn, item_id, command, cwd, exit_code, output_head, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(thread_id, item_id) DO UPDATE SET
+         command = COALESCE(excluded.command, command),
+         cwd = COALESCE(excluded.cwd, cwd),
+         exit_code = COALESCE(excluded.exit_code, exit_code),
+         output_head = COALESCE(excluded.output_head, output_head)`,
     ).run(
       threadId,
       item.turnOrdinal,
