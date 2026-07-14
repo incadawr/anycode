@@ -76,10 +76,15 @@ linux:
       arch:
         - x64
 
-# publish (auto-update feed) is USER-GATED (design §6/§9-U4): git remote is empty,
-# so there is no GitHub repo / hosting decision yet. Enable once U4 lands; the CI
-# skeleton (2.6.3) wires the feed. Example:
-# publish:
-#   provider: github
-#   owner: incadawr
-#   repo: anycode
+# Publish target for `electron-builder --publish always`, which CI passes on a
+# `v*` tag push (.github/workflows/release.yml). Every matrix job uploads into
+# the SAME release for the tag; the first one creates it, the rest reuse it.
+#
+# releaseType: draft — a tag push never publishes to users on its own. CI fills
+# the draft with all four platform artifacts and its release notes (taken from
+# the tag's CHANGELOG.md section); a human presses Publish.
+publish:
+  provider: github
+  owner: incadawr
+  repo: anycode
+  releaseType: draft
