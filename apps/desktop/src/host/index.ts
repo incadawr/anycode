@@ -614,9 +614,10 @@ async function boot(): Promise<void> {
     // Single back-compat resolution point for the wire transport, mirroring the
     // CLI (TASK.43 §0.4): the mandatory discriminant is applied once here rather
     // than defaulted inside EndpointConfig, so the hot-swap factory below cannot
-    // silently drop it. Replaced by the env/catalog ladder when the OpenAI
-    // transports become selectable.
-    const providerTransport: ProviderTransport = "anthropic-messages";
+    // silently drop it. Env always wins; the catalog's declared default is next;
+    // anthropic-messages is the final legacy fallback.
+    const providerTransport: ProviderTransport =
+      envConfig.providerTransport ?? catalogEntry?.defaultTransport ?? "anthropic-messages";
 
     // Slice P7.15 (F14, design §2.1): mid-session model switch mirrors the CLI
     // `/model` recipe (host-side hot-swap, NOT a respawn). The factory rebuilds a

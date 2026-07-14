@@ -21,7 +21,12 @@ import { createOpenAIResponsesLanguageModel } from "./openai-responses.js";
 export function createLanguageModel(config: EndpointConfig): LanguageModel {
   switch (config.transport) {
     case "anthropic-messages":
-      return createAnthropicLanguageModel(config);
+      // `EndpointConfig.transport` is a flat union field, not a discriminated
+      // union of per-transport shapes, so the switch narrows `config.transport`
+      // but not `config` itself; the cast is safe because this case already
+      // confirmed the discriminant. createAnthropicLanguageModel's own runtime
+      // assert is the real defense for callers that bypass this dispatcher.
+      return createAnthropicLanguageModel(config as EndpointConfig & { transport: "anthropic-messages" });
     case "openai-chat-completions":
       return createOpenAICompatibleLanguageModel(config);
     case "openai-responses":

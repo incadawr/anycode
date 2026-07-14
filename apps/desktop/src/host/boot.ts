@@ -312,9 +312,11 @@ export interface MainCredentialProviderOptions {
   /**
    * Static fallback key — the fork's own `ANYCODE_API_KEY` (envConfig.apiKey,
    * the access token this fork was spawned with) — used when a request times
-   * out or main answers with no usable key.
+   * out or main answers with no usable key. Optional because `envConfig.apiKey`
+   * itself is optional (TASK.43 §0.4, no-auth openai transports); oauth mode is
+   * anthropic-only in practice, so this stays undefined only on a mis-wired fork.
    */
-  fallbackApiKey: string;
+  fallbackApiKey: string | undefined;
   /** Overrides CREDENTIAL_REQUEST_TIMEOUT_MS (tests only). */
   timeoutMs?: number;
   /** Overrides CREDENTIAL_CACHE_TTL_MS (tests only). */
@@ -343,7 +345,9 @@ export interface MainCredentialProviderOptions {
  *   `AiSdkModelPort`'s own try/catch (model-port.ts's `buildAttemptModel`), a
  *   broker hiccup can never fail the turn.
  */
-export function createMainCredentialProvider(options: MainCredentialProviderOptions): () => Promise<string> {
+export function createMainCredentialProvider(
+  options: MainCredentialProviderOptions,
+): () => Promise<string | undefined> {
   const timeoutMs = options.timeoutMs ?? CREDENTIAL_REQUEST_TIMEOUT_MS;
   const ttlMs = options.ttlMs ?? CREDENTIAL_CACHE_TTL_MS;
   const now = options.now ?? Date.now;
@@ -351,16 +355,16 @@ export function createMainCredentialProvider(options: MainCredentialProviderOpti
 
   let cached: { apiKey: string; expiresAt: number } | undefined;
 
-  return function resolveApiKey(): Promise<string> {
+  return function resolveApiKey(): Promise<string | undefined> {
     if (cached !== undefined && cached.expiresAt > now()) {
       return Promise.resolve(cached.apiKey);
     }
 
     const requestId = createRequestId();
-    return new Promise<string>((resolve) => {
+    return new Promise<string | undefined>((resolve) => {
       let settled = false;
 
-      const finish = (apiKey: string): void => {
+      const finish = (apiKey: string | undefined): void => {
         if (settled) {
           return;
         }
@@ -404,7 +408,9 @@ export interface BuildResolveApiKeyOptions extends MainCredentialProviderOptions
  * static-key path. `authMode === "oauth"` builds the real
  * `MainCredentialProvider` via `createMainCredentialProvider`.
  */
-export function buildResolveApiKey(options: BuildResolveApiKeyOptions): (() => Promise<string>) | undefined {
+export function buildResolveApiKey(
+  options: BuildResolveApiKeyOptions,
+): (() => Promise<string | undefined>) | undefined {
   if (options.authMode !== "oauth") {
     return undefined;
   }

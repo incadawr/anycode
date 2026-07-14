@@ -10,6 +10,7 @@ import {
   ENV_IMAGE_INPUT,
   ENV_MAX_RETRIES,
   ENV_MAX_OUTPUT_TOKENS,
+  ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
   ENV_MAX_TURNS,
   ENV_MODEL,
@@ -228,5 +229,85 @@ describe("loadEnvConfig", () => {
         }),
       ),
     ).toThrow(/ANYCODE_MAX_RETRIES/);
+  });
+
+  describe("ANYCODE_PROVIDER_TRANSPORT", () => {
+    it("leaves providerTransport undefined when unset", () => {
+      const config = loadEnvConfig(envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" }));
+      expect(config.providerTransport).toBeUndefined();
+    });
+
+    it("treats an empty string as unset", () => {
+      const config = loadEnvConfig(
+        envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x", [ENV_PROVIDER_TRANSPORT]: "  " }),
+      );
+      expect(config.providerTransport).toBeUndefined();
+    });
+
+    it("accepts anthropic-messages", () => {
+      const config = loadEnvConfig(
+        envWith({
+          [ENV_API_KEY]: "key-123",
+          [ENV_MODEL]: "claude-x",
+          [ENV_PROVIDER_TRANSPORT]: "anthropic-messages",
+        }),
+      );
+      expect(config.providerTransport).toBe("anthropic-messages");
+    });
+
+    it("accepts openai-chat-completions without requiring an API key", () => {
+      const config = loadEnvConfig(
+        envWith({ [ENV_MODEL]: "gpt-x", [ENV_PROVIDER_TRANSPORT]: "openai-chat-completions" }),
+      );
+      expect(config.providerTransport).toBe("openai-chat-completions");
+      expect(config.apiKey).toBeUndefined();
+    });
+
+    it("accepts openai-responses without requiring an API key", () => {
+      const config = loadEnvConfig(
+        envWith({ [ENV_MODEL]: "gpt-x", [ENV_PROVIDER_TRANSPORT]: "openai-responses" }),
+      );
+      expect(config.providerTransport).toBe("openai-responses");
+      expect(config.apiKey).toBeUndefined();
+    });
+
+    it("throws on an invalid transport value, naming the variable and the valid values", () => {
+      expect(() =>
+        loadEnvConfig(
+          envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x", [ENV_PROVIDER_TRANSPORT]: "bogus" }),
+        ),
+      ).toThrow(/ANYCODE_PROVIDER_TRANSPORT/);
+    });
+
+    it("rejects a bare \"openai\" transport (not one of the three literals)", () => {
+      expect(() =>
+        loadEnvConfig(
+          envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x", [ENV_PROVIDER_TRANSPORT]: "openai" }),
+        ),
+      ).toThrow(/ANYCODE_PROVIDER_TRANSPORT/);
+    });
+
+    it("still requires ANYCODE_API_KEY when the transport is anthropic-messages", () => {
+      expect(() =>
+        loadEnvConfig(
+          envWith({ [ENV_MODEL]: "claude-x", [ENV_PROVIDER_TRANSPORT]: "anthropic-messages" }),
+        ),
+      ).toThrow(/ANYCODE_API_KEY/);
+    });
+
+    it("still requires ANYCODE_API_KEY when the transport is unset (legacy default)", () => {
+      expect(() => loadEnvConfig(envWith({ [ENV_MODEL]: "claude-x" }))).toThrow(/ANYCODE_API_KEY/);
+    });
+
+    it("accepts an explicit API key alongside an openai transport", () => {
+      const config = loadEnvConfig(
+        envWith({
+          [ENV_API_KEY]: "key-123",
+          [ENV_MODEL]: "gpt-x",
+          [ENV_PROVIDER_TRANSPORT]: "openai-chat-completions",
+        }),
+      );
+      expect(config.apiKey).toBe("key-123");
+    });
   });
 });

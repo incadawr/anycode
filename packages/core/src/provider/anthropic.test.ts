@@ -4,7 +4,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildDualAuthHeaders, normalizeAnthropicBaseUrl } from "./anthropic.js";
+import { buildDualAuthHeaders, createAnthropicLanguageModel, normalizeAnthropicBaseUrl } from "./anthropic.js";
+import type { EndpointConfig } from "./endpoint.js";
 
 describe("normalizeAnthropicBaseUrl", () => {
   it("appends /v1 when missing", () => {
@@ -85,5 +86,28 @@ describe("buildDualAuthHeaders", () => {
     const headers = buildDualAuthHeaders("sk-test-123", { "X-Custom": "value" });
     expect(headers["Authorization"]).toBe("Bearer sk-test-123");
     expect(headers["X-Custom"]).toBe("value");
+  });
+});
+
+describe("createAnthropicLanguageModel", () => {
+  it("throws when apiKey is missing", () => {
+    const config: EndpointConfig & { transport: "anthropic-messages" } = {
+      transport: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      model: "claude-x",
+    };
+    expect(() => createAnthropicLanguageModel(config)).toThrow(/requires an API key/);
+  });
+
+  it("rejects a non-anthropic-messages transport at runtime (W1 HIGH defensive gap)", () => {
+    // Simulates a JS caller (or one that widened the type past the compile-time
+    // guard) smuggling an OpenAI-transport config into the anthropic-only factory.
+    const config = {
+      transport: "openai-chat-completions",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test-123",
+      model: "gpt-x",
+    } as unknown as EndpointConfig & { transport: "anthropic-messages" };
+    expect(() => createAnthropicLanguageModel(config)).toThrow(/openai-chat-completions/);
   });
 });

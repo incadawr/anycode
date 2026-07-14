@@ -1,5 +1,6 @@
 /** Environment-based configuration for the Phase 0 single-provider setup. */
 
+import type { ProviderTransport } from "./catalog.js";
 import type { CoreEnvConfig, ReasoningEffort } from "../types/config.js";
 import type { ImageInputOverride } from "./capabilities.js";
 
@@ -15,21 +16,37 @@ export const ENV_DB_PATH = "ANYCODE_DB_PATH";
 export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
 export const ENV_STALL_TIMEOUT_MS = "ANYCODE_STALL_TIMEOUT_MS";
 export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
+export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
+
+const PROVIDER_TRANSPORT_VALUES: readonly ProviderTransport[] = [
+  "anthropic-messages",
+  "openai-chat-completions",
+  "openai-responses",
+];
 
 export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 
 /**
- * Reads ANYCODE_API_KEY (required), ANYCODE_BASE_URL (default: native
- * Anthropic), ANYCODE_MODEL (required), and the optional integers
- * ANYCODE_MAX_TURNS / ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
+ * Reads ANYCODE_API_KEY, ANYCODE_BASE_URL (default: native Anthropic),
+ * ANYCODE_MODEL (required), and the optional integers ANYCODE_MAX_TURNS /
+ * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS plus ANYCODE_DB_PATH.
  * ANYCODE_REASONING_EFFORT is an optional off|low|medium|high|max selector
  * (per-model levels are gated downstream by the catalog; unsupported → off).
+ * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol (TASK.43 §0.4); an
+ * invalid value throws (never a silent anthropic fallback). ANYCODE_API_KEY is
+ * required when the resolved transport is undefined or `anthropic-messages`
+ * (byte-compat: that path is fail-closed), and optional for the two OpenAI
+ * transports (no-auth local endpoints).
  * Throws a descriptive error naming the offending variable.
  */
 export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConfig {
-  const apiKey = env[ENV_API_KEY];
-  if (!apiKey) {
+  const providerTransport = readProviderTransport(env);
+
+  const apiKeyRequired = providerTransport === undefined || providerTransport === "anthropic-messages";
+  const rawApiKey = env[ENV_API_KEY];
+  const apiKey = rawApiKey && rawApiKey.trim() !== "" ? rawApiKey : undefined;
+  if (apiKeyRequired && apiKey === undefined) {
     throw new Error(`Missing required environment variable: ${ENV_API_KEY} (Anthropic-compatible API key)`);
   }
 
@@ -67,7 +84,30 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
     toolConcurrency,
     stallTimeoutMs,
     imageInput,
+    providerTransport,
   };
+}
+
+/**
+ * Parses ANYCODE_PROVIDER_TRANSPORT (TASK.43 §0.4/W4). Unlike
+ * ANYCODE_IMAGE_INPUT, an unrecognized value THROWS rather than warning and
+ * falling back: a typo here must never silently route an OpenAI endpoint
+ * through the anthropic-messages transport (the exact 400/404-class bug this
+ * discriminant exists to prevent). Mirrors the throw-on-bad-integer style of
+ * `readOptionalInteger`. A bare "openai" is not one of the three literal
+ * transports and is rejected the same way as any other invalid value.
+ */
+function readProviderTransport(env: NodeJS.ProcessEnv): ProviderTransport | undefined {
+  const raw = env[ENV_PROVIDER_TRANSPORT];
+  if (raw === undefined || raw.trim() === "") {
+    return undefined;
+  }
+  if ((PROVIDER_TRANSPORT_VALUES as readonly string[]).includes(raw)) {
+    return raw as ProviderTransport;
+  }
+  throw new Error(
+    `Invalid ${ENV_PROVIDER_TRANSPORT}: "${raw}" is not one of ${PROVIDER_TRANSPORT_VALUES.join(", ")}`,
+  );
 }
 
 function readReasoningEffort(env: NodeJS.ProcessEnv): ReasoningEffort | undefined {

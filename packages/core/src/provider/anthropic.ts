@@ -52,8 +52,20 @@ export function buildDualAuthHeaders(
  * authenticates, and an unauthenticated call would leave the SDK to fall back to
  * an ambient ANTHROPIC_API_KEY or emit a keyless request. A missing key is a
  * mis-resolved config and must surface as such.
+ *
+ * The parameter type narrows `transport` to `"anthropic-messages"` so a caller
+ * passing an OpenAI-transport config is a compile error; the runtime check below
+ * is defense-in-depth for JS callers (or a caller that widens the type), since
+ * this factory is exported and reachable outside the transport-routed dispatcher.
  */
-export function createAnthropicLanguageModel(config: EndpointConfig): LanguageModel {
+export function createAnthropicLanguageModel(
+  config: EndpointConfig & { transport: "anthropic-messages" },
+): LanguageModel {
+  if (config.transport !== "anthropic-messages") {
+    throw new Error(
+      `createAnthropicLanguageModel received a "${config.transport}" endpoint; only "anthropic-messages" is supported`,
+    );
+  }
   const { apiKey } = config;
   if (apiKey === undefined) {
     throw new Error("The anthropic-messages transport requires an API key");

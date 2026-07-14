@@ -386,10 +386,12 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
 
   // Single back-compat resolution point for the wire transport (TASK.43 §0.4):
   // the mandatory discriminant is applied here, once, instead of being defaulted
-  // inside EndpointConfig. Every catalog entry currently declares
-  // anthropic-messages; the env/catalog ladder replaces this constant when the
-  // OpenAI transports become selectable.
-  const providerTransport: ProviderTransport = "anthropic-messages";
+  // inside EndpointConfig. Env always wins; the catalog's declared default is
+  // next; anthropic-messages is the final legacy fallback. Every built-in
+  // catalog entry currently declares anthropic-messages, so this ladder is
+  // byte-identical to the prior constant unless ANYCODE_PROVIDER_TRANSPORT is set.
+  const providerTransport: ProviderTransport =
+    envConfig.providerTransport ?? catalogEntry?.defaultTransport ?? "anthropic-messages";
 
   // (ANYCODE_MAX_RETRIES) and the per-attempt stall watchdog (ANYCODE_STALL_TIMEOUT_MS).
   const retryOverride: Partial<RetryPolicy> = {

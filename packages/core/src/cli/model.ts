@@ -51,6 +51,17 @@ export class SwitchableModelPort implements ModelPort {
  * `baseUrl`) is always skipped BEFORE normalizing it — `normalizeAnthropicBaseUrl`
 
  * "this is the endpoint the caller is on" anyway. No match => `undefined`.
+ *
+ * TODO(W5): only matches against `entry.baseUrl`, not `entry.transportBaseUrls`
+ * (track-43-45-33-47-49-cut.md §0.5/§4). Deferred rather than folded into W4:
+ * (a) no built-in entry populates `transportBaseUrls` yet, so today it would be
+ * a no-op; (b) doing it correctly needs the resolved transport as an input, but
+ * this function runs BEFORE transport resolution (its result feeds
+ * `catalogEntry?.defaultTransport`) — a chicken-and-egg the W5 catalog wave
+ * (which introduces the first `transportBaseUrls` entries) is better placed to
+ * resolve; (c) `normalizeAnthropicBaseUrl` unconditionally appends `/v1`, which
+ * is wrong for OpenAI-transport URLs (§0.5) — reusing it for a transport-aware
+ * match would need its own normalization branch, out of scope for this wave.
  */
 export function matchCatalogEntryByBaseUrl(
   catalog: ProviderCatalog,

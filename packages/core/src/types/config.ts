@@ -1,13 +1,18 @@
 /** Configuration primitives and cross-module constants. */
 
 import type { ImageInputOverride } from "../provider/capabilities.js";
+import type { ProviderTransport } from "../provider/catalog.js";
 
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 
 /** Resolved runtime configuration sourced from environment variables. */
 export interface CoreEnvConfig {
-  /** API key for the Anthropic-compatible endpoint (ANYCODE_API_KEY). */
-  apiKey: string;
+  /**
+   * API key for the endpoint (ANYCODE_API_KEY). Required (throws) when the
+   * resolved transport is `anthropic-messages` or unset; optional for the two
+   * OpenAI transports, which may point at a no-auth local endpoint (TASK.43 §0.4).
+   */
+  apiKey?: string;
   /** Base URL of the endpoint (ANYCODE_BASE_URL); default is the native Anthropic API. */
   baseUrl: string;
   /** Model id to request (ANYCODE_MODEL). */
@@ -33,6 +38,12 @@ export interface CoreEnvConfig {
    * unset or when the value is neither `on` nor `off` (invalid ⇒ warn + ignore).
    */
   imageInput?: ImageInputOverride;
+  /**
+   * Wire transport override (ANYCODE_PROVIDER_TRANSPORT); undefined when unset.
+   * An invalid value throws at load time rather than silently falling back to
+   * `anthropic-messages` (TASK.43 §0.4).
+   */
+  providerTransport?: ProviderTransport;
 }
 
 /** Main-loop turn budget when not overridden (subagents get a lower budget in Phase 3). */
