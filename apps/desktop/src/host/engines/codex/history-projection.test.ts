@@ -431,11 +431,19 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
 
     const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
 
-    // Both native messages survive the cap.
+    // Both native messages survive the cap. `roles.toContain("assistant")`
+    // alone is a WEAK check (W9 — a truncation-marker item is also
+    // assistant-rolled, and so is every orphan command's own tool_call
+    // HistoryItem, so this passes even if the native assistant message were
+    // dropped entirely); assert the native assistant SPECIFICALLY by its own
+    // id and text so a regression that evicts it from `inBounds` cannot hide
+    // behind those other assistant-rolled items.
     const roles = items.map((item) => item.message.role);
     expect(roles).toContain("user");
     expect(roles).toContain("assistant");
     expect(items.some((item) => item.message.role === "user" && item.message.content === "hello")).toBe(true);
+    const nativeAssistant = items.find((item) => item.id === "turn-1:a1");
+    expect(nativeAssistant?.message).toMatchObject({ role: "assistant", content: [{ type: "text", text: "hi there" }] });
 
     // Only 99 of the 100 orphan rows fit the remaining budget
     // (200 - 2 native = 198 slots = 99 whole tool_call/tool_result pairs).
