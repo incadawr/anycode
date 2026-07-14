@@ -45,6 +45,7 @@ const STATUS_LABELS: Record<ToolCallBlock["status"], string> = {
   invalid_input: "Invalid input",
   denied: "Denied",
   timed_out: "Timed out",
+  max_turns: "Max turns reached",
   cancelled: "Cancelled",
 };
 
@@ -483,11 +484,12 @@ export function AgentCardBody({
 }
 
 /** Settled, non-failure statuses fold to the one-line ledger row (design §1.B).
- * Consonance rule: auto-collapse ⟺ the status badge is not danger-tinted
- * (app.css tints error/invalid_input/denied/timed_out danger — failures
- * deserve attention and stay open). cancelled is user-initiated and carries
- * no diagnostic payload, so it folds. proposed/running are not settled.
- * Unknown future statuses fall through to false: fail-visible. */
+ * Consonance rule: auto-collapse ⟺ the status badge is not danger/warning-tinted
+ * (app.css tints error/invalid_input/denied/timed_out danger and max_turns
+ * warning — failures and incompletes deserve attention and stay open). cancelled
+ * is user-initiated and carries no diagnostic payload, so it folds. proposed/
+ * running are not settled. Unknown future statuses fall through to false:
+ * fail-visible. */
 export function shouldAutoCollapse(status: ToolCallBlock["status"]): boolean {
   return status === "success" || status === "cancelled";
 }
