@@ -29,6 +29,8 @@ export function describeCreateTabFailure(result: Extract<CreateTabResult, { ok: 
       // is configured. Renderer surfaces the configure-provider notice. 2.2.4
       // may refine the copy / route to the Settings screen.
       return "Configure a provider (API key + model) before opening a tab.";
+    case "worktree_unavailable":
+      return `This session's worktree is missing or no longer registered${result.worktreePath ? `: ${result.worktreePath}` : ""}. Restore or re-register that path with Git before resuming.`;
     default: {
       const _exhaustive: never = result.reason;
       return _exhaustive;

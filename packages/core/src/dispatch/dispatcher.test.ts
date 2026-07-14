@@ -200,6 +200,36 @@ describe("executeToolCall — happy path", () => {
   });
 });
 
+describe("executeToolCall — dynamic validated-input metadata", () => {
+  it("resolves permission metadata after a hook rewrite", async () => {
+    const seen: PermissionRequest[] = [];
+    const tool = makeTool({
+      resolveMetadata: (input: { value: string }) => ({
+        ...baseMetadata,
+        destructive: input.value === "remove",
+        riskLevel: input.value === "remove" ? "high" : "low",
+        needsApproval: input.value === "remove",
+      }),
+    });
+    const ctx = makeCtx({
+      registry: makeRegistry({ Mock: tool }),
+      hooks: makeHooks({ updatedInput: { value: "remove" } }),
+      permissionEngine: makeEngine({ decision: "allow" }, (request) => seen.push(request)),
+    });
+
+    const result = await executeToolCall(ctx, call({ value: "keep" }));
+
+    expect(result.status).toBe("success");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.input).toEqual({ value: "remove" });
+    expect(seen[0]?.metadata).toMatchObject({
+      destructive: true,
+      riskLevel: "high",
+      needsApproval: true,
+    });
+  });
+});
+
 describe("executeToolCall — lookup & validation", () => {
   it("returns an error outcome for an unknown tool", async () => {
     const ctx = makeCtx({ registry: makeRegistry({}) });

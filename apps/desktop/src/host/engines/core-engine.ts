@@ -52,6 +52,10 @@ export class CoreEngine implements SessionEngine {
     return this.options.loop.runTurn(input, options);
   }
 
+  continueTurn(options: RunTurnOptions) {
+    return this.options.loop.continueTurn(options);
+  }
+
   historyItems() {
     return this.options.loop.history.items;
   }

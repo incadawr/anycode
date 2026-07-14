@@ -239,6 +239,11 @@ export function createTabRegistry(
       // message to the tab's own reducer.
       if (message.type === "host_ready") {
         tabsStore.getState().setSessionId(tabId, message.sessionId);
+        tabsStore.getState().setWorkspaceIdentity(tabId, {
+          workspace: message.workspace,
+          ...(message.projectRoot !== undefined ? { projectRoot: message.projectRoot } : {}),
+          ...(message.worktree !== undefined ? { worktree: message.worktree } : {}),
+        });
       }
       // Phase 4 slice 4.4-T (design feature-session-titles.md §4): title lives
       // in the tabs-store (Sidebar reads it from there), not the per-tab

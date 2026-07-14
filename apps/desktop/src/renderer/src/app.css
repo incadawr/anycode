@@ -591,6 +591,21 @@ body {
   white-space: nowrap;
 }
 
+.sidebar-row-worktree {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 7.5rem;
+  overflow: hidden;
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-row-dot {
   flex-shrink: 0;
   width: 6px;
@@ -1534,6 +1549,34 @@ body {
 
 .session-header-engine {
   margin-left: var(--sp-2);
+}
+
+.session-header-worktree {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 28rem;
+  padding: 0.2rem var(--sp-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-full);
+  color: var(--text-1);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.session-header-worktree-exit {
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.session-header-worktree-exit:hover {
+  color: var(--text-1);
 }
 
 /* One-time arrival hint for the selected workspace. It dismisses after four

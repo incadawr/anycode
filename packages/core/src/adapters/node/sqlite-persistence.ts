@@ -26,7 +26,13 @@ import type {
   CheckpointRecord,
   CheckpointStore,
 } from "../../ports/checkpoints.js";
-import type { PersistencePort, SessionMeta } from "../../ports/persistence.js";
+import type {
+  PersistencePort,
+  SessionMeta,
+  SessionMetaPatch,
+  SessionWorktree,
+  SessionWorktreeCleanup,
+} from "../../ports/persistence.js";
 import type { HistoryItem } from "../../types/history.js";
 import type { PermissionMode } from "../../types/permissions.js";
 
@@ -132,6 +138,29 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE codex_thread_items ADD COLUMN seq_in_turn INTEGER NOT NULL DEFAULT 0",
     ],
   },
+  {
+    version: 6,
+    statements: [
+      "ALTER TABLE sessions ADD COLUMN project_root TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_id TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_path TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_branch TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_base_ref TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_owned_by_anycode INTEGER",
+      "ALTER TABLE sessions ADD COLUMN continuation_pending INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sessions ADD COLUMN continuation_mode TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_cleanup_path TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_cleanup_mode TEXT",
+      "ALTER TABLE sessions ADD COLUMN worktree_cleanup_owned_by_anycode INTEGER",
+      // A legacy session's project identity was its only workspace. Keeping the
+      // stored value explicit makes later workspace relocation unambiguous.
+      "UPDATE sessions SET project_root = workspace WHERE project_root IS NULL",
+    ],
+  },
+  {
+    version: 7,
+    statements: ["ALTER TABLE sessions ADD COLUMN worktree_transition_json TEXT"],
+  },
 ];
 
 /**
@@ -182,9 +211,87 @@ interface SessionRow {
   title: string | null;
   engine_id: string | null;
   external_session_ref: string | null;
+  project_root: string | null;
+  worktree_id: string | null;
+  worktree_path: string | null;
+  worktree_branch: string | null;
+  worktree_base_ref: string | null;
+  worktree_owned_by_anycode: number | null;
+  continuation_pending: number;
+  continuation_mode: string | null;
+  worktree_cleanup_path: string | null;
+  worktree_cleanup_mode: string | null;
+  worktree_cleanup_owned_by_anycode: number | null;
+  worktree_transition_json: string | null;
+}
+
+function rowToWorktreeTransition(row: SessionRow): SessionMeta["worktreeTransition"] {
+  if (typeof row.worktree_transition_json !== "string") return undefined;
+  try {
+    const value = JSON.parse(row.worktree_transition_json) as Partial<NonNullable<SessionMeta["worktreeTransition"]>>;
+    if (
+      (value.kind !== "enter_worktree" && value.kind !== "exit_worktree") ||
+      (value.origin !== "tool" && value.origin !== "chrome") ||
+      typeof value.projectRoot !== "string" ||
+      typeof value.fromWorkspace !== "string" ||
+      typeof value.toWorkspace !== "string" ||
+      value.worktree === undefined ||
+      typeof value.worktree.id !== "string" ||
+      typeof value.worktree.path !== "string" ||
+      typeof value.worktree.branch !== "string" ||
+      typeof value.worktree.baseRef !== "string" ||
+      typeof value.worktree.ownedByAnyCode !== "boolean"
+    ) return undefined;
+    return value as NonNullable<SessionMeta["worktreeTransition"]>;
+  } catch {
+    return undefined;
+  }
+}
+
+function rowToWorktreeCleanup(row: SessionRow): SessionWorktreeCleanup | undefined {
+  if (
+    typeof row.worktree_cleanup_path !== "string" ||
+    row.worktree_cleanup_path.length === 0 ||
+    (row.worktree_cleanup_mode !== "auto" && row.worktree_cleanup_mode !== "remove") ||
+    (row.worktree_cleanup_owned_by_anycode !== 0 && row.worktree_cleanup_owned_by_anycode !== 1)
+  ) {
+    return undefined;
+  }
+  return {
+    path: row.worktree_cleanup_path,
+    mode: row.worktree_cleanup_mode,
+    ownedByAnyCode: row.worktree_cleanup_owned_by_anycode === 1,
+  };
+}
+
+function rowToSessionWorktree(row: SessionRow): SessionWorktree | undefined {
+  if (
+    typeof row.worktree_id !== "string" ||
+    row.worktree_id.length === 0 ||
+    typeof row.worktree_path !== "string" ||
+    row.worktree_path.length === 0 ||
+    typeof row.worktree_branch !== "string" ||
+    row.worktree_branch.length === 0 ||
+    typeof row.worktree_base_ref !== "string" ||
+    row.worktree_base_ref.length === 0 ||
+    (row.worktree_owned_by_anycode !== 0 && row.worktree_owned_by_anycode !== 1)
+  ) {
+    return undefined;
+  }
+  return {
+    id: row.worktree_id,
+    path: row.worktree_path,
+    branch: row.worktree_branch,
+    baseRef: row.worktree_base_ref,
+    ownedByAnyCode: row.worktree_owned_by_anycode === 1,
+  };
 }
 
 function rowToSessionMeta(row: SessionRow): SessionMeta {
+  const worktree = rowToSessionWorktree(row);
+  const worktreeCleanup = rowToWorktreeCleanup(row);
+  const worktreeTransition = rowToWorktreeTransition(row);
+  const projectRoot = typeof row.project_root === "string" ? row.project_root : row.workspace;
   return {
     id: row.id,
     workspace: row.workspace,
@@ -193,6 +300,16 @@ function rowToSessionMeta(row: SessionRow): SessionMeta {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     title: row.title ?? undefined,
+    // Preserve strict legacy projections for ordinary sessions. Consumers use
+    // `projectRoot ?? workspace` as the semantic project identity.
+    ...(projectRoot !== row.workspace || worktree !== undefined ? { projectRoot } : {}),
+    ...(worktree !== undefined ? { worktree } : {}),
+    ...(row.continuation_pending === 1 ? { continuationPending: true } : {}),
+    ...(row.continuation_mode === "model" || row.continuation_mode === "none"
+      ? { continuationMode: row.continuation_mode }
+      : {}),
+    ...(worktreeCleanup !== undefined ? { worktreeCleanup } : {}),
+    ...(worktreeTransition !== undefined ? { worktreeTransition } : {}),
     ...(row.engine_id !== null && row.engine_id !== undefined ? { engineId: row.engine_id } : {}),
     ...(row.external_session_ref !== null && row.external_session_ref !== undefined
       ? { externalSessionRef: row.external_session_ref }
@@ -309,9 +426,14 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     const db = this.open();
     const now = Date.now();
     const full: SessionMeta = { ...meta, createdAt: now, updatedAt: now };
+    const projectRoot = meta.projectRoot ?? meta.workspace;
     db.prepare(
-      `INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, title, engine_id, external_session_ref)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO sessions (
+         id, workspace, model, mode, created_at, updated_at, title, engine_id, external_session_ref,
+         project_root, worktree_id, worktree_path, worktree_branch, worktree_base_ref, worktree_owned_by_anycode,
+         continuation_pending, continuation_mode, worktree_cleanup_path, worktree_cleanup_mode, worktree_cleanup_owned_by_anycode,
+         worktree_transition_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       full.id,
       full.workspace,
@@ -322,8 +444,23 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       full.title ?? null,
       full.engineId ?? null,
       full.externalSessionRef ?? null,
+      projectRoot,
+      full.worktree?.id ?? null,
+      full.worktree?.path ?? null,
+      full.worktree?.branch ?? null,
+      full.worktree?.baseRef ?? null,
+      full.worktree === undefined ? null : full.worktree.ownedByAnyCode ? 1 : 0,
+      full.continuationPending === true ? 1 : 0,
+      full.continuationMode ?? null,
+      full.worktreeCleanup?.path ?? null,
+      full.worktreeCleanup?.mode ?? null,
+      full.worktreeCleanup === undefined ? null : full.worktreeCleanup.ownedByAnyCode ? 1 : 0,
+      full.worktreeTransition === undefined ? null : JSON.stringify(full.worktreeTransition),
     );
-    return full;
+    // Return the same backward-compatible projection as get/list.
+    return rowToSessionMeta(
+      db.prepare("SELECT * FROM sessions WHERE id = ?").get(full.id) as unknown as SessionRow,
+    );
   }
 
   async getSession(id: string): Promise<SessionMeta | null> {
@@ -349,10 +486,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return rows.map(rowToSessionMeta);
   }
 
-  async touchSession(
-    id: string,
-    patch?: Partial<Pick<SessionMeta, "title" | "mode" | "model" | "engineId" | "externalSessionRef">>,
-  ): Promise<void> {
+  async touchSession(id: string, patch?: SessionMetaPatch): Promise<void> {
     const db = this.open();
     const sets: string[] = ["updated_at = ?"];
     const params: (string | number | null)[] = [Date.now()];
@@ -376,8 +510,123 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       sets.push("external_session_ref = ?");
       params.push(patch.externalSessionRef);
     }
+    if (patch?.workspace !== undefined) {
+      sets.push("workspace = ?");
+      params.push(patch.workspace);
+    }
+    if (patch?.projectRoot !== undefined) {
+      sets.push("project_root = ?");
+      params.push(patch.projectRoot);
+    }
+    if (patch?.worktree !== undefined) {
+      sets.push(
+        "worktree_id = ?",
+        "worktree_path = ?",
+        "worktree_branch = ?",
+        "worktree_base_ref = ?",
+        "worktree_owned_by_anycode = ?",
+      );
+      params.push(
+        patch.worktree?.id ?? null,
+        patch.worktree?.path ?? null,
+        patch.worktree?.branch ?? null,
+        patch.worktree?.baseRef ?? null,
+        patch.worktree === null ? null : patch.worktree.ownedByAnyCode ? 1 : 0,
+      );
+    }
+    if (patch?.continuationPending !== undefined) {
+      sets.push("continuation_pending = ?");
+      params.push(patch.continuationPending ? 1 : 0);
+    }
+    if (patch?.continuationMode !== undefined) {
+      sets.push("continuation_mode = ?");
+      params.push(patch.continuationMode);
+    }
+    if (patch?.worktreeCleanup !== undefined) {
+      sets.push(
+        "worktree_cleanup_path = ?",
+        "worktree_cleanup_mode = ?",
+        "worktree_cleanup_owned_by_anycode = ?",
+      );
+      params.push(
+        patch.worktreeCleanup?.path ?? null,
+        patch.worktreeCleanup?.mode ?? null,
+        patch.worktreeCleanup === null ? null : patch.worktreeCleanup.ownedByAnyCode ? 1 : 0,
+      );
+    }
+    if (patch?.worktreeTransition !== undefined) {
+      sets.push("worktree_transition_json = ?");
+      params.push(patch.worktreeTransition === null ? null : JSON.stringify(patch.worktreeTransition));
+    }
     params.push(id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  }
+
+  async claimWorktree(id: string, target: string, patch: SessionMetaPatch): Promise<boolean> {
+    if (
+      (patch.worktree === undefined || patch.worktree === null || patch.workspace === undefined) &&
+      patch.worktreeCleanup?.path !== target
+    ) {
+      throw new Error("claimWorktree requires an active identity or cleanup resource patch");
+    }
+    const db = this.open();
+    // IMMEDIATE serializes competing claims across host processes before the
+    // read, so two sessions can never both observe an unclaimed canonical path.
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const claimed = db.prepare(
+        `SELECT id FROM sessions
+         WHERE id <> ? AND (worktree_path = ? OR worktree_cleanup_path = ?)
+         LIMIT 1`,
+      ).get(id, target, target);
+      if (claimed !== undefined) {
+        db.exec("ROLLBACK");
+        return false;
+      }
+      if (patch.worktree !== undefined && patch.worktree !== null && patch.workspace !== undefined) {
+        db.prepare(
+          `UPDATE sessions SET
+             updated_at = ?, project_root = ?, workspace = ?,
+             worktree_id = ?, worktree_path = ?, worktree_branch = ?, worktree_base_ref = ?, worktree_owned_by_anycode = ?,
+             continuation_pending = ?, continuation_mode = ?,
+             worktree_cleanup_path = ?, worktree_cleanup_mode = ?, worktree_cleanup_owned_by_anycode = ?,
+             worktree_transition_json = ?
+           WHERE id = ?`,
+        ).run(
+          Date.now(), patch.projectRoot ?? patch.workspace, patch.workspace,
+          patch.worktree.id, patch.worktree.path, patch.worktree.branch, patch.worktree.baseRef,
+          patch.worktree.ownedByAnyCode ? 1 : 0,
+          patch.continuationPending === true ? 1 : 0, patch.continuationMode ?? null,
+          patch.worktreeCleanup?.path ?? null, patch.worktreeCleanup?.mode ?? null,
+          patch.worktreeCleanup === undefined || patch.worktreeCleanup === null
+            ? null : patch.worktreeCleanup.ownedByAnyCode ? 1 : 0,
+          patch.worktreeTransition === undefined || patch.worktreeTransition === null
+            ? null : JSON.stringify(patch.worktreeTransition),
+          id,
+        );
+      } else {
+        db.prepare(
+          `UPDATE sessions SET updated_at = ?, project_root = ?,
+             continuation_pending = ?, continuation_mode = ?,
+             worktree_cleanup_path = ?, worktree_cleanup_mode = ?, worktree_cleanup_owned_by_anycode = ?,
+             worktree_transition_json = ?
+           WHERE id = ?`,
+        ).run(
+          Date.now(), patch.projectRoot ?? null,
+          patch.continuationPending === true ? 1 : 0, patch.continuationMode ?? null,
+          patch.worktreeCleanup!.path, patch.worktreeCleanup!.mode,
+          patch.worktreeCleanup!.ownedByAnyCode ? 1 : 0,
+          patch.worktreeTransition === undefined || patch.worktreeTransition === null
+            ? null : JSON.stringify(patch.worktreeTransition),
+          id,
+        );
+      }
+      db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* preserve original error */ }
+      throw error;
+    }
   }
 
   async appendHistory(sessionId: string, items: readonly HistoryItem[]): Promise<void> {
@@ -600,10 +849,15 @@ const defaultHistorySinkLogger: HistorySinkLogger = {
  * turn); operations run strictly in submission order off a single queue, so
  * replaceAll can never overtake a queued append. A failed write is logged
  * and swallowed — it never throws outward into the loop. flush() awaits the
- * current queue tail (graceful shutdown / tests).
+ * current queue tail with that legacy fail-soft behaviour. flushChecked() is
+ * the explicit durability barrier: it rejects when any queued write since the
+ * previous checked barrier failed, then resets that checked failure window.
  */
 export class WriteBehindHistorySink implements HistorySink {
   private tail: Promise<void> = Promise.resolve();
+  private failureCount = 0;
+  private checkedFailureCount = 0;
+  private lastFailure: unknown;
   private readonly logger: HistorySinkLogger;
 
   constructor(
@@ -626,11 +880,30 @@ export class WriteBehindHistorySink implements HistorySink {
     return this.tail;
   }
 
+  /**
+   * Waits for the writes queued at call time and rejects if any write failed
+   * since the previous checked barrier. The failure window is acknowledged
+   * before rejection, so a following barrier reports only newer failures.
+   */
+  async flushChecked(): Promise<void> {
+    const barrier = this.tail;
+    await barrier;
+    if (this.failureCount === this.checkedFailureCount) {
+      return;
+    }
+    this.checkedFailureCount = this.failureCount;
+    throw new Error(`WriteBehindHistorySink: persistence failed for session ${this.sessionId}`, {
+      cause: this.lastFailure,
+    });
+  }
+
   private enqueue(op: "append" | "replaceAll", run: () => Promise<void>): void {
     // Chaining off `this.tail` (rather than firing independently) is what
     // guarantees ordering: `run` only starts once every previously-enqueued
     // write has settled (successfully or not).
     this.tail = this.tail.then(run).catch((error: unknown) => {
+      this.failureCount += 1;
+      this.lastFailure = error;
       try {
         this.logger.error(`WriteBehindHistorySink: ${op} failed for session ${this.sessionId}`, error);
       } catch {

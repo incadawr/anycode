@@ -26,7 +26,6 @@ import { buildSubagentSystemPrompt } from "../prompts/subagent.js";
 import type { SystemPromptEnv } from "../prompts/system.js";
 import type { ModelPort } from "../ports/model.js";
 import { capUtf8Bytes } from "../util/bytes.js";
-import type { LoopEndReason } from "../types/events.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   MAX_CONCURRENT_SUBAGENTS,
@@ -335,7 +334,7 @@ export function createSubagentRunner(
         // by toolCallId rather than a single pending slot.
         const pendingChildCalls = new Map<string, { toolName: string; input: unknown }>();
         let turnEndCount = 0;
-        let loopReason: LoopEndReason | undefined;
+        let loopReason: SubagentOutcome["status"] | undefined;
         let loopTurns: number | undefined;
 
         try {
@@ -406,7 +405,10 @@ export function createSubagentRunner(
                 onProgress?.({ kind: "progress", turns: turnEndCount, toolCalls, lastTool });
                 break;
               case "loop_end":
-                loopReason = event.reason;
+                // Child configs never receive WorktreeControlPort. Treat an
+                // impossible terminal relocation defensively as an error rather
+                // than widening the public SubagentOutcome status contract.
+                loopReason = event.reason === "workspace_transition" ? "error" : event.reason;
                 loopTurns = event.turns;
                 break;
               default:

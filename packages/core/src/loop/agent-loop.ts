@@ -46,6 +46,7 @@ import type { WorkflowPort } from "../ports/workflow.js";
 import type { BackgroundTaskPort } from "../ports/tasks.js";
 import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
+import type { WorktreeControlPort } from "../ports/worktrees.js";
 import type { CheckpointCapturer, CheckpointCaptureResult } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { ConversationHistory } from "../context/history.js";
@@ -147,6 +148,11 @@ export interface AgentLoopConfig {
    * Type-only reference — the loop never constructs the closure.
    */
   media?: MediaCapabilityPort;
+  /**
+   * Parent-host worktree relocation port. Deliberately omitted by child-loop
+   * config builders, so only the owning session can relocate itself.
+   */
+  worktrees?: WorktreeControlPort;
   /**
    * Target mode an approved ExitPlanMode advances to (design slice-4.3-cut.md
    * §2.3). Set => the loop builds a PlanModeControl each turn and threads it
@@ -302,8 +308,32 @@ export class AgentLoop {
     }
   }
 
+  /**
+   * Resume an already-balanced conversation after a host relocation. Unlike
+   * runTurn, this does not run UserPromptSubmit hooks and does not append a
+   * synthetic user message; the first model request sees the persisted history
+   * exactly as the prior host segment left it.
+   */
+  async *continueTurn(
+    options?: { signal?: AbortSignal; mode?: PermissionMode },
+  ): AsyncGenerator<AgentEvent, void, unknown> {
+    const tap = this.config.eventTap;
+    if (tap === undefined) {
+      yield* this.runTurnInner(undefined, options);
+      return;
+    }
+    for await (const event of this.runTurnInner(undefined, options)) {
+      try {
+        tap(event);
+      } catch {
+        // An observer must never break the resumed loop segment.
+      }
+      yield event;
+    }
+  }
+
   private async *runTurnInner(
-    userInput: string,
+    userInput: string | undefined,
     options?: { signal?: AbortSignal; mode?: PermissionMode; attachments?: ImageAttachment[] },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const signal = options?.signal;
@@ -324,31 +354,32 @@ export class AgentLoop {
     // written; their additionalContext is appended inside a structural tag.
     // runUserPromptSubmit is fail-open for hook failures and only throws on an
     // external abort — treat that as a clean cancel.
-    let promptText = userInput;
-    try {
-      const submitted = await this.config.hooks.runUserPromptSubmit(
-        { prompt: userInput },
-        { signal },
-      );
-      if (submitted.additionalContext) {
-        promptText = `${userInput}\n<hook-context>\n${submitted.additionalContext}\n</hook-context>`;
-      }
-    } catch {
-      yield* this.emitLoopEnd("cancelled", 0, signal);
-      return;
-    }
-
-    // Pre-turn history snapshot for the auto-checkpoint (design slice-4.7-cut.md
-    // §2.4): a cheap array of references to immutable items, taken BEFORE the
-    // current turn's user message is appended. Serialization happens only if a
-    // capture actually fires; a read-only turn never touches it.
+    // Pre-turn history snapshot for lazy checkpointing, before a normal turn's
+    // user frame is appended. A continuation has no new frame, so this is also
+    // exactly the persisted pre-resume history.
     const preTurnItems = this.config.checkpoints !== undefined ? [...this.history.items] : [];
 
-    this.history.append({
-      role: "user",
-      content: promptText,
-      ...(options?.attachments?.length ? { images: options.attachments } : {}),
-    });
+    if (userInput !== undefined) {
+      let promptText = userInput;
+      try {
+        const submitted = await this.config.hooks.runUserPromptSubmit(
+          { prompt: userInput },
+          { signal },
+        );
+        if (submitted.additionalContext) {
+          promptText = `${userInput}\n<hook-context>\n${submitted.additionalContext}\n</hook-context>`;
+        }
+      } catch {
+        yield* this.emitLoopEnd("cancelled", 0, signal);
+        return;
+      }
+
+      this.history.append({
+        role: "user",
+        content: promptText,
+        ...(options?.attachments?.length ? { images: options.attachments } : {}),
+      });
+    }
 
     const dispatchCtx: DispatchContext = {
       registry: this.config.registry,
@@ -364,6 +395,7 @@ export class AgentLoop {
       tasks: this.config.tasks,
       lsp: this.config.lsp,
       media: this.config.media,
+      worktrees: this.config.worktrees,
     };
 
     // Plan-mode exit arc (design slice-4.3-cut.md §2.3): built ONLY when the
@@ -403,7 +435,7 @@ export class AgentLoop {
       let announced = false;
       dispatchCtx.checkpoint = {
         ensure: async () => {
-          pending ??= capturer.capture({ userInput, historySnapshot: preTurnItems });
+          pending ??= capturer.capture({ userInput: userInput ?? "", historySnapshot: preTurnItems });
           const result = await pending;
           if (announced) return null;
           announced = true;
@@ -594,6 +626,22 @@ export class AgentLoop {
         if (outcome) {
           this.history.append(buildToolResultMessage(call, outcome));
         }
+      }
+
+      const transition = toolCalls
+        .map((call) => outcomeById.get(call.id))
+        .find(
+          (outcome) =>
+            outcome?.status === "success" &&
+            outcome.result?.ok === true &&
+            outcome.result.control?.type === "workspace_transition",
+        )?.result?.control?.transition;
+
+      if (transition !== undefined) {
+        yield { type: "turn_end", turn, finishReason };
+        yield { type: "workspace_transition", transition };
+        yield* this.emitLoopEnd("workspace_transition", turn, signal);
+        return;
       }
 
       // Cancellation mid-dispatch: history is now balanced (all outcomes written),

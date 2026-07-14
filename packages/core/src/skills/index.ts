@@ -11,6 +11,14 @@ export { createSkillPort, discoverSkills } from "./discovery.js";
 export type { SkillDiscoveryResult, SkillRoot } from "./discovery.js";
 export { buildSkillsPromptSection } from "./prompt-section.js";
 export { SKILL_NAME_RE } from "./discovery.js";
+export {
+  BUILTIN_SKILL_SOURCE,
+  USING_GIT_WORKTREES_SKILL,
+  WORKTREE_BUILTIN_SKILLS,
+  builtinSkillMeta,
+  builtinSkillPath,
+} from "./builtin.js";
+export type { BuiltinSkillDefinition } from "./builtin.js";
 
 // Admin / settings surface (P7.20 W1) — also exposed main-side via the
 // `@anycode/core/skills-admin` subpath; re-exported here for in-core consumers.

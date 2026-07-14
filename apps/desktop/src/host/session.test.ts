@@ -48,7 +48,7 @@ import type { SessionEngine } from "./engines/session-engine.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
-import { Outbound, Session } from "./session.js";
+import { Outbound, Session, type SessionOptions } from "./session.js";
 import {
   MemFs,
   ScriptedModelPort,
@@ -948,6 +948,12 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     engine?: SessionEngine;
     shell?: ShellCapabilitiesProjection;
     git?: GitUiBridge;
+    continuationPending?: boolean;
+    onContinuationReady?: () => Promise<void>;
+    projectRoot?: string;
+    workspace?: string;
+    worktree?: { id: string; path: string; branch: string; baseRef: string; ownedByAnyCode: boolean };
+    onWorkspaceTransition?: SessionOptions["onWorkspaceTransition"];
   }): { port: FakeWirePort } {
     const outbound = new Outbound();
     const broker = new IpcPermissionBroker((message) => outbound.emit(message));
@@ -956,9 +962,14 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       engine: opts.engine ?? buildFakeEngine(),
       broker,
       fs: new MemFs(),
-      workspace: "/workspace",
+      workspace: opts.workspace ?? "/workspace",
       model: "m1",
       sessionId: "s1",
+      ...(opts.continuationPending !== undefined ? { continuationPending: opts.continuationPending } : {}),
+      ...(opts.onContinuationReady !== undefined ? { onContinuationReady: opts.onContinuationReady } : {}),
+      ...(opts.projectRoot !== undefined ? { projectRoot: opts.projectRoot } : {}),
+      ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
+      ...(opts.onWorkspaceTransition !== undefined ? { onWorkspaceTransition: opts.onWorkspaceTransition } : {}),
       rules: new SessionPermissionRules(),
       ...(opts.git !== undefined ? { git: opts.git } : {}),
       ...(opts.shell !== undefined ? { shell: opts.shell } : {}),
@@ -994,6 +1005,88 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     const hostReady = port.hostReady();
     expect(hostReady?.engine).toBeDefined();
     expect(hostReady?.shell).toBeUndefined();
+  });
+
+  it("restores worktree identity before continuing without a synthetic user turn", async () => {
+    const order: string[] = [];
+    let ordinaryRuns = 0;
+    let continuationRuns = 0;
+    const engine = buildFakeEngine({
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        ordinaryRuns += 1;
+      },
+      async *continueTurn(): AsyncIterable<AgentEvent> {
+        continuationRuns += 1;
+        order.push("continue");
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+    });
+    const worktree = {
+      id: "task-5",
+      path: "/repo/.anycode/worktrees/task-5",
+      branch: "anycode-wt/task-5",
+      baseRef: "HEAD",
+      ownedByAnyCode: true,
+    };
+    const { port } = buildTestSession({
+      engine,
+      continuationPending: true,
+      projectRoot: "/repo",
+      workspace: worktree.path,
+      worktree,
+      onContinuationReady: async () => {
+        order.push("ready");
+      },
+    });
+    port.send({ type: "ui_ready" });
+    await vi.waitFor(() => expect(continuationRuns).toBe(1));
+    expect(port.hostReady()).toMatchObject({
+      workspace: worktree.path,
+      projectRoot: "/repo",
+      worktree,
+    });
+    expect(order).toEqual(["ready", "continue"]);
+    expect(ordinaryRuns).toBe(0);
+  });
+
+  it("permanently rejects new turns in the source host after transition handoff", async () => {
+    let runs = 0;
+    const transition = {
+      kind: "enter_worktree" as const,
+      projectRoot: "/repo",
+      fromWorkspace: "/repo",
+      toWorkspace: "/repo/.anycode/worktrees/task-5",
+      worktree: {
+        id: "task-5",
+        path: "/repo/.anycode/worktrees/task-5",
+        branch: "anycode-wt/task-5",
+        baseRef: "HEAD",
+        ownedByAnyCode: true,
+      },
+    };
+    const engine = buildFakeEngine({
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        runs += 1;
+        yield { type: "workspace_transition", transition };
+        yield { type: "loop_end", reason: "workspace_transition", turns: 1 };
+      },
+    });
+    const { port } = buildTestSession({ engine, onWorkspaceTransition: async () => {} });
+    port.send({ type: "ui_ready" });
+    port.send({ type: "user_message", requestId: "first", text: "enter" });
+    await vi.waitFor(() => expect(runs).toBe(1));
+    await vi.waitFor(() => expect(port.received).toContainEqual({
+      type: "agent_event",
+      turnId: expect.any(String),
+      event: { type: "loop_end", reason: "workspace_transition", turns: 1 },
+    }));
+    port.send({ type: "user_message", requestId: "second", text: "must not run" });
+    await vi.waitFor(() => expect(port.received).toContainEqual({
+      type: "turn_rejected",
+      requestId: "second",
+      reason: "not_ready",
+    }));
+    expect(runs).toBe(1);
   });
 
   it("routes a git MUTATION through shell.gitUserMutations, ignoring engine.capabilities.supportsGitMutations entirely (agent-owned vs shell-owned split)", () => {

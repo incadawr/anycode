@@ -151,7 +151,8 @@
 
 import { randomUUID } from "node:crypto";
 import { homedir, release } from "node:os";
-import { dirname, join } from "node:path";
+import { realpath as fsRealpath } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import {
   AgentLoop,
   AiSdkModelPort,
@@ -174,6 +175,7 @@ import {
   SqlitePersistenceAdapter,
   SwitchableModelPort,
   WriteBehindHistorySink,
+  WORKTREE_BUILTIN_SKILLS,
   backgroundCapableBashTool,
   bashKillTool,
   bashOutputTool,
@@ -187,6 +189,8 @@ import {
   createWebSearchTool,
   diagnosticsEditTool,
   diagnosticsWriteTool,
+  enterWorktreeTool,
+  exitWorktreeTool,
   discoverExtensions,
   generateSessionTitle,
   loadEnvConfig,
@@ -225,7 +229,10 @@ import type {
   RepoMapConfig,
   SystemPromptEnv,
   TelemetryPort,
+  WorktreeControlPort,
+  WorkspaceTransition,
 } from "@anycode/core";
+import { hasDurableTransitionResult } from "./worktree-recovery.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -234,6 +241,11 @@ import {
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
+import {
+  WORKTREE_CLEANUP_ENV,
+  WORKTREE_TRANSITION_MESSAGE_TYPE,
+  type WorktreeCleanupIntent as WireWorktreeCleanupIntent,
+} from "../shared/worktrees.js";
 import {
   buildResolveApiKey,
   hostDiagnosticSink,
@@ -266,6 +278,10 @@ import { Outbound, Session } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
 import { createWirePort } from "./wire.js";
+import {
+  WorktreeLifecycleService,
+  type WorktreeCleanupIntent,
+} from "./worktree-lifecycle.js";
 
 const workspace = process.cwd();
 
@@ -330,6 +346,34 @@ const gitAbort = new AbortController();
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function parseCleanupIntent(raw: string | undefined): WireWorktreeCleanupIntent | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    const value = JSON.parse(raw) as Partial<WireWorktreeCleanupIntent>;
+    if (
+      typeof value.path === "string" &&
+      value.path.length > 0 &&
+      (value.mode === "auto" || value.mode === "keep" || value.mode === "remove") &&
+      typeof value.ownedByAnyCode === "boolean"
+    ) {
+      return value as WireWorktreeCleanupIntent;
+    }
+  } catch {
+    // Fail closed below: a pending continuation with malformed cleanup cannot run.
+  }
+  throw new Error("Malformed worktree cleanup handoff from desktop main.");
+}
+
+function toLifecycleCleanup(intent: WireWorktreeCleanupIntent): WorktreeCleanupIntent {
+  if (intent.mode === "auto") {
+    return { kind: "remove_clean", target: intent.path, ownedByAnyCode: true };
+  }
+  if (intent.mode === "remove") {
+    return { kind: "remove_force", target: intent.path, ownedByAnyCode: intent.ownedByAnyCode };
+  }
+  return { kind: "none", reason: `Retained worktree: ${intent.path}` };
 }
 
 /** Codex deliberately reads only its own explicit bootstrap inputs, never provider env config. */
@@ -586,11 +630,145 @@ async function boot(): Promise<void> {
     // cli/main.ts:239-259; the initial history is NOT re-appended to the sink).
     const dbPath = envConfig.dbPath ?? join(homedir(), ".anycode", "anycode.sqlite");
     persistence = new SqlitePersistenceAdapter(dbPath);
-    const { sessionMeta, initialHistory, resumedMissing } = await resolveBootSession(persistence, {
+    const resolvedSession = await resolveBootSession(persistence, {
       args,
       workspace,
       model: envConfig.model,
     });
+    let sessionMeta = resolvedSession.sessionMeta;
+    const { initialHistory, resumedMissing } = resolvedSession;
+    if (sessionMeta.worktreeTransition !== undefined) {
+      const pending = sessionMeta.worktreeTransition;
+      if (hasDurableTransitionResult(initialHistory, pending.kind, pending.origin, pending.toolCallId)) {
+        await persistence.touchSession(sessionMeta.id, { worktreeTransition: null });
+        const { worktreeTransition: _confirmed, ...confirmed } = sessionMeta;
+        sessionMeta = confirmed;
+      } else {
+        // Metadata was staged before the terminal tool result reached durable
+        // history. Restore the source workspace; for a newly-created owned
+        // checkout, prove it clean through GitPort before removing it.
+        let retainedCleanup: { path: string; mode: "auto"; ownedByAnyCode: true } | undefined;
+        if (pending.kind === "enter_worktree" && pending.worktree.ownedByAnyCode) {
+          const removed = await new NodeGitAdapter({ exec: execAdapter, cwd: pending.projectRoot })
+            .worktreeRemove?.({ path: pending.toWorkspace });
+          if (!removed?.ok) {
+            retainedCleanup = { path: pending.toWorkspace, mode: "auto", ownedByAnyCode: true };
+          }
+        }
+        await persistence.touchSession(sessionMeta.id, {
+          projectRoot: pending.projectRoot,
+          workspace: pending.fromWorkspace,
+          worktree: pending.kind === "exit_worktree" ? pending.worktree : null,
+          continuationPending: retainedCleanup !== undefined,
+          continuationMode: retainedCleanup !== undefined ? "none" : null,
+          worktreeCleanup: retainedCleanup ?? null,
+          worktreeTransition: null,
+        });
+        sessionMeta = {
+          ...sessionMeta,
+          projectRoot: pending.projectRoot,
+          workspace: pending.fromWorkspace,
+          ...(pending.kind === "exit_worktree" ? { worktree: pending.worktree } : { worktree: undefined }),
+          continuationPending: retainedCleanup !== undefined,
+          worktreeCleanup: retainedCleanup,
+          continuationMode: retainedCleanup !== undefined ? "none" : undefined,
+          worktreeTransition: undefined,
+        };
+      }
+    }
+    const canonical = async (value: string): Promise<string> => {
+      try {
+        return await fsRealpath(value);
+      } catch {
+        return resolve(value);
+      }
+    };
+    const canonicalStoredWorkspace = await canonical(sessionMeta.workspace);
+    const canonicalHostWorkspace = await canonical(workspace);
+    const canonicalProjectRoot = await canonical(sessionMeta.projectRoot ?? sessionMeta.workspace);
+    if (canonicalStoredWorkspace !== canonicalHostWorkspace) {
+      // Crash recovery for the window after durable transition commit but
+      // before main processed the original handoff. Never start a model in a
+      // cwd that disagrees with persistence; ask main to rehost authoritatively.
+      const cleanup = sessionMeta.worktreeCleanup;
+      process.parentPort.postMessage({
+        type: WORKTREE_TRANSITION_MESSAGE_TYPE,
+        sessionId: sessionMeta.id,
+        fromWorkspace: workspace,
+        toWorkspace: canonicalStoredWorkspace,
+        projectRoot: canonicalProjectRoot,
+        ...(sessionMeta.worktree !== undefined
+          ? { worktree: { ...sessionMeta.worktree, path: canonicalStoredWorkspace } }
+          : {}),
+        ...(cleanup !== undefined ? { cleanup } : {}),
+      });
+      throw new Error(`Persisted workspace requires rehost: ${sessionMeta.workspace}`);
+    }
+    if (
+      sessionMeta.workspace !== canonicalStoredWorkspace ||
+      (sessionMeta.projectRoot ?? sessionMeta.workspace) !== canonicalProjectRoot
+    ) {
+      const normalizedWorktree = sessionMeta.worktree === undefined
+        ? undefined
+        : { ...sessionMeta.worktree, path: canonicalStoredWorkspace };
+      await persistence.touchSession(sessionMeta.id, {
+        workspace: canonicalStoredWorkspace,
+        projectRoot: canonicalProjectRoot,
+        ...(normalizedWorktree !== undefined ? { worktree: normalizedWorktree } : {}),
+      });
+      sessionMeta = {
+        ...sessionMeta,
+        workspace: canonicalStoredWorkspace,
+        projectRoot: canonicalProjectRoot,
+        ...(normalizedWorktree !== undefined ? { worktree: normalizedWorktree } : {}),
+      };
+    }
+    const projectRoot = sessionMeta.projectRoot ?? sessionMeta.workspace;
+    const gitForWorkspace = (cwd: string) =>
+      new NodeGitAdapter({ exec: execAdapter, cwd, signal: gitAbort.signal });
+    const worktreeLifecycle = new WorktreeLifecycleService({
+      session: sessionMeta,
+      persistence,
+      gitForWorkspace,
+      ensureNamespaceIgnored: async (projectRoot) => {
+        const git = gitForWorkspace(projectRoot);
+        if (!git.ensureWorktreeNamespaceIgnored) {
+          return { ok: false, reason: "Git adapter cannot maintain the worktree exclude." };
+        }
+        const result = await git.ensureWorktreeNamespaceIgnored();
+        return result.ok ? { ok: true, value: null } : result;
+      },
+    });
+    const activeWorktree = await worktreeLifecycle.validateActiveWorktree();
+    if (!activeWorktree.ok) {
+      throw new Error(`Cannot resume worktree session: ${activeWorktree.reason}`);
+    }
+    let preparedCleanup: WorktreeCleanupIntent | undefined;
+    const worktreeControl: WorktreeControlPort = {
+      async enter(request, options) {
+        if (options.signal.aborted) return { ok: false, error: "Worktree entry was cancelled.", errorKind: "cancelled" };
+        const result = await worktreeLifecycle.enter(request, options.toolCallId);
+        if (!result.ok) return { ok: false, error: result.reason, errorKind: "invalid_input" };
+        preparedCleanup = result.value.cleanup;
+        return { ok: true, transition: result.value.transition };
+      },
+      async exit(request, options) {
+        if (options.signal.aborted) return { ok: false, error: "Worktree exit was cancelled.", errorKind: "cancelled" };
+        const result = await worktreeLifecycle.exit(request, options.toolCallId);
+        if (!result.ok) return { ok: false, error: result.reason, errorKind: "invalid_input" };
+        preparedCleanup = result.value.cleanup;
+        const message = result.value.cleanup.kind === "none"
+          ? result.value.cleanup.reason
+          : `Worktree cleanup scheduled after rehost: ${result.value.cleanup.target}`;
+        return { ok: true, transition: result.value.transition, message };
+      },
+    };
+    const worktreeAvailable =
+      typeof execAdapter.runBinary === "function" && (await fsAdapter.exists(join(projectRoot, ".git")));
+    if (worktreeAvailable) {
+      registry.register(enterWorktreeTool);
+      registry.register(exitWorktreeTool);
+    }
     // Main selects resume engine from durable metadata, and the host verifies
     // it again before constructing the core graph. A forged/mismatched fork
     // must never silently resume an external session through AgentLoop.
@@ -784,6 +962,7 @@ async function boot(): Promise<void> {
         home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         repoMapConfig,
+        ...(worktreeAvailable ? { builtinSkills: WORKTREE_BUILTIN_SKILLS } : {}),
       });
     } catch (error) {
       console.error(`[host] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${describeError(error)}`);
@@ -999,6 +1178,7 @@ async function boot(): Promise<void> {
         todos: new InMemoryTodoStore(),
       },
       media,
+      ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
       cwd: workspace,
       maxTurns: envConfig.maxTurns,
       maxOutputTokens: bootMaxOutputTokens,
@@ -1107,12 +1287,123 @@ async function boot(): Promise<void> {
         };
       };
     const engine = new CoreEngine({ loop, config, switchModelImpl });
+    const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     session = new Session({
       outbound,
       engine,
       broker,
       fs: fsAdapter,
       workspace,
+      projectRoot: sessionMeta.projectRoot ?? sessionMeta.workspace,
+      ...(sessionMeta.worktree !== undefined ? { worktree: sessionMeta.worktree } : {}),
+      continuationPending: sessionMeta.continuationPending === true,
+      continuationMode: sessionMeta.continuationMode ?? "model",
+      worktreeControl: worktreeAvailable ? worktreeControl : undefined,
+      onContinuationReady: async () => {
+        if (cleanupHandoff !== undefined) {
+          const finalized = await worktreeLifecycle.finalizePostRehost({
+            projectRoot: sessionMeta.projectRoot ?? sessionMeta.workspace,
+            cleanup: toLifecycleCleanup(cleanupHandoff),
+          });
+          if (!finalized.ok) throw new Error(finalized.reason);
+          console.log(`[host] ${finalized.value.message}`);
+          outbound.sendDirect({ type: "worktree_notice", message: finalized.value.message });
+          return;
+        }
+        // No cleanup is pending (enter or retained exit). The durable
+        // continuation claim is cleared only after the model/no-model segment.
+      },
+      onContinuationComplete: async () => {
+        await persistence!.touchSession(sessionId, {
+          continuationPending: false,
+          continuationMode: null,
+        });
+      },
+      onWorkspaceTransition: async (transition: WorkspaceTransition) => {
+        const rollback = async (): Promise<void> => {
+          // Before durable history success, the source host is authoritative.
+          if (transition.kind === "enter_worktree") {
+            const removed = transition.worktree.ownedByAnyCode
+              ? await gitForWorkspace(transition.projectRoot).worktreeRemove?.({ path: transition.toWorkspace })
+              : { ok: true as const, value: null };
+            await persistence!.touchSession(sessionId, {
+              projectRoot: transition.projectRoot,
+              workspace: transition.fromWorkspace,
+              worktree: null,
+              continuationPending: removed?.ok === false,
+              continuationMode: removed?.ok === false ? "none" : null,
+              worktreeCleanup: removed?.ok === false
+                ? { path: transition.toWorkspace, mode: "auto", ownedByAnyCode: true }
+                : null,
+              worktreeTransition: null,
+            });
+          } else {
+            await persistence!.touchSession(sessionId, {
+              projectRoot: transition.projectRoot,
+              workspace: transition.fromWorkspace,
+              worktree: transition.worktree,
+              continuationPending: false,
+              continuationMode: null,
+              worktreeCleanup: null,
+              worktreeTransition: null,
+            });
+          }
+        };
+        const recoverCommittedTransition = (error: unknown): void => {
+          // History success is already durable: rollback would make the
+          // transcript lie. Exit this host and let main respawn; boot recovery
+          // confirms the exact journal/toolCall or reissues canonical rehost.
+          console.error(`[host] committed worktree handoff requires recovery: ${describeError(error)}`);
+          process.exitCode = 1;
+          setTimeout(() => process.exit(1), 0);
+        };
+        try {
+          await historySink!.flushChecked();
+        } catch (error) {
+          try {
+            const durableHistory = await persistence!.loadHistory(sessionId);
+            if (hasDurableTransitionResult(
+              durableHistory,
+              transition.kind,
+              transition.toolCallId === undefined ? "chrome" : "tool",
+              transition.toolCallId,
+            )) {
+              recoverCommittedTransition(error);
+              return;
+            }
+          } catch (historyError) {
+            recoverCommittedTransition(historyError);
+            return;
+          }
+          await rollback();
+          throw error;
+        }
+        const confirmed = await worktreeLifecycle.confirmTransition();
+        if (!confirmed.ok) {
+          recoverCommittedTransition(new Error(confirmed.reason));
+          return;
+        }
+        try {
+          const cleanup = preparedCleanup;
+          const wireCleanup: WireWorktreeCleanupIntent | undefined =
+            cleanup?.kind === "remove_clean"
+              ? { path: cleanup.target, mode: "auto", ownedByAnyCode: true }
+              : cleanup?.kind === "remove_force"
+                ? { path: cleanup.target, mode: "remove", ownedByAnyCode: cleanup.ownedByAnyCode }
+                : undefined;
+          process.parentPort.postMessage({
+            type: WORKTREE_TRANSITION_MESSAGE_TYPE,
+            sessionId,
+            fromWorkspace: transition.fromWorkspace,
+            toWorkspace: transition.toWorkspace,
+            projectRoot: transition.projectRoot,
+            ...(transition.kind === "enter_worktree" ? { worktree: transition.worktree } : {}),
+            ...(wireCleanup !== undefined ? { cleanup: wireCleanup } : {}),
+          });
+        } catch (error) {
+          recoverCommittedTransition(error);
+        }
+      },
       model: currentModel,
       reasoningSupported: bootEffortLevels !== undefined,
       ...(bootEffortLevels !== undefined ? { availableEffortLevels: bootEffortLevels } : {}),

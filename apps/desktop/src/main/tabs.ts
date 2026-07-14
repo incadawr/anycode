@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import {
   CREDENTIAL_REQUEST_TYPE,
@@ -30,6 +31,13 @@ import {
   type EngineProcessRegistration,
 } from "../shared/engines.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
+import {
+  WORKTREE_CLEANUP_ENV,
+  WORKTREE_TRANSITION_MESSAGE_TYPE,
+  type WorktreeCleanupIntent,
+  type WorktreeIdentity,
+  type WorktreeTransitionMessage,
+} from "../shared/worktrees.js";
 
 /**
  * Control-plane message types on the main<->host parentPort channel (mirrors the
@@ -85,12 +93,25 @@ function argvId(value: string | undefined): string | null {
   return trimmed;
 }
 
+function canonicalWorkspace(value: string): string {
+  try {
+    return realpathSync(value);
+  } catch {
+    return value;
+  }
+}
+
 /** A tab's host process + its lifecycle/breaker state (design §2.2). */
 export interface TabHost {
   /** uuid, lives from createTab to closeTab. */
   tabId: string;
   /** = host cwd, known before fork. */
   workspace: string;
+  /** Stable project grouping identity while workspace may relocate. */
+  projectRoot: string;
+  worktree?: WorktreeIdentity;
+  /** Delivered once to the first host booted after an exit transition. */
+  pendingWorktreeCleanup?: WorktreeCleanupIntent;
   /* */
   sessionId: string;
   /** Engine choice is main-owned and retained across every host respawn. */
@@ -348,6 +369,8 @@ export class TabHostManager {
    */
   createTab(params: {
     workspace: string;
+    projectRoot?: string;
+    worktree?: WorktreeIdentity;
     sessionId: string;
     resume: boolean;
     engine?: EngineId;
@@ -368,9 +391,16 @@ export class TabHostManager {
     if (this.atCapacity()) {
       return { ok: false, reason: "max_tabs" };
     }
+    const workspace = canonicalWorkspace(params.workspace);
+    const projectRoot = canonicalWorkspace(params.projectRoot ?? params.workspace);
+    const worktree = params.worktree === undefined
+      ? undefined
+      : { ...params.worktree, path: canonicalWorkspace(params.worktree.path) };
     const tab: TabHost = {
       tabId: this.genId(),
-      workspace: params.workspace,
+      workspace,
+      projectRoot,
+      ...(worktree !== undefined ? { worktree } : {}),
       sessionId: params.sessionId,
       engine,
       engineModel: argvId(params.engineModel),
@@ -408,14 +438,20 @@ export class TabHostManager {
     }
     tab.hostGeneration += 1;
     tab.engineProcess = null;
+    const cleanup = tab.pendingWorktreeCleanup;
     const child = this.deps.fork(this.deps.hostEntry, args, {
       cwd: tab.workspace,
-      env: { ...this.env(), ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}) },
+      env: {
+        ...this.env(),
+        ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}),
+        ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
+      },
       stdio: "inherit",
     });
     tab.proc = child;
     tab.spawnedAt = this.now();
     tab.state = "running";
+    delete tab.pendingWorktreeCleanup;
     this.stormForks += 1;
 
     child.on("spawn", () => {
@@ -443,6 +479,10 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    if (data.type === WORKTREE_TRANSITION_MESSAGE_TYPE) {
+      await this.relocateTab(tab, child, message as WorktreeTransitionMessage);
+      return;
+    }
     if (data.type === ENGINE_PROCESS_REGISTRATION_TYPE) {
       this.registerEngineProcess(tab, child, message);
       return;
@@ -468,6 +508,49 @@ export class TabHostManager {
     } catch (error) {
       this.logger.warn(`[main] failed to post credential response`, error);
     }
+  }
+
+  /** Gracefully replaces one host with a resume host rooted at the transition target. */
+  private async relocateTab(
+    tab: TabHost,
+    child: UtilityProcess,
+    message: WorktreeTransitionMessage,
+  ): Promise<void> {
+    const current = tab.proc === child;
+    const entering = message.worktree !== undefined;
+    const shapeValid = entering
+      ? message.toWorkspace === message.worktree!.path && message.cleanup === undefined
+      : message.toWorkspace === message.projectRoot &&
+        (message.cleanup === undefined || message.cleanup.path === message.fromWorkspace);
+    const valid =
+      current &&
+      tab.state === "running" &&
+      message.sessionId === tab.sessionId &&
+      message.fromWorkspace === tab.workspace &&
+      message.projectRoot === tab.projectRoot &&
+      shapeValid &&
+      typeof message.toWorkspace === "string" &&
+      message.toWorkspace.length > 0 &&
+      typeof message.projectRoot === "string" &&
+      message.projectRoot.length > 0;
+    if (!valid) {
+      this.logger.warn(`[main] rejected stale or malformed worktree transition for tab ${tab.tabId}`);
+      return;
+    }
+    await this.shutdownTabHost(tab);
+    tab.workspace = message.toWorkspace;
+    tab.projectRoot = message.projectRoot;
+    if (message.worktree !== undefined) tab.worktree = message.worktree;
+    else delete tab.worktree;
+    if (message.cleanup !== undefined && message.cleanup.mode !== "keep") {
+      tab.pendingWorktreeCleanup = message.cleanup;
+    } else {
+      delete tab.pendingWorktreeCleanup;
+    }
+    tab.initialResume = true;
+    tab.rapidRespawns = 0;
+    this.spawnTabHost(tab, { firstSpawn: false });
+    this.deliverTabPort(tab);
   }
 
   /**

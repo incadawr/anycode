@@ -72,6 +72,7 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   rewind_restored: "neutral",
   rewind_rejected: "danger",
   engine_notice: "warning",
+  worktree_notice: "warning",
   shell_error: "danger",
 };
 

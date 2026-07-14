@@ -32,6 +32,12 @@ import {
   SKILL_BODY_MAX_BYTES,
   SKILL_DESCRIPTION_MAX_CHARS,
 } from "../types/config.js";
+import {
+  BUILTIN_SKILL_SOURCE,
+  builtinSkillMeta,
+  builtinSkillPath,
+  type BuiltinSkillDefinition,
+} from "./builtin.js";
 
 /** One directory scanned for `<dir>/SKILL.md`, tagged with its provenance. */
 export interface SkillRoot {
@@ -160,7 +166,11 @@ async function scanRoot(
 export async function discoverSkills(
   fs: FileSystemPort,
   roots: readonly SkillRoot[],
-  opts?: { disabled?: ReadonlySet<string> },
+  opts?: {
+    disabled?: ReadonlySet<string>;
+    /** Trusted in-memory skills, considered after every filesystem root. */
+    builtins?: readonly BuiltinSkillDefinition[];
+  },
 ): Promise<SkillDiscoveryResult> {
   const problems: string[] = [];
   const seenDirs = new Set<string>();
@@ -189,6 +199,34 @@ export async function discoverSkills(
     }
   }
 
+  // Application-provided built-ins are intentionally last: project, user,
+  // and plugin skills can replace product guidance by claiming the same name.
+  for (const builtin of opts?.builtins ?? []) {
+    if (disabled?.has(builtin.name) || claimed.has(builtin.name)) {
+      continue;
+    }
+    if (!SKILL_NAME_RE.test(builtin.name)) {
+      problems.push(
+        `Skill discovery: skipping builtin skill — name "${builtin.name}" does not match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`,
+      );
+      continue;
+    }
+    const description = builtin.description.trim();
+    if (!description) {
+      problems.push(
+        `Skill discovery: skipping builtin://${builtin.name}/SKILL.md — a "description" is required`,
+      );
+      continue;
+    }
+    claimed.set(
+      builtin.name,
+      builtinSkillMeta({
+        ...builtin,
+        description: description.slice(0, SKILL_DESCRIPTION_MAX_CHARS),
+      }),
+    );
+  }
+
   let metas = [...claimed.values()];
   if (metas.length > MAX_SKILLS) {
     const dropped = metas.length - MAX_SKILLS;
@@ -203,15 +241,22 @@ export async function discoverSkills(
 
 /**
 
- * is static for the session). load() re-reads the SKILL.md FRESH on every
- * call (an edit is visible without a restart) and strips its frontmatter with
- * the same parser used at discovery time; a vanished file, a name outside the
- * snapshot, or a read failure all resolve to undefined (fail-soft — the
- * handler turns that into invalid_input).
+ * is static for the session). load() re-reads filesystem SKILL.md files FRESH
+ * on every call (an edit is visible without a restart), while opt-in built-ins
+ * load from their immutable in-memory definitions. A vanished file, a name
+ * outside the snapshot, or a read failure all resolve to undefined (fail-soft
+ * — the handler turns that into invalid_input).
  */
-export function createSkillPort(fs: FileSystemPort, metas: readonly SkillMeta[]): SkillPort {
+export function createSkillPort(
+  fs: FileSystemPort,
+  metas: readonly SkillMeta[],
+  opts?: { builtins?: readonly BuiltinSkillDefinition[] },
+): SkillPort {
   const snapshot = [...metas];
   const byName = new Map(snapshot.map((meta) => [meta.name, meta]));
+  const builtinBodies = new Map(
+    (opts?.builtins ?? []).map((builtin) => [builtin.name, builtin.body]),
+  );
 
   return {
     list: () => [...snapshot],
@@ -219,6 +264,18 @@ export function createSkillPort(fs: FileSystemPort, metas: readonly SkillMeta[])
       const meta = byName.get(name);
       if (!meta) {
         return undefined;
+      }
+
+      if (
+        meta.source === BUILTIN_SKILL_SOURCE &&
+        meta.path === builtinSkillPath(meta.name)
+      ) {
+        const body = builtinBodies.get(meta.name);
+        if (body === undefined) {
+          return undefined;
+        }
+        const capped = capUtf8Bytes(body, SKILL_BODY_MAX_BYTES);
+        return { meta, body: capped.text, truncated: capped.truncated };
       }
 
       let raw: string;

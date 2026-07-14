@@ -46,6 +46,9 @@ function isParallelSafe(call: ProposedToolCall, registry: ToolRegistry): boolean
   if (tool.metadata.destructive) {
     return false;
   }
+  if (tool.metadata.terminalControl) {
+    return false;
+  }
   return tool.metadata.concurrentSafe === true;
 }
 
@@ -140,7 +143,8 @@ export async function* runToolBatches(
   const batches = planToolBatches(calls, ctx.registry, config);
   const outcomes: ToolCallOutcome[] = [];
 
-  for (const batch of batches) {
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+    const batch = batches[batchIndex]!;
     // Slot per call, filled at its proposal position so the batch contributes
     // outcomes in proposal order regardless of completion order.
     const batchOutcomes: ToolCallOutcome[] = new Array(batch.length);
@@ -179,6 +183,31 @@ export async function* runToolBatches(
 
     for (const outcome of batchOutcomes) {
       outcomes.push(outcome);
+    }
+
+    const terminal = batchOutcomes.find(
+      (candidate) =>
+        candidate.status === "success" &&
+        candidate.result?.ok === true &&
+        candidate.result.control?.type === "workspace_transition",
+    );
+    if (terminal !== undefined) {
+      // Terminal-control tools are planned solo, so nothing else in their batch
+      // can race the transition. Every later proposal is paired with a typed
+      // cancelled result without entering the dispatcher or handler.
+      const remainingCalls = batches.slice(batchIndex + 1).flat();
+      for (const call of remainingCalls) {
+        const cancelled: ToolCallOutcome = {
+          toolCallId: call.id,
+          toolName: call.name,
+          status: "cancelled",
+          modelText: `Tool ${call.name} was cancelled because ${terminal.toolName} started a workspace transition.`,
+          durationMs: 0,
+        };
+        outcomes.push(cancelled);
+        yield { type: "tool_result", outcome: cancelled };
+      }
+      return outcomes;
     }
   }
 

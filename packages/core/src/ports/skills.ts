@@ -15,9 +15,9 @@ export interface SkillMeta {
   name: string;
   /** Frontmatter description, capped at SKILL_DESCRIPTION_MAX_CHARS. */
   description: string;
-  /** "project" | "user" | "plugin:<pluginName>" (data, not a closed union — plugins widen it). */
+  /** "project" | "user" | "plugin:<pluginName>" | "builtin" (data, not a closed union). */
   source: string;
-  /** Absolute path of the SKILL.md file. */
+  /** Absolute SKILL.md path, or a `builtin://...` URI for an in-memory skill. */
   path: string;
 }
 

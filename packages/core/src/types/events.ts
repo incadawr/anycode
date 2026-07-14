@@ -6,6 +6,7 @@
  */
 
 import type { ToolCallOutcome } from "./tools.js";
+import type { WorkspaceTransition } from "../ports/worktrees.js";
 
 export interface TokenUsage {
   inputTokens?: number;
@@ -56,7 +57,7 @@ export type ModelStreamEvent =
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
   | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string };
 
-export type LoopEndReason = "completed" | "max_turns" | "cancelled" | "error";
+export type LoopEndReason = "completed" | "max_turns" | "cancelled" | "error" | "workspace_transition";
 
 /** Full event stream produced by the agent loop; superset of the model stream vocabulary. */
 export type AgentEvent =
@@ -65,6 +66,7 @@ export type AgentEvent =
   | { type: "turn_end"; turn: number; finishReason: FinishReason }
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; input: unknown }
   | { type: "tool_result"; outcome: ToolCallOutcome }
+  | { type: "workspace_transition"; transition: WorkspaceTransition }
   | { type: "loop_end"; reason: LoopEndReason; turns: number }
   /** trigger "manual" is reserved for the Phase 2 /compact command. */
   | { type: "compaction_start"; trigger: "auto" | "manual" }

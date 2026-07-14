@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionAdapter } from "./node-execution.js";
 import {
   GIT_DIFF_MAX_OUTPUT_BYTES,
+  GIT_WORKTREE_ADD_TIMEOUT_MS,
   NodeGitAdapter,
   parseBranchList,
   parseLogRecords,
   parsePorcelainV2Status,
+  parseWorktreeListZ,
 } from "./node-git.js";
 import type { BinaryExecRequest, ExecRequest, ExecResult, ExecutionPort } from "../../ports/execution.js";
 
@@ -127,6 +129,59 @@ describe("parseLogRecords", () => {
   });
 });
 
+describe("parseWorktreeListZ", () => {
+  it("parses main, linked, detached, locked and prunable porcelain records", () => {
+    const raw =
+      "worktree /repo\0HEAD aaaa\0branch refs/heads/main\0\0" +
+      "worktree /repo/wt one\0HEAD bbbb\0branch refs/heads/feature/x\0locked in use\0\0" +
+      "worktree /repo/wt-detached\0HEAD cccc\0detached\0prunable missing gitdir\0\0";
+    expect(parseWorktreeListZ(raw)).toEqual([
+      {
+        path: "/repo",
+        head: "aaaa",
+        branch: "main",
+        detached: false,
+        isMain: true,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: "/repo/wt one",
+        head: "bbbb",
+        branch: "feature/x",
+        detached: false,
+        isMain: false,
+        locked: true,
+        prunable: false,
+      },
+      {
+        path: "/repo/wt-detached",
+        head: "cccc",
+        branch: null,
+        detached: true,
+        isMain: false,
+        locked: false,
+        prunable: true,
+      },
+    ]);
+  });
+
+  it("handles empty, bare, unicode paths and unknown future attributes", () => {
+    expect(parseWorktreeListZ("")).toEqual([]);
+    expect(parseWorktreeListZ("worktree /tmp/имя с пробелами\0bare\0future value\0\0")).toEqual([
+      {
+        path: "/tmp/имя с пробелами",
+        head: null,
+        branch: null,
+        detached: false,
+        isMain: true,
+        locked: false,
+        prunable: false,
+      },
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Section 2: mock-exec (RecordingExec). Proves argv construction, SAFE_GIT_ENV /
 // GIT_DIR-family neutralization on every method (L2), the pre-spawn ref guard
@@ -143,6 +198,7 @@ interface RecordedCall {
   env?: Record<string, string | undefined>;
   timeoutMs?: number;
   maxOutputBytes?: number;
+  abortSignal?: AbortSignal;
 }
 
 function okResult(stdout: string): ExecResult {
@@ -172,6 +228,7 @@ class RecordingExec implements ExecutionPort {
       env: req.env,
       timeoutMs: req.timeoutMs,
       maxOutputBytes: req.maxOutputBytes,
+      abortSignal: req.abortSignal,
     });
     return Promise.resolve(this.responder(req.args));
   }
@@ -184,10 +241,10 @@ class NoRunBinaryExec implements ExecutionPort {
   }
 }
 
-function assertSafeEnv(call: RecordedCall): void {
+function assertSafeEnv(call: RecordedCall, expectedCwd = CWD, expectedTimeout = 30_000): void {
   expect(call.file).toBe("git");
-  expect(call.cwd).toBe(CWD);
-  expect(call.timeoutMs).toBe(30_000);
+  expect(call.cwd).toBe(expectedCwd);
+  expect(call.timeoutMs).toBe(expectedTimeout);
   const env = call.env ?? {};
   // Positive protective env, plus the ad-hoc-config injection kill-switch.
   expect(env.GIT_TERMINAL_PROMPT).toBe("0");
@@ -199,6 +256,7 @@ function assertSafeEnv(call: RecordedCall): void {
   // child), so no relocation/exec vector reaches git.
   for (const key of [
     "GIT_DIR",
+    "GIT_COMMON_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
     "GIT_OBJECT_DIRECTORY",
@@ -414,6 +472,145 @@ describe("NodeGitAdapter (mock exec)", () => {
     expect(exec.calls[2]?.maxOutputBytes).toBe(GIT_DIFF_MAX_OUTPUT_BYTES);
     expect(exec.calls[3]?.maxOutputBytes).toBe(GIT_DIFF_MAX_OUTPUT_BYTES);
     expect(GIT_DIFF_MAX_OUTPUT_BYTES).toBe(2_097_152);
+  });
+
+  it("honestly disables all worktree methods without runBinary", async () => {
+    const adapter = new NodeGitAdapter({ exec: new NoRunBinaryExec(), cwd: CWD });
+    for (const result of [
+      await adapter.worktreeAdd({ path: "wt", branch: "feature" }),
+      await adapter.worktreeList(),
+      await adapter.worktreeRemove({ path: "wt" }),
+    ]) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("runBinary");
+    }
+  });
+
+  it("builds guarded worktree argv and threads SAFE_GIT_ENV, timeout and abort", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "anycode-git-wt-mock-")));
+    try {
+      const exec = new RecordingExec((args) => {
+        if (args[0] === "worktree" && args[1] === "add") {
+          const separator = args.indexOf("--");
+          const target = args[separator + 1];
+          if (target !== undefined) mkdirSync(target, { recursive: true });
+        }
+        return okResult("");
+      });
+      const controller = new AbortController();
+      const adapter = new NodeGitAdapter({ exec, cwd: root, signal: controller.signal });
+
+      const added = await adapter.worktreeAdd({
+        path: "worktrees/feature one",
+        branch: "feature/one",
+        baseRef: "origin/main",
+      });
+      await adapter.worktreeList();
+      await adapter.worktreeRemove({ path: "worktrees/feature one" });
+      await adapter.worktreeRemove({ path: "worktrees/feature one", force: true });
+
+      expect(added).toEqual({ ok: true, value: { path: join(root, "worktrees", "feature one") } });
+      expect(exec.calls.map((call) => call.args)).toEqual([
+        ["worktree", "add", "-b", "feature/one", "--", join(root, "worktrees", "feature one"), "origin/main"],
+        ["worktree", "list", "--porcelain", "-z"],
+        ["-C", join(root, "worktrees", "feature one"), "status", "--porcelain=v2", "--ignored=matching", "--untracked-files=all", "-z"],
+        ["-C", join(root, "worktrees", "feature one"), "ls-files", "-v", "-z"],
+        ["worktree", "remove", "--", join(root, "worktrees", "feature one")],
+        ["worktree", "remove", "--force", "--", join(root, "worktrees", "feature one")],
+      ]);
+      assertSafeEnv(exec.calls[0]!, root, GIT_WORKTREE_ADD_TIMEOUT_MS);
+      for (const call of exec.calls.slice(1)) assertSafeEnv(call, root);
+      for (const call of exec.calls) expect(call.abortSignal).toBe(controller.signal);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("idempotently excludes the .anycode worktree namespace in the common repo", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "anycode-git-exclude-")));
+    const common = join(root, ".git");
+    try {
+      await mkdir(common, { recursive: true });
+      const exec = new RecordingExec(() => okResult(`${common}\n`));
+      const adapter = new NodeGitAdapter({ exec, cwd: root });
+      expect(await adapter.ensureWorktreeNamespaceIgnored()).toEqual({ ok: true, value: null });
+      expect(await adapter.ensureWorktreeNamespaceIgnored()).toEqual({ ok: true, value: null });
+      expect(await readFile(join(common, "info", "exclude"), "utf8")).toBe("/.anycode/worktrees/\n");
+      expect(exec.calls.map((call) => call.args)).toEqual([
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      ]);
+      for (const call of exec.calls) assertSafeEnv(call, root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a symlinked repository-local exclude file", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "anycode-git-exclude-link-")));
+    const common = join(root, ".git");
+    const victim = join(root, "victim");
+    try {
+      await writeFile(victim, "keep\n");
+      await mkdir(join(common, "info"), { recursive: true });
+      await symlink(victim, join(common, "info", "exclude"));
+      const exec = new RecordingExec(() => okResult(`${common}\n`));
+      const adapter = new NodeGitAdapter({ exec, cwd: root });
+
+      await expect(adapter.ensureWorktreeNamespaceIgnored()).resolves.toMatchObject({ ok: false });
+      await expect(readFile(victim, "utf8")).resolves.toBe("keep\n");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsafe worktree refs and paths before spawning", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "anycode-git-wt-guard-")));
+    const outside = await realpath(await mkdtemp(join(tmpdir(), "anycode-git-wt-outside-")));
+    try {
+      await symlink(outside, join(root, "link"));
+      const exec = new RecordingExec();
+      const adapter = new NodeGitAdapter({ exec, cwd: root });
+      for (const branch of ["", "-b", "--force", "bad\nref"]) {
+        expect((await adapter.worktreeAdd({ path: "wt", branch })).ok).toBe(false);
+      }
+      expect((await adapter.worktreeAdd({ path: "wt", branch: "safe", baseRef: "--evil" })).ok).toBe(false);
+      for (const candidate of [".", "../outside", ".git/wt", "link/wt"]) {
+        expect((await adapter.worktreeAdd({ path: candidate, branch: "safe" })).ok).toBe(false);
+        expect((await adapter.worktreeRemove({ path: candidate })).ok).toBe(false);
+      }
+      expect(exec.calls).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("parses worktreeList output and reports add/list/remove failures honestly", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "anycode-git-wt-fail-")));
+    try {
+      const porcelain = `worktree ${root}\0HEAD aaaa\0branch refs/heads/main\0\0`;
+      const listExec = new RecordingExec(() => okResult(porcelain));
+      const listed = await new NodeGitAdapter({ exec: listExec, cwd: root }).worktreeList();
+      expect(listed.ok && listed.value[0]?.path).toBe(root);
+
+      const failed = (): ExecResult => ({
+        ...okResult(""),
+        exitCode: 128,
+        stderr: "fatal: refused",
+      });
+      const failExec = new RecordingExec(failed);
+      const adapter = new NodeGitAdapter({ exec: failExec, cwd: root });
+      expect((await adapter.worktreeAdd({ path: "wt", branch: "feature" })).ok).toBe(false);
+      expect((await adapter.worktreeList()).ok).toBe(false);
+      expect((await adapter.worktreeRemove({ path: "wt" })).ok).toBe(false);
+
+      const truncatedExec = new RecordingExec(() => ({ ...okResult(porcelain), stdoutTruncated: true }));
+      const truncated = await new NodeGitAdapter({ exec: truncatedExec, cwd: root }).worktreeList();
+      expect(truncated).toEqual({ ok: false, reason: "git worktree list output truncated" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1207,6 +1404,132 @@ describe("NodeGitAdapter real git integration", () => {
       // The string-shape diff() delegate returns the SAME whole text (CLI parity).
       const legacy = await adapter.diff({ target: "worktree" });
       if (legacy.ok && d.ok) expect(legacy.value).toBe(d.value.text);
+    },
+    30_000,
+  );
+
+  it(
+    "worktree add/list/remove isolates the checkout and preserves a dirty tree on non-force failure",
+    async () => {
+      const dir = await realpath(await makeRepo());
+      const adapter = new NodeGitAdapter({ exec, cwd: dir });
+      await writeFile(join(dir, "seed.txt"), "main\n");
+      await adapter.stageAll();
+      await adapter.commit("seed");
+
+      const wtPath = join(dir, ".anycode", "worktrees", "feature");
+      const add = await adapter.worktreeAdd({ path: wtPath, branch: "anycode-wt/feature", baseRef: "main" });
+      expect(add).toEqual({ ok: true, value: { path: wtPath } });
+      expect(existsSync(wtPath)).toBe(true);
+
+      const list = await adapter.worktreeList();
+      expect(list.ok).toBe(true);
+      if (list.ok) {
+        expect(list.value).toHaveLength(2);
+        expect(list.value[0]?.isMain).toBe(true);
+        expect(list.value.find((item) => item.path === wtPath)?.branch).toBe("anycode-wt/feature");
+      }
+
+      await writeFile(join(wtPath, "only-in-worktree.txt"), "precious\n");
+      const mainStatus = await adapter.status();
+      if (mainStatus.ok) expect(mainStatus.value.untracked).not.toContain("only-in-worktree.txt");
+
+      const refused = await adapter.worktreeRemove({ path: wtPath });
+      expect(refused.ok).toBe(false);
+      expect(await readFile(join(wtPath, "only-in-worktree.txt"), "utf-8")).toBe("precious\n");
+
+      expect((await adapter.worktreeRemove({ path: wtPath, force: true })).ok).toBe(true);
+      expect(existsSync(wtPath)).toBe(false);
+      const after = await adapter.worktreeList();
+      if (after.ok) expect(after.value).toHaveLength(1);
+    },
+    30_000,
+  );
+
+  it(
+    "refuses non-force removal when ignored user content would otherwise be silently deleted",
+    async () => {
+      const dir = await realpath(await makeRepo());
+      const adapter = new NodeGitAdapter({ exec, cwd: dir });
+      await writeFile(join(dir, ".gitignore"), "secret.env\n");
+      await adapter.stageAll();
+      await adapter.commit("ignore rule");
+      const wtPath = join(dir, ".anycode", "worktrees", "ignored-safety");
+      expect((await adapter.worktreeAdd({ path: wtPath, branch: "anycode-wt/ignored-safety" })).ok).toBe(true);
+      await writeFile(join(wtPath, "secret.env"), "PRECIOUS\n");
+
+      expect(await new NodeGitAdapter({ exec, cwd: wtPath }).worktreeIsPristine()).toEqual({ ok: true, value: false });
+      expect((await adapter.worktreeRemove({ path: wtPath })).ok).toBe(false);
+      expect(await readFile(join(wtPath, "secret.env"), "utf8")).toBe("PRECIOUS\n");
+      expect((await adapter.worktreeRemove({ path: wtPath, force: true })).ok).toBe(true);
+    },
+    30_000,
+  );
+
+  it(
+    "refuses non-force removal when assume-unchanged or skip-worktree hides tracked edits",
+    async () => {
+      const dir = await realpath(await makeRepo());
+      const adapter = new NodeGitAdapter({ exec, cwd: dir });
+      await writeFile(join(dir, "seed.txt"), "base\n");
+      await adapter.stageAll();
+      await adapter.commit("seed");
+      for (const [index, flag] of ["--assume-unchanged", "--skip-worktree"].entries()) {
+        const name = `hidden-${index}`;
+        const wtPath = join(dir, ".anycode", "worktrees", name);
+        expect((await adapter.worktreeAdd({ path: wtPath, branch: `anycode-wt/${name}` })).ok).toBe(true);
+        runGitCli(wtPath, ["update-index", flag, "seed.txt"]);
+        await writeFile(join(wtPath, "seed.txt"), `PRECIOUS-${flag}\n`);
+
+        expect(await new NodeGitAdapter({ exec, cwd: wtPath }).worktreeIsPristine()).toEqual({ ok: true, value: false });
+        expect((await adapter.worktreeRemove({ path: wtPath })).ok).toBe(false);
+        expect(await readFile(join(wtPath, "seed.txt"), "utf8")).toContain("PRECIOUS");
+        expect((await adapter.worktreeRemove({ path: wtPath, force: true })).ok).toBe(true);
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "worktree operations neutralize inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE",
+    async () => {
+      const dir = await realpath(await makeRepo());
+      const decoy = await realpath(await makeRepo());
+      for (const repo of [dir, decoy]) {
+        await writeFile(join(repo, "seed.txt"), repo);
+        const repoAdapter = new NodeGitAdapter({ exec, cwd: repo });
+        await repoAdapter.stageAll();
+        await repoAdapter.commit("seed");
+      }
+
+      const target = join(dir, "safe-worktree");
+      const saved = {
+        GIT_DIR: process.env.GIT_DIR,
+        GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+        GIT_INDEX_FILE: process.env.GIT_INDEX_FILE,
+      };
+      let result: Awaited<ReturnType<NodeGitAdapter["worktreeAdd"]>>;
+      try {
+        process.env.GIT_DIR = join(decoy, ".git");
+        process.env.GIT_WORK_TREE = decoy;
+        process.env.GIT_INDEX_FILE = join(decoy, ".git", "index");
+        result = await new NodeGitAdapter({ exec, cwd: dir }).worktreeAdd({
+          path: target,
+          branch: "safe-feature",
+        });
+      } finally {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+
+      expect(result!.ok).toBe(true);
+      const realList = parseWorktreeListZ(runGitCli(dir, ["worktree", "list", "--porcelain", "-z"]));
+      const decoyList = parseWorktreeListZ(runGitCli(decoy, ["worktree", "list", "--porcelain", "-z"]));
+      expect(realList.some((item) => item.path === target)).toBe(true);
+      expect(decoyList).toHaveLength(1);
+      expect((await new NodeGitAdapter({ exec, cwd: dir }).worktreeRemove({ path: target })).ok).toBe(true);
     },
     30_000,
   );

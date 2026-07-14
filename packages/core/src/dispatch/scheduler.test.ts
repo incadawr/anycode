@@ -30,6 +30,7 @@ import type {
 } from "../types/permissions.js";
 import type { CorePorts } from "../ports/index.js";
 import { DEFAULT_TOOL_CONCURRENCY } from "../types/config.js";
+import type { WorkspaceTransition } from "../ports/worktrees.js";
 
 // ---------------------------------------------------------------------------
 // Mock builders
@@ -391,5 +392,74 @@ describe("runToolBatches", () => {
     const { outcomes } = await collect(runToolBatches(ctx, [call("Boom", "x")], config));
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]?.status).toBe("error");
+  });
+
+  it("stops after a successful terminal transition and pairs every later proposal as cancelled", async () => {
+    let laterRuns = 0;
+    const transition: WorkspaceTransition = {
+      kind: "enter_worktree",
+      projectRoot: "/work",
+      fromWorkspace: "/work",
+      toWorkspace: "/work/.anycode/worktrees/task-5",
+      worktree: {
+        id: "task-5",
+        path: "/work/.anycode/worktrees/task-5",
+        branch: "anycode-wt/task-5",
+        baseRef: "HEAD",
+        ownedByAnyCode: true,
+      },
+    };
+    const terminal = makeTool("EnterWorktree", {
+      concurrentSafe: false,
+      handler: async () => ({
+        ok: true,
+        output: transition,
+        control: { type: "workspace_transition", transition },
+      }),
+    });
+    terminal.metadata.terminalControl = true;
+    const later = makeTool("Later", {
+      handler: async () => {
+        laterRuns += 1;
+        return { ok: true };
+      },
+    });
+    const ctx = makeCtx({ registry: makeRegistry([terminal, later]) });
+
+    const { events, outcomes } = await collect(
+      runToolBatches(ctx, [call("EnterWorktree", "enter"), call("Later", "later")], config),
+    );
+
+    expect(laterRuns).toBe(0);
+    expect(outcomes.map(({ toolCallId, status }) => ({ toolCallId, status }))).toEqual([
+      { toolCallId: "enter", status: "success" },
+      { toolCallId: "later", status: "cancelled" },
+    ]);
+    expect(events.filter((event) => event.type === "tool_result")).toHaveLength(2);
+    expect(events.some((event) => event.type === "tool_execution_start" && event.toolCallId === "later")).toBe(false);
+  });
+
+  it("continues with later proposals when a terminal-control handler fails", async () => {
+    let laterRuns = 0;
+    const terminal = makeTool("EnterWorktree", {
+      concurrentSafe: false,
+      handler: async () => ({ ok: false, error: "collision" }),
+    });
+    terminal.metadata.terminalControl = true;
+    const later = makeTool("Later", {
+      concurrentSafe: false,
+      handler: async () => {
+        laterRuns += 1;
+        return { ok: true };
+      },
+    });
+    const ctx = makeCtx({ registry: makeRegistry([terminal, later]) });
+
+    const { outcomes } = await collect(
+      runToolBatches(ctx, [call("EnterWorktree", "enter"), call("Later", "later")], config),
+    );
+
+    expect(laterRuns).toBe(1);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["error", "success"]);
   });
 });

@@ -295,6 +295,7 @@ export type UiToHostMessage =
   | { type: "ui_ready" } // handshake; host replies host_ready + replay
   | { type: "user_message"; requestId: string; text: string; images?: ImageAttachment[] } // starts a turn
   | { type: "cancel_turn" } // abort the in-flight turn
+  | { type: "exit_worktree"; cleanup: "auto" | "keep" }
   | {
       type: "permission_response";
       requestId: string;
@@ -346,12 +347,24 @@ export type UiToHostMessage =
   | { type: "rewind_request"; requestId: string; checkpointId: string; scope: RewindScopeWire };
 
 // ── host -> renderer ──
+export interface WorktreeProjection {
+  id: string;
+  path: string;
+  branch: string;
+  baseRef: string;
+  ownedByAnyCode: boolean;
+}
+
 export type HostToUiMessage =
   // Phase-2 §3.3: `sessionId` added (host knows it at boot); renderer binds the
   // tab to its session (badge, picker annotation). Additive on the wire.
   | {
       type: "host_ready";
       workspace: string;
+      /** Stable project identity; differs from workspace while a worktree is active. */
+      projectRoot?: string;
+      /** Present only while this session is executing inside a git worktree. */
+      worktree?: WorktreeProjection;
       mode: PermissionMode;
       model: string;
       sessionId: string;
@@ -367,6 +380,7 @@ export type HostToUiMessage =
   // history is non-empty. The renderer mapping into transcript blocks is task
   // 2.1.5; task 2.1.1 adds only the type + a no-op reducer branch.
   | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
+  | { type: "worktree_notice"; message: string }
   | { type: "turn_started"; requestId: string; turnId: string }
   | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
   | { type: "agent_event"; turnId: string; event: WireAgentEvent }
@@ -543,6 +557,15 @@ export const cancelTurnSchema = z
   })
   .strict();
 
+export const exitWorktreeSchema = z
+  .object({
+    type: z.literal("exit_worktree"),
+    // The chrome action never exposes destructive removal; dirty removal stays
+    // behind the tool permission flow and its explicit consent.
+    cleanup: z.enum(["auto", "keep"]),
+  })
+  .strict();
+
 export const permissionResponseSchema = z
   .object({
     type: z.literal("permission_response"),
@@ -714,6 +737,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   uiReadySchema,
   userMessageSchema,
   cancelTurnSchema,
+  exitWorktreeSchema,
   permissionResponseSchema,
   setModeSchema,
   setReasoningEffortSchema,

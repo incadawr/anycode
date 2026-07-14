@@ -43,6 +43,7 @@ import type {
 import { ModePermissionEngine } from "../permissions/index.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import type { WorkspaceTransition } from "../ports/worktrees.js";
 
 // ---------------------------------------------------------------------------
 // Mock model port: replays scripted stream events, one step per streamText call.
@@ -248,6 +249,99 @@ describe("AgentLoop.runTurn — tool call then completion", () => {
       expect(item.id).toBeTruthy();
       expect(item.tokenEstimate).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe("AgentLoop — workspace terminal control", () => {
+  const transition: WorkspaceTransition = {
+    kind: "enter_worktree",
+    projectRoot: "/work",
+    fromWorkspace: "/work",
+    toWorkspace: "/work/.anycode/worktrees/task-5",
+    worktree: {
+      id: "task-5",
+      path: "/work/.anycode/worktrees/task-5",
+      branch: "anycode-wt/task-5",
+      baseRef: "HEAD",
+      ownedByAnyCode: true,
+    },
+  };
+
+  it("pairs later proposals, emits the transition, and ends before another model step", async () => {
+    let laterRuns = 0;
+    const modelPort = new MockModelPort([
+      [
+        { type: "tool_call", toolCall: { id: "enter", name: "EnterWorktree", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "later", name: "Later", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const terminal = makeTool({
+      metadata: { ...baseMetadata, name: "EnterWorktree", terminalControl: true },
+      handler: async () => ({
+        ok: true,
+        control: { type: "workspace_transition", transition },
+      }),
+    });
+    const later = makeTool({
+      metadata: { ...baseMetadata, name: "Later" },
+      handler: async () => {
+        laterRuns += 1;
+        return { ok: true };
+      },
+    });
+    const loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ EnterWorktree: terminal, Later: later }),
+    });
+
+    const events = await collect(loop.runTurn("isolate this task"));
+
+    expect(modelPort.requests).toHaveLength(1);
+    expect(laterRuns).toBe(0);
+    expect(events.find((event) => event.type === "workspace_transition")).toEqual({
+      type: "workspace_transition",
+      transition,
+    });
+    expect(events.at(-1)).toEqual({
+      type: "loop_end",
+      reason: "workspace_transition",
+      turns: 1,
+    });
+    expect(
+      events
+        .filter((event) => event.type === "tool_result")
+        .map((event) => event.outcome.status),
+    ).toEqual(["success", "cancelled"]);
+    expect(loop.history.unansweredToolCallIds()).toEqual([]);
+  });
+
+  it("continueTurn starts from persisted history without hooks or a fake user message", async () => {
+    const modelPort = new MockModelPort([
+      [
+        { type: "text_delta", id: "continued", text: "resumed" },
+        { type: "finish", finishReason: "stop", usage: {} },
+      ],
+    ]);
+    const userHook = vi.fn(async () => ({ additionalContext: "must not run" }));
+    const hooks = {
+      register: () => {},
+      runPreToolUse: async () => ({}),
+      runUserPromptSubmit: userHook,
+      runObservers: async () => {},
+    } as unknown as HookRunner;
+    const loop = makeLoop({ modelPort, hooks });
+
+    const events = await collect(loop.continueTurn());
+
+    expect(userHook).not.toHaveBeenCalled();
+    expect(modelPort.requests).toHaveLength(1);
+    expect(modelPort.requests[0]?.messages).toEqual([]);
+    expect(loop.history.toMessages()).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "resumed" }] },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
   });
 });
 

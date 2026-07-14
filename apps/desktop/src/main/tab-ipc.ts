@@ -14,6 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { ipcMain } from "electron";
 import { z } from "zod";
 import type { PersistencePort, SessionMeta } from "@anycode/core";
@@ -48,6 +49,8 @@ export interface TabIpcDeps {
   /** Only the picker/resume reads main uses (§2.3); no new port methods needed. */
   persistence: Pick<PersistencePort, "getSession" | "listSessions">;
   dialog: DialogLike;
+  /** Production gate proves the path is still a registered worktree on the persisted branch. */
+  validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
 }
 
 /** exported for tests (tab-ipc.test.ts): the fail-closed request schema. */
@@ -71,6 +74,8 @@ function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSummary {
   return {
     id: meta.id,
     workspace: meta.workspace,
+    ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
+    ...(meta.worktree !== undefined ? { worktree: meta.worktree } : {}),
     model: meta.model,
     mode: meta.mode,
     createdAt: meta.createdAt,
@@ -142,6 +147,14 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   if (meta === null) {
     return { ok: false, reason: "session_not_found" };
   }
+  if (meta.worktree !== undefined) {
+    if (meta.workspace !== meta.worktree.path || !existsSync(meta.worktree.path)) {
+      return { ok: false, reason: "worktree_unavailable", worktreePath: meta.worktree.path };
+    }
+    if (deps.validateWorktreeResume !== undefined && !(await deps.validateWorktreeResume(meta))) {
+      return { ok: false, reason: "worktree_unavailable", worktreePath: meta.worktree.path };
+    }
+  }
   // A resumed engine is persisted host metadata, never renderer input. Old
   // rows have no identity and remain the historical core engine.
   const engine = meta.engineId ?? "core";
@@ -154,6 +167,8 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   }
   const result = deps.manager.createTab({
     workspace: meta.workspace,
+    ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
+    ...(meta.worktree !== undefined ? { worktree: meta.worktree } : {}),
     sessionId: req.sessionId,
     resume: true,
     engine,

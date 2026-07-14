@@ -22,8 +22,9 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { realpath as fsRealpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, MessageChannelMain, app, dialog, nativeImage, safeStorage, shell, utilityProcess } from "electron";
 // electron-updater is CJS and exposes `autoUpdater` via a dynamic getter that
@@ -33,6 +34,8 @@ import { BrowserWindow, MessageChannelMain, app, dialog, nativeImage, safeStorag
 import electronUpdater from "electron-updater";
 const { autoUpdater } = electronUpdater;
 import { SqlitePersistenceAdapter } from "@anycode/core/persistence";
+import { NodeExecutionAdapter } from "@anycode/core/node-execution";
+import { NodeGitAdapter } from "@anycode/core/node-git";
 import {
   catalogProviderIds,
   findCatalogEntry,
@@ -636,7 +639,34 @@ void app.whenReady().then(async () => {
     },
   });
 
-  registerTabIpc({ manager, persistence, dialog });
+  registerTabIpc({
+    manager,
+    persistence,
+    dialog,
+    validateWorktreeResume: async (meta) => {
+      if (meta.worktree === undefined || meta.projectRoot === undefined) return false;
+      try {
+        const root = await fsRealpath(meta.projectRoot);
+        const target = await fsRealpath(meta.worktree.path);
+        const rel = relative(root, target);
+        if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+        const git = new NodeGitAdapter({ exec: new NodeExecutionAdapter(), cwd: root });
+        const listed = await git.worktreeList?.();
+        if (!listed?.ok) return false;
+        for (const item of listed.value) {
+          if (item.isMain || item.branch !== meta.worktree.branch) continue;
+          try {
+            if ((await fsRealpath(item.path)) === target) return true;
+          } catch {
+            // Ignore stale registrations; another entry may still match.
+          }
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    },
+  });
 
   // Window control plane (design/ui-track custom-titlebar §4): the four caption
   // handlers the renderer's custom titlebar drives. getWindow mirrors the
