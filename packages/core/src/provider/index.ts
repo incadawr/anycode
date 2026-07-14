@@ -15,9 +15,13 @@ export {
 export { normalizeExplicitBaseUrl } from "./endpoint.js";
 export type { AnthropicEndpointConfig, EndpointConfig } from "./endpoint.js";
 export { createLanguageModel } from "./language-model.js";
+export {
+  createOpenAICompatibleLanguageModel,
+  OPENAI_COMPATIBLE_PROVIDER_NAME,
+} from "./openai-compatible.js";
 export { translateStreamPart } from "./stream-translator.js";
 export { AiSdkModelPort } from "./model-port.js";
-export { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
+export { OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE, toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 export { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs } from "./retry.js";
 export type { RetryPolicy } from "./retry.js";
 export {

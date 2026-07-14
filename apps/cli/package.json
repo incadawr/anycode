@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.7",
+    "@ai-sdk/openai-compatible": "^3.0.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/ripgrep": "1.18.0",
     "ai": "^7.0.14",
