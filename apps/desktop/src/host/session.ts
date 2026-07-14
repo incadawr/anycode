@@ -93,6 +93,31 @@ const ZERO_CONTEXT_BREAKDOWN = {
   totalEstimatedTokens: 0,
 };
 
+function worktreeExitSystemContext(projectRoot: string): string {
+  return `Worktree exited. The session is now back in the main project at ${projectRoot}.`;
+}
+
+/** A provider-originated non-error event proves the augmented request reached the model stream. */
+function isSuccessfulModelDeliveryEvent(event: AgentEvent): boolean {
+  switch (event.type) {
+    case "start":
+    case "text_start":
+    case "text_delta":
+    case "text_end":
+    case "reasoning_start":
+    case "reasoning_delta":
+    case "reasoning_end":
+    case "tool_input_start":
+    case "tool_input_delta":
+    case "tool_input_end":
+    case "tool_call":
+    case "finish":
+      return true;
+    default:
+      return false;
+  }
+}
+
 /**
  * The engine's OWN model/permission controls (TASK.39, cut §3.1/§2(d)), exposed
  * to Session as a narrow structural seam — exactly like `git`/`checkpoints`/
@@ -287,6 +312,10 @@ export interface SessionOptions {
   /** Durable boot token set by a terminal transition. */
   continuationPending?: boolean;
   continuationMode?: "model" | "none";
+  /** Durable one-shot created only by the chrome's direct Exit Worktree action. */
+  worktreeExitNoticePending?: boolean;
+  /** Clears that durable marker after the augmented input reaches a core model stream. */
+  consumeWorktreeExitNotice?: () => Promise<void>;
   /** Called once after host_ready, before the resumed model segment starts. */
   onContinuationReady?: () => Promise<void>;
   /** Clears the durable continuation claim only after its segment completes. */
@@ -444,6 +473,8 @@ export class Session {
   private readonly worktree: import("../shared/protocol.js").WorktreeProjection | undefined;
   private continuationPending: boolean;
   private readonly continuationMode: "model" | "none";
+  private worktreeExitNoticePending: boolean;
+  private readonly consumeWorktreeExitNotice: (() => Promise<void>) | undefined;
   private readonly onContinuationReady: (() => Promise<void>) | undefined;
   private readonly onContinuationComplete: (() => Promise<void>) | undefined;
   private readonly onWorkspaceTransition: SessionOptions["onWorkspaceTransition"];
@@ -523,6 +554,8 @@ export class Session {
     this.worktree = options.worktree;
     this.continuationPending = options.continuationPending ?? false;
     this.continuationMode = options.continuationMode ?? "model";
+    this.worktreeExitNoticePending = options.worktreeExitNoticePending ?? false;
+    this.consumeWorktreeExitNotice = options.consumeWorktreeExitNotice;
     this.onContinuationReady = options.onContinuationReady;
     this.onContinuationComplete = options.onContinuationComplete;
     this.onWorkspaceTransition = options.onWorkspaceTransition;
@@ -695,31 +728,50 @@ export class Session {
         this.onCancel();
         break;
       case "exit_worktree":
-        if (!this.busy && !this.relocating && this.worktreeControl !== undefined) {
-          this.busy = true;
-          const controller = new AbortController();
-          this.abort = controller;
-          this.currentTurn = this.worktreeControl
-            .exit({ cleanup: message.cleanup, continueAfterRehost: false }, { signal: controller.signal })
-            .then(async (result) => {
-              if (!result.ok) throw new Error(result.error);
-              if (result.message !== undefined) {
-                this.outbound.sendDirect({ type: "worktree_notice", message: result.message });
-              }
-              this.relocating = true;
-              if (this.onWorkspaceTransition === undefined) throw new Error("workspace transition handoff is unavailable");
-              await this.onWorkspaceTransition(result.transition);
-            })
-            .catch((error) => {
-              this.relocating = false;
-              this.outbound.emit({ type: "fatal", message: `exit worktree failed: ${describeError(error)}` });
-            })
-            .finally(() => {
-              this.busy = false;
-              this.abort = null;
-              this.currentTurn = null;
-            });
+        if (this.relocating) {
+          this.outbound.sendDirect({
+            type: "worktree_notice",
+            message: "A workspace transition is already in progress.",
+          });
+          break;
         }
+        if (this.busy) {
+          this.outbound.sendDirect({
+            type: "worktree_notice",
+            message: "Cannot exit the worktree while the session is busy.",
+          });
+          break;
+        }
+        if (this.worktreeControl === undefined) {
+          this.outbound.sendDirect({
+            type: "worktree_notice",
+            message: "Worktree exit is unavailable for this session.",
+          });
+          break;
+        }
+        this.busy = true;
+        const controller = new AbortController();
+        this.abort = controller;
+        this.currentTurn = this.worktreeControl
+          .exit({ cleanup: message.cleanup, continueAfterRehost: false }, { signal: controller.signal })
+          .then(async (result) => {
+            if (!result.ok) throw new Error(result.error);
+            if (result.message !== undefined) {
+              this.outbound.sendDirect({ type: "worktree_notice", message: result.message });
+            }
+            this.relocating = true;
+            if (this.onWorkspaceTransition === undefined) throw new Error("workspace transition handoff is unavailable");
+            await this.onWorkspaceTransition(result.transition);
+          })
+          .catch((error) => {
+            this.relocating = false;
+            this.outbound.emit({ type: "fatal", message: `exit worktree failed: ${describeError(error)}` });
+          })
+          .finally(() => {
+            this.busy = false;
+            this.abort = null;
+            this.currentTurn = null;
+          });
         break;
       case "permission_response":
         if (!this.engine.capabilities.supportsInteractiveApprovals) {
@@ -1091,6 +1143,7 @@ export class Session {
     // busy gate already returned) — a rejected message drains nothing. A turn
     // with no notices keeps `turnInput === text`, byte-identical to pre-6.DP-2.
     let turnInput = text;
+    const carriesWorktreeExitNotice = this.worktreeExitNoticePending;
     if (this.engine.capabilities.supportsTasks && this.tasks) {
       const notices = this.tasks.drainNotices();
       if (notices.length > 0) {
@@ -1098,7 +1151,7 @@ export class Session {
       }
     }
     this.busy = true;
-    this.currentTurn = this.runTurn(requestId, turnInput, attachments).finally(async () => {
+    this.currentTurn = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice).finally(async () => {
       this.busy = false;
       this.abort = null;
       this.turnId = null;
@@ -1134,7 +1187,12 @@ export class Session {
     });
   }
 
-  private async runTurn(requestId: string, text: string | undefined, attachments?: ImageAttachment[]): Promise<void> {
+  private async runTurn(
+    requestId: string,
+    text: string | undefined,
+    attachments?: ImageAttachment[],
+    carriesWorktreeExitNotice = false,
+  ): Promise<void> {
     const turnId = randomUUID();
     const controller = new AbortController();
     this.turnId = turnId;
@@ -1145,12 +1203,31 @@ export class Session {
       const options = {
         signal: controller.signal,
         ...(attachments?.length ? { attachments } : {}),
+        ...(carriesWorktreeExitNotice
+          ? { systemContext: worktreeExitSystemContext(this.projectRoot) }
+          : {}),
       };
       const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
         throw new Error("active engine cannot continue a relocated turn");
       }
+      let noticeConsumeAttempted = false;
       for await (const event of stream) {
+        if (
+          carriesWorktreeExitNotice &&
+          !noticeConsumeAttempted &&
+          isSuccessfulModelDeliveryEvent(event)
+        ) {
+          noticeConsumeAttempted = true;
+          try {
+            await this.consumeWorktreeExitNotice?.();
+            this.worktreeExitNoticePending = false;
+          } catch (error) {
+            // Keep the in-memory + durable marker for a later real turn. A
+            // persistence outage must not discard the notice or kill this turn.
+            console.error(`[host] worktree exit notice consume failed: ${describeError(error)}`);
+          }
+        }
         if (event.type === "workspace_transition") {
           this.relocating = true;
           try {

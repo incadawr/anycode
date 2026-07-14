@@ -1,6 +1,7 @@
 import { access, realpath } from "node:fs/promises";
 import path from "node:path";
 import type {
+  GitOpResult,
   GitPort,
   PersistencePort,
   SessionMeta,
@@ -31,14 +32,25 @@ export const nodeWorktreeFileSystem: WorktreeFileSystem = {
   realpath,
 };
 
-export type WorktreeGitPort = Pick<GitPort, "status" | "worktreeAdd" | "worktreeList" | "worktreeRemove" | "worktreeIsPristine">;
+export type WorktreeGitPort = Pick<
+  GitPort,
+  | "status"
+  | "listBranches"
+  | "worktreeAdd"
+  | "worktreeList"
+  | "worktreeRemove"
+  | "worktreePrune"
+  | "worktreeIsPristine"
+  | "deleteBranch"
+>;
 type WorktreeListResult = Awaited<ReturnType<NonNullable<GitPort["worktreeList"]>>>;
 type GitWorktreeInfo = Extract<WorktreeListResult, { ok: true }>["value"][number];
 
 export type WorktreeCleanupIntent =
   | { kind: "none"; reason: string }
-  | { kind: "remove_clean"; target: string; ownedByAnyCode: true }
-  | { kind: "remove_force"; target: string; ownedByAnyCode: boolean };
+  | { kind: "remove_clean"; target: string; ownedByAnyCode: true; branch?: string }
+  | { kind: "remove_force"; target: string; ownedByAnyCode: true; branch?: string }
+  | { kind: "remove_force"; target: string; ownedByAnyCode: false };
 
 export interface PreparedWorktreeTransition {
   transition: WorkspaceTransition;
@@ -50,10 +62,68 @@ export type WorktreeLifecycleResult<T> = { ok: true; value: T } | { ok: false; r
 export interface WorktreeLifecycleOptions {
   session: SessionMeta;
   persistence: Pick<PersistencePort, "touchSession" | "listSessions" | "claimWorktree">;
-  gitForWorkspace(workspace: string): WorktreeGitPort;
+  gitForWorkspace(workspace: string, signal?: AbortSignal): WorktreeGitPort;
   /** Adds/verifies the repository-local common-git exclude entry. */
-  ensureNamespaceIgnored(projectRoot: string, pattern: string): Promise<WorktreeLifecycleResult<null>>;
+  ensureNamespaceIgnored(
+    projectRoot: string,
+    pattern: string,
+    signal?: AbortSignal,
+  ): Promise<WorktreeLifecycleResult<null>>;
   fs?: WorktreeFileSystem;
+}
+
+/**
+ * Removes exactly one registered AnyCode-owned checkout and its exact merged
+ * branch. Every read is fail-closed; an absent checkout is accepted only after
+ * a successful machine-readable listing, and a refused `branch -d` is retained
+ * for the durable janitor.
+ */
+export async function cleanupOwnedWorktreeResource(
+  git: WorktreeGitPort,
+  spec: { path: string; branch: string; force?: boolean },
+): Promise<GitOpResult<null>> {
+  if (!spec.branch.startsWith(BRANCH_PREFIX)) {
+    return { ok: false, reason: `refusing non-AnyCode cleanup branch: ${spec.branch}` };
+  }
+  if (!git.worktreeList || !git.worktreeRemove) {
+    return { ok: false, reason: "Git adapter cannot prove and remove the exact worktree." };
+  }
+  const listed = await git.worktreeList();
+  if (!listed.ok) return listed;
+  const registered = listed.value.find((item) => path.resolve(item.path) === path.resolve(spec.path));
+  if (registered !== undefined) {
+    if (registered.isMain || registered.branch !== spec.branch) {
+      return { ok: false, reason: "registered worktree does not match the exact cleanup branch" };
+    }
+    const removed = await git.worktreeRemove({
+      path: spec.path,
+      ...(spec.force === true ? { force: true } : {}),
+    });
+    if (!removed.ok) return removed;
+  }
+  return cleanupExactOwnedBranch(git, spec.branch);
+}
+
+export async function cleanupExactOwnedBranch(
+  git: WorktreeGitPort,
+  branch: string,
+): Promise<GitOpResult<null>> {
+  if (!branch.startsWith(BRANCH_PREFIX)) {
+    return { ok: false, reason: `refusing non-AnyCode cleanup branch: ${branch}` };
+  }
+  if (!git.deleteBranch) return { ok: false, reason: "Git adapter cannot safely delete the exact branch." };
+  const listed = await git.listBranches();
+  if (!listed.ok) return listed;
+  if (!listed.value.some((candidate) => candidate.name === branch)) return { ok: true, value: null };
+  const deleted = await git.deleteBranch(branch);
+  if (deleted.ok) return deleted;
+  // A concurrent cleanup may have won after our first list. Only a second
+  // machine-readable absence proof may convert the refusal into success.
+  const after = await git.listBranches();
+  if (after.ok && !after.value.some((candidate) => candidate.name === branch)) {
+    return { ok: true, value: null };
+  }
+  return deleted;
 }
 
 /**
@@ -64,7 +134,7 @@ export interface WorktreeLifecycleOptions {
 export class WorktreeLifecycleService {
   private readonly session: SessionMeta;
   private readonly persistence: Pick<PersistencePort, "touchSession" | "listSessions" | "claimWorktree">;
-  private readonly gitForWorkspace: (workspace: string) => WorktreeGitPort;
+  private readonly gitForWorkspace: (workspace: string, signal?: AbortSignal) => WorktreeGitPort;
   private readonly ensureNamespaceIgnored: WorktreeLifecycleOptions["ensureNamespaceIgnored"];
   private readonly fs: WorktreeFileSystem;
 
@@ -102,7 +172,8 @@ export class WorktreeLifecycleService {
     name?: string;
     baseRef?: string;
     existing?: string;
-  }, toolCallId?: string): Promise<WorktreeLifecycleResult<PreparedWorktreeTransition>> {
+  }, toolCallId?: string, signal?: AbortSignal): Promise<WorktreeLifecycleResult<PreparedWorktreeTransition>> {
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
     const projectRoot = this.session.projectRoot ?? this.session.workspace;
     if (this.session.worktree !== undefined || this.session.workspace !== projectRoot) {
       return fail("Cannot enter a worktree from another worktree; exit to the project root first.");
@@ -115,8 +186,9 @@ export class WorktreeLifecycleService {
 
     const roots = await this.resolveProjectRoot(projectRoot);
     if (!roots.ok) return roots;
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
     if (request.existing !== undefined) {
-      return this.enterExisting(request.existing, roots.value, toolCallId);
+      return this.enterExisting(request.existing, roots.value, toolCallId, signal);
     }
 
     const name = request.name ?? defaultWorktreeName(this.session.id);
@@ -126,10 +198,11 @@ export class WorktreeLifecycleService {
     const refError = validateBaseRef(baseRef);
     if (refError) return fail(refError);
 
-    const ignored = await this.ensureNamespaceIgnored(roots.value.logical, WORKTREE_EXCLUDE_PATTERN);
+    const ignored = await this.ensureNamespaceIgnored(roots.value.logical, WORKTREE_EXCLUDE_PATTERN, signal);
     if (!ignored.ok) {
       return fail(`Cannot create a clean worktree namespace: ${ignored.reason}`);
     }
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
     const target = path.join(roots.value.logical, WORKTREE_NAMESPACE, name);
     if (!isWithin(roots.value.logical, target)) {
       return fail("Generated worktree path escaped the project root.");
@@ -137,25 +210,45 @@ export class WorktreeLifecycleService {
     if (await this.fs.exists(target)) {
       return fail(`Worktree destination already exists: ${target}`);
     }
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
 
-    const git = this.gitForWorkspace(roots.value.logical);
+    const git = this.gitForWorkspace(roots.value.logical, signal);
     if (!git.worktreeAdd || !git.worktreeRemove) {
       return fail("This Git adapter does not support safe worktree creation and rollback.");
     }
     const branch = `${BRANCH_PREFIX}${name}`;
-    const intent = await this.persistCreationIntent(roots.value.logical, target);
+    const intent = await this.persistCreationIntent(roots.value.logical, target, branch);
     if (!intent.ok) return intent;
+    if (signal?.aborted) {
+      await this.clearCreationIntent();
+      return fail("Worktree entry was cancelled.");
+    }
     const created = await git.worktreeAdd({ path: target, branch, baseRef });
+    const cleanupGit = this.gitForWorkspace(roots.value.logical);
+    if (signal?.aborted) {
+      const reconciled = created.ok
+        ? await this.rollbackCreatedWorktree(cleanupGit, target, branch)
+        : await this.reconcileFailedCreation(cleanupGit, target, branch);
+      return fail(
+        `Worktree entry was cancelled.${reconciled ? "" : ` Cleanup is still pending for: ${target}`}`,
+      );
+    }
     if (!created.ok) {
-      const reconciled = await this.reconcileFailedCreation(git, target);
+      const reconciled = await this.reconcileFailedCreation(cleanupGit, target, branch);
       return fail(
         `Could not create worktree: ${created.reason}${reconciled ? "" : ` Cleanup is still pending for: ${target}`}`,
       );
     }
 
     const createdReal = await this.safeRealpath(target);
+    if (signal?.aborted) {
+      const reconciled = await this.rollbackCreatedWorktree(cleanupGit, target, branch);
+      return fail(
+        `Worktree entry was cancelled.${reconciled ? "" : ` Cleanup is still pending for: ${target}`}`,
+      );
+    }
     if (!createdReal.ok || !isWithin(roots.value.real, createdReal.value)) {
-      const rollback = await git.worktreeRemove({ path: target });
+      const rollback = await cleanupOwnedWorktreeResource(cleanupGit, { path: target, branch });
       if (rollback.ok) await this.clearCreationIntent();
       const detail = rollback.ok ? "The unsafe worktree was rolled back." : `Rollback failed: ${rollback.reason}`;
       return fail(`Created worktree failed confinement validation. ${detail}`);
@@ -176,9 +269,15 @@ export class WorktreeLifecycleService {
       worktree,
       ...(toolCallId !== undefined ? { toolCallId } : {}),
     };
+    if (signal?.aborted) {
+      const reconciled = await this.rollbackCreatedWorktree(cleanupGit, createdReal.value, branch);
+      return fail(
+        `Worktree entry was cancelled.${reconciled ? "" : ` Cleanup is still pending for: ${createdReal.value}`}`,
+      );
+    }
     const persisted = await this.persistEnter(roots.value.logical, worktree, transition);
     if (!persisted.ok) {
-      const rollback = await git.worktreeRemove({ path: createdReal.value });
+      const rollback = await cleanupOwnedWorktreeResource(cleanupGit, { path: createdReal.value, branch });
       if (rollback.ok) await this.clearCreationIntent();
       const detail = rollback.ok ? "The new worktree was rolled back." : `Rollback failed; retained path: ${createdReal.value}. ${rollback.reason}`;
       return fail(`${persisted.reason} ${detail}`);
@@ -193,7 +292,8 @@ export class WorktreeLifecycleService {
   async exit(request: {
     cleanup: WorktreeCleanup;
     continueAfterRehost?: boolean;
-  }, toolCallId?: string): Promise<WorktreeLifecycleResult<PreparedWorktreeTransition>> {
+  }, toolCallId?: string, signal?: AbortSignal): Promise<WorktreeLifecycleResult<PreparedWorktreeTransition>> {
+    if (signal?.aborted) return fail("Worktree exit was cancelled.");
     const worktree = this.session.worktree;
     const projectRoot = this.session.projectRoot;
     if (!worktree || !projectRoot) return fail("This session is not in a worktree.");
@@ -203,21 +303,30 @@ export class WorktreeLifecycleService {
 
     const roots = await this.resolveProjectRoot(projectRoot);
     if (!roots.ok) return roots;
+    if (signal?.aborted) return fail("Worktree exit was cancelled.");
     const targetReal = await this.safeRealpath(worktree.path);
     if (!targetReal.ok || !isWithin(roots.value.real, targetReal.value)) {
       return fail(`Active worktree is missing or escapes the project root: ${worktree.path}`);
     }
-    const registered = await this.findRegistered(roots.value.logical, targetReal.value);
+    if (signal?.aborted) return fail("Worktree exit was cancelled.");
+    const registered = await this.findRegistered(roots.value.logical, targetReal.value, signal);
     if (!registered.ok) return registered;
+    if (registered.value.branch !== worktree.branch) {
+      return fail(`Active worktree branch changed (expected ${worktree.branch}); refusing relocation.`);
+    }
+    if (signal?.aborted) return fail("Worktree exit was cancelled.");
 
-    const pristine = await this.pristineAt(targetReal.value);
+    const pristine = await this.pristineAt(targetReal.value, signal);
     if (!pristine.ok) return pristine;
+    if (signal?.aborted) return fail("Worktree exit was cancelled.");
     const dirty = !pristine.value;
     let cleanup: WorktreeCleanupIntent;
     if (request.cleanup === "remove") {
-      cleanup = { kind: "remove_force", target: targetReal.value, ownedByAnyCode: worktree.ownedByAnyCode };
+      cleanup = worktree.ownedByAnyCode
+        ? { kind: "remove_force", target: targetReal.value, ownedByAnyCode: true, branch: worktree.branch }
+        : { kind: "remove_force", target: targetReal.value, ownedByAnyCode: false };
     } else if (request.cleanup === "auto" && worktree.ownedByAnyCode && !dirty) {
-      cleanup = { kind: "remove_clean", target: targetReal.value, ownedByAnyCode: true };
+      cleanup = { kind: "remove_clean", target: targetReal.value, ownedByAnyCode: true, branch: worktree.branch };
     } else {
       const reason = request.cleanup === "keep"
         ? "The worktree was explicitly retained."
@@ -236,6 +345,7 @@ export class WorktreeLifecycleService {
       cleanup: request.cleanup,
       ...(toolCallId !== undefined ? { toolCallId } : {}),
     };
+    if (signal?.aborted) return fail("Worktree exit was cancelled.");
     const persisted = await this.persistExit(projectRoot, cleanup, request.continueAfterRehost !== false, transition);
     if (!persisted.ok) return persisted;
     return ok({
@@ -272,8 +382,27 @@ export class WorktreeLifecycleService {
       // acknowledge it as already removed rather than wedging every respawn.
       const git = this.gitForWorkspace(actual.value.logical);
       const listed = await git.worktreeList?.();
-      const stillRegistered = listed?.ok === true && listed.value.some((item) => path.resolve(item.path) === path.resolve(intent.target));
-      if (!stillRegistered) return this.finishContinuation(true, `Worktree already removed: ${intent.target}`);
+      if (!listed?.ok) return fail(`Could not prove the missing cleanup target is unregistered: ${intent.target}`);
+      const stillRegistered = listed.value.some((item) => path.resolve(item.path) === path.resolve(intent.target));
+      if (!stillRegistered) {
+        if (intent.ownedByAnyCode) {
+          const exactBranch = intent.branch;
+          if (exactBranch === undefined) {
+            return ok({
+              removed: true,
+              message: "Worktree is absent; legacy cleanup ledger retained because its exact branch is unknown.",
+            });
+          }
+          const branch = await cleanupExactOwnedBranch(git, exactBranch);
+          if (!branch.ok) {
+            return ok({
+              removed: true,
+              message: `Worktree was removed; branch ${exactBranch} was retained for cleanup: ${branch.reason}`,
+            });
+          }
+        }
+        return this.finishContinuation(true, `Worktree already removed: ${intent.target}`);
+      }
       return fail(`Cleanup target is missing but still registered: ${intent.target}`);
     }
     if (!isWithin(actual.value.real, target.value)) {
@@ -281,6 +410,21 @@ export class WorktreeLifecycleService {
     }
     const registered = await this.findRegistered(actual.value.logical, target.value);
     if (!registered.ok) return registered;
+
+    let exactBranch = intent.ownedByAnyCode ? intent.branch : undefined;
+    if (intent.ownedByAnyCode) {
+      if (exactBranch !== undefined && registered.value.branch !== exactBranch) {
+        return fail(`Registered cleanup branch changed (expected ${exactBranch}); retaining the ledger.`);
+      }
+      if (exactBranch === undefined && registered.value.branch?.startsWith(BRANCH_PREFIX)) {
+        // v8-and-older ledgers were path-only. The machine-readable worktree
+        // record is the only safe source from which to recover their exact ref.
+        exactBranch = registered.value.branch;
+      }
+      if (exactBranch === undefined) {
+        return fail("Legacy cleanup target has no exact AnyCode-owned branch; retaining the worktree.");
+      }
+    }
 
     const git = this.gitForWorkspace(actual.value.logical);
     if (!git.worktreeRemove) return fail("This Git adapter does not support worktree removal.");
@@ -306,6 +450,15 @@ export class WorktreeLifecycleService {
         `Worktree cleanup failed and was retained: ${target.value}. ${removed.reason}`,
       );
     }
+    if (exactBranch !== undefined) {
+      const branch = await cleanupExactOwnedBranch(git, exactBranch);
+      if (!branch.ok) {
+        return ok({
+          removed: true,
+          message: `Removed worktree; branch ${exactBranch} was retained for cleanup: ${branch.reason}`,
+        });
+      }
+    }
     return this.finishContinuation(true, `Removed worktree: ${target.value}`);
   }
 
@@ -313,16 +466,21 @@ export class WorktreeLifecycleService {
     existing: string,
     roots: { logical: string; real: string },
     toolCallId?: string,
+    signal?: AbortSignal,
   ): Promise<WorktreeLifecycleResult<PreparedWorktreeTransition>> {
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
     if (!path.isAbsolute(existing)) return fail("existing must be an absolute worktree path.");
     const existingReal = await this.safeRealpath(existing);
     if (!existingReal.ok || !isWithin(roots.real, existingReal.value)) {
       return fail(`Existing worktree is missing or escapes the project root: ${existing}`);
     }
-    const registered = await this.findRegistered(roots.logical, existingReal.value);
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
+    const registered = await this.findRegistered(roots.logical, existingReal.value, signal);
     if (!registered.ok) return registered;
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
     const ownership = await this.ensureNotClaimed(existingReal.value);
     if (!ownership.ok) return ownership;
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
     if (!registered.value.branch) return fail("Detached or bare worktrees cannot be entered.");
     const id = path.basename(existingReal.value);
     const ownedNamespace = path.join(roots.real, WORKTREE_NAMESPACE);
@@ -342,6 +500,7 @@ export class WorktreeLifecycleService {
       worktree,
       ...(toolCallId !== undefined ? { toolCallId } : {}),
     };
+    if (signal?.aborted) return fail("Worktree entry was cancelled.");
     const persisted = await this.persistEnter(roots.logical, worktree, transition);
     if (!persisted.ok) return persisted;
     return ok({
@@ -366,8 +525,12 @@ export class WorktreeLifecycleService {
     }
   }
 
-  private async findRegistered(root: string, targetReal: string): Promise<WorktreeLifecycleResult<GitWorktreeInfo>> {
-    const git = this.gitForWorkspace(root);
+  private async findRegistered(
+    root: string,
+    targetReal: string,
+    signal?: AbortSignal,
+  ): Promise<WorktreeLifecycleResult<GitWorktreeInfo>> {
+    const git = this.gitForWorkspace(root, signal);
     if (!git.worktreeList) return fail("This Git adapter cannot validate registered worktrees.");
     const listed = await git.worktreeList();
     if (!listed.ok) return fail(`Could not validate registered worktrees: ${listed.reason}`);
@@ -383,7 +546,11 @@ export class WorktreeLifecycleService {
       const sessions = await this.persistence.listSessions();
       for (const candidate of sessions) {
         if (candidate.id === this.session.id) continue;
-        for (const candidatePath of [candidate.worktree?.path, candidate.worktreeCleanup?.path]) {
+        for (const candidatePath of [
+          candidate.worktree?.path,
+          candidate.worktreeCleanup?.path,
+          candidate.worktreeTransition?.worktree.path,
+        ]) {
           if (candidatePath === undefined) continue;
           const claimed = await this.safeRealpath(candidatePath);
           if ((claimed.ok && claimed.value === targetReal) || path.resolve(candidatePath) === path.resolve(targetReal)) {
@@ -402,7 +569,11 @@ export class WorktreeLifecycleService {
       const sessions = await this.persistence.listSessions();
       for (const candidate of sessions) {
         if (candidate.id === this.session.id) continue;
-        for (const candidatePath of [candidate.worktree?.path, candidate.worktreeCleanup?.path]) {
+        for (const candidatePath of [
+          candidate.worktree?.path,
+          candidate.worktreeCleanup?.path,
+          candidate.worktreeTransition?.worktree.path,
+        ]) {
           if (candidatePath === undefined) continue;
           const claimed = await this.safeRealpath(candidatePath);
           if ((claimed.ok && claimed.value === targetReal) || path.resolve(candidatePath) === path.resolve(targetReal)) {
@@ -416,7 +587,7 @@ export class WorktreeLifecycleService {
     }
   }
 
-  private async reconcileFailedCreation(git: WorktreeGitPort, target: string): Promise<boolean> {
+  private async reconcileFailedCreation(git: WorktreeGitPort, target: string, branch: string): Promise<boolean> {
     let registered = false;
     const listed = await git.worktreeList?.();
     if (listed?.ok) {
@@ -424,10 +595,12 @@ export class WorktreeLifecycleService {
     }
     const exists = await this.fs.exists(target);
     if (!registered && !exists && listed?.ok) {
-      await this.clearCreationIntent();
-      return true;
+      const branchCleanup = await cleanupExactOwnedBranch(git, branch);
+      if (branchCleanup.ok) await this.clearCreationIntent();
+      return branchCleanup.ok;
     }
-    const removed = await git.worktreeRemove?.({ path: target });
+    if (!registered && exists && listed?.ok) return false;
+    const removed = await cleanupOwnedWorktreeResource(git, { path: target, branch });
     if (removed?.ok) {
       await this.clearCreationIntent();
       return true;
@@ -437,8 +610,15 @@ export class WorktreeLifecycleService {
     return false;
   }
 
-  private async pristineAt(workspace: string): Promise<WorktreeLifecycleResult<boolean>> {
-    const git = this.gitForWorkspace(workspace);
+  private async rollbackCreatedWorktree(git: WorktreeGitPort, target: string, branch: string): Promise<boolean> {
+    const removed = await cleanupOwnedWorktreeResource(git, { path: target, branch });
+    if (!removed?.ok) return false;
+    await this.clearCreationIntent();
+    return true;
+  }
+
+  private async pristineAt(workspace: string, signal?: AbortSignal): Promise<WorktreeLifecycleResult<boolean>> {
+    const git = this.gitForWorkspace(workspace, signal);
     if (!git.worktreeIsPristine) {
       return fail("Git adapter cannot prove the worktree has no ignored content; retaining it.");
     }
@@ -487,7 +667,11 @@ export class WorktreeLifecycleService {
    * any point during creation therefore leaves a cleanup candidate that the
    * next source-host boot can consume instead of an undiscoverable checkout.
    */
-  private async persistCreationIntent(projectRoot: string, target: string): Promise<WorktreeLifecycleResult<null>> {
+  private async persistCreationIntent(
+    projectRoot: string,
+    target: string,
+    branch: string,
+  ): Promise<WorktreeLifecycleResult<null>> {
     try {
       if (this.persistence.claimWorktree === undefined) {
         return fail("Persistence cannot atomically reserve a worktree resource.");
@@ -496,7 +680,7 @@ export class WorktreeLifecycleService {
         projectRoot,
         continuationPending: true,
         continuationMode: "none",
-        worktreeCleanup: { path: target, mode: "auto", ownedByAnyCode: true },
+        worktreeCleanup: { path: target, mode: "auto", ownedByAnyCode: true, branch },
       });
       if (!claimed) return fail(`Worktree resource is already claimed by another session: ${target}`);
       return ok(null);
@@ -531,11 +715,22 @@ export class WorktreeLifecycleService {
         worktree: null,
         continuationPending: true,
         continuationMode: continueAfterRehost ? "model" : "none",
+        ...(!continueAfterRehost ? { worktreeExitNoticePending: true } : {}),
         worktreeCleanup:
           cleanup.kind === "remove_clean"
-            ? { path: cleanup.target, mode: "auto", ownedByAnyCode: true }
+            ? {
+                path: cleanup.target,
+                mode: "auto" as const,
+                ownedByAnyCode: true,
+                ...(cleanup.branch !== undefined ? { branch: cleanup.branch } : {}),
+              }
             : cleanup.kind === "remove_force"
-              ? { path: cleanup.target, mode: "remove", ownedByAnyCode: cleanup.ownedByAnyCode }
+              ? {
+                  path: cleanup.target,
+                  mode: "remove" as const,
+                  ownedByAnyCode: cleanup.ownedByAnyCode,
+                  ...(cleanup.ownedByAnyCode && cleanup.branch !== undefined ? { branch: cleanup.branch } : {}),
+                }
               : null,
         worktreeTransition: { ...transition, origin: transition.toolCallId === undefined ? "chrome" : "tool" },
       });

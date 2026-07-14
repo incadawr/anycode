@@ -518,10 +518,17 @@ export class TabHostManager {
   ): Promise<void> {
     const current = tab.proc === child;
     const entering = message.worktree !== undefined;
+    const cleanupShapeValid = message.cleanup === undefined || (
+      message.cleanup.path === message.fromWorkspace &&
+      (!message.cleanup.ownedByAnyCode || message.cleanup.branch === undefined || (
+        tab.worktree?.ownedByAnyCode === true &&
+        message.cleanup.branch === tab.worktree.branch
+      ))
+    );
     const shapeValid = entering
       ? message.toWorkspace === message.worktree!.path && message.cleanup === undefined
       : message.toWorkspace === message.projectRoot &&
-        (message.cleanup === undefined || message.cleanup.path === message.fromWorkspace);
+        cleanupShapeValid;
     const valid =
       current &&
       tab.state === "running" &&

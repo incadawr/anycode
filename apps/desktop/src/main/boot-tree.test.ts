@@ -189,12 +189,14 @@ describe("TabHostManager — worktree relocation", () => {
         path: "/repo/.anycode/worktrees/task-5",
         mode: "auto",
         ownedByAnyCode: true,
+        branch: "anycode-wt/task-5",
       },
     });
     await flush();
 
     expect(forkSpy.mock.calls[2]?.[2]?.cwd).toBe("/repo");
     expect(forkSpy.mock.calls[2]?.[2]?.env?.ANYCODE_WORKTREE_CLEANUP_JSON).toContain('"mode":"auto"');
+    expect(forkSpy.mock.calls[2]?.[2]?.env?.ANYCODE_WORKTREE_CLEANUP_JSON).toContain('"branch":"anycode-wt/task-5"');
     expect(manager.getTab(created.tab.tabId)).toMatchObject({ workspace: "/repo", projectRoot: "/repo" });
     expect(manager.getTab(created.tab.tabId)?.worktree).toBeUndefined();
   });

@@ -67,6 +67,12 @@ import {
   splitToolDeclarationsByMcpPrefix,
 } from "../context/tokens.js";
 
+function appendSystemContext(systemPrompt: string | undefined, systemContext: string | undefined): string | undefined {
+  if (systemContext === undefined || systemContext.length === 0) return systemPrompt;
+  if (systemPrompt === undefined || systemPrompt.length === 0) return systemContext;
+  return `${systemPrompt}\n\n${systemContext}`;
+}
+
 export interface AgentLoopConfig {
   modelPort: ModelPort;
   registry: ToolRegistry;
@@ -291,7 +297,13 @@ export class AgentLoop {
 
   async *runTurn(
     userInput: string,
-    options?: { signal?: AbortSignal; mode?: PermissionMode; attachments?: ImageAttachment[] },
+    options?: {
+      signal?: AbortSignal;
+      mode?: PermissionMode;
+      attachments?: ImageAttachment[];
+      /** Ephemeral context added to this turn's system prompt, never history. */
+      systemContext?: string;
+    },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const tap = this.config.eventTap;
     if (tap === undefined) {
@@ -334,7 +346,12 @@ export class AgentLoop {
 
   private async *runTurnInner(
     userInput: string | undefined,
-    options?: { signal?: AbortSignal; mode?: PermissionMode; attachments?: ImageAttachment[] },
+    options?: {
+      signal?: AbortSignal;
+      mode?: PermissionMode;
+      attachments?: ImageAttachment[];
+      systemContext?: string;
+    },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const signal = options?.signal;
     const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
@@ -487,7 +504,7 @@ export class AgentLoop {
 
       try {
         const stream = this.config.modelPort.streamText({
-          system: this.config.systemPrompt,
+          system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
           messages: this.history.toMessages(),
           tools: toToolDeclarations(this.config.registry),
           maxOutputTokens: this.config.maxOutputTokens,

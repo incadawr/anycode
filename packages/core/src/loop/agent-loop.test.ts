@@ -831,6 +831,26 @@ describe("AgentLoop.runTurn — system prompt", () => {
     expect(messages[0]).toEqual({ role: "user", content: "first" });
     expect(messages).toHaveLength(4);
   });
+
+  it("adds ephemeral system context to one run without changing user history or later runs", async () => {
+    const completedStep: ModelStreamEvent[] = [
+      { type: "start" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+    const modelPort = new MockModelPort([completedStep, completedStep]);
+    const loop = makeLoop({ modelPort, systemPrompt: "base system" });
+
+    await collect(loop.runTurn("first", { systemContext: "workspace changed" }));
+    await collect(loop.runTurn("second"));
+
+    expect(modelPort.requests[0]?.system).toBe("base system\n\nworkspace changed");
+    expect(modelPort.requests[1]?.system).toBe("base system");
+    expect(modelPort.requests[0]?.messages[0]).toEqual({ role: "user", content: "first" });
+    expect(loop.history.toMessages().filter((message) => message.role === "user")).toEqual([
+      { role: "user", content: "first" },
+      { role: "user", content: "second" },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -953,6 +953,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     projectRoot?: string;
     workspace?: string;
     worktree?: { id: string; path: string; branch: string; baseRef: string; ownedByAnyCode: boolean };
+    worktreeControl?: SessionOptions["worktreeControl"];
     onWorkspaceTransition?: SessionOptions["onWorkspaceTransition"];
   }): { port: FakeWirePort } {
     const outbound = new Outbound();
@@ -969,6 +970,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       ...(opts.onContinuationReady !== undefined ? { onContinuationReady: opts.onContinuationReady } : {}),
       ...(opts.projectRoot !== undefined ? { projectRoot: opts.projectRoot } : {}),
       ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
+      ...(opts.worktreeControl !== undefined ? { worktreeControl: opts.worktreeControl } : {}),
       ...(opts.onWorkspaceTransition !== undefined ? { onWorkspaceTransition: opts.onWorkspaceTransition } : {}),
       rules: new SessionPermissionRules(),
       ...(opts.git !== undefined ? { git: opts.git } : {}),
@@ -1087,6 +1089,93 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       reason: "not_ready",
     }));
     expect(runs).toBe(1);
+  });
+
+  it("reports a non-fatal notice when Exit Worktree arrives during a running turn", async () => {
+    let markStarted!: () => void;
+    let releaseTurn!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    const engine = buildFakeEngine({
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        markStarted();
+        await turnGate;
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+    });
+    const exit = vi.fn(async () => ({ ok: false as const, error: "must not run" }));
+    const { port } = buildTestSession({
+      engine,
+      worktreeControl: { enter: vi.fn(), exit },
+    });
+    port.send({ type: "ui_ready" });
+    port.send({ type: "user_message", requestId: "turn", text: "work" });
+    await started;
+
+    port.send({ type: "exit_worktree", cleanup: "auto" });
+
+    await vi.waitFor(() => expect(port.received).toContainEqual({
+      type: "worktree_notice",
+      message: "Cannot exit the worktree while the session is busy.",
+    }));
+    expect(exit).not.toHaveBeenCalled();
+    expect(port.received).not.toContainEqual(expect.objectContaining({ type: "fatal" }));
+    releaseTurn();
+  });
+
+  it("reports a non-fatal notice when worktree exit is unavailable", () => {
+    const { port } = buildTestSession({});
+    port.send({ type: "ui_ready" });
+
+    port.send({ type: "exit_worktree", cleanup: "auto" });
+
+    expect(port.received).toContainEqual({
+      type: "worktree_notice",
+      message: "Worktree exit is unavailable for this session.",
+    });
+    expect(port.received).not.toContainEqual(expect.objectContaining({ type: "fatal" }));
+  });
+
+  it("reports a non-fatal notice instead of starting a second relocation", async () => {
+    let markHandoffStarted!: () => void;
+    let releaseHandoff!: () => void;
+    const handoffStarted = new Promise<void>((resolve) => { markHandoffStarted = resolve; });
+    const handoffGate = new Promise<void>((resolve) => { releaseHandoff = resolve; });
+    const transition = {
+      kind: "exit_worktree" as const,
+      projectRoot: "/repo",
+      fromWorkspace: "/repo/.anycode/worktrees/task-5",
+      toWorkspace: "/repo",
+      worktree: {
+        id: "task-5",
+        path: "/repo/.anycode/worktrees/task-5",
+        branch: "anycode-wt/task-5",
+        baseRef: "HEAD",
+        ownedByAnyCode: true,
+      },
+      cleanup: "auto" as const,
+    };
+    const exit = vi.fn(async () => ({ ok: true as const, transition }));
+    const { port } = buildTestSession({
+      worktreeControl: { enter: vi.fn(), exit },
+      onWorkspaceTransition: async () => {
+        markHandoffStarted();
+        await handoffGate;
+      },
+    });
+    port.send({ type: "ui_ready" });
+    port.send({ type: "exit_worktree", cleanup: "auto" });
+    await handoffStarted;
+
+    port.send({ type: "exit_worktree", cleanup: "auto" });
+
+    await vi.waitFor(() => expect(port.received).toContainEqual({
+      type: "worktree_notice",
+      message: "A workspace transition is already in progress.",
+    }));
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(port.received).not.toContainEqual(expect.objectContaining({ type: "fatal" }));
+    releaseHandoff();
   });
 
   it("routes a git MUTATION through shell.gitUserMutations, ignoring engine.capabilities.supportsGitMutations entirely (agent-owned vs shell-owned split)", () => {
@@ -1613,6 +1702,72 @@ describe("Session — background-task notice injection (design slice-6.DP-2-cut.
       expect(h.touches).toHaveLength(1);
       expect(h.touches[0]?.title).toBe("fix the login bug");
       expect(h.touches[0]?.title).not.toContain("Background task update");
+    } finally {
+      h.close();
+    }
+  });
+});
+
+
+describe("Session — durable worktree-exit notice", () => {
+  it("feeds the next real core model turn one hidden workspace reminder, then consumes it", async () => {
+    const consume = vi.fn(async () => {});
+    const continuationReady = vi.fn(async () => {});
+    const continuationComplete = vi.fn(async () => {});
+    const h = createHarness({
+      steps: [textStep("first"), textStep("second")],
+      worktreeExitNoticePending: true,
+      consumeWorktreeExitNotice: consume,
+      continuationPending: true,
+      continuationMode: "none",
+      onContinuationReady: continuationReady,
+      onContinuationComplete: continuationComplete,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await h.flush();
+      expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(0);
+      expect(continuationReady).toHaveBeenCalledTimes(1);
+      expect(continuationComplete).toHaveBeenCalledTimes(1);
+
+      h.send({ type: "user_message", requestId: "r1", text: "continue" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      const model = h.config.modelPort as ScriptedModelPort;
+      expect(lastUserMessageText(model.requests[0])).toBe("continue");
+      expect(model.requests[0]?.system).toBe(
+        "Worktree exited. The session is now back in the main project at /workspace.",
+      );
+      expect(h.engine.historyItems().find((item) => item.message.role === "user")?.message).toEqual({
+        role: "user",
+        content: "continue",
+      });
+      expect(consume).toHaveBeenCalledTimes(1);
+
+      h.send({ type: "user_message", requestId: "r2", text: "again" });
+      await h.waitUntil(() => model.requests.length === 2);
+      expect(lastUserMessageText(model.requests[1])).toBe("again");
+      expect(model.requests[1]?.system).toBeUndefined();
+      expect(consume).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("does not consume before the model stream successfully accepts the augmented turn", async () => {
+    const consume = vi.fn(async () => {});
+    const h = createHarness({
+      steps: [[]],
+      worktreeExitNoticePending: true,
+      consumeWorktreeExitNotice: consume,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "continue" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect(consume).not.toHaveBeenCalled();
     } finally {
       h.close();
     }

@@ -132,6 +132,14 @@ export interface GitPort {
   worktreeList?(): Promise<GitOpResult<GitWorktreeInfo[]>>;
   /** Removes a registered worktree. Without `force`, git refuses dirty trees. */
   worktreeRemove?(spec: { path: string; force?: boolean }): Promise<GitOpResult<null>>;
+  /** Prunes stale worktree administrative records using git's normal expiry policy. */
+  worktreePrune?(): Promise<GitOpResult<null>>;
+  /**
+   * Deletes a local branch only when git proves it is merged (`git branch -d`).
+   * Implementations must reject unsafe ref-shaped input before spawning and
+   * must never upgrade this operation to force deletion (`-D`).
+   */
+  deleteBranch?(name: string): Promise<GitOpResult<null>>;
   /** Ensures AnyCode's project-local worktree namespace stays invisible to the main checkout. */
   ensureWorktreeNamespaceIgnored?(): Promise<GitOpResult<null>>;
   /** True only when tracked, untracked, and ignored content are all absent. */

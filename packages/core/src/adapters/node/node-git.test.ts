@@ -480,10 +480,57 @@ describe("NodeGitAdapter (mock exec)", () => {
       await adapter.worktreeAdd({ path: "wt", branch: "feature" }),
       await adapter.worktreeList(),
       await adapter.worktreeRemove({ path: "wt" }),
+      await adapter.worktreePrune(),
+      await adapter.deleteBranch("feature"),
     ]) {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.reason).toContain("runBinary");
     }
+  });
+
+  it("prunes worktree metadata and deletes branches only through merged-safe argv", async () => {
+    const exec = new RecordingExec();
+    const adapter = new NodeGitAdapter({ exec, cwd: CWD });
+
+    expect(await adapter.worktreePrune()).toEqual({ ok: true, value: null });
+    expect(await adapter.deleteBranch("anycode-wt/finished")).toEqual({ ok: true, value: null });
+
+    expect(exec.calls.map((call) => call.args)).toEqual([
+      ["worktree", "prune"],
+      ["branch", "-d", "--", "anycode-wt/finished"],
+    ]);
+    for (const call of exec.calls) assertSafeEnv(call);
+    expect(exec.calls.flatMap((call) => call.args)).not.toContain("-D");
+  });
+
+  it("rejects unsafe branch deletion refs before spawning", async () => {
+    const exec = new RecordingExec();
+    const adapter = new NodeGitAdapter({ exec, cwd: CWD });
+
+    for (const name of ["", "-d", "--force", "bad\nref", "bad\tref", "\u007f"]) {
+      const result = await adapter.deleteBranch(name);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("unsafe ref");
+    }
+    expect(exec.calls).toEqual([]);
+  });
+
+  it("reports prune and safe branch deletion failures without retrying forcefully", async () => {
+    const failed = (): ExecResult => ({
+      ...okResult(""),
+      exitCode: 1,
+      stderr: "error: branch is not fully merged",
+    });
+    const exec = new RecordingExec(failed);
+    const adapter = new NodeGitAdapter({ exec, cwd: CWD });
+
+    expect((await adapter.worktreePrune()).ok).toBe(false);
+    expect((await adapter.deleteBranch("anycode-wt/unmerged")).ok).toBe(false);
+    expect(exec.calls.map((call) => call.args)).toEqual([
+      ["worktree", "prune"],
+      ["branch", "-d", "--", "anycode-wt/unmerged"],
+    ]);
+    expect(exec.calls.flatMap((call) => call.args)).not.toContain("-D");
   });
 
   it("builds guarded worktree argv and threads SAFE_GIT_ENV, timeout and abort", async () => {
@@ -1442,6 +1489,33 @@ describe("NodeGitAdapter real git integration", () => {
       expect(existsSync(wtPath)).toBe(false);
       const after = await adapter.worktreeList();
       if (after.ok) expect(after.value).toHaveLength(1);
+    },
+    30_000,
+  );
+
+  it(
+    "prunes stale worktree metadata and refuses to delete an unmerged branch",
+    async () => {
+      const dir = await realpath(await makeRepo());
+      const adapter = new NodeGitAdapter({ exec, cwd: dir });
+      await writeFile(join(dir, "seed.txt"), "seed\n");
+      await adapter.stageAll();
+      await adapter.commit("seed");
+
+      runGitCli(dir, ["branch", "anycode-wt/merged"]);
+      expect((await adapter.deleteBranch("anycode-wt/merged")).ok).toBe(true);
+      expect(runGitCli(dir, ["branch", "--list", "anycode-wt/merged"]).trim()).toBe("");
+
+      runGitCli(dir, ["switch", "-q", "-c", "anycode-wt/unmerged"]);
+      await writeFile(join(dir, "branch-only.txt"), "precious commit\n");
+      await adapter.stageAll();
+      await adapter.commit("branch-only");
+      runGitCli(dir, ["switch", "-q", "main"]);
+
+      const refused = await adapter.deleteBranch("anycode-wt/unmerged");
+      expect(refused.ok).toBe(false);
+      expect(runGitCli(dir, ["branch", "--list", "anycode-wt/unmerged"])).toContain("anycode-wt/unmerged");
+      expect((await adapter.worktreePrune()).ok).toBe(true);
     },
     30_000,
   );

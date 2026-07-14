@@ -22,7 +22,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { realpath as fsRealpath } from "node:fs/promises";
+import { access, realpath as fsRealpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,7 @@ import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingControll
 import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater } from "./updater.js";
+import { runWorktreeJanitor } from "./worktree-janitor.js";
 
 /** Replaced by electron-vite: true in `dev`, false in production builds. */
 declare const __ANYCODE_DEV_AUTOMATION__: boolean;
@@ -573,6 +574,36 @@ void app.whenReady().then(async () => {
   persistence = new SqlitePersistenceAdapter(dbPath);
   await persistence.listSessions({ limit: 1 });
   console.log(`[main] persistence opened + migrated: ${dbPath}`);
+
+  // One global, ledger-driven pass before any tab host can mutate worktree
+  // state. It never discovers deletion authority from a namespace/prefix: only
+  // exact durable cleanup records are eligible, and every ambiguity is retained.
+  try {
+    const janitorExec = new NodeExecutionAdapter();
+    const janitor = await runWorktreeJanitor({
+      persistence,
+      gitForWorkspace: (cwd) => new NodeGitAdapter({ exec: janitorExec, cwd }),
+      exists: async (target) => {
+        try {
+          await access(target);
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw error;
+        }
+      },
+      log: (message) => console.log(message),
+    });
+    if (janitor.examined > 0) {
+      console.log(
+        `[main] worktree janitor complete: examined=${janitor.examined} cleaned=${janitor.cleaned} retained=${janitor.retained}`,
+      );
+    }
+  } catch (error) {
+    // Cleanup is fail-safe. A DB/Git outage leaves ledgers intact for the next
+    // startup or the owning session's normal continuation path.
+    console.warn(`[main] worktree janitor skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
 
   // safeStorage holder, and compute the initial host env + readiness from the
