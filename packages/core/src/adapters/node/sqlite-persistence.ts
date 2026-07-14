@@ -476,21 +476,40 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   // PersistencePort — host-only usage, never consumed through that interface.
 
   /**
-   * First-write-wins for the ANCHOR, enrich-never-degrade for the PAYLOAD
-   * (W8 MEDIUM-1 — W7's plain `INSERT OR IGNORE` swung the pendulum too far:
-   * it made the anchor immovable by also freezing the payload, so a sparse
-   * first delivery's row could never pick up a later, richer terminal
-   * notification for the same item — the command's real exitCode/output was
-   * lost FOREVER). `turn_ordinal`/`position_in_turn`/`seq_in_turn`/
-   * `created_at` are NEVER in the `DO UPDATE SET` clause — the anchor and the
-   * row's first-recorded time are permanent for the life of the shadow log,
-   * exactly like the old `INSERT OR IGNORE`'s guarantee (see the W7
-   * regression test below, which this upsert must keep green unmodified:
-   * a conflicting second write's anchor must never win). `command`/`cwd`/
-   * `exit_code`/`output_head` use `COALESCE(excluded.col, col)`: a non-null
-   * new value enriches the row, a NULL/absent one (e.g. a stale sparse
-   * redelivery arriving after a rich one) never nulls out data already
-   * recorded — enrich-only, never a downgrade.
+   * First-write-wins for the ANCHOR (`turn_ordinal`/`position_in_turn`/
+   * `seq_in_turn`/`created_at` are NEVER in the `DO UPDATE SET` clause — the
+   * anchor and the row's first-recorded time are permanent for the life of
+   * the shadow log; see the W7 regression test below, which this upsert must
+   * keep green unmodified: a conflicting second write's anchor must never
+   * win).
+   *
+   * The PAYLOAD columns are NOT one class (W9 — supersedes W8 MEDIUM-1(b)'s
+   * `COALESCE(excluded.col, col)` rule, which was itself unsound: an empty
+   * string is NOT NULL, so a re-delivered `outputHead: ""` blanked an
+   * already-recorded `"all passed\n"`, and a conflicting non-null redelivery
+   * could overwrite `command` itself — showing the user a false command under
+   * a correctly-frozen anchor. The mirror-image fix, `COALESCE(col,
+   * excluded.col)` ("fill only a NULL hole"), is ALSO unsound: a sparse first
+   * delivery's non-null `outputHead: ""` would then permanently block
+   * enrichment from a later, richer delivery of the SAME item — see the
+   * "shield" regression test below, which any single fill-direction rule
+   * fails). Four classes, no `DO UPDATE SET` entry may ever let a redelivery
+   * DECREASE the information already recorded:
+   *   - `command`: IMMUTABLE. Absent from `DO UPDATE SET` entirely — the
+   *     first recorded value stands forever. A different command string
+   *     under the same `item.id` is not enrichment, it is identity
+   *     corruption; the writer only ever calls this with a real string
+   *     `command` (the column is `NOT NULL`), so there is no hole to fill by
+   *     construction.
+   *   - `cwd`/`exit_code`: fill-only-if-NULL, `COALESCE(col, excluded.col)`
+   *     — unknown (NULL) is filled by the first value learned; an already-
+   *     known value is never replaced (a terminal exit code is a fact, it
+   *     only ever transitions from unknown to known).
+   *   - `output_head`: MONOTONIC GROWTH — updates only when the incoming
+   *     value is non-null AND strictly longer than what is already stored
+   *     (or nothing is stored yet). An empty or shorter redelivery can never
+   *     shrink a longer recorded output; an equal-length redelivery keeps the
+   *     already-stored value (deterministic tie-break).
    */
   async recordCodexThreadItem(threadId: string, item: CodexShadowCommandItem): Promise<void> {
     const db = this.open();
@@ -499,10 +518,14 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
          (thread_id, turn_ordinal, position_in_turn, seq_in_turn, item_id, command, cwd, exit_code, output_head, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(thread_id, item_id) DO UPDATE SET
-         command = COALESCE(excluded.command, command),
-         cwd = COALESCE(excluded.cwd, cwd),
-         exit_code = COALESCE(excluded.exit_code, exit_code),
-         output_head = COALESCE(excluded.output_head, output_head)`,
+         cwd = COALESCE(cwd, excluded.cwd),
+         exit_code = COALESCE(exit_code, excluded.exit_code),
+         output_head = CASE
+           WHEN excluded.output_head IS NOT NULL
+             AND (output_head IS NULL OR length(excluded.output_head) > length(output_head))
+           THEN excluded.output_head
+           ELSE output_head
+         END`,
     ).run(
       threadId,
       item.turnOrdinal,

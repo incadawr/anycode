@@ -533,6 +533,110 @@ describe("SqlitePersistenceAdapter", () => {
       });
     });
 
+    it("a conflicting non-null redelivery never overwrites the recorded command, exitCode, or output (W9 MEDIUM — supersedes W8-1(b)'s COALESCE(excluded.col, col))", async () => {
+      // W8's COALESCE(excluded.col, col) treats ANY non-null incoming value as
+      // "enrichment", including a conflicting one. A re-delivery that carries
+      // a DIFFERENT command string, a different exitCode, and an EMPTY (but
+      // non-null!) outputHead must not touch a single one of those columns —
+      // `command` is immutable once recorded, and exitCode/outputHead are
+      // already-known facts this redelivery does not actually improve on.
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "pnpm test",
+        exitCode: 0,
+        outputHead: "all passed\n",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "rm -rf tmp",
+        exitCode: 137,
+        outputHead: "",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toEqual({
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "pnpm test",
+        exitCode: 0,
+        outputHead: "all passed\n",
+      });
+    });
+
+    it("a later EMPTY outputHead never blanks an already-recorded non-empty output (W9 MEDIUM — the W8 hole: an empty string is not NULL)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "pnpm test",
+        exitCode: 0,
+        outputHead: "all passed\n",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "pnpm test",
+        outputHead: "",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ exitCode: 0, outputHead: "all passed\n" });
+    });
+
+    it("a sparse first delivery with an EMPTY (non-null) outputHead can still be enriched by a later rich delivery (W9 shield — a naive COALESCE(col, excluded.col) 'fill only a NULL hole' rule fails this)", async () => {
+      // The reviewer-proposed mirror-image fix to W8-1(b) — fill a column only
+      // when it is currently NULL — looks safe but is ALSO wrong: a sparse
+      // first delivery's outputHead is "" (empty, non-null), so that rule
+      // would consider the hole already "filled" and permanently refuse a
+      // later, richer delivery for the same item. Enrichment must still win
+      // here.
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "pnpm test",
+        outputHead: "",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "pnpm test",
+        exitCode: 0,
+        outputHead: "all passed\n",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toEqual({
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "pnpm test",
+        exitCode: 0,
+        outputHead: "all passed\n",
+      });
+    });
+
     it("a repeated write for the same (threadId, itemId) never lets a conflicting second write move the FIRST write's anchor (W7 HIGH-2 — first-write-wins, not last-write-wins)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.recordCodexThreadItem("thread-1", {
