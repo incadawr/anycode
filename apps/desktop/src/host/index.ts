@@ -223,6 +223,7 @@ import type {
   McpServerSpec,
   ModelPort,
   PermissionMode,
+  ProviderTransport,
   ReasoningEffort,
   ResolvedTelemetryConfig,
   ResolvedWebSearchBackend,
@@ -610,6 +611,13 @@ async function boot(): Promise<void> {
     // the boot budget/effort resolutions below share the same lookup.
     const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
+    // Single back-compat resolution point for the wire transport, mirroring the
+    // CLI (TASK.43 §0.4): the mandatory discriminant is applied once here rather
+    // than defaulted inside EndpointConfig, so the hot-swap factory below cannot
+    // silently drop it. Replaced by the env/catalog ladder when the OpenAI
+    // transports become selectable.
+    const providerTransport: ProviderTransport = "anthropic-messages";
+
     // Slice P7.15 (F14, design §2.1): mid-session model switch mirrors the CLI
     // `/model` recipe (host-side hot-swap, NOT a respawn). The factory rebuilds a
     // fresh AiSdkModelPort per switch (LanguageModel is built per-attempt, so the
@@ -620,6 +628,7 @@ async function boot(): Promise<void> {
     // preserved so config/Session/refineTitle are unchanged.
     const modelPortFactory = (m: string): ModelPort =>
       new AiSdkModelPort({
+        transport: providerTransport,
         baseUrl: envConfig.baseUrl,
         apiKey: envConfig.apiKey,
         model: m,

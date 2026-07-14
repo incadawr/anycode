@@ -159,6 +159,7 @@ describe("AgentLoop stream-error recovery over a real AiSdkModelPort (P7.7 TASK.
     server = started.server;
 
     const config: AnthropicEndpointConfig = {
+      transport: "anthropic-messages",
       baseUrl: started.baseUrl,
       apiKey: "test-key",
       model: "glm-5.2",
@@ -203,6 +204,7 @@ describe("AgentLoop stream-error recovery over a real AiSdkModelPort (P7.7 TASK.
     server = started.server;
 
     const config: AnthropicEndpointConfig = {
+      transport: "anthropic-messages",
       baseUrl: started.baseUrl,
       apiKey: "test-key",
       model: "glm-5.2",

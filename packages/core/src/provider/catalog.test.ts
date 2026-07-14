@@ -23,7 +23,11 @@ describe("built-in catalog v1 (slice 2.5 §2.2)", () => {
     expect(catalogProviderIds()).toEqual(["anthropic", "z-ai", "deepseek", "moonshot", "custom"]);
     for (const entry of catalog.providers) {
       expect(entry.auth.kind).toBe("api_key");
-      expect(entry.defaultKind).toBe("anthropic");
+      // Every built-in entry speaks the Anthropic wire protocol today, and none
+      // advertises a transport the dispatcher cannot build.
+      expect(entry.defaultTransport).toBe("anthropic-messages");
+      expect(entry.supportedTransports).toEqual(["anthropic-messages"]);
+      expect(entry.supportedTransports).toContain(entry.defaultTransport);
     }
   });
 
@@ -88,16 +92,37 @@ describe("resolveEndpoint (slice 2.5 §2.2)", () => {
     expect(resolveEndpoint(custom, "my-model", "k")).toEqual({ baseUrl: "", model: "my-model" });
   });
 
-  it("joins the default-kind path prefix onto the base URL when present", () => {
+  it("uses the transport-specific base URL when the entry declares one", () => {
+    const entry: CatalogProviderEntry = {
+      id: "x",
+      name: "X",
+      baseUrl: "https://host.example/api/anthropic",
+      transportBaseUrls: {
+        "anthropic-messages": "https://host.example/api/anthropic",
+        "openai-chat-completions": "https://host.example/v1",
+      },
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages", "openai-chat-completions"],
+      auth: { kind: "api_key" },
+      models: [],
+    };
+    // Default transport wins when the caller does not name one...
+    expect(resolveEndpoint(entry, "m", "k").baseUrl).toBe("https://host.example/api/anthropic");
+    // ...and the projection follows the requested transport, verbatim: these are
+    // complete prefixes, never a base with a guessed `/v1` appended (§0.5).
+    expect(resolveEndpoint(entry, "m", "k", "openai-chat-completions").baseUrl).toBe("https://host.example/v1");
+  });
+
+  it("falls back to the plain baseUrl for a transport with no declared base URL", () => {
     const entry: CatalogProviderEntry = {
       id: "x",
       name: "X",
       baseUrl: "https://host.example",
-      paths: { anthropic: "/api/anthropic" },
-      defaultKind: "anthropic",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
       auth: { kind: "api_key" },
       models: [],
     };
-    expect(resolveEndpoint(entry, "m", "k").baseUrl).toBe("https://host.example/api/anthropic");
+    expect(resolveEndpoint(entry, "m", "k", "openai-responses").baseUrl).toBe("https://host.example");
   });
 });

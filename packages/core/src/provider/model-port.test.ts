@@ -120,6 +120,7 @@ function nonRetryableError(): APICallError {
 
 function baseConfig(retry?: Partial<AnthropicEndpointConfig["retry"]>): AnthropicEndpointConfig {
   return {
+    transport: "anthropic-messages",
     baseUrl: "https://api.example.com",
     apiKey: "test-key",
     model: "claude-test",
@@ -579,5 +580,76 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     controller.abort(abortReason);
     await expect(pending).rejects.toBe(abortReason);
     expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () => {
+  it("keeps the GLM bytes byte-identical when the anthropic transport is passed explicitly", () => {
+    // Negative regression against the transport branch displacing the providerName
+    // branch: a GLM endpoint speaks the Anthropic wire protocol, so an explicit
+    // `anthropic-messages` must reproduce the pre-transport bytes exactly — the
+    // same numbers the pins above lock for the two-argument call.
+    expect(
+      reasoningRequestOptions(
+        { ...baseRequest, maxOutputTokens: 512, reasoningEffort: "high" },
+        "Z.AI (GLM)",
+        "anthropic-messages",
+      ),
+    ).toEqual({
+      maxOutputTokens: 512,
+      providerOptions: { anthropic: { effort: "high", thinking: { type: "enabled", budgetTokens: 16_000 } } },
+    });
+    expect(
+      reasoningRequestOptions(
+        { ...baseRequest, maxOutputTokens: 131_072, reasoningEffort: "max" },
+        "Z.AI (GLM)",
+        "anthropic-messages",
+      ),
+    ).toEqual({
+      maxOutputTokens: 99_072,
+      providerOptions: { anthropic: { effort: "max", thinking: { type: "enabled", budgetTokens: 32_000 } } },
+    });
+  });
+
+  it("treats an absent transport as anthropic-messages (legacy call sites)", () => {
+    const request: ModelRequest = { ...baseRequest, maxOutputTokens: 512, reasoningEffort: "high" };
+    expect(reasoningRequestOptions(request, "Anthropic")).toEqual(
+      reasoningRequestOptions(request, "Anthropic", "anthropic-messages"),
+    );
+    expect(reasoningRequestOptions(request, "Z.AI (GLM)")).toEqual(
+      reasoningRequestOptions(request, "Z.AI (GLM)", "anthropic-messages"),
+    );
+  });
+
+  it.each(["openai-chat-completions", "openai-responses"] as const)(
+    "refuses to shape reasoning for %s instead of emitting Anthropic thinking options",
+    (transport) => {
+      expect(() =>
+        reasoningRequestOptions({ ...baseRequest, reasoningEffort: "high" }, "Z.AI (GLM)", transport),
+      ).toThrow(/not implemented/i);
+    },
+  );
+});
+
+describe("AiSdkModelPort — outgoing request bytes per transport (TASK.43 §0.7)", () => {
+  it("sends the pre-transport GLM request bytes for a GLM providerName on the anthropic transport", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    const port = new AiSdkModelPort({
+      ...baseConfig(),
+      transport: "anthropic-messages",
+      providerName: "Z.AI (GLM)",
+      model: "glm-5.2",
+    });
+
+    await collect(port.streamText({ ...baseRequest, reasoningEffort: "high", maxOutputTokens: 131_072 }));
+
+    expect(mockStreamText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxRetries: 0,
+        maxOutputTokens: 115_072,
+        providerOptions: { anthropic: { effort: "high", thinking: { type: "enabled", budgetTokens: 16_000 } } },
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
   });
 });

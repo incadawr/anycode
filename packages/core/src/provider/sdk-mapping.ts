@@ -15,9 +15,26 @@ import type {
   ToolResultPart,
 } from "../types/history.js";
 import type { ToolDeclaration } from "../types/tools.js";
+import type { ProviderTransport } from "./catalog.js";
 
-/** Converts the own envelope into SDK ModelMessage[] (user/assistant/tool only). */
-export function toSdkMessages(messages: readonly ChatMessage[]): ModelMessage[] {
+/**
+ * Converts the own envelope into SDK ModelMessage[] (user/assistant/tool only).
+ *
+ * `transport` is threaded through because message policy is NOT protocol-neutral
+ * even though the SDK types are: an image inside a tool RESULT survives the
+ * anthropic-messages wire but has no representation on the OpenAI transports
+ * (TASK.43 §5.1), so their factories bring their own tool-result policy here. The
+ * anthropic-messages mapping below is the only live one and is byte-pinned by
+ * sdk-mapping.test.ts / image-wire.integration.test.ts. Taking the transport as a
+ * required parameter now means adding a protocol cannot forget this seam — a
+ * silently image-free (or JSON-stringified-base64) tool result is a token bomb
+ * that no type error would have caught.
+ */
+export function toSdkMessages(
+  messages: readonly ChatMessage[],
+  transport: ProviderTransport,
+): ModelMessage[] {
+  void transport;
   return messages.map((message): ModelMessage => {
     switch (message.role) {
       case "user": {

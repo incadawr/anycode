@@ -64,6 +64,7 @@ import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js"
 import { buildRepoMapPromptSection, loadRepoMapConfig, type RepoMapConfig } from "../repoMap/index.js";
 import { resolveImageInput, resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "../provider/capabilities.js";
 import { getBuiltinCatalog } from "../provider/catalog-data.js";
+import type { ProviderTransport } from "../provider/catalog.js";
 import { ENV_API_KEY, ENV_MODEL, loadEnvConfig } from "../provider/env.js";
 import { AiSdkModelPort } from "../provider/model-port.js";
 import type { RetryPolicy } from "../provider/retry.js";
@@ -383,6 +384,12 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   // resolutions below share the same lookup.
   const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
+  // Single back-compat resolution point for the wire transport (TASK.43 §0.4):
+  // the mandatory discriminant is applied here, once, instead of being defaulted
+  // inside EndpointConfig. Every catalog entry currently declares
+  // anthropic-messages; the env/catalog ladder replaces this constant when the
+  // OpenAI transports become selectable.
+  const providerTransport: ProviderTransport = "anthropic-messages";
 
   // (ANYCODE_MAX_RETRIES) and the per-attempt stall watchdog (ANYCODE_STALL_TIMEOUT_MS).
   const retryOverride: Partial<RetryPolicy> = {
@@ -392,6 +399,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   const baseModelPort =
     options?.modelPort ??
     new AiSdkModelPort({
+      transport: providerTransport,
       baseUrl: envConfig.baseUrl,
       apiKey: envConfig.apiKey,
       model: envConfig.model,
@@ -409,6 +417,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     (options?.modelPort === undefined
       ? (m: string) =>
           new AiSdkModelPort({
+            transport: providerTransport,
             baseUrl: envConfig.baseUrl,
             apiKey: envConfig.apiKey,
             model: m,

@@ -20,7 +20,7 @@ export type {
   CatalogModel,
   CatalogProviderEntry,
   ProviderCatalog,
-  ProviderKind,
+  ProviderTransport,
   ResolvedEndpoint,
 } from "./catalog.js";
 export { resolveEndpoint } from "./catalog.js";
@@ -35,7 +35,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     id: "anthropic",
     name: "Anthropic",
     baseUrl: "https://api.anthropic.com",
-    defaultKind: "anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
       { id: "claude-opus-4-20250514", name: "Claude Opus 4", contextWindow: 200_000, imageInput: true, reasoning: true, effortLevels: ["off", "low", "medium", "high"] },
@@ -47,7 +48,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     id: "z-ai",
     name: "Z.AI (GLM)",
     baseUrl: "https://api.z.ai/api/anthropic",
-    defaultKind: "anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
       // GLM-5.2 serves a 1M context window with 128K max output (docs.z.ai, IndexShare sparse attention).
@@ -61,7 +63,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     id: "deepseek",
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com/anthropic",
-    defaultKind: "anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
       { id: "deepseek-chat", name: "DeepSeek Chat", contextWindow: 128_000, maxOutputTokens: 8_192 },
@@ -72,7 +75,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     id: "moonshot",
     name: "Moonshot (Kimi)",
     baseUrl: "https://api.moonshot.ai/anthropic",
-    defaultKind: "anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
       { id: "kimi-k2-0711-preview", name: "Kimi K2", contextWindow: 128_000, maxOutputTokens: 32_768 },
@@ -84,7 +88,12 @@ const ENTRIES: CatalogProviderEntry[] = [
     name: "Custom endpoint",
 
     baseUrl: "",
-    defaultKind: "anthropic",
+    // Legacy default: a bare custom endpoint keeps speaking Anthropic. The
+    // OpenAI transports join `supportedTransports` together with their client
+    // factories — advertising a protocol the dispatcher cannot build would offer
+    // the user a selection that fails at boot.
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     // No static hints — free-text model id only.
     models: [],

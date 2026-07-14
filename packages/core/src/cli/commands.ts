@@ -285,7 +285,7 @@ function handleModeCommand(rest: string, deps: SlashCommandDeps): void {
  * wiring produces from a matched catalog entry), so a minimal
  * CatalogProviderEntry-shaped object is assembled here purely to reuse that
  * renderer without duplicating its string-building; the placeholder
- * id/baseUrl/defaultKind/auth fields are never read by formatModelInfo, which
+ * id/baseUrl/transport/auth fields are never read by formatModelInfo, which
  * only inspects `.name` and `.models`. An argument containing whitespace (or
  * blank after trim, handled above) is ambiguous — free-text model ids never
  * legitimately contain a space — and prints the usage line, mirroring
@@ -301,7 +301,8 @@ function handleModelCommand(rest: string, deps: SlashCommandDeps): void {
             id: deps.model.providerName,
             name: deps.model.providerName,
             baseUrl: "",
-            defaultKind: "anthropic",
+            defaultTransport: "anthropic-messages",
+            supportedTransports: ["anthropic-messages"],
             auth: { kind: "api_key" },
             models: [...deps.model.hints],
           }

@@ -1,6 +1,7 @@
 /**
  * ModelPort adapter over the AI SDK. Per call:
- *  - builds the LanguageModel via createAnthropicLanguageModel(config)
+ *  - builds the LanguageModel via createLanguageModel(config), which picks the
+ *    client factory by the config's transport
  *  - invokes streamText with stopWhen: stepCountIs(1) (explicit; one model
  *    step per call — the multi-turn loop lives above this boundary),
  *    maxRetries: 0 (retry policy is owned by this adapter, Phase 1), and a
@@ -35,7 +36,9 @@ import type { ModelPort, ModelRequest } from "../ports/model.js";
 import { consoleDiagnosticSink, type DiagnosticSink } from "../types/diagnostics.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
-import { createAnthropicLanguageModel, type AnthropicEndpointConfig } from "./anthropic.js";
+import type { ProviderTransport } from "./catalog.js";
+import type { EndpointConfig } from "./endpoint.js";
+import { createLanguageModel } from "./language-model.js";
 import { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 import { describeStreamArtifact, isIgnorableStreamArtifact } from "./stream-artifacts.js";
@@ -70,14 +73,26 @@ const GLM_MAX_TOKENS = 131_072;
  * `providerName` (sourced from the catalog entry's `name` field by the wiring
  * layer) branches the two; absent ⇒ default Anthropic path (legacy behaviour,
  * byte-identical for non-GLM boots).
+ *
+ * `transport` is the OUTER branch and is checked FIRST: reasoning is carried by a
+ * thinking budget on anthropic-messages but by an effort enum on the OpenAI
+ * transports, so the wire protocol — never the provider name — decides the shape.
+ * It defaults to `anthropic-messages` so pre-transport call sites keep their
+ * pinned bytes; the OpenAI transports have no mapping yet and say so loudly
+ * rather than emitting Anthropic options no OpenAI endpoint would read.
  */
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName?: string,
+  transport: ProviderTransport = "anthropic-messages",
 ): {
   maxOutputTokens?: number;
   providerOptions?: { anthropic: { effort?: string; thinking: { type: "enabled"; budgetTokens: number } } };
 } {
+  if (transport !== "anthropic-messages") {
+    throw new Error(`Reasoning options for provider transport "${transport}" are not implemented yet`);
+  }
+
   const effort = request.reasoningEffort;
   if (effort === undefined || effort === "off") {
     return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
@@ -221,23 +236,24 @@ function describeRetryReason(error: unknown): string {
 
 export class AiSdkModelPort implements ModelPort {
   constructor(
-    private readonly config: AnthropicEndpointConfig,
+    private readonly config: EndpointConfig,
     private readonly onDiagnostic: DiagnosticSink = consoleDiagnosticSink,
   ) {}
 
   /**
-   * Builds this attempt's LanguageModel (slice 2.5 §3.3). When no per-attempt
-   * resolver is configured, delegates to `createAnthropicLanguageModel(config)`
-   * unchanged — byte-for-byte the 2.2 static-key path. When one is configured,
-   * resolves a fresh key at the START of the attempt so a mid-session-refreshed
-   * OAuth token is picked up; a rejection or empty/blank result falls back to the
-   * static `config.apiKey` (the model port never fails just because a refresh
-   * hiccupped — the SDK call itself will surface a real auth failure).
+   * Builds this attempt's LanguageModel (slice 2.5 §3.3) through the transport
+   * dispatcher. When no per-attempt resolver is configured, the ORIGINAL config
+   * object is handed to the factory — byte-for-byte the 2.2 static-key path. When
+   * one is configured, resolves a fresh key at the START of the attempt so a
+   * mid-session-refreshed OAuth token is picked up; a rejection or empty/blank
+   * result falls back to the static `config.apiKey` (the model port never fails
+   * just because a refresh hiccupped — the SDK call itself will surface a real
+   * auth failure).
    */
   private async buildAttemptModel(): Promise<LanguageModel> {
     const { resolveApiKey } = this.config;
     if (resolveApiKey === undefined) {
-      return createAnthropicLanguageModel(this.config);
+      return createLanguageModel(this.config);
     }
     let apiKey = this.config.apiKey;
     try {
@@ -248,7 +264,7 @@ export class AiSdkModelPort implements ModelPort {
     } catch {
       // Fall back to the static key: a refresh hiccup must not kill the attempt.
     }
-    return createAnthropicLanguageModel({ ...this.config, apiKey });
+    return createLanguageModel({ ...this.config, apiKey });
   }
 
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
@@ -277,14 +293,14 @@ export class AiSdkModelPort implements ModelPort {
           // System prompt goes out-of-band: ai@7 rejects system-role messages
           // inside `messages`, and its `system` option is deprecated for `instructions`.
           instructions: request.system,
-          messages: toSdkMessages(request.messages),
+          messages: toSdkMessages(request.messages, this.config.transport),
           tools: toSdkTools(request.tools),
           // One SDK step per ModelPort call; the multi-turn loop lives in AgentLoop.
           stopWhen: stepCountIs(1),
           // Retries are this adapter's responsibility (Phase 1); none in Phase 0.
           maxRetries: 0,
           abortSignal: attemptController.signal,
-          ...reasoningRequestOptions(request, this.config.providerName),
+          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport),
           temperature: request.temperature,
         });
 
