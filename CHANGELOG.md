@@ -5,6 +5,20 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.2] — 2026-07-15
+
+### Added
+
+- Isolated worktree sessions. A task can move itself into its own Git worktree
+  and branch (`EnterWorktree`) and come back to the project checkout
+  (`ExitWorktree`), so tasks running in parallel no longer share one working
+  tree. The relocation is recorded and survives a restart, and the built-in
+  `using-worktrees` skill explains when to reach for it.
+- Cleanup of the worktrees AnyCode itself created: on startup it removes the
+  checkouts left behind by an interrupted session, and deletes their branches
+  only when they are already merged. Worktrees and branches it did not create
+  are never touched.
+
 ## [0.0.1] — 2026-07-12
 
 ### Alpha
@@ -30,4 +44,5 @@ validation before they are considered release-ready.
 - A public developer workflow and an enforced dev/release boundary for
   automation smoke.
 
+[0.0.2]: https://github.com/incadawr/anycode/releases/tag/v0.0.2
 [0.0.1]: https://github.com/incadawr/anycode/releases/tag/v0.0.1
