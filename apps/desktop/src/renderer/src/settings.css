@@ -821,6 +821,11 @@
   color: var(--text-2);
 }
 
+.settings-about-version {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
 .settings-about-ack {
   margin: 0;                     /* UA <p> margin reset; the section gap owns rhythm */
   font-size: var(--fs-sm);
