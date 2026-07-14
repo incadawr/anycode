@@ -35,9 +35,19 @@ Detailed implementation notes and private research remain outside Git in
 the test suite once on Linux, then packages macOS (arm64 + x64), Windows (NSIS
 x64), and Linux (AppImage x64) in parallel.
 
-Every job uploads into the **draft** GitHub release for that tag, and a final job
-sets the release body from the tag's `CHANGELOG.md` section. A tag whose version
-has no changelog section fails that job by design.
+The build jobs only produce files; they never publish. A single final job
+downloads all four, checks that no platform is missing, and assembles them into
+the **one** draft release for the tag, whose body is the tag's `CHANGELOG.md`
+section. A tag whose version has no changelog section fails that job by design.
+
+Publishing is deliberately serial. When each build job published itself
+(electron-builder `--publish always`), the four ran concurrently and GitHub —
+which does not key *draft* releases by tag — gave each of them a draft of its
+own: the first v0.0.1 run produced three drafts, artifacts scattered across
+them, and stayed green throughout. The same job also merges the two macOS
+`latest-mac.yml` update feeds, which list only their own architecture and would
+otherwise overwrite one another, offering half of macOS users a build for the
+wrong CPU.
 
 A tag push therefore never ships anything on its own. The release stays a draft,
 invisible to users, until a human reviews it and presses Publish. Running the

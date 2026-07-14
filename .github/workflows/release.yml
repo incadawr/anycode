@@ -1,10 +1,16 @@
 # Release workflow (design working-docs/build/design/slice-2.6-cut.md §7, task 2.6.3).
 #
-# A `v*` tag push builds all four platform artifacts and uploads them into a
-# DRAFT GitHub release for that tag (electron-builder `--publish always`, with
-# `publish.releaseType: draft` in electron-builder.yml). A tag push therefore
-# never ships to users by itself: a human reviews the draft and presses Publish.
+# A `v*` tag push builds all four platform artifacts and assembles them into a
+# single DRAFT GitHub release for that tag. A tag push therefore never ships to
+# users by itself: a human reviews the draft and presses Publish.
 # `workflow_dispatch` stays a dry run — it builds but never publishes.
+#
+# THE BUILD JOBS DO NOT PUBLISH. They used to (electron-builder
+# `--publish always`), and it does not work: GitHub does not key DRAFT releases
+# by tag, so the four concurrent jobs each created a draft of their own. The
+# v0.0.1 run produced THREE drafts for one tag with the artifacts scattered
+# across them — none complete, and a green run start to finish. Publishing is
+# now done exactly once, serially, by the `release` job at the bottom.
 #
 
 # (ripgrep ships as a platform optionalDependency, node-pty ships prebuilds per
@@ -226,30 +232,25 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
-          # electron-builder's own env name for the publish credential. The
-          # built-in Actions token is enough (`permissions: contents: write`
-          # above) — no personal access token to create, store, or rotate.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # A tag push fills the DRAFT release for its tag (electron-builder.yml
-          # pins publish.releaseType); workflow_dispatch stays a dry run that
-          # builds without touching any release.
-          PUBLISH_ARG=never
-          if [ "${{ github.event_name }}" = "push" ]; then
-            PUBLISH_ARG=always
-          fi
-
+          # `--publish never`, on EVERY path: this job only ever produces files.
+          # Four concurrent electron-builder publishers created four races for
+          # one draft release (see the file header); the `release` job assembles
+          # the uploaded artifacts instead. electron-builder.yml keeps its
+          # `publish:` block regardless — that is what writes app-update.yml into
+          # the packaged app, i.e. where electron-updater looks for updates.
+          #
           # electron-builder.yml hard-freezes mac.identity to null (2.6.1) so
           # local/dev builds are always unsigned by default. Override it here
           # ONLY when a Developer ID cert secret is present (design §4.1/§9-U2).
           # MACOS_CSC_NAME is the exact certificate common name, e.g.
           # "Developer ID Application: NAME (TEAMID)".
           if [ "${{ runner.os }}" = "macOS" ] && [ "${{ steps.gates.outputs.mac_sign }}" = "true" ]; then
-            pnpm exec electron-builder --config electron-builder.yml ${{ matrix.electron_builder_args }} --publish "$PUBLISH_ARG" -c.mac.identity="${{ secrets.MACOS_CSC_NAME }}"
+            pnpm exec electron-builder --config electron-builder.yml ${{ matrix.electron_builder_args }} --publish never -c.mac.identity="${{ secrets.MACOS_CSC_NAME }}"
           else
-            pnpm exec electron-builder --config electron-builder.yml ${{ matrix.electron_builder_args }} --publish "$PUBLISH_ARG"
+            pnpm exec electron-builder --config electron-builder.yml ${{ matrix.electron_builder_args }} --publish never
           fi
           # Notarization and Windows signing need no config override: electron-
           # builder activates both automatically from the env vars above when
@@ -295,16 +296,23 @@ jobs:
             apps/desktop/dist/*.AppImage
             apps/desktop/dist/latest*.yml
             apps/desktop/dist/*.blockmap
-          if-no-files-found: warn
+          # A platform that silently produced nothing is the failure this whole
+          # job exists to prevent; it must never reach the release as a gap.
+          if-no-files-found: error
           retention-days: 14
 
-  # The draft release now holds every platform artifact; give it a body. Release
-  # notes are NOT hand-written here — they are the tag's CHANGELOG.md section, so
-  # the changelog stays the single source of truth (docs/development/release.md).
-  # A tag whose version has no changelog section fails this job on purpose: an
-  # undocumented release is a defect, not a formatting detail.
-  notes:
-    name: release notes
+  # THE ONLY JOB THAT PUBLISHES, and it runs once (see the file header for the
+  # multi-draft race that made this necessary). It assembles every platform's
+  # artifacts into one asset set, then creates — or, on a re-run, refreshes —
+  # the single draft release for the tag.
+  #
+  # Release notes are NOT hand-written here — they are the tag's CHANGELOG.md
+  # section, so the changelog stays the single source of truth
+  # (docs/development/release.md). A tag whose version has no changelog section
+  # fails this job on purpose: an undocumented release is a defect, not a
+  # formatting detail.
+  release:
+    name: draft release
     needs: build
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
@@ -313,6 +321,38 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download every platform's artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: anycode-*
+          path: staging
+          # Deliberately NOT merge-multiple: both macOS jobs ship a file called
+          # latest-mac.yml (each listing only its own architecture), and
+          # flattening here would let one silently overwrite the other. The
+          # collector below merges them into a single arch-complete feed.
+
+      - name: Collect the artifacts into one asset set
+        run: node apps/desktop/scripts/collect-release-assets.mjs staging assets
+
+      # The tripwire for a platform that quietly dropped out of the release: an
+      # incomplete draft looks exactly like a complete one until a user goes
+      # looking for their download.
+      - name: Assert every platform is present
+        run: |
+          set -euo pipefail
+          expect() {
+            found=$(find assets -maxdepth 1 -name "$1" | wc -l | tr -d ' ')
+            if [ "$found" != "$2" ]; then
+              echo "FAIL: expected $2 × '$1' in the release assets, found $found" >&2
+              exit 1
+            fi
+          }
+          expect '*.dmg' 2          # macOS arm64 + x64
+          expect '*-mac.zip' 2      # the update feed's payloads for both arches
+          expect '*.exe' 1          # Windows NSIS installer
+          expect '*.AppImage' 1     # Linux
+          expect 'latest*.yml' 3    # one update feed per platform (mac's is merged)
 
       - name: Extract the CHANGELOG section for this tag
         run: |
@@ -329,7 +369,19 @@ jobs:
           fi
           cat "$RUNNER_TEMP/notes.md"
 
-      - name: Write the notes into the draft release
+      - name: Create or refresh the single draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --draft --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$tag" --draft --title "${tag#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          # An array, not a glob: one asset ("AnyCode Setup 0.0.1.exe") has
+          # spaces in its name, and word-splitting would upload it as two.
+          shopt -s nullglob
+          files=(assets/*)
+          gh release upload "$tag" "${files[@]}" --clobber
