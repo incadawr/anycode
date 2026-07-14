@@ -10,6 +10,9 @@ coverage/
 # Claude Code local state (worktrees, local settings)
 .claude/
 
+# Agent worktrees (harness-agnostic)
+.agents/
+
 # JetBrains IDE
 .idea/
 

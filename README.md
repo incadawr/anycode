@@ -14,6 +14,14 @@ Manual end-to-end validation has so far covered only Z.AI (GLM). Anthropic and
 custom Anthropic-compatible endpoints are supported in the configuration model,
 but require further practical validation before they are release-ready.
 
+## Download
+
+Installers for macOS, Windows, and Linux are published on the
+[Releases](https://github.com/incadawr/anycode/releases) page.
+
+The Windows installer is not code-signed: SmartScreen reports an unknown
+publisher on first run, and you continue through **More info → Run anyway**.
+
 ## Repository layout
 
 - `apps/desktop` — Electron desktop application.
@@ -52,7 +60,13 @@ procedure, and [CHANGELOG.md](CHANGELOG.md) for user-facing changes.
 [ROADMAP.md](ROADMAP.md) describes direction and planned harness profiles.
 Repository conventions for agents are in [AGENTS.md](AGENTS.md).
 
+## Contributing
+
+Contributions and feedback are welcome. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+For security vulnerabilities, use the private reporting process in
+[SECURITY.md](SECURITY.md).
+
 ## License
 
-A public license has not been selected yet. Do not assume permission to reuse
-or redistribute this code until a license is added.
+AnyCode is licensed under the [Apache License 2.0](LICENSE).
