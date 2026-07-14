@@ -409,6 +409,60 @@ async function getTabState(ctx, step, tabId) {
   return full?.snapshot?.states?.[tabId];
 }
 
+// `main`'s codex-engine readiness (`codexReady` in main/index.ts, gating
+// `manager.canSpawn("codex")` -> tab-ipc.ts's `not_ready` refusal) is set by a
+// FIRE-AND-FORGET async "codex doctor" probe kicked off at boot
+// (`codexOnboarding.recheck()`, main/index.ts, never awaited before the
+// window appears) — a real `codex app-server` child spawn + version
+// preflight + `initialize` + `account/read` + paginated `model/list`, bounded
+// by `CODEX_DOCTOR_WATCHDOG_MS` (20_000ms, shared/codex-timeouts.ts). A
+// launch that submits the codex draft before that probe resolves gets refused
+// with `not_ready`, rendered as this exact prose by
+// `SessionPicker.tsx`'s `describeCreateTabFailure`.
+//
+// The automation snapshot has no read-only signal for this: `GET
+// /start-screen`'s `availableEngines` (automation.ts's `startScreenState`) is
+// deliberately the STATIC compiled-in engine catalog (`[...ENGINE_IDS]`),
+// not draft-scoped and not readiness-gated (codex-fixes TASK.42 cut §3.7) —
+// it says "this build knows how to speak Codex", never "Codex is ready right
+// now". `GET /settings` and `GET /state` carry no codex-onboarding field
+// either. Lacking a proper readiness read, this polls the one thing that DOES
+// reflect the real main-process gate: `POST /start-screen/submit` itself,
+// which resolves through the SAME `manager.canSpawn("codex")` check as any
+// other create path. A `not_ready` refusal leaves the draft untouched by
+// design (start-session.ts's own doc comment, §3-D8), so retrying it is
+// side-effect-free. Any OTHER failure message is treated as a real,
+// non-transient failure and reported immediately — only the exact known
+// not-ready prose is retried.
+const CODEX_DOCTOR_WATCHDOG_MS = 20_000; // mirrors apps/desktop/src/shared/codex-timeouts.ts
+const CODEX_READY_POLL_TIMEOUT_MS = CODEX_DOCTOR_WATCHDOG_MS + 10_000;
+const CODEX_READY_POLL_INTERVAL_MS = 500;
+const CODEX_NOT_READY_MESSAGE = "Configure a provider (API key + model) before opening a tab.";
+
+async function submitCodexDraftWhenReady(ctx, step) {
+  const deadline = Date.now() + CODEX_READY_POLL_TIMEOUT_MS;
+  let attempts = 0;
+  let submitted;
+  for (;;) {
+    attempts += 1;
+    submitted = await apiOk(ctx, step, "POST", "/start-screen/submit", {});
+    if (submitted?.ok === true) {
+      return submitted;
+    }
+    if (submitted?.message !== CODEX_NOT_READY_MESSAGE || Date.now() >= deadline) {
+      break;
+    }
+    await sleep(CODEX_READY_POLL_INTERVAL_MS);
+  }
+  assertLane(
+    step,
+    submitted?.ok === true,
+    `/start-screen/submit rejected for the codex draft after ${attempts} attempt(s) polling up to ${CODEX_READY_POLL_TIMEOUT_MS}ms for main's async codex-doctor readiness gate (main/index.ts codexReady, main/codex-doctor.ts): ${JSON.stringify(submitted)}`,
+    "B2-host (TASK.39 thread/start engine-aware wiring, cut §5.3)",
+  );
+  return submitted;
+}
+
 async function saveScreenshot(ctx, name) {
   try {
     const resp = await api(ctx, "GET", "/screenshot");
@@ -538,8 +592,11 @@ async function step4CreateCodexSession(ctx) {
 
   const allowPrompt = `Run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelAllow)}. Do not explain, just run it.`;
   await apiAction(ctx, 4, "/start-screen/prompt", { text: allowPrompt });
-  const submitted = await apiOk(ctx, 4, "POST", "/start-screen/submit", {});
-  assertLane(4, submitted?.ok === true, `/start-screen/submit rejected for the codex draft: ${JSON.stringify(submitted)}`, "B2-host (TASK.39 thread/start engine-aware wiring, cut §5.3)");
+  // Poll-retries on the real main-process readiness gate rather than a single
+  // shot — see submitCodexDraftWhenReady's own header comment for why (the
+  // async codex-doctor boot probe races this step; `not_ready` is a
+  // transient hydration state, not an absent provider).
+  const submitted = await submitCodexDraftWhenReady(ctx, 4);
   ctx.codexTabId = submitted.tabId;
 
   await waitUntilTabLane(ctx, 4, ctx.codexTabId, { connection: "ready" }, TURN_WAIT_TIMEOUT_MS, "B2-host (TASK.39 thread/start, cut §5.3)");
