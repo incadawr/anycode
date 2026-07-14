@@ -199,6 +199,8 @@ declare global {
         check(): Promise<UpdateActionResult>;
         download(): Promise<UpdateActionResult>;
         install(): Promise<UpdateActionResult>;
+        // TASK.47 defect 2: darwin honest-manual-path action.
+        openReleasesPage(): Promise<UpdateActionResult>;
         onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
       };
       // Custom titlebar (design/ui-track custom-titlebar §4): the platform the

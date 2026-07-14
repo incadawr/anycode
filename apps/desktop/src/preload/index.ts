@@ -134,6 +134,7 @@ import {
   UPDATE_CHECK_CHANNEL,
   UPDATE_DOWNLOAD_CHANNEL,
   UPDATE_INSTALL_CHANNEL,
+  UPDATE_OPEN_RELEASES_CHANNEL,
   UPDATE_STATUS_CHANNEL,
 } from "../shared/updates.js";
 import type { UpdateActionResult, UpdateStatus } from "../shared/updates.js";
@@ -371,6 +372,10 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(UPDATE_DOWNLOAD_CHANNEL) as Promise<UpdateActionResult>,
     install: (): Promise<UpdateActionResult> =>
       ipcRenderer.invoke(UPDATE_INSTALL_CHANNEL) as Promise<UpdateActionResult>,
+    // TASK.47 defect 2: darwin honest-manual-path action — opens the fixed
+    // GitHub Releases URL (main-side constant, no argument crosses here).
+    openReleasesPage: (): Promise<UpdateActionResult> =>
+      ipcRenderer.invoke(UPDATE_OPEN_RELEASES_CHANNEL) as Promise<UpdateActionResult>,
     onUpdateStatus: (callback: (status: UpdateStatus) => void): (() => void) => {
       function listener(_event: unknown, status: UpdateStatus): void {
         callback(status);

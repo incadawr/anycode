@@ -42,6 +42,7 @@ import {
   SETTINGS_PANES,
   shouldShowBaseUrlField,
   shouldShowUpdateBanner,
+  showsManualUpdateLink,
   updateStatusText,
 } from "./SettingsScreen.js";
 
@@ -306,6 +307,17 @@ describe("updateStatusText (slice 2.6, design §6)", () => {
     expect(updateStatusText({ kind: "available", version: "1.2.3" })).toMatch(/1\.2\.3/);
   });
 
+  it("available with manualOnly unset/false -> the plain phrase, no 'GitHub Releases' wording", () => {
+    expect(updateStatusText({ kind: "available", version: "1.2.3" })).not.toMatch(/GitHub Releases/);
+    expect(updateStatusText({ kind: "available", version: "1.2.3", manualOnly: false })).not.toMatch(/GitHub Releases/);
+  });
+
+  it("TASK.47 defect 2: available with manualOnly:true -> names the version AND the honest download-from-Releases wording", () => {
+    const text = updateStatusText({ kind: "available", version: "1.2.3", manualOnly: true });
+    expect(text).toMatch(/1\.2\.3/);
+    expect(text).toMatch(/GitHub Releases/);
+  });
+
   it("downloading -> the percent", () => {
     expect(updateStatusText({ kind: "downloading", percent: 42 })).toMatch(/42/);
   });
@@ -341,6 +353,31 @@ describe("shouldShowUpdateBanner (design §6: non-intrusive — only the two sta
     ];
     for (const status of quiet) {
       expect(shouldShowUpdateBanner(status)).toBe(false);
+    }
+  });
+});
+
+describe("showsManualUpdateLink (TASK.47 defect 2: darwin honest manual-only path)", () => {
+  it("true only for available + manualOnly:true", () => {
+    expect(showsManualUpdateLink({ kind: "available", version: "1.2.3", manualOnly: true })).toBe(true);
+  });
+
+  it("false for available with manualOnly unset or explicitly false", () => {
+    expect(showsManualUpdateLink({ kind: "available", version: "1.2.3" })).toBe(false);
+    expect(showsManualUpdateLink({ kind: "available", version: "1.2.3", manualOnly: false })).toBe(false);
+  });
+
+  it("false for every other status, including downloaded (download() itself refuses manual_only on darwin, so this state never carries the flag)", () => {
+    const others: UpdateStatus[] = [
+      { kind: "idle" },
+      { kind: "checking" },
+      { kind: "downloading", percent: 10 },
+      { kind: "downloaded", version: "1.2.3" },
+      { kind: "not-available" },
+      { kind: "error", message: "x" },
+    ];
+    for (const status of others) {
+      expect(showsManualUpdateLink(status)).toBe(false);
     }
   });
 });

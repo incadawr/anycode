@@ -66,6 +66,8 @@ export interface UpdatesBridge {
   check(): Promise<UpdateActionResult>;
   download(): Promise<UpdateActionResult>;
   install(): Promise<UpdateActionResult>;
+  /** TASK.47 defect 2: darwin honest-manual-path action — opens GitHub Releases in the system browser. */
+  openReleasesPage(): Promise<UpdateActionResult>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
 }
 
@@ -132,6 +134,8 @@ export interface SettingsAppState {
   downloadUpdate(): Promise<UpdateActionResult>;
   /** Quits and installs the downloaded update; refused (`invalid_state`) unless `updateStatus.kind === "downloaded"`. */
   installUpdate(): Promise<UpdateActionResult>;
+  /** TASK.47 defect 2: opens GitHub Releases (darwin honest-manual-path action, or a manual fallback on any platform). */
+  openReleasesUpdate(): Promise<UpdateActionResult>;
 }
 
 /** Human-readable text for a mutation refusal (design §3/ruling §1) — shared by every mutating action's failure path. */
@@ -177,6 +181,8 @@ export function describeUpdateActionFailure(reason: UpdateActionReason): string 
       return "Auto-update is only available in the packaged app.";
     case "invalid_state":
       return "Not available right now — try checking for updates again.";
+    case "manual_only":
+      return "Automatic updates aren't available on this build yet — download the new version from GitHub Releases.";
     default: {
       const exhaustive: never = reason;
       return exhaustive;
@@ -366,6 +372,14 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
 
     async installUpdate(): Promise<UpdateActionResult> {
       const result = await updatesApi().install();
+      if (!result.ok) {
+        set({ notice: describeUpdateActionFailure(result.reason) });
+      }
+      return result;
+    },
+
+    async openReleasesUpdate(): Promise<UpdateActionResult> {
+      const result = await updatesApi().openReleasesPage();
       if (!result.ok) {
         set({ notice: describeUpdateActionFailure(result.reason) });
       }

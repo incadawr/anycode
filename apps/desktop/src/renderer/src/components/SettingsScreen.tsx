@@ -360,7 +360,11 @@ export function updateStatusText(status: UpdateStatus): string {
     case "checking":
       return "Checking for updates…";
     case "available":
-      return `Update v${status.version} available.`;
+      // TASK.47 defect 2: darwin has no Developer ID yet — an honest message
+      // instead of implying an in-app download/install is possible.
+      return status.manualOnly
+        ? `Update v${status.version} available — download from GitHub Releases.`
+        : `Update v${status.version} available.`;
     case "downloading":
       return `Downloading update… ${status.percent}%`;
     case "downloaded":
@@ -379,6 +383,22 @@ export function updateStatusText(status: UpdateStatus): string {
 /** Whether the compact global banner (rendered by `SettingsDialog` even while closed) should show at all — only the two states worth surfacing unprompted (design §6: "non-intrusive"). */
 export function shouldShowUpdateBanner(status: UpdateStatus): boolean {
   return status.kind === "available" || status.kind === "downloaded";
+}
+
+/**
+ * TASK.47 defect 2: whether a status should render the darwin
+ * honest-manual-path action (a GitHub Releases link) instead of the normal
+ * in-app Download button. Only ever true for `available`; `downloaded` never
+ * carries `manualOnly` because `download()` itself refuses `manual_only` on
+ * darwin (main/updater.ts), so that state is structurally unreachable there.
+ * Deliberately a plain `boolean` (not a `status is …` type predicate) —
+ * TypeScript would otherwise narrow the ELSE branch of a ternary using this
+ * to exclude EVERY `available` value (manualOnly true or false alike), not
+ * just the manual-only ones; call sites re-check `status.kind === "available"`
+ * themselves wherever they need the narrowed `version` field.
+ */
+export function showsManualUpdateLink(status: UpdateStatus): boolean {
+  return status.kind === "available" && status.manualOnly === true;
 }
 
 export type McpRowKind = "running" | "completed" | "failed" | "idle";
@@ -1185,13 +1205,27 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                       Restart to install
                     </button>
                   ) : updateStatus.kind === "available" ? (
-                    <button
-                      type="button"
-                      className="settings-button settings-button-primary"
-                      onClick={() => void store.getState().downloadUpdate()}
-                    >
-                      Download v{updateStatus.version}
-                    </button>
+                    updateStatus.manualOnly ? (
+                      // TASK.47 defect 2: darwin has no Developer ID yet — an
+                      // in-app Download button would only fail (Squirrel.Mac
+                      // rejects the ad-hoc signature mismatch), so this opens
+                      // the release page instead of downloading anything.
+                      <button
+                        type="button"
+                        className="settings-button settings-button-primary"
+                        onClick={() => void store.getState().openReleasesUpdate()}
+                      >
+                        Open GitHub Releases
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="settings-button settings-button-primary"
+                        onClick={() => void store.getState().downloadUpdate()}
+                      >
+                        Download v{updateStatus.version}
+                      </button>
+                    )
                   ) : (
                     <button
                       type="button"
@@ -1279,10 +1313,11 @@ export interface SettingsDialogProps {
 /**
  * Non-intrusive global notice (design §6): a compact fixed banner that shows
  * ONLY for the two states worth surfacing unprompted (`available` /
- * `downloaded`, `shouldShowUpdateBanner`) — text plus, when downloaded, a
- * direct "Restart to install" action, so the update is actionable without
- * ever needing to open Settings. Consent-first throughout: install only
- * fires on this explicit click.
+ * `downloaded`, `shouldShowUpdateBanner`) — text plus a direct action (when
+ * downloaded, "Restart to install"; TASK.47 defect 2, when darwin's
+ * manual-only `available`, "Open GitHub Releases"), so the update is
+ * actionable without ever needing to open Settings. Consent-first
+ * throughout: install/download only fire on an explicit click here.
  */
 function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: SettingsStoreApi }) {
   if (!shouldShowUpdateBanner(status)) {
@@ -1294,6 +1329,11 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
       {status.kind === "downloaded" && (
         <button type="button" className="update-banner-action" onClick={() => void store.getState().installUpdate()}>
           Restart to install
+        </button>
+      )}
+      {showsManualUpdateLink(status) && (
+        <button type="button" className="update-banner-action" onClick={() => void store.getState().openReleasesUpdate()}>
+          Open GitHub Releases
         </button>
       )}
     </div>
