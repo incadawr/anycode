@@ -638,7 +638,32 @@ async function step6DenyCommand(ctx) {
   await waitUntilTabLane(ctx, 6, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS, "B1 (TASK.38 §2(c) decline-continuation, L1)");
 
   assertLane(6, !existsSync(ctx.sentinelDeny), `denied command's sentinel file WAS created (deny did not block execution): ${ctx.sentinelDeny}`, "B1 (TASK.38 deny -> {decision:\"decline\"} mapping, cut §2(c))");
-  pass(6, `command approval DENIED — sentinel file confirmed ABSENT: ${ctx.sentinelDeny}`);
+
+  // W17: the LIVE tab (not just the post-resume projection checked in step 9)
+  // must actually render the denied command as a tool_call block — the
+  // defect this wave fixes was event-translator.ts's onItemStarted never
+  // emitting {type:"tool_call"} at all, so no card existed for
+  // tool_execution_start/tool_result to patch and the denied command rendered
+  // nothing on screen.
+  const state = await getTabState(ctx, 6, ctx.codexTabId);
+  const transcript = Array.isArray(state?.transcript) ? state.transcript : [];
+  const deniedBlock = transcript.find(
+    (b) => b?.kind === "tool_call" && typeof b?.input?.command === "string" && b.input.command.includes(ctx.sentinelDeny),
+  );
+  assertLane(
+    6,
+    deniedBlock !== undefined,
+    `live transcript has no tool_call block for the denied command (sentinel ${ctx.sentinelDeny}); transcript kinds: [${transcript.map((b) => b?.kind ?? "?").join(", ")}]`,
+    "W17 (event-translator.ts onItemStarted tool_call emission)",
+  );
+  assertLane(
+    6,
+    deniedBlock?.status === "denied",
+    `live tool_call block for the denied command has status ${JSON.stringify(deniedBlock?.status)}, expected "denied"`,
+    "W17 (statusFor declined -> denied mapping)",
+  );
+
+  pass(6, `command approval DENIED — sentinel file confirmed ABSENT: ${ctx.sentinelDeny}; live transcript shows a tool_call block with status=denied`);
 }
 
 // ── pre-Stop capture (W16, facts 13+16): snapshot the ALLOW+DENY transcript
@@ -653,13 +678,17 @@ async function capturePreStopSnapshot(ctx, step) {
   const kindOrder = normalizedKindOrder(transcript);
   const reasoningCount = transcript.filter((b) => b?.kind === "reasoning").length;
 
-  // A harness gap, not a production defect (fact 16) — the scenario must
-  // itself elicit assistant_text -> tool_call -> assistant_text before any
-  // W6/W8 regression can be told apart from a merely-empty transcript.
+  // The scenario must itself elicit assistant_text -> tool_call ->
+  // assistant_text before any W6/W8 regression can be told apart from a
+  // merely-empty transcript (fact 16). W17: a red run here once got
+  // mislabeled in this comment/message as "a harness gap, not a production
+  // defect" — it was in fact a real production defect (event-translator.ts's
+  // onItemStarted never emitted {type:"tool_call"} live). This assertion
+  // stays a plain, non-exculpatory description of what is missing.
   assert(
     step,
     hasAdjacentAssistantToolAssistant(kindOrder),
-    `scenario did not produce the discriminating form (assistant_text -> tool_call -> assistant_text) in the ALLOW turn — this is a harness gap (the scenario failed to elicit the shape), not a production defect; normalized kind order: [${kindOrder.join(", ")}]`,
+    `scenario did not produce the discriminating form (assistant_text -> tool_call -> assistant_text) in the ALLOW turn; normalized kind order: [${kindOrder.join(", ")}]`,
   );
   // Live-only discriminator (this wave's spec, fact 16): the ALLOW turn must
   // contain at least one reasoning block, or a live W6 rollback cannot be

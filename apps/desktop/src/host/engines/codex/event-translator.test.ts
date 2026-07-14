@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { TurnTranslator } from "./event-translator.js";
@@ -6,6 +8,39 @@ import { TurnItemIndex, fileChangesOf } from "./turn-item-index.js";
 
 const THREAD_ID = "synthetic-thread";
 const TURN_ID = "synthetic-turn";
+
+const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
+
+/**
+ * Loads a REAL captured app-server trace (contract/fixtures/*.jsonl, cut §2(h))
+ * and replays it through a translator scoped to the turn the fixture's FIRST
+ * `threadId`+`turnId`-bearing message names — a fixture may contain more than
+ * one native turn (e.g. w1-p1-command-decline.jsonl's second, tool-free turn),
+ * and `matchingTurn` inside the translator already discards everything
+ * addressed to any other turn, so replaying every notification here is safe.
+ */
+function translateLiveFixture(fileName: string): AgentEvent[] {
+  const raw = readFileSync(join(FIXTURES_DIR, fileName), "utf8");
+  const messages = raw
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as { method?: unknown; id?: unknown; params?: unknown });
+  // Notifications only (server requests/client responses also carry an "id").
+  const notifications: JsonRpcNotification[] = messages
+    .filter((message) => typeof message.method === "string" && message.id === undefined)
+    .map((message) => ({ method: message.method as string, params: message.params }));
+  let turnKey: { threadId: string; turnId: string } | undefined;
+  for (const message of notifications) {
+    const params = message.params as Record<string, unknown> | undefined;
+    if (typeof params?.threadId === "string" && typeof params?.turnId === "string") {
+      turnKey = { threadId: params.threadId, turnId: params.turnId };
+      break;
+    }
+  }
+  if (!turnKey) throw new Error(`fixture ${fileName} has no threadId+turnId-bearing notification`);
+  const translator = new TurnTranslator({ threadId: turnKey.threadId, turnId: turnKey.turnId, turn: 1 });
+  return notifications.flatMap((message) => translator.onNotification(message));
+}
 
 function started(): JsonRpcNotification {
   return { method: "turn/started", params: { threadId: THREAD_ID, turn: { id: TURN_ID } } };
@@ -117,7 +152,15 @@ describe("TurnTranslator — renderer invariants", () => {
       }),
       ...translator.finishTerminal("cancelled"),
     ];
-    expect(types(events)).toEqual(["text_start", "tool_execution_start", "text_end", "tool_result", "turn_end", "loop_end"]);
+    expect(types(events)).toEqual([
+      "text_start",
+      "tool_call",
+      "tool_execution_start",
+      "text_end",
+      "tool_result",
+      "turn_end",
+      "loop_end",
+    ]);
     expect(events.find((event) => event.type === "tool_result")).toMatchObject({ outcome: { toolCallId: "tool", status: "cancelled" } });
   });
 
@@ -186,8 +229,17 @@ describe("TurnTranslator — renderer invariants", () => {
     // Pre-fix: projectTool() only ever read `item.changes[0]`, so only ONE
     // tool_execution_start would have been emitted here — b.txt would never
     // appear.
-    expect(started).toHaveLength(2);
-    expect(started.map((event) => (event as { toolCallId: string }).toolCallId)).toEqual(["fc:0", "fc:1"]);
+    // Each projection now emits its own tool_call/tool_execution_start pair
+    // (W17): 2 files -> 4 events, tool_call immediately before its matching
+    // tool_execution_start.
+    expect(started).toHaveLength(4);
+    expect(types(started)).toEqual(["tool_call", "tool_execution_start", "tool_call", "tool_execution_start"]);
+    expect(
+      started.filter((event) => event.type === "tool_call").map((event) => (event as { toolCall: { id: string } }).toolCall.id),
+    ).toEqual(["fc:0", "fc:1"]);
+    expect(
+      started.filter((event) => event.type === "tool_execution_start").map((event) => (event as { toolCallId: string }).toolCallId),
+    ).toEqual(["fc:0", "fc:1"]);
 
     const completed = translator.onNotification({
       method: "item/completed",
@@ -298,5 +350,53 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
   it("ignores a warning addressed to a foreign thread", () => {
     const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
     expect(translator.onNotification({ method: "warning", params: { threadId: "other-thread", message: "irrelevant" } })).toEqual([]);
+  });
+});
+
+/**
+ * W17 red-first: replays REAL captured live traces (not synthetic fixtures)
+ * through the translator and proves the renderer's documented lifecycle
+ * (store.ts:1436 `tool_call -> tool_execution_start -> tool_result`) actually
+ * holds on the wire. Before the fix, `onItemStarted` never emitted
+ * `{type:"tool_call"}` at all — these assertions were failing (no tool_call
+ * event existed to find) on both fixtures, ALLOW and DECLINE alike.
+ */
+describe("TurnTranslator — live wire: tool_call precedes tool_execution_start (W17)", () => {
+  it("w0-command-accept.jsonl (ALLOW): tool_call precedes its tool_execution_start with matching id/name/input", () => {
+    const events = translateLiveFixture("w0-command-accept.jsonl");
+    const toolCallIndex = events.findIndex((event) => event.type === "tool_call");
+    const startIndex = events.findIndex((event) => event.type === "tool_execution_start");
+    expect(toolCallIndex).toBeGreaterThanOrEqual(0);
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    expect(toolCallIndex).toBeLessThan(startIndex);
+
+    const toolCall = events[toolCallIndex] as Extract<AgentEvent, { type: "tool_call" }>;
+    const start = events[startIndex] as Extract<AgentEvent, { type: "tool_execution_start" }>;
+    expect(toolCall.toolCall.id).toBe(start.toolCallId);
+    expect(toolCall.toolCall.name).toBe(start.toolName);
+    expect(toolCall.toolCall.input).toEqual(start.input);
+    expect(start).toMatchObject({ toolName: "Bash", input: { command: expect.stringContaining("w0-command-sentinel.txt") } });
+
+    const result = events.find((event) => event.type === "tool_result") as Extract<AgentEvent, { type: "tool_result" }> | undefined;
+    expect(result?.outcome).toMatchObject({ toolCallId: toolCall.toolCall.id, status: "success" });
+  });
+
+  it("w1-p1-command-decline.jsonl (DECLINE): tool_call precedes its tool_execution_start with matching id/name/input, and the outcome is denied", () => {
+    const events = translateLiveFixture("w1-p1-command-decline.jsonl");
+    const toolCallIndex = events.findIndex((event) => event.type === "tool_call");
+    const startIndex = events.findIndex((event) => event.type === "tool_execution_start");
+    expect(toolCallIndex).toBeGreaterThanOrEqual(0);
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    expect(toolCallIndex).toBeLessThan(startIndex);
+
+    const toolCall = events[toolCallIndex] as Extract<AgentEvent, { type: "tool_call" }>;
+    const start = events[startIndex] as Extract<AgentEvent, { type: "tool_execution_start" }>;
+    expect(toolCall.toolCall.id).toBe(start.toolCallId);
+    expect(toolCall.toolCall.name).toBe(start.toolName);
+    expect(toolCall.toolCall.input).toEqual(start.input);
+    expect(start).toMatchObject({ toolName: "Bash", input: { command: expect.stringContaining("w1-sentinel.txt") } });
+
+    const result = events.find((event) => event.type === "tool_result") as Extract<AgentEvent, { type: "tool_result" }> | undefined;
+    expect(result?.outcome).toMatchObject({ toolCallId: toolCall.toolCall.id, status: "denied" });
   });
 });

@@ -137,6 +137,15 @@ export class TurnTranslator {
     const events: AgentEvent[] = [];
     for (const projection of projections) {
       this.tools.set(projection.toolCallId, projection);
+      // Renderer contract (store.ts): a tool_call block is created ONLY on
+      // {type:"tool_call"} — tool_execution_start/tool_result are patch-only,
+      // silent no-ops without it (W17 fix: this emission was missing, so a
+      // live turn's real commands/file-changes never rendered any card at
+      // all, allow/deny/cancel alike).
+      events.push({
+        type: "tool_call",
+        toolCall: { id: projection.toolCallId, name: projection.toolName, input: projection.input },
+      });
       events.push({ type: "tool_execution_start", toolCallId: projection.toolCallId, toolName: projection.toolName, input: projection.input });
     }
     return events;
