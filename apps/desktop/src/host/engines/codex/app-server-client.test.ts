@@ -23,6 +23,30 @@ writeFileSync(
   ].map((message) => JSON.stringify(message)).join("\n") + "\n",
 );
 
+/**
+ * A scripted app-server that answers EVERY request with a JSON-RPC error —
+ * `turn/interrupt` with the live `-32600` / "no active turn to interrupt" the
+ * real app-server returns for an interrupt sent inside its reject window
+ * (TASK.38), anything else with a codeless error. Written to the temp fixture
+ * dir rather than test-child.mjs so the classification test owns its own wire.
+ */
+const erroringChild = join(fixtureDir, "erroring-child.mjs");
+writeFileSync(
+  erroringChild,
+  [
+    "import readline from 'node:readline';",
+    "if (process.argv.includes('--version')) { process.stdout.write('codex-cli 0.144.1\\n'); process.exit(0); }",
+    "const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
+    "rl.on('line', (line) => {",
+    "  const request = JSON.parse(line);",
+    "  const error = request.method === 'turn/interrupt'",
+    "    ? { code: -32600, message: 'no active turn to interrupt' }",
+    "    : { message: 'unclassified failure' };",
+    "  process.stdout.write(JSON.stringify({ id: request.id, error }) + '\\n');",
+    "});",
+  ].join("\n") + "\n",
+);
+
 afterAll(() => rmSync(fixtureDir, { recursive: true, force: true }));
 
 async function waitForFile(path: string, timeoutMs = 1_000): Promise<void> {
@@ -101,6 +125,32 @@ describe("AppServerClient", () => {
     try {
       await client.start();
       expect(binaryTrust).toHaveBeenCalledTimes(2);
+    } finally {
+      await client.close();
+    }
+  });
+
+  // TASK.38 (W12): the rejection a failed request carries is the ONLY place a
+  // caller can learn WHICH failure it was. Pre-fix the dispatcher kept the
+  // message and dropped `code`, so `-32600` ("no active turn to interrupt" — the
+  // interrupt reject window) was indistinguishable from any other failure and
+  // the engine could not know it had to retry.
+  it("carries the JSON-RPC error code on the rejection, so a caller can classify a failure", async () => {
+    const client = makeClient([], { binaryArgs: [erroringChild] });
+    try {
+      await client.start();
+
+      const rejection = await client
+        .request("turn/interrupt", { threadId: "t", turnId: "u" })
+        .then(() => null, (error: unknown) => error);
+      expect(rejection).toBeInstanceOf(AppServerClientError);
+      expect((rejection as AppServerClientError).message).toContain("no active turn to interrupt");
+      expect((rejection as AppServerClientError).code).toBe(-32600);
+
+      // An error frame WITHOUT a code stays codeless — no code is invented.
+      const codeless = await client.request("thread/read").then(() => null, (error: unknown) => error);
+      expect(codeless).toBeInstanceOf(AppServerClientError);
+      expect((codeless as AppServerClientError).code).toBeUndefined();
     } finally {
       await client.close();
     }

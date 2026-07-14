@@ -68,9 +68,20 @@ export interface AppServerClientOptions {
 }
 
 export class AppServerClientError extends Error {
-  constructor(message: string) {
+  /**
+   * The JSON-RPC `code` of the server's error response, when it carried one.
+   * The message alone cannot classify a failure (it is free-form server prose),
+   * so callers that must react to a SPECIFIC refusal — e.g. `-32600` "no active
+   * turn to interrupt", the app-server's answer to an interrupt that arrives
+   * inside its turn-start reject window (TASK.38) — read this instead.
+   * Undefined for every locally-raised failure (timeout, transport, bounds).
+   */
+  readonly code?: number;
+
+  constructor(message: string, code?: number) {
     super(message);
     this.name = "AppServerClientError";
+    this.code = code;
   }
 }
 
@@ -586,8 +597,11 @@ export class AppServerClient {
       this.pending.delete(message.id);
       if (pending.timer) clearTimeout(pending.timer);
       if (message.error !== undefined) {
-        const error = message.error as { message?: unknown };
-        pending.reject(new AppServerClientError(`app-server request failed: ${typeof error.message === "string" ? error.message : "unknown error"}`));
+        const error = message.error as { message?: unknown; code?: unknown };
+        pending.reject(new AppServerClientError(
+          `app-server request failed: ${typeof error.message === "string" ? error.message : "unknown error"}`,
+          typeof error.code === "number" ? error.code : undefined,
+        ));
       } else {
         pending.resolve(message.result);
       }

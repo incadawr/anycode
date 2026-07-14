@@ -161,10 +161,22 @@ class FakeAppServer implements CodexClient {
   readonly observers = new Set<(notification: JsonRpcNotification) => void>();
   readonly stream = new Notifications(this.observers);
   closeCount = 0;
+  /** EVERY `turn/interrupt` the server received, rejected ones included. */
   interrupts = 0;
   turnStartMode: TurnStartMode = "immediate";
   /** "complete": the interrupted turn settles; "silent": the server never settles it. */
   interruptSettles: "complete" | "silent" = "complete";
+  /**
+   * How many `turn/interrupt` calls are rejected with JSON-RPC `-32600`
+   * ("no active turn to interrupt") before one is accepted — the LIVE reject
+   * window measured on codex-cli 0.144.3 (TASK.38): an interrupt sent in the
+   * first ~10-25ms of a turn's life is refused even though `turn/start` has
+   * already returned a real turn id. 0 (the default) reproduces the previous
+   * fake exactly: the first interrupt is accepted.
+   */
+  interruptRejections = 0;
+  private rejectedInterrupts = 0;
+  private acceptedInterrupts = 0;
   account: unknown = { type: "chatgpt" };
   /**
    * Catalog pages, keyed by cursor ("" = first page). Modelled on the LIVE
@@ -299,7 +311,18 @@ class FakeAppServer implements CodexClient {
     }
     if (method === "turn/interrupt") {
       this.interrupts += 1;
-      if (this.interrupts > 1) return new Promise<T>(() => {}); // black hole (L9)
+      // The live reject window (see interruptRejections): while no interrupt has
+      // been ACCEPTED yet and rejections remain, the server refuses this one with
+      // the real wire error. `code` rides the rejection exactly as AppServerClient
+      // now surfaces it.
+      if (this.acceptedInterrupts === 0 && this.rejectedInterrupts < this.interruptRejections) {
+        this.rejectedInterrupts += 1;
+        return Promise.reject(
+          Object.assign(new Error("app-server request failed: no active turn to interrupt"), { code: -32600 }),
+        );
+      }
+      this.acceptedInterrupts += 1;
+      if (this.acceptedInterrupts > 1) return new Promise<T>(() => {}); // black hole (L9)
       if (this.interruptSettles === "complete") {
         const turnId = this.currentTurnId;
         setTimeout(() => this.completeTurn("interrupted", turnId), 0);
@@ -569,6 +592,80 @@ describe("CodexEngine — Stop (TASK.38 blocker)", () => {
     const later = drive(engine, "later", new AbortController().signal);
     await later.done;
     expect(types(later.events)).toEqual(["error", "turn_end", "loop_end"]);
+  });
+
+  // TASK.38 (W12): the live app-server refuses a `turn/interrupt` sent in the
+  // first ~10-25ms of a turn's life with JSON-RPC -32600 — AFTER `turn/start`
+  // has already returned a real turn id. The pre-fix engine sent exactly one
+  // interrupt, swallowed that rejection, and latched: the Stop was lost, and a
+  // turn longer than the settle deadline then failed the session outright.
+  it("retries an interrupt the server rejected as \"no active turn\" until the turn is really interrupted", async () => {
+    const server = new FakeAppServer();
+    server.interruptRejections = 2;
+    server.turnStartMode = "deferred";
+    const engine = new CodexEngine(server, THREAD, undefined, {
+      interruptRetryDelaysMs: [5, 10, 20],
+      postInterruptSettleMs: 200,
+    });
+    const controller = new AbortController();
+    const turn = drive(engine, "stop me instantly", controller.signal);
+    await tick();
+
+    // Stop lands BEFORE the native turn id exists — the exact race that lands
+    // the first interrupt inside the server's reject window.
+    controller.abort();
+    await tick();
+    server.releaseTurnStart();
+    await turn.done;
+
+    const interrupts = server.calls.filter((call) => call.method === "turn/interrupt");
+    expect(server.interrupts).toBe(3); // 2 rejected + 1 accepted
+    expect(interrupts).toHaveLength(3);
+    // Every attempt — retries included — names the SAME captured turn.
+    expect(interrupts.map((call) => (call.params as { turnId?: unknown }).turnId))
+      .toEqual(["native-turn-1", "native-turn-1", "native-turn-1"]);
+    expect(turn.events.at(-1)).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
+    expect(turn.events.some((event) => event.type === "error")).toBe(false);
+    expect(server.closeCount).toBe(0);
+  });
+
+  it("never lets a retried interrupt reach the NEXT turn, even if every attempt is rejected", async () => {
+    const server = new FakeAppServer();
+    server.interruptRejections = 999; // no attempt is ever accepted.
+    server.turnStartMode = "deferred";
+    const engine = new CodexEngine(server, THREAD, undefined, { interruptRetryDelaysMs: [5, 10, 20] });
+    const controller = new AbortController();
+    const first = drive(engine, "stop me instantly", controller.signal);
+    await tick();
+
+    controller.abort();
+    await tick();
+    server.releaseTurnStart();
+    await tick();
+    // The server ignored the Stop and completed the turn normally: the turn the
+    // retry schedule was captured against is now DEAD.
+    server.completeTurn("completed");
+    await first.done;
+
+    // Longer than the whole retry schedule (5 + 10 + 20ms): an ungated retry loop
+    // would keep firing interrupts at a turn that no longer exists.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    server.turnStartMode = "immediate";
+    const second = drive(engine, "next question", new AbortController().signal);
+    await tick();
+    server.completeTurn("completed");
+    await second.done;
+
+    const interrupts = server.calls.filter((call) => call.method === "turn/interrupt");
+    expect(server.interrupts).toBe(1);
+    expect(interrupts.map((call) => (call.params as { turnId?: unknown }).turnId)).toEqual(["native-turn-1"]);
+    // No interrupt may be written after the SECOND turn/start: the second turn is
+    // not the one the user stopped.
+    const secondStart = server.calls.map((call) => call.method).lastIndexOf("turn/start");
+    const lastInterrupt = server.calls.map((call) => call.method).lastIndexOf("turn/interrupt");
+    expect(lastInterrupt).toBeLessThan(secondStart);
+    expect(second.events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
   });
 });
 

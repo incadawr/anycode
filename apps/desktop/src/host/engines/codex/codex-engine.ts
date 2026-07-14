@@ -98,6 +98,14 @@ export interface CodexEngineTimeouts {
   turnStartMs: number;
   interruptMs: number;
   postInterruptSettleMs: number;
+  /**
+   * Back-off before each retry of a `turn/interrupt` the server refused with
+   * `-32600` "no active turn to interrupt" (TASK.38). Engine-LOCAL on purpose:
+   * shared/codex-timeouts.ts is frozen (block C0), and this is not a bound on a
+   * server round-trip — it is the shape of a client-side retry schedule. The
+   * override exists for tests only, exactly like the four bounds above.
+   */
+  interruptRetryDelaysMs: readonly number[];
 }
 
 export const DEFAULT_CODEX_ENGINE_TIMEOUTS: CodexEngineTimeouts = {
@@ -105,7 +113,30 @@ export const DEFAULT_CODEX_ENGINE_TIMEOUTS: CodexEngineTimeouts = {
   turnStartMs: CODEX_TURN_START_TIMEOUT_MS,
   interruptMs: CODEX_TURN_INTERRUPT_TIMEOUT_MS,
   postInterruptSettleMs: CODEX_POST_INTERRUPT_SETTLE_MS,
+  // Attempts land at t≈0, 25, 75, 175 and 375ms. The live reject window measured
+  // on codex-cli 0.144.3 closes by ~25ms after `turn/start` answers, so the
+  // schedule keeps a 4x margin over it while staying two orders of magnitude
+  // inside the 10s post-interrupt settle deadline: a Stop the server refuses can
+  // never be mistaken for a wedged turn.
+  interruptRetryDelaysMs: [25, 50, 100, 200],
 };
+
+/**
+ * The app-server's answer to a `turn/interrupt` that arrives before the turn is
+ * interruptible (measured: within ~10-25ms of `turn/start` answering, even
+ * though it answered with a REAL turn id). Detected duck-typed, on the `code`
+ * AppServerClient now carries — never on the free-form message.
+ */
+const NO_ACTIVE_TURN_RPC_CODE = -32600;
+
+function isNoActiveTurnRejection(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "number" && code === NO_ACTIVE_TURN_RPC_CODE;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function timeouts(overrides?: Partial<CodexEngineTimeouts>): CodexEngineTimeouts {
   return { ...DEFAULT_CODEX_ENGINE_TIMEOUTS, ...overrides };
@@ -990,22 +1021,50 @@ export class CodexEngine implements SessionEngine {
   /**
    * The whole point of the latch: a repeated `turn/interrupt` does not answer
    * while the turn settles (L9), so a second call could only ever add an
-   * unanswerable pending request. Failures are swallowed — the caller's bounded
-   * settle deadline (or close()) is the backstop, and a rejected interrupt must
-   * not itself fail an otherwise-healthy turn.
+   * unanswerable pending request. The latch is therefore taken BEFORE the first
+   * RPC and never released for this turn — it is what makes `beginInterrupt` and
+   * `dispose()` racing each other harmless — and it is reset only by the next
+   * `runTurn`.
+   *
+   * Within that ONE latched call the interrupt is retried, because the server can
+   * legitimately refuse it (TASK.38): a `turn/interrupt` sent in the first
+   * ~10-25ms of a turn's life is answered with `-32600` "no active turn to
+   * interrupt" — even though `turn/start` already returned a real turn id. Sending
+   * it once and swallowing that refusal lost the user's Stop entirely: either the
+   * turn ran to completion as if Stop had never been pressed, or — for any turn
+   * outliving the settle deadline — the deadline fired and killed the session.
+   * Only a `-32600` is retried. A SUCCESS, a timeout, or any other failure ends
+   * the attempt: a genuinely wedged app-server must still be caught by the bounded
+   * settle deadline and closed, which is the terminal backstop this does not touch.
    */
   private async sendInterruptOnce(): Promise<void> {
     const active = this.activeTurn;
     if (active === null || this.interruptSent) return;
     this.interruptSent = true;
-    try {
-      await this.client.request(
-        "turn/interrupt",
-        { threadId: active.threadId, turnId: active.turnId },
-        { timeoutMs: this.bounds.interruptMs },
-      );
-    } catch {
-      // bounded settle / close() remain the terminal backstops.
+    const delays = this.bounds.interruptRetryDelaysMs;
+    for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+      if (attempt > 0) {
+        await delay(delays[attempt - 1]!);
+        // Re-checked immediately before EVERY retry: the turn this schedule was
+        // captured against must still be THE active one. An interrupt aimed at a
+        // dead turn could otherwise reach the server while the NEXT turn is
+        // running and cancel a turn the user never stopped — the server matches
+        // on the live turn, not necessarily on the `turnId` we pass. A turn that
+        // ended, an engine that died or was disposed: all stop the retries
+        // silently, the Stop having already been answered by the turn's own end.
+        if (this.activeTurn !== active || this.disposed || this.terminalError !== null) return;
+      }
+      try {
+        await this.client.request(
+          "turn/interrupt",
+          { threadId: active.threadId, turnId: active.turnId },
+          { timeoutMs: this.bounds.interruptMs },
+        );
+        return;
+      } catch (error) {
+        // bounded settle / close() remain the terminal backstops.
+        if (!isNoActiveTurnRejection(error)) return;
+      }
     }
   }
 
