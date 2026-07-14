@@ -720,6 +720,8 @@ void app.whenReady().then(async () => {
     catalog: projectCatalogSummary(getBuiltinCatalog().providers),
     authKindFor,
     isCustom: isCustomProvider,
+    // TASK.49: dev = apps/desktop/package.json's version, packaged = the bundled version.
+    getAppVersion: () => app.getVersion(),
     oauth: oauthEngine,
     oauthConfigFor: (id) => oauthConfigFromEntry(findCatalogEntry(id)),
     onMutation: async () => {

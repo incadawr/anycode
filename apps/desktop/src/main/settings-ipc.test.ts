@@ -129,6 +129,25 @@ describe("handleGet — snapshot projection", () => {
     expect(snap.providerReady).toBe(false);
     expect(snap.envOverrides).toEqual([]);
     expect(snap.readOnly).toBe(false);
+    expect(snap.appVersion).toBeUndefined();
+  });
+
+  it("TASK.49: populates appVersion from deps.getAppVersion() when supplied", async () => {
+    const snap = await handleGet(makeDeps({ getAppVersion: () => "1.2.3" }));
+    expect(snap.appVersion).toBe("1.2.3");
+  });
+
+  it("TASK.49: omits appVersion entirely (not even undefined-valued) when deps.getAppVersion is absent", async () => {
+    const snap = await handleGet(makeDeps());
+    expect("appVersion" in snap).toBe(false);
+  });
+
+  it("TASK.49: a mutation's fresh snapshot also carries appVersion — main never imports electron here, only the injected deps.getAppVersion", async () => {
+    const res = await handleSet(makeDeps({ getAppVersion: () => "9.9.9" }), { ui: { theme: "dark" } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.snapshot.appVersion).toBe("9.9.9");
+    }
   });
 
   it("reflects an env override in envOverrides + status source", async () => {

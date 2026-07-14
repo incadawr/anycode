@@ -205,6 +205,15 @@ export interface SettingsSnapshot {
    * builder. Renderers treat an absent value as an empty catalog.
    */
   catalog?: CatalogSummary;
+  /**
+   * The running app's version (TASK.49), sourced from `app.getVersion()` — in
+   * dev that resolves to `apps/desktop/package.json`'s `version`, in a packaged
+   * build to the bundled app's version. Optional/additive so this stays a pure
+   * projection: main only populates it when its `SettingsIpcDeps.getAppVersion`
+   * is supplied (settings-ipc.ts), and the About pane renders it as-is — it is
+   * NEVER hardcoded in the renderer.
+   */
+  appVersion?: string;
 }
 
 // ── mutating-channel result shape (all mutators return a fresh snapshot) ──

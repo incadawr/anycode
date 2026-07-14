@@ -1164,6 +1164,9 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                       <span className="welcome-ramp-dot welcome-ramp-yolo" />
                     </div>
                     <span className="settings-about-tag">A coding agent for any provider.</span>
+                    {snapshot.appVersion !== undefined && (
+                      <span className="settings-about-version">Version {snapshot.appVersion}</span>
+                    )}
                   </div>
                 </div>
               </section>

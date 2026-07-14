@@ -89,6 +89,14 @@ export interface SettingsIpcDeps {
   oauth?: OAuthRunnerLike;
   /** Per-provider oauth config; undefined -> the provider is not oauth (`unsupported`). */
   oauthConfigFor?: (providerId: string) => OAuthProviderConfig | undefined;
+  /**
+   * TASK.49: returns the running app's version for `SettingsSnapshot.appVersion`.
+   * Injected (never `import { app } from "electron"` here) so this module keeps
+   * the same DI discipline as automation/handlers.ts's `AppLike` and stays
+   * unit-testable with a fake. main/index.ts wires `() => app.getVersion()`;
+   * absent in a test deps bag simply omits `appVersion` from the snapshot.
+   */
+  getAppVersion?: () => string;
 }
 
 
@@ -210,6 +218,7 @@ async function snapshotFrom(
     envOverrides: envOverrides(deps.bootEnv),
     readOnly,
     ...(deps.catalog !== undefined ? { catalog: deps.catalog } : {}),
+    ...(deps.getAppVersion !== undefined ? { appVersion: deps.getAppVersion() } : {}),
   };
 }
 
