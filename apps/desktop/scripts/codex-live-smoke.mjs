@@ -590,7 +590,13 @@ async function step4CreateCodexSession(ctx) {
   const afterEngine = await apiOk(ctx, 4, "GET", "/start-screen");
   assert(4, afterEngine?.engine === "codex", `engine read-back after POST /start-screen/engine is not "codex": ${JSON.stringify(afterEngine?.engine)}`);
 
-  const allowPrompt = `Run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelAllow)}. Do not explain, just run it.`;
+  // W16 (fact 16: `thread/read` never returns an EMPTY agentMessage — the
+  // old "Do not explain, just run it" prompt made the model emit exactly
+  // that, so the discriminating agentMessage -> commandExecution ->
+  // agentMessage shape was structurally unreachable through this turn, and
+  // the W6 invariant (30da16b) went unexercised live). The three-part form
+  // below forces two non-empty assistant_text blocks around the tool_call.
+  const allowPrompt = `First write one short sentence saying you are about to run the command. Then run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelAllow)}. After it finishes, write one short sentence confirming it ran. All three parts are required - do not skip the sentences.`;
   await apiAction(ctx, 4, "/start-screen/prompt", { text: allowPrompt });
   // Poll-retries on the real main-process readiness gate rather than a single
   // shot — see submitCodexDraftWhenReady's own header comment for why (the
@@ -635,9 +641,47 @@ async function step6DenyCommand(ctx) {
   pass(6, `command approval DENIED — sentinel file confirmed ABSENT: ${ctx.sentinelDeny}`);
 }
 
+// ── pre-Stop capture (W16, facts 13+16): snapshot the ALLOW+DENY transcript
+// AFTER step 6 reaches idle but BEFORE step 7 interrupts a new turn — this
+// is the last point where the transcript is known-quiescent and provably
+// contains the discriminating shape, so step 9 has a known-good normalized
+// order to compare the post-resume transcript against. ──
+
+async function capturePreStopSnapshot(ctx, step) {
+  const state = await getTabState(ctx, step, ctx.codexTabId);
+  const transcript = Array.isArray(state?.transcript) ? state.transcript : [];
+  const kindOrder = normalizedKindOrder(transcript);
+  const reasoningCount = transcript.filter((b) => b?.kind === "reasoning").length;
+
+  // A harness gap, not a production defect (fact 16) — the scenario must
+  // itself elicit assistant_text -> tool_call -> assistant_text before any
+  // W6/W8 regression can be told apart from a merely-empty transcript.
+  assert(
+    step,
+    hasAdjacentAssistantToolAssistant(kindOrder),
+    `scenario did not produce the discriminating form (assistant_text -> tool_call -> assistant_text) in the ALLOW turn — this is a harness gap (the scenario failed to elicit the shape), not a production defect; normalized kind order: [${kindOrder.join(", ")}]`,
+  );
+  // Live-only discriminator (this wave's spec, fact 16): the ALLOW turn must
+  // contain at least one reasoning block, or a live W6 rollback cannot be
+  // told apart from a healthy transcript here — reasoning is what pushes the
+  // shadow log's positionInTurn past native.length, which is what would sink
+  // the tool_call to the turn's tail if the W6 anchor (30da16b) regressed.
+  assert(
+    step,
+    reasoningCount >= 1,
+    `pre-Stop transcript shows zero reasoning blocks in the ALLOW turn — a live run needs >=1 reasoning block to discriminate a W6 rollback (positionInTurn vs native.length); normalized kind order: [${kindOrder.join(", ")}]`,
+  );
+
+  ctx.preStopKindOrder = kindOrder;
+  await saveScreenshot(ctx, "step-7-pre-stop-transcript");
+  return kindOrder;
+}
+
 // ── step 7: send a slow prompt, Stop it mid-turn, verify the turn returns to idle promptly ──
 
 async function step7StopTurn(ctx) {
+  const preStopKindOrder = await capturePreStopSnapshot(ctx, 7);
+
   const slowPrompt =
     "Count out loud from one to fifty. For EVERY single number, write a full separate paragraph of at least three sentences describing something interesting about that number before moving to the next one. Do not use any tools.";
   await apiAction(ctx, 7, `/tabs/${ctx.codexTabId}/prompt`, { text: slowPrompt });
@@ -646,7 +690,7 @@ async function step7StopTurn(ctx) {
   await apiAction(ctx, 7, `/tabs/${ctx.codexTabId}/stop`, {});
   await waitUntilTabLane(ctx, 7, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS, "B1 (TASK.38 single-fire abort-promise / sendInterruptOnce, cut §2(b))");
 
-  pass(7, "Stop mid-turn returned the session to idle without a tab restart");
+  pass(7, `Stop mid-turn returned the session to idle without a tab restart (pre-Stop discriminating shape confirmed: [${preStopKindOrder.join(", ")}])`);
 }
 
 // ── step 8: quit, orphan-check #1, relaunch on the SAME profile ──
@@ -756,6 +800,45 @@ function transcriptDoesNotOpenOnTool(blocks) {
   return blocks.length > 0 && blocks[0]?.kind !== "tool_call";
 }
 
+// ── normalized kind-order helpers (W16, fact 16: `thread/read` never returns
+// an empty agentMessage server-side, but a local live turn can still emit
+// one transiently before the server round-trip settles). Shape comparisons
+// below are noise-blind to `reasoning` (narration, not part of the
+// discriminating shape) and to EMPTY `assistant_text` blocks — everything
+// else, including block ORDER, is preserved exactly. ──
+
+function isBlankText(block) {
+  const combined = `${block?.text ?? ""}${block?.modelText ?? ""}`.trim();
+  return combined.length === 0;
+}
+
+function normalizedKindOrder(blocks) {
+  return blocks
+    .filter((b) => b?.kind !== "reasoning")
+    .filter((b) => b?.kind !== "assistant_text" || !isBlankText(b))
+    .map((b) => b?.kind ?? "?");
+}
+
+/**
+ * The W6/W8 discriminating shape (fact 16): an assistant reply, then a
+ * command, then another assistant reply, ADJACENT in the normalized order.
+ * Neither a W6 rollback (command sinks to the turn's tail) nor a W8
+ * rollback (tail message evicted) can produce this exact triple — the
+ * two-prompt scenario prior waves shipped never emitted it at all (both
+ * prompts said "do not explain", so agentMessage was empty and therefore
+ * ABSENT, fact 16), which is WHY the W6 invariant went unexercised through
+ * the GUI until this wave's three-part ALLOW prompt (step 4) made it
+ * reachable.
+ */
+function hasAdjacentAssistantToolAssistant(kindOrder) {
+  for (let i = 0; i + 2 < kindOrder.length; i += 1) {
+    if (kindOrder[i] === "assistant_text" && kindOrder[i + 1] === "tool_call" && kindOrder[i + 2] === "assistant_text") {
+      return true;
+    }
+  }
+  return false;
+}
+
 // ── step 9: resume the codex session, check the transcript ──
 
 async function step9ResumeAndCheckTranscript(ctx) {
@@ -793,10 +876,15 @@ async function step9ResumeAndCheckTranscript(ctx) {
 
   // W8: the turn's own last message must not be evicted by a re-delivered
   // stale shadow-logged command — the transcript must not end mid-command.
+  // (W16: the failure prose used to claim the transcript "ends on a
+  // tool_call", which is false whenever a later turn appends more history
+  // after that tool_call without ever adding an assistant_text of its own
+  // (fact 13) — the actual invariant this checks is narrower: no
+  // assistant_text anywhere after the LAST tool_call.)
   assertLane(
     9,
     turnHasAssistantTail(transcript),
-    `resumed transcript ends on a tool_call with no assistant_text after it (turn cut off on a command) — kind order: [${kindOrder}]`,
+    `resumed transcript has no assistant_text after the last tool_call — kind order: [${kindOrder}]`,
     "W8 (895b380: let a re-delivered command enrich its row, and stop old commands from evicting live history)",
   );
   // W6: the command must keep ITS OWN place between the agent messages that
@@ -814,6 +902,22 @@ async function step9ResumeAndCheckTranscript(ctx) {
     transcriptDoesNotOpenOnTool(transcript),
     `resumed transcript opens with a tool_call block instead of the original user/assistant history — kind order: [${kindOrder}]`,
     "W8 (895b380: stop old commands from evicting live history)",
+  );
+  // W16 (facts 13+16): the post-resume normalized order must equal the
+  // pre-Stop normalized order (captured in step 7, before the Stop) PLUS a
+  // trailing "user_text" — fact 13: the interrupted step-7 turn persists
+  // ONLY its userMessage (zero agent-items). Any other delta — a shifted
+  // tool_call, a dropped assistant_text, a mismatched length anywhere but
+  // the expected tail — is a live W6/W8 rollback.
+  const postKindOrder = normalizedKindOrder(transcript);
+  const expectedKindOrder = [...(ctx.preStopKindOrder ?? []), "user_text"];
+  const kindOrdersMatch =
+    postKindOrder.length === expectedKindOrder.length && postKindOrder.every((k, i) => k === expectedKindOrder[i]);
+  assertLane(
+    9,
+    kindOrdersMatch,
+    `resumed normalized kind order != pre-Stop normalized kind order + trailing "user_text" (fact 13: an interrupted turn persists only userMessage) — pre-Stop: [${(ctx.preStopKindOrder ?? []).join(", ")}], post-resume: [${postKindOrder.join(", ")}]`,
+    "W6/W8 (fact 13 interrupted-turn persistence, fact 16 empty-agentMessage projection)",
   );
 
   await saveScreenshot(ctx, "step-9-resumed-transcript");
@@ -934,6 +1038,7 @@ async function run() {
     profileDbPath: null,
     profileAutomationInfo: null,
     teardownPromise: null,
+    preStopKindOrder: null,
     screenshotDir: join(desktopRoot, "out", "codex-live-smoke"),
   };
   installSignalTeardown(ctx);
