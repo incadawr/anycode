@@ -462,7 +462,13 @@ describe("SqlitePersistenceAdapter", () => {
       expect(await adapter.listCodexThreadItems("thread-missing")).toEqual([]);
     });
 
-    it("a repeated write for the same (threadId, itemId) is idempotent — no duplicate row (basic shape)", async () => {
+    it("a repeated write for the same (threadId, itemId) is idempotent — no duplicate row, AND enriches a sparse row with the later rich payload (W8 MEDIUM-1)", async () => {
+      // Pre-fix (W7's INSERT OR IGNORE): the second write is a total no-op —
+      // the row stays sparse forever, silently losing exitCode/outputHead
+      // even though a later, more complete notification for the same item
+      // DID arrive. A row-count assertion alone can't see this (the "basic
+      // shape" this test used to be named for) — asserting the payload is
+      // the point.
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.recordCodexThreadItem("thread-1", { itemId: "exec-a", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo a" });
       await adapter.recordCodexThreadItem("thread-1", {
@@ -477,6 +483,54 @@ describe("SqlitePersistenceAdapter", () => {
 
       const items = await adapter.listCodexThreadItems("thread-1");
       expect(items).toHaveLength(1);
+      expect(items[0]).toEqual({
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
+    });
+
+    it("a rich-then-sparse redelivery never erases an already-recorded exitCode/outputHead (downgrade guard, W8 MEDIUM-1)", async () => {
+      // The mirror case of the enrichment test above: a later write for the
+      // SAME (threadId, itemId) that carries NO exitCode/outputHead (e.g. a
+      // stale re-delivery of an earlier sparse snapshot arriving out of
+      // order) must never null out data a previous write already recorded —
+      // payload is enriched, never degraded.
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+        cwd: "/repo",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
+      await adapter.recordCodexThreadItem("thread-1", {
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+      });
+
+      const items = await adapter.listCodexThreadItems("thread-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]).toEqual({
+        itemId: "exec-a",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "echo a",
+        cwd: "/repo",
+        exitCode: 0,
+        outputHead: "a\n",
+      });
     });
 
     it("a repeated write for the same (threadId, itemId) never lets a conflicting second write move the FIRST write's anchor (W7 HIGH-2 — first-write-wins, not last-write-wins)", async () => {
