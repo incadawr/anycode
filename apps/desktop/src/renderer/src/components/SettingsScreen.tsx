@@ -78,6 +78,7 @@ import type {
   SecretStatus,
   SecretTier,
   SettingsPatch,
+  SettingsSnapshot,
 } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
 import type { WireEnvStatus, WireRepoMapStatus } from "../../../shared/protocol.js";
@@ -399,6 +400,19 @@ export function shouldShowUpdateBanner(status: UpdateStatus): boolean {
  */
 export function showsManualUpdateLink(status: UpdateStatus): boolean {
   return status.kind === "available" && status.manualOnly === true;
+}
+
+/**
+ * TASK.49/W14-fix: whether the About pane should render the running app's
+ * version line — extracted into a pure, exported gate (same pattern as
+ * `shouldShowUpdateBanner`/`showsManualUpdateLink` above) because this
+ * package's tests run with no DOM/jsdom (SettingsScreen.test.ts's own
+ * docstring), so this is the level at which "present -> renders, absent ->
+ * does not render" is directly assertable. `appVersion` is absent whenever
+ * main's `SettingsIpcDeps.getAppVersion` isn't supplied (settings-ipc.ts).
+ */
+export function shouldShowAppVersion(snapshot: Pick<SettingsSnapshot, "appVersion">): boolean {
+  return snapshot.appVersion !== undefined;
 }
 
 export type McpRowKind = "running" | "completed" | "failed" | "idle";
@@ -1184,7 +1198,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                       <span className="welcome-ramp-dot welcome-ramp-yolo" />
                     </div>
                     <span className="settings-about-tag">A coding agent for any provider.</span>
-                    {snapshot.appVersion !== undefined && (
+                    {shouldShowAppVersion(snapshot) && (
                       <span className="settings-about-version">Version {snapshot.appVersion}</span>
                     )}
                   </div>

@@ -42,6 +42,7 @@ import {
   SETTINGS_PANES,
   shouldShowBaseUrlField,
   shouldShowUpdateBanner,
+  shouldShowAppVersion,
   showsManualUpdateLink,
   updateStatusText,
 } from "./SettingsScreen.js";
@@ -531,5 +532,20 @@ describe("filterSettingsPanes (slice P7.16 W2, design §3: rail search, v1 hones
 
   it("a garbage query matches nothing", () => {
     expect(filterSettingsPanes("zzz-not-a-setting-zzz")).toEqual([]);
+  });
+});
+
+describe("shouldShowAppVersion (TASK.49/W14-fix — About pane version line)", () => {
+  it("renders when main supplied a version string", () => {
+    expect(shouldShowAppVersion({ appVersion: "1.2.3" })).toBe(true);
+  });
+
+  it("renders even for an empty-string version (still a supplied value, not absence)", () => {
+    expect(shouldShowAppVersion({ appVersion: "" })).toBe(true);
+  });
+
+  it("does not render when main supplied no getAppVersion (appVersion absent)", () => {
+    expect(shouldShowAppVersion({})).toBe(false);
+    expect(shouldShowAppVersion({ appVersion: undefined })).toBe(false);
   });
 });
