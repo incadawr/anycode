@@ -1,9 +1,10 @@
 /**
  * Transport dispatcher tests (TASK.43 §0.3). `createLanguageModel` is the ONE
- * place that maps a transport onto a client factory. Today a single branch is
- * live (anthropic-messages); the OpenAI transports must fail LOUDLY rather than
- * silently POST an Anthropic body to an OpenAI endpoint — the exact failure the
- * transport discriminant exists to prevent.
+ * place that maps a transport onto a client factory. Two branches are live
+ * (anthropic-messages, openai-chat-completions); the still-unimplemented
+ * openai-responses transport must fail LOUDLY rather than silently POST an
+ * Anthropic (or chat-completions) body to a Responses endpoint — the exact
+ * failure the transport discriminant exists to prevent.
  */
 
 import { describe, expect, it } from "vitest";
@@ -34,13 +35,25 @@ describe("createLanguageModel", () => {
     expect(() => createLanguageModel(config({ apiKey: undefined }))).toThrow(/api key/i);
   });
 
-  it.each<ProviderTransport>(["openai-chat-completions", "openai-responses"])(
-    "throws not-implemented for %s instead of falling back to Anthropic",
-    (transport) => {
-      expect(() => createLanguageModel(config({ transport }))).toThrow(/not implemented/i);
-      expect(() => createLanguageModel(config({ transport }))).toThrow(new RegExp(transport));
-    },
-  );
+  it("builds an OpenAI-compatible model for the openai-chat-completions transport", () => {
+    const model = createLanguageModel(
+      config({ transport: "openai-chat-completions", baseUrl: "https://gw.example/v1", model: "gpt-oss" }),
+    );
+    expect(model).toBeDefined();
+    expect(typeof model === "string" ? model : model.modelId).toBe("gpt-oss");
+  });
+
+  it("builds an openai-chat-completions model even without an api key (no-auth endpoint)", () => {
+    expect(() =>
+      createLanguageModel(config({ transport: "openai-chat-completions", apiKey: undefined })),
+    ).not.toThrow();
+  });
+
+  it("throws not-implemented for openai-responses instead of falling back to another transport", () => {
+    const transport: ProviderTransport = "openai-responses";
+    expect(() => createLanguageModel(config({ transport }))).toThrow(/not implemented/i);
+    expect(() => createLanguageModel(config({ transport }))).toThrow(new RegExp(transport));
+  });
 
   it("throws on an unknown transport smuggled in past the type system", () => {
     const rogue = config({ transport: "anthropic" as unknown as ProviderTransport });

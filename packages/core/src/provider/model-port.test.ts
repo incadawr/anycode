@@ -621,14 +621,54 @@ describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () =
     );
   });
 
-  it.each(["openai-chat-completions", "openai-responses"] as const)(
-    "refuses to shape reasoning for %s instead of emitting Anthropic thinking options",
-    (transport) => {
-      expect(() =>
-        reasoningRequestOptions({ ...baseRequest, reasoningEffort: "high" }, "Z.AI (GLM)", transport),
-      ).toThrow(/not implemented/i);
+  it("refuses to shape reasoning for openai-responses instead of emitting Anthropic thinking options", () => {
+    expect(() =>
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "high" }, "Z.AI (GLM)", "openai-responses"),
+    ).toThrow(/not implemented/i);
+  });
+
+  it("is byte-dormant on openai-chat-completions when effort is off, regardless of providerName", () => {
+    expect(
+      reasoningRequestOptions({ ...baseRequest }, "Z.AI (GLM)", "openai-chat-completions"),
+    ).toEqual({});
+    expect(
+      reasoningRequestOptions(
+        { ...baseRequest, maxOutputTokens: 8192, reasoningEffort: "off" },
+        undefined,
+        "openai-chat-completions",
+      ),
+    ).toEqual({ maxOutputTokens: 8192 });
+  });
+
+  it.each(["low", "medium", "high"] as const)(
+    "maps openai-chat-completions effort %s straight through as reasoning_effort, with no token-budget arithmetic",
+    (effort) => {
+      expect(
+        reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 4096, reasoningEffort: effort }, "custom", "openai-chat-completions"),
+      ).toEqual({
+        maxOutputTokens: 4096,
+        providerOptions: { openaiCompatible: { reasoningEffort: effort } },
+      });
     },
   );
+
+  it("collapses openai-chat-completions effort max to high (no max/xhigh tier on chat-completions)", () => {
+    expect(
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max" }, "custom", "openai-chat-completions"),
+    ).toEqual({
+      providerOptions: { openaiCompatible: { reasoningEffort: "high" } },
+    });
+  });
+
+  it("omits maxOutputTokens on openai-chat-completions when the request didn't set one", () => {
+    const result = reasoningRequestOptions(
+      { ...baseRequest, reasoningEffort: "high" },
+      undefined,
+      "openai-chat-completions",
+    );
+    expect(result).toEqual({ providerOptions: { openaiCompatible: { reasoningEffort: "high" } } });
+    expect("maxOutputTokens" in result).toBe(false);
+  });
 });
 
 describe("AiSdkModelPort — outgoing request bytes per transport (TASK.43 §0.7)", () => {
@@ -648,6 +688,27 @@ describe("AiSdkModelPort — outgoing request bytes per transport (TASK.43 §0.7
         maxRetries: 0,
         maxOutputTokens: 115_072,
         providerOptions: { anthropic: { effort: "high", thinking: { type: "enabled", budgetTokens: 16_000 } } },
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
+  });
+
+  it("sends providerOptions.openaiCompatible reasoning_effort on the openai-chat-completions transport", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    const port = new AiSdkModelPort({
+      ...baseConfig(),
+      transport: "openai-chat-completions",
+      baseUrl: "https://gw.example/v1",
+      model: "gpt-oss",
+    });
+
+    await collect(port.streamText({ ...baseRequest, reasoningEffort: "medium", maxOutputTokens: 4096 }));
+
+    expect(mockStreamText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxRetries: 0,
+        maxOutputTokens: 4096,
+        providerOptions: { openaiCompatible: { reasoningEffort: "medium" } },
         messages: [{ role: "user", content: "hi" }],
       }),
     );

@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../types/history.js";
 import type { ImageAttachment } from "../types/images.js";
-import { toSdkMessages } from "./sdk-mapping.js";
+import { OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE, toSdkMessages } from "./sdk-mapping.js";
 
 const IMG: ImageAttachment = { mediaType: "image/png", data: "QUJD" };
 
@@ -109,6 +109,55 @@ describe("toSdkMessages with images (slice 6.2 §2-B1)", () => {
         { type: "text", text: "two" },
         { type: "file", data: "QUJD", mediaType: "image/png" },
         { type: "file", data: "SkpK", mediaType: "image/jpeg" },
+      ],
+    });
+  });
+});
+
+describe("toSdkMessages tool-result image strip on the openai-chat-completions transport (TASK.43 §5.1)", () => {
+  const toolResultWithImage: ChatMessage = {
+    role: "tool",
+    content: [
+      { type: "tool_result", toolCallId: "call_9", toolName: "Read", text: "[image attached]", images: [IMG], status: "success" },
+    ],
+  };
+
+  it("drops the FilePart and appends the omitted-image note as plain text, never a `content` array", () => {
+    const [toolMsg] = toSdkMessages([toolResultWithImage], "openai-chat-completions");
+    expect(toolMsg).toEqual({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "call_9",
+          toolName: "Read",
+          output: { type: "text", value: `[image attached]\n${OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE}` },
+        },
+      ],
+    });
+    // No base64 payload and no `content`-typed OUTPUT (the anthropic image-carrying
+    // variant) anywhere for this message; the outer `content` array key is fine.
+    expect(JSON.stringify(toolMsg)).not.toContain("QUJD");
+    expect(JSON.stringify(toolMsg)).not.toContain('"type":"content"');
+  });
+
+  it("keeps the image-free tool-result path byte-identical on the openai-chat-completions transport", () => {
+    const imageFree: ChatMessage = {
+      role: "tool",
+      content: [{ type: "tool_result", toolCallId: "call_1", toolName: "Read", text: "contents", status: "success" }],
+    };
+    const [anthropicShape] = toSdkMessages([imageFree], "anthropic-messages");
+    const [openaiShape] = toSdkMessages([imageFree], "openai-chat-completions");
+    expect(openaiShape).toEqual(anthropicShape);
+  });
+
+  it("leaves a user-message image untouched on the openai-chat-completions transport (only tool-result images are stripped)", () => {
+    const [userMsg] = toSdkMessages([{ role: "user", content: "look", images: [IMG] }], "openai-chat-completions");
+    expect(userMsg).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "look" },
+        { type: "file", data: "QUJD", mediaType: "image/png" },
       ],
     });
   });

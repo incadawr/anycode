@@ -52,6 +52,25 @@ const GLM_BUDGET_TOKENS = { high: 16_000, max: 32_000 } as const;
 /** Z.AI's documented max_tokens ceiling for the GLM-5/4.6 family. */
 const GLM_MAX_TOKENS = 131_072;
 
+/** Return shape of `reasoningRequestOptions` on the anthropic-messages transport. */
+interface AnthropicReasoningOptions {
+  maxOutputTokens?: number;
+  providerOptions?: { anthropic: { effort?: string; thinking: { type: "enabled"; budgetTokens: number } } };
+}
+
+/**
+ * Return shape on the openai-chat-completions transport: `reasoning_effort` is
+ * a plain enum, not a token budget, so there is no maxOutputTokens arithmetic
+ * to perform (§4.3) — `maxOutputTokens` merely passes the request's value
+ * through unchanged when present.
+ */
+interface OpenAICompatibleReasoningOptions {
+  maxOutputTokens?: number;
+  providerOptions?: { openaiCompatible: { reasoningEffort: string } };
+}
+
+type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOptions;
+
 /**
  * Provider-aware reasoning-effort mapping. GLM uses the Anthropic-compatible
  * provider options channel exposed by `@ai-sdk/anthropic`:
@@ -78,22 +97,66 @@ const GLM_MAX_TOKENS = 131_072;
  * thinking budget on anthropic-messages but by an effort enum on the OpenAI
  * transports, so the wire protocol — never the provider name — decides the shape.
  * It defaults to `anthropic-messages` so pre-transport call sites keep their
- * pinned bytes; the OpenAI transports have no mapping yet and say so loudly
- * rather than emitting Anthropic options no OpenAI endpoint would read.
+ * pinned bytes.
+ *
+ * openai-chat-completions maps to `providerOptions.openaiCompatible.reasoningEffort`
+ * (TASK.43 §4.2/§4.3): `@ai-sdk/openai-compatible` reads that exact key
+ * unconditionally and serializes it as top-level `reasoning_effort` in the
+ * request body. `"max"` collapses to `"high"` — chat-completions has no `xhigh`/
+ * `max` tier of its own, unlike GLM's Anthropic-proxied enum above. openai-responses
+ * has no mapping yet (W3) and says so loudly rather than emitting options no
+ * Responses endpoint would read.
+ *
+ * Overloaded so a caller that passes a literal `"anthropic-messages"` transport
+ * (or omits it) keeps `providerOptions.anthropic` as a NON-optional key on the
+ * return type — model-port.test.ts pins direct `.anthropic.thinking.budgetTokens`
+ * access on exactly that call shape, and a plain union return would force an
+ * unwanted narrowing check there.
  */
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName?: string,
+  transport?: "anthropic-messages",
+): AnthropicReasoningOptions;
+export function reasoningRequestOptions(
+  request: ModelRequest,
+  providerName: string | undefined,
+  transport: "openai-chat-completions",
+): OpenAICompatibleReasoningOptions;
+export function reasoningRequestOptions(
+  request: ModelRequest,
+  providerName: string | undefined,
+  transport: "openai-responses",
+): never;
+export function reasoningRequestOptions(
+  request: ModelRequest,
+  providerName: string | undefined,
+  transport: ProviderTransport,
+): ReasoningOptions;
+export function reasoningRequestOptions(
+  request: ModelRequest,
+  providerName?: string,
   transport: ProviderTransport = "anthropic-messages",
-): {
-  maxOutputTokens?: number;
-  providerOptions?: { anthropic: { effort?: string; thinking: { type: "enabled"; budgetTokens: number } } };
-} {
-  if (transport !== "anthropic-messages") {
+): ReasoningOptions {
+  if (transport === "openai-responses") {
     throw new Error(`Reasoning options for provider transport "${transport}" are not implemented yet`);
   }
 
   const effort = request.reasoningEffort;
+
+  if (transport === "openai-chat-completions") {
+    if (effort === undefined || effort === "off") {
+      return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
+    }
+    // reasoning_effort is an enum, not a token budget: no maxOutputTokens arithmetic.
+    // "max" has no chat-completions equivalent; collapse to "high" (§4.3).
+    const mapped = effort === "max" ? "high" : effort;
+    return {
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      providerOptions: { openaiCompatible: { reasoningEffort: mapped } },
+    };
+  }
+
   if (effort === undefined || effort === "off") {
     return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
   }
