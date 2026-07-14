@@ -734,11 +734,12 @@ async function capturePreStopSnapshot(ctx, step) {
   // sinks the SECOND command to the turn's tail once its anchor reaches
   // native.length) is visible here as a form gap, independent of whether the
   // model chose to reason at all.
-  const formGaps = twoCommandFormGaps(kindOrder);
+  const allowSegment = firstTurnSegment(kindOrder);
+  const formGaps = twoCommandFormGaps(allowSegment);
   assert(
     step,
     formGaps.length === 0,
-    `ALLOW turn did not produce the two-command discriminating form (assistant_text, tool_call, assistant_text, tool_call, assistant_text) — missing: ${formGaps.join("; ")}; normalized kind order: [${kindOrder.join(", ")}]`,
+    `ALLOW turn did not produce the two-command discriminating form (assistant_text, tool_call, assistant_text, tool_call, assistant_text) — missing: ${formGaps.join("; ")}; normalized ALLOW-turn kind order: [${allowSegment.join(", ")}]`,
   );
 
   ctx.preStopKindOrder = kindOrder;
@@ -928,6 +929,32 @@ function hasAdjacentAssistantToolAssistant(kindOrder) {
 }
 
 /**
+ * W19: scopes a normalizedKindOrder array down to the FIRST turn — the ALLOW
+ * turn is always first (step 4), and it is the only turn twoCommandFormGaps
+ * is meant to judge. capturePreStopSnapshot's kindOrder spans EVERY turn run
+ * so far by the time step 7 calls it (ALLOW turn from steps 4/5, THEN the
+ * DENY turn from step 6), because step 9 later needs that same full,
+ * unscoped order to compare pre-Stop vs. post-resume (see
+ * capturePreStopSnapshot's `ctx.preStopKindOrder` and
+ * step9ResumeAndCheckTranscript's `expectedKindOrder`) — normalizedKindOrder
+ * itself must stay whole-transcript for that reason and is not touched here.
+ *
+ * Each turn opens with its own "user_text" block (the prompt that started
+ * it). The ALLOW turn is therefore the slice from the FIRST "user_text" up
+ * to (excluding) the SECOND "user_text", or to the end of the array if no
+ * second turn has run yet. W19's own defect: a prior version counted
+ * tool_call blocks across the WHOLE array, so a healthy 2-command ALLOW turn
+ * plus a healthy 1-command DENY turn read as "3 tool_call blocks found" and
+ * failed for a reason that had nothing to do with the ALLOW turn's shape.
+ */
+function firstTurnSegment(kindOrder) {
+  const firstUser = kindOrder.indexOf("user_text");
+  if (firstUser === -1) return kindOrder.slice();
+  const secondUser = kindOrder.indexOf("user_text", firstUser + 1);
+  return secondUser === -1 ? kindOrder.slice(firstUser) : kindOrder.slice(firstUser, secondUser);
+}
+
+/**
  * W18: the two-command ALLOW turn's discriminating shape — replaces the
  * architect-retired ">=1 reasoning block" check (reasoning is empty on the
  * wire for this model/version; see capturePreStopSnapshot's comment). True
@@ -947,6 +974,10 @@ function hasAdjacentAssistantToolAssistant(kindOrder) {
  * the caller can fail closed with a specific diagnosis rather than a bare
  * boolean — no "harness gap, not a production defect" style excuse: the W17
  * incident was exactly that claim turning out to be false.
+ *
+ * W19: the caller MUST already scope `kindOrder` to a single turn (see
+ * firstTurnSegment) — this function counts tool_call blocks across whatever
+ * it is given, with no turn-boundary awareness of its own.
  */
 function twoCommandFormGaps(kindOrder) {
   const gaps = [];
@@ -969,6 +1000,60 @@ function twoCommandFormGaps(kindOrder) {
     gaps.push("no assistant_text strictly after the second tool_call (missing trailing summary)");
   }
   return gaps;
+}
+
+// ── self-check (W19): firstTurnSegment + twoCommandFormGaps are pure
+// functions of a plain string[] (per this file's own "each predicate is a
+// pure function ... can be exercised on synthetic arrays without a live
+// run" precedent, above) — so their ALLOW-turn scoping is proven here on
+// synthetic kind orders, unconditionally, before any live step runs. A
+// failure here means the harness itself is broken and must not be trusted
+// to judge a live run at all; it exits 1 with the mismatching case named
+// rather than letting a broken predicate silently rubber-stamp step 7.
+const SELF_CHECK_CASES = [
+  {
+    name: "real live pre-Stop order (ALLOW turn: 2 tool_call; DENY turn appends a 3rd) must PASS",
+    kindOrder: [
+      "user_text", "assistant_text", "tool_call", "assistant_text", "tool_call", "assistant_text",
+      "user_text", "tool_call", "assistant_text",
+    ],
+    expectGaps: false,
+  },
+  {
+    name: "W6 tail drift inside the ALLOW turn (2nd tool_call sinks behind an extra assistant_text, no trailing summary) must RED",
+    kindOrder: [
+      "user_text", "assistant_text", "tool_call", "assistant_text", "assistant_text", "tool_call",
+      "user_text", "tool_call", "assistant_text",
+    ],
+    expectGaps: true,
+  },
+  {
+    name: "ALLOW turn runs only one command instead of two must RED",
+    kindOrder: ["user_text", "assistant_text", "tool_call", "assistant_text", "user_text", "tool_call", "assistant_text"],
+    expectGaps: true,
+  },
+  {
+    name: "ALLOW turn has no trailing assistant_text after its 2nd command must RED",
+    kindOrder: [
+      "user_text", "assistant_text", "tool_call", "assistant_text", "tool_call",
+      "user_text", "tool_call", "assistant_text",
+    ],
+    expectGaps: true,
+  },
+];
+
+function selfCheckTwoCommandFormGaps() {
+  for (const { name, kindOrder, expectGaps } of SELF_CHECK_CASES) {
+    const gaps = twoCommandFormGaps(firstTurnSegment(kindOrder));
+    const gotGaps = gaps.length > 0;
+    if (gotGaps !== expectGaps) {
+      console.error(
+        `[codex-live-smoke] SELF-CHECK FAILED: "${name}" — expected ${expectGaps ? "RED (gaps)" : "PASS (no gaps)"}, got ${gotGaps ? `RED: ${JSON.stringify(gaps)}` : "PASS"}`,
+      );
+      process.exit(1);
+    }
+  }
+  console.log(`[codex-live-smoke] self-check OK: ${SELF_CHECK_CASES.length}/${SELF_CHECK_CASES.length} synthetic form-gap cases matched expectations`);
 }
 
 // ── step 9: resume the codex session, check the transcript ──
@@ -1149,6 +1234,7 @@ function installSignalTeardown(ctx) {
 }
 
 async function run() {
+  selfCheckTwoCommandFormGaps();
   const { bin, rawVersion } = preflight();
 
   const ctx = {
