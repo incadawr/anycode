@@ -847,15 +847,17 @@ function withConnectionHealth(
  * `onMutation` — health is advisory (task doc §3: "not a runtime-readiness
  * source") and must not trigger the readiness/host-env/auto-tab side effects a
  * real settings mutation does. Read-only settings or a since-deleted connection
- * are silent no-ops (race-safe). Acquires the settings lock itself — callers
- * that already hold it (handleSetSecret/handleClearSecret/handleConnectionUpdate)
- * must use `withConnectionHealth` directly instead, or this would deadlock.
+ * are silent no-ops for the CALLER's state, but distinguishable via the return
+ * value (`false`) so a caller can gate a push signal on an actual write.
+ * Acquires the settings lock itself — callers that already hold it
+ * (handleSetSecret/handleClearSecret/handleConnectionUpdate) must use
+ * `withConnectionHealth` directly instead, or this would deadlock.
  */
 export async function applyConnectionHealthEvent(
   deps: SettingsIpcDeps,
   connectionId: string,
   event: { kind: "success" } | { kind: "failure"; code: string },
-): Promise<void> {
+): Promise<boolean> {
   const status: ProviderHealthStatus =
     event.kind === "success" ? "ready" : mapProviderFailureCodeToHealthStatus(event.code);
   const lastHealth = {
@@ -863,16 +865,17 @@ export async function applyConnectionHealthEvent(
     at: (deps.now ?? defaultNowIso)(),
     ...(event.kind === "failure" ? { safeCode: event.code } : {}),
   };
-  await withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
-      return;
+      return false;
     }
     const updated = withConnectionHealth(loaded.settings, connectionId, lastHealth);
     if (updated === undefined) {
-      return;
+      return false;
     }
     await saveSettings(deps.settingsPath, updated);
+    return true;
   });
 }
 

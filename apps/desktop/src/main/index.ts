@@ -1004,10 +1004,13 @@ void app.whenReady().then(async () => {
       // all, so an already-loaded app's connection tile stayed on a stale
       // reading until an unrelated mutation happened to refresh it. Pushed
       // ONLY after the write actually lands (never on a failed persist —
-      // there is nothing new to reflect).
+      // there is nothing new to reflect). No-op outcomes (read-only settings,
+      // connection deleted mid-flight) resolve `false` and do not push.
       void applyConnectionHealthEvent(settingsIpcDeps, connectionId, healthEvent)
-        .then(() => {
-          win?.webContents.send(PROVIDER_HEALTH_CHANGED_CHANNEL);
+        .then((persisted) => {
+          if (persisted) {
+            win?.webContents.send(PROVIDER_HEALTH_CHANGED_CHANNEL);
+          }
         })
         .catch((error) => {
           console.error(`[main] failed to record connection health`, error);
