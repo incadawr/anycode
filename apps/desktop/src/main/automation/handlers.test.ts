@@ -32,6 +32,7 @@ import {
   sendPrompt,
   setMode,
   stop,
+  tryAgain,
   transcriptScrollState,
   transcriptScrollTo,
   todoPanelState,
@@ -176,6 +177,12 @@ describe("thin facade commands forward method + args", () => {
     const deps = fakeDeps();
     await sendPrompt(deps, "tab-a", "hello");
     expect(deps.callFacade).toHaveBeenCalledWith("sendPrompt", ["tab-a", "hello"]);
+  });
+
+  it("tryAgain -> callFacade('tryAgain', [tabId]) (TASK.33 W8)", async () => {
+    const deps = fakeDeps();
+    await tryAgain(deps, "tab-a");
+    expect(deps.callFacade).toHaveBeenCalledWith("tryAgain", ["tab-a"]);
   });
 
   it("respondPermission omits requestId when undefined (facade defaults to pending)", async () => {

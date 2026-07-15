@@ -215,6 +215,11 @@ export function sendPrompt(deps: HandlerDeps, tabId: string, text: string): Prom
   return deps.callFacade("sendPrompt", [tabId, text]);
 }
 
+/** TASK.33 W8: thin wrapper over the facade's `tryAgain` — clicks the real Try-again driver (App.tsx's `dispatchTryAgain`), no guard logic of its own. */
+export function tryAgain(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("tryAgain", [tabId]);
+}
+
 export function respondPermission(
   deps: HandlerDeps,
   tabId: string,

@@ -39,6 +39,7 @@ import type {
   TurnState,
 } from "./store.js";
 import { buildConfirmedGitCommand } from "./store.js";
+import { dispatchTryAgain } from "./App.js";
 import type { CtxPopoverRow } from "./components/Composer.js";
 import { confirmDialogCopy } from "./components/GitConfirmDialog.js";
 import { buildDiffRequest } from "./components/GitPanel.js";
@@ -193,6 +194,14 @@ export interface TabStateSnapshot {
    * B5-auto populates this from the live store's `engine`/preset state.
    */
   engine?: { id: EngineId; model?: string; activePresetId?: string };
+  /**
+   * TASK.33 W8 armed Try-again offer projection: mirrors the store's `retry`
+   * field, null when nothing is offered. Same attachment-stripping discipline
+   * as `promptQueue` above (`imageCount`, not the base64 payloads) — `text`
+   * is kept as-is since it's just the user's own prompt, already visible
+   * verbatim in `transcript`'s matching `user_text` block.
+   */
+  retryOffer: { loopEndBlockId: string; text: string; imageCount: number } | null;
 }
 
 /** Return shape of `snapshot()` (design §3.2). */
@@ -1339,6 +1348,12 @@ export interface AnycodeBridge {
 export interface AutomationFacade {
   snapshot(transcriptTail?: number): SnapshotJson;
   sendPrompt(tabId: string, text: string): { ok: true; requestId: string } | FacadeErr;
+  // TASK.33 W8: the same click driver as `agentCardExpand` above — no facade
+  // guard of its own beyond "does an offer exist" (`retry === null` is a
+  // no-op click), everything else is the REAL `dispatchTryAgain` (App.tsx)
+  // the button's own onClick calls, so a live smoke exercises the exact
+  // send/queue/busy decision the product makes, not a re-derived guess of it.
+  tryAgain(tabId: string): FacadeResult;
   respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult;
   setMode(tabId: string, mode: string): FacadeResult;
   stop(tabId: string): FacadeResult;
@@ -2870,6 +2885,10 @@ export function createAutomationFacade(
           envStatus: state.envStatus,
           promptQueue: state.promptQueue.map((item) => ({ id: item.id, text: item.text, imageCount: item.images.length })),
           queuePaused: state.queuePaused,
+          retryOffer:
+            state.retry !== null
+              ? { loopEndBlockId: state.retry.loopEndBlockId, text: state.retry.text, imageCount: state.retry.images.length }
+              : null,
           // Codex-fixes TASK.42 (cut §3.7): mirrors host_ready.engine's own
           // "absent = legacy core" discipline (cut §2(f)) — `state.engine` is
           // null for every core session, so this key is `undefined` (omitted
@@ -2913,6 +2932,21 @@ export function createAutomationFacade(
       const message: UiToHostMessage = { type: "user_message", requestId, text };
       registry.sendToTab(tabId, message);
       return { ok: true, requestId };
+    },
+
+    tryAgain(tabId: string): FacadeResult {
+      const store = registry.getStore(tabId);
+      if (!store) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      if (store.getState().retry === null) {
+        return { ok: false, reason: "no_retry_offer" };
+      }
+      // The REAL dispatch: same function the button's own onClick calls
+      // (App.tsx), through the SAME `registry.sendToTab` every other facade
+      // driver uses — no second path.
+      dispatchTryAgain(store, (msg) => registry.sendToTab(tabId, msg));
+      return { ok: true };
     },
 
     respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult {

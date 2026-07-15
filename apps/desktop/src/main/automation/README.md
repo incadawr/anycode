@@ -108,6 +108,7 @@ missing/bad token → `401`.
 | `POST /tabs/:tabId/permission` | `{behavior:"allow"\|"deny", requestId?}` | `{ok:true}` |
 | `POST /tabs/:tabId/mode` | `{mode}` | `{ok:true}` |
 | `POST /tabs/:tabId/stop` | `{}` | `{ok:true}` |
+| `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"}` — clicks the one-shot Try-again offer (TASK.33 W8), the SAME `dispatchTryAgain` App.tsx's button uses; `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field |
 | `POST /tabs/:tabId/select` | `{}` | `{ok:true}` |
 | `POST /tabs/:tabId/close` | `{}` | `{ok:true}` |
 | `POST /tabs` | `{kind:"new", workspace}` | `{ok:true, tabId, sessionId, workspace}` (bypasses the native open dialog) |

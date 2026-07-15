@@ -44,7 +44,7 @@ import {
 } from "./automation.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
-import type { GitDestructiveIntent } from "./store.js";
+import type { GitDestructiveIntent, RetryOffer } from "./store.js";
 import { createTabRegistry, type TabRegistry } from "./tab-registry.js";
 import { createTabsStore, type TabsStoreApi } from "./tabs-store.js";
 import { createSettingsStore } from "./settings-store.js";
@@ -165,6 +165,7 @@ describe("automation facade — snapshot", () => {
       envStatus: state.envStatus,
       promptQueue: state.promptQueue.map((item) => ({ id: item.id, text: item.text, imageCount: item.images.length })),
       queuePaused: state.queuePaused,
+      retryOffer: null,
     });
   });
 
@@ -223,6 +224,21 @@ describe("automation facade — snapshot", () => {
     port.emit({ type: "env_status", status });
 
     expect(facade.snapshot().states[tabId]?.envStatus).toEqual(status);
+  });
+
+  it("projects a live retry offer as {loopEndBlockId, text, imageCount} — same attachment-stripping discipline as promptQueue (TASK.33 W8)", () => {
+    const { tabsStore, registry, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    const offer: RetryOffer = { loopEndBlockId: "loop_end:t1", text: "hello", images: [image] };
+
+    registry.getStore(tabId)!.setState({ retry: offer });
+
+    expect(facade.snapshot().states[tabId]?.retryOffer).toEqual({
+      loopEndBlockId: "loop_end:t1",
+      text: "hello",
+      imageCount: 1,
+    });
   });
 
   it("reflects live transcript content (agent_event tool_call) with no mirrored/stale copy", () => {
@@ -484,6 +500,52 @@ describe("automation facade — stop / selectTab", () => {
 
     expect(result).toEqual({ ok: false, reason: "unknown_tab" });
     expect(tabsStore.getState().activeTabId).toBe("tab-a");
+  });
+});
+
+describe("automation facade — tryAgain (design TASK.33 W8)", () => {
+  it("unknown tab -> {ok:false, reason:'unknown_tab'}", () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    expect(facade.tryAgain("ghost")).toEqual({ ok: false, reason: "unknown_tab" });
+  });
+
+  it("nothing armed -> {ok:false, reason:'no_retry_offer'}, sending nothing", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    expect(facade.tryAgain(tabId)).toEqual({ ok: false, reason: "no_retry_offer" });
+    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+  });
+
+  it("an armed offer -> {ok:true}, drives the SAME dispatchTryAgain path App.tsx's button uses (user_message on the wire, offer consumed)", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const offer: RetryOffer = { loopEndBlockId: "loop_end:t1", text: "hello again", images: [] };
+    registry.getStore(tabId)!.setState({ retry: offer });
+
+    const result = facade.tryAgain(tabId);
+
+    expect(result).toEqual({ ok: true });
+    const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]).toMatchObject({ type: "user_message", text: "hello again" });
+    expect(uiToHostMessageSchema.safeParse(sentMessages[0]).success).toBe(true);
+    expect(registry.getStore(tabId)!.getState().retry).toBeNull();
+  });
+
+  it("one-shot: a second call right after the first finds nothing armed and sends nothing further", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    registry.getStore(tabId)!.setState({ retry: { loopEndBlockId: "loop_end:t1", text: "hello", images: [] } });
+
+    facade.tryAgain(tabId);
+    const second = facade.tryAgain(tabId);
+
+    expect(second).toEqual({ ok: false, reason: "no_retry_offer" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(1);
   });
 });
 
