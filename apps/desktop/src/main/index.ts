@@ -721,6 +721,20 @@ async function resolveResumePin(meta: {
     pinReservations.release(pinnedId);
     throw error;
   }
+  // TASK.45 W11-FIX M4-narrowing: `ensurePinnedEnv`'s vault reads are the
+  // longest await in this path, so a concurrent `handleConnectionDelete` can
+  // finish entirely (including its `onMutation` refresh, which drops this
+  // pin from `hostEnvByConnection`) while priming was in flight. Re-checking
+  // existence here narrows the dead-tab window down to this sub-await gap: a
+  // pin that died mid-prime now refuses `connection_missing` immediately
+  // (the caller's already-reserved slot is released) instead of registering
+  // a tab that would only die on its first respawn. Custody stays with layer
+  // (c) (main/tabs.ts) for whatever residual window remains — no settings
+  // lock is taken here (the §3.2 re-entrant deadlock).
+  if (connectionById(currentSettings(), pinnedId) === undefined) {
+    pinReservations.release(pinnedId);
+    return { ok: false, connectionId: pinnedId };
+  }
   return { ok: true, connectionId: pinnedId, release: () => pinReservations.release(pinnedId) };
 }
 

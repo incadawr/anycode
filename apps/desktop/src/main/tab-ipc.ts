@@ -215,34 +215,42 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // silent switch to the current default); a legacy session (no pin) resolves
   // `{ok:true}` with no connectionId and resumes on the current default.
   let pinnedConnectionId: string | undefined;
-  // W10-FIX F3: released in the `finally` below (after createTab registers the
-  // tab, or on any failure) so the resume/delete reservation is never briefly
-  // unguarded. Resolved AFTER the already_open guard above so an already-open
-  // resume never touches the reservation (guard order preserved).
+  // W11-FIX M5: `releasePin` is assigned in the SAME synchronous continuum as
+  // the ok-pin is obtained (immediately after each `resolveResumePin` await
+  // settles, before any further await) and `try` wraps everything from the
+  // FIRST reservation onward — including `touchSession` — so a rejection at
+  // ANY point after a reservation exists (e.g. a SQLite write failure) still
+  // hits `finally` and releases it. Previously `touchSession`'s await sat
+  // OUTSIDE the try/finally, so its rejection leaked the replacement's
+  // reservation forever (`connectionInUse` refused that connection's delete
+  // until an app restart).
   let releasePin: (() => void) | undefined;
-  if (deps.resolveResumePin !== undefined) {
-    let pin = await deps.resolveResumePin(meta);
-    // W10-FIX F1: a DEAD stored pin + an explicit user-chosen replacement re-targets
-    // the session to the replacement, then resumes on the replacement's pinned path.
-    // A live stored pin ignores the replacement entirely (never retarget a healthy
-    // pin); a replacement that is itself gone stays refused `connection_missing`.
-    if (!pin.ok && req.replacementConnectionId !== undefined) {
-      const retargeted = await deps.resolveResumePin({ ...meta, connectionId: req.replacementConnectionId });
-      if (!retargeted.ok) {
-        return { ok: false, reason: "connection_missing", connectionId: retargeted.connectionId };
-      }
-      // Persist the re-pin BEFORE createTab so the host reads the new connection on
-      // spawn. touchSession writes only connectionId (SessionMetaPatch, zero core delta).
-      await deps.persistence.touchSession(req.sessionId, { connectionId: req.replacementConnectionId });
-      pin = retargeted;
-    }
-    if (!pin.ok) {
-      return { ok: false, reason: "connection_missing", connectionId: pin.connectionId };
-    }
-    pinnedConnectionId = pin.connectionId;
-    releasePin = pin.release;
-  }
   try {
+    if (deps.resolveResumePin !== undefined) {
+      let pin = await deps.resolveResumePin(meta);
+      if (pin.ok) {
+        releasePin = pin.release;
+      }
+      // W10-FIX F1: a DEAD stored pin + an explicit user-chosen replacement re-targets
+      // the session to the replacement, then resumes on the replacement's pinned path.
+      // A live stored pin ignores the replacement entirely (never retarget a healthy
+      // pin); a replacement that is itself gone stays refused `connection_missing`.
+      if (!pin.ok && req.replacementConnectionId !== undefined) {
+        const retargeted = await deps.resolveResumePin({ ...meta, connectionId: req.replacementConnectionId });
+        if (!retargeted.ok) {
+          return { ok: false, reason: "connection_missing", connectionId: retargeted.connectionId };
+        }
+        releasePin = retargeted.release;
+        // Persist the re-pin BEFORE createTab so the host reads the new connection on
+        // spawn. touchSession writes only connectionId (SessionMetaPatch, zero core delta).
+        await deps.persistence.touchSession(req.sessionId, { connectionId: req.replacementConnectionId });
+        pin = retargeted;
+      }
+      if (!pin.ok) {
+        return { ok: false, reason: "connection_missing", connectionId: pin.connectionId };
+      }
+      pinnedConnectionId = pin.connectionId;
+    }
     const result = deps.manager.createTab({
       workspace: meta.workspace,
       ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),

@@ -511,6 +511,36 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     expect(touchSession).not.toHaveBeenCalled();
     expect(createTab).not.toHaveBeenCalled();
   });
+
+  it("resume: a DEAD pin + a valid replacement whose touchSession REJECTS releases the replacement reservation — no leak (M5)", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const touchSession = vi.fn(async () => {
+      throw new Error("sqlite write failed");
+    });
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      listSessions: async () => [],
+      touchSession,
+    };
+    const release = vi.fn();
+    const resolveResumePin = vi.fn(async (m: { connectionId?: string }) =>
+      m.connectionId === "conn-new"
+        ? { ok: true as const, connectionId: "conn-new", release }
+        : { ok: false as const, connectionId: m.connectionId ?? "" },
+    );
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+
+    await expect(
+      handleCreate(deps, { kind: "resume", sessionId: "s-resume", replacementConnectionId: "conn-new" }),
+    ).rejects.toThrow("sqlite write failed");
+
+    // The replacement's reservation must be released even though touchSession
+    // rejected before createTab ever ran — otherwise it stays connectionInUse
+    // forever (until an app restart).
+    expect(release).toHaveBeenCalledOnce();
+    expect(createTab).not.toHaveBeenCalled();
+  });
 });
 
 describe("handleCreate — guard order canSpawn -> atCapacity -> dialog/skip (R7)", () => {
