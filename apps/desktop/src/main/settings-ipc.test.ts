@@ -924,6 +924,36 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
     expect(again.ok).toBe(true);
   });
 
+  it("refuses to delete a connection pinned to a LIVE session (connection_in_use) and keeps its secrets (W10 delete-guard)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const clearSpy = vi.spyOn(vault, "clearSecret");
+    const res = await handleConnectionDelete(
+      makeDeps({ catalogIds: CATALOG_IDS, connectionInUse: (id) => id === "conn-1" }),
+      { id: "conn-1" },
+    );
+    expect(res).toEqual({ ok: false, reason: "connection_in_use" });
+    // A blocked delete touches NOTHING: no secret cleared, connection intact.
+    expect(clearSpy).not.toHaveBeenCalled();
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(1);
+  });
+
+  it("cancels an in-flight oauth flow for the deleted connection's provider (residual §6.5)", async () => {
+    const oauth = new FakeOAuthRunner(vault);
+    const deps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+    });
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-1
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    // The engine must not persist a blob under a just-deleted connection id.
+    expect(oauth.cancelled).toContain("acme");
+  });
+
   it("no CRUD response ever carries a secret value (custody)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
     await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });

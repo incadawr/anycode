@@ -185,6 +185,34 @@ describe("OAuthEngine.startFlow — refusals", () => {
     expect(store.saved).toHaveLength(0);
   });
 
+  it("does NOT persist a blob when cancelled DURING the token exchange (residual §6.5)", async () => {
+    const store = new FakeStore();
+    let releaseExchange!: () => void;
+    const exchangeGate = new Promise<void>((resolve) => (releaseExchange = resolve));
+    let engine!: OAuthEngine;
+    engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+      // The token exchange is in flight when the connection is deleted: cancel
+      // the flow, then let the exchange resolve. The persist must be skipped —
+      // otherwise a blob lands under a connection id that no longer exists.
+      fetchFn: async () => {
+        engine.cancel("acme");
+        await exchangeGate;
+        return { ok: true, status: 200, json: async () => ({ access_token: "at", expires_in: 3600 }) };
+      },
+    });
+    const outcome = engine.startFlow(config(), "conn-acme", { allowWeak: false });
+    // Resolves once `cancel()` (inside fetchFn) settles the flow — the exchange
+    // is now suspended on the gate.
+    expect(await outcome).toEqual({ ok: false, reason: "cancelled" });
+    // Let the cancelled exchange resolve, then give the (guarded-away) persist a
+    // generous window to run before asserting it never did.
+    releaseExchange();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(store.saved).toEqual([]);
+  });
+
   it("times out when the browser never returns", async () => {
     const store = new FakeStore();
     const engine = new OAuthEngine({
