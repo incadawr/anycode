@@ -642,12 +642,15 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
       type: "stream_retry",
       attempt: 1,
       maxAttempts: 3,
-      // W7b-FIX #2: stream_retry.reason is the whitelist-derived safe message
-      // (describeRetryReason redacts uniformly; the synthetic stall Error
-      // classifies as "unknown"). The raw "stream stalled…" text still rides the
-      // final thrown error on retry-exhaustion (asserted below), so it stays
-      // diagnosable at the host log — only the wire-crossing reason is redacted.
-      reason: "request failed",
+      // W7b-FIX #3: the stall timeout is LOCALLY generated (never provider
+      // text), so it gets its own fixed whitelist reason instead of being
+      // routed through classifyProviderFailure's generic "unknown" ->
+      // "request failed" bucket, which threw away the actionable diagnostic
+      // for no safety benefit. The raw "stream stalled…" text (with the
+      // interpolated timeout) still rides the final thrown error on
+      // retry-exhaustion (asserted below) for the host log — only the
+      // wire-crossing `reason` is the fixed, non-interpolated whitelist string.
+      reason: "stream_stalled",
     });
 
     const afterRetry = iterator.next();
