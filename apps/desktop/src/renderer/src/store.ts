@@ -1832,6 +1832,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // slate instead of appending on top of the dead host's stale
             // live-rendered blocks. A no-op on a fresh store (page load: the
             // session slice is already empty).
+            //
+            // W8-FIX #3: an armed Try-again `retry` offer must survive a host
+            // respawn (App.tsx:141-147, `setHostExited`'s own docstring) —
+            // `performReset()` wipes the whole session slice, `retry` included,
+            // so capture it here and restore it below. This does NOT apply to
+            // `performReset`'s other caller (the public `reset()` for a
+            // new-task/full reset, below): that path must still clear `retry`,
+            // so the preservation lives here, not inside `performReset` itself.
+            const armedRetry = get().retry;
             performReset();
             // Slice P7.14: `performReset` deliberately leaves the prompt queue
             // intact (it isn't in the session slice), so a respawn keeps the
@@ -1852,6 +1861,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 queueInFlight: null,
                 promptQueue,
                 ...(promptQueue.length > 0 ? { queuePaused: true } : {}),
+                ...(armedRetry !== null ? { retry: armedRetry } : {}),
               };
             });
             set({

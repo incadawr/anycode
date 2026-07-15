@@ -1049,7 +1049,59 @@ describe("desktop store — TASK.33 W8 retry visibility + Try-again", () => {
     expect(store.getState().consumeRetry()).toBeNull();
   });
 
-  it("performReset (host respawn) clears lastSentMessage/lastErrorRetry/retry — part of the session slice", () => {
+  it("performReset (host respawn) clears lastSentMessage/lastErrorRetry — part of the session slice — but PRESERVES an armed retry offer (W8-FIX #3: Try-again must survive a host restart, App.tsx:141-147)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+    store.getState().recordSentMessage("hello", []);
+    driveErrorThenLoopEnd(store, turnId, {
+      attemptsMade: 3,
+      maxAttempts: 3,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+    const armed = store.getState().retry;
+    expect(armed).not.toBeNull();
+
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s2" });
+
+    expect(store.getState().retry).toEqual(armed);
+    expect(store.getState().lastErrorRetry).toBeNull();
+    expect(store.getState().lastSentMessage).toBeNull();
+  });
+
+  it("an armed retry offer survives BOTH setHostExited AND the respawned host_ready that follows it (W8-FIX #3): the Try-again button must be able to return after a host crash+restart, not just during the disconnected gap", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+    store.getState().recordSentMessage("hello", []);
+    driveErrorThenLoopEnd(store, turnId, {
+      attemptsMade: 3,
+      maxAttempts: 3,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+    const armed = store.getState().retry;
+    expect(armed).not.toBeNull();
+
+    // setHostExited already preserves it (existing behavior) — assert that
+    // still holds so a regression there isn't masked by the assertion below.
+    store.getState().setHostExited();
+    expect(store.getState().retry).toEqual(armed);
+
+    // The respawned host's host_ready is where the offer used to be lost:
+    // performReset() wipes the whole session slice, retry included.
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s2" });
+
+    expect(store.getState().retry).toEqual(armed);
+    expect(store.getState().connection).toBe("ready");
+  });
+
+  it("a public reset() (new-task / full reset) still clears an armed retry offer — only the host_ready respawn path preserves it", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     const turnId = "turn-1";
@@ -1064,11 +1116,9 @@ describe("desktop store — TASK.33 W8 retry visibility + Try-again", () => {
     });
     expect(store.getState().retry).not.toBeNull();
 
-    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s2" });
+    store.getState().reset();
 
     expect(store.getState().retry).toBeNull();
-    expect(store.getState().lastErrorRetry).toBeNull();
-    expect(store.getState().lastSentMessage).toBeNull();
   });
 });
 
