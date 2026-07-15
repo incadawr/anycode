@@ -262,9 +262,10 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
   });
 
   it("custom provider -> undefined: folds into the legacy 2.2 path (ruling §7-R6)", async () => {
-    // Custom uses the bare `provider.apiKey` vault key + connection baseUrl/model,
-    // exactly like "no selection" — buildHostEnv's legacy branch reads the active
-    // connection's key, matching the renderer's providerSecretKey. Returning a
+    // Custom uses the active connection's OWN connection-scoped vault key +
+    // connection baseUrl/model, exactly like "no selection" — buildHostEnv's
+    // legacy branch reads the active connection's key via `resolveActiveCredential`,
+    // matching the renderer's `connectionSecretKey` (ConnectionTile.tsx). Returning a
     // selection here would desync the key the UI writes from the key the fork reads.
     const sel = await resolveProviderSelection(deps(settings({ id: "custom", baseUrl: "https://my/endpoint", model: "m" })));
     expect(sel).toBeUndefined();

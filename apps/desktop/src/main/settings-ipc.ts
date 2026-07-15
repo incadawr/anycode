@@ -45,7 +45,6 @@ import type {
   CatalogAuthKind,
   CatalogSummary,
   CatalogSummaryEntry,
-  LegacyProviderPatch,
   OAuthCancelRequest,
   OAuthStartRequest,
   OAuthStartResult,
@@ -55,7 +54,6 @@ import type {
   ProviderSettingsV2,
   ProviderTransportId,
   SecretKey,
-  SecretStatus,
   SettingsMutationResult,
   SettingsPatch,
   SettingsSnapshot,
@@ -231,60 +229,6 @@ function findOrCreateConnectionByProvider(
   };
 }
 
-/** The legacy vault-key alias the pre-W12 renderer reads/writes a credential under (mirror of SettingsScreen `providerSecretKey`). */
-function legacyAliasKey(providerId: string, authKind: "api_key" | "oauth"): SecretKey {
-  if (providerId === "" || providerId === "custom") {
-    return "provider.apiKey";
-  }
-  return authKind === "oauth" ? `provider.${providerId}.oauth` : `provider.${providerId}.apiKey`;
-}
-
-/**
- * Translates a secret-set/clear key into the vault key it should ACTUALLY touch
- * (pre-W12 write seam, §4.1). A key already in connection form
- * (`provider.connection.<id>.*`) passes through unchanged. A legacy-shaped key
- * (bare `provider.apiKey`, or `provider.<pid>.{apiKey,oauth}`) is routed to the
- * connection of that provider bucket — found, or (for a write) created + possibly
- * activated. The legacy form is NEVER written to the vault again; the connection
- * key is the only source of truth. Returns the possibly-updated settings + the
- * resolved target key (`undefined` = a clear of a bucket with no connection: a
- * safe no-op).
- */
-function translateSecretKey(
-  key: SecretKey,
-  settings: AnycodeSettings,
-  genId: () => string,
-  opts: { create: boolean },
-): { settings: AnycodeSettings; targetKey: SecretKey | undefined } {
-  if (/^provider\.connection\.[^.]+\.(apiKey|oauth)$/.test(key)) {
-    return { settings, targetKey: key }; // already connection-scoped
-  }
-  let providerId: string;
-  let authKind: "api_key" | "oauth";
-  if (key === "provider.apiKey") {
-    providerId = "";
-    authKind = "api_key";
-  } else {
-    const match = /^provider\.([^.]+)\.(apiKey|oauth)$/.exec(key);
-    if (match === null || match[1] === undefined) {
-      return { settings, targetKey: undefined };
-    }
-    providerId = match[1];
-    authKind = match[2] === "oauth" ? "oauth" : "api_key";
-  }
-  const existing = bucketConnection(settings.provider, providerId);
-  if (existing !== undefined) {
-    return { settings, targetKey: connectionSecretKey(existing.id, authKind) };
-  }
-  if (!opts.create) {
-    return { settings, targetKey: undefined }; // clear of an absent connection: nothing to do
-  }
-  const { provider, connectionId } = findOrCreateConnectionByProvider(settings.provider, providerId, genId, "if-none");
-  return { settings: { ...settings, provider }, targetKey: connectionSecretKey(connectionId, authKind) };
-}
-
-
-
 /**
  * Secret-set/clear key: a bare `string` here (the catalog-membership refine is
  * done in the handler via `isKnownSecretKey(key, catalogIds)`, which is the
@@ -374,57 +318,21 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
 
 /**
  * The credential key that gates readiness for the ACTIVE connection (TASK.45 v2):
- * its own connection key (`provider.connection.<id>.{apiKey,oauth}`), plus the
- * legacy alias key the pre-W12 renderer reads that key's status under (§4.2).
- * `{}` when there is no active connection — `computeProviderReady` then uses its
- * legacy `provider.apiKey` default (unset on a fresh install).
+ * its own connection key (`provider.connection.<id>.{apiKey,oauth}`).
+ * `undefined` when there is no active connection — `computeProviderReady` then
+ * uses its legacy `provider.apiKey` default (unset on a fresh install).
  */
-function activeCredential(
-  deps: SettingsIpcDeps,
-  settings: AnycodeSettings,
-): { credentialKey?: SecretKey; aliasKey?: SecretKey } {
+function activeCredential(deps: SettingsIpcDeps, settings: AnycodeSettings): SecretKey | undefined {
   const connection = activeConnection(settings);
   if (connection === undefined) {
-    return {};
+    return undefined;
   }
   const providerId = connection.providerId;
   // custom/bare-legacy and every catalog entry are api_key today; an oauth
   // provider (dormant in v1 catalog) uses the connection's oauth key.
   const kind = providerId === "" ? "api_key" : deps.authKindFor?.(providerId) ?? "api_key";
   const authKind: "api_key" | "oauth" = kind === "oauth" ? "oauth" : "api_key";
-  return {
-    credentialKey: connectionSecretKey(connection.id, authKind),
-    aliasKey: legacyAliasKey(providerId, authKind),
-  };
-}
-
-/**
- * Mirrors the ACTIVE connection's credential status under the legacy alias the
- * pre-W12 renderer looks it up by (§4.2). Presentation-only and value-less
- * (`SecretStatus` carries no plaintext — custody intact): the projected entry
- * copies `set/source/tier` from the connection key's status (or, when that key
- * has no on-disk entry, reports `set:false` with an env-or-none source). Replaces
- * an existing same-key entry in place (so `provider.apiKey` keeps its position),
- * else appends.
- */
-function projectAliasStatus(
-  secrets: SecretStatus[],
-  connectionKey: SecretKey,
-  aliasKey: SecretKey,
-  bootEnv: NodeJS.ProcessEnv,
-): SecretStatus[] {
-  const connStatus = secrets.find((s) => s.key === connectionKey);
-  const envValue = bootEnv.ANYCODE_API_KEY;
-  const envSet = envValue !== undefined && envValue.trim() !== "";
-  const aliasStatus: SecretStatus = {
-    key: aliasKey,
-    set: connStatus?.set ?? false,
-    source: connStatus?.source ?? (envSet ? "env" : "none"),
-    tier: connStatus?.tier ?? secrets[0]?.tier ?? "unavailable",
-  };
-  return secrets.some((s) => s.key === aliasKey)
-    ? secrets.map((s) => (s.key === aliasKey ? aliasStatus : s))
-    : [...secrets, aliasStatus];
+  return connectionSecretKey(connection.id, authKind);
 }
 
 /**
@@ -471,34 +379,13 @@ function selectedTransportInfo(
 /**
  * Deep-partial patch SHAPE guard: rejects only a non-object payload (a malformed
  * bridge message is a safe no-op). This is a shape gate, not a value gate — the
- * legacy `provider` sub-patch is type-validated by `legacyProviderPatchSchema`
- * and the fully-merged settings object is validated against `settingsSchema`
- * before it is written (§5.2). A bad enum/type is therefore refused `invalid`
- * and NEVER persisted; an unvalidated write would quarantine the WHOLE
- * settings.json on the next load (it is not "clamped to the schema").
+ * fully-merged settings object is validated against `settingsSchema` before it
+ * is written (§5.2). A bad enum/type is therefore refused `invalid` and NEVER
+ * persisted; an unvalidated write would quarantine the WHOLE settings.json on
+ * the next load (it is not "clamped to the schema"). `provider` is refined out
+ * entirely upstream (`handleSet`, TASK.45 W12) before this shape gate even runs.
  */
 const patchSchema = z.record(z.string(), z.unknown());
-
-/**
- * Type-validates the whitelisted legacy `provider` sub-patch (§5.2 layer 1):
- * known fields must be well-typed (a bad `transport` / `reasoningEffort` enum is
- * `invalid`), while `.passthrough()` lets an unknown field pass exactly as
- * `applyFieldEdits` already ignores it. Enums are reused from the CRUD schemas.
- */
-const legacyProviderPatchSchema = z
-  .object({
-    id: z.string().optional(),
-    model: z.string().optional(),
-    baseUrl: z.string().optional(),
-    transport: transportEnum.optional(),
-    defaults: z
-      .record(
-        z.string(),
-        z.object({ model: z.string().optional(), reasoningEffort: reasoningEffortEnum.optional() }).passthrough(),
-      )
-      .optional(),
-  })
-  .passthrough();
 
 // ── snapshot projection ──
 
@@ -519,29 +406,22 @@ async function snapshotFrom(
   readOnly: boolean,
 ): Promise<SettingsSnapshot> {
   const transportInfo = selectedTransportInfo(deps, settings);
-  const credential = activeCredential(deps, settings);
+  const credentialKey = activeCredential(deps, settings);
   const [rawSecrets, providerReady] = await Promise.all([
     deps.vault.statuses(deps.bootEnv, deps.catalogIds ?? []),
     computeProviderReady({
       bootEnv: deps.bootEnv,
       settings,
       getSecret: (key) => deps.vault.getSecretValue(key),
-      credentialKey: credential.credentialKey,
+      credentialKey,
       authOptional: transportInfo.authOptional,
       resolvedTransport: transportInfo.resolvedTransport,
       supportedTransports: transportInfo.supportedTransports,
     }),
   ]);
-  // Legacy alias projection (§4.2): mirror the active connection's key status
-  // under the alias the pre-W12 renderer reads, so a key entered via the old
-  // generic channel shows as set. Value-less; dies with the shim in W12.
-  const secrets =
-    credential.credentialKey !== undefined && credential.aliasKey !== undefined
-      ? projectAliasStatus(rawSecrets, credential.credentialKey, credential.aliasKey, deps.bootEnv)
-      : rawSecrets;
   return {
     settings,
-    secrets,
+    secrets: rawSecrets,
     providerReady,
     envOverrides: envOverrides(deps.bootEnv),
     readOnly,
@@ -562,92 +442,13 @@ export async function handleGet(deps: SettingsIpcDeps): Promise<SettingsSnapshot
 }
 
 /**
- * The v1-patch compat shim (TASK.45 W9 §4.3): translates a whitelisted legacy
- * `provider` sub-patch into an operation on the ACTIVE connection so the pre-W12
- * renderer's generic write path keeps behaving as it did pre-W9. `id` switches
- * the active connection (find-or-create the connection for that provider bucket,
- * then make it active); `model/baseUrl/transport` and a folded `defaults[activePid]`
- * update the active connection. It never accepts a wholesale `connections[]` /
- * `activeConnectionId` (rejected upstream in `handleSet`). `genId` mints an
- * opaque `conn-<uuid>` for a created connection (injected for deterministic
- * tests). Lives until W12 moves the renderer onto the `connection-*` IPC.
- */
-export function applyLegacyProviderPatch(
-  settings: AnycodeSettings,
-  patch: LegacyProviderPatch,
-  genId: () => string = defaultConnectionId,
-): AnycodeSettings {
-  let provider: ProviderSettingsV2 = settings.provider;
-  let targetId = provider.activeConnectionId;
-
-  // (1) provider selection change -> find-or-create the connection for that
-  // provider bucket, make it active, and reflect the explicit catalog pick on it
-  // (custom<->bare share one bucket).
-  if (patch.id !== undefined) {
-    const pickedId = patch.id;
-    const result = findOrCreateConnectionByProvider(provider, pickedId, genId, "always");
-    provider = {
-      ...result.provider,
-      connections: result.provider.connections.map((connection) =>
-        connection.id === result.connectionId ? { ...connection, providerId: pickedId } : connection,
-      ),
-    };
-    targetId = result.connectionId;
-  } else if (targetId === undefined && hasLegacyFieldEdit(patch)) {
-    // A model/baseUrl/transport edit with no active connection (fresh install,
-    // no provider picked): materialise a bare-legacy connection to hold it.
-    const connectionId = genId();
-    provider = {
-      ...provider,
-      connections: [...provider.connections, { id: connectionId, providerId: "" }],
-      activeConnectionId: connectionId,
-    };
-    targetId = connectionId;
-  }
-
-  // (2) apply model/baseUrl/transport + the folded defaults entry to the target.
-  if (targetId !== undefined) {
-    const currentId = targetId;
-    provider = {
-      ...provider,
-      connections: provider.connections.map((connection) =>
-        connection.id === currentId ? applyFieldEdits(connection, patch) : connection,
-      ),
-    };
-  }
-
-  return { ...settings, provider };
-}
-
-/** True when the patch carries any per-connection field edit (model/baseUrl/transport/defaults). */
-function hasLegacyFieldEdit(patch: LegacyProviderPatch): boolean {
-  return (
-    patch.model !== undefined ||
-    patch.baseUrl !== undefined ||
-    patch.transport !== undefined ||
-    patch.defaults !== undefined
-  );
-}
-
-/** Applies a legacy patch's field edits to one connection (defaults[activePid] wins over the top-level model, matching v1). */
-function applyFieldEdits(connection: ProviderConnection, patch: LegacyProviderPatch): ProviderConnection {
-  const activePid = connection.providerId === "" ? "custom" : connection.providerId;
-  const folded = patch.defaults?.[activePid];
-  return {
-    ...connection,
-    ...(patch.model !== undefined ? { model: patch.model } : {}),
-    ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-    ...(patch.transport !== undefined ? { transport: patch.transport } : {}),
-    ...(folded?.model !== undefined ? { model: folded.model } : {}),
-    ...(folded?.reasoningEffort !== undefined ? { reasoningEffort: folded.reasoningEffort } : {}),
-  };
-}
-
-/**
- * settings-set: deep-partial merge into settings.json. The legacy `provider`
- * sub-patch routes through the v1-patch compat shim; a wholesale connections
- * graph refine-rejects. Refuses `read_only` (a newer-than-CURRENT file) and an
- * unparseable patch (`invalid`); `version` is never changed by a patch.
+ * settings-set: deep-partial merge into settings.json. `provider` is refine-
+ * rejected outright (TASK.45 W12): the connection graph is CRUD-only
+ * (`connection-*` channels) — the pre-W12 v1-patch compat shim that folded a
+ * legacy `provider` sub-patch onto the active connection is retired now that
+ * the renderer writes connections directly. Refuses `read_only` (a
+ * newer-than-CURRENT file) and an unparseable patch (`invalid`); `version` is
+ * never changed by a patch.
  */
 export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = patchSchema.safeParse(raw);
@@ -655,27 +456,10 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     return { ok: false, reason: "invalid" };
   }
   const rawPatch = parsed.data as Record<string, unknown>;
-  const providerPatch = rawPatch.provider;
-  if (providerPatch !== undefined) {
-    if (typeof providerPatch !== "object" || providerPatch === null || Array.isArray(providerPatch)) {
-      return { ok: false, reason: "invalid" };
-    }
-    const pp = providerPatch as Record<string, unknown>;
-    // Refine-reject a wholesale connections graph through the generic path: the
-    // renderer must use the main-authoritative connection-* CRUD (cut invariant).
-    if ("connections" in pp || "activeConnectionId" in pp) {
-      return { ok: false, reason: "invalid" };
-    }
-    // A `provider.id` in the shim patch must name a catalog entry (trust boundary,
-    // threat model §9): a compromised renderer cannot point at an arbitrary id.
-    if ("id" in pp && pp.id !== undefined && (typeof pp.id !== "string" || !(deps.catalogIds ?? []).includes(pp.id))) {
-      return { ok: false, reason: "invalid" };
-    }
-    // Type-validate the legacy provider sub-patch (§5.2 layer 1): a bad enum is
-    // refused here, never folded onto a connection and persisted.
-    if (!legacyProviderPatchSchema.safeParse(providerPatch).success) {
-      return { ok: false, reason: "invalid" };
-    }
+  // The connection graph is CRUD-only (cut invariant) — ANY `provider` key sent
+  // through the generic path is refused, not folded onto a connection.
+  if ("provider" in rawPatch) {
+    return { ok: false, reason: "invalid" };
   }
 
   return withSettingsLock(deps.settingsPath, async () => {
@@ -683,19 +467,10 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
     }
-    // Translate the legacy provider sub-patch into a connection operation first.
-    let settings = loaded.settings;
-    if (providerPatch !== undefined) {
-      settings = applyLegacyProviderPatch(
-        settings,
-        providerPatch as LegacyProviderPatch,
-        deps.genConnectionId ?? defaultConnectionId,
-      );
-    }
-    // Drop version + provider (already handled by the shim); merge the rest.
+    const settings = loaded.settings;
+    // Drop version (main is the sole authority); merge the rest.
     const patch: SettingsPatch = { ...(rawPatch as SettingsPatch) };
     delete (patch as Record<string, unknown>).version;
-    delete (patch as Record<string, unknown>).provider;
     // Defense in depth (F20 hardening): validate the `keybindings` section against
     // the schema (scoped ONLY to keybindings) so a malformed section is dropped
     // rather than persisted where it could crash a reader.
@@ -724,96 +499,68 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   });
 }
 
+/** Matches a connection-scoped vault key, capturing `[id, kind]`. */
+const CONNECTION_SECRET_KEY_RE = /^provider\.connection\.([^.]+)\.(apiKey|oauth)$/;
+
 /**
- * secret-set: store a value in the vault (design §1). Pre-W12 the renderer still
- * writes a legacy-shaped key (`provider.apiKey` / `provider.<id>.*`); W9′
- * TRANSLATES it to the connection key of the target provider bucket, minting +
- * activating a connection when none exists yet (§4.1). The connection metadata is
- * persisted FIRST (metadata-first: a crash leaves a visible keyless connection,
- * never an orphan secret). The legacy form is never written to the vault. The
- * consent flag comes from the persisted settings; a weak tier without consent
- * returns `weak_storage_needs_consent` and — after rolling back any connection
- * this call just minted — leaves settings.json and the vault untouched (§3.2).
- * A raw `provider.connection.<id>.*` key is custody-checked against the graph
- * first (§4.2). The whole load→persist→vault→snapshot critical section runs under
- * the settings mutation lock (§2.2). Blocked in read_only.
+ * secret-set: store a value in the vault (design §1). TASK.45 W12: the renderer
+ * writes a connection-scoped key DIRECTLY (`provider.connection.<id>.*`) —
+ * connection metadata is always created first via `connection-create`, so this
+ * handler never mints or activates a connection itself; a legacy-shaped key
+ * (bare `provider.apiKey` / `provider.<id>.*`) is refused `invalid` (the
+ * pre-W12 write-translation shim is retired). The named connection must EXIST
+ * and its auth kind must match the key suffix (custody: a compromised renderer
+ * cannot seat a vault entry outside the connection graph). The consent flag
+ * comes from the persisted settings; a weak tier without consent returns
+ * `weak_storage_needs_consent` and leaves settings.json and the vault untouched.
+ * The whole load→vault→snapshot critical section runs under the settings
+ * mutation lock (§2.2). Blocked in read_only.
  */
 export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = secretSetSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-
-  // `SecretKey` is only valid for the legacy `provider.apiKey`, a
-  // `provider.<id>.{apiKey,oauth}` whose id is in the catalog, or a
-  // `provider.connection.<id>.*` key. Runtime narrowing from `string`.
   const { key } = parsed.data;
   if (!isKnownSecretKey(key, deps.catalogIds ?? [])) {
     return { ok: false, reason: "invalid" };
+  }
+  const connMatch = CONNECTION_SECRET_KEY_RE.exec(key);
+  if (connMatch === null) {
+    return { ok: false, reason: "invalid" }; // legacy-shaped key: no longer a write target
   }
   return withSettingsLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
     }
-    // Connection-key custody (§4.2, `handleSetSecret` ONLY): a raw
-    // `provider.connection.<id>.<kind>` write must name a connection that EXISTS
-    // and whose auth kind matches the suffix — a compromised renderer cannot seat
-    // a vault entry outside the connection graph. `handleClearSecret` stays
-    // permissive (existence not required) so orphans remain removable.
-    const connMatch = /^provider\.connection\.([^.]+)\.(apiKey|oauth)$/.exec(key);
-    if (connMatch !== null) {
-      const conn = loaded.settings.provider.connections.find((c) => c.id === connMatch[1]);
-      if (conn === undefined) {
-        return { ok: false, reason: "not_found" };
-      }
-      // Resolve the connection's auth kind exactly as `activeCredential` does.
-      const kind = conn.providerId === "" ? "api_key" : deps.authKindFor?.(conn.providerId) ?? "api_key";
-      const expectedSuffix = kind === "oauth" ? "oauth" : "apiKey";
-      if (connMatch[2] !== expectedSuffix) {
-        return { ok: false, reason: "invalid" };
-      }
+    const conn = loaded.settings.provider.connections.find((c) => c.id === connMatch[1]);
+    if (conn === undefined) {
+      return { ok: false, reason: "not_found" };
     }
-    const { settings: updatedSettings, targetKey } = translateSecretKey(
-      key,
-      loaded.settings,
-      deps.genConnectionId ?? defaultConnectionId,
-      { create: true },
-    );
-    if (targetKey === undefined) {
-      return { ok: false, reason: "invalid" }; // defensive: isKnownSecretKey already narrowed
+    // Resolve the connection's auth kind exactly as `activeCredential` does.
+    const kind = conn.providerId === "" ? "api_key" : deps.authKindFor?.(conn.providerId) ?? "api_key";
+    const expectedSuffix = kind === "oauth" ? "oauth" : "apiKey";
+    if (connMatch[2] !== expectedSuffix) {
+      return { ok: false, reason: "invalid" };
     }
-    // Metadata-first: persist a freshly-minted connection BEFORE writing its secret.
-    const connectionCreated = updatedSettings !== loaded.settings;
-    if (connectionCreated) {
-      await saveSettings(deps.settingsPath, updatedSettings);
-    }
-    const result = await deps.vault.setSecret(targetKey, parsed.data.value, {
-      allowWeak: updatedSettings.security.allowWeakSecretStorage,
+    const result = await deps.vault.setSecret(key, parsed.data.value, {
+      allowWeak: loaded.settings.security.allowWeakSecretStorage,
     });
     if (!result.ok) {
-      // Refusal rollback (§3.2): the refused write persisted nothing in the vault,
-      // so the connection this call just minted must not linger. Roll the metadata
-      // back to the pre-mint state (race-safe under the mutation lock).
-      if (connectionCreated) {
-        await saveSettings(deps.settingsPath, loaded.settings);
-      }
       return { ok: false, reason: result.reason };
     }
     // TASK.45 W11: a stored/replaced credential has not yet been confirmed by a
     // real request or explicit check — reset health to `unchecked` (never leave
     // a stale auth_invalid/etc. from a NOW-superseded key).
-    let finalSettings = updatedSettings;
-    const targetConnMatch = /^provider\.connection\.([^.]+)\./.exec(targetKey);
-    if (targetConnMatch?.[1] !== undefined) {
-      const withHealth = withConnectionHealth(updatedSettings, targetConnMatch[1], {
-        status: "unchecked",
-        at: (deps.now ?? defaultNowIso)(),
-      });
-      if (withHealth !== undefined) {
-        finalSettings = withHealth;
-        await saveSettings(deps.settingsPath, finalSettings);
-      }
+    let finalSettings = loaded.settings;
+    const withHealth = withConnectionHealth(loaded.settings, conn.id, {
+      status: "unchecked",
+      at: (deps.now ?? defaultNowIso)(),
+    });
+    if (withHealth !== undefined) {
+      finalSettings = withHealth;
+      await saveSettings(deps.settingsPath, finalSettings);
     }
     const snapshot = await snapshotFrom(deps, finalSettings, false);
     await emitMutation(deps, snapshot);
@@ -822,9 +569,10 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
 }
 
 /**
- * secret-clear: remove a value from the vault. A legacy-shaped key is translated
- * to the connection key of its provider bucket (find-only — clearing a bucket
- * with no connection is a safe no-op, §4.1). Blocked in read_only.
+ * secret-clear: remove a value from the vault. TASK.45 W12: only a
+ * connection-scoped key is a valid clear target — a legacy-shaped key is
+ * refused `invalid` (nothing ever writes one anymore). Existence of the
+ * connection is NOT required (orphans remain removable). Blocked in read_only.
  */
 export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = secretClearSchema.safeParse(raw);
@@ -835,31 +583,27 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
   if (!isKnownSecretKey(key, deps.catalogIds ?? [])) {
     return { ok: false, reason: "invalid" };
   }
+  const connMatch = CONNECTION_SECRET_KEY_RE.exec(key);
+  if (connMatch === null) {
+    return { ok: false, reason: "invalid" };
+  }
   return withSettingsLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
     }
-    const { targetKey } = translateSecretKey(key, loaded.settings, deps.genConnectionId ?? defaultConnectionId, {
-      create: false,
-    });
+    await deps.vault.clearSecret(key);
+    // TASK.45 W11: a cleared credential resets health to `unchecked` too (cut
+    // §W11: "replace/clear key -> unchecked") — never leave a stale
+    // auth_invalid/etc. pinned to a now-empty credential slot.
     let finalSettings = loaded.settings;
-    if (targetKey !== undefined) {
-      await deps.vault.clearSecret(targetKey);
-      // TASK.45 W11: a cleared credential resets health to `unchecked` too (cut
-      // §W11: "replace/clear key -> unchecked") — never leave a stale
-      // auth_invalid/etc. pinned to a now-empty credential slot.
-      const targetConnMatch = /^provider\.connection\.([^.]+)\./.exec(targetKey);
-      if (targetConnMatch?.[1] !== undefined) {
-        const withHealth = withConnectionHealth(loaded.settings, targetConnMatch[1], {
-          status: "unchecked",
-          at: (deps.now ?? defaultNowIso)(),
-        });
-        if (withHealth !== undefined) {
-          finalSettings = withHealth;
-          await saveSettings(deps.settingsPath, finalSettings);
-        }
-      }
+    const withHealth = withConnectionHealth(loaded.settings, connMatch[1] as string, {
+      status: "unchecked",
+      at: (deps.now ?? defaultNowIso)(),
+    });
+    if (withHealth !== undefined) {
+      finalSettings = withHealth;
+      await saveSettings(deps.settingsPath, finalSettings);
     }
     const snapshot = await snapshotFrom(deps, finalSettings, false);
     await emitMutation(deps, snapshot);

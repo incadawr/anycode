@@ -242,37 +242,57 @@ describe("handleGet — snapshot projection", () => {
   });
 });
 
-describe("handleSetSecret — custody + consent + write-translation (I1 / R1 / §4.1)", () => {
-  it("translates the legacy key to the connection key (value ONLY under provider.connection.<id>.apiKey, never the legacy form)", async () => {
+describe("handleSetSecret — connection-scoped write only (TASK.45 W12: legacy write-translation retired)", () => {
+  it("writes the value under the connection's OWN key when the connection exists", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const onMutation = vi.fn();
-    const res = await handleSetSecret(makeDeps({ onMutation }), { key: "provider.apiKey", value: SECRET_VALUE });
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS, onMutation }), {
+      key: "provider.connection.conn-1.apiKey",
+      value: SECRET_VALUE,
+    });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      // The alias mirrors the connection key's status under the legacy key the
-      // pre-W12 renderer reads (secrets[0] === provider.apiKey), so it shows set.
-      expect(res.snapshot.secrets[0]).toMatchObject({ key: "provider.apiKey", set: true, source: "vault" });
       expect(containsSecret(res)).toBe(false);
     }
-    // The value reached the CONNECTION key, and the legacy form was NEVER written.
     expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
-    expect(vault.store.has("provider.apiKey")).toBe(false);
     expect(onMutation).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a legacy-shaped key (bare provider.apiKey) — no longer a write target", async () => {
+    const res = await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(vault.store.size).toBe(0);
+  });
+
+  it("rejects a legacy per-provider key (provider.<id>.apiKey) — no longer a write target", async () => {
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.z-ai.apiKey",
+      value: SECRET_VALUE,
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(vault.store.size).toBe(0);
+  });
+
   it("passes the weak-consent refusal through and does NOT fire onMutation", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     vault.setResult = { ok: false, reason: "weak_storage_needs_consent" };
     const onMutation = vi.fn();
-    const res = await handleSetSecret(makeDeps({ onMutation }), { key: "provider.apiKey", value: SECRET_VALUE });
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS, onMutation }), {
+      key: "provider.connection.conn-1.apiKey",
+      value: SECRET_VALUE,
+    });
     expect(res).toEqual({ ok: false, reason: "weak_storage_needs_consent" });
     expect(onMutation).not.toHaveBeenCalled();
   });
 
   it("reads the consent flag from persisted settings", async () => {
-    // Persist consent, then a spy vault records the allowWeak it was handed.
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const spy = vi.spyOn(vault, "setSecret");
     await handleSet(makeDeps(), { security: { allowWeakSecretStorage: true } });
-    await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
-    // Written under the connection key (the legacy form is translated away).
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-1.apiKey",
+      value: SECRET_VALUE,
+    });
     expect(spy).toHaveBeenLastCalledWith("provider.connection.conn-1.apiKey", SECRET_VALUE, { allowWeak: true });
   });
 
@@ -283,38 +303,40 @@ describe("handleSetSecret — custody + consent + write-translation (I1 / R1 / �
 });
 
 describe("handleClearSecret", () => {
-  it("clears the active connection's key when a legacy key is cleared, returning a fresh snapshot", async () => {
-    // A connection holds the secret under its connection key (the W9′ shape).
-    await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
+  it("clears a connection's OWN key, returning a fresh snapshot", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-1.apiKey",
+      value: SECRET_VALUE,
+    });
     expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
 
-    const res = await handleClearSecret(makeDeps(), { key: "provider.apiKey" });
+    const res = await handleClearSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.connection.conn-1.apiKey" });
     expect(res.ok).toBe(true);
-    if (res.ok) {
-      // The alias reflects the now-empty connection key.
-      expect(res.snapshot.secrets[0]).toMatchObject({ key: "provider.apiKey", set: false });
-    }
     expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
   });
 
-  it("clearing a legacy key for a provider with no connection is a safe no-op", async () => {
-    const res = await handleClearSecret(makeDeps(), { key: "provider.apiKey" });
+  it("clearing an orphan connection-key (no such connection) is a safe no-op", async () => {
+    const res = await handleClearSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.connection.conn-nope.apiKey" });
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects a legacy-shaped key (bare provider.apiKey) — no longer a clear target", async () => {
+    const res = await handleClearSecret(makeDeps(), { key: "provider.apiKey" });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
   });
 });
 
 describe("handleSet — merge + read-only", () => {
-  it("deep-partial merges and persists (the legacy provider patch folds onto a connection)", async () => {
-    const res = await handleSet(makeDeps(), { provider: { model: "claude-x" }, ui: { theme: "dark" } });
+  it("deep-partial merges a non-provider patch and persists", async () => {
+    const res = await handleSet(makeDeps(), { ui: { theme: "dark" } });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    // The legacy `provider.model` shim materialised a bare active connection.
-    expect(activeProviderView(loaded.settings).model).toBe("claude-x");
     expect(loaded.settings.ui.theme).toBe("dark");
   });
 
   it("ignores a version change in the patch", async () => {
-    await handleSet(makeDeps(), { version: 99, provider: { model: "m" } });
+    await handleSet(makeDeps(), { version: 99, ui: { theme: "dark" } });
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.version).toBe(2);
   });
@@ -325,7 +347,7 @@ describe("handleSet — merge + read-only", () => {
       settingsPath,
       JSON.stringify({ version: 3, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }),
     );
-    const res = await handleSet(makeDeps(), { provider: { model: "m" } });
+    const res = await handleSet(makeDeps(), { ui: { theme: "dark" } });
     expect(res).toEqual({ ok: false, reason: "read_only" });
   });
 
@@ -366,35 +388,8 @@ describe("handleSet — keybindings validation (F20 hardening, defense in depth)
   });
 });
 
-describe("handleSet — legacy provider patch folds onto the active connection (TASK.45 §4.3 shim)", () => {
-  it("folds provider.{id,model,defaults[pid]} onto ONE active connection (no provider.defaults key persisted)", async () => {
-    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), {
-      provider: { id: "z-ai", defaults: { "z-ai": { model: "glm-5.2", reasoningEffort: "high" } } },
-    });
-    expect(res.ok).toBe(true);
-    const loaded = await loadSettings(settingsPath);
-    const view = activeProviderView(loaded.settings);
-    expect(view.id).toBe("z-ai");
-    expect(view.model).toBe("glm-5.2"); // defaults[pid].model folded onto the connection
-    expect(view.reasoningEffort).toBe("high");
-    expect(loaded.settings.provider.connections).toHaveLength(1);
-    // The v1 `provider.defaults` key does NOT survive — it folded into the connection.
-    expect((loaded.settings.provider as unknown as Record<string, unknown>).defaults).toBeUndefined();
-    // A later, independent settings-get (fresh load off disk) sees the same connection.
-    const reloaded = await handleGet(makeDeps({ catalogIds: CATALOG_IDS }));
-    expect(activeProviderView(reloaded.settings).model).toBe("glm-5.2");
-  });
-
-  it("re-patching the SAME provider id overwrites its model on the one connection (last-write-wins)", async () => {
-    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "glm-4.6" } });
-    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "glm-5.2" } });
-    expect(res.ok).toBe(true);
-    const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections).toHaveLength(1);
-    expect(activeProviderView(loaded.settings).model).toBe("glm-5.2");
-  });
-
-  it("an old v1 settings.json on disk is reset to an empty provider on load (no v1 carry-over)", async () => {
+describe("handleGet — v1 settings.json on disk resets to an empty provider (no v1 carry-over, no migration)", () => {
+  it("an old v1 settings.json on disk is reset to an empty provider on load", async () => {
     await writeFile(
       settingsPath,
       JSON.stringify({
@@ -536,7 +531,7 @@ describe("projectCatalogSummary — value-only projection", () => {
     const vllm = summary.find((e) => e.id === "vllm");
     const custom = summary.find((e) => e.id === "custom");
     // Both needsBaseUrl; only the custom sentinel is isCustom. The renderer's
-    // providerSecretKey/displayedProviderId key off this distinction.
+    // connectionSecretKey/selectDisplayValue key off this distinction.
     expect(vllm?.needsBaseUrl).toBe(true);
     expect(vllm?.isCustom).toBeUndefined();
     expect(custom?.needsBaseUrl).toBe(true);
@@ -564,16 +559,19 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
   }
 
   it("vLLM (authOptional) is ready with a model and no key at all", async () => {
-    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
-      provider: { id: VLLM_ID, model: "m" },
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
+      providerId: VLLM_ID,
+      model: "m",
     });
     const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }));
     expect(snap.providerReady).toBe(true);
   });
 
   it("blocks readiness when settings.provider.transport is outside the selected entry's supportedTransports", async () => {
-    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
-      provider: { id: VLLM_ID, model: "m", transport: "openai-responses" },
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
+      providerId: VLLM_ID,
+      model: "m",
+      transport: "openai-responses",
     });
     const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }));
     expect(snap.providerReady).toBe(false);
@@ -584,8 +582,9 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     // guard's only signal is the env override. Pre-W5-FIX the guard ignored the
     // env rung entirely, saw the (supported) catalog default, and wrongly
     // reported ready — contradicting the fork the env actually forces.
-    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
-      provider: { id: VLLM_ID, model: "m" },
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
+      providerId: VLLM_ID,
+      model: "m",
     });
     const snap = await buildSettingsSnapshot(
       makeDeps({
@@ -605,8 +604,11 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
   ]);
 
   it("custom becomes auth-optional once its resolved transport is an OpenAI-family one", async () => {
-    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
-      provider: { id: "custom", model: "m", baseUrl: "http://localhost:8000/v1", transport: "openai-chat-completions" },
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      providerId: "custom",
+      model: "m",
+      baseUrl: "http://localhost:8000/v1",
+      transport: "openai-chat-completions",
     });
     const snap = await buildSettingsSnapshot(
       makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: CUSTOM_CATALOG, isCustom: (id) => id === "custom" }),
@@ -615,8 +617,10 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
   });
 
   it("custom stays fail-closed (requires a key) on the default anthropic-messages transport", async () => {
-    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
-      provider: { id: "custom", model: "m", baseUrl: "https://bridge.example" },
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      providerId: "custom",
+      model: "m",
+      baseUrl: "https://bridge.example",
     });
     const snap = await buildSettingsSnapshot(
       makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: CUSTOM_CATALOG, isCustom: (id) => id === "custom" }),
@@ -629,8 +633,10 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     // Pre-W5-FIX the auth waiver read only settings.transport (unset ⇒ treated
     // as anthropic-messages), demanded a key, and reported NOT ready — blind to
     // the env transport the fork actually runs.
-    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
-      provider: { id: "custom", model: "m", baseUrl: "http://localhost:8000/v1" },
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      providerId: "custom",
+      model: "m",
+      baseUrl: "http://localhost:8000/v1",
     });
     const snap = await buildSettingsSnapshot(
       makeDeps({
@@ -644,39 +650,36 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
   });
 });
 
-describe("handleSet — provider.id catalog refine (slice 2.5)", () => {
-  it("accepts a provider.id that names a catalog entry", async () => {
+describe("handleSet — provider refine-reject (TASK.45 W12: the connection graph is CRUD-only)", () => {
+  it("rejects ANY provider key sent through the generic settings-set path", async () => {
     const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai" } });
-    expect(res.ok).toBe(true);
-    const loaded = await loadSettings(settingsPath);
-    expect(activeProviderView(loaded.settings).id).toBe("z-ai");
-  });
-
-  it("refuses a provider.id outside the catalog as invalid", async () => {
-    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "evil" } });
     expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toEqual([]);
   });
 
-  it("still accepts a legacy patch with no provider.id", async () => {
-    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { model: "m" } });
-    expect(res.ok).toBe(true);
+  it("still applies sibling (non-provider) sections in the SAME rejected patch — no, the whole call is refused", async () => {
+    // A `provider` key anywhere in the payload refuses the WHOLE call (not a
+    // partial apply) — the connection graph is CRUD-only, and mixing it into a
+    // patch that also touches `ui` must not silently drop just the provider part.
+    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai" }, ui: { theme: "dark" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.ui.theme).toBe("system"); // untouched
   });
 });
 
-describe("handleSetSecret/handleClearSecret — widened SecretKey refine + write-translation", () => {
-  it("accepts a per-provider apiKey key for a catalog id, storing it under that provider's connection key", async () => {
+describe("handleSetSecret/handleClearSecret — catalog-scoped legacy keys are refused too (TASK.45 W12)", () => {
+  it("rejects a per-provider apiKey key even for a valid catalog id — connection-scoped only", async () => {
     const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
       key: "provider.z-ai.apiKey",
       value: SECRET_VALUE,
     });
-    expect(res.ok).toBe(true);
-    // Translated to the connection key for a freshly-created z-ai connection;
-    // the legacy `provider.z-ai.apiKey` form is never written.
-    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
-    expect(vault.store.has("provider.z-ai.apiKey")).toBe(false);
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(vault.store.size).toBe(0);
   });
 
-  it("rejects a per-provider key whose id is not in the catalog", async () => {
+  it("rejects a per-provider key whose id is not in the catalog (isKnownSecretKey gate, before the connection-scope check)", async () => {
     const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
       key: "provider.evil.apiKey",
       value: "x",
@@ -684,13 +687,9 @@ describe("handleSetSecret/handleClearSecret — widened SecretKey refine + write
     expect(res).toEqual({ ok: false, reason: "invalid" });
   });
 
-  it("clears a per-provider key by translating it to the provider's connection key", async () => {
-    // Establish a z-ai connection holding the secret under its connection key.
-    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
-    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
+  it("rejects a per-provider key clear too — connection-scoped only", async () => {
     const res = await handleClearSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey" });
-    expect(res.ok).toBe(true);
-    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
+    expect(res).toEqual({ ok: false, reason: "invalid" });
   });
 });
 
@@ -704,9 +703,9 @@ describe("snapshot — catalog projection + oauth readiness (slice 2.5)", () => 
   });
 
   it("providerReady uses the oauth credentialKey (the active connection's oauth key present)", async () => {
-    // Select acme (oauth) with a model, and a stored oauth blob under the
-    // connection's key (W9′ keys credentials by connection).
-    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "acme", model: "m" } });
+    // Create+activate an acme (oauth) connection with a model, and a stored
+    // oauth blob under the connection's key (connections key credentials by id).
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "acme", model: "m" }); // conn-1
     vault.store.set("provider.connection.conn-1.oauth", "blob");
     const snap = await buildSettingsSnapshot(
       makeDeps({ catalogIds: CATALOG_IDS, authKindFor: (id) => (id === "acme" ? "oauth" : undefined) }),
@@ -715,7 +714,7 @@ describe("snapshot — catalog projection + oauth readiness (slice 2.5)", () => 
   });
 
   it("providerReady false for an oauth provider with no stored token", async () => {
-    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "acme", model: "m" } });
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "acme", model: "m" }); // conn-1
     const snap = await buildSettingsSnapshot(
       makeDeps({ catalogIds: CATALOG_IDS, authKindFor: (id) => (id === "acme" ? "oauth" : undefined) }),
     );
@@ -743,7 +742,9 @@ describe("handleOAuthStart / handleOAuthCancel", () => {
     const res = await handleOAuthStart(oauthDeps({ onMutation }), { providerId: "acme" });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      const oauthStatus = res.snapshot.secrets.find((s) => s.key === "provider.acme.oauth");
+      // No alias projection (TASK.45 W12): the status lives under the connection's
+      // OWN key — the engine minted+persisted conn-1 for this flow's first run.
+      const oauthStatus = res.snapshot.secrets.find((s) => s.key === "provider.connection.conn-1.oauth");
       expect(oauthStatus?.set).toBe(true);
       // No token anywhere in the response.
       expect(JSON.stringify(res)).not.toContain("OAUTH-TOKEN-BLOB-SECRET");
@@ -786,59 +787,46 @@ describe("handleOAuthStart / handleOAuthCancel", () => {
   });
 });
 
-// ── TASK.45 W9′ new seams: write-path, CRUD custody, alias, refine-reject ──
+// ── TASK.45 W12: connection-CRUD write path, custody, alias-free, refine-reject ──
 
-describe("pre-W12 secret write-path end-to-end (§4.1, DoD item 4)", () => {
-  it("pick provider → enter key → snapshot: connection created+active, secret ONLY under the connection key, alias visible, ready", async () => {
+describe("connection CRUD write-path end-to-end (W12, DoD item 4 replacement — no legacy key anywhere)", () => {
+  it("create connection → secret-set by connection id → snapshot: active, secret ONLY under the connection key, ready", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    // (1) pick a provider through the OLD generic settings-set channel.
-    await handleSet(deps, { provider: { id: "z-ai", model: "glm-4.6" } });
-    // (2) enter a key through the OLD generic secret-set channel (legacy-shaped key).
-    const setRes = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    // (1) create+activate a connection through the connection-create CRUD channel.
+    const created = await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.6" });
+    expect(created.ok).toBe(true);
+    const conn = created.ok ? created.snapshot.settings.provider.connections[0] : undefined;
+    expect(conn?.providerId).toBe("z-ai");
+
+    // (2) write the credential through secret-set, keyed DIRECTLY by connection id.
+    const setRes = await handleSetSecret(deps, { key: `provider.connection.${conn?.id}.apiKey`, value: SECRET_VALUE });
     expect(setRes.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
-    // A connection was created and is the default for new sessions.
     expect(loaded.settings.provider.connections).toHaveLength(1);
-    const conn = activeConnection(loaded.settings);
-    expect(conn?.providerId).toBe("z-ai");
     expect(loaded.settings.provider.activeConnectionId).toBe(conn?.id);
 
-    // The secret lives ONLY under the connection key; both legacy forms are absent.
+    // The secret lives ONLY under the connection key; no legacy form anywhere.
     expect(vault.store.get(`provider.connection.${conn?.id}.apiKey`)).toBe(SECRET_VALUE);
     expect(vault.store.has("provider.z-ai.apiKey")).toBe(false);
     expect(vault.store.has("provider.apiKey")).toBe(false);
+    expect([...vault.store.keys()]).toEqual([`provider.connection.${conn?.id}.apiKey`]);
 
-    // The snapshot mirrors the connection key's status under the legacy alias the
-    // pre-W12 renderer reads (providerSecretKey("z-ai") === "provider.z-ai.apiKey").
+    // No alias projection: the snapshot's secrets carry ONLY the connection key
+    // (plus the vault's own static `provider.apiKey` allow-list entry, unset).
     const snap = await buildSettingsSnapshot(deps);
-    expect(snap.secrets.find((s) => s.key === "provider.z-ai.apiKey")?.set).toBe(true);
+    expect(snap.secrets.some((s) => s.key === "provider.z-ai.apiKey")).toBe(false);
+    expect(snap.secrets.find((s) => s.key === `provider.connection.${conn?.id}.apiKey`)?.set).toBe(true);
     // The readiness gate reads the connection key -> providerReady flips true.
     expect(snap.providerReady).toBe(true);
   });
 
-  it("negative: the raw secrets store never holds a legacy form (custody + no desync)", async () => {
+  it("negative: a legacy-shaped secret-set never reaches the vault at all (refused invalid, not translated)", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    await handleSetSecret(deps, { key: "provider.apiKey", value: SECRET_VALUE });
-    expect([...vault.store.keys()]).toEqual(["provider.connection.conn-1.apiKey"]);
-  });
-});
-
-describe("snapshot — legacy alias projection (§4.2)", () => {
-  it("mirrors the active connection's key status under the legacy alias, value-less", async () => {
-    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "m" } });
-    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
-    const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: CATALOG_IDS }));
-    const alias = snap.secrets.find((s) => s.key === "provider.z-ai.apiKey");
-    expect(alias).toMatchObject({ set: true, source: "vault" });
-    expect(Object.keys(alias ?? {}).sort()).toEqual(["key", "set", "source", "tier"]); // value-less
-    expect(containsSecret(snap)).toBe(false);
-  });
-
-  it("reflects an env override on the alias source", async () => {
-    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "m" } });
-    const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: CATALOG_IDS, bootEnv: { ANYCODE_API_KEY: "k" } }));
-    expect(snap.secrets.find((s) => s.key === "provider.z-ai.apiKey")?.source).toBe("env");
+    const res = await handleSetSecret(deps, { key: "provider.apiKey", value: SECRET_VALUE });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(vault.store.size).toBe(0);
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toEqual([]);
   });
 });
 
@@ -923,7 +911,7 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
 
   it("delete clears BOTH connection secrets first, then removes metadata + active id (idempotent)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1 active
-    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
 
     const clearSpy = vi.spyOn(vault, "clearSecret");
@@ -944,7 +932,7 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
 
   it("refuses to delete a connection pinned to a LIVE session (connection_in_use) and keeps its secrets (W10 delete-guard)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
-    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     const clearSpy = vi.spyOn(vault, "clearSecret");
     const res = await handleConnectionDelete(
       makeDeps({ catalogIds: CATALOG_IDS, connectionInUse: (id) => id === "conn-1" }),
@@ -959,7 +947,7 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
 
   it("refuses delete when the pin is RESERVED but not yet registered (W10-FIX F3 early guard, registered ∪ pending)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
-    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     const clearSpy = vi.spyOn(vault, "clearSecret");
     // A resume has RESERVED this pin (synchronously, before its tab is registered):
     // `connectionInUse` unions the reservation set, so the early guard refuses.
@@ -976,7 +964,7 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
 
   it("re-checks connectionInUse AFTER the secret-clears and aborts if it flipped (W10-FIX F3 late re-check)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
-    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     const clearSpy = vi.spyOn(vault, "clearSecret");
     // Free at the EARLY check; a resume registers the pin during the awaited
     // clears, so the LATE re-check (2nd call) sees it in use.
@@ -1012,7 +1000,7 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
 
   it("no CRUD response ever carries a secret value (custody)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
-    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     const responses = [
       await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "m" }),
       await handleConnectionSetActive(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" }),
@@ -1264,7 +1252,7 @@ describe("handleSetSecret / handleClearSecret — reset health to unchecked (cut
     const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T01:00:00.000Z" });
     await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "auth" }); // pre-existing auth_invalid
 
-    const res = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const res = await handleSetSecret(deps, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
@@ -1277,10 +1265,10 @@ describe("handleSetSecret / handleClearSecret — reset health to unchecked (cut
   it("clearing a secret also resets health to unchecked", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T02:00:00.000Z" });
-    await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(deps, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" }); // ready
 
-    const res = await handleClearSecret(deps, { key: "provider.z-ai.apiKey" });
+    const res = await handleClearSecret(deps, { key: "provider.connection.conn-1.apiKey" });
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
@@ -1296,7 +1284,7 @@ describe("handleSetSecret / handleClearSecret — reset health to unchecked (cut
     await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "auth" });
     vault.setResult = { ok: false, reason: "weak_storage_needs_consent" };
 
-    const res = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const res = await handleSetSecret(deps, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     expect(res).toEqual({ ok: false, reason: "weak_storage_needs_consent" });
 
     const loaded = await loadSettings(settingsPath);
@@ -1337,7 +1325,7 @@ describe("handleConnectionCheck — probe (TASK.45 W11)", () => {
   it("with NO probe wired (default), behaves byte-identically to the W9 scaffold: no network call, health untouched", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(deps, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
 
     const res = await handleConnectionCheck(deps, { id: "conn-1" });
     expect(res.ok).toBe(true);
@@ -1369,7 +1357,7 @@ describe("handleConnectionCheck — probe (TASK.45 W11)", () => {
   it("a wired probe's ok:true writes ready; ok:false classifies + writes safeCode — through the SAME table", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const bootstrap = makeDeps({ catalogIds: CATALOG_IDS });
-    await handleSetSecret(bootstrap, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(bootstrap, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
 
     const ok: ConnectionProbeOutcome = { ok: true };
     const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T04:00:00.000Z", probeConnection: async () => ok });
@@ -1397,7 +1385,7 @@ describe("handleConnectionCheck — probe (TASK.45 W11)", () => {
   it("never falls back to a billable request — connection-check calls the probe AT MOST once", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const bootstrap = makeDeps({ catalogIds: CATALOG_IDS });
-    await handleSetSecret(bootstrap, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await handleSetSecret(bootstrap, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
     const probeConnection = vi.fn<(...args: unknown[]) => Promise<ConnectionProbeOutcome>>().mockResolvedValue({ ok: true });
     const deps = makeDeps({ catalogIds: CATALOG_IDS, probeConnection });
 
@@ -1407,41 +1395,13 @@ describe("handleConnectionCheck — probe (TASK.45 W11)", () => {
   });
 });
 
-// ── W9′-FIX #1: legacy writes target the ACTIVE connection, not first-match (§1.4) ──
+// ── OAuth prep still finds the ACTIVE connection of a provider bucket (§4.3) ──
+// `findOrCreateConnectionByProvider`/`bucketConnection` survive the W12
+// write-seam removal (they are NOT part of the retired shim — OAuth prep is the
+// one remaining caller, cut §4.3/§8 "downstream W10/W11: без изменений").
 
-describe("W9′-FIX #1 — legacy writes target the ACTIVE connection (§1.4)", () => {
-  /** Fixture: two connections of the SAME provider bucket (each with a model so
-   * readiness can hinge on the credential), active = the SECOND. */
-  async function twoConnActiveSecond(deps: SettingsIpcDeps, providerId: string): Promise<void> {
-    await handleConnectionCreate(deps, { providerId, model: "m" }); // conn-1 (first ⇒ active by default)
-    await handleConnectionCreate(deps, { providerId, model: "m", setActive: true }); // conn-2 (now active)
-    expect((await loadSettings(settingsPath)).settings.provider.activeConnectionId).toBe("conn-2");
-  }
-
-  it("handleSetSecret routes a legacy key to the ACTIVE connection's key (not the first match)", async () => {
-    const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    await twoConnActiveSecond(deps, "z-ai");
-    const res = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
-    expect(res.ok).toBe(true);
-    // The runtime reads the ACTIVE connection's key -> the write MUST land there.
-    expect(vault.store.get("provider.connection.conn-2.apiKey")).toBe(SECRET_VALUE);
-    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
-    // No new connection minted (find, don't create) and readiness reflects the active key.
-    expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(2);
-    expect((await buildSettingsSnapshot(deps)).providerReady).toBe(true);
-  });
-
-  it("handleSet (legacy provider re-pick) keeps the ACTIVE connection active — no silent flip to first-match (§1.2)", async () => {
-    const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    await twoConnActiveSecond(deps, "z-ai");
-    const res = await handleSet(deps, { provider: { id: "z-ai" } });
-    expect(res.ok).toBe(true);
-    // Re-selecting the same provider while conn-2 is active must NOT switch the
-    // account under the user to conn-1 (the pre-fix first-match behaviour).
-    expect((await loadSettings(settingsPath)).settings.provider.activeConnectionId).toBe("conn-2");
-  });
-
-  it("handleOAuthStart threads the ACTIVE connection id to the engine (not first-match)", async () => {
+describe("handleOAuthStart routes to the ACTIVE connection of a provider bucket, not first-match", () => {
+  it("threads the ACTIVE connection id to the engine when two connections share a provider", async () => {
     const runner = new FakeOAuthRunner(vault);
     const deps = makeDeps({
       catalogIds: CATALOG_IDS,
@@ -1449,36 +1409,24 @@ describe("W9′-FIX #1 — legacy writes target the ACTIVE connection (§1.4)", 
       oauth: runner,
       oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
     });
-    await twoConnActiveSecond(deps, "acme");
+    await handleConnectionCreate(deps, { providerId: "acme", model: "m" }); // conn-1 (first ⇒ active by default)
+    await handleConnectionCreate(deps, { providerId: "acme", model: "m", setActive: true }); // conn-2 (now active)
     const res = await handleOAuthStart(deps, { providerId: "acme" });
     expect(res.ok).toBe(true);
     expect(runner.lastConnectionId).toBe("conn-2");
-  });
-
-  it("DoD item-4 extension — pre-W12 write-path with TWO connections lands the secret ONLY under the active key", async () => {
-    const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    await twoConnActiveSecond(deps, "z-ai");
-    const setRes = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
-    expect(setRes.ok).toBe(true);
-    // Secret ONLY under the active connection; the first connection stays empty.
-    expect(vault.store.get("provider.connection.conn-2.apiKey")).toBe(SECRET_VALUE);
-    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
-    // Alias status (what the pre-W12 renderer reads) mirrors the active key.
-    const snap = await buildSettingsSnapshot(deps);
-    expect(snap.secrets.find((s) => s.key === "provider.z-ai.apiKey")?.set).toBe(true);
-    expect(snap.providerReady).toBe(true);
   });
 });
 
 // ── W9′-FIX #2: settings mutation lock (§2.3) ──
 
 describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
-  it("serializes concurrent settings-set ‖ secret-set — neither read-modify-write is lost", async () => {
+  it("serializes concurrent connection-update ‖ secret-set on the same connection — neither write is lost (TASK.45 W12 shape)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     ipcGate.arm();
     const p = Promise.all([
-      handleSet(deps, { provider: { id: "z-ai", model: "USER-MODEL" } }),
-      handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE }),
+      handleConnectionUpdate(deps, { id: "conn-1", model: "USER-MODEL" }),
+      handleSetSecret(deps, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE }),
     ]);
     await drainGate(p);
     await p;
@@ -1493,11 +1441,10 @@ describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
 
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.provider.connections).toHaveLength(1);
-    const active = activeConnection(loaded.settings);
-    // The user's provider pick (model) survives — not clobbered by the racing write.
-    expect(active?.model).toBe("USER-MODEL");
-    // The secret landed on the ONE surviving connection (no orphan / no desync).
-    expect(vault.store.get(`provider.connection.${active?.id}.apiKey`)).toBe(SECRET_VALUE);
+    // The metadata edit survives — not clobbered by the racing secret write.
+    expect(loaded.settings.provider.connections[0]?.model).toBe("USER-MODEL");
+    // The secret landed on the connection (no orphan / no desync).
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
     expect((await buildSettingsSnapshot(deps)).providerReady).toBe(true);
   });
 
@@ -1547,31 +1494,11 @@ describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
   });
 });
 
-// ── W9′-FIX #3: refused secret-set rolls the connection back (§3.3) ──
-
-describe("W9′-FIX #3 — refusal rollback (§3.3)", () => {
-  it("a refused weak-storage secret-set leaves NO persisted connection", async () => {
-    vault.setResult = { ok: false, reason: "weak_storage_needs_consent" };
-    const setSpy = vi.spyOn(vault, "setSecret");
-    const res = await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
-    expect(res).toEqual({ ok: false, reason: "weak_storage_needs_consent" });
-    // The just-minted connection is rolled back — nothing persists.
-    const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections).toEqual([]);
-    expect(loaded.settings.provider.activeConnectionId).toBeUndefined();
-    expect(setSpy).toHaveBeenCalledTimes(1); // no second write after rollback
-  });
-
-  it("convergence regress: consent granted → the same set persists ONE connection with the key", async () => {
-    await handleSet(makeDeps(), { security: { allowWeakSecretStorage: true } });
-    const res = await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
-    expect(res.ok).toBe(true);
-    const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections).toHaveLength(1);
-    const active = activeConnection(loaded.settings);
-    expect(vault.store.get(`provider.connection.${active?.id}.apiKey`)).toBe(SECRET_VALUE);
-  });
-});
+// W9′-FIX #3 ("refusal rollback") retired with the write-seam (TASK.45 W12):
+// a secret-set can no longer mint a connection at all (connection-create is a
+// separate, prior step), so there is nothing left to roll back — the
+// not-yet-created-connection state W9′-FIX #4 below tests (`not_found`) is
+// the direct replacement.
 
 // ── W9′-FIX #4: connection-key custody in handleSetSecret only (§4.3) ──
 
@@ -1619,12 +1546,12 @@ describe("W9′-FIX #4 — connection-key custody (§4.3)", () => {
 // ── W9′-FIX #5: validated merge — no quarantine-wipe of settings.json (§5.3) ──
 
 describe("W9′-FIX #5 — validated merge (§5.3)", () => {
-  it("rejects an invalid provider transport (invalid) and leaves settings.json intact (no quarantine)", async () => {
+  it("rejects an invalid transport enum in connection-update (invalid) and leaves settings.json intact (no quarantine)", async () => {
     // Seed a valid baseline, capture its bytes.
-    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "glm-4.6" } });
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-4.6" }); // conn-1
     const before = await readFile(settingsPath, "utf8");
 
-    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { transport: "bogus" } });
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", transport: "bogus" });
     expect(res).toEqual({ ok: false, reason: "invalid" });
 
     const after = await readFile(settingsPath, "utf8");
@@ -1659,5 +1586,45 @@ describe("W9′-FIX #5 — validated merge (§5.3)", () => {
     const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
     expect(raw.futureThing).toEqual({ a: 1 }); // a future-version key is NOT stripped
     expect((raw.ui as { theme: string }).theme).toBe("dark");
+  });
+});
+
+// ── TASK.45 W12 gate: the legacy write-seam is FULLY retired, not just unused ──
+// (metadata-shim + secret-write-translation + alias-projection, cut §4.4/§8 —
+// "снимаются одним пунктом"). A mechanical grep, not just behavioral tests, so
+// a future edit can't quietly resurrect a dead symbol name without this
+// failing — the retired names must never reappear in EITHER file's source text.
+
+describe("legacy write-seam retirement — mechanical source-text gate (TASK.45 W12)", () => {
+  const RETIRED_SYMBOLS = [
+    "applyLegacyProviderPatch",
+    "LegacyProviderPatch",
+    "translateSecretKey",
+    "legacyAliasKey",
+    "projectAliasStatus",
+    "legacyProviderPatchSchema",
+    "hasLegacyFieldEdit",
+  ];
+
+  it("settings-ipc.ts contains none of the retired shim/translation/alias symbol names", async () => {
+    const source = await readFile(new URL("./settings-ipc.ts", import.meta.url), "utf8");
+    for (const symbol of RETIRED_SYMBOLS) {
+      expect(source).not.toContain(symbol);
+    }
+  });
+
+  it("shared/settings.ts contains none of the retired symbol names either (the type itself is gone)", async () => {
+    const source = await readFile(new URL("../shared/settings.ts", import.meta.url), "utf8");
+    for (const symbol of RETIRED_SYMBOLS) {
+      expect(source).not.toContain(symbol);
+    }
+    // SettingsPatch no longer carries a `provider` sub-shape at all.
+    expect(source).not.toContain("provider?: LegacyProviderPatch");
+  });
+
+  it("findOrCreateConnectionByProvider/bucketConnection survive (OAuth prep's own use, NOT part of the retired shim)", async () => {
+    const source = await readFile(new URL("./settings-ipc.ts", import.meta.url), "utf8");
+    expect(source).toContain("findOrCreateConnectionByProvider");
+    expect(source).toContain("bucketConnection");
   });
 });
