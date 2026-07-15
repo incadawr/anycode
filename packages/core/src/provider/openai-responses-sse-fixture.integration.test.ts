@@ -286,7 +286,7 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.4
     expect(captured!.body["max_output_tokens"]).toBe(16);
   });
 
-  it("never leaks an ambient OPENAI_API_KEY: apiKey undefined sends a deterministic empty Bearer token, not process.env", async () => {
+  it("never leaks an ambient OPENAI_API_KEY: apiKey undefined omits Authorization entirely, not process.env (MEDIUM#2)", async () => {
     const previous = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "ambient-secret-should-never-be-sent";
     try {
@@ -302,11 +302,10 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.4
       const events = await collect(portFor({ apiKey: undefined }).streamText(request));
 
       expect(events.filter((e) => e.type === "error")).toEqual([]);
-      // The `Bearer ` prefix + empty token round-trips through undici with the
-      // trailing space trimmed off the wire header value — what matters is that
-      // it is NOT the ambient key.
-      expect(captured!.headers["authorization"]).toBe("Bearer");
-      expect(captured!.headers["authorization"]).not.toContain("ambient-secret-should-never-be-sent");
+      // MEDIUM#2 fix: a genuine no-auth endpoint sends NO Authorization header
+      // at all (matching the chat-completions transport), not an empty Bearer
+      // token — see openai-responses-auth.test.ts for the dedicated coverage.
+      expect(captured!.headers["authorization"]).toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env.OPENAI_API_KEY;

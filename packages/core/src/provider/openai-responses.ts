@@ -40,13 +40,31 @@ export const OPENAI_RESPONSES_PROVIDER_NAME = "openai";
  * accepts any string, including empty) so behaviour is controlled ENTIRELY by
  * `EndpointConfig`, never by the shell environment: a no-auth endpoint gets a
  * deterministic empty Bearer token, never an ambient credential.
+ *
+ * That empty token still produces a real outgoing `Authorization: Bearer `
+ * header (present, just empty) — the chat-completions transport
+ * (`openai-compatible.ts`) instead OMITS the header entirely when there is no
+ * key. To match that behaviour without reintroducing the `loadApiKey` ambient
+ * fallback, a genuine no-auth config (`config.apiKey === undefined`) keeps the
+ * `""` short-circuit AND installs `stripAuthorizationFetch` so the header
+ * never reaches the wire; a real key is left untouched.
  */
+function stripAuthorizationFetch(
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+): ReturnType<typeof fetch> {
+  const headers = new Headers(init?.headers);
+  headers.delete("authorization");
+  return fetch(input, { ...init, headers });
+}
+
 export function createOpenAIResponsesLanguageModel(config: EndpointConfig): LanguageModel {
   const provider = createOpenAI({
     name: OPENAI_RESPONSES_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
     apiKey: config.apiKey ?? "",
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
+    ...(config.apiKey === undefined ? { fetch: stripAuthorizationFetch } : {}),
   });
   return provider.responses(config.model);
 }
