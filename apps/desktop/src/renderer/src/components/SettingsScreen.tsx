@@ -72,6 +72,7 @@ import type {
   CatalogSummaryEntry,
   ProviderConnection,
   ProviderTransportId,
+  SecretKey,
   SecretSource,
   SecretStatus,
   SecretTier,
@@ -451,6 +452,38 @@ function useActiveEnvStatus(): WireEnvStatus | null {
 
 // ── components ──
 
+/** The action a tile's "Replace key"/"Sign in" control resolves to for one connection (TASK.45 W12-FIX §1). */
+export type ReplaceKeyAction =
+  | { kind: "oauthStart"; providerId: string; connectionId: string }
+  | { kind: "clearSecret"; key: SecretKey };
+
+/**
+ * Resolves `openReplaceKey`'s action (TASK.45 W12-FIX §1): an OAuth connection
+ * with no stored token starts a sign-in SCOPED TO THIS CONNECTION — never a
+ * provider-wide bucket guess, the custody defect this fix closes (a sign-in
+ * on a non-active same-provider connection must not land on the active one's
+ * credential) — one with a token clears it, and a non-oauth connection falls
+ * through to the drawer's credential field (`undefined`). Exported for direct
+ * testing: this package's vitest config has no jsdom (see
+ * ConnectionDrawer.test.ts's docstring), so click-driven behavior is proven
+ * pure-logic here and end-to-end by the live smoke script.
+ */
+export function resolveReplaceKeyAction(
+  connection: ProviderConnection,
+  catalogEntry: CatalogSummaryEntry | undefined,
+  secrets: readonly SecretStatus[],
+): ReplaceKeyAction | undefined {
+  if (catalogEntry?.authKind !== "oauth") {
+    return undefined;
+  }
+  const key = connectionSecretKey(connection.id, "oauth");
+  const status = secrets.find((s) => s.key === key);
+  if (status?.set) {
+    return { kind: "clearSecret", key };
+  }
+  return { kind: "oauthStart", providerId: connection.providerId, connectionId: connection.id };
+}
+
 export interface ProviderSettingsProps {
   /** Injectable for tests / isolation; defaults to the app's singleton settings-store. */
   store?: SettingsStoreApi;
@@ -523,12 +556,12 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   function openReplaceKey(connection: ProviderConnection, catalogEntry: CatalogSummaryEntry | undefined): void {
     // An OAuth connection's "Replace key" IS the sign-in/out toggle itself —
     // no drawer needed, mirroring the old OAuthCredentialBlock's direct action.
-    if (catalogEntry?.authKind === "oauth") {
-      const status = secrets.find((s) => s.key === connectionSecretKey(connection.id, "oauth"));
-      if (status?.set) {
-        void store.getState().clearSecret(connectionSecretKey(connection.id, "oauth"));
+    const action = resolveReplaceKeyAction(connection, catalogEntry, secrets);
+    if (action !== undefined) {
+      if (action.kind === "clearSecret") {
+        void store.getState().clearSecret(action.key);
       } else {
-        void store.getState().oauthStart(connection.providerId);
+        void store.getState().oauthStart(action.providerId, action.connectionId);
       }
       return;
     }

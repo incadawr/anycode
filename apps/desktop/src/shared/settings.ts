@@ -328,6 +328,15 @@ export type SettingsMutationResult =
 
 export interface OAuthStartRequest {
   providerId: string;
+  /**
+   * Scopes the sign-in to ONE connection (TASK.45 W12-FIX §1) — additive,
+   * companion to `providerId`. Present: the flow persists the token to
+   * EXACTLY this connection (not-found or a different provider bucket both
+   * refuse `failed`, zero side effects). Absent: the pre-existing
+   * provider-scoped findOrCreate semantics (the v1-shim / legacy path),
+   * unchanged byte-for-byte.
+   */
+  connectionId?: string;
 }
 
 export interface OAuthCancelRequest {

@@ -833,6 +833,75 @@ describe("handleOAuthStart / handleOAuthCancel", () => {
   });
 });
 
+// ── TASK.45 W12-FIX §1: OAuth start is connection-scoped (codex W12 review #1) ──
+
+describe("handleOAuthStart — connection-scoped (`connectionId` present, W12-FIX §1)", () => {
+  function oauthDeps(over: Partial<SettingsIpcDeps> = {}): SettingsIpcDeps {
+    return makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauth: runner,
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      ...over,
+    });
+  }
+  let runner: FakeOAuthRunner;
+  beforeEach(() => {
+    runner = new FakeOAuthRunner(vault);
+  });
+
+  // §1.1 — hits ONLY the handler layer: with `connectionId` absent the schema
+  // drops it and bucketConnection resolves the ACTIVE connection (conn-1, A) —
+  // reverting the handler's connectionId-aware branch is what turns this red.
+  it("§1.1 routes to the EXACT connectionId given, not the active/bucket connection", async () => {
+    const deps = oauthDeps();
+    await handleConnectionCreate(deps, { providerId: "acme", model: "m" }); // conn-1 (A, active by default)
+    await handleConnectionCreate(deps, { providerId: "acme", model: "m" }); // conn-2 (B, not active)
+    const res = await handleOAuthStart(deps, { providerId: "acme", connectionId: "conn-2" });
+    expect(res.ok).toBe(true);
+    expect(runner.lastConnectionId).toBe("conn-2");
+    // The token landed under B's own key, never A's.
+    expect(vault.store.has("provider.connection.conn-2.oauth")).toBe(true);
+    expect(vault.store.has("provider.connection.conn-1.oauth")).toBe(false);
+  });
+
+  // §1.2 — custody guard: a connectionId from a DIFFERENT provider bucket must
+  // refuse, zero side effects. Reverting the `inSameProviderBucket` check (or
+  // dropping it) turns this red — the flow would otherwise start on a
+  // mismatched connection's credential.
+  it("§1.2 custody guard: refuses `failed` when connectionId belongs to a different provider bucket", async () => {
+    const deps = oauthDeps();
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1 (api_key bucket)
+    const res = await handleOAuthStart(deps, { providerId: "acme", connectionId: "conn-1" });
+    expect(res).toEqual({ ok: false, reason: "failed" });
+    expect(runner.lastConnectionId).toBeUndefined();
+    expect(vault.store.size).toBe(0);
+  });
+
+  // §1.3 — not-found: refuses `failed`, engine never called, connections
+  // array never grows (anti-mint — the connectionId path must never fall
+  // back to findOrCreate's minting behavior).
+  it("§1.3 not-found connectionId: refuses `failed`, engine not called, no connection minted", async () => {
+    const deps = oauthDeps();
+    const res = await handleOAuthStart(deps, { providerId: "acme", connectionId: "conn-nope" });
+    expect(res).toEqual({ ok: false, reason: "failed" });
+    expect(runner.lastConnectionId).toBeUndefined();
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toHaveLength(0);
+  });
+
+  // §1.6 — legacy regress: invoking WITHOUT connectionId must still hit the
+  // pre-existing findOrCreate/bucket path byte-for-byte (pinned via the
+  // EXISTING oauth describe block above, untouched by this wave — this test
+  // only re-confirms the two paths coexist off the SAME handler).
+  it("§1.6 absent connectionId still uses findOrCreate (legacy path unaffected)", async () => {
+    const deps = oauthDeps();
+    const res = await handleOAuthStart(deps, { providerId: "acme" });
+    expect(res.ok).toBe(true);
+    expect(runner.lastConnectionId).toBe("conn-1");
+  });
+});
+
 // ── TASK.45 W12: connection-CRUD write path, custody, alias-free, refine-reject ──
 
 describe("connection CRUD write-path end-to-end (W12, DoD item 4 replacement — no legacy key anywhere)", () => {

@@ -238,7 +238,10 @@ function findOrCreateConnectionByProvider(
 const secretSetSchema = z.object({ key: z.string(), value: z.string() });
 const secretClearSchema = z.object({ key: z.string() });
 
-const oauthStartSchema: z.ZodType<OAuthStartRequest> = z.object({ providerId: z.string().min(1) });
+const oauthStartSchema: z.ZodType<OAuthStartRequest> = z.object({
+  providerId: z.string().min(1),
+  connectionId: z.string().min(1).optional(),
+});
 const oauthCancelSchema: z.ZodType<OAuthCancelRequest> = z.object({ providerId: z.string().min(1) });
 
 const ruleAddSchema: z.ZodType<PermissionRuleAddRequest> = z.object({
@@ -646,6 +649,12 @@ export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promis
   });
 }
 
+/** Resolution outcome of `handleOAuthStart`'s lock-held prep step (§1, W12-FIX). */
+type OAuthStartPrep =
+  | { readOnly: true }
+  | { readOnly: false; refused: true }
+  | { readOnly: false; refused: false; connectionId: string; allowWeak: boolean };
+
 /**
  * oauth-start: run the interactive loopback+PKCE sign-in for a catalog provider
  * (design §3.2/§4.1). Refuses `unsupported` when the provider is not oauth (no
@@ -653,6 +662,15 @@ export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promis
  * and — on success — returns a fresh snapshot (the provider's SecretStatus now
 
  * the vault by the engine and only the SecretStatus changes.
+ *
+ * TASK.45 W12-FIX §1: `connectionId` (additive, optional) scopes the sign-in
+ * to ONE connection — a connection-scoped surface (tile, drawer) must persist
+ * the token to the EXACT connection the user clicked, never a provider-bucket
+ * guess that could silently land on a different same-provider connection's
+ * custody. Present: resolved by exact id (not-found or a different provider
+ * bucket both refuse `failed`, zero side effects — the engine is never
+ * called, nothing minted/activated). Absent: the pre-existing
+ * findOrCreateConnectionByProvider/bucket semantics, unchanged.
  */
 export async function handleOAuthStart(deps: SettingsIpcDeps, raw: unknown): Promise<OAuthStartResult> {
   const parsed = oauthStartSchema.safeParse(raw);
@@ -664,15 +682,28 @@ export async function handleOAuthStart(deps: SettingsIpcDeps, raw: unknown): Pro
   if (config === undefined || oauth === undefined) {
     return { ok: false, reason: "unsupported" };
   }
+  const targetConnectionId = parsed.data.connectionId;
   // Resolve the target connection under the mutation lock (§2.2): the engine
   // persists the token blob by CONNECTION id, so a connection must exist first
   // (metadata-first, created + activated when the provider has none yet). ONLY
   // this metadata section is serialized — the interactive flow (minutes of
   // browser login) runs OUTSIDE the lock so it never freezes settings IPC.
-  const prep = await withSettingsLock(deps.settingsPath, async () => {
+  const prep: OAuthStartPrep = await withSettingsLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { readOnly: true as const };
+    }
+    if (targetConnectionId !== undefined) {
+      const connection = loaded.settings.provider.connections.find((c) => c.id === targetConnectionId);
+      if (connection === undefined || !inSameProviderBucket(connection.providerId, parsed.data.providerId)) {
+        return { readOnly: false as const, refused: true as const };
+      }
+      return {
+        readOnly: false as const,
+        refused: false as const,
+        connectionId: connection.id,
+        allowWeak: loaded.settings.security.allowWeakSecretStorage,
+      };
     }
     const { provider, connectionId, created } = findOrCreateConnectionByProvider(
       loaded.settings.provider,
@@ -684,10 +715,18 @@ export async function handleOAuthStart(deps: SettingsIpcDeps, raw: unknown): Pro
     if (created) {
       await saveSettings(deps.settingsPath, settings);
     }
-    return { readOnly: false as const, connectionId, allowWeak: settings.security.allowWeakSecretStorage };
+    return {
+      readOnly: false as const,
+      refused: false as const,
+      connectionId,
+      allowWeak: settings.security.allowWeakSecretStorage,
+    };
   });
   if (prep.readOnly) {
     return { ok: false, reason: "read_only" };
+  }
+  if (prep.refused) {
+    return { ok: false, reason: "failed" };
   }
   const outcome = await oauth.startFlow(config, prep.connectionId, { allowWeak: prep.allowWeak });
   if (!outcome.ok) {

@@ -292,8 +292,14 @@ contextBridge.exposeInMainWorld("anycode", {
 
     // token ever crosses back (oauthStart resolves with a snapshot whose
     // SecretStatus flips to set:true, never the token itself).
-    oauthStart: (providerId: string): Promise<OAuthStartResult> =>
-      ipcRenderer.invoke(OAUTH_START_CHANNEL, { providerId }) as Promise<OAuthStartResult>,
+    // `connectionId` (TASK.45 W12-FIX §1, additive/optional): scopes the
+    // sign-in to one connection; omitted preserves the legacy provider-scoped
+    // findOrCreate behavior byte-for-byte.
+    oauthStart: (providerId: string, connectionId?: string): Promise<OAuthStartResult> =>
+      ipcRenderer.invoke(OAUTH_START_CHANNEL, {
+        providerId,
+        ...(connectionId ? { connectionId } : {}),
+      }) as Promise<OAuthStartResult>,
     oauthCancel: (providerId: string): Promise<void> =>
       ipcRenderer.invoke(OAUTH_CANCEL_CHANNEL, { providerId }) as Promise<void>,
     // TASK.45 W10: ModelPill's model/effort write, main-authoritative by connection

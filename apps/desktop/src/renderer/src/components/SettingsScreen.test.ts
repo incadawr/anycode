@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
-import type { CatalogSummary, CatalogSummaryEntry, SecretStatus } from "../../../shared/settings.js";
+import type { CatalogSummary, CatalogSummaryEntry, ProviderConnection, SecretStatus } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
 import type { WireRepoMapStatus } from "../../../shared/protocol.js";
 import {
@@ -31,6 +31,7 @@ import {
   filterSettingsPanes,
   isEnvOverridden,
   parseOptionalInt,
+  resolveReplaceKeyAction,
   secretFieldReducer,
   selectProviderEntry,
   SETTINGS_PANES,
@@ -219,6 +220,38 @@ describe("shouldShowBaseUrlField (custom<->catalog baseUrl toggle, design §5 po
 
   it("shown when nothing is selected (legacy, or no catalog at all) — ruling R6: same mode as custom", () => {
     expect(shouldShowBaseUrlField(undefined)).toBe(true);
+  });
+});
+
+describe("resolveReplaceKeyAction (TASK.45 W12-FIX §1: connection-scoped oauth sign-in, codex W12 review #1)", () => {
+  const connB: ProviderConnection = { id: "conn-b", providerId: "acme" };
+
+  // §1.4 — reverting the SettingsScreen.tsx call site back to
+  // `oauthStart(providerId)` (dropping the connectionId) turns this red: the
+  // action must carry THIS connection's own id, not whatever a provider-wide
+  // bucket resolution would land on (which could be a DIFFERENT, active
+  // same-provider connection — the custody defect this fix closes).
+  it("§1.4 an oauth connection with no stored token resolves to a sign-in SCOPED TO THIS connection", () => {
+    expect(resolveReplaceKeyAction(connB, ACME_OAUTH, [])).toEqual({
+      kind: "oauthStart",
+      providerId: "acme",
+      connectionId: "conn-b",
+    });
+  });
+
+  it("an oauth connection WITH a stored token resolves to clearSecret on its own key (regress)", () => {
+    const secrets: SecretStatus[] = [
+      { key: "provider.connection.conn-b.oauth", set: true, source: "vault", tier: "os_encrypted" },
+    ];
+    expect(resolveReplaceKeyAction(connB, ACME_OAUTH, secrets)).toEqual({
+      kind: "clearSecret",
+      key: "provider.connection.conn-b.oauth",
+    });
+  });
+
+  it("a non-oauth connection (or no catalog entry) falls through to the drawer (undefined, regress)", () => {
+    expect(resolveReplaceKeyAction(connB, ANTHROPIC, [])).toBeUndefined();
+    expect(resolveReplaceKeyAction(connB, undefined, [])).toBeUndefined();
   });
 });
 

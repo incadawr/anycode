@@ -33,6 +33,7 @@ import { useStore } from "zustand";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
+  ConnectionUpdateRequest,
   ProviderConnection,
   ProviderTransportId,
   SecretStatus,
@@ -62,6 +63,53 @@ export function findNewlyCreatedConnection(
 ): ProviderConnection | undefined {
   const priorIds = new Set(before.map((c) => c.id));
   return after.find((c) => !priorIds.has(c.id));
+}
+
+/**
+ * The connection-scoped oauth sign-in args the drawer's credential section
+ * dispatches (TASK.45 W12-FIX §1): a sign-in from this drawer always targets
+ * the connection currently being edited/created, never a provider-wide
+ * bucket guess. `undefined` when there is no selected catalog entry or no
+ * connection has been minted yet (the credential section only ever renders
+ * post-creation, so this is a defensive branch, not a reachable one).
+ * Exported for direct testing (no jsdom in this package's vitest config, see
+ * file docstring).
+ */
+export function resolveDrawerOAuthStartArgs(
+  selectedEntryId: string | undefined,
+  createdConnectionId: string | null,
+): { providerId: string; connectionId: string } | undefined {
+  if (selectedEntryId === undefined || createdConnectionId === null) {
+    return undefined;
+  }
+  return { providerId: selectedEntryId, connectionId: createdConnectionId };
+}
+
+/**
+ * The connection-update payload `saveMetadata` sends (TASK.45 W12-FIX §3):
+ * `transport` is sent UNCONDITIONALLY (never omitted) — the local state
+ * already speaks the channel's `ProviderTransportId | ""` sentinel, so
+ * omitting it on `""` would leave an existing explicit choice untouched
+ * instead of clearing it back to catalog default, the exact asymmetry this
+ * fix closes. `createConnection`'s payload is NOT this shape — at create time
+ * an omitted transport already means "use the default", so it keeps the old
+ * conditional-spread form. Exported for direct testing (no jsdom).
+ */
+export function buildConnectionUpdatePayload(params: {
+  connectionId: string;
+  label: string;
+  model: string;
+  transport: ProviderTransportId | "";
+  baseUrl: string;
+  showBaseUrl: boolean;
+}): ConnectionUpdateRequest {
+  return {
+    id: params.connectionId,
+    label: params.label.trim(),
+    model: params.model.trim(),
+    transport: params.transport,
+    baseUrl: params.showBaseUrl ? params.baseUrl.trim() : "",
+  };
 }
 
 export interface ConnectionDrawerFieldsProps {
@@ -318,7 +366,10 @@ export function ConnectionDrawerFields({
                 status={credentialStatus}
                 pending={oauthPendingProviderId === selectedEntry?.id}
                 readOnly={readOnly}
-                onSignIn={() => selectedEntry && void store.getState().oauthStart(selectedEntry.id)}
+                onSignIn={() => {
+                  const args = resolveDrawerOAuthStartArgs(selectedEntry?.id, createdConnectionId);
+                  if (args) void store.getState().oauthStart(args.providerId, args.connectionId);
+                }}
                 onCancel={() => selectedEntry && void store.getState().oauthCancel(selectedEntry.id)}
                 onSignOut={() => void clearSecretValue()}
               />

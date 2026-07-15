@@ -57,7 +57,7 @@ export interface SettingsBridge {
   // Slice 2.5 (design §4.5): interactive OAuth sign-in / cancel. Neither call
   // ever carries a token value — providerId in, a fresh SettingsSnapshot (or a
   // typed refusal reason) out.
-  oauthStart(providerId: string): Promise<OAuthStartResult>;
+  oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult>;
   oauthCancel(providerId: string): Promise<void>;
   // TASK.45 W10: main-authoritative connection metadata update (ModelPill's
   // model/effort write). Never carries a secret; resolves with a fresh snapshot.
@@ -125,8 +125,10 @@ export interface SettingsAppState {
    * the loopback+PKCE flow) and always clears it before returning, regardless
    * of outcome. Success refreshes the snapshot (the provider's SecretStatus now
    * reads `set: true`); every refusal reason sets a human-readable `notice`.
+   * `connectionId` (TASK.45 W12-FIX §1, additive) scopes the sign-in to one
+   * connection — omitted preserves the legacy provider-scoped behavior.
    */
-  oauthStart(providerId: string): Promise<OAuthStartResult>;
+  oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult>;
   /**
    * Aborts an in-flight OAuth flow for a provider. Forwards to the bridge only
    * — the flow's own pending `oauthStart` call is what clears
@@ -411,9 +413,12 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
       set({ notice: text });
     },
 
-    async oauthStart(providerId: string): Promise<OAuthStartResult> {
+    async oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult> {
       set({ oauthPendingProviderId: providerId });
-      const result = await api().oauthStart(providerId);
+      // Two-arg form ONLY when connectionId is present (not `(providerId,
+      // undefined)`) — preserves the exact call shape existing bridge mocks
+      // assert on for the legacy (absent-connectionId) path.
+      const result = connectionId !== undefined ? await api().oauthStart(providerId, connectionId) : await api().oauthStart(providerId);
       // Unconditional clear, mirroring acceptWeakStorageConsent's discipline:
       // the pending flag must not survive past this one round-trip regardless
       // of how it resolved.
