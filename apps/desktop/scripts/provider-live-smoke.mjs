@@ -143,6 +143,16 @@ async function postJson(url, headers, body, signal) {
 }
 
 /**
+ * Extracts the media-type essence from a Content-Type header — the part
+ * before any `;` parameter, trimmed and lowercased. A substring/`includes`
+ * check on the raw header would let `application/json; note=text/event-stream`
+ * sneak past an SSE gate; this requires an exact essence match instead.
+ */
+function mimeEssence(contentType) {
+  return contentType.split(";")[0].trim().toLowerCase();
+}
+
+/**
  * Parses newline-delimited SSE frames (`data: {...}` lines, optional leading
  * `event:` lines, blocks separated by a blank line) into `{event, data}`
  * pairs; a block whose data doesn't parse as JSON (e.g. a `[DONE]` sentinel)
@@ -201,7 +211,7 @@ async function runGlmAnthropicTierCell(cellId, label, { apiKey, model, baseUrl, 
       },
     );
     if (status !== 200) return cellFail(cellId, label, `HTTP ${status}`, { body: text });
-    if (!contentType.toLowerCase().includes("text/event-stream")) {
+    if (mimeEssence(contentType) !== "text/event-stream") {
       return cellFail(cellId, label, `response was not SSE (content-type: "${contentType}")`);
     }
 
@@ -212,17 +222,17 @@ async function runGlmAnthropicTierCell(cellId, label, { apiKey, model, baseUrl, 
       (e) => e.data?.type === "content_block_start" && e.data?.content_block?.type === "thinking",
     );
     const usagePresent = events.some(
-      (e) => e.data?.type === "message_delta" && typeof e.data?.usage?.output_tokens === "number",
+      (e) =>
+        (e.data?.type === "message_delta" || e.data?.type === "message_stop") &&
+        typeof e.data?.usage?.output_tokens === "number",
     );
-    cellPass(cellId, label, {
-      status,
-      reasoningPresent,
-      usagePresent,
-      maxTokens: GLM_MAX_TOKENS,
-      budgetTokens,
-      effort: tier,
-      baseUrl,
-    });
+    const facts = { status, reasoningPresent, usagePresent, maxTokens: GLM_MAX_TOKENS, budgetTokens, effort: tier, baseUrl };
+    // A 200 SSE body that never actually carries the requested thinking/usage
+    // frames must FAIL — accepting any parseable event here previously let a
+    // stream containing only e.g. a bare `message_start` false-green this cell.
+    if (!reasoningPresent) return cellFail(cellId, label, "stream carried no thinking content_block_start frame", facts);
+    if (!usagePresent) return cellFail(cellId, label, "stream carried no message_delta/message_stop usage frame", facts);
+    cellPass(cellId, label, facts);
   } catch (err) {
     cellFail(cellId, label, `threw: ${err?.message ?? err}`);
   }
@@ -277,7 +287,7 @@ async function runOpenAIResponsesCell(cellId, label, { apiKey, model, baseUrl })
     facts.streamStatus = status;
     facts.streamContentType = contentType;
     if (status !== 200) return cellFail(cellId, label, `stream HTTP ${status}`, facts);
-    if (!contentType.toLowerCase().includes("text/event-stream")) {
+    if (mimeEssence(contentType) !== "text/event-stream") {
       return cellFail(cellId, label, `stream response was not SSE (content-type: "${contentType}")`, facts);
     }
     const responseFrames = parseSseEvents(text).filter(
