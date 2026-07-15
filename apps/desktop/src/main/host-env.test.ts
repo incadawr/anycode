@@ -16,10 +16,12 @@ import {
   computeProviderReady,
   envOverrides,
   isKnownSecretKey,
+  resolveEffectiveTransport,
   scrubSecretEnv,
   secretEnvFor,
   snapshotBootEnv,
 } from "./host-env.js";
+import { resolveProviderSelection, type ProviderSelectionDeps } from "./token-broker.js";
 
 function settings(over: Partial<AnycodeSettings> = {}): AnycodeSettings {
   return {
@@ -262,7 +264,7 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
     expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-chat-completions");
   });
 
-  it("fills the transport from the resolved selection on the catalog path", async () => {
+  it("fills the transport from the resolved selection's (non-anthropic) catalog default on the catalog path", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
       settings: settings(),
@@ -272,7 +274,7 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
         model: "gpt-5.1",
         apiKey: "sk-openai",
         authKind: "api_key",
-        transport: "openai-responses",
+        defaultTransport: "openai-responses",
       }),
     });
     expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-responses");
@@ -295,7 +297,7 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
         model: "gpt-5.1",
         apiKey: "sk-openai",
         authKind: "api_key",
-        transport: "openai-responses",
+        defaultTransport: "openai-responses",
       }),
     });
     expect(catalog[ENV_PROVIDER_TRANSPORT]).toBe("anthropic-messages");
@@ -304,6 +306,97 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
   it("leaves the var unset when neither env, settings, nor the selection carries a transport", async () => {
     const env = await buildHostEnv({ bootEnv: {}, settings: settings(), getSecret: noSecret });
     expect(env[ENV_PROVIDER_TRANSPORT]).toBeUndefined();
+  });
+});
+
+describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT emission rule (TASK.43 W5-FIX, cut Risk #3)", () => {
+  // The REAL production seam: main wires `resolveSelection = () =>
+  // resolveProviderSelection(...)` and feeds it to buildHostEnv. This exercises
+  // that seam end-to-end so the fork-env byte-parity fix is proven where it lives.
+  const anthropicFamilyDeps = (s: AnycodeSettings): ProviderSelectionDeps => ({
+    settings: s,
+    resolveCatalog: (id) =>
+      id === "z-ai"
+        ? {
+            baseUrl: "https://api.z.ai/api/anthropic",
+            authKind: "api_key",
+            isCustom: false,
+            defaultTransport: "anthropic-messages",
+            supportedTransports: ["anthropic-messages"],
+          }
+        : undefined,
+    getApiKey: async () => "sk-glm",
+    getAccessToken: async () => undefined,
+  });
+
+  it("anthropic-family catalog default with UNSET settings.transport leaves the var ABSENT (pre-W5 fork-env byte parity)", async () => {
+    const s = settings({ provider: { id: "z-ai", model: "glm-4.6" } });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: s,
+      getSecret: noSecret,
+      resolveSelection: () => resolveProviderSelection(anthropicFamilyDeps(s)),
+    });
+    // Pre-W5-FIX this injected ANYCODE_PROVIDER_TRANSPORT=anthropic-messages
+    // (settings.transport ?? defaultTransport), breaking anthropic/GLM fork-env
+    // byte-compat. An implicit anthropic-family default must emit NOTHING.
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBeUndefined();
+  });
+
+  it("an explicit settings.provider.transport still wins over an anthropic-family catalog default in the fork env", async () => {
+    const s = settings({ provider: { id: "z-ai", model: "glm-4.6", transport: "openai-chat-completions" } });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: s,
+      getSecret: noSecret,
+      resolveSelection: () => resolveProviderSelection(anthropicFamilyDeps(s)),
+    });
+    // The user opted in explicitly (source "settings") — that IS emitted, unlike
+    // the implicit default above. Proves the ladder moved intact to buildHostEnv.
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-chat-completions");
+  });
+});
+
+describe("resolveEffectiveTransport — the ONE transport ladder authority (TASK.43 W5-FIX)", () => {
+  it("nonblank env wins over settings and default (source env)", () => {
+    expect(
+      resolveEffectiveTransport({
+        bootEnv: { [ENV_PROVIDER_TRANSPORT]: "openai-responses" },
+        settingsTransport: "openai-chat-completions",
+        defaultTransport: "anthropic-messages",
+      }),
+    ).toEqual({ value: "openai-responses", source: "env" });
+  });
+
+  it("a blank/whitespace-only env value is treated as absent (falls through to settings)", () => {
+    expect(
+      resolveEffectiveTransport({
+        bootEnv: { [ENV_PROVIDER_TRANSPORT]: "   " },
+        settingsTransport: "openai-chat-completions",
+        defaultTransport: "anthropic-messages",
+      }),
+    ).toEqual({ value: "openai-chat-completions", source: "settings" });
+  });
+
+  it("settings wins over the catalog default when env is absent (source settings)", () => {
+    expect(
+      resolveEffectiveTransport({
+        bootEnv: {},
+        settingsTransport: "openai-responses",
+        defaultTransport: "anthropic-messages",
+      }),
+    ).toEqual({ value: "openai-responses", source: "settings" });
+  });
+
+  it("falls to the catalog default when neither env nor settings selects one (source catalog-default)", () => {
+    expect(resolveEffectiveTransport({ bootEnv: {}, defaultTransport: "anthropic-messages" })).toEqual({
+      value: "anthropic-messages",
+      source: "catalog-default",
+    });
+  });
+
+  it("is unset when nothing selects a transport (source unset)", () => {
+    expect(resolveEffectiveTransport({ bootEnv: {} })).toEqual({ source: "unset" });
   });
 });
 

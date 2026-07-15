@@ -291,12 +291,12 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
         model: "m",
         apiKey: "key-vllm",
         authKind: "api_key",
-        transport: "openai-chat-completions",
+        defaultTransport: "openai-chat-completions",
       });
     });
   });
 
-  describe("transport ladder (TASK.43 W5): settings.provider.transport wins over the catalog default", () => {
+  describe("transport projection (TASK.43 W5-FIX): resolveProviderSelection carries the RAW catalog default, never the resolved ladder", () => {
     // A dedicated fixture (not "z-ai" above) so this describe block's assertions
     // never perturb the pre-existing exact-`toEqual` tests elsewhere in this file.
     const transportCatalog: Record<string, CatalogSelectionInfo> = {
@@ -311,16 +311,16 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     };
     const transportDeps = (s: AnycodeSettings) => ({ ...deps(s), resolveCatalog: (id: string) => transportCatalog[id] });
 
-    it("uses the catalog entry's defaultTransport when settings carries none", async () => {
+    it("surfaces the catalog entry's defaultTransport when settings carries none", async () => {
       const sel = await resolveProviderSelection(transportDeps(settings({ id: "gw", model: "m" })));
-      expect(sel?.transport).toBe("anthropic-messages");
+      expect(sel?.defaultTransport).toBe("anthropic-messages");
     });
 
-    it("settings.provider.transport overrides the catalog entry's defaultTransport", async () => {
+    it("still surfaces the RAW catalog defaultTransport even when settings.provider.transport is set (the env>settings>default ladder is applied downstream by buildHostEnv, not here)", async () => {
       const sel = await resolveProviderSelection(
         transportDeps(settings({ id: "gw", model: "m", transport: "openai-chat-completions" })),
       );
-      expect(sel?.transport).toBe("openai-chat-completions");
+      expect(sel?.defaultTransport).toBe("anthropic-messages");
     });
   });
 

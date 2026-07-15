@@ -102,6 +102,66 @@ function envPresent(env: NodeJS.ProcessEnv, name: string): boolean {
   return value !== undefined && value.trim() !== "";
 }
 
+/** Where the effective transport came from (drives both readiness and fork-env emission). */
+export type EffectiveTransportSource = "env" | "settings" | "catalog-default" | "unset";
+
+export interface EffectiveTransport {
+  /** The resolved transport id, or undefined when nothing selects one ("unset"). */
+  value?: string;
+  source: EffectiveTransportSource;
+}
+
+/**
+ * The ONE normative transport ladder (TASK.43 W5-FIX, cut Risk #3): the single
+ * authority every readiness guard and every fork-env emission consumes, so they
+ * can never disagree about which transport a fork actually runs. Rungs:
+ *
+ *   nonblank bootEnv[ANYCODE_PROVIDER_TRANSPORT]  ->  source "env"
+ *   nonblank settingsTransport                    ->  source "settings"
+ *   defined defaultTransport (catalog default)    ->  source "catalog-default"
+ *   otherwise                                     ->  source "unset"
+ *
+ * A blank/whitespace-only env value is treated as absent, exactly like
+ * `envPresent` elsewhere in this module. `source` lets `buildHostEnv` apply the
+ * emission rule (an implicit anthropic-family default emits nothing) without
+ * re-deriving the ladder.
+ */
+export function resolveEffectiveTransport(input: {
+  bootEnv: NodeJS.ProcessEnv;
+  settingsTransport?: string;
+  defaultTransport?: string;
+}): EffectiveTransport {
+  if (envPresent(input.bootEnv, ENV_PROVIDER_TRANSPORT)) {
+    return { value: input.bootEnv[ENV_PROVIDER_TRANSPORT], source: "env" };
+  }
+  if (input.settingsTransport !== undefined && input.settingsTransport.trim() !== "") {
+    return { value: input.settingsTransport, source: "settings" };
+  }
+  if (input.defaultTransport !== undefined) {
+    return { value: input.defaultTransport, source: "catalog-default" };
+  }
+  return { source: "unset" };
+}
+
+/**
+ * The value `buildHostEnv` writes into ANYCODE_PROVIDER_TRANSPORT for the fork,
+ * per the emission rule (TASK.43 W5-FIX): only an explicit user selection
+ * (source "settings") or a NON-anthropic catalog default is emitted. An env
+ * value is already carried in `{...bootEnv}` and is never re-emitted; an
+ * implicit anthropic-family catalog default emits NOTHING, so the anthropic /
+ * z-ai(GLM) / deepseek / moonshot / custom fork env stays byte-identical to
+ * pre-W5. Returns undefined for the "no emission" cases.
+ */
+function transportToEmit(resolved: EffectiveTransport): string | undefined {
+  if (resolved.source === "settings") {
+    return resolved.value;
+  }
+  if (resolved.source === "catalog-default" && resolved.value !== "anthropic-messages") {
+    return resolved.value;
+  }
+  return undefined;
+}
+
 
 
 /**
@@ -166,13 +226,14 @@ export interface ResolvedProviderSelection {
   /** "oauth" -> also set ANYCODE_AUTH_MODE so the host brokers per-attempt tokens. */
   authKind: "api_key" | "oauth";
   /**
-   * Wire transport for ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5): the ladder
-   * `settings.provider.transport ?? catalogEntry.defaultTransport`, resolved by
-   * the caller (main's `resolveProviderSelection`). Undefined leaves the var
-   * unset — the host falls back to its own `catalogEntry?.defaultTransport ??
-   * "anthropic-messages"` resolution, byte-compat with pre-W5 behaviour.
+   * The selected catalog entry's RAW `defaultTransport` (TASK.43 W5-FIX). The
+   * effective transport ladder (env > settings.provider.transport > this
+   * default) is applied by `buildHostEnv` via the single
+   * `resolveEffectiveTransport` authority — this projection deliberately does
+   * NOT pre-resolve it, so the catalog fork-env path and the readiness guards
+   * can never disagree. Undefined = no catalog entry (legacy path).
    */
-  transport?: string;
+  defaultTransport?: string;
 }
 
 export interface HostEnvParams {
@@ -227,10 +288,6 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     }
     fillFromSettings(env, ENV_MODEL, providerDefaults?.model ?? settings.provider.model);
     fillFromSettings(env, ENV_BASE_URL, settings.provider.baseUrl);
-    // Covers BOTH real "custom" and a fully-unset provider.id — the legacy
-    // path has no catalog entry to fall back on, so the raw settings value (or
-    // nothing) is all there is (TASK.43 W5).
-    fillFromSettings(env, ENV_PROVIDER_TRANSPORT, settings.provider.transport);
   } else {
     // CATALOG path (slice 2.5): main already resolved the selected provider's
     // credential (an api key, or an OAuth access token via the TokenBroker) and
@@ -246,8 +303,20 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     if (selection.authKind === "oauth") {
       env[ENV_AUTH_MODE] = "oauth";
     }
-    fillFromSettings(env, ENV_PROVIDER_TRANSPORT, selection.transport);
   }
+
+  // Wire transport (TASK.43 W5-FIX, cut Risk #3): ONE ladder authority for BOTH
+  // branches. `defaultTransport` is the selected catalog entry's raw default
+  // (undefined on the legacy/no-catalog path). The emission rule suppresses an
+  // implicit anthropic-family default so the anthropic/GLM/deepseek/moonshot/
+  // custom fork env stays byte-identical to pre-W5; an env value already rides
+  // in `{...bootEnv}` and `fillFromSettings` never overwrites it.
+  const effectiveTransport = resolveEffectiveTransport({
+    bootEnv,
+    settingsTransport: settings.provider.transport,
+    defaultTransport: selection?.defaultTransport,
+  });
+  fillFromSettings(env, ENV_PROVIDER_TRANSPORT, transportToEmit(effectiveTransport));
 
   fillFromSettings(env, ENV_TOOL_CONCURRENCY, numToStr(settings.tools.concurrency));
   fillFromSettings(env, ENV_STALL_TIMEOUT_MS, numToStr(settings.tools.stallTimeoutMs));

@@ -213,17 +213,21 @@ export async function resolveProviderSelection(
   // Per-provider persisted default (F14 §2.4): a stored defaults[id].model wins
   // over the plain settings.provider.model, mirroring buildHostEnv's legacy path.
   const model = deps.settings.provider.defaults?.[id]?.model ?? deps.settings.provider.model;
-  // Wire transport ladder (TASK.43 W5): settings.provider.transport (the
-  // user's explicit selection) wins over the catalog entry's default.
-  const transport = deps.settings.provider.transport ?? info.defaultTransport;
+  // Carry the catalog entry's RAW defaultTransport (TASK.43 W5-FIX). The full
+  // ladder (env > settings.provider.transport > this default, with the
+  // anthropic-family suppression) is applied by buildHostEnv's single
+  // `resolveEffectiveTransport` authority — this projection no longer
+  // pre-resolves it, so the catalog fork-env path and the readiness guards can
+  // never disagree about the effective transport.
+  const defaultTransport = info.defaultTransport;
   // A `needsBaseUrl` entry (vLLM template, or a future non-custom template)
   // sources its baseUrl from settings exactly like `custom` above, even though
   // it is NOT `isCustom` and did not bypass to the legacy branch.
   const baseUrl = info.needsBaseUrl === true ? deps.settings.provider.baseUrl : info.baseUrl;
   if (info.authKind === "oauth") {
     const apiKey = await deps.getAccessToken(id);
-    return { baseUrl, model, apiKey, authKind: "oauth", transport };
+    return { baseUrl, model, apiKey, authKind: "oauth", defaultTransport };
   }
   const apiKey = await deps.getApiKey(id);
-  return { baseUrl, model, apiKey, authKind: "api_key", transport };
+  return { baseUrl, model, apiKey, authKind: "api_key", defaultTransport };
 }
