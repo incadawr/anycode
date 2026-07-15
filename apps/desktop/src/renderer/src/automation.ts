@@ -3027,6 +3027,14 @@ export function createAutomationFacade(
       if (store.getState().retry === null) {
         return { ok: false, reason: "no_retry_offer" };
       }
+      // Mirrors dispatchTryAgain's own readiness gate (App.tsx, W8-FIX #1):
+      // it bails without consuming the offer when disconnected, leaving it
+      // armed for when the connection returns. Without this check the route
+      // would report {ok:true} even though dispatchTryAgain sent nothing —
+      // a lying facade that could mask a real regression in a live smoke.
+      if (store.getState().connection !== "ready") {
+        return { ok: false, reason: "not_ready" };
+      }
       // The REAL dispatch: same function the button's own onClick calls
       // (App.tsx), through the SAME `registry.sendToTab` every other facade
       // driver uses — no second path.
