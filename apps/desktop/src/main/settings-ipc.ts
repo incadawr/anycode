@@ -975,7 +975,16 @@ function defaultNowIso(): string {
  * code (forward-compat with a new core failure bucket) defaults to
  * `unreachable` rather than either "credential is bad" bucket.
  */
-const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = {
+/**
+ * Null-prototype (W11-FIX2 #1): a plain object literal inherits
+ * `Object.prototype`, so both the bracket-index below and the `in` operator in
+ * `sanitizeProviderFailureCode` treat `"constructor"`/`"toString"`/
+ * `"hasOwnProperty"`/`"__proto__"`/etc as present keys — collapsing this table
+ * to a null prototype makes every current AND future accessor own-key-only by
+ * construction, closing the whole class of proto-inherited members at once
+ * rather than patching each accessor individually.
+ */
+const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = Object.assign(Object.create(null), {
   auth: "auth_invalid",
   forbidden: "forbidden",
   rate_limited: "rate_limited",
@@ -984,7 +993,7 @@ const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = {
   network: "unreachable",
   server: "unreachable",
   unknown: "misconfigured",
-};
+});
 
 /** Pure classification (TASK.45 W11 gate: 401/429/timeout/bad-model all discriminate). */
 export function mapProviderFailureCodeToHealthStatus(code: string): ProviderHealthStatus {

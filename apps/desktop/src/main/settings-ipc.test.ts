@@ -1086,6 +1086,46 @@ describe("sanitizeProviderFailureCode — untrusted host->main boundary (TASK.45
     // connection's credential state as bad.
     expect(reloaded.settings.provider.connections[0]?.lastHealth?.status).toBe("misconfigured");
   });
+
+  it.each(["constructor", "toString", "hasOwnProperty", "__proto__"])(
+    "collapses the inherited Object.prototype member %s to \"unknown\" (W11-FIX2 #1, proto-permeable whitelist)",
+    (code) => {
+      expect(sanitizeProviderFailureCode(code)).toBe("unknown");
+    },
+  );
+
+  it.each(["constructor", "toString", "hasOwnProperty", "__proto__"])(
+    "maps the inherited Object.prototype member %s to \"unreachable\" as a string, never the inherited function/object (W11-FIX2 #1)",
+    (code) => {
+      const status = mapProviderFailureCodeToHealthStatus(code);
+      expect(typeof status).toBe("string");
+      expect(status).toBe("unreachable");
+    },
+  );
+
+  it("blast-e2e: a health event carrying code:\"constructor\" never quarantines settings.json on the next boot (W11-FIX2 #1)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T00:00:00.000Z" });
+
+    await applyConnectionHealthEvent(deps, "conn-1", {
+      kind: "failure",
+      code: sanitizeProviderFailureCode("constructor"),
+    });
+
+    // A fresh load (simulating a restart) must re-read the file we just wrote
+    // WITHOUT falling back to read-only/quarantine defaults — a non-string
+    // `status` value (the inherited `Object` function, pre-fix) fails
+    // JSON.stringify silently, drops the required schema field, and sends the
+    // NEXT loadSettings into the corrupt-file fail-soft path.
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.readOnly).toBe(false);
+    expect(reloaded.settings.provider.connections).toHaveLength(1);
+    // sanitize("constructor") -> "unknown" (a legitimate table entry) -> map
+    // "unknown" -> "misconfigured" — a valid enum string, never the pre-fix
+    // inherited Object constructor function that fails JSON.stringify.
+    expect(reloaded.settings.provider.connections[0]?.lastHealth?.status).toBe("misconfigured");
+    expect(typeof reloaded.settings.provider.connections[0]?.lastHealth?.status).toBe("string");
+  });
 });
 
 describe("applyConnectionHealthEvent — advisory persist round-trip + \"Last known\" after restart", () => {
