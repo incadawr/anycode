@@ -214,13 +214,9 @@ export function ConnectionDrawerFields({
     }
     setSavingMeta(true);
     try {
-      await store.getState().connectionUpdate({
-        id: createdConnectionId,
-        label: label.trim(),
-        model: model.trim(),
-        ...(transport ? { transport } : {}),
-        baseUrl: showBaseUrl ? baseUrl.trim() : "",
-      });
+      await store.getState().connectionUpdate(
+        buildConnectionUpdatePayload({ connectionId: createdConnectionId, label, model, transport, baseUrl, showBaseUrl }),
+      );
     } finally {
       setSavingMeta(false);
     }
