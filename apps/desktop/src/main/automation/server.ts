@@ -38,6 +38,7 @@ import {
   screenshot,
   selectTab,
   sendPrompt,
+  tryAgain,
   setMode,
   stop,
   respondPermission,
@@ -840,6 +841,9 @@ async function route(
       case "stop":
         parseBody(rawBody, emptyBody);
         return stop(deps, tabId);
+      case "retry":
+        parseBody(rawBody, emptyBody);
+        return tryAgain(deps, tabId);
       case "select":
         parseBody(rawBody, emptyBody);
         return selectTab(deps, tabId);
