@@ -1501,11 +1501,11 @@ describe("applyConnectionHealthEvent — advisory persist round-trip + \"Last kn
     });
   });
 
-  it("persists {status: ready} with no safeCode for a success event", async () => {
+  it("persists {status: ready} with no safeCode for a success event, resolving true (a write actually landed)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T00:00:00.000Z" });
 
-    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+    await expect(applyConnectionHealthEvent(deps, "conn-1", { kind: "success" })).resolves.toBe(true);
 
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.connections[0]?.lastHealth).toEqual({
@@ -1514,13 +1514,30 @@ describe("applyConnectionHealthEvent — advisory persist round-trip + \"Last kn
     });
   });
 
-  it("is a race-safe no-op when the connection was deleted mid-flight", async () => {
+  it("is a race-safe no-op when the connection was deleted mid-flight, resolving false", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" });
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
 
-    await expect(applyConnectionHealthEvent(deps, "conn-1", { kind: "success" })).resolves.toBeUndefined();
+    await expect(applyConnectionHealthEvent(deps, "conn-1", { kind: "success" })).resolves.toBe(false);
     expect((await loadSettings(settingsPath)).settings.provider.connections).toEqual([]);
+  });
+
+  it("is a no-op when settings.json is read-only (newer version than CURRENT), resolving false", async () => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 3,
+        provider: { connections: [{ id: "conn-1", providerId: "z-ai" }] },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+
+    await expect(applyConnectionHealthEvent(deps, "conn-1", { kind: "success" })).resolves.toBe(false);
   });
 
   it("never fires onMutation — health is advisory and must not trigger the readiness/auto-tab refresh a real settings mutation does", async () => {
