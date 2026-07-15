@@ -23,7 +23,7 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings } from "../settings/files.js";
-import { keybindingsSchema, mergeSettings } from "../settings/schema.js";
+import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
 import {
   CONNECTION_CHECK_CHANNEL,
   CONNECTION_CREATE_CHANNEL,
@@ -119,6 +119,26 @@ function defaultConnectionId(): string {
 }
 
 /**
+ * Per-settings-file mutation lock (§2.2). Every mutating handler's
+ * load→modify→save→snapshot critical section runs through this promise-chain so
+ * two interleaved `ipcMain.handle` handlers can never both load the same base and
+ * clobber each other on save (main is the sole writer). Keyed on `settingsPath`
+ * so unit tests with distinct scratch paths never serialize against each other.
+ * The interactive OAuth flow stays OUTSIDE the lock — only its metadata section
+ * is serialized (a minutes-long browser login must not freeze all settings IPC).
+ */
+const settingsLocks = new Map<string, Promise<unknown>>();
+function withSettingsLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const prev = settingsLocks.get(path) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  settingsLocks.set(
+    path,
+    run.catch(() => undefined),
+  );
+  return run;
+}
+
+/**
  * Whether two providerIds share the credential bucket. `custom` ≡ bare-legacy
  * (`providerId ∈ {"", "custom"}`) — the R6 equivalence: the catalog `custom`
  * entry and a no-catalog-pick connection both use the bare legacy key — so their
@@ -127,6 +147,24 @@ function defaultConnectionId(): string {
 function inSameProviderBucket(a: string, b: string): boolean {
   const isBare = (p: string): boolean => p === "" || p === "custom";
   return isBare(a) ? isBare(b) : a === b;
+}
+
+/**
+ * The bucket's target connection (§1.3): the ACTIVE connection when it belongs to
+ * the requested provider bucket, else the first matching connection. A legacy
+ * write must land on the connection the runtime actually reads (readiness/env
+ * resolve strictly by `activeConnectionId`), so with multiple connections of the
+ * same provider the active one — not array order — wins.
+ */
+function bucketConnection(provider: ProviderSettingsV2, providerId: string): ProviderConnection | undefined {
+  const active =
+    provider.activeConnectionId === undefined
+      ? undefined
+      : provider.connections.find((c) => c.id === provider.activeConnectionId);
+  if (active !== undefined && inSameProviderBucket(active.providerId, providerId)) {
+    return active;
+  }
+  return provider.connections.find((c) => inSameProviderBucket(c.providerId, providerId));
 }
 
 /**
@@ -144,7 +182,7 @@ function findOrCreateConnectionByProvider(
   genId: () => string,
   activate: "always" | "if-none",
 ): { provider: ProviderSettingsV2; connectionId: string; created: boolean } {
-  const existing = provider.connections.find((c) => inSameProviderBucket(c.providerId, providerId));
+  const existing = bucketConnection(provider, providerId);
   if (existing !== undefined) {
     if (activate === "always" && provider.activeConnectionId !== existing.id) {
       return { provider: { ...provider, activeConnectionId: existing.id }, connectionId: existing.id, created: false };
@@ -206,7 +244,7 @@ function translateSecretKey(
     providerId = match[1];
     authKind = match[2] === "oauth" ? "oauth" : "api_key";
   }
-  const existing = settings.provider.connections.find((c) => inSameProviderBucket(c.providerId, providerId));
+  const existing = bucketConnection(settings.provider, providerId);
   if (existing !== undefined) {
     return { settings, targetKey: connectionSecretKey(existing.id, authKind) };
   }
@@ -403,11 +441,36 @@ function selectedTransportInfo(
 }
 
 /**
- * Deep-partial patch validator: permissive by design (mergeSettings ignores
- * unknown/undefined fields and clamps to the schema on the next read). Rejects
- * only a non-object payload so a malformed bridge message is a safe no-op.
+ * Deep-partial patch SHAPE guard: rejects only a non-object payload (a malformed
+ * bridge message is a safe no-op). This is a shape gate, not a value gate — the
+ * legacy `provider` sub-patch is type-validated by `legacyProviderPatchSchema`
+ * and the fully-merged settings object is validated against `settingsSchema`
+ * before it is written (§5.2). A bad enum/type is therefore refused `invalid`
+ * and NEVER persisted; an unvalidated write would quarantine the WHOLE
+ * settings.json on the next load (it is not "clamped to the schema").
  */
 const patchSchema = z.record(z.string(), z.unknown());
+
+/**
+ * Type-validates the whitelisted legacy `provider` sub-patch (§5.2 layer 1):
+ * known fields must be well-typed (a bad `transport` / `reasoningEffort` enum is
+ * `invalid`), while `.passthrough()` lets an unknown field pass exactly as
+ * `applyFieldEdits` already ignores it. Enums are reused from the CRUD schemas.
+ */
+const legacyProviderPatchSchema = z
+  .object({
+    id: z.string().optional(),
+    model: z.string().optional(),
+    baseUrl: z.string().optional(),
+    transport: transportEnum.optional(),
+    defaults: z
+      .record(
+        z.string(),
+        z.object({ model: z.string().optional(), reasoningEffort: reasoningEffortEnum.optional() }).passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
 
 // ── snapshot projection ──
 
@@ -580,37 +643,57 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     if ("id" in pp && pp.id !== undefined && (typeof pp.id !== "string" || !(deps.catalogIds ?? []).includes(pp.id))) {
       return { ok: false, reason: "invalid" };
     }
-  }
-
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  // Translate the legacy provider sub-patch into a connection operation first.
-  let settings = loaded.settings;
-  if (providerPatch !== undefined) {
-    settings = applyLegacyProviderPatch(settings, providerPatch as LegacyProviderPatch, deps.genConnectionId ?? defaultConnectionId);
-  }
-  // Drop version + provider (already handled by the shim); merge the rest.
-  const patch: SettingsPatch = { ...(rawPatch as SettingsPatch) };
-  delete (patch as Record<string, unknown>).version;
-  delete (patch as Record<string, unknown>).provider;
-  // Defense in depth (F20 hardening): validate the `keybindings` section against
-  // the schema (scoped ONLY to keybindings) so a malformed section is dropped
-  // rather than persisted where it could crash a reader.
-  if ("keybindings" in patch) {
-    const kb = keybindingsSchema.safeParse((patch as Record<string, unknown>).keybindings);
-    if (kb.success) {
-      (patch as Record<string, unknown>).keybindings = kb.data;
-    } else {
-      delete (patch as Record<string, unknown>).keybindings;
+    // Type-validate the legacy provider sub-patch (§5.2 layer 1): a bad enum is
+    // refused here, never folded onto a connection and persisted.
+    if (!legacyProviderPatchSchema.safeParse(providerPatch).success) {
+      return { ok: false, reason: "invalid" };
     }
   }
-  const merged = mergeSettings(settings, patch);
-  await saveSettings(deps.settingsPath, merged);
-  const snapshot = await snapshotFrom(deps, merged, false);
-  await emitMutation(deps, snapshot);
-  return { ok: true, snapshot };
+
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    // Translate the legacy provider sub-patch into a connection operation first.
+    let settings = loaded.settings;
+    if (providerPatch !== undefined) {
+      settings = applyLegacyProviderPatch(
+        settings,
+        providerPatch as LegacyProviderPatch,
+        deps.genConnectionId ?? defaultConnectionId,
+      );
+    }
+    // Drop version + provider (already handled by the shim); merge the rest.
+    const patch: SettingsPatch = { ...(rawPatch as SettingsPatch) };
+    delete (patch as Record<string, unknown>).version;
+    delete (patch as Record<string, unknown>).provider;
+    // Defense in depth (F20 hardening): validate the `keybindings` section against
+    // the schema (scoped ONLY to keybindings) so a malformed section is dropped
+    // rather than persisted where it could crash a reader.
+    if ("keybindings" in patch) {
+      const kb = keybindingsSchema.safeParse((patch as Record<string, unknown>).keybindings);
+      if (kb.success) {
+        (patch as Record<string, unknown>).keybindings = kb.data;
+      } else {
+        delete (patch as Record<string, unknown>).keybindings;
+      }
+    }
+    const merged = mergeSettings(settings, patch);
+    // Safety gate (§5.2 layer 2): validate the WHOLE merged object before it is
+    // written. A type/enum violation in ANY section is refused `invalid` rather
+    // than persisted — an unvalidated write would fail schema parse on the next
+    // load and quarantine-wipe the entire settings.json. Persist the ORIGINAL
+    // `merged` (validate-only): `parsed.data` would strip the top-level
+    // passthrough keys a future version relies on surviving.
+    if (!settingsSchema.safeParse(merged).success) {
+      return { ok: false, reason: "invalid" };
+    }
+    await saveSettings(deps.settingsPath, merged);
+    const snapshot = await snapshotFrom(deps, merged, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
+  });
 }
 
 /**
@@ -621,7 +704,11 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
  * persisted FIRST (metadata-first: a crash leaves a visible keyless connection,
  * never an orphan secret). The legacy form is never written to the vault. The
  * consent flag comes from the persisted settings; a weak tier without consent
- * returns `weak_storage_needs_consent` and writes nothing. Blocked in read_only.
+ * returns `weak_storage_needs_consent` and — after rolling back any connection
+ * this call just minted — leaves settings.json and the vault untouched (§3.2).
+ * A raw `provider.connection.<id>.*` key is custody-checked against the graph
+ * first (§4.2). The whole load→persist→vault→snapshot critical section runs under
+ * the settings mutation lock (§2.2). Blocked in read_only.
  */
 export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = secretSetSchema.safeParse(raw);
@@ -636,33 +723,59 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
   if (!isKnownSecretKey(key, deps.catalogIds ?? [])) {
     return { ok: false, reason: "invalid" };
   }
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  const { settings: updatedSettings, targetKey } = translateSecretKey(
-    key,
-    loaded.settings,
-    deps.genConnectionId ?? defaultConnectionId,
-    { create: true },
-  );
-  if (targetKey === undefined) {
-    return { ok: false, reason: "invalid" }; // defensive: isKnownSecretKey already narrowed
-  }
-  // Metadata-first: persist a freshly-minted connection BEFORE writing its secret.
-  const connectionCreated = updatedSettings !== loaded.settings;
-  if (connectionCreated) {
-    await saveSettings(deps.settingsPath, updatedSettings);
-  }
-  const result = await deps.vault.setSecret(targetKey, parsed.data.value, {
-    allowWeak: updatedSettings.security.allowWeakSecretStorage,
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    // Connection-key custody (§4.2, `handleSetSecret` ONLY): a raw
+    // `provider.connection.<id>.<kind>` write must name a connection that EXISTS
+    // and whose auth kind matches the suffix — a compromised renderer cannot seat
+    // a vault entry outside the connection graph. `handleClearSecret` stays
+    // permissive (existence not required) so orphans remain removable.
+    const connMatch = /^provider\.connection\.([^.]+)\.(apiKey|oauth)$/.exec(key);
+    if (connMatch !== null) {
+      const conn = loaded.settings.provider.connections.find((c) => c.id === connMatch[1]);
+      if (conn === undefined) {
+        return { ok: false, reason: "not_found" };
+      }
+      // Resolve the connection's auth kind exactly as `activeCredential` does.
+      const kind = conn.providerId === "" ? "api_key" : deps.authKindFor?.(conn.providerId) ?? "api_key";
+      const expectedSuffix = kind === "oauth" ? "oauth" : "apiKey";
+      if (connMatch[2] !== expectedSuffix) {
+        return { ok: false, reason: "invalid" };
+      }
+    }
+    const { settings: updatedSettings, targetKey } = translateSecretKey(
+      key,
+      loaded.settings,
+      deps.genConnectionId ?? defaultConnectionId,
+      { create: true },
+    );
+    if (targetKey === undefined) {
+      return { ok: false, reason: "invalid" }; // defensive: isKnownSecretKey already narrowed
+    }
+    // Metadata-first: persist a freshly-minted connection BEFORE writing its secret.
+    const connectionCreated = updatedSettings !== loaded.settings;
+    if (connectionCreated) {
+      await saveSettings(deps.settingsPath, updatedSettings);
+    }
+    const result = await deps.vault.setSecret(targetKey, parsed.data.value, {
+      allowWeak: updatedSettings.security.allowWeakSecretStorage,
+    });
+    if (!result.ok) {
+      // Refusal rollback (§3.2): the refused write persisted nothing in the vault,
+      // so the connection this call just minted must not linger. Roll the metadata
+      // back to the pre-mint state (race-safe under the mutation lock).
+      if (connectionCreated) {
+        await saveSettings(deps.settingsPath, loaded.settings);
+      }
+      return { ok: false, reason: result.reason };
+    }
+    const snapshot = await snapshotFrom(deps, updatedSettings, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
   });
-  if (!result.ok) {
-    return { ok: false, reason: result.reason };
-  }
-  const snapshot = await snapshotFrom(deps, updatedSettings, false);
-  await emitMutation(deps, snapshot);
-  return { ok: true, snapshot };
 }
 
 /**
@@ -679,19 +792,21 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
   if (!isKnownSecretKey(key, deps.catalogIds ?? [])) {
     return { ok: false, reason: "invalid" };
   }
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  const { targetKey } = translateSecretKey(key, loaded.settings, deps.genConnectionId ?? defaultConnectionId, {
-    create: false,
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const { targetKey } = translateSecretKey(key, loaded.settings, deps.genConnectionId ?? defaultConnectionId, {
+      create: false,
+    });
+    if (targetKey !== undefined) {
+      await deps.vault.clearSecret(targetKey);
+    }
+    const snapshot = await snapshotFrom(deps, loaded.settings, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
   });
-  if (targetKey !== undefined) {
-    await deps.vault.clearSecret(targetKey);
-  }
-  const snapshot = await snapshotFrom(deps, loaded.settings, false);
-  await emitMutation(deps, snapshot);
-  return { ok: true, snapshot };
 }
 
 /**
@@ -704,27 +819,29 @@ export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promis
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  const rule = {
-    toolName: parsed.data.toolName,
-    ...(parsed.data.pattern !== undefined ? { pattern: parsed.data.pattern } : {}),
-  };
-  const existing = loaded.settings.permissions.alwaysAllow;
-  const isDup = existing.some((r) => r.toolName === rule.toolName && r.pattern === rule.pattern);
-  let settings = loaded.settings;
-  if (!isDup) {
-    settings = {
-      ...loaded.settings,
-      permissions: { ...loaded.settings.permissions, alwaysAllow: [...existing, rule] },
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const rule = {
+      toolName: parsed.data.toolName,
+      ...(parsed.data.pattern !== undefined ? { pattern: parsed.data.pattern } : {}),
     };
-    await saveSettings(deps.settingsPath, settings);
-  }
-  const snapshot = await snapshotFrom(deps, settings, false);
-  await emitMutation(deps, snapshot);
-  return { ok: true, snapshot };
+    const existing = loaded.settings.permissions.alwaysAllow;
+    const isDup = existing.some((r) => r.toolName === rule.toolName && r.pattern === rule.pattern);
+    let settings = loaded.settings;
+    if (!isDup) {
+      settings = {
+        ...loaded.settings,
+        permissions: { ...loaded.settings.permissions, alwaysAllow: [...existing, rule] },
+      };
+      await saveSettings(deps.settingsPath, settings);
+    }
+    const snapshot = await snapshotFrom(deps, settings, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
+  });
 }
 
 /**
@@ -741,33 +858,42 @@ export async function handleOAuthStart(deps: SettingsIpcDeps, raw: unknown): Pro
     return { ok: false, reason: "failed" };
   }
   const config = deps.oauthConfigFor?.(parsed.data.providerId);
-  if (config === undefined || deps.oauth === undefined) {
+  const oauth = deps.oauth;
+  if (config === undefined || oauth === undefined) {
     return { ok: false, reason: "unsupported" };
   }
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
+  // Resolve the target connection under the mutation lock (§2.2): the engine
+  // persists the token blob by CONNECTION id, so a connection must exist first
+  // (metadata-first, created + activated when the provider has none yet). ONLY
+  // this metadata section is serialized — the interactive flow (minutes of
+  // browser login) runs OUTSIDE the lock so it never freezes settings IPC.
+  const prep = await withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { readOnly: true as const };
+    }
+    const { provider, connectionId, created } = findOrCreateConnectionByProvider(
+      loaded.settings.provider,
+      parsed.data.providerId,
+      deps.genConnectionId ?? defaultConnectionId,
+      "if-none",
+    );
+    const settings: AnycodeSettings = created ? { ...loaded.settings, provider } : loaded.settings;
+    if (created) {
+      await saveSettings(deps.settingsPath, settings);
+    }
+    return { readOnly: false as const, connectionId, allowWeak: settings.security.allowWeakSecretStorage };
+  });
+  if (prep.readOnly) {
     return { ok: false, reason: "read_only" };
   }
-  // Resolve the target connection (§4.3): the engine persists the token blob by
-  // CONNECTION id, so a connection must exist first (metadata-first). Created +
-  // activated when the provider has no connection yet.
-  const { provider, connectionId, created } = findOrCreateConnectionByProvider(
-    loaded.settings.provider,
-    parsed.data.providerId,
-    deps.genConnectionId ?? defaultConnectionId,
-    "if-none",
-  );
-  const settings: AnycodeSettings = created ? { ...loaded.settings, provider } : loaded.settings;
-  if (created) {
-    await saveSettings(deps.settingsPath, settings);
-  }
-  const outcome = await deps.oauth.startFlow(config, connectionId, {
-    allowWeak: settings.security.allowWeakSecretStorage,
-  });
+  const outcome = await oauth.startFlow(config, prep.connectionId, { allowWeak: prep.allowWeak });
   if (!outcome.ok) {
     return { ok: false, reason: outcome.reason };
   }
-  const snapshot = await snapshotFrom(deps, settings, false);
+  // Post-flow snapshot from a FRESH load (§2.2): reflects the token the engine
+  // just wrote plus any mutation that landed while the flow was in flight.
+  const snapshot = await buildSettingsSnapshot(deps);
   await emitMutation(deps, snapshot);
   return { ok: true, snapshot };
 }
@@ -810,27 +936,29 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
   if (!(deps.catalogIds ?? []).includes(req.providerId)) {
     return { ok: false, reason: "invalid" };
   }
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  const id = (deps.genConnectionId ?? defaultConnectionId)();
-  const connection: ProviderConnection = {
-    id,
-    providerId: req.providerId,
-    ...(req.label !== undefined ? { label: req.label } : {}),
-    ...(req.model !== undefined ? { model: req.model } : {}),
-    ...(req.transport !== undefined ? { transport: req.transport } : {}),
-    ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
-    ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
-  };
-  const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
-  const activeConnectionId = shouldActivate ? id : loaded.settings.provider.activeConnectionId;
-  const provider: ProviderSettingsV2 = {
-    connections: [...loaded.settings.provider.connections, connection],
-    ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
-  };
-  return persistProvider(deps, loaded.settings, provider);
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const id = (deps.genConnectionId ?? defaultConnectionId)();
+    const connection: ProviderConnection = {
+      id,
+      providerId: req.providerId,
+      ...(req.label !== undefined ? { label: req.label } : {}),
+      ...(req.model !== undefined ? { model: req.model } : {}),
+      ...(req.transport !== undefined ? { transport: req.transport } : {}),
+      ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
+      ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+    };
+    const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
+    const activeConnectionId = shouldActivate ? id : loaded.settings.provider.activeConnectionId;
+    const provider: ProviderSettingsV2 = {
+      connections: [...loaded.settings.provider.connections, connection],
+      ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
+    };
+    return persistProvider(deps, loaded.settings, provider);
+  });
 }
 
 /** connection-update: patch a connection's metadata (never its credential). `not_found` for an unknown id. */
@@ -840,29 +968,31 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     return { ok: false, reason: "invalid" };
   }
   const req = parsed.data;
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  const existing = loaded.settings.provider.connections.find((connection) => connection.id === req.id);
-  if (existing === undefined) {
-    return { ok: false, reason: "not_found" };
-  }
-  const updatedConnection: ProviderConnection = {
-    ...existing,
-    ...(req.label !== undefined ? { label: req.label } : {}),
-    ...(req.model !== undefined ? { model: req.model } : {}),
-    ...(req.transport !== undefined ? { transport: req.transport } : {}),
-    ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
-    ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
-  };
-  const provider: ProviderSettingsV2 = {
-    ...loaded.settings.provider,
-    connections: loaded.settings.provider.connections.map((connection) =>
-      connection.id === req.id ? updatedConnection : connection,
-    ),
-  };
-  return persistProvider(deps, loaded.settings, provider);
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const existing = loaded.settings.provider.connections.find((connection) => connection.id === req.id);
+    if (existing === undefined) {
+      return { ok: false, reason: "not_found" };
+    }
+    const updatedConnection: ProviderConnection = {
+      ...existing,
+      ...(req.label !== undefined ? { label: req.label } : {}),
+      ...(req.model !== undefined ? { model: req.model } : {}),
+      ...(req.transport !== undefined ? { transport: req.transport } : {}),
+      ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
+      ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+    };
+    const provider: ProviderSettingsV2 = {
+      ...loaded.settings.provider,
+      connections: loaded.settings.provider.connections.map((connection) =>
+        connection.id === req.id ? updatedConnection : connection,
+      ),
+    };
+    return persistProvider(deps, loaded.settings, provider);
+  });
 }
 
 /** connection-set-active: make a connection the default for NEW sessions (session-pinning is W10). */
@@ -871,15 +1001,17 @@ export async function handleConnectionSetActive(deps: SettingsIpcDeps, raw: unkn
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  if (!loaded.settings.provider.connections.some((connection) => connection.id === parsed.data.id)) {
-    return { ok: false, reason: "not_found" };
-  }
-  const provider: ProviderSettingsV2 = { ...loaded.settings.provider, activeConnectionId: parsed.data.id };
-  return persistProvider(deps, loaded.settings, provider);
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    if (!loaded.settings.provider.connections.some((connection) => connection.id === parsed.data.id)) {
+      return { ok: false, reason: "not_found" };
+    }
+    const provider: ProviderSettingsV2 = { ...loaded.settings.provider, activeConnectionId: parsed.data.id };
+    return persistProvider(deps, loaded.settings, provider);
+  });
 }
 
 /**
@@ -894,22 +1026,24 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (loaded.readOnly) {
-    return { ok: false, reason: "read_only" };
-  }
-  const id = parsed.data.id;
-  // secrets-first (idempotent clears): both credential kinds, before metadata.
-  await deps.vault.clearSecret(connectionSecretKey(id, "api_key"));
-  await deps.vault.clearSecret(connectionSecretKey(id, "oauth"));
-  const remaining = loaded.settings.provider.connections.filter((connection) => connection.id !== id);
-  const activeConnectionId =
-    loaded.settings.provider.activeConnectionId === id ? undefined : loaded.settings.provider.activeConnectionId;
-  const provider: ProviderSettingsV2 = {
-    connections: remaining,
-    ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
-  };
-  return persistProvider(deps, loaded.settings, provider);
+  return withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const id = parsed.data.id;
+    // secrets-first (idempotent clears): both credential kinds, before metadata.
+    await deps.vault.clearSecret(connectionSecretKey(id, "api_key"));
+    await deps.vault.clearSecret(connectionSecretKey(id, "oauth"));
+    const remaining = loaded.settings.provider.connections.filter((connection) => connection.id !== id);
+    const activeConnectionId =
+      loaded.settings.provider.activeConnectionId === id ? undefined : loaded.settings.provider.activeConnectionId;
+    const provider: ProviderSettingsV2 = {
+      connections: remaining,
+      ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
+    };
+    return persistProvider(deps, loaded.settings, provider);
+  });
 }
 
 /**
