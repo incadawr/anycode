@@ -66,7 +66,19 @@ export type ModelStreamEvent =
   | {
       type: "error";
       error: unknown;
-      retry?: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+      retry?: {
+        attemptsMade: number;
+        maxAttempts?: number;
+        /**
+         * Whether a MANUAL retry (W8's Try-again button) may succeed — NOT the
+         * auto-retry decision (that is `isRetryableStreamError`, observable via
+         * `attemptsMade`). The two intentionally diverge; see
+         * `classifyProviderFailure` in provider/failure.ts.
+         */
+        retryable: boolean;
+        hadModelOutput: boolean;
+        code: string;
+      };
     }
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
   | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string };
