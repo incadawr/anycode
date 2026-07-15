@@ -784,4 +784,24 @@ export class TabHostManager {
     this.quitting = true;
     await Promise.allSettled([...this.tabs.values()].map((tab) => this.shutdownTabHost(tab)));
   }
+
+  /**
+   * TASK.33 FIX-A dev-only smoke lever: force-kills the tab's current host
+   * child WITHOUT marking it "closing" first, so `handleExit`'s normal
+   * unexpected-exit path runs unmodified — the exact respawn (breaker
+   * accounting, fresh port pair, `--resume`) a real crash triggers. Deliberately
+   * distinct from `shutdownTabHost` (which sets `state = "closing"` precisely
+   * to SUPPRESS that respawn); this route exists to force the respawn, not
+   * avoid it. `tab.proc` can already be null between an exit and its respawn
+   * landing — a no-op kill in that narrow window is fine, the respawn is
+   * already in flight.
+   */
+  killHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" } {
+    const tab = this.tabs.get(tabId);
+    if (tab === undefined) {
+      return { ok: false, reason: "unknown_tab" };
+    }
+    tab.proc?.kill();
+    return { ok: true };
+  }
 }

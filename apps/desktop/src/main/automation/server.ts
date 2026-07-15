@@ -44,6 +44,7 @@ import {
   respondPermission,
   waitFor,
   closeTab,
+  killHost,
   gitCommand,
   gitStageConfirm,
   gitConfirmAccept,
@@ -949,6 +950,15 @@ async function route(
     const tabId = decodeURIComponent(parts[1]!);
     const body = parseBody(rawBody, composerKeyBody);
     return composerKey(deps, tabId, body.key);
+  }
+  // Dev-only host-kill lever (TASK.33 FIX-A): `/tabs/:tabId/host/kill` — same
+  // `parts.length === 4` shape as the model-pill pick / ctx-popover open /
+  // slash-menu routes above, forces the tab's real host child to exit so the
+  // existing crash-respawn machinery (tabs.ts) runs for a discriminating
+  // cross-respawn smoke.
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "host" && parts[3] === "kill") {
+    parseBody(rawBody, emptyBody);
+    return killHost(deps, decodeURIComponent(parts[1]!));
   }
   // Agent-card expand driver (slice-P7.18-cut.md §4 W4):
   // `/tabs/:tabId/agent-card/:toolCallId/expand` — one segment deeper than

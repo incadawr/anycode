@@ -15,10 +15,13 @@
  * surfaces that as a structural `FacadeUnavailableError` -> HTTP 503 (design
 
  *
- * The two main-plane commands that are deliberately NOT facade calls are the
+ * The main-plane commands that are deliberately NOT facade calls are the
  * new-tab open (`manager.createTab` + `deliverTabPort`, the sanctioned
- * dialog bypass, §1) and `quit` (`app.quit()`); everything else is a thin
- * wrapper over the frozen facade contract (§3.2).
+ * dialog bypass, §1), `quit` (`app.quit()`), and the dev-only `killHost`
+ * (TASK.33 FIX-A: `manager.killHost`, a smoke lever with no renderer
+ * counterpart — killing a host child is main-process territory, not
+ * something the page's facade could do); everything else is a thin wrapper
+ * over the frozen facade contract (§3.2).
  */
 
 import { randomUUID } from "node:crypto";
@@ -52,6 +55,7 @@ export interface ManagerLike {
   createTab(params: { workspace: string; sessionId: string; resume: boolean }): CreateTabResult;
   deliverTabPort(tab: TabHost): void;
   listTabs(): ReadonlyArray<TabSummary>;
+  killHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" };
 }
 
 /**
@@ -270,6 +274,18 @@ export function resumeTab(deps: HandlerDeps, sessionId: string): Promise<unknown
 
 export function closeTab(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("closeTab", [tabId]);
+}
+
+/**
+ * `POST /tabs/:tabId/host/kill` (TASK.33 FIX-A): forces the tab's live host
+ * child to exit so the existing crash-respawn machinery (`tabs.ts`) runs for
+ * real — the sole way a cross-respawn smoke can prove the retry UI survives
+ * an actual respawn instead of asserting store state alone. Main-plane only,
+ * same posture as `createTabNew` above (no facade call — a page has no way to
+ * kill its own host process).
+ */
+export function killHost(deps: HandlerDeps, tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" } {
+  return deps.manager.killHost(tabId);
 }
 
 export function quit(deps: HandlerDeps): { ok: true } {

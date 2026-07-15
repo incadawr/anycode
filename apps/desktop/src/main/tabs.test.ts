@@ -574,6 +574,77 @@ describe("TabHostManager — close guards", () => {
   });
 });
 
+describe("TabHostManager — dev-only host-kill lever (TASK.33 FIX-A)", () => {
+  it("returns ok:false unknown_tab for a missing tab", () => {
+    const { fork } = liveForkRig();
+    const { window } = windowRig();
+    const manager = makeManager(fork, window);
+    expect(manager.killHost("no-such-tab")).toEqual({ ok: false, reason: "unknown_tab" });
+  });
+
+  it("kills the tab's live host process without marking it closing (unlike shutdownTabHost)", () => {
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = makeManager(fork, window);
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    const tab = created.ok ? manager.getTab(created.tab.tabId) : undefined;
+    expect(tab).toBeDefined();
+
+    const result = manager.killHost(tab!.tabId);
+
+    expect(result).toEqual({ ok: true });
+    expect(hosts[0]!.kill).toHaveBeenCalledTimes(1);
+    // Deliberately NOT "closing" — the exit handler must still run the normal
+    // unexpected-exit respawn path below, unlike shutdownTabHost's graceful close.
+    expect(tab!.state).toBe("running");
+  });
+
+  it("a kill's exit runs the SAME healthy-respawn path a real crash would (fresh port pair, --resume)", async () => {
+    const hosts: FakeHost[] = [];
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const { window, posted } = windowRig();
+    let ticks = 0;
+    const now = () => (ticks += 5000); // each call advances 5s -> uptime >= minHealthyUptimeMs (2000ms)
+    const manager = new TabHostManager({
+      fork: forkSpy,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      logger: silentLogger,
+      now,
+      limits: {},
+    });
+
+    const created = manager.createTab({ workspace: "/ws", sessionId: "sess-K", resume: false });
+    expect(created.ok).toBe(true);
+    const tabId = created.ok ? created.tab.tabId : "";
+
+    const result = manager.killHost(tabId);
+    expect(result).toEqual({ ok: true });
+    expect(hosts[0]!.kill).toHaveBeenCalledTimes(1);
+
+    // The kill call above doesn't itself fire "exit" (a fake has no real OS
+    // process) — emitting it here is what a genuine kill eventually does,
+    // and this is the SAME listener spawnTabHost registered up front.
+    hosts[0]!.emit("exit", 0);
+    await flush();
+
+    expect(forkSpy).toHaveBeenCalledTimes(2);
+    expect(forkSpy.mock.calls[1]?.[1]).toEqual(["--resume", "sess-K"]);
+    expect(manager.getTab(tabId)?.state).toBe("running");
+    expect(hosts).toHaveLength(2);
+    expect(hosts[1]!.pid).not.toBe(hosts[0]!.pid);
+
+    manager.deliverTabPort(manager.getTab(tabId)!);
+    expect(posted.some((p) => p.channel === PORT_ENVELOPE_TYPE)).toBe(true);
+  });
+});
+
 describe("TabHostManager — terminal channel delivery (design §3.2, slice 2.4.2)", () => {
   it("deliverTabPort hands out a UI channel AND a disjoint terminal channel", async () => {
     const { fork, hosts } = liveForkRig();

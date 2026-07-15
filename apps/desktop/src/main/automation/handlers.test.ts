@@ -11,6 +11,7 @@ import {
   buildFacadeExpr,
   closeTab,
   createTabNew,
+  killHost,
   FacadeThrewError,
   FacadeUnavailableError,
   getState,
@@ -109,6 +110,7 @@ function fakeManager(overrides: Partial<ManagerLike> = {}): ManagerLike {
     ),
     deliverTabPort: vi.fn(),
     listTabs: vi.fn((): ReadonlyArray<TabSummary> => []),
+    killHost: vi.fn(() => ({ ok: true }) as const),
     ...overrides,
   };
 }
@@ -730,6 +732,29 @@ describe("quit", () => {
     const deps = fakeDeps();
     expect(quit(deps)).toEqual({ ok: true });
     expect(deps.app.quit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("killHost (TASK.33 FIX-A) — dev-only host-kill lever, main-plane only", () => {
+  it("forwards to manager.killHost and returns its result", () => {
+    const manager = fakeManager({ killHost: vi.fn(() => ({ ok: true }) as const) });
+    const deps = fakeDeps({ manager });
+    const result = killHost(deps, "tab-a");
+    expect(manager.killHost).toHaveBeenCalledWith("tab-a");
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("surfaces manager refusal (unknown_tab)", () => {
+    const manager = fakeManager({ killHost: vi.fn(() => ({ ok: false, reason: "unknown_tab" }) as const) });
+    const deps = fakeDeps({ manager });
+    const result = killHost(deps, "no-such-tab");
+    expect(result).toEqual({ ok: false, reason: "unknown_tab" });
+  });
+
+  it("never calls callFacade — this is a main-plane-only command", () => {
+    const deps = fakeDeps();
+    killHost(deps, "tab-a");
+    expect(deps.callFacade).not.toHaveBeenCalled();
   });
 });
 

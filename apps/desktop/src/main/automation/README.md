@@ -562,6 +562,31 @@ curl "${A[@]}" "$B/tabs/$TAB/try-again-button/$LOOP_END_BLOCK_ID"
 curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/try-again-button/$LOOP_END_BLOCK_ID/click -d '{}'
 ```
 
+### Host-kill lever (TASK.33 FIX-A)
+
+The Try-again offer surviving `store.ts`'s host-restart reset only proves the
+*state* layer survives a respawn — it says nothing about whether the button
+is actually reachable in the post-respawn DOM (the anchored button's render
+site is gated on a `loop_end` transcript block, which hydration never
+reproduces). `POST /tabs/:tabId/host/kill` is a dev-only lever to make that
+distinction testable live: it force-kills the tab's REAL host child process
+(`TabHostManager.killHost`, main-plane only — no facade call, a page has no
+way to kill its own host), letting the existing crash-respawn machinery
+(`tabs.ts`: breaker accounting, fresh port pair, `--resume`) run exactly as it
+would for a genuine crash. Deliberately distinct from the graceful
+`shutdownTabHost` path `POST /tabs/:tabId/close` and `/quit` use, which marks
+the tab `"closing"` first specifically to SUPPRESS a respawn — this route
+exists to force one.
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `POST /tabs/:tabId/host/kill` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"}` |
+
+```bash
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/host/kill -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/wait -d "{\"tabId\":\"$TAB\",\"until\":{\"connection\":\"ready\"}}"
+```
+
 ### MCP Servers pane probe/driver (slice P7.19 F22, W4)
 
 Exercises `McpServersPane.tsx` (the MCP management page,

@@ -52,6 +52,7 @@ function fakeManager(overrides: Partial<ManagerLike> = {}): ManagerLike {
     ),
     deliverTabPort: vi.fn(),
     listTabs: vi.fn((): ReadonlyArray<TabSummary> => []),
+    killHost: vi.fn(() => ({ ok: true }) as const),
     ...overrides,
   };
 }
@@ -954,6 +955,44 @@ describe("try-again-button click route (TASK.33 W8-FIX #2)", () => {
     );
     expect(res.status).toBe(200);
     expect(calls[0]).toContain('["tab a","loop_end:t 1"]');
+  });
+});
+
+describe("host-kill route (TASK.33 FIX-A)", () => {
+  it("401s POST /tabs/:tabId/host/kill without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/host/kill"), { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /tabs/:tabId/host/kill -> manager.killHost, never the facade", async () => {
+    const killHost = vi.fn(() => ({ ok: true }) as const);
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window, manager: fakeManager({ killHost }) });
+    const res = await fetch(url(h, "/tabs/tab-a/host/kill"), { method: "POST", headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(killHost).toHaveBeenCalledWith("tab-a");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("surfaces manager refusal (unknown_tab)", async () => {
+    const killHost = vi.fn(() => ({ ok: false, reason: "unknown_tab" }) as const);
+    const h = await boot({ manager: fakeManager({ killHost }) });
+    const res = await fetch(url(h, "/tabs/no-such-tab/host/kill"), { method: "POST", headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, reason: "unknown_tab" });
+  });
+
+  it("POST /tabs/:tabId/host/kill decodes URL-encoded tabId", async () => {
+    const killHost = vi.fn(() => ({ ok: true }) as const);
+    const h = await boot({ manager: fakeManager({ killHost }) });
+    const res = await fetch(url(h, `/tabs/${encodeURIComponent("tab a")}/host/kill`), {
+      method: "POST",
+      headers: auth(),
+    });
+    expect(res.status).toBe(200);
+    expect(killHost).toHaveBeenCalledWith("tab a");
   });
 });
 
