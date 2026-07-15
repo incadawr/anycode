@@ -204,6 +204,28 @@ describe("AiSdkModelPort — retry before model output (thrown exception)", () =
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
 
+  it("redacts the raw error in stream_retry.reason — no secret reaches the reason string (W7b-FIX #2)", async () => {
+    const poisoned = new APICallError({
+      message: "overloaded Authorization: Bearer sk-test",
+      url: "https://api.example.com/v1/messages",
+      requestBodyValues: { apiKey: "sk-test" },
+      statusCode: 529,
+      isRetryable: false,
+    });
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(poisoned)]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    const retry = events.find((e) => e.type === "stream_retry");
+    expect(retry).toBeDefined();
+    expect(JSON.stringify(retry)).not.toContain("sk-test");
+    // The reason is the whitelist-derived safe message for the classified code.
+    expect((retry as { reason: string }).reason).toBe("server error");
+  });
+
   it("does not retry a non-retryable error (e.g. HTTP 400) even before any content", async () => {
     const error = nonRetryableError();
     mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]));
@@ -620,7 +642,12 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
       type: "stream_retry",
       attempt: 1,
       maxAttempts: 3,
-      reason: "stream stalled: no events for 50ms",
+      // W7b-FIX #2: stream_retry.reason is the whitelist-derived safe message
+      // (describeRetryReason redacts uniformly; the synthetic stall Error
+      // classifies as "unknown"). The raw "stream stalled…" text still rides the
+      // final thrown error on retry-exhaustion (asserted below), so it stays
+      // diagnosable at the host log — only the wire-crossing reason is redacted.
+      reason: "request failed",
     });
 
     const afterRetry = iterator.next();
