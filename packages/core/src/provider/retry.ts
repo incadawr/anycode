@@ -1,8 +1,8 @@
 /**
  * Stream retry policy (design §2.9). The AiSdkModelPort retries a failed step
- * ONLY while no event has been yielded from the stream (connect/first-chunk
- * failures are safe to replay whole; mid-stream retry is Phase 2). Backoff
- * waits are abortable and each retry is announced with a stream_retry event.
+ * ONLY while no model output has reached the consumer (connect/reset/HTTP-error-
+ * before-content failures are safe to replay whole; mid-stream retry is Phase 2).
+ * Backoff waits are abortable and each retry is announced with a stream_retry event.
  */
 
 import { APICallError } from "ai";

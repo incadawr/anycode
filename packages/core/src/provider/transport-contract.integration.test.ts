@@ -14,7 +14,7 @@
  * — is identical in shape and semantics across the three transports, even
  * though each wire protocol gets there via a completely different SSE shape.
  *
- * A genuine, transport-AGNOSTIC finding surfaced while building the
+ * A genuine, transport-AGNOSTIC finding surfaced while building the original
  * "retry-before-first-event" scenario against the REAL `ai@7.0.14` core
  * (not the hand-rolled generator mocks in model-port.test.ts): `ai` core's
  * public `fullStream` is a `ReadableStream` whose `start()` handler enqueues
@@ -23,19 +23,19 @@
  * `ai@7.0.14` dist and by a live probe against all three transports: a
  * destroyed socket on the first connection attempt always surfaces as a
  * translated `{type:"error"}` STREAM PART, never a thrown exception, and it
- * arrives strictly after `{type:"start"}`). `AiSdkModelPort`'s retry gate is
- * `!yieldedEvent`, and its own docstring already documents the intent
- * ("once any event (even `start`) has reached the consumer, a NON-stall error
- * propagates/gets yielded as-is") — so this is DELIBERATE, DOCUMENTED
- * behavior, not a bug this wave introduced. The practical, previously-hidden
- * consequence: a same-attempt connect/reset failure is classified retryable by
- * `retry.ts` (`isRetryableStreamError` returns true for it) but is NEVER
- * actually retried in production, on ANY transport, because `start` always
- * wins the race. This is flagged for TASK.33 ("observable retry" — the cut's
- * own W7 explicitly targets retry/abort/stall race conditions); this wave does
- * NOT touch `model-port.ts`'s retry loop, which is a different task's scope.
- * The scenario below pins the REAL, uniform, current behavior rather than a
- * scenario the real SDK cannot produce.
+ * arrives strictly after `{type:"start"}`). The old retry gate was
+ * `!yieldedEvent`, which the synthetic `start` closed before any wire event —
+ * so a same-attempt connect/reset failure was classified retryable by
+ * `retry.ts` yet NEVER actually retried in production, on ANY transport.
+ *
+ * FIXED IN W7a (TASK.33): the gate now closes on MODEL OUTPUT
+ * (`isModelOutputEvent` in ./failure.ts), not on any event — `start` and a
+ * same-attempt `error` no longer close it, so before-content connect/reset/5xx
+ * failures retry, while content/tool/finish still bar auto-retry. The
+ * "retry-then-success" / "retry-exhaustion" scenarios below pin the fixed
+ * behavior across all three transports; the "5xx-before-content" case pins the
+ * intended widening; the "mid-stream failure" and "auth 401" cases pin the
+ * non-regressions.
  */
 
 import { createServer, type Server } from "node:http";
@@ -469,6 +469,9 @@ describe.each(KITS)("cross-transport contract: $transport", (kit) => {
 
     expect(textOf(events)).toBe("partial answer");
     expect(events.some((e) => e.type === "error")).toBe(true);
+    // A failure AFTER content is NOT auto-retried: the gate is closed by the
+    // model output already yielded (W7a non-regression, §3).
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
     // `ai` core synthesizes a trailing finish once the source stream ends,
     // regardless of whether the specific provider transform itself enqueued
     // one (verified empirically for all three transports) — identically
@@ -510,12 +513,45 @@ describe.each(KITS)("cross-transport contract: $transport", (kit) => {
     }
   });
 
-  it("retry-before-first-event: documents the real, uniform, current behavior — a connect failure is classified retryable but is not retried once the SDK's synthetic start has fired (TASK.33 finding, see file docstring)", async () => {
+  it("retry-then-success: a connect reset on the first two attempts retries and the third succeeds (W7a gate-fix)", async () => {
     let attempts = 0;
     const flakyServer = createServer((req, res) => {
       attempts += 1;
-      // Abrupt reset before any response.
-      req.socket.destroy();
+      if (attempts < 3) {
+        req.socket.destroy(); // RST before any response
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        res.end(kit.serialize(kit.textOnlyFrames("recovered")));
+      });
+    });
+    const flakyBaseUrl = `${await listen(flakyServer)}/v1`;
+    try {
+      const port = new AiSdkModelPort(
+        kit.buildConfig(flakyBaseUrl, { retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 } }),
+      );
+      const events = await collect(port.streamText(kit.buildRequest()));
+
+      // The synthetic `start` no longer closes the retry gate: the connect
+      // failure retries twice, then the third attempt delivers real content.
+      expect(attempts).toBe(3);
+      expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(2);
+      expect(textOf(events)).toBe("recovered");
+      expect(events.find((e) => e.type === "finish")).toMatchObject({ type: "finish" });
+      expect(events.some((e) => e.type === "error")).toBe(false);
+    } finally {
+      await closeServer(flakyServer);
+    }
+  });
+
+  it("retry-exhaustion: a persistent connect reset retries up to the budget, then surfaces a terminal error (W7a gate-fix)", async () => {
+    let attempts = 0;
+    const flakyServer = createServer((req, res) => {
+      attempts += 1;
+      req.socket.destroy(); // RST before any response, every time
       void res;
     });
     const flakyBaseUrl = `${await listen(flakyServer)}/v1`;
@@ -525,19 +561,91 @@ describe.each(KITS)("cross-transport contract: $transport", (kit) => {
       );
       const events = await collect(port.streamText(kit.buildRequest()));
 
-      // start, then the connect failure as a translated error — no throw, no
-      // stream_retry, and exactly ONE request ever reached the server: the
-      // "no event yet" retry gate is already closed by the synthetic start.
-      expect(events[0]).toEqual({ type: "start" });
+      // maxRetries:3 ⇒ one initial attempt + three retries = four connections;
+      // three stream_retry announcements; then the retryable error is yielded
+      // as the terminal event (budget exhausted).
+      expect(attempts).toBe(4);
+      expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(3);
       const errorEvent = events.find((e): e is Extract<ModelStreamEvent, { type: "error" }> => e.type === "error");
       expect(errorEvent).toBeDefined();
-      // The classifier itself is correct — the failure IS retryable in
-      // principle; it just never reaches AiSdkModelPort's retry path here.
       expect(isRetryableStreamError(errorEvent!.error)).toBe(true);
-      expect(events.some((e) => e.type === "stream_retry")).toBe(false);
-      expect(attempts).toBe(1);
     } finally {
       await closeServer(flakyServer);
+    }
+  });
+
+  // The former "retry-before-first-event" scenario pinned the OLD dead gate
+  // (start closes it ⇒ attempts===1, 0 stream_retry). W7a fixes that gate, so
+  // its flipped assertions now live in "retry-exhaustion" above (same
+  // always-reset server). See the file docstring for the finding it referenced.
+
+  it("5xx-before-content: an HTTP 500 before any content is retried, then succeeds (intended W7a widening)", async () => {
+    let attempts = 0;
+    const flakyServer = createServer((req, res) => {
+      attempts += 1;
+      req.resume();
+      req.on("end", () => {
+        if (attempts < 2) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "server blew up", type: "server_error" } }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        res.end(kit.serialize(kit.textOnlyFrames("recovered after 500")));
+      });
+    });
+    const flakyBaseUrl = `${await listen(flakyServer)}/v1`;
+    try {
+      const port = new AiSdkModelPort(
+        kit.buildConfig(flakyBaseUrl, { retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 } }),
+      );
+      const events = await collect(port.streamText(kit.buildRequest()));
+
+      // A 5xx arrives before any content (same class as connect/reset via the
+      // synthetic start), so it now retries — the intended widening (§3).
+      expect(attempts).toBe(2);
+      expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
+      expect(textOf(events)).toBe("recovered after 500");
+      expect(events.find((e) => e.type === "finish")).toMatchObject({ type: "finish" });
+    } finally {
+      await closeServer(flakyServer);
+    }
+  });
+
+  it("auth 401 before content: non-retryable — one attempt, terminal error, zero stream_retry (non-regression)", async () => {
+    let attempts = 0;
+    const authServer = createServer((req, res) => {
+      attempts += 1;
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "invalid api key", type: "authentication_error" } }));
+      });
+    });
+    const authBaseUrl = `${await listen(authServer)}/v1`;
+    try {
+      const port = new AiSdkModelPort(
+        kit.buildConfig(authBaseUrl, { retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 } }),
+      );
+      // The 401 surfaces as a terminal failure — a translated error event on
+      // some transports, a thrown APICallError on others — but NEVER retried
+      // (auth is non-retryable, `isRetryableStreamError` untouched by W7a).
+      const events: ModelStreamEvent[] = [];
+      let thrown: unknown;
+      try {
+        for await (const e of port.streamText(kit.buildRequest())) events.push(e);
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(attempts).toBe(1);
+      expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+      const errorEvent = events.find((e): e is Extract<ModelStreamEvent, { type: "error" }> => e.type === "error");
+      const failure = errorEvent?.error ?? thrown;
+      expect(failure).toBeDefined();
+      expect(isRetryableStreamError(failure)).toBe(false);
+    } finally {
+      await closeServer(authServer);
     }
   });
 });

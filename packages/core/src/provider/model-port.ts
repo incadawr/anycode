@@ -10,21 +10,26 @@
  *    dropping nulls.
  *
 
- * while no event has yet been yielded from this attempt's stream — a
- * connect/first-chunk failure is safe to replay the whole step; once any
- * event (even `start`) has reached the consumer, a NON-stall error
- * propagates/gets yielded as-is (mid-stream retry stays out of scope except
- * for stalls, see below). Retries apply uniformly whether the failure
- * surfaces as a thrown exception from `fullStream` iteration or as a
- * translated `error` event. Before each retry the adapter yields
- * `stream_retry`, then waits the backoff delay — the wait is abortable and
- * the request's abortSignal wins instantly.
+ * while no MODEL OUTPUT has yet reached the consumer from this attempt's stream
+ * (see `isModelOutputEvent` in ./failure.ts): a before-content failure —
+ * connect/reset/HTTP-error-before-content — is safe to replay the whole step.
+ * The SDK's `fullStream` unconditionally yields a synthetic `{type:"start"}`
+ * before any network I/O, and a same-attempt `{type:"error"}` is the failure
+ * descriptor itself, so NEITHER closes the gate (TASK.33 W7a; without this the
+ * connect-timeout retry never fired in production). Content, reasoning,
+ * tool-input, `tool_call`, and `finish` DO close it — replaying after real
+ * output would double-dispatch a tool call, duplicate partial text, or re-bill a
+ * completed step. Retries apply uniformly whether the failure surfaces as a
+ * thrown exception from `fullStream` iteration or as a translated `error` event.
+ * Before each retry the adapter yields `stream_retry`, then waits the backoff
+ * delay — the wait is abortable and the request's abortSignal wins instantly;
+ * an already-aborted request never retries (an external abort always wins).
  *
 
  * abortable `policy.stallTimeoutMs` timer (0 disables it). A stall aborts the
  * per-attempt controller (so the underlying SDK call is actually cancelled,
  * not merely abandoned) and is classified as a retryable stall REGARDLESS of
- * `yieldedEvent` — it is the one mid-stream retry allowed by design, still
+ * `hadModelOutput` — it is the one mid-stream retry allowed by design, still
  * bounded by the shared `attempt < policy.maxRetries` budget. A genuine
  * external abort (request.abortSignal) always wins over a stall and rejects
  * immediately with the abort reason, never retried.
@@ -38,6 +43,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
+import { isModelOutputEvent } from "./failure.js";
 import { createLanguageModel } from "./language-model.js";
 import { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
@@ -371,10 +377,10 @@ export class AiSdkModelPort implements ModelPort {
     let attempt = 0;
 
     for (;;) {
-      let yieldedEvent = false;
+      let hadModelOutput = false;
       let pendingRetryError: unknown = NO_RETRY;
       // Per-attempt dedup of dropped-artifact warnings (reset with the attempt
-      // on retry, alongside yieldedEvent) — slice 3.7 R1, §2.2.
+      // on retry, alongside hadModelOutput) — slice 3.7 R1, §2.2.
       const warnedArtifacts = new Set<string>();
 
       // Per-attempt controller so a stall can cancel just this attempt's SDK
@@ -414,7 +420,7 @@ export class AiSdkModelPort implements ModelPort {
             // Actually cancel the underlying SDK call; it will never be read again.
             attemptController.abort(stallError);
             // Stall is the one mid-stream retry allowed by design: it ignores
-            // yieldedEvent, still bounded by the shared attempt budget.
+            // hadModelOutput, still bounded by the shared attempt budget.
             if (attempt < policy.maxRetries) {
               pendingRetryError = stallError;
               break;
@@ -435,7 +441,7 @@ export class AiSdkModelPort implements ModelPort {
           // result, that isn't in the SDK's closed chunk union): the stream
           // continues (finish still arrives), so warn+continue instead of
           // yielding an `error` that would kill the turn. Does not touch
-          // yieldedEvent and does not consume the retry budget (§2.2).
+          // hadModelOutput and does not consume the retry budget (§2.2).
           if (event.type === "error" && isIgnorableStreamArtifact(event.error)) {
             const signature = describeStreamArtifact(event.error);
             if (!warnedArtifacts.has(signature)) {
@@ -444,20 +450,41 @@ export class AiSdkModelPort implements ModelPort {
             }
             continue;
           }
+          // Retry a before-content failure that surfaced as an `error` STREAM
+          // PART (the connect/reset/HTTP-error-before-content class — see the
+          // gate note in ./failure.ts). The gate is `!hadModelOutput`, so the
+          // synthetic `start` above does NOT block this branch. An already-
+          // aborted request always wins over retry (the abort reason may itself
+          // look retryable); aborting the attempt controller before breaking
+          // tears down the abandoned attempt's socket now instead of at GC,
+          // mirroring the stall path.
           if (
             event.type === "error" &&
-            !yieldedEvent &&
+            !hadModelOutput &&
             attempt < policy.maxRetries &&
-            isRetryableStreamError(event.error)
+            isRetryableStreamError(event.error) &&
+            !request.abortSignal?.aborted
           ) {
             pendingRetryError = event.error;
+            attemptController.abort(pendingRetryError);
             break;
           }
-          yieldedEvent = true;
+          if (isModelOutputEvent(event)) {
+            hadModelOutput = true;
+          }
           yield event;
         }
       } catch (error) {
-        if (!yieldedEvent && attempt < policy.maxRetries && isRetryableStreamError(error)) {
+        // Same gate as the error-part branch, for a before-content failure that
+        // surfaced as a THROWN exception from `fullStream` iteration. The
+        // `!request.abortSignal?.aborted` guard makes an external abort always
+        // win over retry, even when the thrown abort reason looks retryable.
+        if (
+          !hadModelOutput &&
+          attempt < policy.maxRetries &&
+          isRetryableStreamError(error) &&
+          !request.abortSignal?.aborted
+        ) {
           pendingRetryError = error;
         } else {
           throw error;

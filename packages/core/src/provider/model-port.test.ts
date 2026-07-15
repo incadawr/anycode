@@ -181,27 +181,32 @@ describe("AiSdkModelPort — happy path", () => {
   });
 });
 
-describe("AiSdkModelPort — retry before the first event (thrown exception)", () => {
-  it("retries a connect failure that throws before any part is yielded, then succeeds", async () => {
+describe("AiSdkModelPort — retry before model output (thrown exception)", () => {
+  it("retries a connect failure that throws after the synthetic start, then succeeds", async () => {
     const error = retryableError();
     mockStreamText
-      .mockImplementationOnce(() => fakeResult([throwsWith(error)]))
+      // Real SDK shape: `start` is yielded before the connect failure throws;
+      // W7a keeps the gate open through `start`, so the throw still retries.
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]))
       .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
     const events = await collect(port.streamText(baseRequest));
 
-    expect(events[0]).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 3 });
-    expect(events.slice(1)).toEqual([
+    // start (attempt 0) → retry → start (attempt 1) → finish. Each attempt
+    // re-yields its own synthetic `start` (Fable §1 edge-case 4).
+    expect(events[0]).toEqual({ type: "start" });
+    expect(events[1]).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 3 });
+    expect(events.slice(2)).toEqual([
       { type: "start" },
       { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry a non-retryable error (e.g. HTTP 400) even before the first chunk", async () => {
+  it("does not retry a non-retryable error (e.g. HTTP 400) even before any content", async () => {
     const error = nonRetryableError();
-    mockStreamText.mockImplementationOnce(() => fakeResult([throwsWith(error)]));
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]));
 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
     await expect(collect(port.streamText(baseRequest))).rejects.toBe(error);
@@ -213,17 +218,18 @@ describe("AiSdkModelPort — retry before the first event (thrown exception)", (
     const error2 = retryableError();
     const error3 = retryableError();
     mockStreamText
-      .mockImplementationOnce(() => fakeResult([throwsWith(error1)]))
-      .mockImplementationOnce(() => fakeResult([throwsWith(error2)]))
-      .mockImplementationOnce(() => fakeResult([throwsWith(error3)]));
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error1)]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error2)]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error3)]));
 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 2 }));
     const iterator = port.streamText(baseRequest)[Symbol.asyncIterator]();
 
-    const first = await iterator.next();
-    expect(first.value).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 2 });
-    const second = await iterator.next();
-    expect(second.value).toMatchObject({ type: "stream_retry", attempt: 2, maxAttempts: 2 });
+    expect((await iterator.next()).value).toEqual({ type: "start" });
+    expect((await iterator.next()).value).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 2 });
+    expect((await iterator.next()).value).toEqual({ type: "start" });
+    expect((await iterator.next()).value).toMatchObject({ type: "stream_retry", attempt: 2, maxAttempts: 2 });
+    expect((await iterator.next()).value).toEqual({ type: "start" });
 
     await expect(iterator.next()).rejects.toBe(error3);
     expect(mockStreamText).toHaveBeenCalledTimes(3);
@@ -231,7 +237,7 @@ describe("AiSdkModelPort — retry before the first event (thrown exception)", (
 
   it("disables retries entirely when maxRetries is 0 (ANYCODE_MAX_RETRIES=0)", async () => {
     const error = retryableError();
-    mockStreamText.mockImplementationOnce(() => fakeResult([throwsWith(error)]));
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]));
 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 0 }));
     await expect(collect(port.streamText(baseRequest))).rejects.toBe(error);
@@ -239,44 +245,106 @@ describe("AiSdkModelPort — retry before the first event (thrown exception)", (
   });
 });
 
-describe("AiSdkModelPort — no retry after the first event", () => {
-  it("propagates a mid-stream thrown error without retrying once a part has been yielded", async () => {
+describe("AiSdkModelPort — no retry after model output", () => {
+  it("propagates a mid-stream thrown error without retrying once MODEL OUTPUT has been yielded", async () => {
     const error = retryableError();
-    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]));
+    // start alone no longer closes the gate (W7a); a text_delta does — the
+    // subsequent throw must NOT retry (mid-stream replay could duplicate text).
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([part(startPart), part({ type: "text-delta", id: "t1", text: "hi" }), throwsWith(error)]),
+    );
 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
     const iterator = port.streamText(baseRequest)[Symbol.asyncIterator]();
 
-    const first = await iterator.next();
-    expect(first.value).toEqual({ type: "start" });
+    expect((await iterator.next()).value).toEqual({ type: "start" });
+    expect((await iterator.next()).value).toEqual({ type: "text_delta", id: "t1", text: "hi" });
     await expect(iterator.next()).rejects.toBe(error);
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("AiSdkModelPort — retryable/non-retryable `error` stream parts", () => {
-  it("retries when the first thing on the stream is a retryable `error` part (no thrown exception)", async () => {
+  it("retries a retryable `error` part that arrives right after the synthetic start (the prod connect shape)", async () => {
     const error = retryableError();
     mockStreamText
-      .mockImplementationOnce(() => fakeResult([part({ type: "error", error })]))
-      .mockImplementationOnce(() => fakeResult([part(finishPart)]));
+      // Real connect-failure shape: start, then a translated retryable `error`
+      // STREAM PART (not a throw) — the branch that was dead in prod pre-W7a.
+      .mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error })]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
     const events = await collect(port.streamText(baseRequest));
 
-    expect(events[0]).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 3 });
-    expect(events[1]).toMatchObject({ type: "finish" });
+    expect(events[0]).toEqual({ type: "start" });
+    expect(events[1]).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 3 });
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events.find((e) => e.type === "finish")).toMatchObject({ type: "finish" });
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
 
   it("yields a non-retryable `error` part as a normal error event with no retry", async () => {
     const error = nonRetryableError();
-    mockStreamText.mockImplementationOnce(() => fakeResult([part({ type: "error", error })]));
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error })]));
 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
     const events = await collect(port.streamText(baseRequest));
 
-    expect(events).toEqual([{ type: "error", error }]);
+    expect(events).toEqual([{ type: "start" }, { type: "error", error }]);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AiSdkModelPort — W7a model-output retry gate", () => {
+  const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
+  const toolCallPart = { type: "tool-call", toolCallId: "call_1", toolName: "Read", input: { file_path: "/a.txt" } };
+
+  it("start → text_delta → retryable error part ⇒ NO retry (content closed the gate)", async () => {
+    const error = retryableError();
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([part(startPart), part(textDelta("hi")), part({ type: "error", error })]),
+    );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    expect(events).toEqual([
+      { type: "start" },
+      { type: "text_delta", id: "t1", text: "hi" },
+      { type: "error", error },
+    ]);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("start → tool_call → error part ⇒ NO retry (tool activity closed the gate — invariant #1)", async () => {
+    const error = retryableError();
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([part(startPart), part(toolCallPart), part({ type: "error", error })]),
+    );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    const toolCall = events.find((e) => e.type === "tool_call");
+    expect(toolCall).toMatchObject({ type: "tool_call", toolCall: { id: "call_1", name: "Read" } });
+    expect(events.some((e) => e.type === "error")).toBe(true);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("start → finish → error part ⇒ NO retry (a completed step is never replayed — Fable §1 edge-case 1)", async () => {
+    const error = retryableError();
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([part(startPart), part(finishPart), part({ type: "error", error })]),
+    );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    expect(events.find((e) => e.type === "finish")).toMatchObject({ type: "finish", finishReason: "stop" });
+    expect(events.some((e) => e.type === "error")).toBe(true);
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 });
@@ -424,10 +492,10 @@ describe("AiSdkModelPort — named diagnostics seam (slice 5.6 Wave B)", () => {
   });
 });
 
-describe("AiSdkModelPort — abortable backoff wait", () => {
+describe("AiSdkModelPort — abort wins over retry", () => {
   it("exits instantly when the abort signal fires during the backoff wait, without waiting the full delay", async () => {
     const error = retryableError();
-    mockStreamText.mockImplementationOnce(() => fakeResult([throwsWith(error)]));
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]));
 
     const controller = new AbortController();
     // Deliberately large so a passing test proves the abort short-circuits the wait
@@ -437,6 +505,7 @@ describe("AiSdkModelPort — abortable backoff wait", () => {
       .streamText({ ...baseRequest, abortSignal: controller.signal })
       [Symbol.asyncIterator]();
 
+    expect((await iterator.next()).value).toEqual({ type: "start" });
     const first = await iterator.next();
     expect(first.value).toMatchObject({ type: "stream_retry" });
 
@@ -450,22 +519,56 @@ describe("AiSdkModelPort — abortable backoff wait", () => {
     expect(mockStreamText).toHaveBeenCalledTimes(1); // second attempt never started
   });
 
-  it("rejects immediately if the signal is already aborted before the wait begins", async () => {
+  it("rejects via the already-aborted fast path when the signal aborts between the retry announcement and the backoff wait", async () => {
     const error = retryableError();
-    mockStreamText.mockImplementationOnce(() => fakeResult([throwsWith(error)]));
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]));
 
     const controller = new AbortController();
-    const abortReason = new Error("already gone");
-    controller.abort(abortReason);
-
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, baseDelayMs: 5_000, maxDelayMs: 5_000 }));
     const iterator = port
       .streamText({ ...baseRequest, abortSignal: controller.signal })
       [Symbol.asyncIterator]();
 
-    const first = await iterator.next();
-    expect(first.value).toMatchObject({ type: "stream_retry" });
+    expect((await iterator.next()).value).toEqual({ type: "start" });
+    expect((await iterator.next()).value).toMatchObject({ type: "stream_retry" });
+
+    // Abort AFTER the retry was announced but BEFORE resuming into the wait, so
+    // abortableDelay sees an already-aborted signal at entry (its synchronous
+    // fast path).
+    const abortReason = new Error("already gone");
+    controller.abort(abortReason);
+
     await expect(iterator.next()).rejects.toBe(abortReason);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects with the abort reason and does NOT retry when aborted during the connect phase (guard, Fable §1 edge-case 2)", async () => {
+    // Real shape: the synthetic `start` fires, then the network read hangs —
+    // an in-flight connect that never produced content. The abort settles it.
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield startPart;
+        await new Promise(() => {});
+      })(),
+    }));
+
+    const controller = new AbortController();
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, stallTimeoutMs: 0 }));
+    const iterator = port
+      .streamText({ ...baseRequest, abortSignal: controller.signal })
+      [Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value).toEqual({ type: "start" });
+    const pending = iterator.next(); // blocks on the hanging network read
+
+    // Abort with a reason that WOULD classify retryable (HTTP 529): only the
+    // explicit abort guard — not the classifier — keeps this from retrying.
+    // `start` did not close the gate, so without the guard this would retry.
+    const abortReason = retryableError();
+    controller.abort(abortReason);
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 });
 
