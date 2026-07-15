@@ -135,7 +135,10 @@ declare global {
         addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult>;
         // Slice 2.5 (design §4.5): interactive OAuth sign-in / cancel. No token
         // ever returns — oauthStart resolves with a fresh snapshot on success.
-        oauthStart(providerId: string): Promise<OAuthStartResult>;
+        // `connectionId` (TASK.45 W12-FIX §1, additive/optional): scopes the
+        // sign-in to one connection; omitted preserves the legacy provider-scoped
+        // findOrCreate behavior byte-for-byte.
+        oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult>;
         oauthCancel(providerId: string): Promise<void>;
         // TASK.45 W10: main-authoritative connection metadata update (ModelPill's
         // model/effort write path, off the v1-patch shim). Never carries a secret.
