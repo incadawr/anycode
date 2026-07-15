@@ -67,6 +67,7 @@ function makeDialog(result: { canceled: boolean; filePaths: string[] }, order: s
 const persistenceStub: TabIpcDeps["persistence"] = {
   getSession: async () => null,
   listSessions: async () => [],
+  touchSession: async () => {},
 };
 
 /**
@@ -123,6 +124,22 @@ describe("createTabRequestSchema — new-tab workspace matrix (§2F.4)", () => {
     ).toBe(true);
     // Both stay optional — a Core (or bare) draft omits them entirely.
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x" }).success).toBe(true);
+  });
+
+  it("accepts an optional replacementConnectionId on a resume request (W10-FIX F1)", () => {
+    expect(
+      createTabRequestSchema.safeParse({ kind: "resume", sessionId: "s", replacementConnectionId: "conn-x" }).success,
+    ).toBe(true);
+    // Optional — a normal resume omits it.
+    expect(createTabRequestSchema.safeParse({ kind: "resume", sessionId: "s" }).success).toBe(true);
+    // Bounds enforced (empty / oversized rejected).
+    expect(
+      createTabRequestSchema.safeParse({ kind: "resume", sessionId: "s", replacementConnectionId: "" }).success,
+    ).toBe(false);
+    expect(
+      createTabRequestSchema.safeParse({ kind: "resume", sessionId: "s", replacementConnectionId: "x".repeat(129) })
+        .success,
+    ).toBe(false);
   });
 
   it("rejects an empty-string engineModel/enginePreset (min(1)) and a value over 128 chars (max)", () => {
@@ -236,6 +253,7 @@ describe("handleCreate — persisted engine identity", () => {
         updatedAt: 1,
       }),
       listSessions: async () => [],
+      touchSession: async () => {},
     };
     const validateWorktreeResume = vi.fn(async () => false);
 
@@ -261,6 +279,7 @@ describe("handleCreate — persisted engine identity", () => {
         engineId: "codex",
       }),
       listSessions: async () => [],
+      touchSession: async () => {},
     };
 
     await expect(handleCreate({ manager, persistence, dialog }, { kind: "resume", sessionId: "codex-session" })).resolves.toEqual({
@@ -285,6 +304,7 @@ describe("handleCreate — persisted engine identity", () => {
         engineId: "unreviewed-engine",
       }),
       listSessions: async () => [],
+      touchSession: async () => {},
     };
 
     await expect(handleCreate({ manager, persistence, dialog }, { kind: "resume", sessionId: "unknown-session" })).resolves.toEqual({
@@ -343,6 +363,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const persistence: TabIpcDeps["persistence"] = {
       getSession: async () => resumeMeta({ connectionId: "conn-x" }),
       listSessions: async () => [],
+      touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
     const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
@@ -358,6 +379,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const persistence: TabIpcDeps["persistence"] = {
       getSession: async () => resumeMeta({ connectionId: "conn-gone" }),
       listSessions: async () => [],
+      touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
     const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
@@ -372,6 +394,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const persistence: TabIpcDeps["persistence"] = {
       getSession: async () => resumeMeta(), // no connectionId
       listSessions: async () => [],
+      touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
     const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
@@ -388,6 +411,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const persistence: TabIpcDeps["persistence"] = {
       getSession: async () => resumeMeta({ connectionId: "conn-x" }),
       listSessions: async () => [],
+      touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
     const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
@@ -403,11 +427,89 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const persistence: TabIpcDeps["persistence"] = {
       getSession: async () => resumeMeta({ connectionId: "conn-x" }),
       listSessions: async () => [],
+      touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
     const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
     expect(res.ok).toBe(false);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("resume: a DEAD stored pin + a valid replacement re-pins the session, then resumes on it (W10-FIX F1)", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const touchSession = vi.fn(async () => {});
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      listSessions: async () => [],
+      touchSession,
+    };
+    // The stored pin is dead; the replacement resolves.
+    const resolveResumePin = vi.fn(async (m: { connectionId?: string }) =>
+      m.connectionId === "conn-new"
+        ? { ok: true as const, connectionId: "conn-new", release: () => {} }
+        : { ok: false as const, connectionId: m.connectionId ?? "" },
+    );
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, {
+      kind: "resume",
+      sessionId: "s-resume",
+      replacementConnectionId: "conn-new",
+    });
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/project" });
+    // The session was re-pinned to the replacement BEFORE the spawn.
+    expect(touchSession).toHaveBeenCalledWith("s-resume", { connectionId: "conn-new" });
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ resume: true, connectionId: "conn-new" }));
+  });
+
+  it("resume: a LIVE stored pin IGNORES a supplied replacement — never retarget a healthy pin (W10-FIX F1)", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const touchSession = vi.fn(async () => {});
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-alive" }),
+      listSessions: async () => [],
+      touchSession,
+    };
+    const resolveResumePin = vi.fn(async (m: { connectionId?: string }) =>
+      m.connectionId === "conn-alive"
+        ? { ok: true as const, connectionId: "conn-alive", release: () => {} }
+        : { ok: false as const, connectionId: m.connectionId ?? "" },
+    );
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, {
+      kind: "resume",
+      sessionId: "s-resume",
+      replacementConnectionId: "conn-new",
+    });
+    expect(res.ok).toBe(true);
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn-alive" }));
+  });
+
+  it("resume: a DEAD pin + a replacement that is ALSO gone refuses connection_missing and writes nothing (W10-FIX F1)", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const touchSession = vi.fn(async () => {});
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      listSessions: async () => [],
+      touchSession,
+    };
+    // Neither the stored pin nor the replacement resolves.
+    const resolveResumePin = vi.fn(async (m: { connectionId?: string }) => ({
+      ok: false as const,
+      connectionId: m.connectionId ?? "",
+    }));
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, {
+      kind: "resume",
+      sessionId: "s-resume",
+      replacementConnectionId: "conn-also-gone",
+    });
+    expect(res).toEqual({ ok: false, reason: "connection_missing", connectionId: "conn-also-gone" });
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(createTab).not.toHaveBeenCalled();
   });
 });
 

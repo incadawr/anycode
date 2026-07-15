@@ -68,7 +68,19 @@ export type CreateTabRequest =
       engineModel?: string;
       enginePreset?: string;
     }
-  | { kind: "resume"; sessionId: string };
+  | {
+      kind: "resume";
+      sessionId: string;
+      /**
+       * Re-pin target for a session whose stored connection was deleted (TASK.45
+       * W10-FIX F1). Additive-optional: present ONLY when the user explicitly picks
+       * a replacement from the `connection_missing` notice (never an automatic
+       * switch). Ignored when the stored pin is still alive; a deleted pin + this
+       * id re-targets the session to it before resuming. The full replacement
+       * picker (W12) rides this SAME field — no second channel.
+       */
+      replacementConnectionId?: string;
+    };
 
 /**
  * Result of a create-tab request; `already_open` carries the tab to focus instead.

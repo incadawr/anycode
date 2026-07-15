@@ -62,8 +62,13 @@ export type ResumePinResult =
 
 export interface TabIpcDeps {
   manager: TabHostManager;
-  /** Only the picker/resume reads main uses (§2.3); no new port methods needed. */
-  persistence: Pick<PersistencePort, "getSession" | "listSessions">;
+  /**
+   * The picker/resume reads main uses (§2.3), plus `touchSession` (W10-FIX F1):
+   * re-pinning a resumed session to a replacement connection writes only
+   * `SessionMetaPatch.connectionId` (already part of the core port — ZERO core
+   * delta). No other new port methods needed.
+   */
+  persistence: Pick<PersistencePort, "getSession" | "listSessions" | "touchSession">;
   dialog: DialogLike;
   /** Production gate proves the path is still a registered worktree on the persisted branch. */
   validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
@@ -92,7 +97,13 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
     engineModel: z.string().min(1).max(128).optional(),
     enginePreset: z.string().min(1).max(128).optional(),
   }),
-  z.object({ kind: z.literal("resume"), sessionId: z.string().min(1) }),
+  z.object({
+    kind: z.literal("resume"),
+    sessionId: z.string().min(1),
+    // W10-FIX F1: additive-optional re-pin target (bounds only — main validates
+    // existence against live settings via resolveResumePin, never trusts the id).
+    replacementConnectionId: z.string().min(1).max(128).optional(),
+  }),
 ]);
 
 const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
@@ -210,7 +221,21 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // resume never touches the reservation (guard order preserved).
   let releasePin: (() => void) | undefined;
   if (deps.resolveResumePin !== undefined) {
-    const pin = await deps.resolveResumePin(meta);
+    let pin = await deps.resolveResumePin(meta);
+    // W10-FIX F1: a DEAD stored pin + an explicit user-chosen replacement re-targets
+    // the session to the replacement, then resumes on the replacement's pinned path.
+    // A live stored pin ignores the replacement entirely (never retarget a healthy
+    // pin); a replacement that is itself gone stays refused `connection_missing`.
+    if (!pin.ok && req.replacementConnectionId !== undefined) {
+      const retargeted = await deps.resolveResumePin({ ...meta, connectionId: req.replacementConnectionId });
+      if (!retargeted.ok) {
+        return { ok: false, reason: "connection_missing", connectionId: retargeted.connectionId };
+      }
+      // Persist the re-pin BEFORE createTab so the host reads the new connection on
+      // spawn. touchSession writes only connectionId (SessionMetaPatch, zero core delta).
+      await deps.persistence.touchSession(req.sessionId, { connectionId: req.replacementConnectionId });
+      pin = retargeted;
+    }
     if (!pin.ok) {
       return { ok: false, reason: "connection_missing", connectionId: pin.connectionId };
     }

@@ -11,7 +11,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { CreateTabResult } from "../../../shared/tabs.js";
-import { describeCreateTabFailure, handleCreateTabResult } from "./SessionPicker.js";
+import {
+  describeCreateTabFailure,
+  handleCreateTabResult,
+  resolveConnectionMissingAction,
+} from "./SessionPicker.js";
 
 describe("describeCreateTabFailure", () => {
   it("has non-empty human-readable text for every CreateTabResult failure reason", () => {
@@ -20,10 +24,36 @@ describe("describeCreateTabFailure", () => {
       "max_tabs",
       "session_not_found",
       "already_open",
+      "connection_missing",
     ];
     for (const reason of reasons) {
       expect(describeCreateTabFailure({ ok: false, reason }).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("resolveConnectionMissingAction (TASK.45 W10-FIX F1 re-pin affordance)", () => {
+  it("arms a re-pin action for connection_missing when a current connection exists", () => {
+    const result: CreateTabResult = { ok: false, reason: "connection_missing", connectionId: "conn-dead" };
+    expect(resolveConnectionMissingAction(result, "sess-1", "conn-active")).toEqual({
+      sessionId: "sess-1",
+      replacementConnectionId: "conn-active",
+    });
+  });
+
+  it("offers NO action (Settings-only) when there is no current connection to re-pin onto", () => {
+    const result: CreateTabResult = { ok: false, reason: "connection_missing", connectionId: "conn-dead" };
+    expect(resolveConnectionMissingAction(result, "sess-1", undefined)).toBeNull();
+  });
+
+  it("offers NO action for a different failure reason", () => {
+    const result: CreateTabResult = { ok: false, reason: "session_not_found" };
+    expect(resolveConnectionMissingAction(result, "sess-1", "conn-active")).toBeNull();
+  });
+
+  it("offers NO action on success", () => {
+    const result: CreateTabResult = { ok: true, tabId: "t", workspace: "/ws" };
+    expect(resolveConnectionMissingAction(result, "sess-1", "conn-active")).toBeNull();
   });
 });
 

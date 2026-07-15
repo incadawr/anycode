@@ -32,15 +32,40 @@ export function describeCreateTabFailure(result: Extract<CreateTabResult, { ok: 
     case "worktree_unavailable":
       return `This session's worktree is missing or no longer registered${result.worktreePath ? `: ${result.worktreePath}` : ""}. Restore or re-register that path with Git before resuming.`;
     case "connection_missing":
-      // TASK.45 W10: the pinned provider connection was deleted. Resume must not
-      // silently switch this session to the current default — route the user to
-      // Settings to choose a replacement (the full in-place picker is W12).
-      return "This task's provider connection was deleted. Open Settings and choose a replacement connection before resuming this task.";
+      // TASK.45 W10-FIX F1: the pinned provider connection was deleted. Resume must
+      // NOT silently switch this session to the current default — the Sidebar turns
+      // this into an actionable notice: an explicit "Resume on the current
+      // connection" button (which re-pins the session) when one is configured, else
+      // a Settings pointer. This base text states only the fact (the prior copy told
+      // the user to "choose a replacement in Settings", which never re-pinned).
+      return "This task's provider connection was deleted.";
     default: {
       const _exhaustive: never = result.reason;
       return _exhaustive;
     }
   }
+}
+
+/**
+ * The re-pin action a resume failure should arm on the notice toast (TASK.45
+ * W10-FIX F1), or null when none applies. An actionable re-pin is offered ONLY
+ * for `connection_missing` AND only when a current connection exists to re-pin
+ * onto — every other outcome (success, a different failure, or no connection
+ * configured) returns null, so the toast shows just its text (the no-connection
+ * case points the user to Settings instead of a dead-end button). The action is
+ * armed but NEVER auto-invoked — resuming on the replacement requires the user's
+ * explicit click, which is the boundary against the forbidden "silent switch".
+ * Exported for unit testing.
+ */
+export function resolveConnectionMissingAction(
+  result: CreateTabResult,
+  sessionId: string,
+  activeConnectionId: string | undefined,
+): { sessionId: string; replacementConnectionId: string } | null {
+  if (result.ok || result.reason !== "connection_missing" || activeConnectionId === undefined) {
+    return null;
+  }
+  return { sessionId, replacementConnectionId: activeConnectionId };
 }
 
 export interface CreateTabCallbacks {

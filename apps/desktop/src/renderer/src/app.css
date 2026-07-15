@@ -4065,6 +4065,24 @@ body {
   flex: 1;
 }
 
+/* W10-FIX F1: the connection_missing re-pin affordance — a compact primary
+   action inside the sidebar notice toast (explicit user re-pin, never auto). */
+.notice-toast-action {
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-app);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+.notice-toast-action:hover {
+  background: var(--bg-overlay);
+}
+
 .notice-toast-dismiss {
   background: none;
   border: none;
