@@ -25,8 +25,8 @@ import {
 
 function baseSettings(alwaysAllow: AlwaysAllowRule[] = []): SettingsSnapshot["settings"] {
   return {
-    version: 1,
-    provider: {},
+    version: 2,
+    provider: { connections: [] },
     tools: {},
     permissions: { alwaysAllow },
     ui: { theme: "system" },

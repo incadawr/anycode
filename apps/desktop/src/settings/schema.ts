@@ -17,13 +17,13 @@
 import { z } from "zod";
 import type { AnycodeSettings, SettingsPatch } from "../shared/settings.js";
 
-/** The settings schema version this binary writes and understands. */
-export const CURRENT_SETTINGS_VERSION = 1 as const;
+/** The settings schema version this binary writes and understands (TASK.45: bumped to v2 — provider connections). */
+export const CURRENT_SETTINGS_VERSION = 2 as const;
 
 /** Canonical empty settings — every field present, secrets absent (they are a separate file). */
 export const DEFAULT_SETTINGS: AnycodeSettings = {
-  version: 1,
-  provider: {},
+  version: 2,
+  provider: { connections: [] },
   tools: {},
   permissions: { alwaysAllow: [] },
   ui: { theme: "system" },
@@ -61,38 +61,55 @@ export const keybindingsSchema = z.object({
  * level keeps unknown keys from a future version alive across a read-modify-write
  * (design §2) — a v1 binary must not silently drop fields a v2 binary added.
  */
+/** The three wire transports a provider selection can speak (TASK.43). */
+const transportSchema = z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
+
+/** Per-model reasoning-effort tiers. */
+const reasoningEffortSchema = z.enum(["off", "low", "medium", "high", "max"]);
+
+/**
+ * One `ProviderConnection` (TASK.45 settings v2). `id`/`providerId` are required;
+ * every default is optional (a connection may exist with only a credential, or
+ * only a remembered model). `lastHealth` is the advisory cache (W11 writes it).
+ */
+const connectionSchema = z.object({
+  id: z.string(),
+  providerId: z.string(),
+  label: z.string().optional(),
+  model: z.string().optional(),
+  transport: transportSchema.optional(),
+  baseUrl: z.string().optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
+  lastHealth: z
+    .object({
+      status: z.enum([
+        "needs_credential",
+        "unchecked",
+        "ready",
+        "auth_invalid",
+        "forbidden",
+        "rate_limited",
+        "unreachable",
+        "misconfigured",
+      ]),
+      at: z.string(),
+      safeCode: z.string().optional(),
+    })
+    .optional(),
+});
+
 export const settingsSchema: z.ZodType<AnycodeSettings> = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
+    // Provider connections (TASK.45 settings v2 — replacing shape). The v1
+    // singleton fields no longer exist here; `settingsMigrations[1]` resets the
+    // provider block to empty on a v1 file (no v1-data carry-over — pre-beta,
+    // there is no installed base of v1 credentials). `connections` is a required
+    // array (empty on a fresh install); `activeConnectionId` is the default for
+    // new sessions.
     provider: z.object({
-      // Catalog entry id (slice 2.5, additive-optional). Absent = legacy/custom.
-      // Version is NOT bumped: a v1 binary that predates this field still reads
-      // and round-trips new files (top-level .passthrough covers unknown keys,
-      // and this optional key parses to undefined on old files).
-      id: z.string().optional(),
-      model: z.string().optional(),
-      baseUrl: z.string().optional(),
-      // Wire transport override (TASK.43 W5, additive-optional; version NOT
-      // bumped, same forward-compat reasoning as `defaults` below). Declared
-      // explicitly (not left to the top-level .passthrough()) for the same
-      // read-modify-write-survival reason as `defaults`.
-      transport: z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]).optional(),
-      // Per-provider last-picked model+effort (F14, slice-P7.15-cut.md §2.4,
-      // additive-optional; version NOT bumped, same reasoning as `id` above).
-      // Declared EXPLICITLY here (not left to the top-level .passthrough()):
-      // that passthrough only preserves unrecognised TOP-LEVEL keys, so a nested
-      // key under `provider` a prior binary didn't know about would otherwise be
-      // silently stripped on the next parse — this is exactly the read-modify-write
-      // compat bug the cut calls out.
-      defaults: z
-        .record(
-          z.string(),
-          z.object({
-            model: z.string().optional(),
-            reasoningEffort: z.enum(["off", "low", "medium", "high", "max"]).optional(),
-          }),
-        )
-        .optional(),
+      activeConnectionId: z.string().optional(),
+      connections: z.array(connectionSchema),
     }),
     tools: z.object({
       concurrency: z.number().optional(),
@@ -151,12 +168,27 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
 export type SettingsMigration = (input: Record<string, unknown>) => Record<string, unknown>;
 
 /**
- * Forward migration chain, keyed by source version. Empty for v1 (skeleton only):
- * the loader walks `settingsMigrations[v]` for v in [fileVersion, CURRENT) before
- * validating. A gap in the chain aborts the walk (falls through to schema parse,
- * which fails -> defaults) rather than guessing.
+ * v1 -> v2 (TASK.45, owner-decision 2026-07-15): RESET, not carry-over. A v1
+ * `provider.{id,model,baseUrl,transport,defaults}` block is replaced by an empty
+ * v2 `provider: {connections: []}` — the user re-adds a connection. AnyCode is
+ * pre-beta (`0.0.x`) with no installed base of v1 credentials, so there is
+ * nothing to migrate; carrying v1 fields forward would be dead code. Every OTHER
+ * top-level section (tools/permissions/ui/security/keybindings/codex + unknown
+ * keys) passes through untouched and validates as usual — the reset touches ONLY
+ * `provider`, so a v1 file loads to `ok` (never corrupt, never quarantined).
+ * Legacy vault credentials are scrubbed separately on boot (main/index.ts).
  */
-export const settingsMigrations: Record<number, SettingsMigration> = {};
+function resetV1Provider(input: Record<string, unknown>): Record<string, unknown> {
+  return { ...input, version: 2, provider: { connections: [] } };
+}
+
+/**
+ * Forward migration chain, keyed by source version: the loader walks
+ * `settingsMigrations[v]` for v in [fileVersion, CURRENT) before validating. A
+ * gap in the chain aborts the walk (falls through to schema parse, which fails
+ * -> corrupt) rather than guessing.
+ */
+export const settingsMigrations: Record<number, SettingsMigration> = { 1: resetV1Provider };
 
 /** Outcome of parsing a raw JSON value read from settings.json. */
 export type SettingsParseResult =

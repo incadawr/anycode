@@ -19,21 +19,22 @@ import { blobFromTokenResponse, type FetchLike, type OAuthProviderConfig } from 
 import type { ResolvedProviderSelection } from "./host-env.js";
 import type { OAuthTokenBlob } from "./vault.js";
 import type { AnycodeSettings } from "../shared/settings.js";
+import { activeConnection } from "../shared/settings.js";
 
 const defaultFetch: FetchLike = (url, init) => globalThis.fetch(url, init);
 
 /** Refresh this many ms BEFORE the real expiry, to guard against clock skew / in-flight use. */
 const DEFAULT_SKEW_MS = 60_000;
 
-/** Vault surface the broker reads/writes token blobs through (structural). */
+/** Vault surface the broker reads/writes token blobs through (structural; blob keyed by CONNECTION id). */
 export interface TokenBrokerVault {
-  getOAuthTokens(providerId: string): Promise<OAuthTokenBlob | undefined>;
+  getOAuthTokens(connectionId: string): Promise<OAuthTokenBlob | undefined>;
   setOAuthTokens(
-    providerId: string,
+    connectionId: string,
     blob: OAuthTokenBlob,
     opts: { allowWeak: boolean },
   ): Promise<{ ok: boolean }>;
-  clearOAuthTokens(providerId: string): Promise<void>;
+  clearOAuthTokens(connectionId: string): Promise<void>;
 }
 
 export interface TokenBrokerDeps {
@@ -81,50 +82,61 @@ export class TokenBroker {
   }
 
   /**
-   * The current valid access token for a provider (design §3.3). Returns the
-   * cached token while it is live; otherwise runs (or joins) a single-flight
-   * refresh. `undefined` = not signed in / undecryptable / refresh failed (the
-   * host then falls back to its fork's static env key).
+   * The current valid access token for a CONNECTION (design §3.3 + TASK.45). The
+   * token blob is keyed by `connectionId` (two accounts of the same OAuth
+   * provider never collide) while the OAuth CONFIG is looked up by `providerId`.
+   * Returns the cached token while it is live; otherwise runs (or joins) a
+   * single-flight refresh (per connection). `undefined` = not signed in /
+   * undecryptable / refresh failed (the host then falls back to its fork's static
+   * env key).
    */
-  async getAccessToken(providerId: string): Promise<string | undefined> {
-    const blob = await this.vault.getOAuthTokens(providerId);
+  async getAccessToken(connectionId: string, providerId: string): Promise<string | undefined> {
+    const blob = await this.vault.getOAuthTokens(connectionId);
     if (blob === undefined) {
       return undefined;
     }
     if (this.now() < blob.expiresAt - this.skewMs) {
       return blob.accessToken; // live cache
     }
-    return this.refreshSingleFlight(providerId, blob);
+    return this.refreshSingleFlight(connectionId, providerId, blob);
   }
 
-  /** Joins an existing refresh for this provider, or starts one and registers it. */
-  private refreshSingleFlight(providerId: string, blob: OAuthTokenBlob): Promise<string | undefined> {
-    const existing = this.inFlight.get(providerId);
+  /** Joins an existing refresh for this connection, or starts one and registers it. */
+  private refreshSingleFlight(
+    connectionId: string,
+    providerId: string,
+    blob: OAuthTokenBlob,
+  ): Promise<string | undefined> {
+    const existing = this.inFlight.get(connectionId);
     if (existing !== undefined) {
       return existing;
     }
-    const started = this.doRefresh(providerId, blob).finally(() => {
-      this.inFlight.delete(providerId);
+    const started = this.doRefresh(connectionId, providerId, blob).finally(() => {
+      this.inFlight.delete(connectionId);
     });
-    this.inFlight.set(providerId, started);
+    this.inFlight.set(connectionId, started);
     return started;
   }
 
-  private async doRefresh(providerId: string, blob: OAuthTokenBlob): Promise<string | undefined> {
+  private async doRefresh(
+    connectionId: string,
+    providerId: string,
+    blob: OAuthTokenBlob,
+  ): Promise<string | undefined> {
     const config = this.resolveConfig(providerId);
     if (config === undefined || blob.refreshToken === "") {
       return undefined;
     }
     try {
       const fresh = await this.exchangeRefresh(config, blob.refreshToken);
-      await this.vault.setOAuthTokens(providerId, fresh, { allowWeak: this.allowWeak() });
+      await this.vault.setOAuthTokens(connectionId, fresh, { allowWeak: this.allowWeak() });
       return fresh.accessToken;
     } catch (err) {
       if (err instanceof RefreshError && err.revoked) {
         // Revoked: nuke the entry so readiness + UI show "sign in again".
-        await this.vault.clearOAuthTokens(providerId);
+        await this.vault.clearOAuthTokens(connectionId);
       } else {
-        this.logger?.warn(`token-broker: refresh failed for ${providerId}`, err);
+        this.logger?.warn(`token-broker: refresh failed for ${connectionId}`, err);
       }
       return undefined;
     }
@@ -179,55 +191,55 @@ export interface ProviderSelectionDeps {
   settings: AnycodeSettings;
   /** Core-backed lookup: catalog id -> {baseUrl, authKind, isCustom}, or undefined (unknown id). */
   resolveCatalog: (providerId: string) => CatalogSelectionInfo | undefined;
-  /** Per-provider api-key vault read (`provider.<id>.apiKey`). */
-  getApiKey: (providerId: string) => Promise<string | undefined>;
-  /** Fresh OAuth access token via the TokenBroker. */
-  getAccessToken: (providerId: string) => Promise<string | undefined>;
+  /** Active connection's api-key read (its connection key). */
+  getApiKey: (connectionId: string) => Promise<string | undefined>;
+  /** Fresh OAuth access token via the TokenBroker (blob by connectionId, config by providerId). */
+  getAccessToken: (connectionId: string, providerId: string) => Promise<string | undefined>;
 }
 
 /**
- * Resolves the selected catalog provider into the host-env selection (baseUrl,
- * model, credential, authKind). Returns `undefined` for the LEGACY path (no
- * `provider.id`, or an id absent from the catalog) so buildHostEnv falls back to
- * byte-for-byte 2.2. oauth -> the credential is a fresh access token (broker);
- * api_key -> the per-provider vault key; custom -> settings.baseUrl.
+ * Resolves the ACTIVE connection into the host-env selection (baseUrl, model,
+ * credential, authKind). Returns `undefined` for the LEGACY path (no active
+ * connection, a bare-legacy connection, an id absent from the catalog, or the
+ * `custom` sentinel) so buildHostEnv falls back to its active-connection
+ * legacy branch. oauth -> the credential is a fresh access token (broker);
+ * api_key -> the connection key (with migrated fallback); custom -> handled by
+ * the legacy branch.
  */
 export async function resolveProviderSelection(
   deps: ProviderSelectionDeps,
 ): Promise<ResolvedProviderSelection | undefined> {
-  const id = deps.settings.provider.id;
-  if (id === undefined || id.trim() === "") {
+  const connection = activeConnection(deps.settings);
+  if (connection === undefined) {
     return undefined;
+  }
+  const id = connection.providerId;
+  if (id === undefined || id.trim() === "") {
+    return undefined; // bare-legacy connection -> legacy branch
   }
   const info = deps.resolveCatalog(id);
   if (info === undefined) {
     return undefined;
   }
 
-  // legacy/custom credential; baseUrl/model already come from settings). Returning
-  // undefined makes buildHostEnv read `provider.apiKey`, matching the renderer's
-  // providerSecretKey (a needsBaseUrl entry uses the bare legacy key).
+  // custom sentinel: the legacy branch reads the connection credential + the
+  // connection baseUrl/model; returning undefined routes it there.
   if (info.isCustom) {
     return undefined;
   }
-  // Per-provider persisted default (F14 §2.4): a stored defaults[id].model wins
-  // over the plain settings.provider.model, mirroring buildHostEnv's legacy path.
-  const model = deps.settings.provider.defaults?.[id]?.model ?? deps.settings.provider.model;
+  const model = connection.model;
   // Carry the catalog entry's RAW defaultTransport (TASK.43 W5-FIX). The full
-  // ladder (env > settings.provider.transport > this default, with the
+  // ladder (env > active-connection transport > this default, with the
   // anthropic-family suppression) is applied by buildHostEnv's single
-  // `resolveEffectiveTransport` authority — this projection no longer
-  // pre-resolves it, so the catalog fork-env path and the readiness guards can
-  // never disagree about the effective transport.
+  // `resolveEffectiveTransport` authority.
   const defaultTransport = info.defaultTransport;
-  // A `needsBaseUrl` entry (vLLM template, or a future non-custom template)
-  // sources its baseUrl from settings exactly like `custom` above, even though
-  // it is NOT `isCustom` and did not bypass to the legacy branch.
-  const baseUrl = info.needsBaseUrl === true ? deps.settings.provider.baseUrl : info.baseUrl;
+  // A `needsBaseUrl` entry (vLLM template) sources its baseUrl from the
+  // connection, exactly like `custom`, even though it is NOT `isCustom`.
+  const baseUrl = info.needsBaseUrl === true ? connection.baseUrl : info.baseUrl;
   if (info.authKind === "oauth") {
-    const apiKey = await deps.getAccessToken(id);
+    const apiKey = await deps.getAccessToken(connection.id, id);
     return { baseUrl, model, apiKey, authKind: "oauth", defaultTransport };
   }
-  const apiKey = await deps.getApiKey(id);
+  const apiKey = await deps.getApiKey(connection.id);
   return { baseUrl, model, apiKey, authKind: "api_key", defaultTransport };
 }

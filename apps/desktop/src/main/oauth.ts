@@ -62,7 +62,7 @@ export type OAuthOutcome = { ok: true } | { ok: false; reason: "cancelled" | "ti
 /** Vault surface the engine writes tokens through (structural — tests inject a fake). */
 export interface OAuthTokenStore {
   setOAuthTokens(
-    providerId: string,
+    connectionId: string,
     blob: OAuthTokenBlob,
     opts: { allowWeak: boolean },
   ): Promise<{ ok: boolean }>;
@@ -94,6 +94,8 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface CallbackContext {
   config: OAuthProviderConfig;
+  /** Vault connection id the token blob is persisted under (TASK.45 W9 §4.3). */
+  connectionId: string;
   state: string;
   verifier: string;
   redirectUri: () => string;
@@ -127,10 +129,15 @@ export class OAuthEngine {
 
   /**
    * Runs the full loopback+PKCE flow for one provider. Resolves `{ok:true}` after
-   * the token blob is persisted, else a typed reason. A new flow for the same
-   * provider supersedes (cancels) any prior in-flight one.
+   * the token blob is persisted (under `connectionId`, TASK.45 W9 §4.3), else a
+   * typed reason. A new flow for the same provider supersedes (cancels) any prior
+   * in-flight one.
    */
-  async startFlow(config: OAuthProviderConfig, opts: { allowWeak: boolean }): Promise<OAuthOutcome> {
+  async startFlow(
+    config: OAuthProviderConfig,
+    connectionId: string,
+    opts: { allowWeak: boolean },
+  ): Promise<OAuthOutcome> {
     this.cancel(config.providerId);
     const verifier = randomBytes(32).toString("base64url");
     const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -155,6 +162,7 @@ export class OAuthEngine {
       const server: Server = createServer((req, res) => {
         void this.handleCallback(req, res, {
           config,
+          connectionId,
           state,
           verifier,
           redirectUri: () => redirectUri,
@@ -232,7 +240,7 @@ export class OAuthEngine {
 
     try {
       const blob = await this.exchangeCode(ctx.config, code, ctx.redirectUri(), ctx.verifier);
-      const stored = await this.vault.setOAuthTokens(ctx.config.providerId, blob, {
+      const stored = await this.vault.setOAuthTokens(ctx.connectionId, blob, {
         allowWeak: ctx.opts.allowWeak,
       });
       if (!stored.ok) {

@@ -46,10 +46,12 @@ import {
 import type { FileIoLogger } from "../settings/files.js";
 import { defaultSecretsPath, defaultSettingsPath, loadSettings } from "../settings/files.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
+import { activeConnection, activeProviderView } from "../shared/settings.js";
 import {
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
+  connectionSecretKey,
   resolveEffectiveTransport,
   scrubSecretEnv,
   snapshotBootEnv,
@@ -442,24 +444,34 @@ function authKindFor(id: string): "api_key" | "oauth" | undefined {
   return findCatalogEntry(id)?.auth.kind;
 }
 
-/** Vault key gating readiness for the selected provider (undefined = legacy). */
-function credentialKeyFor(current: AnycodeSettings): SecretKey | undefined {
-  const id = current.provider.id;
-
-  // renderer's providerSecretKey (a needsBaseUrl entry uses the bare legacy key).
-  if (id === undefined || id.trim() === "" || isCustomProvider(id)) {
-    return undefined;
+/**
+ * The active connection's credential key (TASK.45 v2): its own connection key.
+ * `{}` when no connection is active.
+ */
+function activeCredential(current: AnycodeSettings): { credentialKey?: SecretKey } {
+  const connection = activeConnection(current);
+  if (connection === undefined) {
+    return {};
   }
-  const kind = authKindFor(id);
-  if (kind === undefined) {
-    return undefined;
-  }
-  return kind === "oauth" ? `provider.${id}.oauth` : `provider.${id}.apiKey`;
+  const providerId = connection.providerId;
+  const kind = providerId === "" ? undefined : authKindFor(providerId);
+  const authKind: "api_key" | "oauth" = kind === "oauth" ? "oauth" : "api_key";
+  return { credentialKey: connectionSecretKey(connection.id, authKind) };
 }
 
-/** Fresh OAuth access token via the broker (undefined pre-boot / not signed in). */
-const getAccessTokenFor = (id: string): Promise<string | undefined> =>
-  tokenBroker === null ? Promise.resolve(undefined) : tokenBroker.getAccessToken(id);
+/**
+ * buildHostEnv's legacy/custom/no-active branch credential: the active
+ * connection's api-key connection key. An oauth connection never reaches this
+ * branch (it takes the catalog path).
+ */
+const resolveActiveCredential = (current: AnycodeSettings): (() => Promise<string | undefined>) => {
+  const spec = activeCredential(current);
+  return () => (spec.credentialKey === undefined ? Promise.resolve(undefined) : getSecret(spec.credentialKey));
+};
+
+/** Fresh OAuth access token via the broker (blob by connectionId, config by providerId); undefined pre-boot / not signed in. */
+const getAccessTokenFor = (connectionId: string, providerId: string): Promise<string | undefined> =>
+  tokenBroker === null ? Promise.resolve(undefined) : tokenBroker.getAccessToken(connectionId, providerId);
 
 /**
  * Auth-policy + transport-guard inputs for `computeProviderReady` (TASK.43 W5,
@@ -475,11 +487,12 @@ function selectedTransportInfo(current: AnycodeSettings): {
   resolvedTransport?: string;
   supportedTransports?: readonly string[];
 } {
-  const id = current.provider.id;
-  // Legacy / no-catalog branches: still apply the env rung over settings, but
-  // there is no catalog entry to validate a transport against (TASK.43 W5-FIX).
+  const view = activeProviderView(current);
+  const id = view.id;
+  // Legacy / no-catalog branches: still apply the env rung over the active
+  // connection's transport, but there is no catalog entry to validate against.
   const resolveLegacy = (): string | undefined =>
-    resolveEffectiveTransport({ bootEnv, settingsTransport: current.provider.transport }).value;
+    resolveEffectiveTransport({ bootEnv, settingsTransport: view.transport }).value;
   if (id === undefined || id.trim() === "") {
     return { authOptional: false, resolvedTransport: resolveLegacy() };
   }
@@ -487,11 +500,12 @@ function selectedTransportInfo(current: AnycodeSettings): {
   if (entry === undefined) {
     return { authOptional: false, resolvedTransport: resolveLegacy() };
   }
-  // Env-inclusive ladder (env > settings > catalog default) so the readiness
-  // guard + the custom auth-waiver see the SAME transport the fork runs.
+  // Env-inclusive ladder (env > active-connection transport > catalog default)
+  // so the readiness guard + the custom auth-waiver see the SAME transport the
+  // fork runs.
   const resolvedTransport = resolveEffectiveTransport({
     bootEnv,
-    settingsTransport: current.provider.transport,
+    settingsTransport: view.transport,
     defaultTransport: entry.defaultTransport,
   }).value;
   const authOptional =
@@ -507,26 +521,42 @@ function selectedTransportInfo(current: AnycodeSettings): {
  * scrub never changes the outcome.
  */
 async function refreshProviderState(): Promise<void> {
-  const current = settings ?? { version: 1, provider: {}, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } };
-  // Catalog resolution (slice 2.5): main resolves the selected provider's
-  // baseUrl/model/credential; buildHostEnv stays core-free via this injected fn.
-  // Absent/unknown provider.id -> resolveProviderSelection yields undefined ->
-  // buildHostEnv takes the byte-for-byte legacy 2.2 path.
+  const current: AnycodeSettings =
+    settings ?? {
+      version: 2,
+      provider: { connections: [] },
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    };
+  // Catalog resolution (slice 2.5 + TASK.45 v2): main resolves the ACTIVE
+  // connection's baseUrl/model/credential; buildHostEnv stays core-free via the
+  // injected fns. No active/custom/bare connection -> resolveProviderSelection
+  // yields undefined -> buildHostEnv takes the active-connection legacy branch,
+  // whose credential is `resolveLegacyCredential`.
   const resolveSelection = (): Promise<ResolvedProviderSelection | undefined> =>
     resolveProviderSelection({
       settings: current,
       resolveCatalog,
-      getApiKey: (id) => getSecret(`provider.${id}.apiKey`),
+      getApiKey: (connectionId) => getSecret(connectionSecretKey(connectionId, "api_key")),
       getAccessToken: getAccessTokenFor,
     });
-  currentHostEnv = await buildHostEnv({ bootEnv, settings: current, getSecret, resolveSelection });
+  currentHostEnv = await buildHostEnv({
+    bootEnv,
+    settings: current,
+    getSecret,
+    resolveSelection,
+    resolveActiveCredential: resolveActiveCredential(current),
+  });
   applySubagentsHomeOverride(currentHostEnv, resolveSubagentsHome(bootEnv, app.isPackaged));
   const transportInfo = selectedTransportInfo(current);
+  const credential = activeCredential(current);
   providerReady = await computeProviderReady({
     bootEnv,
     settings: current,
     getSecret,
-    credentialKey: credentialKeyFor(current),
+    credentialKey: credential.credentialKey,
     authOptional: transportInfo.authOptional,
     resolvedTransport: transportInfo.resolvedTransport,
     supportedTransports: transportInfo.supportedTransports,
@@ -668,6 +698,13 @@ void app.whenReady().then(async () => {
   const loaded = await loadSettings(settingsPath, fileLogger);
   settings = loaded.settings;
   vault = new Vault({ safeStorage, secretsPath, logger: fileLogger });
+  // Boot-time scrub of stale v1 provider secrets (TASK.45 W9 §2): W9′ keys every
+  // credential by connection, so a leftover legacy `provider.apiKey` /
+  // `provider.<id>.{apiKey,oauth}` would lie to readiness/status projections.
+  // Deletes ONLY the two exact legacy forms (enumerate-good — connection keys and
+  // unrecognized keys are untouched), idempotent + fail-soft internally. It
+  // touches secrets.json, not settings.json, so no read_only gate is needed.
+  await vault.scrubLegacyProviderKeys(catalogProviderIds());
   // TokenBroker + OAuth engine (slice 2.5 §3.2/§3.3): main-owned custody. The
   // broker refreshes/rotates oauth tokens (single-flight); the engine runs the
   // loopback+PKCE sign-in. Both read weak-storage consent fresh from settings.
@@ -705,15 +742,19 @@ void app.whenReady().then(async () => {
       ...(engine === "codex" && codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
     }),
     reapEngineProcess: createEngineProcessReaper(),
-    // Credential channel (slice 2.5 §3.3): an oauth-mode host asks main for a
-    // fresh access token per attempt; resolve it for the selected oauth provider
-    // (undefined for api_key / legacy -> the host keeps its static env key).
+    // Credential channel (slice 2.5 §3.3 + TASK.45 v2): an oauth-mode host asks
+    // main for a fresh access token per attempt; resolve it for the ACTIVE oauth
+    // connection (undefined for api_key / legacy -> the host keeps its static env
+    // key). Session-pinning of this to the tab's own connection is W10.
     resolveCredential: async () => {
-      const id = settings?.provider.id;
-      if (id === undefined || authKindFor(id) !== "oauth") {
+      if (settings === null) {
         return undefined;
       }
-      return getAccessTokenFor(id);
+      const connection = activeConnection(settings);
+      if (connection === undefined || connection.providerId === "" || authKindFor(connection.providerId) !== "oauth") {
+        return undefined;
+      }
+      return getAccessTokenFor(connection.id, connection.providerId);
     },
   });
 

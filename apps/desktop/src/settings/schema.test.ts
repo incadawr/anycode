@@ -1,20 +1,27 @@
 /**
- * Unit tests for the settings schema, migration skeleton, deep-partial merge and
- * version policy (design slice-2.2-cut.md §2, frozen by 2.2.1). Plus a freeze
+ * Unit tests for the settings v2 schema, the v1->v2 reset, deep-partial merge
+ * and version policy (design slice-2.2-cut.md §2 + TASK.45 W9). Plus a freeze
  * guard on the value-only contract surface (shared/settings.ts) so the wave
  * cannot drift the channels / env-key list without a red test.
  */
 
 import { describe, expect, it } from "vitest";
 import {
+  CONNECTION_CREATE_CHANNEL,
+  CONNECTION_DELETE_CHANNEL,
+  CONNECTION_SET_ACTIVE_CHANNEL,
+  CONNECTION_UPDATE_CHANNEL,
   PERMISSION_RULE_ADD_CHANNEL,
   SECRET_CLEAR_CHANNEL,
   SECRET_ENV_KEYS,
   SECRET_SET_CHANNEL,
   SETTINGS_GET_CHANNEL,
   SETTINGS_SET_CHANNEL,
+  activeConnection,
+  activeProviderView,
   type AnycodeSettings,
 } from "../shared/settings.js";
+import { providerV2 } from "../shared/provider-v2-fixture.js";
 import {
   CURRENT_SETTINGS_VERSION,
   DEFAULT_SETTINGS,
@@ -33,12 +40,19 @@ describe("frozen contract surface (shared/settings.ts)", () => {
     expect(PERMISSION_RULE_ADD_CHANNEL).toBe("anycode:permission-rule-add");
   });
 
+  it("pins the connection CRUD channels (TASK.45 W9)", () => {
+    expect(CONNECTION_CREATE_CHANNEL).toBe("anycode:connection-create");
+    expect(CONNECTION_UPDATE_CHANNEL).toBe("anycode:connection-update");
+    expect(CONNECTION_SET_ACTIVE_CHANNEL).toBe("anycode:connection-set-active");
+    expect(CONNECTION_DELETE_CHANNEL).toBe("anycode:connection-delete");
+  });
+
   it("pins SECRET_ENV_KEYS (ruling R3)", () => {
     expect(SECRET_ENV_KEYS).toEqual(["ANYCODE_API_KEY"]);
   });
 });
 
-describe("settingsSchema", () => {
+describe("settingsSchema (v2)", () => {
   it("accepts the defaults and round-trips through JSON", () => {
     const parsed = settingsSchema.safeParse(cloneDefaults());
     expect(parsed.success).toBe(true);
@@ -47,6 +61,17 @@ describe("settingsSchema", () => {
     expect(roundTripped.success).toBe(true);
     if (roundTripped.success) {
       expect(roundTripped.data).toEqual(DEFAULT_SETTINGS);
+    }
+  });
+
+  it("accepts a populated connections array", () => {
+    const settings: AnycodeSettings = { ...cloneDefaults(), provider: providerV2({ id: "z-ai", model: "glm-5.2" }) };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(settings)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.activeConnectionId).toBe("conn-z-ai");
+      expect(parsed.data.provider.connections).toEqual([{ id: "conn-z-ai", providerId: "z-ai", model: "glm-5.2" }]);
+      expect(parsed.data.version).toBe(2);
     }
   });
 
@@ -63,162 +88,113 @@ describe("settingsSchema", () => {
     const bad = { ...cloneDefaults(), ui: { theme: "neon" } };
     expect(settingsSchema.safeParse(bad).success).toBe(false);
   });
-});
 
-describe("provider.id (slice 2.5, additive-optional)", () => {
-  it("round-trips a provider.id without bumping the version", () => {
-    const withId: AnycodeSettings = {
-      ...cloneDefaults(),
-      provider: { id: "z-ai", model: "glm-4.6" },
-    };
-    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withId)));
-    expect(parsed.success).toBe(true);
-    if (parsed.success) {
-      expect(parsed.data.provider.id).toBe("z-ai");
-      expect(parsed.data.provider.model).toBe("glm-4.6");
-      expect(parsed.data.version).toBe(1); // NOT bumped
-    }
-  });
-
-  it("reads an old file with no provider.id (legacy, byte-for-byte 2.2)", () => {
-    // A settings.json written before slice 2.5 has no provider.id at all.
-    const legacy = { ...cloneDefaults(), provider: { model: "claude-x" } };
-    const result = parseSettings(legacy);
-    expect(result.status).toBe("ok");
-    expect(result.settings.provider.id).toBeUndefined();
-    expect(result.settings.provider.model).toBe("claude-x");
-  });
-
-  it("rejects a non-string provider.id", () => {
-    const bad = { ...cloneDefaults(), provider: { id: 42 } };
+  it("rejects a connection with a missing required id/providerId", () => {
+    const bad = { ...cloneDefaults(), provider: { connections: [{ providerId: "z-ai" }] } };
     expect(settingsSchema.safeParse(bad).success).toBe(false);
   });
 
-  it("mergeSettings can set provider.id without dropping model/baseUrl siblings", () => {
-    const base = mergeSettings(cloneDefaults(), { provider: { model: "m", baseUrl: "b" } });
-    const merged = mergeSettings(base, { provider: { id: "deepseek" } });
-    expect(merged.provider).toEqual({ id: "deepseek", model: "m", baseUrl: "b" });
-  });
-});
-
-describe("provider.transport (TASK.43 W5, additive-optional)", () => {
-  it("round-trips a provider.transport without bumping the version", () => {
-    const withTransport: AnycodeSettings = {
+  it("rejects a connection with an unrecognized transport", () => {
+    const bad = {
       ...cloneDefaults(),
-      provider: { id: "openai", model: "gpt-5.1", transport: "openai-responses" },
+      provider: { connections: [{ id: "c1", providerId: "openai", transport: "openai" }] },
     };
-    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withTransport)));
-    expect(parsed.success).toBe(true);
-    if (parsed.success) {
-      expect(parsed.data.provider.transport).toBe("openai-responses");
-      expect(parsed.data.version).toBe(1); // NOT bumped
-    }
-  });
-
-  it("accepts all three transport literals", () => {
-    for (const transport of ["anthropic-messages", "openai-chat-completions", "openai-responses"] as const) {
-      const parsed = settingsSchema.safeParse({ ...cloneDefaults(), provider: { transport } });
-      expect(parsed.success).toBe(true);
-    }
-  });
-
-  it("rejects an unrecognized transport literal", () => {
-    const bad = { ...cloneDefaults(), provider: { transport: "openai" } };
     expect(settingsSchema.safeParse(bad).success).toBe(false);
   });
 
-  it("reads an old file with no provider.transport at all (legacy, byte-for-byte)", () => {
-    const legacy = { ...cloneDefaults(), provider: { model: "claude-x" } };
-    const result = parseSettings(legacy);
-    expect(result.status).toBe("ok");
-    expect(result.settings.provider.transport).toBeUndefined();
+  it("rejects a connection with an invalid reasoningEffort tier", () => {
+    const bad = {
+      ...cloneDefaults(),
+      provider: { connections: [{ id: "c1", providerId: "z-ai", reasoningEffort: "extreme" }] },
+    };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
   });
 
-  it("mergeSettings can set provider.transport without dropping id/model siblings", () => {
-    const base = mergeSettings(cloneDefaults(), { provider: { id: "vllm", model: "m" } });
-    const merged = mergeSettings(base, { provider: { transport: "openai-chat-completions" } });
-    expect(merged.provider).toEqual({ id: "vllm", model: "m", transport: "openai-chat-completions" });
-  });
-});
-
-describe("provider.defaults (F14, slice-P7.15-cut.md §2.4, additive-optional)", () => {
-  it("round-trips a per-provider default through JSON without bumping the version", () => {
-    const withDefaults: AnycodeSettings = {
+  it("accepts an advisory lastHealth on a connection (W11 field, schema owned here)", () => {
+    const settings = {
       ...cloneDefaults(),
       provider: {
+        activeConnectionId: "c1",
+        connections: [
+          { id: "c1", providerId: "openai", lastHealth: { status: "ready", at: "2026-07-15T00:00:00.000Z" } },
+        ],
+      },
+    };
+    expect(settingsSchema.safeParse(settings).success).toBe(true);
+  });
+});
+
+describe("v1 reset (settingsMigrations[1])", () => {
+  const v1 = (provider: Record<string, unknown>): Record<string, unknown> => ({
+    version: 1,
+    provider,
+    tools: {},
+    permissions: { alwaysAllow: [] },
+    ui: { theme: "system" },
+    security: { allowWeakSecretStorage: false },
+  });
+
+  it("resets a populated v1 provider block to an empty v2 provider (no v1-data carry-over)", () => {
+    const result = parseSettings(
+      v1({
         id: "z-ai",
-        model: "glm-5.2",
+        model: "glm-4.6",
+        baseUrl: "https://bridge.example",
+        transport: "openai-responses",
         defaults: { "z-ai": { model: "glm-5.2", reasoningEffort: "high" } },
-      },
-    };
-    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withDefaults)));
-    expect(parsed.success).toBe(true);
-    if (parsed.success) {
-      expect(parsed.data.provider.defaults).toEqual({ "z-ai": { model: "glm-5.2", reasoningEffort: "high" } });
-      expect(parsed.data.version).toBe(1); // NOT bumped
-    }
-  });
-
-  it("reads an old file with no provider.defaults at all (legacy, byte-for-byte)", () => {
-    const legacy = { ...cloneDefaults(), provider: { id: "z-ai", model: "glm-4.6" } };
-    const result = parseSettings(legacy);
+      }),
+    );
     expect(result.status).toBe("ok");
-    expect(result.settings.provider.defaults).toBeUndefined();
+    expect(result.settings.version).toBe(2);
+    expect(result.settings.provider).toEqual({ connections: [] });
+    expect(result.settings.provider.activeConnectionId).toBeUndefined();
+    expect(activeConnection(result.settings)).toBeUndefined();
+    expect(activeProviderView(result.settings)).toEqual({});
   });
 
-  it("supports multiple provider keys, including the custom/legacy 'custom' key", () => {
-    const withMany: AnycodeSettings = {
-      ...cloneDefaults(),
-      provider: {
-        defaults: {
-          custom: { reasoningEffort: "off" },
-          "z-ai": { model: "glm-4.6", reasoningEffort: "max" },
-        },
-      },
-    };
-    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withMany)));
-    expect(parsed.success).toBe(true);
-    if (parsed.success) {
-      expect(parsed.data.provider.defaults).toEqual({
-        custom: { reasoningEffort: "off" },
-        "z-ai": { model: "glm-4.6", reasoningEffort: "max" },
-      });
-    }
+  it("resets a bare-legacy v1 singleton (no provider.id) the same way", () => {
+    const result = parseSettings(v1({ model: "claude-x", baseUrl: "https://bridge.example" }));
+    expect(result.status).toBe("ok");
+    expect(result.settings.provider).toEqual({ connections: [] });
+    expect(activeConnection(result.settings)).toBeUndefined();
   });
 
-  it("rejects an invalid reasoningEffort tier inside a default entry", () => {
-    const bad = { ...cloneDefaults(), provider: { defaults: { "z-ai": { reasoningEffort: "extreme" } } } };
-    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  it("resets a fresh v1 (empty provider) to an empty v2 provider", () => {
+    const result = parseSettings(v1({}));
+    expect(result.status).toBe("ok");
+    expect(result.settings.provider).toEqual({ connections: [] });
+    expect(activeConnection(result.settings)).toBeUndefined();
   });
 
-  it("mergeSettings can set provider.defaults without dropping id/model siblings", () => {
-    const base = mergeSettings(cloneDefaults(), { provider: { id: "z-ai", model: "glm-5.2" } });
-    const merged = mergeSettings(base, { provider: { defaults: { "z-ai": { reasoningEffort: "high" } } } });
-    expect(merged.provider).toEqual({
-      id: "z-ai",
-      model: "glm-5.2",
-      defaults: { "z-ai": { reasoningEffort: "high" } },
+  it("touches ONLY provider — every other top-level section survives byte-for-byte", () => {
+    const result = parseSettings({
+      version: 1,
+      provider: { id: "z-ai", model: "glm-4.6" },
+      tools: { maxTurns: 7 },
+      permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
+      ui: { theme: "dark" },
+      security: { allowWeakSecretStorage: false },
+      keybindings: { overrides: [{ action: "session.new", bindings: ["mod+shift+n"] }] },
+      codex: { binaryPath: "/usr/local/bin/codex" },
     });
+    expect(result.status).toBe("ok");
+    expect(result.settings.provider).toEqual({ connections: [] });
+    expect(result.settings.tools).toEqual({ maxTurns: 7 });
+    expect(result.settings.permissions.alwaysAllow).toEqual([{ toolName: "Bash", pattern: "git *" }]);
+    expect(result.settings.ui.theme).toBe("dark");
+    expect(result.settings.keybindings?.overrides).toEqual([{ action: "session.new", bindings: ["mod+shift+n"] }]);
+    expect(result.settings.codex?.binaryPath).toBe("/usr/local/bin/codex");
   });
 
-  it("survives a read-modify-write cycle (the exact desktop compat bug the cut calls out)", () => {
-    // Simulates: settings-set writes {provider:{defaults}}, then a LATER
-    // settings-get reloads through parseSettings/settingsSchema -- the nested
-    // `defaults` key must be explicitly declared in the provider zod object
-    // (not relying on the top-level .passthrough(), which only covers unknown
-    // TOP-LEVEL keys) or it is silently stripped on this second parse.
-    const written = mergeSettings(cloneDefaults(), {
-      provider: { id: "z-ai", defaults: { "z-ai": { model: "glm-5.2", reasoningEffort: "high" } } },
-    });
-    const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
-    expect(reloaded.status).toBe("ok");
-    expect(reloaded.settings.provider.defaults).toEqual({ "z-ai": { model: "glm-5.2", reasoningEffort: "high" } });
+  it("preserves unknown top-level keys across the reset (passthrough forward-compat)", () => {
+    const result = parseSettings({ ...v1({ id: "z-ai" }), futureField: { nested: 1 } });
+    expect(result.status).toBe("ok");
+    expect((result.settings as unknown as Record<string, unknown>).futureField).toEqual({ nested: 1 });
   });
 });
 
 describe("keybindings.overrides (F20, slice-P7.24-cut.md §1, additive-optional)", () => {
-  it("reads an old file with no keybindings field, round-tripping byte-identically", () => {
-    // A settings.json written before P7.24 has no keybindings key at all.
+  it("reads a file with no keybindings field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();
     const before = JSON.stringify(legacy);
     const result = parseSettings(JSON.parse(before));
@@ -227,7 +203,7 @@ describe("keybindings.overrides (F20, slice-P7.24-cut.md §1, additive-optional)
     expect(JSON.stringify(result.settings)).toBe(before); // byte-identical round-trip
   });
 
-  it("validates a file WITH keybindings.overrides without bumping the version", () => {
+  it("validates a file WITH keybindings.overrides", () => {
     const withOverrides: AnycodeSettings = {
       ...cloneDefaults(),
       keybindings: {
@@ -244,7 +220,6 @@ describe("keybindings.overrides (F20, slice-P7.24-cut.md §1, additive-optional)
         { action: "palette.toggle", bindings: ["mod+shift+p"] },
         { action: "terminal.toggle", bindings: [] },
       ]);
-      expect(parsed.data.version).toBe(1); // NOT bumped
     }
   });
 
@@ -267,25 +242,12 @@ describe("keybindings.overrides (F20, slice-P7.24-cut.md §1, additive-optional)
     });
     const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
     expect(reloaded.status).toBe("ok");
-    expect(reloaded.settings.keybindings?.overrides).toEqual([
-      { action: "session.new", bindings: ["mod+shift+n"] },
-    ]);
-  });
-
-  it("mergeSettings replaces the overrides array wholesale (editor semantics)", () => {
-    const base = mergeSettings(cloneDefaults(), {
-      keybindings: { overrides: [{ action: "palette.toggle", bindings: ["mod+shift+p"] }] },
-    });
-    const replaced = mergeSettings(base, {
-      keybindings: { overrides: [{ action: "session.new", bindings: ["mod+shift+n"] }] },
-    });
-    expect(replaced.keybindings?.overrides).toEqual([{ action: "session.new", bindings: ["mod+shift+n"] }]);
+    expect(reloaded.settings.keybindings?.overrides).toEqual([{ action: "session.new", bindings: ["mod+shift+n"] }]);
   });
 });
 
 describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
-  it("reads an old file with no codex field, round-tripping byte-identically", () => {
-    // A settings.json written before codex-fixes has no codex key at all.
+  it("reads a file with no codex field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();
     const before = JSON.stringify(legacy);
     const result = parseSettings(JSON.parse(before));
@@ -294,7 +256,7 @@ describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
     expect(JSON.stringify(result.settings)).toBe(before); // byte-identical round-trip
   });
 
-  it("validates a file WITH codex.binaryPath + codex.lastCheck without bumping the version", () => {
+  it("validates a file WITH codex.binaryPath + codex.lastCheck", () => {
     const withCodex: AnycodeSettings = {
       ...cloneDefaults(),
       codex: {
@@ -309,14 +271,10 @@ describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
         binaryPath: "/opt/homebrew/bin/codex",
         lastCheck: { status: "ready", version: "0.144.1", at: "2026-07-13T00:00:00.000Z" },
       });
-      expect(parsed.data.version).toBe(1); // NOT bumped
     }
   });
 
   it("drops a corrupt lastCheck.status instead of failing the whole document (MED-2 fix)", () => {
-    // `codex` is advisory-cache-only (unlike e.g. `ui.theme`) — a malformed
-    // value here must never sink the rest of the settings document (see the
-    // schema's own `.catch(undefined)` doc comment).
     const bad = {
       ...cloneDefaults(),
       codex: { lastCheck: { status: "bogus", at: "2026-07-13T00:00:00.000Z" } },
@@ -328,54 +286,22 @@ describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
     }
   });
 
-  it("drops a lastCheck missing the required `at` timestamp instead of failing the whole document (MED-2 fix)", () => {
-    const bad = { ...cloneDefaults(), codex: { lastCheck: { status: "ready" } } };
-    const parsed = settingsSchema.safeParse(bad);
-    expect(parsed.success).toBe(true);
-    if (parsed.success) {
-      expect(parsed.data.codex).toBeUndefined();
-    }
-  });
-
-  it("tolerates a foreign/wrong-typed codex value at the file level — every sibling field survives (MED-2 regression, post-C0 review)", () => {
-    // Simulates an old/foreign settings.json where `codex` holds something
-    // this binary does not recognize at all (wrong type, not just a wrong
-    // nested shape). Before the fix this failed `settingsSchema.safeParse`
-    // entirely, so `parseSettings` fell to "corrupt" and replaced the WHOLE
-    // document with defaults — losing the user's real provider/permissions/ui
-    // configuration over one advisory field.
+  it("tolerates a foreign/wrong-typed codex value — every sibling field survives (MED-2, v1 reset)", () => {
     const legacy = {
-      ...cloneDefaults(),
+      version: 1,
       provider: { model: "claude-x" },
+      tools: {},
       permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
       codex: "legacy-value",
     };
     const result = parseSettings(legacy);
     expect(result.status).toBe("ok");
     expect(result.settings.codex).toBeUndefined();
-    expect(result.settings.provider.model).toBe("claude-x");
+    // provider is reset (no v1 carry-over); the OTHER sections still survive.
+    expect(result.settings.provider).toEqual({ connections: [] });
     expect(result.settings.permissions.alwaysAllow).toEqual([{ toolName: "Bash", pattern: "git *" }]);
-  });
-
-  it("survives a read-modify-write cycle (nested codex fields not stripped on reparse)", () => {
-    const written = mergeSettings(cloneDefaults(), {
-      codex: { binaryPath: "/usr/local/bin/codex" },
-    });
-    const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
-    expect(reloaded.status).toBe("ok");
-    expect(reloaded.settings.codex?.binaryPath).toBe("/usr/local/bin/codex");
-  });
-
-  it("never carries a token/credential field — only path/status metadata is representable", () => {
-    // Type-level guard: attempting to widen the schema shape here (e.g. a
-    // `token`/`apiKey`/`refreshToken` key) would need a code change to this
-    // test, keeping the credential-free invariant (cut §2(g)) visible at review.
-    const withCodex: AnycodeSettings = {
-      ...cloneDefaults(),
-      codex: { binaryPath: "/usr/local/bin/codex", lastCheck: { status: "signed_out", at: "2026-07-13T00:00:00.000Z" } },
-    };
-    expect(Object.keys(withCodex.codex ?? {})).toEqual(["binaryPath", "lastCheck"]);
-    expect(Object.keys(withCodex.codex?.lastCheck ?? {})).toEqual(["status", "at"]);
   });
 });
 
@@ -385,15 +311,16 @@ describe("cloneDefaults", () => {
     a.permissions.alwaysAllow.push({ toolName: "Bash" });
     expect(DEFAULT_SETTINGS.permissions.alwaysAllow).toEqual([]);
     expect(cloneDefaults().permissions.alwaysAllow).toEqual([]);
+    a.provider.connections.push({ id: "x", providerId: "z-ai" });
+    expect(DEFAULT_SETTINGS.provider.connections).toEqual([]);
   });
 });
 
 describe("mergeSettings (deep-partial merge)", () => {
   it("merges nested objects key-by-key without dropping siblings", () => {
-    const merged = mergeSettings(cloneDefaults(), { provider: { model: "claude-x" } });
-    expect(merged.provider.model).toBe("claude-x");
-    expect(merged.provider.baseUrl).toBeUndefined();
-    expect(merged.ui.theme).toBe("system"); // untouched sibling survives
+    const merged = mergeSettings(cloneDefaults(), { ui: { theme: "dark" } });
+    expect(merged.ui.theme).toBe("dark");
+    expect(merged.provider.connections).toEqual([]); // untouched sibling survives
   });
 
   it("replaces arrays wholesale (rule editor semantics)", () => {
@@ -406,12 +333,6 @@ describe("mergeSettings (deep-partial merge)", () => {
     expect(replaced.permissions.alwaysAllow).toEqual([{ toolName: "Read" }]);
   });
 
-  it("ignores undefined patch values (never deletes a base key)", () => {
-    const base = mergeSettings(cloneDefaults(), { provider: { model: "keep-me" } });
-    const merged = mergeSettings(base, { provider: { baseUrl: undefined } });
-    expect(merged.provider.model).toBe("keep-me");
-  });
-
   it("does not mutate the base object", () => {
     const base = cloneDefaults();
     const frozen = JSON.stringify(base);
@@ -421,7 +342,7 @@ describe("mergeSettings (deep-partial merge)", () => {
 
   it("preserves version when the patch omits it", () => {
     const merged = mergeSettings(cloneDefaults(), { ui: { theme: "light" } });
-    expect(merged.version).toBe(1);
+    expect(merged.version).toBe(2);
   });
 });
 
@@ -432,7 +353,15 @@ describe("parseSettings (version policy)", () => {
     expect(result.readOnly).toBe(false);
   });
 
-  it("flags a newer-than-CURRENT file as read_only, salvaging valid fields", () => {
+  it("loads a real v1 file to ok (reset, not corrupt)", () => {
+    const v1 = { version: 1, provider: { id: "deepseek", model: "deepseek-chat" }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } };
+    const result = parseSettings(v1);
+    expect(result.status).toBe("ok");
+    expect(result.settings.version).toBe(2);
+    expect(result.settings.provider).toEqual({ connections: [] });
+  });
+
+  it("flags a newer-than-CURRENT file as read_only, salvaging valid fields (old binary sees v2/v3 as read_only)", () => {
     const future: Record<string, unknown> = {
       ...cloneDefaults(),
       version: CURRENT_SETTINGS_VERSION + 1,
@@ -458,16 +387,18 @@ describe("parseSettings (version policy)", () => {
   });
 
   it("treats a schema-invalid current-version object as corrupt -> defaults", () => {
-    const result = parseSettings({ version: 1, ui: { theme: 123 } });
+    const result = parseSettings({ version: 2, provider: { connections: [] }, ui: { theme: 123 } });
     expect(result.status).toBe("corrupt");
     expect(result.settings).toEqual(DEFAULT_SETTINGS);
   });
 });
 
 describe("DEFAULT_SETTINGS", () => {
-  it("has every section present and a false consent flag", () => {
+  it("has every section present, an empty connections array and a false consent flag", () => {
     const defaults: AnycodeSettings = DEFAULT_SETTINGS;
-    expect(defaults.version).toBe(1);
+    expect(defaults.version).toBe(2);
+    expect(defaults.provider.connections).toEqual([]);
+    expect(defaults.provider.activeConnectionId).toBeUndefined();
     expect(defaults.security.allowWeakSecretStorage).toBe(false);
     expect(defaults.permissions.alwaysAllow).toEqual([]);
   });

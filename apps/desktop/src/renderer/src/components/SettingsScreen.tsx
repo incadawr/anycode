@@ -80,6 +80,7 @@ import type {
   SecretTier,
   SettingsPatch,
 } from "../../../shared/settings.js";
+import { activeProviderView } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
 import type { WireEnvStatus, WireRepoMapStatus } from "../../../shared/protocol.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -578,10 +579,13 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   // same clobber-avoidance rationale as SettingsScreen's own seed effect).
   useEffect(() => {
     if (!initialized && snapshot) {
-      setProviderId(snapshot.settings.provider.id);
-      setModel(snapshot.settings.provider.model ?? "");
-      setBaseUrl(snapshot.settings.provider.baseUrl ?? "");
-      setTransport(snapshot.settings.provider.transport ?? "");
+      // Active-connection view (TASK.45 v2): the former singleton fields now live
+      // on the active connection; `activeProviderView` projects them back.
+      const view = activeProviderView(snapshot.settings);
+      setProviderId(view.id);
+      setModel(view.model ?? "");
+      setBaseUrl(view.baseUrl ?? "");
+      setTransport(view.transport ?? "");
       setInitialized(true);
     }
   }, [snapshot, initialized]);
@@ -593,6 +597,9 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
     return null;
   }
 
+  // Active-connection view (TASK.45 v2): stands in for the removed v1 singleton
+  // for every read-site below (baseUrl/transport). Captured after the null guard.
+  const view = activeProviderView(snapshot.settings);
   const readOnly = snapshot.readOnly;
   const catalog: CatalogSummary = snapshot.catalog ?? [];
   const hasCatalog = catalog.length > 0;
@@ -604,13 +611,13 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   // Captured as a plain local (not re-read off `snapshot` inside the nested
   // functions below) so TS's null-narrowing of `snapshot` — which does not
   // cross a nested function boundary — stays sound.
-  const storedBaseUrl = snapshot.settings.provider.baseUrl ?? "";
+  const storedBaseUrl = view.baseUrl ?? "";
   // TASK.43 W5, deliberately disposable (W12 absorbs this into a drawer):
   // the transport `<select>` options + a field-error against the PERSISTED
   // (not in-progress) value — an unsupported combination blocks readiness
   // (main's computeProviderReady) rather than silently falling back.
   const transportChoices = transportOptions(selectedEntry);
-  const transportUnsupported = isTransportUnsupported(selectedEntry, snapshot.settings.provider.transport);
+  const transportUnsupported = isTransportUnsupported(selectedEntry, view.transport);
 
   async function changeProvider(newId: string): Promise<void> {
     setProviderId(newId);
@@ -721,7 +728,7 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
         </label>
         {transportUnsupported && (
           <div className="settings-env-warning" role="alert">
-            "{TRANSPORT_LABEL[snapshot.settings.provider.transport as ProviderTransportId]}" is not supported by{" "}
+            "{TRANSPORT_LABEL[view.transport as ProviderTransportId]}" is not supported by{" "}
             {selectedEntry?.name ?? "this provider"} — pick a supported transport above, readiness is blocked until you do.
           </div>
         )}

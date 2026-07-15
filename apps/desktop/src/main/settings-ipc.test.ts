@@ -13,12 +13,17 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
 import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "../shared/settings.js";
+import { activeConnection, activeProviderView } from "../shared/settings.js";
 import { ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import {
   buildSettingsSnapshot,
   handleAddRule,
   handleClearSecret,
+  handleConnectionCreate,
+  handleConnectionDelete,
+  handleConnectionSetActive,
+  handleConnectionUpdate,
   handleGet,
   handleOAuthCancel,
   handleOAuthStart,
@@ -73,14 +78,16 @@ class FakeVault implements VaultLike {
   }
 }
 
-/** Fake OAuth runner: a successful start writes a token blob into the vault. */
+/** Fake OAuth runner: a successful start writes a token blob into the vault under the CONNECTION key (§4.3). */
 class FakeOAuthRunner implements OAuthRunnerLike {
   outcome: OAuthOutcome = { ok: true };
   cancelled: string[] = [];
+  lastConnectionId: string | undefined;
   constructor(private readonly vault: FakeVault) {}
-  async startFlow(config: OAuthProviderConfig): Promise<OAuthOutcome> {
+  async startFlow(_config: OAuthProviderConfig, connectionId: string): Promise<OAuthOutcome> {
+    this.lastConnectionId = connectionId;
     if (this.outcome.ok) {
-      this.vault.store.set(`provider.${config.providerId}.oauth`, "OAUTH-TOKEN-BLOB-SECRET");
+      this.vault.store.set(`provider.connection.${connectionId}.oauth`, "OAUTH-TOKEN-BLOB-SECRET");
     }
     return this.outcome;
   }
@@ -100,15 +107,18 @@ const OAUTH_CONFIG: OAuthProviderConfig = {
 let dir: string;
 let settingsPath: string;
 let vault: FakeVault;
+/** Deterministic connection ids for tests (`conn-1`, `conn-2`, …), reset per test. */
+let connSeq: number;
 
 function makeDeps(over: Partial<SettingsIpcDeps> = {}): SettingsIpcDeps {
-  return { vault, bootEnv: {}, settingsPath, ...over };
+  return { vault, bootEnv: {}, settingsPath, genConnectionId: () => `conn-${++connSeq}`, ...over };
 }
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "anycode-ipc-"));
   settingsPath = join(dir, "settings.json");
   vault = new FakeVault();
+  connSeq = 0;
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -122,7 +132,7 @@ function containsSecret(value: unknown): boolean {
 describe("handleGet — snapshot projection", () => {
   it("returns a full snapshot with SecretStatus (never a value)", async () => {
     const snap = await handleGet(makeDeps());
-    expect(snap.settings.version).toBe(1);
+    expect(snap.settings.version).toBe(2);
     expect(snap.secrets).toEqual([
       { key: "provider.apiKey", set: false, source: "none", tier: "os_encrypted" },
     ]);
@@ -139,18 +149,20 @@ describe("handleGet — snapshot projection", () => {
   });
 });
 
-describe("handleSetSecret — custody + consent (I1 / R1)", () => {
-  it("stores the value and returns a snapshot WITHOUT the value anywhere", async () => {
+describe("handleSetSecret — custody + consent + write-translation (I1 / R1 / §4.1)", () => {
+  it("translates the legacy key to the connection key (value ONLY under provider.connection.<id>.apiKey, never the legacy form)", async () => {
     const onMutation = vi.fn();
     const res = await handleSetSecret(makeDeps({ onMutation }), { key: "provider.apiKey", value: SECRET_VALUE });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.snapshot.secrets[0]).toMatchObject({ set: true, source: "vault" });
+      // The alias mirrors the connection key's status under the legacy key the
+      // pre-W12 renderer reads (secrets[0] === provider.apiKey), so it shows set.
+      expect(res.snapshot.secrets[0]).toMatchObject({ key: "provider.apiKey", set: true, source: "vault" });
       expect(containsSecret(res)).toBe(false);
     }
-    // The value did reach the vault.
-    expect(vault.store.get("provider.apiKey")).toBe(SECRET_VALUE);
-    // onMutation fired with the fresh snapshot.
+    // The value reached the CONNECTION key, and the legacy form was NEVER written.
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
+    expect(vault.store.has("provider.apiKey")).toBe(false);
     expect(onMutation).toHaveBeenCalledTimes(1);
   });
 
@@ -167,7 +179,8 @@ describe("handleSetSecret — custody + consent (I1 / R1)", () => {
     const spy = vi.spyOn(vault, "setSecret");
     await handleSet(makeDeps(), { security: { allowWeakSecretStorage: true } });
     await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
-    expect(spy).toHaveBeenLastCalledWith("provider.apiKey", SECRET_VALUE, { allowWeak: true });
+    // Written under the connection key (the legacy form is translated away).
+    expect(spy).toHaveBeenLastCalledWith("provider.connection.conn-1.apiKey", SECRET_VALUE, { allowWeak: true });
   });
 
   it("rejects a malformed payload as invalid", async () => {
@@ -177,37 +190,47 @@ describe("handleSetSecret — custody + consent (I1 / R1)", () => {
 });
 
 describe("handleClearSecret", () => {
-  it("clears the vault entry and returns a fresh snapshot", async () => {
-    vault.store.set("provider.apiKey", SECRET_VALUE);
+  it("clears the active connection's key when a legacy key is cleared, returning a fresh snapshot", async () => {
+    // A connection holds the secret under its connection key (the W9′ shape).
+    await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
+
     const res = await handleClearSecret(makeDeps(), { key: "provider.apiKey" });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.snapshot.secrets[0]?.set).toBe(false);
+      // The alias reflects the now-empty connection key.
+      expect(res.snapshot.secrets[0]).toMatchObject({ key: "provider.apiKey", set: false });
     }
-    expect(vault.store.has("provider.apiKey")).toBe(false);
+    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
+  });
+
+  it("clearing a legacy key for a provider with no connection is a safe no-op", async () => {
+    const res = await handleClearSecret(makeDeps(), { key: "provider.apiKey" });
+    expect(res.ok).toBe(true);
   });
 });
 
 describe("handleSet — merge + read-only", () => {
-  it("deep-partial merges and persists", async () => {
+  it("deep-partial merges and persists (the legacy provider patch folds onto a connection)", async () => {
     const res = await handleSet(makeDeps(), { provider: { model: "claude-x" }, ui: { theme: "dark" } });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.model).toBe("claude-x");
+    // The legacy `provider.model` shim materialised a bare active connection.
+    expect(activeProviderView(loaded.settings).model).toBe("claude-x");
     expect(loaded.settings.ui.theme).toBe("dark");
   });
 
   it("ignores a version change in the patch", async () => {
     await handleSet(makeDeps(), { version: 99, provider: { model: "m" } });
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.version).toBe(1);
+    expect(loaded.settings.version).toBe(2);
   });
 
-  it("refuses read_only when settings.json is a newer version", async () => {
-    // A version>CURRENT file loads as readOnly.
+  it("refuses read_only when settings.json is a newer version than CURRENT", async () => {
+    // A version>CURRENT (v3) file loads as readOnly.
     await writeFile(
       settingsPath,
-      JSON.stringify({ version: 2, provider: {}, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }),
+      JSON.stringify({ version: 3, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }),
     );
     const res = await handleSet(makeDeps(), { provider: { model: "m" } });
     expect(res).toEqual({ ok: false, reason: "read_only" });
@@ -250,51 +273,35 @@ describe("handleSet — keybindings validation (F20 hardening, defense in depth)
   });
 });
 
-describe("handleSet — provider.defaults persist (F14, slice-P7.15-cut.md §2.4)", () => {
-  it("persists a per-provider default and survives a LATER settings-get reload", async () => {
-    // The patch schema (patchSchema = z.record(string, unknown)) is already
-    // permissive enough to carry an arbitrary provider.defaults shape through —
-    // the compat risk this proves is downstream, in the schema.ts zod re-parse
-    // on the NEXT load (loadSettings -> parseSettings -> settingsSchema).
+describe("handleSet — legacy provider patch folds onto the active connection (TASK.45 §4.3 shim)", () => {
+  it("folds provider.{id,model,defaults[pid]} onto ONE active connection (no provider.defaults key persisted)", async () => {
     const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), {
       provider: { id: "z-ai", defaults: { "z-ai": { model: "glm-5.2", reasoningEffort: "high" } } },
     });
     expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.snapshot.settings.provider.defaults).toEqual({
-        "z-ai": { model: "glm-5.2", reasoningEffort: "high" },
-      });
-    }
-
-    // A later, independent settings-get (fresh load off disk) must see the same
-    // thing — this is where a provider zod object without the `defaults` key
-    // declared would silently strip it.
-    const reloaded = await handleGet(makeDeps());
-    expect(reloaded.settings.provider.defaults).toEqual({ "z-ai": { model: "glm-5.2", reasoningEffort: "high" } });
+    const loaded = await loadSettings(settingsPath);
+    const view = activeProviderView(loaded.settings);
+    expect(view.id).toBe("z-ai");
+    expect(view.model).toBe("glm-5.2"); // defaults[pid].model folded onto the connection
+    expect(view.reasoningEffort).toBe("high");
+    expect(loaded.settings.provider.connections).toHaveLength(1);
+    // The v1 `provider.defaults` key does NOT survive — it folded into the connection.
+    expect((loaded.settings.provider as unknown as Record<string, unknown>).defaults).toBeUndefined();
+    // A later, independent settings-get (fresh load off disk) sees the same connection.
+    const reloaded = await handleGet(makeDeps({ catalogIds: CATALOG_IDS }));
+    expect(activeProviderView(reloaded.settings).model).toBe("glm-5.2");
   });
 
-  it("a second patch for a DIFFERENT provider id accumulates alongside the first (deep-merge, not array-replace)", async () => {
-    await handleSet(makeDeps(), { provider: { defaults: { custom: { reasoningEffort: "off" } } } });
-    const res = await handleSet(makeDeps(), { provider: { defaults: { "z-ai": { reasoningEffort: "max" } } } });
+  it("re-patching the SAME provider id overwrites its model on the one connection (last-write-wins)", async () => {
+    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "glm-4.6" } });
+    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "glm-5.2" } });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.defaults).toEqual({
-      custom: { reasoningEffort: "off" },
-      "z-ai": { reasoningEffort: "max" },
-    });
+    expect(loaded.settings.provider.connections).toHaveLength(1);
+    expect(activeProviderView(loaded.settings).model).toBe("glm-5.2");
   });
 
-  it("re-patching the SAME provider id overwrites its snapshot (last-write-wins, cut §6 R9)", async () => {
-    await handleSet(makeDeps(), { provider: { defaults: { "z-ai": { model: "glm-4.6", reasoningEffort: "off" } } } });
-    const res = await handleSet(makeDeps(), {
-      provider: { defaults: { "z-ai": { model: "glm-5.2", reasoningEffort: "high" } } },
-    });
-    expect(res.ok).toBe(true);
-    const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.defaults).toEqual({ "z-ai": { model: "glm-5.2", reasoningEffort: "high" } });
-  });
-
-  it("an old settings.json with no provider.defaults loads unchanged (backward-compat)", async () => {
+  it("an old v1 settings.json on disk is reset to an empty provider on load (no v1 carry-over)", async () => {
     await writeFile(
       settingsPath,
       JSON.stringify({
@@ -307,8 +314,8 @@ describe("handleSet — provider.defaults persist (F14, slice-P7.15-cut.md §2.4
       }),
     );
     const snapshot = await handleGet(makeDeps());
-    expect(snapshot.settings.provider.model).toBe("legacy-model");
-    expect(snapshot.settings.provider.defaults).toBeUndefined();
+    expect(snapshot.settings.provider).toEqual({ connections: [] });
+    expect(activeProviderView(snapshot.settings)).toEqual({});
   });
 });
 
@@ -549,7 +556,7 @@ describe("handleSet — provider.id catalog refine (slice 2.5)", () => {
     const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai" } });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.id).toBe("z-ai");
+    expect(activeProviderView(loaded.settings).id).toBe("z-ai");
   });
 
   it("refuses a provider.id outside the catalog as invalid", async () => {
@@ -563,14 +570,17 @@ describe("handleSet — provider.id catalog refine (slice 2.5)", () => {
   });
 });
 
-describe("handleSetSecret/handleClearSecret — widened SecretKey refine", () => {
-  it("accepts a per-provider apiKey key for a catalog id", async () => {
+describe("handleSetSecret/handleClearSecret — widened SecretKey refine + write-translation", () => {
+  it("accepts a per-provider apiKey key for a catalog id, storing it under that provider's connection key", async () => {
     const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
       key: "provider.z-ai.apiKey",
       value: SECRET_VALUE,
     });
     expect(res.ok).toBe(true);
-    expect(vault.store.get("provider.z-ai.apiKey")).toBe(SECRET_VALUE);
+    // Translated to the connection key for a freshly-created z-ai connection;
+    // the legacy `provider.z-ai.apiKey` form is never written.
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
+    expect(vault.store.has("provider.z-ai.apiKey")).toBe(false);
   });
 
   it("rejects a per-provider key whose id is not in the catalog", async () => {
@@ -581,11 +591,13 @@ describe("handleSetSecret/handleClearSecret — widened SecretKey refine", () =>
     expect(res).toEqual({ ok: false, reason: "invalid" });
   });
 
-  it("clears a per-provider key", async () => {
-    vault.store.set("provider.z-ai.apiKey", SECRET_VALUE);
+  it("clears a per-provider key by translating it to the provider's connection key", async () => {
+    // Establish a z-ai connection holding the secret under its connection key.
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
     const res = await handleClearSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey" });
     expect(res.ok).toBe(true);
-    expect(vault.store.has("provider.z-ai.apiKey")).toBe(false);
+    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
   });
 });
 
@@ -598,10 +610,11 @@ describe("snapshot — catalog projection + oauth readiness (slice 2.5)", () => 
     expect(snap.catalog).toEqual(catalog);
   });
 
-  it("providerReady uses the oauth credentialKey (provider.<id>.oauth present)", async () => {
-    // Select acme (oauth) with a model, and a stored oauth blob.
+  it("providerReady uses the oauth credentialKey (the active connection's oauth key present)", async () => {
+    // Select acme (oauth) with a model, and a stored oauth blob under the
+    // connection's key (W9′ keys credentials by connection).
     await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "acme", model: "m" } });
-    vault.store.set("provider.acme.oauth", "blob");
+    vault.store.set("provider.connection.conn-1.oauth", "blob");
     const snap = await buildSettingsSnapshot(
       makeDeps({ catalogIds: CATALOG_IDS, authKindFor: (id) => (id === "acme" ? "oauth" : undefined) }),
     );
@@ -659,7 +672,7 @@ describe("handleOAuthStart / handleOAuthCancel", () => {
   it("refuses read_only when settings.json is newer than this binary", async () => {
     await writeFile(
       settingsPath,
-      JSON.stringify({ version: 2, provider: {}, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }),
+      JSON.stringify({ version: 3, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }),
     );
     const res = await handleOAuthStart(oauthDeps(), { providerId: "acme" });
     expect(res).toEqual({ ok: false, reason: "read_only" });
@@ -668,5 +681,184 @@ describe("handleOAuthStart / handleOAuthCancel", () => {
   it("handleOAuthCancel forwards the provider id to the engine", async () => {
     await handleOAuthCancel(oauthDeps(), { providerId: "acme" });
     expect(runner.cancelled).toEqual(["acme"]);
+  });
+
+  it("threads the target connection id into the engine (persist-by-connection, §4.3)", async () => {
+    const res = await handleOAuthStart(oauthDeps(), { providerId: "acme" });
+    expect(res.ok).toBe(true);
+    // A connection was minted for acme and its id was handed to the engine.
+    expect(runner.lastConnectionId).toBe("conn-1");
+    const loaded = await loadSettings(settingsPath);
+    expect(activeConnection(loaded.settings)?.providerId).toBe("acme");
+  });
+});
+
+// ── TASK.45 W9′ new seams: write-path, CRUD custody, alias, refine-reject ──
+
+describe("pre-W12 secret write-path end-to-end (§4.1, DoD item 4)", () => {
+  it("pick provider → enter key → snapshot: connection created+active, secret ONLY under the connection key, alias visible, ready", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    // (1) pick a provider through the OLD generic settings-set channel.
+    await handleSet(deps, { provider: { id: "z-ai", model: "glm-4.6" } });
+    // (2) enter a key through the OLD generic secret-set channel (legacy-shaped key).
+    const setRes = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    expect(setRes.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    // A connection was created and is the default for new sessions.
+    expect(loaded.settings.provider.connections).toHaveLength(1);
+    const conn = activeConnection(loaded.settings);
+    expect(conn?.providerId).toBe("z-ai");
+    expect(loaded.settings.provider.activeConnectionId).toBe(conn?.id);
+
+    // The secret lives ONLY under the connection key; both legacy forms are absent.
+    expect(vault.store.get(`provider.connection.${conn?.id}.apiKey`)).toBe(SECRET_VALUE);
+    expect(vault.store.has("provider.z-ai.apiKey")).toBe(false);
+    expect(vault.store.has("provider.apiKey")).toBe(false);
+
+    // The snapshot mirrors the connection key's status under the legacy alias the
+    // pre-W12 renderer reads (providerSecretKey("z-ai") === "provider.z-ai.apiKey").
+    const snap = await buildSettingsSnapshot(deps);
+    expect(snap.secrets.find((s) => s.key === "provider.z-ai.apiKey")?.set).toBe(true);
+    // The readiness gate reads the connection key -> providerReady flips true.
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("negative: the raw secrets store never holds a legacy form (custody + no desync)", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleSetSecret(deps, { key: "provider.apiKey", value: SECRET_VALUE });
+    expect([...vault.store.keys()]).toEqual(["provider.connection.conn-1.apiKey"]);
+  });
+});
+
+describe("snapshot — legacy alias projection (§4.2)", () => {
+  it("mirrors the active connection's key status under the legacy alias, value-less", async () => {
+    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "m" } });
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: CATALOG_IDS }));
+    const alias = snap.secrets.find((s) => s.key === "provider.z-ai.apiKey");
+    expect(alias).toMatchObject({ set: true, source: "vault" });
+    expect(Object.keys(alias ?? {}).sort()).toEqual(["key", "set", "source", "tier"]); // value-less
+    expect(containsSecret(snap)).toBe(false);
+  });
+
+  it("reflects an env override on the alias source", async () => {
+    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "m" } });
+    const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: CATALOG_IDS, bootEnv: { ANYCODE_API_KEY: "k" } }));
+    expect(snap.secrets.find((s) => s.key === "provider.z-ai.apiKey")?.source).toBe("env");
+  });
+});
+
+describe("handleSet — refine-rejects a wholesale connections graph (DoD item 6)", () => {
+  it("rejects a wholesale connections array through the generic settings-set path", async () => {
+    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), {
+      provider: { connections: [{ id: "x", providerId: "z-ai" }] },
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    // Nothing persisted.
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toEqual([]);
+  });
+
+  it("rejects an activeConnectionId through the generic settings-set path", async () => {
+    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { activeConnectionId: "x" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+});
+
+describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
+  it("create rejects a payload carrying a credential field (.strict) — plaintext never crosses IPC", async () => {
+    const withApiKey = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      apiKey: SECRET_VALUE,
+    });
+    expect(withApiKey).toEqual({ ok: false, reason: "invalid" });
+    const withToken = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      token: SECRET_VALUE,
+    });
+    expect(withToken).toEqual({ ok: false, reason: "invalid" });
+    // Nothing persisted, and the secret never reached the vault.
+    expect(vault.store.size).toBe(0);
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toEqual([]);
+  });
+
+  it("update rejects a payload carrying a credential field (.strict)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", apiKey: SECRET_VALUE });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("create mints conn-<id>, activates the first connection, rejects a non-catalog providerId", async () => {
+    const bad = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "evil" });
+    expect(bad).toEqual({ ok: false, reason: "invalid" });
+
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-5.2" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toEqual([{ id: "conn-1", providerId: "z-ai", model: "glm-5.2" }]);
+    expect(loaded.settings.provider.activeConnectionId).toBe("conn-1"); // first connection activates
+  });
+
+  it("update patches metadata (never a credential); not_found for an unknown id", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      model: "glm-5.2",
+      label: "Prod",
+    });
+    expect(res.ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]).toMatchObject({
+      model: "glm-5.2",
+      label: "Prod",
+    });
+
+    const missing = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-nope", model: "x" });
+    expect(missing).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("set-active switches the default; not_found for an unknown id", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1 (active)
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "acme" }); // conn-2
+    const res = await handleConnectionSetActive(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-2" });
+    expect(res.ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.activeConnectionId).toBe("conn-2");
+
+    const missing = await handleConnectionSetActive(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-nope" });
+    expect(missing).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("delete clears BOTH connection secrets first, then removes metadata + active id (idempotent)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1 active
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
+
+    const clearSpy = vi.spyOn(vault, "clearSecret");
+    const res = await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    // secrets-first: both credential kinds cleared before metadata removal.
+    expect(clearSpy).toHaveBeenCalledWith("provider.connection.conn-1.apiKey");
+    expect(clearSpy).toHaveBeenCalledWith("provider.connection.conn-1.oauth");
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toEqual([]);
+    expect(loaded.settings.provider.activeConnectionId).toBeUndefined();
+    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
+
+    // Idempotent: deleting an already-gone connection still succeeds.
+    const again = await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" });
+    expect(again.ok).toBe(true);
+  });
+
+  it("no CRUD response ever carries a secret value (custody)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const responses = [
+      await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "m" }),
+      await handleConnectionSetActive(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" }),
+      await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" }),
+    ];
+    for (const res of responses) {
+      expect(containsSecret(res)).toBe(false);
+    }
   });
 });

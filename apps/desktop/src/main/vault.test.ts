@@ -222,7 +222,7 @@ describe("Vault.statuses — multi-key (slice 2.5)", () => {
     const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
     await v.setSecret("provider.apiKey", "legacy", { allowWeak: false });
     await v.setSecret("provider.z-ai.apiKey", "zk", { allowWeak: false });
-    await v.setOAuthTokens("anthropic", { accessToken: "at", refreshToken: "rt", expiresAt: 1 }, { allowWeak: false });
+    await v.setSecret("provider.anthropic.oauth", "oauth-blob", { allowWeak: false });
 
     const statuses = await v.statuses({}, catalogIds);
     expect(statuses[0]?.key).toBe("provider.apiKey");
@@ -265,16 +265,16 @@ describe("Vault.statuses — multi-key (slice 2.5)", () => {
   });
 });
 
-describe("Vault OAuth token blob (slice 2.5 §3.3)", () => {
-  it("round-trips a token blob as one encrypted value", async () => {
+describe("Vault OAuth token blob (slice 2.5 §3.3 + TASK.45: keyed by CONNECTION id)", () => {
+  it("round-trips a token blob as one encrypted value under the connection oauth key", async () => {
     const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
     const blob = { accessToken: "at-1", refreshToken: "rt-1", expiresAt: 1234 };
-    const r = await v.setOAuthTokens("z-ai", blob, { allowWeak: false });
+    const r = await v.setOAuthTokens("conn-1", blob, { allowWeak: false });
     expect(r).toEqual({ ok: true });
-    expect(await v.getOAuthTokens("z-ai")).toEqual(blob);
-    // Stored under the oauth key, encrypted (the raw token is not on disk in clear).
+    expect(await v.getOAuthTokens("conn-1")).toEqual(blob);
+    // Stored under the connection oauth key, encrypted (raw token not on disk in clear).
     const { file } = await loadSecrets(secretsPath());
-    expect(file.entries["provider.z-ai.oauth"]?.cipher).toBe("safeStorage");
+    expect(file.entries["provider.connection.conn-1.oauth"]?.cipher).toBe("safeStorage");
     const raw = await readFile(secretsPath(), "utf8");
     expect(raw).not.toContain("at-1");
     expect(raw).not.toContain("rt-1");
@@ -282,33 +282,73 @@ describe("Vault OAuth token blob (slice 2.5 §3.3)", () => {
 
   it("getOAuthTokens is fail-soft on a decrypt failure", async () => {
     const writer = makeVault(new FakeSafeStorage({ available: true }), "darwin");
-    await writer.setOAuthTokens("z-ai", { accessToken: "a", refreshToken: "r", expiresAt: 1 }, { allowWeak: false });
+    await writer.setOAuthTokens("conn-1", { accessToken: "a", refreshToken: "r", expiresAt: 1 }, { allowWeak: false });
     const reader = makeVault(new FakeSafeStorage({ available: true, corruptDecrypt: true }), "darwin");
-    expect(await reader.getOAuthTokens("z-ai")).toBeUndefined();
+    expect(await reader.getOAuthTokens("conn-1")).toBeUndefined();
   });
 
   it("getOAuthTokens returns undefined for a corrupt (non-JSON / wrong-shape) value", async () => {
-    // A plaintext non-JSON value under the oauth key.
+    // A plaintext non-JSON value under the connection oauth key.
     await saveSecrets(secretsPath(), {
       version: 1,
-      entries: { "provider.z-ai.oauth": { cipher: "plaintext", value: "not-json" } },
+      entries: { "provider.connection.conn-1.oauth": { cipher: "plaintext", value: "not-json" } },
     });
     const v = makeVault(new FakeSafeStorage({ available: false }), "linux");
-    expect(await v.getOAuthTokens("z-ai")).toBeUndefined();
+    expect(await v.getOAuthTokens("conn-1")).toBeUndefined();
   });
 
   it("clearOAuthTokens removes the blob", async () => {
     const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
-    await v.setOAuthTokens("z-ai", { accessToken: "a", refreshToken: "r", expiresAt: 1 }, { allowWeak: false });
-    await v.clearOAuthTokens("z-ai");
-    expect(await v.getOAuthTokens("z-ai")).toBeUndefined();
+    await v.setOAuthTokens("conn-1", { accessToken: "a", refreshToken: "r", expiresAt: 1 }, { allowWeak: false });
+    await v.clearOAuthTokens("conn-1");
+    expect(await v.getOAuthTokens("conn-1")).toBeUndefined();
   });
 
   it("refuses to store on a weak tier without consent (no write)", async () => {
     const v = makeVault(new FakeSafeStorage({ available: false }), "linux");
-    const r = await v.setOAuthTokens("z-ai", { accessToken: "a", refreshToken: "r", expiresAt: 1 }, { allowWeak: false });
+    const r = await v.setOAuthTokens("conn-1", { accessToken: "a", refreshToken: "r", expiresAt: 1 }, { allowWeak: false });
     expect(r).toEqual({ ok: false, reason: "weak_storage_needs_consent" });
-    expect(await v.getOAuthTokens("z-ai")).toBeUndefined();
+    expect(await v.getOAuthTokens("conn-1")).toBeUndefined();
+  });
+});
+
+describe("Vault.scrubLegacyProviderKeys — boot scrub of stale v1 keys (§2, DoD item 9)", () => {
+  const catalogIds = ["z-ai", "anthropic", "custom"];
+
+  it("deletes ONLY the bare legacy key + catalog-scoped per-provider keys; leaves connection + unknown keys", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await saveSecrets(secretsPath(), {
+      version: 1,
+      entries: {
+        "provider.apiKey": { cipher: "plaintext", value: "legacy" },
+        "provider.z-ai.apiKey": { cipher: "plaintext", value: "z" },
+        "provider.anthropic.oauth": { cipher: "plaintext", value: "a" },
+        "provider.connection.conn-1.apiKey": { cipher: "plaintext", value: "keep" },
+        "provider.evil.apiKey": { cipher: "plaintext", value: "keep-unknown-id" },
+      },
+    });
+    await v.scrubLegacyProviderKeys(catalogIds);
+    const { file } = await loadSecrets(secretsPath());
+    expect(Object.keys(file.entries).sort()).toEqual([
+      "provider.connection.conn-1.apiKey",
+      "provider.evil.apiKey",
+    ]);
+    // readiness/status no longer see a phantom "provider.apiKey".
+    expect(await v.getSecretValue("provider.apiKey")).toBeUndefined();
+  });
+
+  it("is idempotent — a second scrub is a no-op", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await v.setSecret("provider.connection.conn-1.apiKey", "keep", { allowWeak: false });
+    await v.scrubLegacyProviderKeys(catalogIds);
+    await v.scrubLegacyProviderKeys(catalogIds);
+    const { file } = await loadSecrets(secretsPath());
+    expect(Object.keys(file.entries)).toEqual(["provider.connection.conn-1.apiKey"]);
+  });
+
+  it("no-ops (and never throws) when there is nothing legacy on disk", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await expect(v.scrubLegacyProviderKeys(catalogIds)).resolves.toBeUndefined();
   });
 });
 

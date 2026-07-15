@@ -22,16 +22,26 @@ import {
   snapshotBootEnv,
 } from "./host-env.js";
 import { resolveProviderSelection, type ProviderSelectionDeps } from "./token-broker.js";
+import { providerV2, type SingletonFixture } from "../shared/provider-v2-fixture.js";
 
-function settings(over: Partial<AnycodeSettings> = {}): AnycodeSettings {
+/**
+ * A v2 settings object whose `provider` block is built from a legacy-singleton
+ * description (TASK.45 fixture): `settings({ provider: { id, model, ... } })`
+ * yields ONE active connection so `activeProviderView` reads it back as the
+ * former singleton. Every other section can be overridden via `over`.
+ */
+type SettingsOver = Partial<Omit<AnycodeSettings, "provider" | "version">> & { provider?: SingletonFixture };
+
+function settings(over: SettingsOver = {}): AnycodeSettings {
+  const { provider, ...rest } = over;
   return {
-    version: 1,
-    provider: {},
+    version: 2,
+    provider: providerV2(provider ?? {}),
     tools: {},
     permissions: { alwaysAllow: [] },
     ui: { theme: "system" },
     security: { allowWeakSecretStorage: false },
-    ...over,
+    ...rest,
   };
 }
 
@@ -170,54 +180,42 @@ describe("buildHostEnv — catalog selection path (slice 2.5)", () => {
   });
 });
 
-describe("buildHostEnv — provider.defaults inheritance (F14, slice-P7.15-cut.md §2.4)", () => {
-  it("legacy/custom path: defaults['custom'].model wins over provider.model when no provider.id", async () => {
+describe("buildHostEnv — active-connection model/effort (TASK.45 v2, F14 §2.4)", () => {
+  // W9′: the v1 `defaults[pid]` fold is gone — the active connection carries
+  // model/reasoningEffort directly, and buildHostEnv reads them via
+  // `activeProviderView`. These prove the ladder OUTPUT is unchanged.
+  it("legacy/custom path: emits the active connection's model", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
-      settings: settings({
-        provider: { model: "settings-model", defaults: { custom: { model: "persisted-model" } } },
-      }),
+      settings: settings({ provider: { model: "persisted-model" } }),
       getSecret: noSecret,
     });
     expect(env.ANYCODE_MODEL).toBe("persisted-model");
   });
 
-  it("legacy/custom path: falls back to provider.model when no matching default entry", async () => {
+  it("sets ANYCODE_REASONING_EFFORT from the active connection on the legacy/custom path", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
-      settings: settings({
-        provider: { model: "settings-model", defaults: { "z-ai": { model: "other-provider-model" } } },
-      }),
-      getSecret: noSecret,
-    });
-    expect(env.ANYCODE_MODEL).toBe("settings-model");
-  });
-
-  it("sets ANYCODE_REASONING_EFFORT from defaults[pid] on the legacy/custom path", async () => {
-    const env = await buildHostEnv({
-      bootEnv: {},
-      settings: settings({ provider: { defaults: { custom: { reasoningEffort: "high" } } } }),
+      settings: settings({ provider: { reasoningEffort: "high" } }),
       getSecret: noSecret,
     });
     expect(env[ENV_REASONING_EFFORT]).toBe("high");
   });
 
-  it("keys the default lookup by provider.id when set (not 'custom')", async () => {
+  it("reads the effort off the active connection even when the id names a catalog provider", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
-      settings: settings({
-        provider: { id: "z-ai", defaults: { custom: { reasoningEffort: "high" }, "z-ai": { reasoningEffort: "max" } } },
-      }),
+      settings: settings({ provider: { id: "z-ai", reasoningEffort: "max" } }),
       getSecret: noSecret,
-      resolveSelection: async () => undefined, // e.g. custom/legacy-folding provider.id
+      resolveSelection: async () => undefined, // legacy branch (e.g. custom/no-catalog)
     });
     expect(env[ENV_REASONING_EFFORT]).toBe("max");
   });
 
-  it("sets ANYCODE_REASONING_EFFORT on the catalog selection path too (provider-keyed, not selection-keyed)", async () => {
+  it("sets ANYCODE_REASONING_EFFORT on the catalog selection path too (from the active connection)", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
-      settings: settings({ provider: { id: "z-ai", defaults: { "z-ai": { reasoningEffort: "high" } } } }),
+      settings: settings({ provider: { id: "z-ai", reasoningEffort: "high" } }),
       getSecret: noSecret,
       resolveSelection: async () => ({
         baseUrl: "https://api.z.ai/api/anthropic",
@@ -229,21 +227,21 @@ describe("buildHostEnv — provider.defaults inheritance (F14, slice-P7.15-cut.m
     expect(env[ENV_REASONING_EFFORT]).toBe("high");
   });
 
-  it("env still wins over the persisted effort default (I2 unchanged)", async () => {
+  it("env still wins over the persisted effort (I2 unchanged)", async () => {
     const env = await buildHostEnv({
       bootEnv: { ANYCODE_REASONING_EFFORT: "low" },
-      settings: settings({ provider: { defaults: { custom: { reasoningEffort: "max" } } } }),
+      settings: settings({ provider: { reasoningEffort: "max" } }),
       getSecret: noSecret,
     });
     expect(env[ENV_REASONING_EFFORT]).toBe("low");
   });
 
-  it("leaves ANYCODE_REASONING_EFFORT unset when no default is persisted (no drop to a hardcoded literal)", async () => {
+  it("leaves ANYCODE_REASONING_EFFORT unset when the active connection persists no effort (no hardcoded literal)", async () => {
     const env = await buildHostEnv({ bootEnv: {}, settings: settings(), getSecret: noSecret });
     expect(env[ENV_REASONING_EFFORT]).toBeUndefined();
   });
 
-  it("an old settings.json with no provider.defaults behaves exactly as before (backward-compat)", async () => {
+  it("a fresh install (no active connection) emits neither model nor effort (backward-compat)", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
       settings: settings({ provider: { model: "settings-model" } }),

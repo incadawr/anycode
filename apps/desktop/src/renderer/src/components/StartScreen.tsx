@@ -52,6 +52,7 @@ import { modelDisplayName, modelMenuItems, pillLabel, resolvePid } from "./Model
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
+import { activeProviderView } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
@@ -347,16 +348,20 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // dependency arrays, since none of them dereference `draft` unguarded
   // (`draft?.model ?? null`).
   const recents = deriveRecentWorkspaces(sessions, hiddenWorkspaces);
-  const providerId = snapshot?.settings.provider.id;
+  // Active-connection view (TASK.45 v2): the former singleton's model/effort now
+  // live on the active connection, so the resolved default is simply `view.model`
+  // / `view.reasoningEffort`.
+  const view = snapshot ? activeProviderView(snapshot.settings) : undefined;
+  const providerId = view?.id;
   const pid = resolvePid(providerId);
   const catalogModels = snapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
-  const resolvedDefault = resolveProviderDefaultModel(snapshot?.settings.provider.model, snapshot?.settings.provider.defaults, pid);
+  const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);
   // The active-session ModelPill includes the persisted effort in its label.
   // A brand-new draft has no host yet, so its honest equivalent is the
   // provider default; an explicit model pick deliberately shows only the
   // model because its capabilities have not been negotiated with a host.
-  const defaultEffort = snapshot?.settings.provider.defaults?.[pid]?.reasoningEffort;
+  const defaultEffort = view?.reasoningEffort;
   const modelChipLabel = draft?.model === null && defaultEffort !== undefined
     ? pillLabel(modelChip.label, defaultEffort, ["off"])
     : modelChip.label;

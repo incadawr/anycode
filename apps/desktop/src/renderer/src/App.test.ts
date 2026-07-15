@@ -22,8 +22,8 @@ import { createDesktopStore, type RetryOffer } from "./store.js";
 function snapshot(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
     settings: {
-      version: 1,
-      provider: {},
+      version: 2,
+      provider: { connections: [] },
       tools: {},
       permissions: { alwaysAllow: [] },
       ui: { theme: "system" },

@@ -14,7 +14,7 @@
 
 import { ENV_AUTH_MODE } from "../shared/credentials.js";
 import type { AnycodeSettings, SecretEnvKey, SecretKey } from "../shared/settings.js";
-import { SECRET_ENV_KEYS } from "../shared/settings.js";
+import { activeProviderView, SECRET_ENV_KEYS } from "../shared/settings.js";
 
 // ── env var names (mirror core/provider/env.ts by contract; local literals so
 // main never value-imports the core runtime, same reasoning as main/index.ts) ──
@@ -72,12 +72,26 @@ export function isKnownSecretKey(key: string, catalogIds: readonly string[]): ke
   if (key === "provider.apiKey") {
     return true;
   }
+  // Connection-scoped keys (TASK.45): provider.connection.<connectionId>.{apiKey,oauth}.
+  // The connectionId carries no dots (opaque `conn-<uuid>` ids), so it is a
+  // `[^.]+` segment; connection-graph membership is enforced at the CRUD boundary.
+  const connMatch = /^provider\.connection\.([^.]+)\.(apiKey|oauth)$/.exec(key);
+  if (connMatch !== null) {
+    return connMatch[1] !== undefined && connMatch[1].length > 0;
+  }
   const match = /^provider\.(.+)\.(apiKey|oauth)$/.exec(key);
   if (match === null) {
     return false;
   }
   const providerId = match[1];
   return providerId !== undefined && providerId.length > 0 && catalogIds.includes(providerId);
+}
+
+/** The vault key a connection's credential lives under (TASK.45): connection-scoped. */
+export function connectionSecretKey(connectionId: string, authKind: "api_key" | "oauth"): SecretKey {
+  return authKind === "oauth"
+    ? `provider.connection.${connectionId}.oauth`
+    : `provider.connection.${connectionId}.apiKey`;
 }
 
 /**
@@ -250,6 +264,14 @@ export interface HostEnvParams {
    * (`provider.apiKey` + settings baseUrl/model), byte-for-byte.
    */
   resolveSelection?: () => Promise<ResolvedProviderSelection | undefined>;
+  /**
+   * TASK.45 v2: resolves the ACTIVE connection's credential (its connection key)
+   * for the legacy/custom/no-active branch — main computes it because host-env is
+   * core-free (it cannot derive the auth kind / connection key itself). Absent ->
+   * the byte-for-byte 2.2 read of the bare `provider.apiKey` (used by pre-v2 unit
+   * fixtures only).
+   */
+  resolveActiveCredential?: () => Promise<string | undefined>;
 }
 
 /**
@@ -266,32 +288,32 @@ export interface HostEnvParams {
  * the vault is picked up by the next respawn.
  */
 export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.ProcessEnv> {
-  const { bootEnv, settings, getSecret, resolveSelection } = params;
+  const { bootEnv, settings, getSecret, resolveSelection, resolveActiveCredential } = params;
   const env: NodeJS.ProcessEnv = { ...bootEnv };
   const selection = resolveSelection !== undefined ? await resolveSelection() : undefined;
-  // Per-provider persisted default (F14 §2.4): keyed by catalog id, "custom" for
-  // legacy/unset provider.id. Resolved once here so BOTH the legacy/custom model
-  // fill below and the effort rung at the end of the ladder share one lookup;
-  // the catalog-path model is resolved by token-broker's resolveProviderSelection
-  // (same defaults[pid]?.model precedence), not here.
-  const pid = settings.provider.id ?? "custom";
-  const providerDefaults = settings.provider.defaults?.[pid];
+  // Active-connection legacy-shaped view (TASK.45 v2): model/baseUrl/transport/
+  // effort come from the ACTIVE connection, not the removed v1 singleton. Post
+  // migration the active connection ≡ the former singleton, so the ladder OUTPUT
+  // stays byte-equivalent (DoD #5).
+  const view = activeProviderView(settings);
 
   if (selection === undefined) {
-    // LEGACY 2.2 path (byte-for-byte): the single `provider.apiKey` vault key +
-    // settings baseUrl/model. ANYCODE_AUTH_MODE is never set.
+    // LEGACY/custom/no-active branch: the credential is the active connection's
+    // connection key, resolved by main because host-env is core-free.
+    // `provider.apiKey` bare-read is the pre-v2 fixture fallback only.
+    // ANYCODE_AUTH_MODE is never set.
     if (!envPresent(env, ENV_API_KEY)) {
-      const fromVault = await getSecret("provider.apiKey");
-      if (fromVault !== undefined && fromVault !== "") {
-        env[ENV_API_KEY] = fromVault;
+      const cred =
+        resolveActiveCredential !== undefined ? await resolveActiveCredential() : await getSecret("provider.apiKey");
+      if (cred !== undefined && cred !== "") {
+        env[ENV_API_KEY] = cred;
       }
     }
-    fillFromSettings(env, ENV_MODEL, providerDefaults?.model ?? settings.provider.model);
-    fillFromSettings(env, ENV_BASE_URL, settings.provider.baseUrl);
+    fillFromSettings(env, ENV_MODEL, view.model);
+    fillFromSettings(env, ENV_BASE_URL, view.baseUrl);
   } else {
-    // CATALOG path (slice 2.5): main already resolved the selected provider's
-    // credential (an api key, or an OAuth access token via the TokenBroker) and
-
+    // CATALOG path (slice 2.5): main already resolved the active connection's
+    // credential (an api key, or an OAuth access token via the TokenBroker).
     if (!envPresent(env, ENV_API_KEY) && selection.apiKey !== undefined && selection.apiKey !== "") {
       env[ENV_API_KEY] = selection.apiKey;
     }
@@ -313,7 +335,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // in `{...bootEnv}` and `fillFromSettings` never overwrites it.
   const effectiveTransport = resolveEffectiveTransport({
     bootEnv,
-    settingsTransport: settings.provider.transport,
+    settingsTransport: view.transport,
     defaultTransport: selection?.defaultTransport,
   });
   fillFromSettings(env, ENV_PROVIDER_TRANSPORT, transportToEmit(effectiveTransport));
@@ -322,10 +344,9 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_STALL_TIMEOUT_MS, numToStr(settings.tools.stallTimeoutMs));
   fillFromSettings(env, ENV_MAX_TURNS, numToStr(settings.tools.maxTurns));
   // Reasoning-effort inheritance rung (F14 §2.4): a new host boot inherits the
-  // last chosen effort for this provider instead of hardcoded `off`. Applies to
-  // BOTH the legacy/custom and catalog paths (effort is provider-keyed, not
-  // catalog-selection-keyed). Env still wins by construction (fillFromSettings).
-  fillFromSettings(env, ENV_REASONING_EFFORT, providerDefaults?.reasoningEffort);
+  // active connection's last chosen effort instead of hardcoded `off`. Env still
+  // wins by construction (fillFromSettings).
+  fillFromSettings(env, ENV_REASONING_EFFORT, view.reasoningEffort);
 
   return env;
 }
@@ -411,11 +432,9 @@ export async function computeProviderReady(params: ReadinessParams): Promise<boo
     return false;
   }
   const credentialKey = params.credentialKey ?? "provider.apiKey";
-  const apiKeyReady =
-    params.authOptional === true ||
-    envPresent(bootEnv, ENV_API_KEY) ||
-    hasValue(await getSecret(credentialKey));
-  const modelReady = envPresent(bootEnv, ENV_MODEL) || hasValue(settings.provider.model);
+  const credential = await getSecret(credentialKey);
+  const apiKeyReady = params.authOptional === true || envPresent(bootEnv, ENV_API_KEY) || hasValue(credential);
+  const modelReady = envPresent(bootEnv, ENV_MODEL) || hasValue(activeProviderView(settings).model);
   return apiKeyReady && modelReady;
 }
 

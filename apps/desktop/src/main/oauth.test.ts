@@ -13,15 +13,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OAuthEngine, oauthConfigFromEntry, type OAuthProviderConfig, type OAuthTokenStore } from "./oauth.js";
 import type { OAuthTokenBlob } from "./vault.js";
 
-/** In-memory OAuthTokenStore: records what the engine persists. */
+/** In-memory OAuthTokenStore: records what the engine persists (keyed by CONNECTION id, TASK.45 §4.3). */
 class FakeStore implements OAuthTokenStore {
-  saved: Array<{ providerId: string; blob: OAuthTokenBlob; allowWeak: boolean }> = [];
+  saved: Array<{ connectionId: string; blob: OAuthTokenBlob; allowWeak: boolean }> = [];
   setResult: { ok: boolean } = { ok: true };
-  async setOAuthTokens(providerId: string, blob: OAuthTokenBlob, opts: { allowWeak: boolean }): Promise<{ ok: boolean }> {
+  async setOAuthTokens(connectionId: string, blob: OAuthTokenBlob, opts: { allowWeak: boolean }): Promise<{ ok: boolean }> {
     if (!this.setResult.ok) {
       return this.setResult;
     }
-    this.saved.push({ providerId, blob, allowWeak: opts.allowWeak });
+    this.saved.push({ connectionId, blob, allowWeak: opts.allowWeak });
     return { ok: true };
   }
 }
@@ -113,7 +113,7 @@ describe("OAuthEngine.startFlow — happy path (fake-IdP + simulated browser)", 
       now: () => 1_000_000,
     });
 
-    const outcome = await engine.startFlow(config(), { allowWeak: false });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
     expect(outcome).toEqual({ ok: true });
 
     // The authorization URL is a proper public-client PKCE request.
@@ -135,8 +135,10 @@ describe("OAuthEngine.startFlow — happy path (fake-IdP + simulated browser)", 
     expect(body.code_verifier).toBeTruthy();
     expect(body.client_secret).toBeUndefined();
 
-    // The persisted blob carries the tokens + a computed expiry.
+    // The persisted blob carries the tokens + a computed expiry, keyed by the
+    // CONNECTION id threaded from settings-ipc (TASK.45 §4.3), NOT the providerId.
     expect(store.saved).toHaveLength(1);
+    expect(store.saved[0]?.connectionId).toBe("conn-acme");
     expect(store.saved[0]?.blob).toEqual({
       accessToken: "at-1",
       refreshToken: "rt-1",
@@ -151,7 +153,7 @@ describe("OAuthEngine.startFlow — happy path (fake-IdP + simulated browser)", 
       vault: store,
       openExternal: (url) => void hitCallback(url),
     });
-    await engine.startFlow(config(), { allowWeak: true });
+    await engine.startFlow(config(), "conn-acme", { allowWeak: true });
     expect(store.saved[0]?.allowWeak).toBe(true);
   });
 });
@@ -163,7 +165,7 @@ describe("OAuthEngine.startFlow — refusals", () => {
       vault: store,
       openExternal: (url) => void hitCallback(url, { state: "not-the-state" }),
     });
-    const outcome = await engine.startFlow(config(), { allowWeak: false });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
     expect(outcome).toEqual({ ok: false, reason: "failed" });
     expect(store.saved).toHaveLength(0);
   });
@@ -178,7 +180,7 @@ describe("OAuthEngine.startFlow — refusals", () => {
         setTimeout(() => engine.cancel(cfg.providerId), 5);
       },
     });
-    const outcome = await engine.startFlow(cfg, { allowWeak: false });
+    const outcome = await engine.startFlow(cfg, "conn-acme", { allowWeak: false });
     expect(outcome).toEqual({ ok: false, reason: "cancelled" });
     expect(store.saved).toHaveLength(0);
   });
@@ -192,7 +194,7 @@ describe("OAuthEngine.startFlow — refusals", () => {
       },
       timeoutMs: 40,
     });
-    const outcome = await engine.startFlow(config(), { allowWeak: false });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
     expect(outcome).toEqual({ ok: false, reason: "timeout" });
   });
 
@@ -203,7 +205,7 @@ describe("OAuthEngine.startFlow — refusals", () => {
       vault: store,
       openExternal: (url) => void hitCallback(url),
     });
-    const outcome = await engine.startFlow(config(), { allowWeak: false });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
     expect(outcome).toEqual({ ok: false, reason: "failed" });
     expect(store.saved).toHaveLength(0);
   });
@@ -215,7 +217,7 @@ describe("OAuthEngine.startFlow — refusals", () => {
       vault: store,
       openExternal: (url) => void hitCallback(url),
     });
-    const outcome = await engine.startFlow(config(), { allowWeak: false });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
     expect(outcome).toEqual({ ok: false, reason: "failed" });
   });
 });
@@ -224,7 +226,7 @@ describe("OAuthEngine — custody (I1)", () => {
   it("the outcome never carries a token value", async () => {
     const store = new FakeStore();
     const engine = new OAuthEngine({ vault: store, openExternal: (url) => void hitCallback(url) });
-    const outcome = await engine.startFlow(config(), { allowWeak: false });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
     expect(JSON.stringify(outcome)).not.toContain("at-1");
     expect(JSON.stringify(outcome)).not.toContain("rt-1");
   });

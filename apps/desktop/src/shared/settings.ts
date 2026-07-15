@@ -52,6 +52,21 @@ export const OAUTH_START_CHANNEL = "anycode:oauth-start";
 /** invoke channel: abort an in-flight OAuth flow for a provider ({providerId}). */
 export const OAUTH_CANCEL_CHANNEL = "anycode:oauth-cancel";
 
+// ── connection CRUD invoke channels (TASK.45 W9; main-authoritative, additive —
+// the generic settings-set path can NEVER carry a wholesale `connections[]`,
+// which refine-rejects) ──
+
+/** invoke channel: create a connection ({providerId, label?, model?, ...}). */
+export const CONNECTION_CREATE_CHANNEL = "anycode:connection-create";
+/** invoke channel: update a connection's metadata ({id, model?, ...}). */
+export const CONNECTION_UPDATE_CHANNEL = "anycode:connection-update";
+/** invoke channel: make a connection the default for new sessions ({id}). */
+export const CONNECTION_SET_ACTIVE_CHANNEL = "anycode:connection-set-active";
+/** invoke channel: delete a connection ({id}) — secrets cleared before metadata. */
+export const CONNECTION_DELETE_CHANNEL = "anycode:connection-delete";
+/** invoke channel: re-check a connection's health ({id}) — scaffold (W11 wires the probe). */
+export const CONNECTION_CHECK_CHANNEL = "anycode:connection-check";
+
 // ── settings schema (design §2; mirrored 1:1 by the zod schema in settings/schema.ts) ──
 
 /**
@@ -85,35 +100,80 @@ export interface KeybindingOverride {
  */
 export type ProviderTransportId = "anthropic-messages" | "openai-chat-completions" | "openai-responses";
 
+/** Per-model reasoning-effort tier (mirrors core's `ReasoningEffort`; local literal keeps this module zero-import). */
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
+
+/**
+ * Advisory connection health (TASK.45 §3). NOT a runtime-readiness source — it
+ * is a last-known classification of the last real request/probe. W9 only owns
+ * the SHAPE (it lives in the persisted connection); W11 classifies + writes it.
+ */
+export type ProviderHealthStatus =
+  | "needs_credential"
+  | "unchecked"
+  | "ready"
+  | "auth_invalid"
+  | "forbidden"
+  | "rate_limited"
+  | "unreachable"
+  | "misconfigured";
+
+/**
+ * One user-created provider connection (TASK.45 §«Техническая модель»): an
+ * instance of a catalog `providerId` with its own label, default
+ * model/transport/baseUrl/effort and its OWN vault credential
+ * (`provider.connection.<id>.{apiKey,oauth}`). `id` is a stable opaque id minted
+ * + validated by main (`conn-<uuid>`). `providerId` is `""` for the bare/custom
+ * "legacy" bucket (no catalog pick) so `activeProviderView` reads back an
+ * absent `provider.id`, exactly like a v1 singleton with no id.
+ */
+export interface ProviderConnection {
+  id: string;
+  providerId: string;
+  label?: string;
+  model?: string;
+  transport?: ProviderTransportId;
+  baseUrl?: string;
+  reasoningEffort?: ReasoningEffort;
+  /** Advisory last-known health (TASK.45 §3); W11 writes it, never a runtime-readiness source. */
+  lastHealth?: { status: ProviderHealthStatus; at: string; safeCode?: string };
+}
+
+/**
+ * settings.json v2 `provider` (TASK.45): the replacing shape — the v1 singleton
+ * fields (`id/model/baseUrl/transport/defaults`) NO LONGER EXIST here; the user
+ * configures one or more named connections instead. `activeConnectionId` is the
+ * default for NEW core sessions only (session-pinning is W10).
+ */
+export interface ProviderSettingsV2 {
+  activeConnectionId?: string;
+  connections: ProviderConnection[];
+}
+
+/**
+ * Derived legacy-shaped view of the ACTIVE connection (`shared` helper
+ * `activeProviderView`): the read-only projection every pre-W12 read-site
+ * consumes in place of the removed v1 singleton, so their behaviour is preserved
+ * by construction (the active connection stands in for the former singleton).
+ * Never persisted.
+ */
+export interface ActiveProviderView {
+  id?: string;
+  model?: string;
+  baseUrl?: string;
+  transport?: ProviderTransportId;
+  reasoningEffort?: ReasoningEffort;
+}
+
 /** Non-secret, human-editable settings persisted to ~/.anycode/settings.json (0644). */
 export interface AnycodeSettings {
-  version: 1;
+  version: 2;
   /**
-
-   * `id` (slice 2.5) selects a catalog entry; absent = legacy/custom (byte-for-byte
-
+   * Provider connections (TASK.45, settings v2 — replacing shape). The active
+   * connection is the default for new core sessions; pre-W12 read-sites project
+   * it through `activeProviderView`.
    */
-  provider: {
-    id?: string;
-    model?: string;
-    baseUrl?: string;
-    /**
-     * Wire transport override (TASK.43 W5, additive-optional; version NOT
-     * bumped, same forward-compat reasoning as `defaults` below). Absent =
-     * the selected catalog entry's `defaultTransport` (or
-     * `"anthropic-messages"` for legacy/unset) wins.
-     */
-    transport?: ProviderTransportId;
-    /**
-     * Per-provider last-picked model+effort (F14, slice-P7.15-cut.md §2.4). Key =
-     * catalog id, `"custom"` for legacy/unset `provider.id`. Read at host-env-ladder
-     * composition time (main/host-env.ts `buildHostEnv`) so a new host boot
-     * inherits the last chosen model/effort instead of a hardcoded `off` — the
-     * field is additive/optional so an existing settings.json with no
-     * `provider.defaults` round-trips and behaves exactly as before.
-     */
-    defaults?: Record<string, { model?: string; reasoningEffort?: "off" | "low" | "medium" | "high" | "max" }>;
-  };
+  provider: ProviderSettingsV2;
   /** Mirrors of the ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS env (env > settings). */
   tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number };
   /** Persisted always-allow rules seeded into every new host session (§5). */
@@ -166,7 +226,15 @@ export interface AnycodeSettings {
 export type SecretKey =
   | "provider.apiKey"
   | `provider.${string}.apiKey`
-  | `provider.${string}.oauth`;
+  | `provider.${string}.oauth`
+  // ── connection-scoped keys (TASK.45 settings v2) ──
+  //   `provider.connection.<connectionId>.apiKey` — a connection's API key
+  //   `provider.connection.<connectionId>.oauth`  — a connection's OAuth token blob
+  // (structurally a subset of `provider.${string}.{apiKey,oauth}`, declared
+  // explicitly for readability; catalog/connection membership is enforced at the
+  // main boundary via `isKnownSecretKey`).
+  | `provider.connection.${string}.apiKey`
+  | `provider.connection.${string}.oauth`;
 
 /** What will actually win when a host is spawned (env-override is visible to the UI). */
 export type SecretSource = "env" | "vault" | "plaintext" | "none";
@@ -238,7 +306,7 @@ export interface SettingsSnapshot {
 
 // ── mutating-channel result shape (all mutators return a fresh snapshot) ──
 
-export type SettingsMutationReason = "invalid" | "read_only" | "weak_storage_needs_consent";
+export type SettingsMutationReason = "invalid" | "read_only" | "weak_storage_needs_consent" | "not_found";
 
 /**
  * Response of every mutating channel (settings-set / secret-set / secret-clear /
@@ -280,12 +348,66 @@ export type OAuthStartResult =
 // ── request payloads (companions to the 5 channels) ──
 
 /**
+ * The v1-legacy `provider` sub-patch the generic `settings-set` path still
+ * accepts (TASK.45 W9 §4.3 «v1-patch compat shim»): main TRANSLATES these
+ * whitelisted legacy fields into an operation on the ACTIVE connection until W12
+ * moves the renderer onto the `connection-*` IPC. It is deliberately NOT the v2
+ * `ProviderSettingsV2` shape — a wholesale `connections[]` / `activeConnectionId`
+ * through the generic path refine-rejects (main is the trust boundary for the
+ * connection graph).
+ */
+export interface LegacyProviderPatch {
+  id?: string;
+  model?: string;
+  baseUrl?: string;
+  transport?: ProviderTransportId;
+  defaults?: Record<string, { model?: string; reasoningEffort?: ReasoningEffort }>;
+}
+
+/**
  * Deep-partial patch for `settings-set`: nested objects merge key-by-key while
  * arrays (e.g. `permissions.alwaysAllow`) are replaced wholesale — the rule
  * editor sends the full array. `version` is patchable in the type but main
- * ignores/rejects a version change.
+ * ignores/rejects a version change. `provider` stays the legacy shim shape (see
+ * `LegacyProviderPatch`), never the v2 connections graph.
  */
-export type SettingsPatch = DeepPartial<AnycodeSettings>;
+export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider"> & {
+  provider?: LegacyProviderPatch;
+};
+
+// ── connection CRUD request payloads (companions to the connection-* channels) ──
+
+export interface ConnectionCreateRequest {
+  providerId: string;
+  label?: string;
+  model?: string;
+  transport?: ProviderTransportId;
+  baseUrl?: string;
+  reasoningEffort?: ReasoningEffort;
+  /** Make the new connection active (default for new sessions). */
+  setActive?: boolean;
+}
+
+export interface ConnectionUpdateRequest {
+  id: string;
+  label?: string;
+  model?: string;
+  transport?: ProviderTransportId;
+  baseUrl?: string;
+  reasoningEffort?: ReasoningEffort;
+}
+
+export interface ConnectionSetActiveRequest {
+  id: string;
+}
+
+export interface ConnectionDeleteRequest {
+  id: string;
+}
+
+export interface ConnectionCheckRequest {
+  id: string;
+}
 
 export interface SecretSetRequest {
   key: SecretKey;
@@ -312,6 +434,44 @@ export interface PermissionRuleAddRequest {
 export const SECRET_ENV_KEYS = ["ANYCODE_API_KEY"] as const;
 
 export type SecretEnvKey = (typeof SECRET_ENV_KEYS)[number];
+
+// ── connection view helpers (pure; value-only, no imports — usable in main + renderer) ──
+
+/**
+ * The active connection (the default for new core sessions), or `undefined` when
+ * none is selected / it was deleted. A fresh install (no connections) yields
+ * `undefined`, exactly like a fresh v1 install had no configured provider.
+ */
+export function activeConnection(settings: AnycodeSettings): ProviderConnection | undefined {
+  const { activeConnectionId, connections } = settings.provider;
+  if (activeConnectionId === undefined) {
+    return undefined;
+  }
+  return connections.find((connection) => connection.id === activeConnectionId);
+}
+
+/**
+ * Legacy-shaped projection of the active connection (TASK.45 W9 §4.1): every
+ * pre-W12 read-site consumes this in place of the removed v1
+ * `settings.provider.{id,model,baseUrl,transport,reasoningEffort}` singleton, so
+ * its behaviour is preserved by construction (the active connection stands in
+ * for the former singleton). `id` is the connection's `providerId` normalised so
+ * the bare/custom sentinel (`providerId === ""`) reads back as `undefined`,
+ * byte-for-byte v1's absent `provider.id`. Never persisted.
+ */
+export function activeProviderView(settings: AnycodeSettings): ActiveProviderView {
+  const connection = activeConnection(settings);
+  if (connection === undefined) {
+    return {};
+  }
+  return {
+    id: connection.providerId === "" ? undefined : connection.providerId,
+    model: connection.model,
+    baseUrl: connection.baseUrl,
+    transport: connection.transport,
+    reasoningEffort: connection.reasoningEffort,
+  };
+}
 
 // ── internal type helper (not exported; erased at compile time) ──
 

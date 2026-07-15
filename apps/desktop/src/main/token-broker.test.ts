@@ -8,6 +8,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { AnycodeSettings } from "../shared/settings.js";
+import { providerV2, type SingletonFixture } from "../shared/provider-v2-fixture.js";
 import type { FetchLike, OAuthProviderConfig } from "./oauth.js";
 import {
   TokenBroker,
@@ -70,14 +71,14 @@ describe("TokenBroker.getAccessToken — live cache", () => {
       fetchFn: fetchRig.fn,
       now: () => 1_000_000,
     });
-    expect(await broker.getAccessToken("acme")).toBe("at-live");
+    expect(await broker.getAccessToken("acme", "acme")).toBe("at-live");
     expect(fetchRig.calls()).toBe(0);
   });
 
   it("returns undefined when not signed in", async () => {
     const vault = new FakeVault();
     const broker = new TokenBroker({ vault, resolveConfig: () => CONFIG, allowWeak: () => false });
-    expect(await broker.getAccessToken("acme")).toBeUndefined();
+    expect(await broker.getAccessToken("acme", "acme")).toBeUndefined();
   });
 });
 
@@ -94,7 +95,7 @@ describe("TokenBroker.getAccessToken — refresh + rotation", () => {
       now: () => 1_000_000,
     });
 
-    const token = await broker.getAccessToken("acme");
+    const token = await broker.getAccessToken("acme", "acme");
     expect(token).toBe("at-new");
     expect(fetchRig.calls()).toBe(1);
     // The refresh_token grant was used.
@@ -119,7 +120,7 @@ describe("TokenBroker.getAccessToken — refresh + rotation", () => {
       fetchFn: fetchRig.fn,
       now: () => 0,
     });
-    await broker.getAccessToken("acme");
+    await broker.getAccessToken("acme", "acme");
     expect(vault.store.get("acme")?.refreshToken).toBe("rt-keep");
   });
 
@@ -135,7 +136,7 @@ describe("TokenBroker.getAccessToken — refresh + rotation", () => {
       now: () => 1_000_000,
     });
 
-    const [a, b] = await Promise.all([broker.getAccessToken("acme"), broker.getAccessToken("acme")]);
+    const [a, b] = await Promise.all([broker.getAccessToken("acme", "acme"), broker.getAccessToken("acme", "acme")]);
     expect(a).toBe("at-new");
     expect(b).toBe("at-new");
     expect(fetchRig.calls()).toBe(1);
@@ -153,8 +154,8 @@ describe("TokenBroker.getAccessToken — refresh + rotation", () => {
       fetchFn: fetchRig.fn,
       now: () => 1_000_000,
     });
-    await broker.getAccessToken("acme");
-    await broker.getAccessToken("acme");
+    await broker.getAccessToken("acme", "acme");
+    await broker.getAccessToken("acme", "acme");
     expect(fetchRig.calls()).toBe(2);
   });
 });
@@ -171,7 +172,7 @@ describe("TokenBroker.getAccessToken — refresh failure", () => {
       fetchFn: fetchRig.fn,
       now: () => 1_000_000,
     });
-    expect(await broker.getAccessToken("acme")).toBeUndefined();
+    expect(await broker.getAccessToken("acme", "acme")).toBeUndefined();
     expect(vault.cleared).toEqual(["acme"]);
     expect(vault.store.has("acme")).toBe(false);
   });
@@ -188,7 +189,7 @@ describe("TokenBroker.getAccessToken — refresh failure", () => {
       now: () => 1_000_000,
       logger: { warn: vi.fn() },
     });
-    expect(await broker.getAccessToken("acme")).toBeUndefined();
+    expect(await broker.getAccessToken("acme", "acme")).toBeUndefined();
     expect(vault.cleared).toEqual([]);
     expect(vault.store.has("acme")).toBe(true);
   });
@@ -204,16 +205,16 @@ describe("TokenBroker.getAccessToken — refresh failure", () => {
       fetchFn: fetchRig.fn,
       now: () => 1_000_000,
     });
-    expect(await broker.getAccessToken("acme")).toBeUndefined();
+    expect(await broker.getAccessToken("acme", "acme")).toBeUndefined();
     expect(fetchRig.calls()).toBe(0);
   });
 });
 
 describe("resolveProviderSelection — catalog selection matrix", () => {
-  function settings(over: Partial<AnycodeSettings["provider"]> = {}): AnycodeSettings {
+  function settings(singleton: SingletonFixture = {}): AnycodeSettings {
     return {
-      version: 1,
-      provider: { ...over },
+      version: 2,
+      provider: providerV2(singleton),
       tools: {},
       permissions: { alwaysAllow: [] },
       ui: { theme: "system" },
@@ -233,14 +234,16 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
       supportedTransports: ["openai-chat-completions"],
     },
   };
+  // TASK.45 v2: the api-key read is keyed by CONNECTION id (`conn-<providerId>`
+  // for the fixture); the access token is minted per connection too.
   const deps = (s: AnycodeSettings) => ({
     settings: s,
     resolveCatalog: (id: string) => catalog[id],
-    getApiKey: async (id: string) => `key-${id}`,
-    getAccessToken: async (id: string) => `oauth-token-${id}`,
+    getApiKey: async (connectionId: string) => `key-${connectionId}`,
+    getAccessToken: async (connectionId: string) => `oauth-token-${connectionId}`,
   });
 
-  it("legacy: no provider.id -> undefined (buildHostEnv takes the 2.2 path)", async () => {
+  it("legacy: no active connection -> undefined (buildHostEnv takes the 2.2 path)", async () => {
     expect(await resolveProviderSelection(deps(settings()))).toBeUndefined();
   });
 
@@ -248,22 +251,21 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     expect(await resolveProviderSelection(deps(settings({ id: "nope" })))).toBeUndefined();
   });
 
-  it("api_key catalog provider: baseUrl from catalog, apiKey from the vault", async () => {
+  it("api_key catalog provider: baseUrl from catalog, apiKey from the connection key", async () => {
     const sel = await resolveProviderSelection(deps(settings({ id: "z-ai", model: "glm-4.6" })));
     expect(sel).toEqual({
       baseUrl: "https://api.z.ai/api/anthropic",
       model: "glm-4.6",
-      apiKey: "key-z-ai",
+      apiKey: "key-conn-z-ai",
       authKind: "api_key",
     });
   });
 
   it("custom provider -> undefined: folds into the legacy 2.2 path (ruling §7-R6)", async () => {
-    // Custom uses the bare `provider.apiKey` vault key + settings baseUrl/model,
-    // exactly like "no selection" — buildHostEnv's legacy branch reads
-    // `provider.apiKey`, matching the renderer's providerSecretKey. Returning a
-    // selection here (with a `provider.custom.apiKey` credential) would desync the
-    // key the UI writes from the key the fork reads.
+    // Custom uses the bare `provider.apiKey` vault key + connection baseUrl/model,
+    // exactly like "no selection" — buildHostEnv's legacy branch reads the active
+    // connection's key, matching the renderer's providerSecretKey. Returning a
+    // selection here would desync the key the UI writes from the key the fork reads.
     const sel = await resolveProviderSelection(deps(settings({ id: "custom", baseUrl: "https://my/endpoint", model: "m" })));
     expect(sel).toBeUndefined();
   });
@@ -273,23 +275,23 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     expect(sel).toEqual({
       baseUrl: "https://sub/anthropic",
       model: "m",
-      apiKey: "oauth-token-subd",
+      apiKey: "oauth-token-conn-subd",
       authKind: "oauth",
     });
   });
 
-  describe("needsBaseUrl (TASK.43 W5): a non-custom template entry (vLLM) still sources baseUrl from settings", () => {
-    it("substitutes settings.provider.baseUrl for a needsBaseUrl entry, unlike isCustom's bypass-to-legacy", async () => {
+  describe("needsBaseUrl (TASK.43 W5): a non-custom template entry (vLLM) still sources baseUrl from the connection", () => {
+    it("substitutes the connection's baseUrl for a needsBaseUrl entry, unlike isCustom's bypass-to-legacy", async () => {
       const sel = await resolveProviderSelection(
         deps(settings({ id: "vllm", model: "m", baseUrl: "http://localhost:8000/v1" })),
       );
       // Unlike "custom" above, vllm does NOT return undefined — it keeps its
-      // own per-provider vault key + catalog defaults; only the baseUrl comes
-      // from settings.
+      // own per-provider connection key + catalog defaults; only the baseUrl comes
+      // from the connection.
       expect(sel).toEqual({
         baseUrl: "http://localhost:8000/v1",
         model: "m",
-        apiKey: "key-vllm",
+        apiKey: "key-conn-vllm",
         authKind: "api_key",
         defaultTransport: "openai-chat-completions",
       });
@@ -324,39 +326,18 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     });
   });
 
-  describe("provider.defaults precedence (F14, slice-P7.15-cut.md §2.4)", () => {
-    it("a persisted defaults[id].model wins over the plain provider.model", async () => {
-      const sel = await resolveProviderSelection(
-        deps(settings({ id: "z-ai", model: "settings-model", defaults: { "z-ai": { model: "persisted-model" } } })),
-      );
-      expect(sel).toEqual({
-        baseUrl: "https://api.z.ai/api/anthropic",
-        model: "persisted-model",
-        apiKey: "key-z-ai",
-        authKind: "api_key",
-      });
+  describe("active-connection model (TASK.45 v2: no defaults folding)", () => {
+    it("carries the active connection's model straight through (no defaults lookup)", async () => {
+      const sel = await resolveProviderSelection(deps(settings({ id: "z-ai", model: "connection-model" })));
+      expect(sel?.model).toBe("connection-model");
     });
 
-    it("falls back to provider.model when no matching defaults entry (backward-compat)", async () => {
-      const sel = await resolveProviderSelection(
-        deps(settings({ id: "z-ai", model: "settings-model", defaults: { subd: { model: "other-provider" } } })),
-      );
-      expect(sel?.model).toBe("settings-model");
-    });
-
-    it("falls back to provider.model when provider.defaults is absent entirely", async () => {
-      const sel = await resolveProviderSelection(deps(settings({ id: "z-ai", model: "settings-model" })));
-      expect(sel?.model).toBe("settings-model");
-    });
-
-    it("also applies the persisted default for an oauth provider", async () => {
-      const sel = await resolveProviderSelection(
-        deps(settings({ id: "subd", model: "settings-model", defaults: { subd: { model: "persisted-model" } } })),
-      );
+    it("also carries the connection model for an oauth provider", async () => {
+      const sel = await resolveProviderSelection(deps(settings({ id: "subd", model: "connection-model" })));
       expect(sel).toEqual({
         baseUrl: "https://sub/anthropic",
-        model: "persisted-model",
-        apiKey: "oauth-token-subd",
+        model: "connection-model",
+        apiKey: "oauth-token-conn-subd",
         authKind: "oauth",
       });
     });

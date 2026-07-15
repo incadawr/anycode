@@ -36,6 +36,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { ReasoningEffort } from "@anycode/core";
 import type { SettingsPatch } from "../../../shared/settings.js";
+import { activeProviderView } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useSettingsStore } from "../settings-store.js";
 import type { DesktopState, TurnState } from "../store.js";
@@ -238,7 +239,7 @@ export function ModelPill() {
   const snapshot = useSettingsStore((state) => state.snapshot);
   const setPatch = useSettingsStore((state) => state.setPatch);
 
-  const providerId = snapshot?.settings.provider.id;
+  const providerId = snapshot ? activeProviderView(snapshot.settings).id : undefined;
   const pid = resolvePid(providerId);
   const catalogModels = snapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
 

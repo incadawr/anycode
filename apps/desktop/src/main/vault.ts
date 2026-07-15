@@ -176,8 +176,8 @@ export class Vault {
    * undefined. The ONLY place a decrypted token is produced, and it never leaves
 
    */
-  async getOAuthTokens(providerId: string): Promise<OAuthTokenBlob | undefined> {
-    const raw = await this.getSecretValue(`provider.${providerId}.oauth`);
+  async getOAuthTokens(connectionId: string): Promise<OAuthTokenBlob | undefined> {
+    const raw = await this.getSecretValue(`provider.connection.${connectionId}.oauth`);
     if (raw === undefined) {
       return undefined;
     }
@@ -185,21 +185,66 @@ export class Vault {
   }
 
   /**
-   * Persists a provider's OAuth token blob as ONE encrypted value under
-   * `provider.<id>.oauth` (design §3.3). Same weak-storage consent gate as any
-   * other secret (a weak tier without consent refuses and writes nothing).
+   * Persists a connection's OAuth token blob as ONE encrypted value under
+   * `provider.connection.<connectionId>.oauth` (design §3.3 + TASK.45: the blob
+   * is keyed by CONNECTION id so two accounts of the same OAuth provider never
+   * collide; the OAuth CONFIG stays keyed by providerId in the broker). Same
+   * weak-storage consent gate as any other secret.
    */
   async setOAuthTokens(
-    providerId: string,
+    connectionId: string,
     blob: OAuthTokenBlob,
     opts: { allowWeak: boolean },
   ): Promise<SecretSetResult> {
-    return this.setSecret(`provider.${providerId}.oauth`, JSON.stringify(blob), opts);
+    return this.setSecret(`provider.connection.${connectionId}.oauth`, JSON.stringify(blob), opts);
   }
 
-  /** Removes a provider's OAuth blob (sign-out, or a revoked-refresh cleanup). */
-  async clearOAuthTokens(providerId: string): Promise<void> {
-    return this.clearSecret(`provider.${providerId}.oauth`);
+  /** Removes a connection's OAuth blob (sign-out, or a revoked-refresh cleanup). */
+  async clearOAuthTokens(connectionId: string): Promise<void> {
+    return this.clearSecret(`provider.connection.${connectionId}.oauth`);
+  }
+
+  /**
+   * Boot-time scrub of stale legacy provider secrets (TASK.45 W9 §2). W9′ keys
+   * every credential by connection (`provider.connection.<id>.*`); a leftover
+   * v1-shaped key would otherwise LIE to readiness/status projections
+   * (`computeProviderReady`'s `provider.apiKey` default, `statusKeys`' bare
+   * `provider.apiKey`). Deletes ONLY the two exact legacy forms — the bare
+   * `provider.apiKey`, and `provider.<id>.{apiKey,oauth}` whose `<id>` is a
+   * catalog member — enumerate-good: `provider.connection.*` and any
+   * unrecognized key are NEVER touched. Idempotent (a second boot finds nothing
+   * to remove and no-ops) and fail-soft (a load/save error is warned, not
+   * thrown — the worst case is the stale keys survive to the next boot).
+   */
+  async scrubLegacyProviderKeys(catalogIds: readonly string[]): Promise<void> {
+    try {
+      const file = await this.load();
+      const entries = { ...file.entries };
+      let removed = 0;
+      for (const key of Object.keys(file.entries)) {
+        if (key === "provider.apiKey") {
+          delete entries[key];
+          removed += 1;
+          continue;
+        }
+        if (key.startsWith("provider.connection.")) {
+          continue; // connection-scoped key: never a legacy form
+        }
+        const match = /^provider\.([^.]+)\.(apiKey|oauth)$/.exec(key);
+        const id = match?.[1];
+        if (id !== undefined && catalogIds.includes(id)) {
+          // `key` is a valid legacy `provider.<id>.{apiKey,oauth}` SecretKey here.
+          delete entries[key as SecretKey];
+          removed += 1;
+        }
+      }
+      if (removed === 0) {
+        return; // idempotent no-op
+      }
+      await saveSecrets(this.secretsPath, { version: 1, entries });
+    } catch (err) {
+      this.logger?.warn("vault: failed to scrub legacy provider keys", err);
+    }
   }
 
   /**
