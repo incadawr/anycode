@@ -314,6 +314,27 @@ export function showTryAgainButton(retry: RetryOffer | null, blockId: string, co
   return retry !== null && retry.loopEndBlockId === blockId && connection === "ready";
 }
 
+/**
+ * Standalone fallback Try-again row visibility (TASK.33 FIX-A): a host
+ * respawn (`performReset` + hydration, store.ts) wipes the transcript and
+ * rebuilds it from persisted history, whose block ids never include the
+ * live-minted `loop_end:${turnId}` the armed offer names — so
+ * `showTryAgainButton` above can never find its anchor again post-respawn.
+ * This predicate is the mirror image: true exactly when the offer is armed,
+ * the connection is ready to send, and NO block in the current transcript
+ * carries the offer's `loopEndBlockId` (the anchor is genuinely gone, not
+ * just off-screen). Mutually exclusive with the anchored button by
+ * construction — when the anchor block IS present, this is false and only
+ * the anchored button renders. Exported for unit testing.
+ */
+export function showStandaloneRetry(
+  retry: RetryOffer | null,
+  blocks: readonly TranscriptBlock[],
+  connection: ConnectionPhase,
+): boolean {
+  return retry !== null && connection === "ready" && !blocks.some((b) => b.id === retry.loopEndBlockId);
+}
+
 export function MessageList({
   blocks,
   turn,
@@ -701,6 +722,17 @@ export function MessageList({
           }
         })}
         {showWorkingRow && startedAt !== null && <WorkingRow startedAt={startedAt} />}
+        {retry !== null && showStandaloneRetry(retry, blocks, connection) && (
+          <div
+            className="message message-loop-end message-retry-standalone"
+            data-block-id={retry.loopEndBlockId}
+          >
+            The last message failed before any response.
+            <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
+              Try again
+            </button>
+          </div>
+        )}
       </div>
       {/* Sibling of the role="log" column (not nested): SR never announces
           this chip as transcript content (design §3.1 spec c). */}

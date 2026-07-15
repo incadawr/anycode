@@ -145,7 +145,11 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
  * be silently dropped. Bail out BEFORE consuming the offer so a click made
  * while disconnected leaves it armed for when the connection comes back,
  * matching every other send site's readiness gate (automation.ts's
- * `sendPrompt`, SessionHeader.tsx, ModelPill.tsx).
+ * `sendPrompt`, SessionHeader.tsx, ModelPill.tsx). TASK.33 FIX-A: the offer
+ * surviving in `store.ts` only makes the state layer "survive a host
+ * restart" — the standalone fallback Try-again row (`MessageList.tsx`'s
+ * `showStandaloneRetry`) is what makes that true at the UI level too, once
+ * `host_ready`'s hydration has dropped the anchored button's `loop_end` block.
  */
 export function dispatchTryAgain(store: DesktopStoreApi, sendToHost: (message: UiToHostMessage) => void): void {
   if (store.getState().connection !== "ready") {

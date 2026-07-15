@@ -9,6 +9,7 @@ import {
   isTerminalStatus,
   needsSnap,
   showTryAgainButton,
+  showStandaloneRetry,
   shouldShowJumpButton,
   shouldShowTranscriptEmpty,
   stackBadgeText,
@@ -417,5 +418,41 @@ describe("showTryAgainButton (TASK.33 W8 button-visibility truth-table)", () => 
     expect(showTryAgainButton(offer, "loop_end:turn-1", "host_exited")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_port")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_host_ready")).toBe(false);
+  });
+});
+
+describe("showStandaloneRetry (TASK.33 FIX-A — fallback row visibility when the anchor is lost to respawn)", () => {
+  const offer: RetryOffer = { loopEndBlockId: "loop_end:turn-1", text: "hello", images: [] };
+  const anchorBlock: TranscriptBlock = { kind: "loop_end", id: "loop_end:turn-1", reason: "retryable", turns: 1 };
+  // Hydration-shaped transcript (store.ts's projectHistoryToBlocks): ids are
+  // `${item.id}:${partIdx}`, a namespace that can never contain a live-minted
+  // `loop_end:${turnId}` — this is the exact post-respawn shape.
+  const hydratedBlocks: TranscriptBlock[] = [
+    { kind: "user_text", id: "abc-123:0", text: "hello" },
+  ];
+
+  it("hidden when there is no armed offer at all", () => {
+    expect(showStandaloneRetry(null, hydratedBlocks, "ready")).toBe(false);
+  });
+
+  it("shown when armed + ready + no block in the transcript carries the anchor id (the respawn case)", () => {
+    expect(showStandaloneRetry(offer, hydratedBlocks, "ready")).toBe(true);
+  });
+
+  it("hidden when the anchor block IS present — mutually exclusive with the anchored button, no double render", () => {
+    expect(showStandaloneRetry(offer, [anchorBlock], "ready")).toBe(false);
+  });
+
+  it("hidden while the connection is not ready, even with the anchor absent", () => {
+    expect(showStandaloneRetry(offer, hydratedBlocks, "host_exited")).toBe(false);
+    expect(showStandaloneRetry(offer, hydratedBlocks, "awaiting_port")).toBe(false);
+    expect(showStandaloneRetry(offer, hydratedBlocks, "awaiting_host_ready")).toBe(false);
+  });
+
+  it("discriminating pair: against a hydration-shaped transcript, showTryAgainButton is false for EVERY block while showStandaloneRetry is true — the unit-level encoding of the defect this fix closes", () => {
+    for (const block of hydratedBlocks) {
+      expect(showTryAgainButton(offer, block.id, "ready")).toBe(false);
+    }
+    expect(showStandaloneRetry(offer, hydratedBlocks, "ready")).toBe(true);
   });
 });
