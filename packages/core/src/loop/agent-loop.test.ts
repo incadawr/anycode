@@ -720,6 +720,102 @@ describe("AgentLoop.runTurn — stream_retry resets step accumulators (design sl
   });
 });
 
+describe("AgentLoop.runTurn — terminal retry metadata (TASK.33 W7b)", () => {
+  function findErrorEvent(events: AgentEvent[]): Extract<AgentEvent, { type: "error" }> | undefined {
+    return events.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");
+  }
+
+  it("carries attemptsMade:0 and no maxAttempts on a same-attempt terminal error (no stream_retry this turn)", async () => {
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "error", error: Object.assign(new Error("invalid api key"), { statusCode: 401 }) },
+      ],
+    ]);
+    const loop = makeLoop({ modelPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 0,
+      retryable: false,
+      hadModelOutput: false,
+      code: "auth",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("counts attemptsMade across every stream_retry seen this turn and reports it on the terminal error", async () => {
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 0, reason: "reset" },
+        { type: "stream_retry", attempt: 2, maxAttempts: 3, delayMs: 0, reason: "reset" },
+        { type: "stream_retry", attempt: 3, maxAttempts: 3, delayMs: 0, reason: "reset" },
+        { type: "error", error: new Error("Cannot connect to API: Connect Timeout Error") },
+      ],
+    ]);
+    const loop = makeLoop({ modelPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 3,
+      maxAttempts: 3,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("reports hadModelOutput:true when text already streamed before the (unforgiven) terminal error", async () => {
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "text_delta", id: "t1", text: "partial" },
+        { type: "error", error: new Error("mid-stream boom") },
+      ],
+    ]);
+    const loop = makeLoop({ modelPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 0,
+      retryable: false,
+      hadModelOutput: true,
+      code: "unknown",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("enriches the catch-throw error path (stream iterator threw) the same way as an in-stream error event", async () => {
+    const throwingPort: ModelPort = {
+      streamText: () =>
+        (async function* () {
+          yield { type: "start" } as ModelStreamEvent;
+          throw Object.assign(new Error("server blew up"), { statusCode: 503 });
+        })(),
+    };
+    const loop = makeLoop({ modelPort: throwingPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 0,
+      retryable: true,
+      hadModelOutput: false,
+      code: "server",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+});
+
 describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, tail 3)", () => {
   function seedFourItemHistory(loop: AgentLoop): void {
     loop.history.append({ role: "user", content: "u1" });

@@ -448,9 +448,18 @@ export function renderEvent(
       );
       break;
     }
-    case "error":
-      write(paint("error", `\n[error] ${String(event.error)}\n`));
+    case "error": {
+      // event.retry (TASK.33 W7b) is additive-optional: absent for any error
+      // event a pre-W7b core emitted, so the base line stays byte-identical.
+      // Only surfaced when at least one retry actually happened this turn — a
+      // never-retried failure needs no "after N attempts" annotation.
+      const retrySuffix =
+        event.retry && event.retry.attemptsMade > 0
+          ? ` (failed after ${event.retry.attemptsMade} attempt${event.retry.attemptsMade === 1 ? "" : "s"})`
+          : "";
+      write(paint("error", `\n[error] ${String(event.error)}${retrySuffix}\n`));
       break;
+    }
     case "loop_end":
       write(event.reason === "max_turns"
         ? `\n[stopped: reached the turn limit (${event.turns} turns) — raise it in Settings or ANYCODE_MAX_TURNS]\n`

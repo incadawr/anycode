@@ -53,7 +53,21 @@ export type ModelStreamEvent =
   | { type: "tool_input_end"; id: string }
   | { type: "tool_call"; toolCall: ProposedToolCall }
   | { type: "finish"; finishReason: FinishReason; usage: TokenUsage }
-  | { type: "error"; error: unknown }
+  /**
+   * `retry` (TASK.33 W7b) is additive-optional terminal-retry metadata the loop
+   * attaches to every passing error event: `attemptsMade` is the count of
+   * `stream_retry` events already seen this turn, `maxAttempts` comes from the
+   * last `stream_retry` event (absent when the turn never retried — the port
+   * owns the policy, not the loop), `retryable`/`code` come from
+   * `classifyProviderFailure` (provider/failure.ts), and `hadModelOutput` from
+   * `isModelOutputEvent`. `code` is a plain string (not the provider/failure.ts
+   * union) to keep this file free of a dependency on the provider layer.
+   */
+  | {
+      type: "error";
+      error: unknown;
+      retry?: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+    }
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
   | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string };
 

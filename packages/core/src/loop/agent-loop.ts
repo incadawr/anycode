@@ -66,11 +66,34 @@ import {
   estimateToolDeclarationTokens,
   splitToolDeclarationsByMcpPrefix,
 } from "../context/tokens.js";
+import { classifyProviderFailure, isModelOutputEvent } from "../provider/failure.js";
 
 function appendSystemContext(systemPrompt: string | undefined, systemContext: string | undefined): string | undefined {
   if (systemContext === undefined || systemContext.length === 0) return systemPrompt;
   if (systemPrompt === undefined || systemPrompt.length === 0) return systemContext;
   return `${systemPrompt}\n\n${systemContext}`;
+}
+
+/**
+ * Terminal-retry metadata for an `{type:"error"}` event (TASK.33 W7b). Called
+ * at yield time for every error event this turn — terminality is not knowable
+ * yet (a `finish` may still arrive and forgive it), so every passing error
+ * event gets the CURRENT per-turn counters, not just the last one.
+ */
+function buildRetryMetadata(
+  error: unknown,
+  attemptsMade: number,
+  maxAttempts: number | undefined,
+  hadModelOutput: boolean,
+): { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string } {
+  const classification = classifyProviderFailure(error);
+  return {
+    attemptsMade,
+    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+    retryable: classification.retryable,
+    hadModelOutput,
+    code: classification.code,
+  };
 }
 
 export interface AgentLoopConfig {
@@ -501,6 +524,12 @@ export class AgentLoop {
       let usage: TokenUsage = {};
       let streamErrored = false;
       let sawFinish = false;
+      // Terminal-retry metadata counters (TASK.33 W7b): attemptsMade counts
+      // stream_retry events seen THIS TURN — unlike the accumulators above it is
+      // NOT reset on stream_retry (a retry increments it, it does not erase it).
+      let attemptsMade = 0;
+      let maxAttempts: number | undefined;
+      let hadModelOutput = false;
 
       try {
         const stream = this.config.modelPort.streamText({
@@ -512,7 +541,12 @@ export class AgentLoop {
           abortSignal: signal,
         });
         for await (const event of stream) {
-          yield event;
+          yield event.type === "error"
+            ? { ...event, retry: buildRetryMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput) }
+            : event;
+          if (isModelOutputEvent(event)) {
+            hadModelOutput = true;
+          }
           switch (event.type) {
             case "text_delta":
               textParts.push(event.text);
@@ -529,6 +563,12 @@ export class AgentLoop {
               streamErrored = true;
               break;
             case "stream_retry":
+              attemptsMade += 1;
+              maxAttempts = event.maxAttempts;
+              // hadModelOutput is already false here by construction: the port's
+              // own retry gate (isModelOutputEvent, provider/failure.ts) never
+              // emits stream_retry once model output has reached the consumer.
+              hadModelOutput = false;
 
               // whole step is replayed from scratch, so every accumulator built up
               // from the aborted attempt's partial events must be discarded — the
@@ -556,7 +596,7 @@ export class AgentLoop {
         if (signal?.aborted) {
           yield* this.emitLoopEnd("cancelled", turn, signal);
         } else {
-          yield { type: "error", error };
+          yield { type: "error", error, retry: buildRetryMetadata(error, attemptsMade, maxAttempts, hadModelOutput) };
           // The consumer may abort while paused on the yielded error event
           // (before this generator resumes) — re-check so a synchronous
           // abort there still ends the loop as "cancelled", not "error".

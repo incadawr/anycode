@@ -151,6 +151,39 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
     expect(text).toBe("\x1b[31;1m\n[error] Error: boom\n\x1b[0m");
   });
 
+  it("appends a 'failed after N attempts' suffix when the error carries retry metadata (TASK.33 W7b)", () => {
+    const text = collect([
+      {
+        type: "error",
+        error: new Error("boom"),
+        retry: { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout" },
+      },
+    ]);
+    expect(text).toBe("\n[error] Error: boom (failed after 3 attempts)\n");
+  });
+
+  it("singularizes the suffix for a single attempt", () => {
+    const text = collect([
+      {
+        type: "error",
+        error: new Error("boom"),
+        retry: { attemptsMade: 1, retryable: true, hadModelOutput: false, code: "network" },
+      },
+    ]);
+    expect(text).toBe("\n[error] Error: boom (failed after 1 attempt)\n");
+  });
+
+  it("omits the suffix when retry metadata is present but no retry actually happened (attemptsMade: 0)", () => {
+    const text = collect([
+      {
+        type: "error",
+        error: new Error("boom"),
+        retry: { attemptsMade: 0, retryable: false, hadModelOutput: false, code: "auth" },
+      },
+    ]);
+    expect(text).toBe("\n[error] Error: boom\n");
+  });
+
   it("paints the whole [usage] line (finish event) with the usage/dim role", () => {
     const text = collect(
       [{ type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } }],
