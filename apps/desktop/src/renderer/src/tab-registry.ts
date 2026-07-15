@@ -37,7 +37,7 @@ import { deriveCoarse, useTabStatusStore, type TabStatusStoreApi } from "./tab-s
 import { terminalView as defaultTerminalView, type TerminalDims, type TerminalView } from "./terminal-view.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import { TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS, type TermToHostMessage } from "../../shared/terminal.js";
-import { loadUsageLimitNotices, parseUsageLimitNotice, saveUsageLimitNotice } from "./provider-notices.js";
+import { loadUsageLimitNotices, saveUsageLimitNotice } from "./provider-notices.js";
 
 /** Convenience alias for the store instance type `createDesktopStore()` returns. */
 export type DesktopStoreApi = ReturnType<typeof createDesktopStore>;
@@ -281,9 +281,10 @@ export function createTabRegistry(
         }
       }
       if (message.type === "agent_event" && message.event.type === "error") {
-        const notice = parseUsageLimitNotice(message.event.error);
+        // The notice is parsed host-side and rides the wire event (W7b-FIX #2).
+        const notice = message.event.notice;
         const sessionId = tabsStore.getState().tabs.find((tab) => tab.tabId === tabId)?.sessionId;
-        if (notice !== null && sessionId !== null && sessionId !== undefined) {
+        if (notice !== undefined && sessionId !== null && sessionId !== undefined) {
           saveUsageLimitNotice(sessionId, notice);
         }
       }

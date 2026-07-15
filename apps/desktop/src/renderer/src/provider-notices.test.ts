@@ -2,30 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   formatUsageLimitReset,
   loadUsageLimitNotices,
-  parseUsageLimitNotice,
   saveUsageLimitNotice,
 } from "./provider-notices.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("parseUsageLimitNotice", () => {
-  it("recognizes Z.AI 1308 and interprets its timezone-less reset clock as Asia/Shanghai", () => {
-    const notice = parseUsageLimitNotice({
-      name: "AI_APICallError",
-      message: "[1308][Usage limit reached for 5 hour. Your limit will reset at 2026-07-12 19:07:09][trace]",
-    });
-    expect(notice).toEqual({
-      kind: "usage_limit",
-      code: 1308,
-      resetAt: Date.UTC(2026, 6, 12, 11, 7, 9),
-    });
-  });
-
-  it("leaves unknown/provider-malformed failures on the generic error path", () => {
-    expect(parseUsageLimitNotice({ name: "AI_APICallError", message: "[1210] bad max_tokens" })).toBeNull();
-    expect(parseUsageLimitNotice({ name: "AI_APICallError", message: "[1308] Usage limit reached" })).toBeNull();
-  });
-});
+// parseUsageLimitNotice moved to shared/usage-limit.ts (host parses the raw
+// message at the wire boundary; the renderer reads the numeric notice). Its
+// parse coverage lives in shared/usage-limit.test.ts (W7b-FIX #2).
 
 describe("formatUsageLimitReset", () => {
   it("formats a valid local timestamp into a non-empty local-time label", () => {

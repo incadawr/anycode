@@ -46,6 +46,7 @@ import type {
 } from "@anycode/core";
 import type { LspServerStatus } from "@anycode/core";
 import type { EngineId } from "./engines.js";
+import type { UsageLimitNotice } from "./usage-limit.js";
 // Slice 5.7 (design slice-5.7-cut.md §2.1): git-domain types for the additive
 // git wire surface. Type-only (verbatimModuleSyntax erases them from the renderer
 // bundle — hard requirement, see this file's header). They ride the ports barrel
@@ -129,10 +130,14 @@ export interface ShellCapabilitiesProjection {
 }
 
 /**
- * AgentEvent after sanitization: the {type:"error"} variant carries
- * SerializedError instead of unknown. `retry` (TASK.33 W8) rides through
- * unchanged from the core event — additive-optional, so a pre-W7b core
- * event (no `retry` field) produces a byte-identical wire event.
+ * AgentEvent after sanitization: the {type:"error"} variant carries a
+ * SerializedError built EXCLUSIVELY from the core event's redacted `safe`
+ * descriptor (TASK.33 W7b-FIX #2) — the raw error never crosses. `retry`
+ * (TASK.33 W8) rides through unchanged from the core event. `notice`
+ * (W7b-FIX #2) is the numbers-only usage_limit descriptor the host parses from
+ * the raw message at the wire boundary, because the redacted `error.message`
+ * the renderer now receives no longer carries the parseable z.ai text. All
+ * three fields are additive-optional.
  */
 export type WireAgentEvent =
   | Exclude<AgentEvent, { type: "error" }>
@@ -140,6 +145,7 @@ export type WireAgentEvent =
       type: "error";
       error: SerializedError;
       retry?: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+      notice?: UsageLimitNotice;
     };
 
 /** UI-safe subset of ToolMetadata (flat data only, no schemas/handlers). */
