@@ -22,22 +22,15 @@ import type { CatalogSummary, CatalogSummaryEntry, SecretStatus } from "../../..
 import type { UpdateStatus } from "../../../shared/updates.js";
 import type { WireRepoMapStatus } from "../../../shared/protocol.js";
 import {
-  baseUrlChangeNotice,
-  buildProviderPatch,
-  buildProviderSelectPatch,
   buildToolsPatch,
   describeMcpServer,
   describeOAuthStatus,
   describeRepoMapRow,
   describeSecretStatus,
   describeTelemetryRow,
-  displayedProviderId,
   filterSettingsPanes,
   isEnvOverridden,
-  isTransportUnsupported,
   parseOptionalInt,
-  providerChangeNotice,
-  providerSecretKey,
   secretFieldReducer,
   selectProviderEntry,
   SETTINGS_PANES,
@@ -173,36 +166,7 @@ describe("parseOptionalInt", () => {
   });
 });
 
-describe("buildProviderPatch", () => {
-  it("includes both fields when both are filled", () => {
-    expect(buildProviderPatch(" claude-sonnet-5 ", " https://example.com ")).toEqual({
-      provider: { model: "claude-sonnet-5", baseUrl: "https://example.com" },
-    });
-  });
-
-  it("omits a blank field entirely rather than sending an empty string", () => {
-    expect(buildProviderPatch("", "https://example.com")).toEqual({ provider: { baseUrl: "https://example.com" } });
-    expect(buildProviderPatch("claude-sonnet-5", "")).toEqual({ provider: { model: "claude-sonnet-5" } });
-  });
-
-  it("both blank -> an empty provider patch", () => {
-    expect(buildProviderPatch("", "")).toEqual({ provider: {} });
-  });
-
-  it("includes a transport when supplied (TASK.43 W5)", () => {
-    expect(buildProviderPatch("gpt-5.1", "", "openai-responses")).toEqual({
-      provider: { model: "gpt-5.1", transport: "openai-responses" },
-    });
-  });
-
-  it("omits transport when blank (the third arg defaults to '')", () => {
-    expect(buildProviderPatch("claude-sonnet-5", "https://example.com")).toEqual({
-      provider: { model: "claude-sonnet-5", baseUrl: "https://example.com" },
-    });
-  });
-});
-
-describe("transportOptions (TASK.43 W5, deliberately disposable — W12 absorbs into a drawer)", () => {
+describe("transportOptions (TASK.43 W5; reused by ConnectionDrawer, TASK.45 W12)", () => {
   it("restricts to a catalog entry's own supportedTransports", () => {
     expect(transportOptions(OPENAI)).toEqual(["openai-responses", "openai-chat-completions"]);
     expect(transportOptions(VLLM)).toEqual(["openai-chat-completions"]);
@@ -211,25 +175,6 @@ describe("transportOptions (TASK.43 W5, deliberately disposable — W12 absorbs 
   it("offers all three for no selection / the needsBaseUrl (custom) entry", () => {
     expect(transportOptions(undefined)).toEqual(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
     expect(transportOptions(CUSTOM)).toEqual(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
-  });
-});
-
-describe("isTransportUnsupported (TASK.43 W5 cut Risk #3: fail-loud, never a silent anthropic fallback)", () => {
-  it("false when no transport is persisted (the catalog default wins)", () => {
-    expect(isTransportUnsupported(OPENAI, undefined)).toBe(false);
-  });
-
-  it("false when the persisted transport IS in the entry's supportedTransports", () => {
-    expect(isTransportUnsupported(OPENAI, "openai-chat-completions")).toBe(false);
-  });
-
-  it("true when the persisted transport is outside the entry's supportedTransports", () => {
-    expect(isTransportUnsupported(VLLM, "anthropic-messages")).toBe(true);
-  });
-
-  it("never unsupported for no-selection/custom — every transport is offered", () => {
-    expect(isTransportUnsupported(undefined, "openai-responses")).toBe(false);
-    expect(isTransportUnsupported(CUSTOM, "anthropic-messages")).toBe(false);
   });
 });
 
@@ -246,13 +191,6 @@ describe("buildToolsPatch", () => {
     expect(buildToolsPatch("", "30000")).toEqual({ tools: { stallTimeoutMs: 30000 } });
     expect(buildToolsPatch("4", "")).toEqual({ tools: { concurrency: 4 } });
     expect(buildToolsPatch("nope", "nope")).toEqual({ tools: {} });
-  });
-});
-
-describe("buildProviderSelectPatch (slice 2.5 §5: sent immediately on selector change, no Save gate)", () => {
-  it("wraps the chosen id as a provider patch", () => {
-    expect(buildProviderSelectPatch("anthropic")).toEqual({ provider: { id: "anthropic" } });
-    expect(buildProviderSelectPatch("custom")).toEqual({ provider: { id: "custom" } });
   });
 });
 
@@ -281,69 +219,6 @@ describe("shouldShowBaseUrlField (custom<->catalog baseUrl toggle, design §5 po
 
   it("shown when nothing is selected (legacy, or no catalog at all) — ruling R6: same mode as custom", () => {
     expect(shouldShowBaseUrlField(undefined)).toBe(true);
-  });
-});
-
-describe("providerSecretKey (ruling R6: legacy and the catalog's custom entry share ONE vault key)", () => {
-  it("legacy/no-selection -> the bare legacy key", () => {
-    expect(providerSecretKey(undefined)).toBe("provider.apiKey");
-  });
-
-  it("the catalog's needsBaseUrl (custom) entry -> the SAME bare legacy key, not a per-id key", () => {
-    expect(providerSecretKey(CUSTOM)).toBe("provider.apiKey");
-  });
-
-  it("a regular api_key catalog entry -> its per-provider apiKey key", () => {
-    expect(providerSecretKey(ANTHROPIC)).toBe("provider.anthropic.apiKey");
-  });
-
-  it("an oauth catalog entry -> its per-provider oauth key", () => {
-    expect(providerSecretKey(ACME_OAUTH)).toBe("provider.acme.oauth");
-  });
-
-  it("a NON-custom needsBaseUrl template (vLLM) -> its per-provider key, NOT the legacy slot (TASK.43 W5-FIX #2)", () => {
-    // vLLM needsBaseUrl but is not the custom sentinel; the broker reads
-    // provider.vllm.apiKey. Pre-W5-FIX this returned the bare legacy key, so a
-    // vLLM key never reached the server and clobbered the legacy/custom slot.
-    expect(providerSecretKey(VLLM)).toBe("provider.vllm.apiKey");
-  });
-});
-
-describe("displayedProviderId", () => {
-  it("the real id when one is selected", () => {
-    expect(displayedProviderId(CATALOG, "anthropic")).toBe("anthropic");
-  });
-
-  it("falls back to the catalog's own needsBaseUrl (custom) entry when nothing is selected", () => {
-    expect(displayedProviderId(CATALOG, undefined)).toBe("custom");
-  });
-
-  it("falls back to empty string when the catalog has no custom-style entry at all", () => {
-    expect(displayedProviderId([ANTHROPIC], undefined)).toBe("");
-  });
-
-  it("with vLLM ordered before custom, the no-selection fallback picks custom, NOT the first needsBaseUrl (TASK.43 W5-FIX #5)", () => {
-    // The real W5 catalog orders vllm before custom (both needsBaseUrl). The old
-    // first-needsBaseUrl fallback rendered "vLLM" as selected for a legacy
-    // no-id settings file; the fallback must key off the custom sentinel.
-    const w5Order: CatalogSummary = [ANTHROPIC, OPENAI, VLLM, CUSTOM];
-    expect(displayedProviderId(w5Order, undefined)).toBe("custom");
-  });
-});
-
-describe("provider/baseUrl change notices (exfil-mitigation, design §5/threat model 2.2)", () => {
-  it("providerChangeNotice names the new provider and the new-tabs-only scope", () => {
-    expect(providerChangeNotice("Anthropic")).toMatch(/Anthropic/);
-    expect(providerChangeNotice("Anthropic")).toMatch(/new tabs/i);
-  });
-
-  it("baseUrlChangeNotice is non-empty and scoped to new tabs", () => {
-    expect(baseUrlChangeNotice().length).toBeGreaterThan(0);
-    expect(baseUrlChangeNotice()).toMatch(/new tabs/i);
-  });
-
-  it("the two notices are textually distinct (so a human can tell which changed)", () => {
-    expect(providerChangeNotice("Anthropic")).not.toBe(baseUrlChangeNotice());
   });
 });
 

@@ -355,32 +355,14 @@ export type OAuthStartResult =
 // ── request payloads (companions to the 5 channels) ──
 
 /**
- * The v1-legacy `provider` sub-patch the generic `settings-set` path still
- * accepts (TASK.45 W9 §4.3 «v1-patch compat shim»): main TRANSLATES these
- * whitelisted legacy fields into an operation on the ACTIVE connection until W12
- * moves the renderer onto the `connection-*` IPC. It is deliberately NOT the v2
- * `ProviderSettingsV2` shape — a wholesale `connections[]` / `activeConnectionId`
- * through the generic path refine-rejects (main is the trust boundary for the
- * connection graph).
- */
-export interface LegacyProviderPatch {
-  id?: string;
-  model?: string;
-  baseUrl?: string;
-  transport?: ProviderTransportId;
-  defaults?: Record<string, { model?: string; reasoningEffort?: ReasoningEffort }>;
-}
-
-/**
  * Deep-partial patch for `settings-set`: nested objects merge key-by-key while
  * arrays (e.g. `permissions.alwaysAllow`) are replaced wholesale — the rule
  * editor sends the full array. `version` is patchable in the type but main
- * ignores/rejects a version change. `provider` stays the legacy shim shape (see
- * `LegacyProviderPatch`), never the v2 connections graph.
+ * ignores/rejects a version change. `provider` is excluded entirely (TASK.45
+ * W12): the connection graph is CRUD-only (`connection-*` channels below) —
+ * main refine-rejects ANY `provider` key sent through this generic path.
  */
-export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider"> & {
-  provider?: LegacyProviderPatch;
-};
+export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 

@@ -19,6 +19,10 @@ import type {
   WorkspacePickResult,
 } from "../../shared/tabs";
 import type {
+  ConnectionCheckRequest,
+  ConnectionCreateRequest,
+  ConnectionDeleteRequest,
+  ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
@@ -136,6 +140,12 @@ declare global {
         // TASK.45 W10: main-authoritative connection metadata update (ModelPill's
         // model/effort write path, off the v1-patch shim). Never carries a secret.
         connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
+        // TASK.45 W12: the connections grid/drawer's remaining CRUD surface.
+        // Never carries a secret; resolves with a fresh snapshot.
+        connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult>;
+        connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
+        connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
+        connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config
       // management invoke-API. `get` returns the joined project/user/compat

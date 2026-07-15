@@ -44,16 +44,13 @@
  * settings-store's `pendingConsent`, not in this component's own state), so
  * a stored secret is never echoed back into a rendered field.
  *
- * PROVIDER SELECTION (slice 2.5 §5): the provider `<select>` is populated
- * from `snapshot.catalog` (optional/absent = empty, 2.5.1's additive-field
- * contract) and hidden entirely when the catalog is empty — degrading
- * byte-for-byte to the 2.2 layout (single `provider.apiKey` credential,
- * baseUrl always visible) for any main build that hasn't populated the
- * catalog yet. `providerSecretKey`/`shouldShowBaseUrlField` both treat "no
- * selection" and "the catalog's own `custom`/needsBaseUrl entry" as the SAME
-
- * key") — deliberately not hardcoding the `"custom"` id string so the
- * renderer stays data-driven off the frozen `needsBaseUrl` flag alone.
+ * PROVIDER SELECTION (TASK.45 W12, replacing slice 2.5 §5's singleton
+ * `<select>`): the ConnectionDrawer's template `<select>` is populated from
+ * `snapshot.catalog` (optional/absent = empty). `shouldShowBaseUrlField`
+ * treats "no selection" and the catalog's own `custom`/needsBaseUrl entry as
+ * the SAME "needs a base URL" case — deliberately not hardcoding the
+ * `"custom"` id string so the renderer stays data-driven off the frozen
+ * `needsBaseUrl` flag alone.
  *
  * MCP status row (slice 3.2, design/slice-3.2-cut.md §5.1/§6, task 3.2.4):
  * status display only — a server-management UI is explicitly NOT in v1. MCP
@@ -67,20 +64,19 @@
  * via `tabRegistry`, the same two primitives App.tsx itself already uses to
  * pick `activeStore` — no new prop/context plumbing needed.
  */
-import { useEffect, useReducer, useRef, useState, type ComponentType, type KeyboardEvent, type SVGProps } from "react";
+import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type SVGProps } from "react";
 import { useStore } from "zustand";
 import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
+  ProviderConnection,
   ProviderTransportId,
-  SecretKey,
   SecretSource,
   SecretStatus,
   SecretTier,
   SettingsPatch,
 } from "../../../shared/settings.js";
-import { activeProviderView } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
 import type { WireEnvStatus, WireRepoMapStatus } from "../../../shared/protocol.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -88,6 +84,8 @@ import { applyThemePreference } from "../theme.js";
 import { tabRegistry } from "../tab-registry.js";
 import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
+import { ConnectionDrawer } from "./ConnectionDrawer.js";
+import { ConnectionTile, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
 import { McpServersPane } from "./McpServersPane.js";
@@ -95,14 +93,13 @@ import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane } from "./SubagentsPane.js";
 import { ProfilePane } from "./ProfilePane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
-import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, ImageIcon, Info, Keyboard, Person, Robot, Search, ServerStack, Terminal } from "./icons.js";
+import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Terminal } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
 import { applyDensity, DENSITY_KEY, readDensity, type Density } from "../density.js";
 import "../settings.css";
 
-const LEGACY_API_KEY: SecretKey = "provider.apiKey";
 const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 
 export type SettingsPaneId = "profile" | "provider" | "codex" | "permissions" | "tools" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
@@ -250,31 +247,7 @@ export function parseOptionalInt(text: string): number | undefined {
   return Number.isFinite(n) ? Math.trunc(n) : undefined;
 }
 
-/**
- * Builds the `provider` patch, omitting a field entirely (rather than
- * sending it as `""`/`undefined`) when the input is blank — a deep-partial
- * merge (design §3) should mean "don't touch this field" for an
- * untouched/cleared input, not "overwrite it with an empty string". NB for
- * 2.2.5 integration: double check this omission convention against 2.2.2's
- * actual `settings-set` merge implementation once it lands.
- */
-export function buildProviderPatch(model: string, baseUrl: string, transport = ""): SettingsPatch {
-  const provider: { model?: string; baseUrl?: string; transport?: ProviderTransportId } = {};
-  const trimmedModel = model.trim();
-  const trimmedBaseUrl = baseUrl.trim();
-  if (trimmedModel) {
-    provider.model = trimmedModel;
-  }
-  if (trimmedBaseUrl) {
-    provider.baseUrl = trimmedBaseUrl;
-  }
-  if (transport) {
-    provider.transport = transport as ProviderTransportId;
-  }
-  return { provider };
-}
-
-/** Same blank-omission convention as `buildProviderPatch`, for the `tools` mirror fields. */
+/** Same blank-omission convention the retired v1 provider patch used, for the `tools` mirror fields. */
 export function buildToolsPatch(concurrencyText: string, stallTimeoutText: string, maxTurnsText = ""): SettingsPatch {
   const tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number } = {};
   const concurrency = parseOptionalInt(concurrencyText);
@@ -290,12 +263,7 @@ export function buildToolsPatch(concurrencyText: string, stallTimeoutText: strin
   return { tools };
 }
 
-// ── provider-section v2 pure helpers (slice 2.5 §5) ──
-
-/** Builds the `{provider:{id}}` patch sent immediately on a provider-selector change (design §5 point 1 — no "Save" gate, unlike model/baseUrl). */
-export function buildProviderSelectPatch(id: string): SettingsPatch {
-  return { provider: { id } };
-}
+// ── provider-section v2 pure helpers (slice 2.5 §5; reused by ConnectionDrawer/ConnectionTile, TASK.45 W12) ──
 
 /** Looks up the catalog entry matching the currently selected provider id; `undefined` for an empty/absent id, an empty catalog, or an id with no match (all three fold into the same legacy/custom fallback below). */
 export function selectProviderEntry(catalog: CatalogSummary, id: string | undefined): CatalogSummaryEntry | undefined {
@@ -336,71 +304,6 @@ export const TRANSPORT_LABEL: Record<ProviderTransportId, string> = {
  */
 export function transportOptions(selectedEntry: CatalogSummaryEntry | undefined): ProviderTransportId[] {
   return selectedEntry?.supportedTransports ?? ALL_TRANSPORTS;
-}
-
-/**
- * True when the PERSISTED transport (not the in-progress edit) is not one of
- * the currently selected provider's supported transports (TASK.43 W5 cut Risk
- * #3) — a stale/hand-edited value must surface as a field-error, never
- * silently fall back to anthropic. `undefined` (no override persisted) is
- * always supported — the catalog default wins.
- */
-export function isTransportUnsupported(
-  selectedEntry: CatalogSummaryEntry | undefined,
-  persistedTransport: ProviderTransportId | undefined,
-): boolean {
-  if (persistedTransport === undefined) {
-    return false;
-  }
-  return !transportOptions(selectedEntry).includes(persistedTransport);
-}
-
-/**
- * The vault key a credential block reads/writes/clears for the currently
-
- * own `needsBaseUrl` (custom) entry both use the bare legacy key — "legacy/
- * custom mode" is one storage location, not two — every OTHER catalog entry
- * gets a per-provider key keyed on its declared authKind.
- */
-export function providerSecretKey(selectedEntry: CatalogSummaryEntry | undefined): SecretKey {
-  // Only no-selection (legacy) and the LITERAL custom sentinel share the bare
-  // legacy key (TASK.43 W5-FIX #2). A non-custom needsBaseUrl template (vLLM)
-  // keeps its own per-provider key — the broker reads `provider.vllm.apiKey`, so
-  // keying off `needsBaseUrl` here mis-routed the vLLM key to the legacy slot.
-  if (!selectedEntry || selectedEntry.isCustom) {
-    return LEGACY_API_KEY;
-  }
-  return selectedEntry.authKind === "oauth" ? `provider.${selectedEntry.id}.oauth` : `provider.${selectedEntry.id}.apiKey`;
-}
-
-/**
- * The `<select>`'s displayed value: the real selected id, or — when nothing
- * is selected yet (legacy) — the catalog's own `custom` sentinel entry,
-
- * `""` only if the catalog carries no custom-style entry at all. Kept
- * separate from `selectedEntry`/`providerSecretKey` (which stay legitimately
- * "no selection" until the user actually picks something) — this only
- * controls what option LOOKS selected.
- */
-export function displayedProviderId(catalog: CatalogSummary, id: string | undefined): string {
-  if (id) {
-    return id;
-  }
-  // Fall back to the custom sentinel, NOT the first needsBaseUrl entry (TASK.43
-  // W5-FIX #5): the W5 catalog orders vLLM before custom (both needsBaseUrl), so
-  // the old first-needsBaseUrl pick rendered "vLLM" as selected for a legacy
-  // no-id settings file.
-  return catalog.find((entry) => entry.isCustom)?.id ?? "";
-}
-
-/** Notice text shown after a provider change is accepted (exfil-mitigation, design §5/threat model 2.2: any redirect of credentials/prompts must be human-visible). */
-export function providerChangeNotice(providerName: string): string {
-  return `Provider changed to ${providerName} — applies to new tabs.`;
-}
-
-/** Notice text shown after a baseUrl change is accepted (same exfil-mitigation rationale as `providerChangeNotice`). */
-export function baseUrlChangeNotice(): string {
-  return "Base URL changed — applies to new tabs.";
 }
 
 // ── auto-updater pure helpers (slice 2.6 §6) ──
@@ -554,41 +457,31 @@ export interface ProviderSettingsProps {
 }
 
 /**
- * Provider + credential composition (slice R11 §2.1): the Provider section,
- * the coupled API-key/Sign-in section (credentialKey/selectedEntry derive
- * from providerId — the two sections are one unit), and the weak-storage
- * ConsentDialog (pendingConsent only ever arises from setSecret, which lives
- * here). Extracted from SettingsScreen's body as a markup recomposition:
- * rendered DOM is attribute-for-attribute identical to the pre-R11 sections.
- * Two consumers: SettingsScreen below (dialog) and WelcomeScreen (first-run);
- * R16's settings redesign reuses it as the Provider pane.
+ * Provider connections grid + drawer (TASK.45 W12, replacing the R11 singleton
+ * form): a compact responsive grid of `ConnectionTile`s — one per user-created
+ * connection — plus a trailing `+ Add connection` tile and, when an
+ * `ANYCODE_API_KEY`-family env var overrides the runtime, a read-only
+ * "Environment override" banner (cut §5: its outcome must never repaint a
+ * stored connection's plaquette). Clicking a tile's body makes it the default
+ * for NEW sessions (`connection-set-active`); Edit/Replace key/Check/Delete
+ * live in the tile's own menu, never behind a body click (design §4). The
+ * `ConnectionDrawer` (add/edit) and the weak-storage `ConsentDialog`
+ * (`pendingConsent` only ever arises from a `setSecret` call, which now lives
+ * inside the drawer) are the two dialogs this pane owns. Two consumers:
+ * SettingsScreen below (dialog) and WelcomeScreen (first-run, cut §"Отдельный
+ * first-run empty state") — WelcomeScreen conditionally narrows the grid to a
+ * single first-connection prompt, see its own file.
  */
 export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
-  const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
 
-  const [initialized, setInitialized] = useState(false);
-  const [providerId, setProviderId] = useState<string | undefined>(undefined);
-  const [model, setModel] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [transport, setTransport] = useState<ProviderTransportId | "">("");
-  const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
-
-  // Seeds the local form fields from the first snapshot that arrives (once —
-  // same clobber-avoidance rationale as SettingsScreen's own seed effect).
-  useEffect(() => {
-    if (!initialized && snapshot) {
-      // Active-connection view (TASK.45 v2): the former singleton fields now live
-      // on the active connection; `activeProviderView` projects them back.
-      const view = activeProviderView(snapshot.settings);
-      setProviderId(view.id);
-      setModel(view.model ?? "");
-      setBaseUrl(view.baseUrl ?? "");
-      setTransport(view.transport ?? "");
-      setInitialized(true);
-    }
-  }, [snapshot, initialized]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
+  const [drawerConnectionId, setDrawerConnectionId] = useState<string | null>(null);
+  const [drawerFocus, setDrawerFocus] = useState<"label" | "credential">("label");
+  const [checkingIds, setCheckingIds] = useState<ReadonlySet<string>>(new Set());
+  const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Unreachable from both real mounts (SettingsScreen early-returns its own
   // loading row before this renders; App only mounts Welcome once the first
@@ -597,202 +490,170 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
     return null;
   }
 
-  // Active-connection view (TASK.45 v2): stands in for the removed v1 singleton
-  // for every read-site below (baseUrl/transport). Captured after the null guard.
-  const view = activeProviderView(snapshot.settings);
   const readOnly = snapshot.readOnly;
   const catalog: CatalogSummary = snapshot.catalog ?? [];
-  const hasCatalog = catalog.length > 0;
-  const selectedEntry = selectProviderEntry(catalog, providerId);
-  const showBaseUrl = shouldShowBaseUrlField(selectedEntry);
-  const credentialKey = providerSecretKey(selectedEntry);
-  const credentialStatus = snapshot.secrets.find((s) => s.key === credentialKey);
+  const connections = snapshot.settings.provider.connections;
+  const activeConnectionId = snapshot.settings.provider.activeConnectionId;
   const envOverridden = isEnvOverridden(snapshot.envOverrides, API_KEY_ENV_VAR);
   // Captured as a plain local (not re-read off `snapshot` inside the nested
   // functions below) so TS's null-narrowing of `snapshot` — which does not
-  // cross a nested function boundary — stays sound.
-  const storedBaseUrl = view.baseUrl ?? "";
-  // TASK.43 W5, deliberately disposable (W12 absorbs this into a drawer):
-  // the transport `<select>` options + a field-error against the PERSISTED
-  // (not in-progress) value — an unsupported combination blocks readiness
-  // (main's computeProviderReady) rather than silently falling back.
-  const transportChoices = transportOptions(selectedEntry);
-  const transportUnsupported = isTransportUnsupported(selectedEntry, view.transport);
+  // cross a nested function boundary — stays sound (same discipline the old
+  // ProviderSettings singleton form used for `storedBaseUrl`).
+  const secrets = snapshot.secrets;
+  const editConnection = drawerConnectionId !== null ? connections.find((c) => c.id === drawerConnectionId) : undefined;
+  // Roving focus targets: every tile's select-button, then the trailing "+
+  // Add connection" tile (design §"Компактная сетка": keyboard navigation
+  // across the whole grid, add tile included).
+  const rovingCount = connections.length + 1;
 
-  async function changeProvider(newId: string): Promise<void> {
-    setProviderId(newId);
-    const result = await store.getState().setPatch(buildProviderSelectPatch(newId));
-    if (result.ok) {
-      const label = selectProviderEntry(catalog, newId)?.name ?? newId;
-      store.getState().setNotice(providerChangeNotice(label));
-    }
+  function openAdd(): void {
+    setDrawerMode("add");
+    setDrawerConnectionId(null);
+    setDrawerFocus("label");
+    setDrawerOpen(true);
   }
 
-  async function saveProvider(): Promise<void> {
-    // Never resend a stale baseUrl for a provider that hides the field —
-    // buildProviderPatch already omits a blank value entirely (deep-partial
-    // merge, "don't touch this field").
-    const effectiveBaseUrl = showBaseUrl ? baseUrl : "";
-    const baseUrlChanged = showBaseUrl && baseUrl.trim() !== storedBaseUrl;
-    const result = await store.getState().setPatch(buildProviderPatch(model, effectiveBaseUrl, transport));
-    if (result.ok && baseUrlChanged) {
-      store.getState().setNotice(baseUrlChangeNotice());
-    }
+  function openEdit(id: string): void {
+    setDrawerMode("edit");
+    setDrawerConnectionId(id);
+    setDrawerFocus("label");
+    setDrawerOpen(true);
   }
 
-  async function saveSecret(): Promise<void> {
-    const value = secretValue;
-    // CUSTODY: clear the field the instant Save is clicked, before the async
-    // round-trip even settles — the typed value must not still be visible in
-    // a rendered `<input>` while the request is in flight or after it
-    // returns (see secretFieldReducer's docstring).
-    dispatchSecret({ type: "submitted" });
-    if (!value) {
+  function openReplaceKey(connection: ProviderConnection, catalogEntry: CatalogSummaryEntry | undefined): void {
+    // An OAuth connection's "Replace key" IS the sign-in/out toggle itself —
+    // no drawer needed, mirroring the old OAuthCredentialBlock's direct action.
+    if (catalogEntry?.authKind === "oauth") {
+      const status = secrets.find((s) => s.key === connectionSecretKey(connection.id, "oauth"));
+      if (status?.set) {
+        void store.getState().clearSecret(connectionSecretKey(connection.id, "oauth"));
+      } else {
+        void store.getState().oauthStart(connection.providerId);
+      }
       return;
     }
-    await store.getState().setSecret(credentialKey, value);
+    setDrawerMode("edit");
+    setDrawerConnectionId(connection.id);
+    setDrawerFocus("credential");
+    setDrawerOpen(true);
   }
 
-  async function clearSecretValue(): Promise<void> {
-    await store.getState().clearSecret(credentialKey);
+  async function check(id: string): Promise<void> {
+    setCheckingIds((prev) => new Set(prev).add(id));
+    try {
+      await store.getState().connectionCheck({ id });
+    } finally {
+      setCheckingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  function onTileKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number): void {
+    let next: number;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        next = nextRovingIndex(index, 1, rovingCount);
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        next = nextRovingIndex(index, -1, rovingCount);
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = rovingCount - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    tileRefs.current[next]?.focus();
   }
 
   return (
     <>
       <section className="settings-section">
-        <div className="settings-section-title">Provider</div>
-        {hasCatalog && (
-          <label className="settings-field">
-            <span className="settings-field-label">Provider</span>
-            <select
-              className="settings-field-select"
-              value={displayedProviderId(catalog, providerId)}
-              disabled={readOnly}
-              onChange={(e) => void changeProvider(e.target.value)}
-            >
-              {catalog.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <label className="settings-field">
-          <span className="settings-field-label">Model</span>
-          <input
-            className="settings-field-input"
-            type="text"
-            list="settings-model-suggestions"
-            value={model}
-            disabled={readOnly}
-            placeholder="e.g. claude-sonnet-5"
-            onChange={(e) => setModel(e.target.value)}
-          />
-          <datalist id="settings-model-suggestions">
-            {(selectedEntry?.models ?? []).map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name ?? m.id}
-              </option>
-            ))}
-          </datalist>
-        </label>
-        {showBaseUrl && (
-          <label className="settings-field">
-            <span className="settings-field-label">Base URL</span>
-            <input
-              className="settings-field-input"
-              type="text"
-              value={baseUrl}
-              disabled={readOnly}
-              placeholder="(provider default)"
-              onChange={(e) => setBaseUrl(e.target.value)}
-            />
-          </label>
-        )}
-        <label className="settings-field">
-          <span className="settings-field-label">Transport</span>
-          <select
-            className="settings-field-select"
-            value={transport}
-            disabled={readOnly}
-            onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
-          >
-            <option value="">(provider default)</option>
-            {transportChoices.map((t) => (
-              <option key={t} value={t}>
-                {TRANSPORT_LABEL[t]}
-              </option>
-            ))}
-          </select>
-        </label>
-        {transportUnsupported && (
-          <div className="settings-env-warning" role="alert">
-            "{TRANSPORT_LABEL[view.transport as ProviderTransportId]}" is not supported by{" "}
-            {selectedEntry?.name ?? "this provider"} — pick a supported transport above, readiness is blocked until you do.
+        <div className="settings-section-title">Provider connections</div>
+        {envOverridden && (
+          <div className="connection-env-banner" role="status">
+            <span className="connection-env-banner-label">Environment override</span>
+            <span>
+              {API_KEY_ENV_VAR} is set in the environment — it overrides every stored connection for new
+              sessions. Your saved connections are unaffected and remain selected for later.
+            </span>
           </div>
         )}
-        <div className="settings-field-row">
-          <button type="button" className="settings-button settings-button-primary" disabled={readOnly} onClick={() => void saveProvider()}>
-            Save provider settings
+        <div className="connection-grid" role="list" aria-label="Provider connections">
+          {connections.map((connection, index) => {
+            const catalogEntry = selectProviderEntry(catalog, connection.providerId || undefined);
+            const authKind = catalogEntry?.authKind ?? "api_key";
+            const credentialStatus = snapshot.secrets.find((s) => s.key === connectionSecretKey(connection.id, authKind));
+            const displayName = connectionDisplayName(connection, catalogEntry?.name ?? "Custom", connections);
+            return (
+              <div role="listitem" key={connection.id}>
+                <ConnectionTile
+                  connection={connection}
+                  catalogEntry={catalogEntry}
+                  displayName={displayName}
+                  credentialStatus={credentialStatus}
+                  selected={connection.id === activeConnectionId}
+                  checking={checkingIds.has(connection.id)}
+                  readOnly={readOnly}
+                  tabIndex={index === 0 ? 0 : -1}
+                  tileRef={(el) => {
+                    tileRefs.current[index] = el;
+                  }}
+                  onSelect={() => {
+                    if (connection.id !== activeConnectionId) {
+                      void store.getState().connectionSetActive({ id: connection.id });
+                    }
+                  }}
+                  onEdit={() => openEdit(connection.id)}
+                  onReplaceKey={() => openReplaceKey(connection, catalogEntry)}
+                  onCheck={() => void check(connection.id)}
+                  onDelete={() => void store.getState().connectionDelete({ id: connection.id })}
+                  onKeyDownRoving={(e) => onTileKeyDown(e, index)}
+                />
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            className="connection-tile connection-tile-add"
+            tabIndex={connections.length === 0 ? 0 : -1}
+            disabled={readOnly}
+            ref={(el) => {
+              tileRefs.current[connections.length] = el;
+            }}
+            onClick={openAdd}
+            onKeyDown={(e) => onTileKeyDown(e, connections.length)}
+          >
+            <Plus aria-hidden="true" />
+            <span>Add connection</span>
           </button>
         </div>
+        {connections.length === 0 && (
+          <p className="connection-grid-empty">No connections yet — add one to start a session.</p>
+        )}
       </section>
 
-      <section className="settings-section">
-        <div className="settings-section-title">{selectedEntry?.authKind === "oauth" ? "Sign-in" : "API key"}</div>
-        {envOverridden && (
-          <div className="settings-env-warning">
-            {API_KEY_ENV_VAR} is set in the environment and overrides the stored credential.
-          </div>
-        )}
-        {selectedEntry?.authKind === "oauth" ? (
-          <OAuthCredentialBlock
-            entry={selectedEntry}
-            status={credentialStatus}
-            pending={oauthPendingProviderId === selectedEntry.id}
-            readOnly={readOnly}
-            onSignIn={() => void store.getState().oauthStart(selectedEntry.id)}
-            onCancel={() => void store.getState().oauthCancel(selectedEntry.id)}
-            onSignOut={() => void clearSecretValue()}
-          />
-        ) : (
-          <>
-            <div className="settings-field-row">
-              {credentialStatus && (
-                <span className={`settings-secret-status settings-secret-status-${describeSecretStatus(credentialStatus).tone}`}>
-                  {describeSecretStatus(credentialStatus).text}
-                </span>
-              )}
-            </div>
-            <label className="settings-field">
-              <span className="settings-field-label">Set a new key (never displayed once saved)</span>
-              <input
-                className="settings-field-input"
-                type="password"
-                autoComplete="off"
-                value={secretValue}
-                disabled={readOnly}
-                placeholder="sk-…"
-                onChange={(e) => dispatchSecret({ type: "change", value: e.target.value })}
-              />
-            </label>
-            <div className="settings-field-row">
-              <button type="button" className="settings-button settings-button-primary" disabled={readOnly || !secretValue} onClick={() => void saveSecret()}>
-                Save key
-              </button>
-              <button
-                type="button"
-                className="settings-button settings-button-danger"
-                disabled={readOnly || !credentialStatus?.set}
-                onClick={() => void clearSecretValue()}
-              >
-                Clear key
-              </button>
-            </div>
-          </>
-        )}
-      </section>
+      <ConnectionDrawer
+        open={drawerOpen}
+        mode={drawerMode}
+        editConnection={editConnection}
+        catalog={catalog}
+        connections={connections}
+        secrets={snapshot.secrets}
+        readOnly={readOnly}
+        initialFocus={drawerFocus}
+        onClose={() => setDrawerOpen(false)}
+        store={store}
+      />
 
       <ConsentDialog
         open={pendingConsent !== null}
@@ -1325,7 +1186,7 @@ interface OAuthCredentialBlockProps {
  * anything beyond a `SecretStatus`-derived badge — no account label, no
  * token, structurally nothing else is available to render (custody).
  */
-function OAuthCredentialBlock({ entry, status, pending, readOnly, onSignIn, onCancel, onSignOut }: OAuthCredentialBlockProps) {
+export function OAuthCredentialBlock({ entry, status, pending, readOnly, onSignIn, onCancel, onSignOut }: OAuthCredentialBlockProps) {
   const described = describeOAuthStatus(status);
   return (
     <div className="settings-oauth-block">

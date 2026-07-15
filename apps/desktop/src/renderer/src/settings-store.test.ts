@@ -58,6 +58,10 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
     oauthStart: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies OAuthStartResult),
     oauthCancel: vi.fn().mockResolvedValue(undefined),
     connectionUpdate: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
+    connectionCreate: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
+    connectionSetActive: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
+    connectionDelete: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
+    connectionCheck: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     ...overrides,
   };
 }
@@ -139,6 +143,57 @@ describe("settings-store: plain mutations", () => {
 
     expect(bridge.addRule).toHaveBeenCalledWith({ toolName: "Bash", pattern: "git *" });
     expect(store.getState().snapshot).toEqual(withRule);
+  });
+});
+
+describe("settings-store: connection CRUD (TASK.45 W12)", () => {
+  it("connectionCreate applies the fresh snapshot on success", async () => {
+    const withConn = baseSnapshot({
+      settings: { ...baseSettings(), provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai" }] } },
+    });
+    const bridge = fakeBridge({ connectionCreate: vi.fn().mockResolvedValue({ ok: true, snapshot: withConn }) });
+    const store = createSettingsStore(bridge);
+
+    const result = await store.getState().connectionCreate({ providerId: "z-ai" });
+
+    expect(bridge.connectionCreate).toHaveBeenCalledWith({ providerId: "z-ai" });
+    expect(result).toEqual({ ok: true, snapshot: withConn });
+    expect(store.getState().snapshot).toEqual(withConn);
+  });
+
+  it("connectionSetActive applies the fresh snapshot on success", async () => {
+    const nowActive = baseSnapshot({
+      settings: { ...baseSettings(), provider: { activeConnectionId: "conn-2", connections: [] } },
+    });
+    const bridge = fakeBridge({ connectionSetActive: vi.fn().mockResolvedValue({ ok: true, snapshot: nowActive }) });
+    const store = createSettingsStore(bridge);
+
+    await store.getState().connectionSetActive({ id: "conn-2" });
+
+    expect(bridge.connectionSetActive).toHaveBeenCalledWith({ id: "conn-2" });
+    expect(store.getState().snapshot).toEqual(nowActive);
+  });
+
+  it("connectionDelete refused with connection_in_use sets the notice and leaves snapshot untouched", async () => {
+    const bridge = fakeBridge({ connectionDelete: vi.fn().mockResolvedValue({ ok: false, reason: "connection_in_use" }) });
+    const store = createSettingsStore(bridge);
+
+    const result = await store.getState().connectionDelete({ id: "conn-1" });
+
+    expect(result).toEqual({ ok: false, reason: "connection_in_use" });
+    expect(store.getState().snapshot).toBeNull();
+    expect(store.getState().notice).toBe(describeMutationFailure("connection_in_use"));
+  });
+
+  it("connectionCheck applies the fresh snapshot (post-probe health) on success", async () => {
+    const checked = baseSnapshot();
+    const bridge = fakeBridge({ connectionCheck: vi.fn().mockResolvedValue({ ok: true, snapshot: checked }) });
+    const store = createSettingsStore(bridge);
+
+    await store.getState().connectionCheck({ id: "conn-1" });
+
+    expect(bridge.connectionCheck).toHaveBeenCalledWith({ id: "conn-1" });
+    expect(store.getState().snapshot).toEqual(checked);
   });
 });
 

@@ -42,13 +42,16 @@ import {
   type CheckpointPanelDom,
   type TranscriptBlockDom,
   type TryAgainButtonDom,
+  type ProviderPaneDom,
+  type ProviderConnectionRowView,
+  type ProviderDrawerDomState,
 } from "./automation.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
 import type { GitDestructiveIntent, RetryOffer } from "./store.js";
 import { createTabRegistry, type TabRegistry } from "./tab-registry.js";
 import { createTabsStore, type TabsStoreApi } from "./tabs-store.js";
-import { createSettingsStore } from "./settings-store.js";
+import { createSettingsStore, type SettingsStoreApi } from "./settings-store.js";
 import type { GitCommand, HostToUiMessage, WireCheckpointMeta, WireEnvStatus, WireGitStatus } from "../../shared/protocol.js";
 import { uiToHostMessageSchema } from "../../shared/protocol.js";
 import type { CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
@@ -4671,6 +4674,495 @@ describe("automation facade — tryAgainButtonState/tryAgainButtonClick (TASK.33
       const tryAgainButtonDom: TryAgainButtonDom = { state: () => null, click: vi.fn(() => false) };
       const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
       expect(facade.tryAgainButtonClick(tabId, "loop_end:t1")).toEqual({ ok: false, reason: "not_present" });
+    });
+  });
+});
+
+describe("automation facade — provider connections grid/drawer probe/driver (TASK.45 W12)", () => {
+  /** Builds a facade wired ONLY for the provider-pane methods — registry/tabsStore are a fresh empty pair (the pane is shell-level, not tab-scoped, so neither is ever touched) and every other DOM slot keeps its own real (never-exercised) default. */
+  function buildFacade(settingsStore: SettingsStoreApi, providerPaneDom: ProviderPaneDom) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      settingsStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      providerPaneDom,
+    );
+  }
+
+  function settingsStoreWith(snapshot: SettingsSnapshot | null): SettingsStoreApi {
+    const store = createSettingsStore();
+    store.setState({ snapshot });
+    return store;
+  }
+
+  function row(overrides: Partial<ProviderConnectionRowView> = {}): ProviderConnectionRowView {
+    return {
+      connectionId: "conn-1",
+      providerName: "Z.AI",
+      displayName: "Z.AI",
+      model: "glm-5.2",
+      statusText: "Ready",
+      statusTone: "ok",
+      selected: false,
+      menuOpen: false,
+      confirmingDelete: false,
+      ...overrides,
+    };
+  }
+
+  function drawerState(overrides: Partial<ProviderDrawerDomState> = {}): ProviderDrawerDomState {
+    return {
+      embedded: false,
+      stage: "template",
+      providerId: "",
+      templateLocked: false,
+      label: "",
+      model: "",
+      transport: "",
+      transportOptions: ["anthropic-messages", "openai-chat-completions", "openai-responses"],
+      baseUrlVisible: false,
+      baseUrl: "",
+      authKind: "api_key",
+      apiKeyEntered: false,
+      credentialStatusText: null,
+      oauthPending: false,
+      primaryButtonLabel: "Create connection",
+      primaryButtonEnabled: false,
+      saveKeyEnabled: false,
+      clearKeyEnabled: false,
+      ...overrides,
+    };
+  }
+
+  /** A fully-controllable fake `ProviderPaneDom` (same discipline as `fakeSettingsDom`): read probes are frozen at construction via `overrides`; every drive method is a spy defaulting to a successful no-op click so a test can assert exactly which real DOM action the facade would have fired. */
+  function fakeProviderPaneDom(
+    overrides: Partial<{
+      gridMounted: boolean;
+      envOverrideVisible: boolean;
+      rows: ProviderConnectionRowView[];
+      drawer: ProviderDrawerDomState | null;
+    }> = {},
+  ): ProviderPaneDom {
+    return {
+      gridMounted: () => overrides.gridMounted ?? true,
+      envOverrideVisible: () => overrides.envOverrideVisible ?? false,
+      rows: () => overrides.rows ?? [],
+      clickAddTile: vi.fn<() => boolean>(() => true),
+      clickTileSelect: vi.fn<(connectionId: string) => boolean>(() => true),
+      clickMenuTrigger: vi.fn<(connectionId: string) => boolean>(() => true),
+      clickMenuItem: vi.fn<(connectionId: string, index: number) => boolean>(() => true),
+      clickConfirmDelete: vi.fn<(connectionId: string) => boolean>(() => true),
+      drawer: () => overrides.drawer ?? null,
+      setDrawerProvider: vi.fn<(value: string) => boolean>(() => true),
+      setDrawerLabel: vi.fn<(value: string) => boolean>(() => true),
+      setDrawerModel: vi.fn<(value: string) => boolean>(() => true),
+      setDrawerTransport: vi.fn<(value: string) => boolean>(() => true),
+      setDrawerBaseUrl: vi.fn<(value: string) => boolean>(() => true),
+      setDrawerApiKey: vi.fn<(value: string) => boolean>(() => true),
+      clickDrawerPrimary: vi.fn<() => boolean>(() => true),
+      clickDrawerSaveKey: vi.fn<() => boolean>(() => true),
+      clickDrawerClearKey: vi.fn<() => boolean>(() => true),
+      clickDrawerClose: vi.fn<() => boolean>(() => true),
+    };
+  }
+
+  describe("settingsProviderPaneState", () => {
+    it("reports the closed/empty shape when the grid isn't mounted — never reads rows or the drawer", () => {
+      const dom = fakeProviderPaneDom({ gridMounted: false });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      expect(facade.settingsProviderPaneState()).toEqual({
+        mounted: false,
+        envOverrideVisible: false,
+        rows: [],
+        drawer: {
+          open: false,
+          embedded: false,
+          stage: null,
+          providerId: null,
+          templateLocked: false,
+          label: null,
+          model: null,
+          transport: null,
+          transportOptions: [],
+          baseUrlVisible: false,
+          baseUrl: null,
+          authKind: null,
+          apiKeyEntered: false,
+          credentialStatusText: null,
+          oauthPending: false,
+          primaryButtonLabel: null,
+          primaryButtonEnabled: false,
+          saveKeyEnabled: false,
+          clearKeyEnabled: false,
+        },
+      });
+    });
+
+    it("reports mounted rows + env banner + an open drawer straight off the DOM accessor, never a re-derived guess", () => {
+      const r = row({ connectionId: "conn-9", selected: true, statusText: "Key invalid", statusTone: "danger" });
+      const d = drawerState({ stage: "credential", providerId: "z-ai", label: "Work", primaryButtonLabel: "Save changes", primaryButtonEnabled: true });
+      const dom = fakeProviderPaneDom({ gridMounted: true, envOverrideVisible: true, rows: [r], drawer: d });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      expect(facade.settingsProviderPaneState()).toEqual({
+        mounted: true,
+        envOverrideVisible: true,
+        rows: [r],
+        drawer: { open: true, ...d },
+      });
+    });
+  });
+
+  describe("settingsProviderAddOpen", () => {
+    it("refuses with grid_not_mounted when the Settings provider pane isn't rendered", async () => {
+      const dom = fakeProviderPaneDom({ gridMounted: false });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderAddOpen()).resolves.toEqual({ ok: false, reason: "grid_not_mounted" });
+      expect(dom.clickAddTile).not.toHaveBeenCalled();
+    });
+
+    it("no-ops (ok:true) without clicking when the drawer is already open", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState() });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderAddOpen()).resolves.toEqual({ ok: true });
+      expect(dom.clickAddTile).not.toHaveBeenCalled();
+    });
+
+    it("clicks the trailing + Add connection tile and succeeds once the drawer commits (mounts only after a tick)", async () => {
+      let drawer: ProviderDrawerDomState | null = null;
+      const clickAddTile = vi.fn(() => {
+        setTimeout(() => {
+          drawer = drawerState();
+        }, 0);
+        return true;
+      });
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom(), drawer: () => drawer, clickAddTile };
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderAddOpen()).resolves.toEqual({ ok: true });
+      expect(clickAddTile).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses with did_not_open when the drawer never mounts, bounded by the commit-poll deadline rather than hanging", async () => {
+      const dom = fakeProviderPaneDom({ drawer: null });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      const start = Date.now();
+      await expect(facade.settingsProviderAddOpen()).resolves.toEqual({ ok: false, reason: "did_not_open" });
+      expect(Date.now() - start).toBeLessThan(4000);
+    });
+  });
+
+  describe("settingsProviderTileClick", () => {
+    it("refuses with grid_not_mounted", async () => {
+      const dom = fakeProviderPaneDom({ gridMounted: false });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderTileClick({ connectionId: "conn-1" })).resolves.toEqual({ ok: false, reason: "grid_not_mounted" });
+    });
+
+    it("refuses with connection_not_found for an id absent from the grid", async () => {
+      const dom = fakeProviderPaneDom({ rows: [row({ connectionId: "conn-1" })] });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderTileClick({ connectionId: "conn-ghost" })).resolves.toEqual({
+        ok: false,
+        reason: "connection_not_found",
+      });
+    });
+
+    it("no-ops (ok:true) without clicking when the connection is already the default (mirrors ProviderSettings.tsx's own onSelect guard)", async () => {
+      const dom = fakeProviderPaneDom({ rows: [row({ selected: true })] });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderTileClick({ connectionId: "conn-1" })).resolves.toEqual({ ok: true });
+      expect(dom.clickTileSelect).not.toHaveBeenCalled();
+    });
+
+    it("clicks the tile's select button and succeeds once the settings snapshot's object reference changes (a fresh object from connection-set-active)", async () => {
+      const store = settingsStoreWith(null);
+      const clickTileSelect = vi.fn(() => {
+        setTimeout(() => {
+          store.setState({ snapshot: { settings: {} } as unknown as SettingsSnapshot });
+        }, 0);
+        return true;
+      });
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom({ rows: [row({ selected: false })] }), clickTileSelect };
+      const facade = buildFacade(store, dom);
+      await expect(facade.settingsProviderTileClick({ connectionId: "conn-1" })).resolves.toEqual({ ok: true });
+      expect(clickTileSelect).toHaveBeenCalledWith("conn-1");
+    });
+  });
+
+  describe("settingsProviderMenuAction", () => {
+    it("refuses with grid_not_mounted", async () => {
+      const dom = fakeProviderPaneDom({ gridMounted: false });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderMenuAction({ connectionId: "conn-1", action: "edit" })).resolves.toEqual({
+        ok: false,
+        reason: "grid_not_mounted",
+      });
+    });
+
+    it("refuses with connection_not_found for an id absent from the grid", async () => {
+      const dom = fakeProviderPaneDom({ rows: [] });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderMenuAction({ connectionId: "conn-ghost", action: "edit" })).resolves.toEqual({
+        ok: false,
+        reason: "connection_not_found",
+      });
+    });
+
+    it("edit (index 0): opens the closed menu first, then clicks item 0, then waits for the drawer to open", async () => {
+      let menuOpen = false;
+      let drawer: ProviderDrawerDomState | null = null;
+      const clickMenuTrigger = vi.fn(() => {
+        menuOpen = true;
+        return true;
+      });
+      const clickMenuItem = vi.fn((_id: string, index: number) => {
+        if (index === 0) {
+          setTimeout(() => {
+            drawer = drawerState({ stage: "credential" });
+          }, 0);
+        }
+        return true;
+      });
+      const dom: ProviderPaneDom = {
+        ...fakeProviderPaneDom(),
+        rows: () => [row({ menuOpen })],
+        drawer: () => drawer,
+        clickMenuTrigger,
+        clickMenuItem,
+      };
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderMenuAction({ connectionId: "conn-1", action: "edit" })).resolves.toEqual({ ok: true });
+      expect(clickMenuTrigger).toHaveBeenCalledWith("conn-1");
+      expect(clickMenuItem).toHaveBeenCalledWith("conn-1", 0);
+    });
+
+    it("does not re-open an already-open menu before clicking the item", async () => {
+      const clickMenuTrigger = vi.fn(() => true);
+      const dom: ProviderPaneDom = {
+        ...fakeProviderPaneDom({ rows: [row({ menuOpen: true })], drawer: drawerState() }),
+        clickMenuTrigger,
+      };
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderMenuAction({ connectionId: "conn-1", action: "check" })).resolves.toEqual({ ok: true });
+      expect(clickMenuTrigger).not.toHaveBeenCalled();
+    });
+
+    it("check (index 2): settles once the settings snapshot's object reference changes (a fresh object from connection-check)", async () => {
+      const store = settingsStoreWith(null);
+      const clickMenuItem = vi.fn((_id: string, index: number) => {
+        if (index === 2) {
+          setTimeout(() => {
+            store.setState({ snapshot: { settings: {} } as unknown as SettingsSnapshot });
+          }, 0);
+        }
+        return true;
+      });
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom({ rows: [row({ menuOpen: true })] }), clickMenuItem };
+      const facade = buildFacade(store, dom);
+      await expect(facade.settingsProviderMenuAction({ connectionId: "conn-1", action: "check" })).resolves.toEqual({ ok: true });
+      expect(clickMenuItem).toHaveBeenCalledWith("conn-1", 2);
+    });
+
+    it("delete (index 3): clicks the item to open the inline confirm view, THEN drives that view's own Delete button — a distinct node from the menu item", async () => {
+      let confirmingDelete = false;
+      const store = settingsStoreWith(null);
+      const clickMenuItem = vi.fn((_id: string, index: number) => {
+        if (index === 3) {
+          confirmingDelete = true;
+        }
+        return true;
+      });
+      const clickConfirmDelete = vi.fn(() => {
+        setTimeout(() => {
+          store.setState({ snapshot: { settings: {} } as unknown as SettingsSnapshot });
+        }, 0);
+        return true;
+      });
+      const dom: ProviderPaneDom = {
+        ...fakeProviderPaneDom(),
+        rows: () => [row({ menuOpen: true, confirmingDelete })],
+        clickMenuItem,
+        clickConfirmDelete,
+      };
+      const facade = buildFacade(store, dom);
+      await expect(facade.settingsProviderMenuAction({ connectionId: "conn-1", action: "delete" })).resolves.toEqual({ ok: true });
+      expect(clickMenuItem).toHaveBeenCalledWith("conn-1", 3);
+      expect(clickConfirmDelete).toHaveBeenCalledWith("conn-1");
+    });
+  });
+
+  describe("settingsProviderDrawerSet", () => {
+    it("refuses with drawer_not_open when the drawer isn't mounted", async () => {
+      const dom = fakeProviderPaneDom({ drawer: null });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerSet({ label: "Work" })).resolves.toEqual({ ok: false, reason: "drawer_not_open" });
+    });
+
+    it("refuses with <field>_unavailable when a requested field's control isn't present/enabled", async () => {
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom({ drawer: drawerState() }), setDrawerLabel: vi.fn(() => false) };
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerSet({ label: "Work" })).resolves.toEqual({ ok: false, reason: "label_unavailable" });
+    });
+
+    it("sets every provided field via its own native setter, in order, and stops at the first failure", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState() });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(
+        facade.settingsProviderDrawerSet({
+          providerId: "z-ai",
+          label: "Work",
+          model: "glm-5.2",
+          transport: "anthropic-messages",
+          baseUrl: "https://x",
+          apiKey: "sk-test",
+        }),
+      ).resolves.toEqual({ ok: true });
+      expect(dom.setDrawerProvider).toHaveBeenCalledWith("z-ai");
+      expect(dom.setDrawerLabel).toHaveBeenCalledWith("Work");
+      expect(dom.setDrawerModel).toHaveBeenCalledWith("glm-5.2");
+      expect(dom.setDrawerTransport).toHaveBeenCalledWith("anthropic-messages");
+      expect(dom.setDrawerBaseUrl).toHaveBeenCalledWith("https://x");
+      expect(dom.setDrawerApiKey).toHaveBeenCalledWith("sk-test");
+    });
+
+    it("never touches a field the caller didn't ask for", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState() });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerSet({ label: "Work" })).resolves.toEqual({ ok: true });
+      expect(dom.setDrawerProvider).not.toHaveBeenCalled();
+      expect(dom.setDrawerModel).not.toHaveBeenCalled();
+      expect(dom.setDrawerApiKey).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("settingsProviderDrawerSubmit", () => {
+    it("refuses with drawer_not_open", async () => {
+      const dom = fakeProviderPaneDom({ drawer: null });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerSubmit()).resolves.toEqual({ ok: false, reason: "drawer_not_open" });
+    });
+
+    it("refuses with submit_disabled without clicking when the primary button is disabled", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState({ primaryButtonEnabled: false }) });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerSubmit()).resolves.toEqual({ ok: false, reason: "submit_disabled" });
+      expect(dom.clickDrawerPrimary).not.toHaveBeenCalled();
+    });
+
+    it("clicks the primary button and succeeds once the settings snapshot's object reference changes (custody: the SAME settle signal the drawer's own doc comment specifies — the credential input's rendered text can read byte-identical before/after a same-shaped replace)", async () => {
+      const store = settingsStoreWith(null);
+      const clickDrawerPrimary = vi.fn(() => {
+        setTimeout(() => {
+          store.setState({ snapshot: { settings: {} } as unknown as SettingsSnapshot });
+        }, 0);
+        return true;
+      });
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom({ drawer: drawerState({ primaryButtonEnabled: true }) }), clickDrawerPrimary };
+      const facade = buildFacade(store, dom);
+      await expect(facade.settingsProviderDrawerSubmit()).resolves.toEqual({ ok: true });
+      expect(clickDrawerPrimary).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses with did_not_settle when the snapshot never changes, bounded by the commit-poll deadline rather than hanging", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState({ primaryButtonEnabled: true }) });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      const start = Date.now();
+      await expect(facade.settingsProviderDrawerSubmit()).resolves.toEqual({ ok: false, reason: "did_not_settle" });
+      expect(Date.now() - start).toBeLessThan(4000);
+    });
+  });
+
+  describe("settingsProviderDrawerSaveKey / settingsProviderDrawerClearKey", () => {
+    it("SaveKey refuses with save_key_disabled without clicking when disabled", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState({ saveKeyEnabled: false }) });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerSaveKey()).resolves.toEqual({ ok: false, reason: "save_key_disabled" });
+      expect(dom.clickDrawerSaveKey).not.toHaveBeenCalled();
+    });
+
+    it("SaveKey clicks Save key and succeeds once the snapshot changes (a fresh object from secret-set)", async () => {
+      const store = settingsStoreWith(null);
+      const clickDrawerSaveKey = vi.fn(() => {
+        setTimeout(() => {
+          store.setState({ snapshot: { settings: {} } as unknown as SettingsSnapshot });
+        }, 0);
+        return true;
+      });
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom({ drawer: drawerState({ saveKeyEnabled: true }) }), clickDrawerSaveKey };
+      const facade = buildFacade(store, dom);
+      await expect(facade.settingsProviderDrawerSaveKey()).resolves.toEqual({ ok: true });
+      expect(clickDrawerSaveKey).toHaveBeenCalledTimes(1);
+    });
+
+    it("ClearKey refuses with clear_key_disabled without clicking when disabled (no credential set to clear)", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState({ clearKeyEnabled: false }) });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerClearKey()).resolves.toEqual({ ok: false, reason: "clear_key_disabled" });
+      expect(dom.clickDrawerClearKey).not.toHaveBeenCalled();
+    });
+
+    it("ClearKey clicks Clear key and succeeds once the snapshot changes (a fresh object from secret-clear)", async () => {
+      const store = settingsStoreWith(null);
+      const clickDrawerClearKey = vi.fn(() => {
+        setTimeout(() => {
+          store.setState({ snapshot: { settings: {} } as unknown as SettingsSnapshot });
+        }, 0);
+        return true;
+      });
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom({ drawer: drawerState({ clearKeyEnabled: true }) }), clickDrawerClearKey };
+      const facade = buildFacade(store, dom);
+      await expect(facade.settingsProviderDrawerClearKey()).resolves.toEqual({ ok: true });
+      expect(clickDrawerClearKey).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("settingsProviderDrawerClose", () => {
+    it("no-ops (ok:true) without clicking when the drawer is already closed", async () => {
+      const dom = fakeProviderPaneDom({ drawer: null });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerClose()).resolves.toEqual({ ok: true });
+      expect(dom.clickDrawerClose).not.toHaveBeenCalled();
+    });
+
+    it("refuses with no_close_affordance for the WelcomeScreen embed (neither an X nor a Done button exists to click)", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState({ embedded: true }) });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerClose()).resolves.toEqual({ ok: false, reason: "no_close_affordance" });
+      expect(dom.clickDrawerClose).not.toHaveBeenCalled();
+    });
+
+    it("clicks the close control and succeeds once the drawer unmounts (mirrors X-then-Done, then a refusal)", async () => {
+      let drawer: ProviderDrawerDomState | null = drawerState({ embedded: false });
+      const clickDrawerClose = vi.fn(() => {
+        setTimeout(() => {
+          drawer = null;
+        }, 0);
+        return true;
+      });
+      const dom: ProviderPaneDom = { ...fakeProviderPaneDom(), drawer: () => drawer, clickDrawerClose };
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerClose()).resolves.toEqual({ ok: true });
+      expect(clickDrawerClose).toHaveBeenCalledTimes(1);
     });
   });
 });

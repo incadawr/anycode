@@ -535,6 +535,14 @@
   color: var(--text-2);
 }
 
+/* Fourth tone (TASK.45 W12): a DISCRIMINATED credential failure (auth_invalid/
+   forbidden) only — distinct from the amber "warn" tone (429/timeout/5xx/bad
+   model), which must never paint red (task §3 table). */
+.settings-secret-status-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .settings-env-warning {
   font-size: var(--fs-xs);
   color: var(--warning);
@@ -552,6 +560,337 @@
   font-size: var(--fs-sm);
   color: var(--text-dim);
   font-style: italic;
+}
+
+/* ── Provider connections grid + tile (TASK.45 W12, cut §"Компактная сетка подключений") ── */
+
+.connection-env-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.connection-env-banner-label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--warning);
+}
+
+.connection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 0.6rem;
+}
+
+/* Responsive fallback to a single column (design §"Компактная сетка": keyboard
+   nav + a single-column layout on narrow widths). */
+@media (max-width: 30rem) {
+  .connection-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.connection-tile {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+}
+
+.connection-tile-selected {
+  border-color: var(--accent);
+}
+
+.connection-tile-select {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.6rem 0.7rem;
+  padding-right: 2.2rem; /* clears the menu trigger */
+  background: transparent;
+  border: none;
+  border-radius: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.connection-tile-select:hover {
+  background: var(--bg-hover);
+}
+
+.connection-tile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.connection-tile-provider {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.connection-tile-selected-marker {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.connection-tile-selected-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.connection-tile-name {
+  font-size: var(--fs-md);
+  font-weight: var(--w-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-tile-model {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-tile-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--fs-xs);
+}
+
+.connection-tile-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--r-full);
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+
+.connection-tile-status-ok .connection-tile-status-dot {
+  background: var(--success);
+}
+.connection-tile-status-ok {
+  color: var(--success);
+}
+
+.connection-tile-status-warn .connection-tile-status-dot {
+  background: var(--warning);
+}
+.connection-tile-status-warn {
+  color: var(--warning);
+}
+
+.connection-tile-status-danger .connection-tile-status-dot {
+  background: var(--danger);
+}
+.connection-tile-status-danger {
+  color: var(--danger);
+}
+
+.connection-tile-status-muted {
+  color: var(--text-2);
+}
+
+.connection-tile-menu {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+}
+
+.connection-tile-menu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.connection-tile-menu-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.connection-tile-menu-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 10rem;
+  margin-top: 0.2rem;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-overlay);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.connection-tile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.connection-tile-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.connection-tile-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.connection-tile-menu-danger {
+  color: var(--danger);
+}
+
+.connection-tile-confirm {
+  gap: 0.4rem;
+}
+
+.connection-tile-confirm-text {
+  margin: 0;
+  padding: 0.2rem 0.3rem;
+  font-size: var(--fs-sm);
+}
+
+.connection-tile-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.connection-tile-add {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 5.5rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.connection-tile-add:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.connection-tile-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.connection-grid-empty {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+/* ── Connection add/edit drawer (TASK.45 W12, cut §"Add/Edit flow") ── */
+
+.connection-drawer {
+  width: min(28rem, 92vw);
+  max-height: 85vh;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-overlay);
+  color: var(--text);
+}
+
+.connection-drawer::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.connection-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.connection-drawer-title {
+  font-size: var(--fs-md);
+  font-weight: var(--w-semibold);
+}
+
+.connection-drawer-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.connection-drawer-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.connection-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  overflow-y: auto;
+}
+
+.connection-drawer-credential {
+  padding-top: 0.3rem;
+  border-top: 1px solid var(--border);
+}
+
+.connection-drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 0.4rem;
 }
 
 /* ── MCP status row (slice 3.2, design §6, task 3.2.4): status display only, no server-management UI (§5.1) ── */

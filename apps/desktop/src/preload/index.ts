@@ -101,6 +101,10 @@ import type {
 } from "../shared/profile-config.js";
 import { TERMINAL_PORT_ENVELOPE_TYPE, type TerminalPortEnvelope } from "../shared/terminal.js";
 import {
+  CONNECTION_CHECK_CHANNEL,
+  CONNECTION_CREATE_CHANNEL,
+  CONNECTION_DELETE_CHANNEL,
+  CONNECTION_SET_ACTIVE_CHANNEL,
   CONNECTION_UPDATE_CHANNEL,
   OAUTH_CANCEL_CHANNEL,
   OAUTH_START_CHANNEL,
@@ -111,6 +115,10 @@ import {
   SETTINGS_SET_CHANNEL,
 } from "../shared/settings.js";
 import type {
+  ConnectionCheckRequest,
+  ConnectionCreateRequest,
+  ConnectionDeleteRequest,
+  ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
@@ -292,6 +300,18 @@ contextBridge.exposeInMainWorld("anycode", {
     // id (off the v1-patch shim). Returns a fresh snapshot; never carries a secret.
     connectionUpdate: (req: ConnectionUpdateRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_UPDATE_CHANNEL, req) as Promise<SettingsMutationResult>,
+    // TASK.45 W12: the connections grid/drawer's CRUD surface — main-authoritative,
+    // additive. No credential ever crosses these (create/update payloads are
+    // `.strict()`-refused if they carry one); a value only ever travels via
+    // `setSecret`.
+    connectionCreate: (req: ConnectionCreateRequest): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(CONNECTION_CREATE_CHANNEL, req) as Promise<SettingsMutationResult>,
+    connectionSetActive: (req: ConnectionSetActiveRequest): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(CONNECTION_SET_ACTIVE_CHANNEL, req) as Promise<SettingsMutationResult>,
+    connectionDelete: (req: ConnectionDeleteRequest): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(CONNECTION_DELETE_CHANNEL, req) as Promise<SettingsMutationResult>,
+    connectionCheck: (req: ConnectionCheckRequest): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(CONNECTION_CHECK_CHANNEL, req) as Promise<SettingsMutationResult>,
   },
   // P7.19/F22 W2 (design/slice-P7.19-cut.md §3/§4): `mcpConfig.*` — five more
   // thin invoke wrappers over the MCP config-management channels (main owns

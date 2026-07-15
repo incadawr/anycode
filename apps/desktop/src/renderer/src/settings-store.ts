@@ -31,6 +31,10 @@
 import { create } from "zustand";
 import type {
   AlwaysAllowRule,
+  ConnectionCheckRequest,
+  ConnectionCreateRequest,
+  ConnectionDeleteRequest,
+  ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
   OAuthStartReason,
   OAuthStartResult,
@@ -58,6 +62,12 @@ export interface SettingsBridge {
   // TASK.45 W10: main-authoritative connection metadata update (ModelPill's
   // model/effort write). Never carries a secret; resolves with a fresh snapshot.
   connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
+  // TASK.45 W12: the connections grid/drawer's remaining CRUD surface — create/
+  // set-active/delete/check. Never carries a secret; resolves with a fresh snapshot.
+  connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult>;
+  connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
+  connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
+  connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
 }
 
 /**
@@ -130,6 +140,18 @@ export interface SettingsAppState {
    * success; a refusal sets a `notice`. Never carries a secret.
    */
   connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
+  /**
+   * TASK.45 W12: the remaining connection CRUD actions the grid/drawer drives —
+   * create (drawer add-flow), set-active (a tile click), delete (tile menu, with
+   * `connection_in_use` surfaced via `notice`), check (tile menu's explicit
+   * "Check" — never a hidden billable request). Same discipline as
+   * `connectionUpdate`: refreshes the snapshot on success, sets a `notice` on
+   * refusal, never carries a secret.
+   */
+  connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult>;
+  connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
+  connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
+  connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
 
   // ── slice 2.6 (auto-updater, design §6) ──
   /** Last `UpdateStatus` pushed by main; `idle` until `subscribeUpdates` has wired the push channel (or nothing has happened yet in a dev build). */
@@ -286,6 +308,46 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
 
     async clearSecret(key: SecretKey): Promise<SettingsMutationResult> {
       const result = await api().clearSecret(key);
+      if (result.ok) {
+        set({ snapshot: result.snapshot });
+      } else {
+        set({ notice: describeMutationFailure(result.reason) });
+      }
+      return result;
+    },
+
+    async connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult> {
+      const result = await api().connectionCreate(req);
+      if (result.ok) {
+        set({ snapshot: result.snapshot });
+      } else {
+        set({ notice: describeMutationFailure(result.reason) });
+      }
+      return result;
+    },
+
+    async connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult> {
+      const result = await api().connectionSetActive(req);
+      if (result.ok) {
+        set({ snapshot: result.snapshot });
+      } else {
+        set({ notice: describeMutationFailure(result.reason) });
+      }
+      return result;
+    },
+
+    async connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult> {
+      const result = await api().connectionDelete(req);
+      if (result.ok) {
+        set({ snapshot: result.snapshot });
+      } else {
+        set({ notice: describeMutationFailure(result.reason) });
+      }
+      return result;
+    },
+
+    async connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult> {
+      const result = await api().connectionCheck(req);
       if (result.ok) {
         set({ snapshot: result.snapshot });
       } else {

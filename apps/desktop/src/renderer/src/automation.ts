@@ -1367,6 +1367,143 @@ export interface TranscriptBlockDom {
   count(tabId: string): number;
 }
 
+/**
+ * One `ConnectionTile` row as `settingsProviderPaneState` reads it (TASK.45
+ * W12): every field is read straight off the tile's own rendered DOM tokens
+ * (name/model text, the `connection-tile-status-<tone>` class, `aria-pressed`,
+ * the menu-popover/confirm-view's mere presence) — same "cannot drift from
+ * what a user actually sees" discipline as `realLspPanelDom`'s state-class
+ * reads above, never a re-derived guess of `ConnectionTile`'s own props.
+ */
+export interface ProviderConnectionRowView {
+  connectionId: string;
+  providerName: string;
+  displayName: string;
+  model: string;
+  statusText: string;
+  statusTone: string;
+  selected: boolean;
+  menuOpen: boolean;
+  confirmingDelete: boolean;
+}
+
+/**
+ * The live DOM read backing `ProviderDrawerView` below (TASK.45 W12): `stage`
+ * mirrors `ConnectionDrawerFields`' own `createdConnectionId === null` split
+ * (design §"Add/Edit flow" sequencing) — `"template"` before a connection
+ * exists yet, `"credential"` once metadata is minted and the credential
+ * section has activated. `embedded` distinguishes the WelcomeScreen first-run
+ * embed (no dialog chrome, no close affordance) from the Settings grid's
+ * `ConnectionDrawer` wrapper.
+ */
+export interface ProviderDrawerDomState {
+  embedded: boolean;
+  stage: "template" | "credential";
+  providerId: string;
+  templateLocked: boolean;
+  label: string;
+  model: string;
+  transport: string;
+  transportOptions: string[];
+  baseUrlVisible: boolean;
+  baseUrl: string;
+  authKind: "api_key" | "oauth";
+  /** Whether the credential input currently holds a non-empty typed value — never the value itself (custody: a plaintext-in-progress credential never crosses this dev-only channel either). */
+  apiKeyEntered: boolean;
+  credentialStatusText: string | null;
+  oauthPending: boolean;
+  primaryButtonLabel: string | null;
+  primaryButtonEnabled: boolean;
+  saveKeyEnabled: boolean;
+  clearKeyEnabled: boolean;
+}
+
+/**
+ * DOM accessor DI for the provider connections grid + drawer probe/driver
+ * (TASK.45 W12), same injectable-for-tests discipline as `SettingsDom`.
+ * `rows()`/`drawer()` return the empty/`null` reading when their respective
+ * root (`.connection-grid` / `.connection-drawer-body`) isn't in the DOM —
+ * the facade turns that into the valid "not mounted"/"closed" state, never an
+ * error (same "no mirrored state" posture as every other pane probe). Every
+ * click method fires a real `.click()` on the exact node a user would press,
+ * returning `false` for a no-op (control absent or disabled) rather than
+ * throwing — mirrors `SettingsDom`'s own click-method discipline.
+ */
+export interface ProviderPaneDom {
+  gridMounted(): boolean;
+  envOverrideVisible(): boolean;
+  rows(): ProviderConnectionRowView[];
+  clickAddTile(): boolean;
+  clickTileSelect(connectionId: string): boolean;
+  clickMenuTrigger(connectionId: string): boolean;
+  /** Clicks the tile's Nth open-menu item — 0=Edit, 1=Replace key/Sign in-out, 2=Check, 3=Delete (`ConnectionTile.tsx`'s own render order, stable regardless of the Replace-key label's auth-kind-dependent text). */
+  clickMenuItem(connectionId: string, index: number): boolean;
+  /** Clicks the tile menu's inline delete-confirm popover's own "Delete" button. */
+  clickConfirmDelete(connectionId: string): boolean;
+  drawer(): ProviderDrawerDomState | null;
+  setDrawerProvider(value: string): boolean;
+  setDrawerLabel(value: string): boolean;
+  setDrawerModel(value: string): boolean;
+  setDrawerTransport(value: string): boolean;
+  setDrawerBaseUrl(value: string): boolean;
+  setDrawerApiKey(value: string): boolean;
+  /** Clicks the drawer's own top-level action button ("Create connection"/"Save" pre-creation, "Save changes" post-creation). */
+  clickDrawerPrimary(): boolean;
+  /** Clicks the credential section's primary action (API key "Save key" OR OAuth "Sign in" — both are "establish this connection's credential"). */
+  clickDrawerSaveKey(): boolean;
+  /** Clicks the credential section's danger action (API key "Clear key" OR OAuth "Sign out"). */
+  clickDrawerClearKey(): boolean;
+  /** X, then the footer "Done" button, else `false` (the WelcomeScreen embed has neither). */
+  clickDrawerClose(): boolean;
+}
+
+/** The tile menu's four actions (`ConnectionTile.tsx`'s own render order — see `ProviderPaneDom.clickMenuItem`'s doc comment). */
+export type ProviderMenuAction = "edit" | "replace_key" | "check" | "delete";
+
+/**
+ * `settingsProviderPaneState`'s drawer reading (TASK.45 W12): `open: false`
+ * (every other field `null`/empty/`false`) is the closed reading; `open:
+ * true` mirrors `ProviderDrawerDomState` verbatim (see that interface's own
+ * doc comment for field semantics) — this is deliberately the SAME shape
+ * plus the `open` discriminant, not a re-derived summary of it.
+ */
+export interface ProviderDrawerView {
+  open: boolean;
+  embedded: boolean;
+  stage: "template" | "credential" | null;
+  providerId: string | null;
+  templateLocked: boolean;
+  label: string | null;
+  model: string | null;
+  transport: string | null;
+  transportOptions: string[];
+  baseUrlVisible: boolean;
+  baseUrl: string | null;
+  authKind: "api_key" | "oauth" | null;
+  apiKeyEntered: boolean;
+  credentialStatusText: string | null;
+  oauthPending: boolean;
+  primaryButtonLabel: string | null;
+  primaryButtonEnabled: boolean;
+  saveKeyEnabled: boolean;
+  clearKeyEnabled: boolean;
+}
+
+/**
+ * `settingsProviderPaneState`'s ok-shape (TASK.45 W12): unlike every tab-
+ * scoped probe above, the provider pane is NOT tab-scoped (Settings/Welcome
+ * are shell-level), so there is no `tab_not_active` structural refusal here —
+ * `mounted: false` (grid not rendered) and `drawer.open: false` (drawer not
+ * rendered) are both ordinary readings, never an error, same "no mirrored
+ * state" posture as every other pane probe in this file.
+ */
+export interface ProviderPaneState {
+  mounted: boolean;
+  envOverrideVisible: boolean;
+  rows: ProviderConnectionRowView[];
+  drawer: ProviderDrawerView;
+}
+
 /* */
 export interface AnycodeBridge {
   createTab(request: CreateTabRequest): Promise<CreateTabResult>;
@@ -1575,6 +1712,44 @@ export interface AutomationFacade {
     tabId: string,
     args: { checkpointId?: string; index?: number; scope: RewindScopeWire },
   ): Promise<CheckpointRewindResult | FacadeErr>;
+  // ── Provider connections pane probe/driver (TASK.45 W12) — a DEDICATED
+  // probe, every prior probe above stays byte-untouched. `settingsProviderPaneState`
+  // reads the mounted grid (`ProviderSettings`) AND the drawer
+  // (`ConnectionDrawerFields`, mounted either inside the Settings dialog's
+  // `ConnectionDrawer` or embedded raw in WelcomeScreen's first-run flow) in
+  // ONE read, same "no mirrored state" discipline as the other pane probes: an
+  // unmounted grid reads as `rows:[]`/`envOverrideVisible:false`; a closed
+  // drawer reads as `drawer.open:false`. `settingsProviderAddOpen` clicks the
+  // trailing "+ Add connection" tile; `settingsProviderTileClick` clicks a
+  // tile's own select button (make-default); `settingsProviderMenuAction`
+  // opens a tile's overflow menu and invokes ONE of its four items — `delete`
+  // additionally drives the inline confirm popover's own Delete button.
+  // `settingsProviderDrawerSet` drives the drawer's fields via the SAME
+  // native-setter + `fieldByLabel` discipline as the rest of this file;
+  // `settingsProviderDrawerSubmit`/`SaveKey`/`ClearKey` click the drawer's own
+  // buttons and wait for the settings-store's `snapshot` object reference to
+  // change (a fresh object on every successful round-trip through
+  // `connectionCreate`/`Update`/`setSecret`/`clearSecret` — a more reliable
+  // settle signal than the rendered text, which can read byte-identical
+  // before/after a same-shaped credential replace). `settingsProviderDrawerClose`
+  // mirrors the brief's own close-affordance fallback (X, then Done, then a
+  // refusal) — the WelcomeScreen embed has neither. ──
+  settingsProviderPaneState(): ProviderPaneState;
+  settingsProviderAddOpen(): Promise<FacadeResult>;
+  settingsProviderTileClick(args: { connectionId: string }): Promise<FacadeResult>;
+  settingsProviderMenuAction(args: { connectionId: string; action: ProviderMenuAction }): Promise<FacadeResult>;
+  settingsProviderDrawerSet(args: {
+    providerId?: string;
+    label?: string;
+    model?: string;
+    transport?: string;
+    baseUrl?: string;
+    apiKey?: string;
+  }): Promise<FacadeResult>;
+  settingsProviderDrawerSubmit(): Promise<FacadeResult>;
+  settingsProviderDrawerSaveKey(): Promise<FacadeResult>;
+  settingsProviderDrawerClearKey(): Promise<FacadeResult>;
+  settingsProviderDrawerClose(): Promise<FacadeResult>;
 }
 
 /** The real `window.anycode` bridge, resolved lazily (only read when a caller omits the `bridge` DI parameter — never at module load, so this file stays importable from a plain Node test context with no `window`). */
@@ -2136,6 +2311,20 @@ function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string): v
     textarea.value = value;
   }
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/**
+ * Sets a value on a React-controlled `<select>` the way a real option-pick
+ * would (TASK.45 W12): unlike `<input>`/`<textarea>`, React does not patch
+ * `HTMLSelectElement.prototype.value` with its own tracked setter (a select's
+ * value is derived from its `<option>` children, not a single text property
+ * React needs to "un-stick"), so a plain `select.value = x` assignment is
+ * already visible; the native `change` event (not `input`) is what a
+ * `<select>`'s own `onChange` listens for.
+ */
+function setNativeSelectValue(select: HTMLSelectElement, value: string): void {
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 /** Parses `formatEffectiveToolsLine`'s rendered caption ("Effective tools: a, b, c" / "Effective tools: none") back into an array; `null` propagates a missing/absent line (SubagentsPane.tsx's own helper is the format oracle — this is its exact inverse). */
@@ -2771,6 +2960,265 @@ function realTranscriptBlockDom(): TranscriptBlockDom {
 }
 
 /**
+ * The real provider-connections grid + drawer DOM accessor (TASK.45 W12),
+ * same laziness/document-query posture as `realSettingsDom` above.
+ * `fieldControl` walks to the `label.settings-field` whose own
+ * `.settings-field-label` text matches exactly, then returns the input/select
+ * it wraps — the SAME implicit label/control association a screen reader
+ * relies on (`ConnectionDrawerFields.tsx` renders each as a native `<label>`
+ * wrapping both the caption and the control), so this reads the form the same
+ * way an a11y tree would, not a re-derived guess of its markup. The credential
+ * input is looked up structurally (`input[type="password"]`) instead, since
+ * its caption text is auth-kind/status-dependent ("API key" vs "Replace
+ * key…").
+ */
+function realProviderPaneDom(): ProviderPaneDom {
+  function grid(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(".connection-grid");
+  }
+  function tileEl(connectionId: string): HTMLElement | null {
+    return grid()?.querySelector<HTMLElement>(`[data-connection-id="${CSS.escape(connectionId)}"]`) ?? null;
+  }
+  function drawerBody(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(".connection-drawer-body");
+  }
+  function credentialSection(body: HTMLElement): HTMLElement | null {
+    return body.querySelector<HTMLElement>(".connection-drawer-credential");
+  }
+  function fieldControl(body: HTMLElement, labelText: string): HTMLInputElement | HTMLSelectElement | null {
+    const label = Array.from(body.querySelectorAll<HTMLLabelElement>("label.settings-field")).find(
+      (l) => l.querySelector(".settings-field-label")?.textContent?.trim() === labelText,
+    );
+    return label?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select") ?? null;
+  }
+  function primaryTopButton(body: HTMLElement): HTMLButtonElement | null {
+    // The one `.settings-field-row` that is a DIRECT child of the form body
+    // (the credential section's own Save-key/Clear-key row is nested inside
+    // `.connection-drawer-credential`, a level deeper, so `:scope >` alone
+    // excludes it) — "Create connection"/"Save" pre-creation carries
+    // `-primary`, "Save changes" post-creation doesn't.
+    return (
+      body.querySelector<HTMLButtonElement>(":scope > .settings-field-row .settings-button-primary") ??
+      body.querySelector<HTMLButtonElement>(":scope > .settings-field-row .settings-button")
+    );
+  }
+
+  return {
+    gridMounted: () => grid() !== null,
+    envOverrideVisible: () => document.querySelector(".connection-env-banner") !== null,
+    rows(): ProviderConnectionRowView[] {
+      const g = grid();
+      if (!g) {
+        return [];
+      }
+      return Array.from(g.querySelectorAll<HTMLElement>("[data-connection-id]")).map((el) => {
+        const statusEl = el.querySelector<HTMLElement>(".connection-tile-status");
+        const toneClass = Array.from(statusEl?.classList ?? []).find((cls) =>
+          /^connection-tile-status-(ok|warn|danger|muted)$/.test(cls),
+        );
+        const selectBtn = el.querySelector<HTMLButtonElement>(".connection-tile-select");
+        return {
+          connectionId: el.getAttribute("data-connection-id") ?? "",
+          providerName: el.querySelector(".connection-tile-provider")?.textContent ?? "",
+          displayName: el.querySelector(".connection-tile-name")?.textContent ?? "",
+          model: el.querySelector(".connection-tile-model")?.textContent ?? "",
+          statusText: statusEl?.querySelectorAll("span")[1]?.textContent ?? "",
+          statusTone: toneClass ? toneClass.slice("connection-tile-status-".length) : "",
+          selected: selectBtn?.getAttribute("aria-pressed") === "true",
+          menuOpen: el.querySelector(".connection-tile-menu-popover") !== null,
+          confirmingDelete: el.querySelector(".connection-tile-confirm") !== null,
+        };
+      });
+    },
+    clickAddTile(): boolean {
+      const btn = grid()?.querySelector<HTMLButtonElement>(".connection-tile-add") ?? null;
+      if (!btn || btn.disabled) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    clickTileSelect(connectionId: string): boolean {
+      const btn = tileEl(connectionId)?.querySelector<HTMLButtonElement>(".connection-tile-select") ?? null;
+      if (!btn || btn.disabled) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    clickMenuTrigger(connectionId: string): boolean {
+      const btn = tileEl(connectionId)?.querySelector<HTMLButtonElement>(".connection-tile-menu-trigger") ?? null;
+      if (!btn || btn.disabled) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    clickMenuItem(connectionId: string, index: number): boolean {
+      const items =
+        tileEl(connectionId)?.querySelectorAll<HTMLButtonElement>(".connection-tile-menu-popover .connection-tile-menu-item") ??
+        ([] as unknown as NodeListOf<HTMLButtonElement>);
+      const btn = items[index];
+      if (!btn || btn.disabled) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    clickConfirmDelete(connectionId: string): boolean {
+      const btn =
+        tileEl(connectionId)?.querySelector<HTMLButtonElement>(".connection-tile-confirm-actions .settings-button-danger") ?? null;
+      if (!btn) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    drawer(): ProviderDrawerDomState | null {
+      const body = drawerBody();
+      if (!body) {
+        return null;
+      }
+      const embedded = body.closest(".connection-drawer") === null;
+      const sec = credentialSection(body);
+      const stage: "template" | "credential" = sec ? "credential" : "template";
+      const providerSelect = fieldControl(body, "Provider") as HTMLSelectElement | null;
+      const labelInput = fieldControl(body, "Label (optional)") as HTMLInputElement | null;
+      const modelInput = fieldControl(body, "Model") as HTMLInputElement | null;
+      const transportSelect = fieldControl(body, "Transport") as HTMLSelectElement | null;
+      const baseUrlInput = fieldControl(body, "Base URL") as HTMLInputElement | null;
+      const secretInput = sec?.querySelector<HTMLInputElement>('input[type="password"]') ?? null;
+      const authKind: "api_key" | "oauth" = sec?.querySelector(".settings-oauth-block") ? "oauth" : "api_key";
+      const credentialStatusEl = sec?.querySelector<HTMLElement>('[class*="settings-secret-status"]') ?? null;
+      const primary = primaryTopButton(body);
+      const saveKeyBtn = sec?.querySelector<HTMLButtonElement>(".settings-button-primary") ?? null;
+      const clearKeyBtn = sec?.querySelector<HTMLButtonElement>(".settings-button-danger") ?? null;
+      return {
+        embedded,
+        stage,
+        providerId: providerSelect?.value ?? "",
+        templateLocked: providerSelect?.disabled ?? false,
+        label: labelInput?.value ?? "",
+        model: modelInput?.value ?? "",
+        transport: transportSelect?.value ?? "",
+        transportOptions: transportSelect
+          ? Array.from(transportSelect.options)
+              .map((o) => o.value)
+              .filter((v) => v !== "")
+          : [],
+        baseUrlVisible: baseUrlInput !== null,
+        baseUrl: baseUrlInput?.value ?? "",
+        authKind,
+        apiKeyEntered: (secretInput?.value ?? "") !== "",
+        credentialStatusText: credentialStatusEl?.textContent ?? null,
+        oauthPending: (sec?.textContent ?? "").includes("Waiting for browser sign-in"),
+        primaryButtonLabel: primary?.textContent ?? null,
+        primaryButtonEnabled: primary !== null && !primary.disabled,
+        saveKeyEnabled: saveKeyBtn !== null && !saveKeyBtn.disabled,
+        clearKeyEnabled: clearKeyBtn !== null && !clearKeyBtn.disabled,
+      };
+    },
+    setDrawerProvider(value: string): boolean {
+      const body = drawerBody();
+      const select = body && (fieldControl(body, "Provider") as HTMLSelectElement | null);
+      if (!select || select.disabled) {
+        return false;
+      }
+      setNativeSelectValue(select, value);
+      return true;
+    },
+    setDrawerLabel(value: string): boolean {
+      const body = drawerBody();
+      const input = body && (fieldControl(body, "Label (optional)") as HTMLInputElement | null);
+      if (!input || input.disabled) {
+        return false;
+      }
+      setNativeInputValue(input, value);
+      return true;
+    },
+    setDrawerModel(value: string): boolean {
+      const body = drawerBody();
+      const input = body && (fieldControl(body, "Model") as HTMLInputElement | null);
+      if (!input || input.disabled) {
+        return false;
+      }
+      setNativeInputValue(input, value);
+      return true;
+    },
+    setDrawerTransport(value: string): boolean {
+      const body = drawerBody();
+      const select = body && (fieldControl(body, "Transport") as HTMLSelectElement | null);
+      if (!select || select.disabled) {
+        return false;
+      }
+      setNativeSelectValue(select, value);
+      return true;
+    },
+    setDrawerBaseUrl(value: string): boolean {
+      const body = drawerBody();
+      const input = body && (fieldControl(body, "Base URL") as HTMLInputElement | null);
+      if (!input || input.disabled) {
+        return false;
+      }
+      setNativeInputValue(input, value);
+      return true;
+    },
+    setDrawerApiKey(value: string): boolean {
+      const body = drawerBody();
+      const sec = body && credentialSection(body);
+      const input = sec?.querySelector<HTMLInputElement>('input[type="password"]') ?? null;
+      if (!input || input.disabled) {
+        return false;
+      }
+      setNativeInputValue(input, value);
+      return true;
+    },
+    clickDrawerPrimary(): boolean {
+      const body = drawerBody();
+      const btn = body && primaryTopButton(body);
+      if (!btn || btn.disabled) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    clickDrawerSaveKey(): boolean {
+      const body = drawerBody();
+      const sec = body && credentialSection(body);
+      const btn = sec?.querySelector<HTMLButtonElement>(".settings-button-primary") ?? null;
+      if (!btn || btn.disabled) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    clickDrawerClearKey(): boolean {
+      const body = drawerBody();
+      const sec = body && credentialSection(body);
+      const btn = sec?.querySelector<HTMLButtonElement>(".settings-button-danger") ?? null;
+      if (!btn || btn.disabled) {
+        return false;
+      }
+      btn.click();
+      return true;
+    },
+    clickDrawerClose(): boolean {
+      const closeX = document.querySelector<HTMLButtonElement>(".connection-drawer-close");
+      if (closeX) {
+        closeX.click();
+        return true;
+      }
+      const done = document.querySelector<HTMLButtonElement>(".connection-drawer-footer .settings-button-primary");
+      if (done) {
+        done.click();
+        return true;
+      }
+      return false;
+    },
+  };
+}
+
+/**
  * Shared read for `rewindState`/`checkpointRewind` (design §1 W3) — a plain
  * function (not an object method) so both facade methods above build the
  * identical reading without one calling the other through `this`. Guards
@@ -2908,6 +3356,9 @@ const REWIND_SETTLE_DEADLINE_MS = 15_000;
 /** Deadline for `startScreenToggleProjectMenu`'s post-click settle poll (design/slice-F5-1b-cut.md §2-D4) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const START_SCREEN_COMMIT_DEADLINE_MS = 500;
 
+/** Deadline for the provider connections grid/drawer's post-click settle polls (TASK.45 W12) — generous enough for a real connection-CRUD/secret-vault IPC round-trip (main writes settings.json / the OS keychain), same rationale as `MCP_PANE_COMMIT_DEADLINE_MS`. */
+const PROVIDER_PANE_COMMIT_DEADLINE_MS = 2_000;
+
 /**
  * Builds an `AutomationFacade` over the given registry/tabs-store/bridge.
  * `createAutomationFacade()` with no arguments (what `installAutomation`
@@ -2938,6 +3389,7 @@ export function createAutomationFacade(
   checkpointPanelDom: CheckpointPanelDom = realCheckpointPanelDom(),
   transcriptBlockDom: TranscriptBlockDom = realTranscriptBlockDom(),
   tryAgainButtonDom: TryAgainButtonDom = realTryAgainButtonDom(),
+  providerPaneDom: ProviderPaneDom = realProviderPaneDom(),
 ): AutomationFacade {
   return {
     snapshot(transcriptTail?: number): SnapshotJson {
@@ -4719,6 +5171,235 @@ export function createAutomationFacade(
       // #1's literal ask), not the structural probe-succeeded `ok:true` above.
       const hostResult = store.getState().lastRewindResult;
       return { ok: hostResult?.ok ?? false, reason: hostResult?.reason ?? null, lastResult: state.lastResult, transcriptBlockCount: state.transcriptBlockCount };
+    },
+
+    settingsProviderPaneState(): ProviderPaneState {
+      const mounted = providerPaneDom.gridMounted();
+      const d = providerPaneDom.drawer();
+      const drawer: ProviderDrawerView = d
+        ? { open: true, ...d }
+        : {
+            open: false,
+            embedded: false,
+            stage: null,
+            providerId: null,
+            templateLocked: false,
+            label: null,
+            model: null,
+            transport: null,
+            transportOptions: [],
+            baseUrlVisible: false,
+            baseUrl: null,
+            authKind: null,
+            apiKeyEntered: false,
+            credentialStatusText: null,
+            oauthPending: false,
+            primaryButtonLabel: null,
+            primaryButtonEnabled: false,
+            saveKeyEnabled: false,
+            clearKeyEnabled: false,
+          };
+      return {
+        mounted,
+        envOverrideVisible: mounted ? providerPaneDom.envOverrideVisible() : false,
+        rows: mounted ? providerPaneDom.rows() : [],
+        drawer,
+      };
+    },
+
+    async settingsProviderAddOpen(): Promise<FacadeResult> {
+      if (!providerPaneDom.gridMounted()) {
+        return { ok: false, reason: "grid_not_mounted" };
+      }
+      if (providerPaneDom.drawer() !== null) {
+        return { ok: true };
+      }
+      if (!providerPaneDom.clickAddTile()) {
+        return { ok: false, reason: "add_tile_not_present" };
+      }
+      const opened = await waitUntil(() => providerPaneDom.drawer() !== null, PROVIDER_PANE_COMMIT_DEADLINE_MS);
+      return opened ? { ok: true } : { ok: false, reason: "did_not_open" };
+    },
+
+    async settingsProviderTileClick({ connectionId }: { connectionId: string }): Promise<FacadeResult> {
+      if (!providerPaneDom.gridMounted()) {
+        return { ok: false, reason: "grid_not_mounted" };
+      }
+      const row = providerPaneDom.rows().find((r) => r.connectionId === connectionId);
+      if (!row) {
+        return { ok: false, reason: "connection_not_found" };
+      }
+      // Mirrors ProviderSettings.tsx's own onSelect guard: clicking the
+      // already-default tile is a no-op, not a redundant round-trip.
+      if (row.selected) {
+        return { ok: true };
+      }
+      if (!providerPaneDom.clickTileSelect(connectionId)) {
+        return { ok: false, reason: "tile_not_present" };
+      }
+      const before = settingsStore.getState().snapshot;
+      const changed = await waitUntil(() => settingsStore.getState().snapshot !== before, PROVIDER_PANE_COMMIT_DEADLINE_MS);
+      return changed ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    async settingsProviderMenuAction({
+      connectionId,
+      action,
+    }: {
+      connectionId: string;
+      action: ProviderMenuAction;
+    }): Promise<FacadeResult> {
+      if (!providerPaneDom.gridMounted()) {
+        return { ok: false, reason: "grid_not_mounted" };
+      }
+      const row = providerPaneDom.rows().find((r) => r.connectionId === connectionId);
+      if (!row) {
+        return { ok: false, reason: "connection_not_found" };
+      }
+      if (!row.menuOpen) {
+        if (!providerPaneDom.clickMenuTrigger(connectionId)) {
+          return { ok: false, reason: "menu_trigger_not_present" };
+        }
+        const opened = await waitUntil(
+          () => providerPaneDom.rows().find((r) => r.connectionId === connectionId)?.menuOpen === true,
+          PROVIDER_PANE_COMMIT_DEADLINE_MS,
+        );
+        if (!opened) {
+          return { ok: false, reason: "menu_did_not_open" };
+        }
+      }
+      // ConnectionTile.tsx's own fixed render order (its own doc comment) —
+      // stable regardless of the Replace-key item's auth-kind-dependent text.
+      const itemIndex = { edit: 0, replace_key: 1, check: 2, delete: 3 }[action];
+      if (!providerPaneDom.clickMenuItem(connectionId, itemIndex)) {
+        return { ok: false, reason: "menu_item_not_present" };
+      }
+      if (action === "delete") {
+        // The click above only switches the popover to its inline
+        // delete-confirm sub-view (ConnectionTile.tsx) — the actual delete
+        // is that sub-view's OWN "Delete" button, a distinct node.
+        const confirming = await waitUntil(
+          () => providerPaneDom.rows().find((r) => r.connectionId === connectionId)?.confirmingDelete === true,
+          PROVIDER_PANE_COMMIT_DEADLINE_MS,
+        );
+        if (!confirming) {
+          return { ok: false, reason: "confirm_did_not_open" };
+        }
+        const before = settingsStore.getState().snapshot;
+        if (!providerPaneDom.clickConfirmDelete(connectionId)) {
+          return { ok: false, reason: "confirm_delete_not_present" };
+        }
+        const changed = await waitUntil(() => settingsStore.getState().snapshot !== before, PROVIDER_PANE_COMMIT_DEADLINE_MS);
+        return changed ? { ok: true } : { ok: false, reason: "did_not_settle" };
+      }
+      // edit/replace_key(api_key) open the drawer (local component state);
+      // replace_key(oauth)/check round-trip through main and land a fresh
+      // settings snapshot instead — wait for whichever this action actually
+      // does rather than assuming one shape.
+      const before = settingsStore.getState().snapshot;
+      const settled = await waitUntil(
+        () => providerPaneDom.drawer() !== null || settingsStore.getState().snapshot !== before,
+        PROVIDER_PANE_COMMIT_DEADLINE_MS,
+      );
+      return settled ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    async settingsProviderDrawerSet(args: {
+      providerId?: string;
+      label?: string;
+      model?: string;
+      transport?: string;
+      baseUrl?: string;
+      apiKey?: string;
+    }): Promise<FacadeResult> {
+      if (providerPaneDom.drawer() === null) {
+        return { ok: false, reason: "drawer_not_open" };
+      }
+      if (args.providerId !== undefined && !providerPaneDom.setDrawerProvider(args.providerId)) {
+        return { ok: false, reason: "provider_unavailable" };
+      }
+      if (args.label !== undefined && !providerPaneDom.setDrawerLabel(args.label)) {
+        return { ok: false, reason: "label_unavailable" };
+      }
+      if (args.model !== undefined && !providerPaneDom.setDrawerModel(args.model)) {
+        return { ok: false, reason: "model_unavailable" };
+      }
+      if (args.transport !== undefined && !providerPaneDom.setDrawerTransport(args.transport)) {
+        return { ok: false, reason: "transport_unavailable" };
+      }
+      if (args.baseUrl !== undefined && !providerPaneDom.setDrawerBaseUrl(args.baseUrl)) {
+        return { ok: false, reason: "base_url_unavailable" };
+      }
+      if (args.apiKey !== undefined && !providerPaneDom.setDrawerApiKey(args.apiKey)) {
+        return { ok: false, reason: "api_key_unavailable" };
+      }
+      return { ok: true };
+    },
+
+    async settingsProviderDrawerSubmit(): Promise<FacadeResult> {
+      const d = providerPaneDom.drawer();
+      if (d === null) {
+        return { ok: false, reason: "drawer_not_open" };
+      }
+      if (!d.primaryButtonEnabled) {
+        return { ok: false, reason: "submit_disabled" };
+      }
+      const before = settingsStore.getState().snapshot;
+      if (!providerPaneDom.clickDrawerPrimary()) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      const changed = await waitUntil(() => settingsStore.getState().snapshot !== before, PROVIDER_PANE_COMMIT_DEADLINE_MS);
+      return changed ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    async settingsProviderDrawerSaveKey(): Promise<FacadeResult> {
+      const d = providerPaneDom.drawer();
+      if (d === null) {
+        return { ok: false, reason: "drawer_not_open" };
+      }
+      if (!d.saveKeyEnabled) {
+        return { ok: false, reason: "save_key_disabled" };
+      }
+      const before = settingsStore.getState().snapshot;
+      if (!providerPaneDom.clickDrawerSaveKey()) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      const changed = await waitUntil(() => settingsStore.getState().snapshot !== before, PROVIDER_PANE_COMMIT_DEADLINE_MS);
+      return changed ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    async settingsProviderDrawerClearKey(): Promise<FacadeResult> {
+      const d = providerPaneDom.drawer();
+      if (d === null) {
+        return { ok: false, reason: "drawer_not_open" };
+      }
+      if (!d.clearKeyEnabled) {
+        return { ok: false, reason: "clear_key_disabled" };
+      }
+      const before = settingsStore.getState().snapshot;
+      if (!providerPaneDom.clickDrawerClearKey()) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      const changed = await waitUntil(() => settingsStore.getState().snapshot !== before, PROVIDER_PANE_COMMIT_DEADLINE_MS);
+      return changed ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    async settingsProviderDrawerClose(): Promise<FacadeResult> {
+      const d = providerPaneDom.drawer();
+      if (d === null) {
+        return { ok: true };
+      }
+      if (d.embedded) {
+        // The WelcomeScreen first-run embed has no dialog chrome to close
+        // (design §"Отдельный first-run empty state" — App's own readiness
+        // gate is what unmounts it, not a user close action).
+        return { ok: false, reason: "no_close_affordance" };
+      }
+      if (!providerPaneDom.clickDrawerClose()) {
+        return { ok: false, reason: "close_control_not_present" };
+      }
+      const closed = await waitUntil(() => providerPaneDom.drawer() === null, PROVIDER_PANE_COMMIT_DEADLINE_MS);
+      return closed ? { ok: true } : { ok: false, reason: "did_not_close" };
     },
   };
 }
