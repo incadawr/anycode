@@ -24,6 +24,9 @@ class FakeStore implements OAuthTokenStore {
     this.saved.push({ connectionId, blob, allowWeak: opts.allowWeak });
     return { ok: true };
   }
+  async clearOAuthTokens(connectionId: string): Promise<void> {
+    this.saved = this.saved.filter((s) => s.connectionId !== connectionId);
+  }
 }
 
 interface Idp {
@@ -209,6 +212,34 @@ describe("OAuthEngine.startFlow — refusals", () => {
     // Let the cancelled exchange resolve, then give the (guarded-away) persist a
     // generous window to run before asserting it never did.
     releaseExchange();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(store.saved).toEqual([]);
+  });
+
+  it("CLEARS the just-written blob when cancelled DURING the vault write (W10-FIX F4 post-write re-check)", async () => {
+    const store = new FakeStore();
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => (releaseWrite = resolve));
+    let engine!: OAuthEngine;
+    // The pre-write isSettled guard has already passed; the settle (delete/cancel)
+    // lands WHILE this write is in flight, then the write completes and lands the
+    // blob. The post-write re-check must clear it — otherwise it strands under the
+    // now-deleted connection id.
+    const realSet = store.setOAuthTokens.bind(store);
+    store.setOAuthTokens = async (id, blob, opts) => {
+      engine.cancel("acme");
+      await writeGate;
+      return realSet(id, blob, opts);
+    };
+    engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+    });
+    const outcome = engine.startFlow(config(), "conn-acme", { allowWeak: false });
+    // Settles cancelled the moment the write starts (inside setOAuthTokens).
+    expect(await outcome).toEqual({ ok: false, reason: "cancelled" });
+    // Let the in-flight write complete, then the compensating clear runs.
+    releaseWrite();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(store.saved).toEqual([]);
   });

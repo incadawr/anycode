@@ -66,6 +66,12 @@ export interface OAuthTokenStore {
     blob: OAuthTokenBlob,
     opts: { allowWeak: boolean },
   ): Promise<{ ok: boolean }>;
+  /**
+   * Removes the token blob for `connectionId` (TASK.45 W10-FIX F4): the
+   * compensating clear when a flow settles WHILE its own vault write is in flight
+   * (main/vault.ts's `clearOAuthTokens` satisfies this structurally). Idempotent.
+   */
+  clearOAuthTokens(connectionId: string): Promise<void>;
 }
 
 /** Minimal token-endpoint fetch surface (injectable; defaults to global fetch). */
@@ -257,6 +263,21 @@ export class OAuthEngine {
       if (!stored.ok) {
         respondHtml(res, "Sign-in could not be saved. You can close this window.");
         ctx.settle({ ok: false, reason: "failed" });
+        return;
+      }
+      // TASK.45 W10-FIX F4: the pre-write guard above only catches a settle that
+      // landed BEFORE the write. A cancel/timeout that fired WHILE setOAuthTokens
+      // was in flight (e.g. the connection was deleted mid-write) would otherwise
+      // strand a blob under a now-deleted connection id. Re-check after the write
+      // and compensate by clearing our OWN blob, WITHOUT settling `{ok:true}` (the
+      // flow already settled). Correctness rests on the delete's cancel-BEFORE-clear
+      // order: a settle before this re-check → we clear it here; a settle after →
+      // the delete's own clears run after our completed write and remove it. Both
+      // clear-vs-clear races are idempotent, and connection ids are uuids (never
+      // reused), so this can never erase another flow's legitimate blob.
+      if (ctx.isSettled()) {
+        await this.vault.clearOAuthTokens(ctx.connectionId);
+        respondHtml(res, "Sign-in was cancelled. You can close this window.");
         return;
       }
       respondHtml(res, "Signed in. You can close this window and return to the app.");
