@@ -33,6 +33,7 @@ import {
   handleSetSecret,
   mapProviderFailureCodeToHealthStatus,
   projectCatalogSummary,
+  sanitizeProviderFailureCode,
   type ConnectionProbeOutcome,
   type OAuthRunnerLike,
   type SettingsIpcDeps,
@@ -1043,6 +1044,47 @@ describe("mapProviderFailureCodeToHealthStatus — classification table (401 ≠
     expect(status).toBe("unreachable");
     expect(status).not.toBe("auth_invalid");
     expect(status).not.toBe("forbidden");
+  });
+});
+
+describe("sanitizeProviderFailureCode — untrusted host->main boundary (TASK.45 W11-FIX H1)", () => {
+  it.each(["auth", "forbidden", "rate_limited", "quota", "connect_timeout", "network", "server", "unknown"])(
+    "passes the legitimate code %s through unchanged",
+    (code) => {
+      expect(sanitizeProviderFailureCode(code)).toBe(code);
+    },
+  );
+
+  it("collapses an arbitrary/leaked string (e.g. a bearer token) to \"unknown\" rather than persisting it verbatim", () => {
+    expect(sanitizeProviderFailureCode("Bearer sk-should-not-persist")).toBe("unknown");
+  });
+
+  it("collapses a non-string value to \"unknown\"", () => {
+    expect(sanitizeProviderFailureCode(undefined)).toBe("unknown");
+    expect(sanitizeProviderFailureCode(null)).toBe("unknown");
+    expect(sanitizeProviderFailureCode(42)).toBe("unknown");
+    expect(sanitizeProviderFailureCode({ code: "auth" })).toBe("unknown");
+  });
+
+  it("end-to-end: a leaked/arbitrary host code never reaches persisted lastHealth.safeCode verbatim", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T00:00:00.000Z" });
+
+    // Mirrors what the main-boundary consumer (index.ts onProviderHealthEvent)
+    // does: sanitize the raw host-reported code before it ever reaches
+    // applyConnectionHealthEvent.
+    await applyConnectionHealthEvent(deps, "conn-1", {
+      kind: "failure",
+      code: sanitizeProviderFailureCode("Bearer sk-should-not-persist"),
+    });
+
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.lastHealth?.safeCode).toBe("unknown");
+    // "unknown" is itself a legitimate table entry (an unclassified core
+    // failure, e.g. a 400 bad-model request) mapped to "misconfigured" — NOT
+    // "auth_invalid"/"forbidden", so a garbage host code can never paint a
+    // connection's credential state as bad.
+    expect(reloaded.settings.provider.connections[0]?.lastHealth?.status).toBe("misconfigured");
   });
 });
 

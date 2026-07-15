@@ -68,8 +68,10 @@ import {
   handleSet,
   projectCatalogSummary,
   registerSettingsIpc,
+  sanitizeProviderFailureCode,
   type SettingsIpcDeps,
 } from "./settings-ipc.js";
+import type { ProviderHealthEvent } from "../shared/provider-health.js";
 import { TabHostManager, createPinReservations } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc } from "./tab-ipc.js";
@@ -94,6 +96,32 @@ import {
 } from "./dev-profile.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Normalizes a raw host-reported `ProviderHealthEvent` into the shape
+ * `applyConnectionHealthEvent` accepts, or `undefined` to drop it entirely
+ * (TASK.45 W11-FIX H1). `tabs.ts` casts the parentPort message to
+ * `ProviderHealthEvent` with NO runtime shape validation, so at the process
+ * boundary `kind` can be any string despite the type-level `"success" |
+ * "failure"` union (only a first-party host is the real producer, but the
+ * boundary itself must not trust that). A `kind` outside the two known
+ * literals is DROPPED rather than coerced to failure — coercing an
+ * unrecognised shape into "failure" would paint a healthy connection red on
+ * a signal the host was never meant to send. `code` is sanitized via
+ * `sanitizeProviderFailureCode` so an arbitrary/leaked string can never reach
+ * persisted `lastHealth.safeCode`.
+ */
+function normalizeProviderHealthEvent(
+  event: ProviderHealthEvent,
+): { kind: "success" } | { kind: "failure"; code: string } | undefined {
+  if (event.kind === "success") {
+    return { kind: "success" };
+  }
+  if (event.kind === "failure") {
+    return { kind: "failure", code: sanitizeProviderFailureCode(event.code) };
+  }
+  return undefined;
+}
 
 /**
  * Dev-only override for the skills import scan's `home`
@@ -943,8 +971,11 @@ void app.whenReady().then(async () => {
       if (shouldSkipConnectionHealthBinding(bootEnv)) {
         return;
       }
-      const healthEvent =
-        event.kind === "success" ? ({ kind: "success" } as const) : { kind: "failure" as const, code: event.code ?? "unknown" };
+      const healthEvent = normalizeProviderHealthEvent(event);
+      if (healthEvent === undefined) {
+        console.warn(`[main] dropping malformed provider-health event (kind=${JSON.stringify(event.kind)})`);
+        return;
+      }
       void applyConnectionHealthEvent(settingsIpcDeps, connectionId, healthEvent).catch((error) => {
         console.error(`[main] failed to record connection health`, error);
       });

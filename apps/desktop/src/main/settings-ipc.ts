@@ -992,6 +992,21 @@ export function mapProviderFailureCodeToHealthStatus(code: string): ProviderHeal
 }
 
 /**
+ * Sanitizes a host-reported failure code at the untrusted main<->host process
+ * boundary (TASK.45 W11-FIX H1): `tabs.ts` casts the parentPort message to
+ * `ProviderHealthEvent` with no runtime shape validation, so `code` can be any
+ * string a regressed/compromised host writes (e.g. a leaked bearer token) —
+ * `FAILURE_CODE_TO_HEALTH`'s keys already mirror core's `ProviderFailureCode`
+ * enum, so they double as the whitelist here rather than a third copy of the
+ * list. Anything outside that whitelist collapses to `"unknown"` — the same
+ * bucket a real unclassified core failure already uses — so `lastHealth.safeCode`
+ * can never persist or render an arbitrary string.
+ */
+export function sanitizeProviderFailureCode(code: unknown): string {
+  return typeof code === "string" && code in FAILURE_CODE_TO_HEALTH ? code : "unknown";
+}
+
+/**
  * Pure merge of `lastHealth` onto one connection; `undefined` when the
  * connection no longer exists (race-safe no-op — deleted mid-flight). Callers
  * that already hold the settings lock use this directly (no re-entrant lock);
