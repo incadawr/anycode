@@ -75,6 +75,25 @@ const ipcGate = vi.hoisted(() => {
   };
 });
 
+/**
+ * W11-FIX3 guard control: makes the NEXT `saveSettings` call reject with a
+ * given error (simulates a non-writable disk), then auto-clears so every
+ * other test is an unaffected pass-through.
+ */
+const saveSettingsControl = vi.hoisted(() => {
+  let pendingError: Error | undefined;
+  return {
+    failNext(err: Error): void {
+      pendingError = err;
+    },
+    consume(): Error | undefined {
+      const err = pendingError;
+      pendingError = undefined;
+      return err;
+    },
+  };
+});
+
 vi.mock("../settings/files.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../settings/files.js")>();
   return {
@@ -87,6 +106,10 @@ vi.mock("../settings/files.js", async (importOriginal) => {
       return result;
     },
     saveSettings: async (...args: Parameters<typeof actual.saveSettings>) => {
+      const failure = saveSettingsControl.consume();
+      if (failure) {
+        throw failure;
+      }
       if (ipcGate.isArmed()) {
         await ipcGate.wait("save");
       }
@@ -188,6 +211,28 @@ class FakeOAuthRunner implements OAuthRunnerLike {
   }
 }
 
+/**
+ * W11-FIX3: a vault whose `statuses` call always fails (simulates a locked
+ * keychain on the post-save snapshot leg), while `setSecret`/`clearSecret`/
+ * `getSecretValue` delegate to a real `FakeVault` so the durable-clear path
+ * behaves normally.
+ */
+class FailingStatusesVault implements VaultLike {
+  constructor(private readonly inner: FakeVault) {}
+  setSecret(key: SecretKey, value: string): Promise<SecretSetResult> {
+    return this.inner.setSecret(key, value);
+  }
+  clearSecret(key: SecretKey): Promise<void> {
+    return this.inner.clearSecret(key);
+  }
+  getSecretValue(key: SecretKey): Promise<string | undefined> {
+    return this.inner.getSecretValue(key);
+  }
+  async statuses(): Promise<SecretStatus[]> {
+    throw new Error("vault statuses unavailable (locked keychain)");
+  }
+}
+
 const OAUTH_CONFIG: OAuthProviderConfig = {
   providerId: "acme",
   authorizationUrl: "https://idp/authorize",
@@ -212,6 +257,7 @@ beforeEach(async () => {
   vault = new FakeVault();
   connSeq = 0;
   ipcGate.disarm();
+  saveSettingsControl.consume();
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -1076,6 +1122,84 @@ describe("handleConnectionDelete — tombstone wiring (W11-FIX2 #2, handler laye
     expect(oauth.markedDeleting).toEqual(["conn-1"]);
     expect(oauth.reverted).toEqual(["conn-1"]);
     expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(1);
+  });
+});
+
+describe("handleConnectionDelete — tombstone commit point is the durable save, not the composite resolve (W11-FIX3)", () => {
+  it("does NOT revert the tombstone when the post-save snapshot leg throws AFTER a successful durable save (vault leg)", async () => {
+    const oauth = new FakeOAuthRunner(vault);
+    const setupDeps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+    });
+    await handleConnectionCreate(setupDeps, { providerId: "acme" }); // conn-1
+
+    const deleteDeps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+      vault: new FailingStatusesVault(vault),
+    });
+    await expect(handleConnectionDelete(deleteDeps, { id: "conn-1" })).rejects.toThrow();
+
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections).toHaveLength(0);
+    expect(oauth.markedDeleting).toEqual(["conn-1"]);
+    expect(oauth.reverted).toEqual([]);
+  });
+
+  it("does NOT revert the tombstone when the post-save emit leg throws AFTER a successful durable save (emit leg)", async () => {
+    const oauth = new FakeOAuthRunner(vault);
+    const setupDeps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+    });
+    await handleConnectionCreate(setupDeps, { providerId: "acme" }); // conn-1
+
+    const failingOnMutation = vi.fn().mockRejectedValue(new Error("window destroyed mid-delete"));
+    const deleteDeps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+      onMutation: failingOnMutation,
+    });
+    await expect(handleConnectionDelete(deleteDeps, { id: "conn-1" })).rejects.toThrow();
+
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections).toHaveLength(0);
+    expect(oauth.markedDeleting).toEqual(["conn-1"]);
+    expect(oauth.reverted).toEqual([]);
+  });
+
+  it("DOES revert the tombstone when the durable save itself throws (guard: reverse side of the invariant)", async () => {
+    const oauth = new FakeOAuthRunner(vault);
+    const setupDeps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+    });
+    await handleConnectionCreate(setupDeps, { providerId: "acme" }); // conn-1
+
+    saveSettingsControl.failNext(new Error("disk full"));
+    const deleteDeps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+    });
+    await expect(handleConnectionDelete(deleteDeps, { id: "conn-1" })).rejects.toThrow();
+
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections).toHaveLength(1);
+    expect(oauth.markedDeleting).toEqual(["conn-1"]);
+    expect(oauth.reverted).toEqual(["conn-1"]);
   });
 });
 

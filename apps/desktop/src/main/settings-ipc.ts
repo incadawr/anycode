@@ -831,14 +831,31 @@ export async function applyConnectionHealthEvent(
 
 // ── connection CRUD handlers (TASK.45 W9, main-authoritative) ──
 
+/**
+ * The ONE durable commit point for a provider-settings mutation (W11-FIX3):
+ * everything after this resolves is announce-only (snapshot projection +
+ * onMutation broadcast), never a condition for whether the write "happened".
+ * Callers that hold compensating state keyed on durability (e.g.
+ * `handleConnectionDelete`'s oauth tombstone) must treat THIS resolving —
+ * not the composite `persistProvider` below — as the commit signal.
+ */
+async function saveProviderSettings(
+  deps: SettingsIpcDeps,
+  settings: AnycodeSettings,
+  provider: ProviderSettingsV2,
+): Promise<AnycodeSettings> {
+  const updated: AnycodeSettings = { ...settings, provider };
+  await saveSettings(deps.settingsPath, updated);
+  return updated;
+}
+
 /** Persists a new provider settings block, then returns a fresh snapshot + fires onMutation. */
 async function persistProvider(
   deps: SettingsIpcDeps,
   settings: AnycodeSettings,
   provider: ProviderSettingsV2,
 ): Promise<SettingsMutationResult> {
-  const updated: AnycodeSettings = { ...settings, provider };
-  await saveSettings(deps.settingsPath, updated);
+  const updated = await saveProviderSettings(deps, settings, provider);
   const snapshot = await snapshotFrom(deps, updated, false);
   await emitMutation(deps, snapshot);
   return { ok: true, snapshot };
@@ -1024,9 +1041,16 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
         connections: remaining,
         ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
       };
-      const result = await persistProvider(deps, loaded.settings, provider);
-      committed = result.ok;
-      return result;
+      // W11-FIX3: the tombstone's commit signal is the durable save resolving,
+      // NOT the composite persistProvider resolving. A post-save throw below
+      // (snapshot/emit) must NOT revert the tombstone — the metadata is
+      // already gone from disk, so reverting here would strand an OAuth blob
+      // in the vault under the just-deleted id (reopens fix #2's own DoD).
+      const updated = await saveProviderSettings(deps, loaded.settings, provider);
+      committed = true;
+      const snapshot = await snapshotFrom(deps, updated, false);
+      await emitMutation(deps, snapshot);
+      return { ok: true, snapshot };
     } finally {
       if (!committed) {
         revertTombstone?.();
