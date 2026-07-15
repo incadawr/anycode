@@ -21,6 +21,7 @@ import {
   type SecretsFileV1,
 } from "./files.js";
 import { DEFAULT_SETTINGS, cloneDefaults } from "./schema.js";
+import { providerV2 } from "../shared/provider-v2-fixture.js";
 
 let dir: string;
 const settingsPath = () => join(dir, "settings.json");
@@ -54,7 +55,7 @@ describe("loadSettings (fail-soft)", () => {
 
   it("round-trips a saved file", async () => {
     const settings = cloneDefaults();
-    settings.provider.model = "claude-x";
+    settings.provider = providerV2({ id: "z-ai", model: "claude-x" });
     settings.ui.theme = "dark";
     await saveSettings(settingsPath(), settings);
 

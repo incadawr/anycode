@@ -61,6 +61,7 @@ import { sortCheckpointsNewestFirst } from "./components/TimelinePanel.js";
 import type { GitCommand, RewindScopeWire, UiToHostMessage, WireEnvStatus } from "../../shared/protocol.js";
 import type { CreateTabRequest, CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
 import { ENGINE_IDS, isEngineId, type EngineId } from "../../shared/engines.js";
+import { activeProviderView } from "../../shared/settings.js";
 import type { McpConfigSource, McpHarnessKind } from "../../shared/mcp-config.js";
 import type { SkillHarnessKind, SkillScope, SkillSourceKind } from "../../shared/skills-config.js";
 import type { SubagentSourceKind } from "../../shared/subagents-config.js";
@@ -3608,7 +3609,7 @@ export function createAutomationFacade(
       }
       const state = store.getState();
       const settingsSnapshot = settingsStore.getState().snapshot;
-      const providerId = settingsSnapshot?.settings.provider.id;
+      const providerId = settingsSnapshot ? activeProviderView(settingsSnapshot.settings).id : undefined;
       const catalogModels = settingsSnapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
       const model = state.model;
       const menuOpen = modelPillDom.popoverOpen();
@@ -3676,7 +3677,7 @@ export function createAutomationFacade(
         return { ok: false, reason: pick.kind === "effort" ? "effort_row_hidden" : "navigation_failed" };
       }
       const settingsSnapshot = settingsStore.getState().snapshot;
-      const providerId = settingsSnapshot?.settings.provider.id;
+      const providerId = settingsSnapshot ? activeProviderView(settingsSnapshot.settings).id : undefined;
       const catalogModels = settingsSnapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
       const values: readonly string[] =
         pick.kind === "model" ? modelMenuItems(state.model ?? "", catalogModels).map((item) => item.id) : (state.availableEffortLevels ?? []);

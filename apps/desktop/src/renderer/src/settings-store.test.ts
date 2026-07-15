@@ -28,8 +28,8 @@ import {
 
 function baseSettings(): SettingsSnapshot["settings"] {
   return {
-    version: 1,
-    provider: {},
+    version: 2,
+    provider: { connections: [] },
     tools: {},
     permissions: { alwaysAllow: [] },
     ui: { theme: "system" },

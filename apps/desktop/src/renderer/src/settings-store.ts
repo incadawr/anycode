@@ -143,6 +143,8 @@ export function describeMutationFailure(reason: SettingsMutationReason): string 
       return "Settings file is a newer version than this app understands — read-only until you upgrade.";
     case "weak_storage_needs_consent":
       return "This system has no secure OS keychain available.";
+    case "not_found":
+      return "That connection no longer exists — refresh and try again.";
     default: {
       const exhaustive: never = reason;
       return exhaustive;

@@ -53,6 +53,7 @@ import type { GitCommand, HostToUiMessage, WireCheckpointMeta, WireEnvStatus, Wi
 import { uiToHostMessageSchema } from "../../shared/protocol.js";
 import type { CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
 import type { AlwaysAllowRule, SettingsSnapshot } from "../../shared/settings.js";
+import { providerV2 } from "../../shared/provider-v2-fixture.js";
 
 /** Minimal MessagePort double (same shape as tab-registry.test.ts's). */
 class FakeMessagePort {
@@ -1769,8 +1770,8 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
   function settingsSnapshotWithCatalog(providerId: string, models: { id: string; name?: string }[]): SettingsSnapshot {
     return {
       settings: {
-        version: 1,
-        provider: { id: providerId },
+        version: 2,
+        provider: providerV2({ id: providerId }),
         tools: {},
         permissions: { alwaysAllow: [] },
         ui: { theme: "system" },
@@ -2531,8 +2532,8 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
   function baseSnapshot(alwaysAllow: AlwaysAllowRule[]): SettingsSnapshot {
     return {
       settings: {
-        version: 1,
-        provider: { id: "z-ai" },
+        version: 2,
+        provider: providerV2({ id: "z-ai" }),
         tools: {},
         permissions: { alwaysAllow },
         ui: { theme: "system" },
