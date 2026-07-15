@@ -185,6 +185,16 @@ const MIGRATIONS: readonly Migration[] = [
          AND json_extract(worktree_transition_json, '$.worktree.branch') LIKE 'anycode-wt/%'`,
     ],
   },
+  {
+    version: 10,
+    statements: [
+      // Provider connection pinned to a session (TASK.45 W10). Additive-only,
+      // nullable: every pre-v10 row reads back NULL (no connectionId), which is
+      // the documented legacy-session fallback. New core sessions store their
+      // pinned connection id here so resume resolves the same account/credential.
+      "ALTER TABLE sessions ADD COLUMN connection_id TEXT",
+    ],
+  },
 ];
 
 /**
@@ -249,6 +259,7 @@ interface SessionRow {
   worktree_cleanup_owned_by_anycode: number | null;
   worktree_cleanup_branch: string | null;
   worktree_transition_json: string | null;
+  connection_id: string | null;
 }
 
 function parseWorktreeTransitionJson(raw: string | null): SessionMeta["worktreeTransition"] {
@@ -347,6 +358,9 @@ function rowToSessionMeta(row: SessionRow): SessionMeta {
     ...(row.engine_id !== null && row.engine_id !== undefined ? { engineId: row.engine_id } : {}),
     ...(row.external_session_ref !== null && row.external_session_ref !== undefined
       ? { externalSessionRef: row.external_session_ref }
+      : {}),
+    ...(typeof row.connection_id === "string" && row.connection_id.length > 0
+      ? { connectionId: row.connection_id }
       : {}),
   };
 }
@@ -467,8 +481,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
          project_root, worktree_id, worktree_path, worktree_branch, worktree_base_ref, worktree_owned_by_anycode,
          continuation_pending, continuation_mode, worktree_cleanup_path, worktree_cleanup_mode, worktree_cleanup_owned_by_anycode,
          worktree_cleanup_branch,
-         worktree_transition_json, worktree_exit_notice_pending
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         worktree_transition_json, worktree_exit_notice_pending, connection_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       full.id,
       full.workspace,
@@ -493,6 +507,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       full.worktreeCleanup?.branch ?? null,
       full.worktreeTransition === undefined ? null : JSON.stringify(full.worktreeTransition),
       full.worktreeExitNoticePending === true ? 1 : 0,
+      full.connectionId ?? null,
     );
     // Return the same backward-compatible projection as get/list.
     return rowToSessionMeta(
@@ -600,6 +615,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     if (patch?.worktreeTransition !== undefined) {
       sets.push("worktree_transition_json = ?");
       params.push(patch.worktreeTransition === null ? null : JSON.stringify(patch.worktreeTransition));
+    }
+    if (patch?.connectionId !== undefined) {
+      sets.push("connection_id = ?");
+      params.push(patch.connectionId);
     }
     params.push(id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...params);

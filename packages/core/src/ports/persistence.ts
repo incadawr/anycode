@@ -64,6 +64,13 @@ export interface SessionMeta {
   engineId?: string;
   /** Opaque native-session reference owned by an external engine; never credentials/config JSON. */
   externalSessionRef?: string;
+  /**
+   * Provider connection pinned to this session at creation (TASK.45 W10):
+   * resume resolves the credential/model/baseUrl of THIS connection, not the
+   * currently-active one. Absent is a legacy session that predates connection
+   * pinning — resume falls back to the current default (documented behaviour).
+   */
+  connectionId?: string;
 }
 
 export type SessionMetaPatch = Partial<
@@ -78,6 +85,7 @@ export type SessionMetaPatch = Partial<
     | "projectRoot"
     | "continuationPending"
     | "worktreeExitNoticePending"
+    | "connectionId"
   >
 > & {
   /** `null` atomically clears the active worktree identity fields. */
