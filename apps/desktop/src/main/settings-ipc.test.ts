@@ -900,6 +900,17 @@ describe("handleOAuthStart — connection-scoped (`connectionId` present, W12-FI
     expect(res.ok).toBe(true);
     expect(runner.lastConnectionId).toBe("conn-1");
   });
+
+  // §4-pin (W12-FIX2 §4, codex W12-FIX review #4): intentional NO-ACTION —
+  // `unsupported` (the provider isn't oauth) dominates connectionId validation
+  // by design; pinned so the precedence question isn't re-litigated later.
+  // Green-at-base: this is an intent pin, not a fix.
+  it("§4-pin support-precedence: unsupported wins over a bogus connectionId for a non-oauth provider", async () => {
+    const deps = oauthDeps();
+    const res = await handleOAuthStart(deps, { providerId: "z-ai", connectionId: "missing" });
+    expect(res).toEqual({ ok: false, reason: "unsupported" });
+    expect(runner.lastConnectionId).toBeUndefined();
+  });
 });
 
 // ── TASK.45 W12: connection-CRUD write path, custody, alias-free, refine-reject ──

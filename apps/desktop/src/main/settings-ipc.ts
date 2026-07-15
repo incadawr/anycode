@@ -674,6 +674,11 @@ type OAuthStartPrep =
  * bucket both refuse `failed`, zero side effects — the engine is never
  * called, nothing minted/activated). Absent: the pre-existing
  * findOrCreateConnectionByProvider/bucket semantics, unchanged.
+ *
+ * Support-precedence (TASK.45 W12-FIX2 §4): `unsupported` (the provider's
+ * catalog auth kind is not oauth) is checked BEFORE `connectionId` is
+ * resolved and dominates it — both are fail-closed, so a non-oauth
+ * `providerId` refuses `unsupported` even when `connectionId` is bogus too.
  */
 export async function handleOAuthStart(deps: SettingsIpcDeps, raw: unknown): Promise<OAuthStartResult> {
   const parsed = oauthStartSchema.safeParse(raw);
