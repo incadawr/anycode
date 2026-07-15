@@ -31,6 +31,12 @@ export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
  * `envConfig.reasoningEffort` on every fork boot — zero host/core delta here).
  */
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
+/**
+ * Wire transport override (TASK.43 W5). Literal mirrors core's
+ * `provider/env.ts` `ENV_PROVIDER_TRANSPORT` — same local-literal convention
+ * as every other var above (host-env stays core-free).
+ */
+export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
 
 /** The vault key allow-list (2.2 = one key; 2.5.2 generalises via isKnownSecretKey). */
 export const SECRET_KEYS: readonly SecretKey[] = ["provider.apiKey"];
@@ -87,6 +93,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_STALL_TIMEOUT_MS,
   ENV_MAX_TURNS,
   ENV_REASONING_EFFORT,
+  ENV_PROVIDER_TRANSPORT,
 ];
 
 /** True when an env var is present AND non-blank (mirrors loadEnvConfig's own test). */
@@ -158,6 +165,14 @@ export interface ResolvedProviderSelection {
   apiKey?: string;
   /** "oauth" -> also set ANYCODE_AUTH_MODE so the host brokers per-attempt tokens. */
   authKind: "api_key" | "oauth";
+  /**
+   * Wire transport for ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5): the ladder
+   * `settings.provider.transport ?? catalogEntry.defaultTransport`, resolved by
+   * the caller (main's `resolveProviderSelection`). Undefined leaves the var
+   * unset — the host falls back to its own `catalogEntry?.defaultTransport ??
+   * "anthropic-messages"` resolution, byte-compat with pre-W5 behaviour.
+   */
+  transport?: string;
 }
 
 export interface HostEnvParams {
@@ -212,6 +227,10 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     }
     fillFromSettings(env, ENV_MODEL, providerDefaults?.model ?? settings.provider.model);
     fillFromSettings(env, ENV_BASE_URL, settings.provider.baseUrl);
+    // Covers BOTH real "custom" and a fully-unset provider.id — the legacy
+    // path has no catalog entry to fall back on, so the raw settings value (or
+    // nothing) is all there is (TASK.43 W5).
+    fillFromSettings(env, ENV_PROVIDER_TRANSPORT, settings.provider.transport);
   } else {
     // CATALOG path (slice 2.5): main already resolved the selected provider's
     // credential (an api key, or an OAuth access token via the TokenBroker) and
@@ -227,6 +246,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     if (selection.authKind === "oauth") {
       env[ENV_AUTH_MODE] = "oauth";
     }
+    fillFromSettings(env, ENV_PROVIDER_TRANSPORT, selection.transport);
   }
 
   fillFromSettings(env, ENV_TOOL_CONCURRENCY, numToStr(settings.tools.concurrency));
@@ -280,6 +300,26 @@ export interface ReadinessParams {
    * (byte-for-byte 2.2).
    */
   credentialKey?: SecretKey;
+  /**
+   * Auth-policy override (TASK.43 W5, cut Risk #3): true waives the apiKeyReady
+   * requirement entirely. Set by the caller for a catalog entry marked
+   * `authOptional` (vLLM), or for `custom` on a resolved openai-family
+   * transport (mirrors core's `loadEnvConfig` — a key is only ever mandatory
+   * on `anthropic-messages`). Undefined/false keeps the byte-compat
+   * fail-closed default: anthropic and every other `api_key` provider still
+   * require a key regardless of transport.
+   */
+  authOptional?: boolean;
+  /**
+   * The transport actually in effect for the selected provider (env >
+   * settings.provider.transport > catalog default ladder), paired with
+   * `supportedTransports` below to block readiness on an unsupported
+   * combination instead of silently falling back (cut Risk #3). Undefined
+   * skips the guard (legacy path — no catalog entry to validate against).
+   */
+  resolvedTransport?: string;
+  /** supportedTransports of the selected catalog entry; undefined skips the unsupported-transport guard. */
+  supportedTransports?: readonly string[];
 }
 
 /**
@@ -287,13 +327,25 @@ export interface ReadinessParams {
  * (§6). apiKey is ready when the boot snapshot carries a non-blank
  * ANYCODE_API_KEY OR the vault yields a decryptable value for the selected
  * provider's `credentialKey` (a present-but-undecryptable entry counts as unset,
- * ruling §1: user re-enters). model is ready from env or the settings default.
+ * ruling §1: user re-enters) OR `authOptional` waives the requirement (TASK.43
+ * W5). model is ready from env or the settings default. Readiness is blocked
+ * outright when the resolved transport is not one the selected catalog entry
+ * supports (TASK.43 W5 cut Risk #3) — never a silent anthropic fallback.
  */
 export async function computeProviderReady(params: ReadinessParams): Promise<boolean> {
   const { bootEnv, settings, getSecret } = params;
+  if (
+    params.resolvedTransport !== undefined &&
+    params.supportedTransports !== undefined &&
+    !params.supportedTransports.includes(params.resolvedTransport)
+  ) {
+    return false;
+  }
   const credentialKey = params.credentialKey ?? "provider.apiKey";
   const apiKeyReady =
-    envPresent(bootEnv, ENV_API_KEY) || hasValue(await getSecret(credentialKey));
+    params.authOptional === true ||
+    envPresent(bootEnv, ENV_API_KEY) ||
+    hasValue(await getSecret(credentialKey));
   const modelReady = envPresent(bootEnv, ENV_MODEL) || hasValue(settings.provider.model);
   return apiKeyReady && modelReady;
 }

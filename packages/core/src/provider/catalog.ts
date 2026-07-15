@@ -80,6 +80,15 @@ export interface CatalogProviderEntry {
   apiKeyEnv?: string;
   headers?: Record<string, string>;
   models: CatalogModel[];
+  /**
+   * True when this endpoint legitimately runs with no credential at all (a
+   * local vLLM/Ollama-style server, TASK.43 W5) — readiness does not require a
+   * key even though `auth.kind` is still `api_key` for the case a key IS
+   * supplied. Absent/false is the byte-compat default: every other entry
+   * (including `custom`) keeps requiring a key when its resolved transport is
+   * `anthropic-messages` (desktop's readiness gate, cut Risk #3).
+   */
+  authOptional?: boolean;
 }
 
 export interface ProviderCatalog {
@@ -114,5 +123,26 @@ export function resolveEndpoint(
   transport: ProviderTransport = entry.defaultTransport,
 ): ResolvedEndpoint {
   void apiKey;
+  if (!entry.supportedTransports.includes(transport)) {
+    throw new Error(
+      `Provider "${entry.id}" does not support transport "${transport}" (supported: ${entry.supportedTransports.join(", ")})`,
+    );
+  }
   return { baseUrl: entry.transportBaseUrls?.[transport] ?? entry.baseUrl, model: modelId };
+}
+
+/**
+ * Dev-time invariant (TASK.43 W5): a catalog entry's `defaultTransport` must be
+ * a member of its own `supportedTransports`, else `resolveEndpoint`'s default
+ * parameter would immediately throw for every caller that doesn't pass an
+ * explicit transport. Called over the whole built-in catalog at module load
+ * (catalog-data.ts) so a broken entry fails fast at import time, not the first
+ * time a host tries to boot it.
+ */
+export function assertTransportContract(entry: CatalogProviderEntry): void {
+  if (!entry.supportedTransports.includes(entry.defaultTransport)) {
+    throw new Error(
+      `Catalog entry "${entry.id}": defaultTransport "${entry.defaultTransport}" is not in its own supportedTransports [${entry.supportedTransports.join(", ")}]`,
+    );
+  }
 }

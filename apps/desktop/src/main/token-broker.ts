@@ -160,6 +160,19 @@ export interface CatalogSelectionInfo {
   baseUrl: string;
   authKind: "api_key" | "oauth";
   isCustom: boolean;
+  /**
+   * True when this entry's OWN baseUrl is empty and settings.provider.baseUrl
+   * must be substituted (TASK.43 W5) — the `vllm` template entry needs this
+   * even though it is NOT `isCustom` (it keeps its own per-provider vault key
+   * and catalog defaults, unlike the `custom` sentinel, which bypasses to the
+   * fully legacy path above). Optional/undefined behaves like `isCustom` did
+   * before W5 (only the literal custom sentinel needed base-url substitution).
+   */
+  needsBaseUrl?: boolean;
+  /** Transport used when neither env nor `settings.provider.transport` pick one (TASK.43 W5). */
+  defaultTransport?: string;
+  /** Every transport this endpoint is known to speak (TASK.43 W5). */
+  supportedTransports?: readonly string[];
 }
 
 export interface ProviderSelectionDeps {
@@ -200,11 +213,17 @@ export async function resolveProviderSelection(
   // Per-provider persisted default (F14 §2.4): a stored defaults[id].model wins
   // over the plain settings.provider.model, mirroring buildHostEnv's legacy path.
   const model = deps.settings.provider.defaults?.[id]?.model ?? deps.settings.provider.model;
+  // Wire transport ladder (TASK.43 W5): settings.provider.transport (the
+  // user's explicit selection) wins over the catalog entry's default.
+  const transport = deps.settings.provider.transport ?? info.defaultTransport;
+  // A `needsBaseUrl` entry (vLLM template, or a future non-custom template)
+  // sources its baseUrl from settings exactly like `custom` above, even though
+  // it is NOT `isCustom` and did not bypass to the legacy branch.
+  const baseUrl = info.needsBaseUrl === true ? deps.settings.provider.baseUrl : info.baseUrl;
   if (info.authKind === "oauth") {
     const apiKey = await deps.getAccessToken(id);
-    return { baseUrl: info.baseUrl, model, apiKey, authKind: "oauth" };
+    return { baseUrl, model, apiKey, authKind: "oauth", transport };
   }
   const apiKey = await deps.getApiKey(id);
-  const baseUrl = info.isCustom ? deps.settings.provider.baseUrl : info.baseUrl;
-  return { baseUrl, model, apiKey, authKind: "api_key" };
+  return { baseUrl, model, apiKey, authKind: "api_key", transport };
 }

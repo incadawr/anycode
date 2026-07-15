@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
+  ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
   applySubagentsHomeOverride,
   buildHostEnv,
@@ -251,6 +252,61 @@ describe("buildHostEnv — provider.defaults inheritance (F14, slice-P7.15-cut.m
   });
 });
 
+describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
+  it("fills the transport from settings.provider.transport on the legacy/custom path", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { model: "m", baseUrl: "https://x", transport: "openai-chat-completions" } }),
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-chat-completions");
+  });
+
+  it("fills the transport from the resolved selection on the catalog path", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings(),
+      getSecret: noSecret,
+      resolveSelection: async () => ({
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-5.1",
+        apiKey: "sk-openai",
+        authKind: "api_key",
+        transport: "openai-responses",
+      }),
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-responses");
+  });
+
+  it("env still wins over both the legacy and catalog transport fills (I2 unchanged)", async () => {
+    const legacy = await buildHostEnv({
+      bootEnv: { [ENV_PROVIDER_TRANSPORT]: "anthropic-messages" },
+      settings: settings({ provider: { transport: "openai-chat-completions" } }),
+      getSecret: noSecret,
+    });
+    expect(legacy[ENV_PROVIDER_TRANSPORT]).toBe("anthropic-messages");
+
+    const catalog = await buildHostEnv({
+      bootEnv: { [ENV_PROVIDER_TRANSPORT]: "anthropic-messages" },
+      settings: settings(),
+      getSecret: noSecret,
+      resolveSelection: async () => ({
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-5.1",
+        apiKey: "sk-openai",
+        authKind: "api_key",
+        transport: "openai-responses",
+      }),
+    });
+    expect(catalog[ENV_PROVIDER_TRANSPORT]).toBe("anthropic-messages");
+  });
+
+  it("leaves the var unset when neither env, settings, nor the selection carries a transport", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: settings(), getSecret: noSecret });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBeUndefined();
+  });
+});
+
 describe("envOverrides", () => {
   it("lists the provider ANYCODE_* vars present in the boot snapshot", () => {
     expect(
@@ -332,6 +388,70 @@ describe("computeProviderReady — readiness matrix (§6)", () => {
       credentialKey: "provider.z-ai.apiKey",
     });
     expect(ready).toBe(false);
+  });
+});
+
+describe("computeProviderReady — auth-policy + unsupported-transport (TASK.43 W5, cut Risk #3)", () => {
+  it("authOptional=true is ready with a model and NO key at all (vLLM/no-auth custom)", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: settings({ provider: { id: "vllm", model: "m" } }),
+      getSecret: noSecret,
+      authOptional: true,
+    });
+    expect(ready).toBe(true);
+  });
+
+  it("authOptional=true still requires a model", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: settings({ provider: { id: "vllm" } }),
+      getSecret: noSecret,
+      authOptional: true,
+    });
+    expect(ready).toBe(false);
+  });
+
+  it("authOptional absent/false keeps the byte-compat fail-closed default (a key is still required)", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: settings({ provider: { id: "openai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    expect(ready).toBe(false);
+  });
+
+  it("blocks readiness when the resolved transport is not in the entry's supportedTransports", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: { ANYCODE_API_KEY: "k" },
+      settings: settings({ provider: { id: "vllm", model: "m", transport: "openai-responses" } }),
+      getSecret: noSecret,
+      authOptional: true,
+      resolvedTransport: "openai-responses",
+      supportedTransports: ["openai-chat-completions"],
+    });
+    expect(ready).toBe(false);
+  });
+
+  it("ready when the resolved transport IS supported, even with the guard params present", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: { ANYCODE_API_KEY: "k" },
+      settings: settings({ provider: { id: "openai", model: "m", transport: "openai-responses" } }),
+      getSecret: noSecret,
+      resolvedTransport: "openai-responses",
+      supportedTransports: ["openai-responses", "openai-chat-completions"],
+    });
+    expect(ready).toBe(true);
+  });
+
+  it("skips the unsupported-transport guard when supportedTransports is not supplied (legacy path)", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: { ANYCODE_API_KEY: "k", ANYCODE_MODEL: "m" },
+      settings: settings({ provider: { transport: "openai-responses" } }),
+      getSecret: noSecret,
+      resolvedTransport: "openai-responses",
+    });
+    expect(ready).toBe(true);
   });
 });
 

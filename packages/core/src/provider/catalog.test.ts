@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CatalogProviderEntry } from "./catalog.js";
-import { resolveEndpoint } from "./catalog.js";
+import { assertTransportContract, resolveEndpoint } from "./catalog.js";
 import {
   CUSTOM_PROVIDER_ID,
   catalogProviderIds,
@@ -16,19 +16,60 @@ import {
   isCustomProvider,
 } from "./catalog-data.js";
 
-describe("built-in catalog v1 (slice 2.5 §2.2)", () => {
-  it("ships exactly the ruling-U2 set, all api_key auth (ruling U1)", () => {
+describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
+  it("ships the ruling-U2 + W5 public set, all api_key auth (ruling U1)", () => {
     const catalog = getBuiltinCatalog();
     expect(catalog.schemaVersion).toBe("anycode.model-providers.v1");
-    expect(catalogProviderIds()).toEqual(["anthropic", "z-ai", "deepseek", "moonshot", "custom"]);
+    expect(catalogProviderIds()).toEqual([
+      "anthropic",
+      "z-ai",
+      "deepseek",
+      "moonshot",
+      "openai",
+      "openrouter",
+      "vllm",
+      "custom",
+    ]);
     for (const entry of catalog.providers) {
       expect(entry.auth.kind).toBe("api_key");
-      // Every built-in entry speaks the Anthropic wire protocol today, and none
-      // advertises a transport the dispatcher cannot build.
-      expect(entry.defaultTransport).toBe("anthropic-messages");
-      expect(entry.supportedTransports).toEqual(["anthropic-messages"]);
+      // None advertises a default transport it doesn't also support.
       expect(entry.supportedTransports).toContain(entry.defaultTransport);
     }
+  });
+
+  it("keeps every pre-W5 entry pinned to the anthropic-messages transport (byte-compat)", () => {
+    for (const id of ["anthropic", "z-ai", "deepseek", "moonshot"]) {
+      const entry = findCatalogEntry(id);
+      expect(entry?.defaultTransport).toBe("anthropic-messages");
+      expect(entry?.supportedTransports).toEqual(["anthropic-messages"]);
+      expect(entry?.authOptional).toBeUndefined();
+    }
+  });
+
+  it("declares the new public OpenAI-family entries (W5)", () => {
+    expect(findCatalogEntry("openai")).toMatchObject({
+      baseUrl: "https://api.openai.com/v1",
+      defaultTransport: "openai-responses",
+      supportedTransports: ["openai-responses", "openai-chat-completions"],
+    });
+    expect(findCatalogEntry("openrouter")).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
+      defaultTransport: "openai-chat-completions",
+      supportedTransports: ["openai-chat-completions", "openai-responses"],
+    });
+    expect(findCatalogEntry("vllm")).toMatchObject({
+      baseUrl: "",
+      defaultTransport: "openai-chat-completions",
+      supportedTransports: ["openai-chat-completions"],
+      authOptional: true,
+    });
+  });
+
+  it("widens custom to all three transports now both OpenAI factories exist (W5), default unchanged", () => {
+    expect(findCatalogEntry(CUSTOM_PROVIDER_ID)).toMatchObject({
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages", "openai-chat-completions", "openai-responses"],
+    });
   });
 
   it("maps the known anthropic-compatible base URLs", () => {
@@ -113,7 +154,25 @@ describe("resolveEndpoint (slice 2.5 §2.2)", () => {
     expect(resolveEndpoint(entry, "m", "k", "openai-chat-completions").baseUrl).toBe("https://host.example/v1");
   });
 
-  it("falls back to the plain baseUrl for a transport with no declared base URL", () => {
+  it("falls back to the plain baseUrl for a SUPPORTED transport with no declared transportBaseUrls entry", () => {
+    const entry: CatalogProviderEntry = {
+      id: "x",
+      name: "X",
+      baseUrl: "https://host.example",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages", "openai-responses"],
+      auth: { kind: "api_key" },
+      models: [],
+    };
+    expect(resolveEndpoint(entry, "m", "k", "openai-responses").baseUrl).toBe("https://host.example");
+  });
+
+  // Replaces the old silent-fallback test (MEDIUM#3/W1#4, CONFIRMED REAL):
+  // resolveEndpoint used to accept ANY transport unconditionally, silently
+  // returning entry.baseUrl for a protocol the entry never declared it speaks
+  // (cut Risk #3 — "a typo in env/catalog gets old 400/404s with no
+  // explanation"). It must now throw instead of degrading quietly.
+  it("throws when the requested transport is not in the entry's supportedTransports", () => {
     const entry: CatalogProviderEntry = {
       id: "x",
       name: "X",
@@ -123,6 +182,55 @@ describe("resolveEndpoint (slice 2.5 §2.2)", () => {
       auth: { kind: "api_key" },
       models: [],
     };
-    expect(resolveEndpoint(entry, "m", "k", "openai-responses").baseUrl).toBe("https://host.example");
+    expect(() => resolveEndpoint(entry, "m", "k", "openai-responses")).toThrow(/does not support transport/);
+  });
+
+  it("the unsupported-transport throw names the entry and lists what IS supported", () => {
+    const entry: CatalogProviderEntry = {
+      id: "vllm",
+      name: "vLLM",
+      baseUrl: "",
+      defaultTransport: "openai-chat-completions",
+      supportedTransports: ["openai-chat-completions"],
+      auth: { kind: "api_key" },
+      models: [],
+    };
+    expect(() => resolveEndpoint(entry, "m", "k", "anthropic-messages")).toThrow(
+      /"vllm".*anthropic-messages.*openai-chat-completions/s,
+    );
+  });
+});
+
+describe("assertTransportContract (dev-time invariant, TASK.43 W5)", () => {
+  it("passes when defaultTransport is included in supportedTransports", () => {
+    const entry: CatalogProviderEntry = {
+      id: "x",
+      name: "X",
+      baseUrl: "https://host.example",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+      models: [],
+    };
+    expect(() => assertTransportContract(entry)).not.toThrow();
+  });
+
+  it("throws when defaultTransport is missing from supportedTransports", () => {
+    const entry: CatalogProviderEntry = {
+      id: "broken",
+      name: "Broken",
+      baseUrl: "https://host.example",
+      defaultTransport: "openai-responses",
+      supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+      models: [],
+    };
+    expect(() => assertTransportContract(entry)).toThrow(/"broken".*defaultTransport/s);
+  });
+
+  it("every built-in entry already satisfies the invariant (exercised again explicitly, not just at module load)", () => {
+    for (const entry of getBuiltinCatalog().providers) {
+      expect(() => assertTransportContract(entry)).not.toThrow();
+    }
   });
 });

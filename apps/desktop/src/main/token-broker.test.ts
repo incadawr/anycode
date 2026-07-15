@@ -224,6 +224,14 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     "z-ai": { baseUrl: "https://api.z.ai/api/anthropic", authKind: "api_key", isCustom: false },
     custom: { baseUrl: "", authKind: "api_key", isCustom: true },
     subd: { baseUrl: "https://sub/anthropic", authKind: "oauth", isCustom: false },
+    vllm: {
+      baseUrl: "",
+      authKind: "api_key",
+      isCustom: false,
+      needsBaseUrl: true,
+      defaultTransport: "openai-chat-completions",
+      supportedTransports: ["openai-chat-completions"],
+    },
   };
   const deps = (s: AnycodeSettings) => ({
     settings: s,
@@ -267,6 +275,52 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
       model: "m",
       apiKey: "oauth-token-subd",
       authKind: "oauth",
+    });
+  });
+
+  describe("needsBaseUrl (TASK.43 W5): a non-custom template entry (vLLM) still sources baseUrl from settings", () => {
+    it("substitutes settings.provider.baseUrl for a needsBaseUrl entry, unlike isCustom's bypass-to-legacy", async () => {
+      const sel = await resolveProviderSelection(
+        deps(settings({ id: "vllm", model: "m", baseUrl: "http://localhost:8000/v1" })),
+      );
+      // Unlike "custom" above, vllm does NOT return undefined — it keeps its
+      // own per-provider vault key + catalog defaults; only the baseUrl comes
+      // from settings.
+      expect(sel).toEqual({
+        baseUrl: "http://localhost:8000/v1",
+        model: "m",
+        apiKey: "key-vllm",
+        authKind: "api_key",
+        transport: "openai-chat-completions",
+      });
+    });
+  });
+
+  describe("transport ladder (TASK.43 W5): settings.provider.transport wins over the catalog default", () => {
+    // A dedicated fixture (not "z-ai" above) so this describe block's assertions
+    // never perturb the pre-existing exact-`toEqual` tests elsewhere in this file.
+    const transportCatalog: Record<string, CatalogSelectionInfo> = {
+      ...catalog,
+      gw: {
+        baseUrl: "https://gw.example/anthropic",
+        authKind: "api_key",
+        isCustom: false,
+        defaultTransport: "anthropic-messages",
+        supportedTransports: ["anthropic-messages", "openai-chat-completions"],
+      },
+    };
+    const transportDeps = (s: AnycodeSettings) => ({ ...deps(s), resolveCatalog: (id: string) => transportCatalog[id] });
+
+    it("uses the catalog entry's defaultTransport when settings carries none", async () => {
+      const sel = await resolveProviderSelection(transportDeps(settings({ id: "gw", model: "m" })));
+      expect(sel?.transport).toBe("anthropic-messages");
+    });
+
+    it("settings.provider.transport overrides the catalog entry's defaultTransport", async () => {
+      const sel = await resolveProviderSelection(
+        transportDeps(settings({ id: "gw", model: "m", transport: "openai-chat-completions" })),
+      );
+      expect(sel?.transport).toBe("openai-chat-completions");
     });
   });
 

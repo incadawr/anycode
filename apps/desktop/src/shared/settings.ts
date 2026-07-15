@@ -77,6 +77,14 @@ export interface KeybindingOverride {
   bindings: string[];
 }
 
+/**
+ * Wire protocol a provider selection speaks (TASK.43, mirrors core's
+ * `ProviderTransport`). Redeclared here — not imported from `@anycode/core` —
+ * so this value-only module keeps its zero-import rule (same precedent as
+ * `SecretKey`).
+ */
+export type ProviderTransportId = "anthropic-messages" | "openai-chat-completions" | "openai-responses";
+
 /** Non-secret, human-editable settings persisted to ~/.anycode/settings.json (0644). */
 export interface AnycodeSettings {
   version: 1;
@@ -89,6 +97,13 @@ export interface AnycodeSettings {
     id?: string;
     model?: string;
     baseUrl?: string;
+    /**
+     * Wire transport override (TASK.43 W5, additive-optional; version NOT
+     * bumped, same forward-compat reasoning as `defaults` below). Absent =
+     * the selected catalog entry's `defaultTransport` (or
+     * `"anthropic-messages"` for legacy/unset) wins.
+     */
+    transport?: ProviderTransportId;
     /**
      * Per-provider last-picked model+effort (F14, slice-P7.15-cut.md §2.4). Key =
      * catalog id, `"custom"` for legacy/unset `provider.id`. Read at host-env-ladder
@@ -184,6 +199,12 @@ export interface CatalogSummaryEntry {
   authKind: CatalogAuthKind;
   models: { id: string; name?: string }[];
   needsBaseUrl?: boolean;
+  /** Transport this endpoint uses when neither env nor settings pick one (TASK.43 W5). */
+  defaultTransport?: ProviderTransportId;
+  /** Every transport this endpoint is known to speak; a UI may only offer these (TASK.43 W5). */
+  supportedTransports?: ProviderTransportId[];
+  /** True when this endpoint works without a credential (e.g. a local vLLM server) — readiness never blocks on a missing key (TASK.43 W5). */
+  authOptional?: boolean;
 }
 
 /** The catalog as the renderer sees it (main projects it from @anycode/core/catalog). */

@@ -34,6 +34,7 @@ import {
   displayedProviderId,
   filterSettingsPanes,
   isEnvOverridden,
+  isTransportUnsupported,
   parseOptionalInt,
   providerChangeNotice,
   providerSecretKey,
@@ -42,6 +43,7 @@ import {
   SETTINGS_PANES,
   shouldShowBaseUrlField,
   shouldShowUpdateBanner,
+  transportOptions,
   updateStatusText,
 } from "./SettingsScreen.js";
 
@@ -69,7 +71,28 @@ const ACME_OAUTH: CatalogSummaryEntry = {
   models: [{ id: "acme-large" }],
 };
 
-const CATALOG: CatalogSummary = [ANTHROPIC, ACME_OAUTH, CUSTOM];
+// TASK.43 W5 fixtures.
+const OPENAI: CatalogSummaryEntry = {
+  id: "openai",
+  name: "OpenAI",
+  authKind: "api_key",
+  models: [],
+  defaultTransport: "openai-responses",
+  supportedTransports: ["openai-responses", "openai-chat-completions"],
+};
+
+const VLLM: CatalogSummaryEntry = {
+  id: "vllm",
+  name: "vLLM",
+  authKind: "api_key",
+  models: [],
+  needsBaseUrl: true,
+  defaultTransport: "openai-chat-completions",
+  supportedTransports: ["openai-chat-completions"],
+  authOptional: true,
+};
+
+const CATALOG: CatalogSummary = [ANTHROPIC, ACME_OAUTH, CUSTOM, OPENAI, VLLM];
 
 describe("secretFieldReducer (custody: write-only field)", () => {
   it("tracks typed characters", () => {
@@ -163,6 +186,49 @@ describe("buildProviderPatch", () => {
 
   it("both blank -> an empty provider patch", () => {
     expect(buildProviderPatch("", "")).toEqual({ provider: {} });
+  });
+
+  it("includes a transport when supplied (TASK.43 W5)", () => {
+    expect(buildProviderPatch("gpt-5.1", "", "openai-responses")).toEqual({
+      provider: { model: "gpt-5.1", transport: "openai-responses" },
+    });
+  });
+
+  it("omits transport when blank (the third arg defaults to '')", () => {
+    expect(buildProviderPatch("claude-sonnet-5", "https://example.com")).toEqual({
+      provider: { model: "claude-sonnet-5", baseUrl: "https://example.com" },
+    });
+  });
+});
+
+describe("transportOptions (TASK.43 W5, deliberately disposable — W12 absorbs into a drawer)", () => {
+  it("restricts to a catalog entry's own supportedTransports", () => {
+    expect(transportOptions(OPENAI)).toEqual(["openai-responses", "openai-chat-completions"]);
+    expect(transportOptions(VLLM)).toEqual(["openai-chat-completions"]);
+  });
+
+  it("offers all three for no selection / the needsBaseUrl (custom) entry", () => {
+    expect(transportOptions(undefined)).toEqual(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
+    expect(transportOptions(CUSTOM)).toEqual(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
+  });
+});
+
+describe("isTransportUnsupported (TASK.43 W5 cut Risk #3: fail-loud, never a silent anthropic fallback)", () => {
+  it("false when no transport is persisted (the catalog default wins)", () => {
+    expect(isTransportUnsupported(OPENAI, undefined)).toBe(false);
+  });
+
+  it("false when the persisted transport IS in the entry's supportedTransports", () => {
+    expect(isTransportUnsupported(OPENAI, "openai-chat-completions")).toBe(false);
+  });
+
+  it("true when the persisted transport is outside the entry's supportedTransports", () => {
+    expect(isTransportUnsupported(VLLM, "anthropic-messages")).toBe(true);
+  });
+
+  it("never unsupported for no-selection/custom — every transport is offered", () => {
+    expect(isTransportUnsupported(undefined, "openai-responses")).toBe(false);
+    expect(isTransportUnsupported(CUSTOM, "anthropic-messages")).toBe(false);
   });
 });
 

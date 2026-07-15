@@ -101,6 +101,46 @@ describe("provider.id (slice 2.5, additive-optional)", () => {
   });
 });
 
+describe("provider.transport (TASK.43 W5, additive-optional)", () => {
+  it("round-trips a provider.transport without bumping the version", () => {
+    const withTransport: AnycodeSettings = {
+      ...cloneDefaults(),
+      provider: { id: "openai", model: "gpt-5.1", transport: "openai-responses" },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withTransport)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.transport).toBe("openai-responses");
+      expect(parsed.data.version).toBe(1); // NOT bumped
+    }
+  });
+
+  it("accepts all three transport literals", () => {
+    for (const transport of ["anthropic-messages", "openai-chat-completions", "openai-responses"] as const) {
+      const parsed = settingsSchema.safeParse({ ...cloneDefaults(), provider: { transport } });
+      expect(parsed.success).toBe(true);
+    }
+  });
+
+  it("rejects an unrecognized transport literal", () => {
+    const bad = { ...cloneDefaults(), provider: { transport: "openai" } };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("reads an old file with no provider.transport at all (legacy, byte-for-byte)", () => {
+    const legacy = { ...cloneDefaults(), provider: { model: "claude-x" } };
+    const result = parseSettings(legacy);
+    expect(result.status).toBe("ok");
+    expect(result.settings.provider.transport).toBeUndefined();
+  });
+
+  it("mergeSettings can set provider.transport without dropping id/model siblings", () => {
+    const base = mergeSettings(cloneDefaults(), { provider: { id: "vllm", model: "m" } });
+    const merged = mergeSettings(base, { provider: { transport: "openai-chat-completions" } });
+    expect(merged.provider).toEqual({ id: "vllm", model: "m", transport: "openai-chat-completions" });
+  });
+});
+
 describe("provider.defaults (F14, slice-P7.15-cut.md §2.4, additive-optional)", () => {
   it("round-trips a per-provider default through JSON without bumping the version", () => {
     const withDefaults: AnycodeSettings = {

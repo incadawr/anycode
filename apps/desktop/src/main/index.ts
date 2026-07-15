@@ -430,6 +430,9 @@ function resolveCatalog(id: string): CatalogSelectionInfo | undefined {
     baseUrl: resolveEndpoint(entry, "", "").baseUrl,
     authKind: entry.auth.kind,
     isCustom: isCustomProvider(id),
+    needsBaseUrl: entry.baseUrl === "",
+    defaultTransport: entry.defaultTransport,
+    supportedTransports: entry.supportedTransports,
   };
 }
 
@@ -458,6 +461,33 @@ const getAccessTokenFor = (id: string): Promise<string | undefined> =>
   tokenBroker === null ? Promise.resolve(undefined) : tokenBroker.getAccessToken(id);
 
 /**
+ * Auth-policy + transport-guard inputs for `computeProviderReady` (TASK.43 W5,
+ * cut Risk #3) — the core-aware counterpart of settings-ipc.ts's own
+ * `selectedTransportInfo` (that module stays core-free, so it re-derives the
+ * same thing off the projected `CatalogSummary` instead of `findCatalogEntry`).
+ * `authOptional` is true either statically (a catalog entry marked
+ * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
+ * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`).
+ */
+function selectedTransportInfo(current: AnycodeSettings): {
+  authOptional: boolean;
+  resolvedTransport?: string;
+  supportedTransports?: readonly string[];
+} {
+  const id = current.provider.id;
+  if (id === undefined || id.trim() === "") {
+    return { authOptional: false, resolvedTransport: current.provider.transport };
+  }
+  const entry = findCatalogEntry(id);
+  if (entry === undefined) {
+    return { authOptional: false, resolvedTransport: current.provider.transport };
+  }
+  const resolvedTransport = current.provider.transport ?? entry.defaultTransport;
+  const authOptional = entry.authOptional === true || (isCustomProvider(id) && resolvedTransport !== "anthropic-messages");
+  return { authOptional, resolvedTransport, supportedTransports: entry.supportedTransports };
+}
+
+/**
  * Recomputes the host fork env + readiness from the current settings/vault
 
 
@@ -478,11 +508,15 @@ async function refreshProviderState(): Promise<void> {
     });
   currentHostEnv = await buildHostEnv({ bootEnv, settings: current, getSecret, resolveSelection });
   applySubagentsHomeOverride(currentHostEnv, resolveSubagentsHome(bootEnv, app.isPackaged));
+  const transportInfo = selectedTransportInfo(current);
   providerReady = await computeProviderReady({
     bootEnv,
     settings: current,
     getSecret,
     credentialKey: credentialKeyFor(current),
+    authOptional: transportInfo.authOptional,
+    resolvedTransport: transportInfo.resolvedTransport,
+    supportedTransports: transportInfo.supportedTransports,
   });
 }
 

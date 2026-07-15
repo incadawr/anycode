@@ -25,7 +25,7 @@ export type {
 } from "./catalog.js";
 export { resolveEndpoint } from "./catalog.js";
 
-import type { CatalogProviderEntry, ProviderCatalog } from "./catalog.js";
+import { assertTransportContract, type CatalogProviderEntry, type ProviderCatalog } from "./catalog.js";
 
 /** Sentinel id for the user-supplied endpoint whose baseUrl lives in settings. */
 export const CUSTOM_PROVIDER_ID = "custom";
@@ -84,21 +84,72 @@ const ENTRIES: CatalogProviderEntry[] = [
     ],
   },
   {
+    id: "openai",
+    name: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    defaultTransport: "openai-responses",
+    supportedTransports: ["openai-responses", "openai-chat-completions"],
+    auth: { kind: "api_key" },
+    // Conservative public model ids only; reasoning/effortLevels intentionally
+    // omitted until W6 live-smoke confirms per-model tiers (TASK.43 W5).
+    models: [
+      { id: "gpt-5.1", name: "GPT-5.1", contextWindow: 400_000, maxOutputTokens: 128_000 },
+      { id: "gpt-4o", name: "GPT-4o", contextWindow: 128_000, maxOutputTokens: 16_384, imageInput: true },
+      { id: "gpt-4o-mini", name: "GPT-4o mini", contextWindow: 128_000, maxOutputTokens: 16_384, imageInput: true },
+    ],
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    defaultTransport: "openai-chat-completions",
+    supportedTransports: ["openai-chat-completions", "openai-responses"],
+    auth: { kind: "api_key" },
+    // No static hints: OpenRouter's model set is huge and vendor-prefixed
+    // (`vendor/model`) — same free-text-only reasoning as `custom`.
+    models: [],
+  },
+  {
+    id: "vllm",
+    name: "vLLM / local OpenAI-compatible",
+    // Template entry (TASK.43 W5): baseUrl lives in settings, exactly like
+    // `custom` — `needsBaseUrl` is derived from this empty string downstream
+    // (main/settings-ipc.ts `projectCatalogSummary`).
+    baseUrl: "",
+    defaultTransport: "openai-chat-completions",
+    supportedTransports: ["openai-chat-completions"],
+    auth: { kind: "api_key" },
+    // A local no-auth deployment is the common case; a key is still accepted
+    // (and stored under this entry's own `provider.vllm.apiKey`) for gated
+    // deployments, but readiness never blocks on it.
+    authOptional: true,
+    models: [],
+  },
+  {
     id: CUSTOM_PROVIDER_ID,
     name: "Custom endpoint",
 
     baseUrl: "",
-    // Legacy default: a bare custom endpoint keeps speaking Anthropic. The
-    // OpenAI transports join `supportedTransports` together with their client
-    // factories — advertising a protocol the dispatcher cannot build would offer
-    // the user a selection that fails at boot.
+    // Legacy default: a bare custom endpoint keeps speaking Anthropic — the
+    // most common existing use (an Anthropic-compatible bridge). Both OpenAI
+    // client factories now exist (W2/W3), so `supportedTransports` widens to
+    // all three: the user may explicitly opt a custom endpoint into either
+    // OpenAI transport (e.g. a local no-auth vLLM/Ollama server) without
+    // changing the default anyone already relies on.
     defaultTransport: "anthropic-messages",
-    supportedTransports: ["anthropic-messages"],
+    supportedTransports: ["anthropic-messages", "openai-chat-completions", "openai-responses"],
     auth: { kind: "api_key" },
     // No static hints — free-text model id only.
     models: [],
   },
 ];
+
+// Dev-time invariant (TASK.43 W5): fail fast at import time if a future entry
+// declares a defaultTransport outside its own supportedTransports, rather than
+// the first time some caller's default-parameter resolveEndpoint call throws.
+for (const entry of ENTRIES) {
+  assertTransportContract(entry);
+}
 
 const CATALOG: ProviderCatalog = {
   schemaVersion: "anycode.model-providers.v1",

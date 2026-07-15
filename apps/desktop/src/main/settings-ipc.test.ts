@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
-import type { SecretKey, SecretStatus, SettingsSnapshot } from "../shared/settings.js";
+import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "../shared/settings.js";
 import { isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import {
@@ -378,6 +378,117 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
     // Never a baseUrl / key in the projection (custody + no secret).
     expect(JSON.stringify(summary)).not.toContain("https://z");
+  });
+
+  it("projects defaultTransport/supportedTransports/authOptional only when the source entry declares them (TASK.43 W5)", () => {
+    const summary = projectCatalogSummary([
+      {
+        id: "openai",
+        name: "OpenAI",
+        auth: { kind: "api_key" },
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        defaultTransport: "openai-responses",
+        supportedTransports: ["openai-responses", "openai-chat-completions"],
+      },
+      {
+        id: "vllm",
+        name: "vLLM",
+        auth: { kind: "api_key" },
+        baseUrl: "",
+        models: [],
+        defaultTransport: "openai-chat-completions",
+        supportedTransports: ["openai-chat-completions"],
+        authOptional: true,
+      },
+      { id: "z-ai", name: "Z.AI", auth: { kind: "api_key" }, baseUrl: "https://z", models: [] },
+    ]);
+    expect(summary).toEqual([
+      {
+        id: "openai",
+        name: "OpenAI",
+        authKind: "api_key",
+        models: [],
+        defaultTransport: "openai-responses",
+        supportedTransports: ["openai-responses", "openai-chat-completions"],
+      },
+      {
+        id: "vllm",
+        name: "vLLM",
+        authKind: "api_key",
+        models: [],
+        needsBaseUrl: true,
+        defaultTransport: "openai-chat-completions",
+        supportedTransports: ["openai-chat-completions"],
+        authOptional: true,
+      },
+      // No transport fields at all when the source entry omits them — a legacy
+      // fixture's output is byte-identical to pre-W5.
+      { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [] },
+    ]);
+  });
+});
+
+describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5, cut Risk #3)", () => {
+  const VLLM_ID = "vllm";
+  const TRANSPORT_CATALOG_IDS = ["vllm", "custom"];
+
+  function transportCatalog(): CatalogSummary {
+    return projectCatalogSummary([
+      {
+        id: VLLM_ID,
+        name: "vLLM",
+        auth: { kind: "api_key" },
+        baseUrl: "",
+        models: [],
+        defaultTransport: "openai-chat-completions",
+        supportedTransports: ["openai-chat-completions"],
+        authOptional: true,
+      },
+    ]);
+  }
+
+  it("vLLM (authOptional) is ready with a model and no key at all", async () => {
+    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
+      provider: { id: VLLM_ID, model: "m" },
+    });
+    const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }));
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("blocks readiness when settings.provider.transport is outside the selected entry's supportedTransports", async () => {
+    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
+      provider: { id: VLLM_ID, model: "m", transport: "openai-responses" },
+    });
+    const snap = await buildSettingsSnapshot(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }));
+    expect(snap.providerReady).toBe(false);
+  });
+
+  // main's real wiring always projects EVERY catalog entry (including custom)
+  // into `deps.catalog` — `selectedTransportInfo` looks the selected id up
+  // there, so the fixture must include it too.
+  const CUSTOM_CATALOG: CatalogSummary = projectCatalogSummary([
+    { id: "custom", name: "Custom endpoint", auth: { kind: "api_key" }, baseUrl: "", models: [] },
+  ]);
+
+  it("custom becomes auth-optional once its resolved transport is an OpenAI-family one", async () => {
+    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      provider: { id: "custom", model: "m", baseUrl: "http://localhost:8000/v1", transport: "openai-chat-completions" },
+    });
+    const snap = await buildSettingsSnapshot(
+      makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: CUSTOM_CATALOG, isCustom: (id) => id === "custom" }),
+    );
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("custom stays fail-closed (requires a key) on the default anthropic-messages transport", async () => {
+    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      provider: { id: "custom", model: "m", baseUrl: "https://bridge.example" },
+    });
+    const snap = await buildSettingsSnapshot(
+      makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: CUSTOM_CATALOG, isCustom: (id) => id === "custom" }),
+    );
+    expect(snap.providerReady).toBe(false);
   });
 });
 

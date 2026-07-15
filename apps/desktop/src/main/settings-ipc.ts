@@ -36,10 +36,12 @@ import type {
   AnycodeSettings,
   CatalogAuthKind,
   CatalogSummary,
+  CatalogSummaryEntry,
   OAuthCancelRequest,
   OAuthStartRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
+  ProviderTransportId,
   SecretKey,
   SettingsMutationResult,
   SettingsPatch,
@@ -117,12 +119,20 @@ export interface CatalogEntryShape {
   auth: { kind: string };
   baseUrl: string;
   models: { id: string; name?: string }[];
+  /** Wire transport fields (TASK.43 W5); `string`-typed to keep this module core-import-free. */
+  defaultTransport?: string;
+  supportedTransports?: readonly string[];
+  authOptional?: boolean;
 }
 
 /**
  * Projects the built-in catalog to the renderer-facing `CatalogSummary` (value
  * only — no baseUrl secret, no key). `needsBaseUrl` is set for an entry with an
- * empty baseUrl (the `custom` endpoint, whose baseUrl lives in settings).
+ * empty baseUrl (e.g. the `custom`/`vllm` endpoints, whose baseUrl lives in
+ * settings). `defaultTransport`/`supportedTransports`/`authOptional` (TASK.43
+ * W5) are projected only when the source entry declares them, so a legacy
+ * caller's plain `{id,name,auth,baseUrl,models}` fixtures keep producing the
+ * exact same output as before this wave.
  */
 export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): CatalogSummary {
   return providers.map((entry) => ({
@@ -131,6 +141,11 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     authKind: entry.auth.kind === "oauth" ? "oauth" : "api_key",
     models: entry.models.map((m) => (m.name !== undefined ? { id: m.id, name: m.name } : { id: m.id })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : {}),
+    ...(entry.defaultTransport !== undefined ? { defaultTransport: entry.defaultTransport as ProviderTransportId } : {}),
+    ...(entry.supportedTransports !== undefined
+      ? { supportedTransports: entry.supportedTransports as ProviderTransportId[] }
+      : {}),
+    ...(entry.authOptional === true ? { authOptional: true } : {}),
   }));
 }
 
@@ -155,6 +170,35 @@ function credentialKeyFor(deps: SettingsIpcDeps, settings: AnycodeSettings): Sec
     return undefined;
   }
   return kind === "oauth" ? `provider.${id}.oauth` : `provider.${id}.apiKey`;
+}
+
+/**
+ * Auth-policy + transport-guard inputs for `computeProviderReady` (TASK.43 W5,
+ * cut Risk #3). Looks the selected id up in the already-projected
+ * `deps.catalog` (this module stays core-free — no second catalog lookup
+ * path). `authOptional` is true either statically (a catalog entry marked
+ * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
+ * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`: a key is
+ * only ever mandatory on `anthropic-messages`).
+ */
+function selectedTransportInfo(
+  deps: SettingsIpcDeps,
+  settings: AnycodeSettings,
+): { authOptional: boolean; resolvedTransport?: string; supportedTransports?: readonly string[] } {
+  const id = settings.provider.id;
+  if (id === undefined || id.trim() === "") {
+    return { authOptional: false, resolvedTransport: settings.provider.transport };
+  }
+  const entry: CatalogSummaryEntry | undefined = deps.catalog?.find((e) => e.id === id);
+  if (entry === undefined) {
+    return { authOptional: false, resolvedTransport: settings.provider.transport };
+  }
+  const resolvedTransport = settings.provider.transport ?? entry.defaultTransport;
+  const isCustomEntry = deps.isCustom?.(id) === true;
+  const authOptional =
+    entry.authOptional === true ||
+    (isCustomEntry && resolvedTransport !== undefined && resolvedTransport !== "anthropic-messages");
+  return { authOptional, resolvedTransport, supportedTransports: entry.supportedTransports };
 }
 
 /** Reads `patch.provider.id` presence + raw value (before the catalog refine). */
@@ -194,6 +238,7 @@ async function snapshotFrom(
   settings: AnycodeSettings,
   readOnly: boolean,
 ): Promise<SettingsSnapshot> {
+  const transportInfo = selectedTransportInfo(deps, settings);
   const [secrets, providerReady] = await Promise.all([
     deps.vault.statuses(deps.bootEnv, deps.catalogIds ?? []),
     computeProviderReady({
@@ -201,6 +246,9 @@ async function snapshotFrom(
       settings,
       getSecret: (key) => deps.vault.getSecretValue(key),
       credentialKey: credentialKeyFor(deps, settings),
+      authOptional: transportInfo.authOptional,
+      resolvedTransport: transportInfo.resolvedTransport,
+      supportedTransports: transportInfo.supportedTransports,
     }),
   ]);
   return {

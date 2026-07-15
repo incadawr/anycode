@@ -73,6 +73,7 @@ import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
+  ProviderTransportId,
   SecretKey,
   SecretSource,
   SecretStatus,
@@ -256,8 +257,8 @@ export function parseOptionalInt(text: string): number | undefined {
  * 2.2.5 integration: double check this omission convention against 2.2.2's
  * actual `settings-set` merge implementation once it lands.
  */
-export function buildProviderPatch(model: string, baseUrl: string): SettingsPatch {
-  const provider: { model?: string; baseUrl?: string } = {};
+export function buildProviderPatch(model: string, baseUrl: string, transport = ""): SettingsPatch {
+  const provider: { model?: string; baseUrl?: string; transport?: ProviderTransportId } = {};
   const trimmedModel = model.trim();
   const trimmedBaseUrl = baseUrl.trim();
   if (trimmedModel) {
@@ -265,6 +266,9 @@ export function buildProviderPatch(model: string, baseUrl: string): SettingsPatc
   }
   if (trimmedBaseUrl) {
     provider.baseUrl = trimmedBaseUrl;
+  }
+  if (transport) {
+    provider.transport = transport as ProviderTransportId;
   }
   return { provider };
 }
@@ -308,6 +312,46 @@ export function selectProviderEntry(catalog: CatalogSummary, id: string | undefi
  */
 export function shouldShowBaseUrlField(selectedEntry: CatalogSummaryEntry | undefined): boolean {
   return !selectedEntry || selectedEntry.needsBaseUrl === true;
+}
+
+/** Every transport this build knows how to speak — the "custom"/no-selection option set (TASK.43 W5). */
+const ALL_TRANSPORTS: ProviderTransportId[] = ["anthropic-messages", "openai-chat-completions", "openai-responses"];
+
+export const TRANSPORT_LABEL: Record<ProviderTransportId, string> = {
+  "anthropic-messages": "Anthropic Messages",
+  "openai-chat-completions": "OpenAI Chat Completions",
+  "openai-responses": "OpenAI Responses",
+};
+
+/**
+ * Options the transport `<select>` offers (TASK.43 W5, deliberately disposable
+ * — W12 absorbs this into a drawer): a catalog entry restricts to its own
+ * `supportedTransports` (the `custom` entry itself now declares all three, so
+ * it naturally falls out of this same rule — no special-casing needed);
+ * "no selection" (legacy, or no catalog at all) offers all three, same
+ * "no selection ≡ custom" fold `shouldShowBaseUrlField` uses. NOT keyed off
+ * `needsBaseUrl` — `vllm` also needsBaseUrl but must stay restricted to its
+ * own (narrower) supportedTransports, unlike custom.
+ */
+export function transportOptions(selectedEntry: CatalogSummaryEntry | undefined): ProviderTransportId[] {
+  return selectedEntry?.supportedTransports ?? ALL_TRANSPORTS;
+}
+
+/**
+ * True when the PERSISTED transport (not the in-progress edit) is not one of
+ * the currently selected provider's supported transports (TASK.43 W5 cut Risk
+ * #3) — a stale/hand-edited value must surface as a field-error, never
+ * silently fall back to anthropic. `undefined` (no override persisted) is
+ * always supported — the catalog default wins.
+ */
+export function isTransportUnsupported(
+  selectedEntry: CatalogSummaryEntry | undefined,
+  persistedTransport: ProviderTransportId | undefined,
+): boolean {
+  if (persistedTransport === undefined) {
+    return false;
+  }
+  return !transportOptions(selectedEntry).includes(persistedTransport);
 }
 
 /**
@@ -519,6 +563,7 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   const [providerId, setProviderId] = useState<string | undefined>(undefined);
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [transport, setTransport] = useState<ProviderTransportId | "">("");
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
 
   // Seeds the local form fields from the first snapshot that arrives (once —
@@ -528,6 +573,7 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
       setProviderId(snapshot.settings.provider.id);
       setModel(snapshot.settings.provider.model ?? "");
       setBaseUrl(snapshot.settings.provider.baseUrl ?? "");
+      setTransport(snapshot.settings.provider.transport ?? "");
       setInitialized(true);
     }
   }, [snapshot, initialized]);
@@ -551,6 +597,12 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   // functions below) so TS's null-narrowing of `snapshot` — which does not
   // cross a nested function boundary — stays sound.
   const storedBaseUrl = snapshot.settings.provider.baseUrl ?? "";
+  // TASK.43 W5, deliberately disposable (W12 absorbs this into a drawer):
+  // the transport `<select>` options + a field-error against the PERSISTED
+  // (not in-progress) value — an unsupported combination blocks readiness
+  // (main's computeProviderReady) rather than silently falling back.
+  const transportChoices = transportOptions(selectedEntry);
+  const transportUnsupported = isTransportUnsupported(selectedEntry, snapshot.settings.provider.transport);
 
   async function changeProvider(newId: string): Promise<void> {
     setProviderId(newId);
@@ -567,7 +619,7 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
     // merge, "don't touch this field").
     const effectiveBaseUrl = showBaseUrl ? baseUrl : "";
     const baseUrlChanged = showBaseUrl && baseUrl.trim() !== storedBaseUrl;
-    const result = await store.getState().setPatch(buildProviderPatch(model, effectiveBaseUrl));
+    const result = await store.getState().setPatch(buildProviderPatch(model, effectiveBaseUrl, transport));
     if (result.ok && baseUrlChanged) {
       store.getState().setNotice(baseUrlChangeNotice());
     }
@@ -642,6 +694,28 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
               onChange={(e) => setBaseUrl(e.target.value)}
             />
           </label>
+        )}
+        <label className="settings-field">
+          <span className="settings-field-label">Transport</span>
+          <select
+            className="settings-field-select"
+            value={transport}
+            disabled={readOnly}
+            onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
+          >
+            <option value="">(provider default)</option>
+            {transportChoices.map((t) => (
+              <option key={t} value={t}>
+                {TRANSPORT_LABEL[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {transportUnsupported && (
+          <div className="settings-env-warning" role="alert">
+            "{TRANSPORT_LABEL[snapshot.settings.provider.transport as ProviderTransportId]}" is not supported by{" "}
+            {selectedEntry?.name ?? "this provider"} — pick a supported transport above, readiness is blocked until you do.
+          </div>
         )}
         <div className="settings-field-row">
           <button type="button" className="settings-button settings-button-primary" disabled={readOnly} onClick={() => void saveProvider()}>

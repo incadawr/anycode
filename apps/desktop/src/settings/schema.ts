@@ -72,6 +72,11 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       id: z.string().optional(),
       model: z.string().optional(),
       baseUrl: z.string().optional(),
+      // Wire transport override (TASK.43 W5, additive-optional; version NOT
+      // bumped, same forward-compat reasoning as `defaults` below). Declared
+      // explicitly (not left to the top-level .passthrough()) for the same
+      // read-modify-write-survival reason as `defaults`.
+      transport: z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]).optional(),
       // Per-provider last-picked model+effort (F14, slice-P7.15-cut.md §2.4,
       // additive-optional; version NOT bumped, same reasoning as `id` above).
       // Declared EXPLICITLY here (not left to the top-level .passthrough()):
