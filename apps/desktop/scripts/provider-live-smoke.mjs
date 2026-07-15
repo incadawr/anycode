@@ -36,7 +36,14 @@
  * cell live"; a `_MODEL` var left unset falls back to the documented default
  * so only the credential needs setting):
  *
- *   (a) generic-gateway/GLM x anthropic-messages (reasoning regression)
+ *   (a1)/(a2) generic-gateway/GLM x anthropic-messages (reasoning regression,
+ *       high AND max tiers, streaming) — mirrors reasoningRequestOptions's GLM
+ *       branch (model-port.ts) byte-for-byte: max_tokens=131072 (the ceiling,
+ *       not a placeholder), thinking.budget_tokens=16000/32000, output_config.
+ *       effort="high"/"max", stream:true. See glm-reasoning-wire.integration.
+ *       test.ts for the deterministic proof this mirrors (W6-FIX #2 — the
+ *       prior single-tier cell sent max_tokens:1024/budget:512/effort:high/
+ *       stream:false, which cannot validate the 131072 ceiling or the max tier).
  *       ANYCODE_API_KEY   required. Same names the product itself reads
  *       ANYCODE_BASE_URL  optional, default native Anthropic (provider/env.ts)
  *       ANYCODE_MODEL     required
@@ -118,16 +125,48 @@ function openaiHeaders(apiKey) {
   return headers;
 }
 
-async function postJson(url, headers, body, signal) {
+async function postRaw(url, headers, body, signal) {
   const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
   const text = await res.text();
+  return { status: res.status, contentType: res.headers.get("content-type") ?? "", text };
+}
+
+async function postJson(url, headers, body, signal) {
+  const { status, text } = await postRaw(url, headers, body, signal);
   let json;
   try {
     json = text === "" ? {} : JSON.parse(text);
   } catch {
     json = { raw: text };
   }
-  return { status: res.status, json };
+  return { status, json };
+}
+
+/**
+ * Parses newline-delimited SSE frames (`data: {...}` lines, optional leading
+ * `event:` lines, blocks separated by a blank line) into `{event, data}`
+ * pairs; a block whose data doesn't parse as JSON (e.g. a `[DONE]` sentinel)
+ * is dropped. Used to PROVE a "stream" response actually carries real SSE
+ * frames rather than accepting any non-empty 200 body as success (W6-FIX #3).
+ */
+function parseSseEvents(rawText) {
+  const events = [];
+  for (const block of rawText.split("\n\n")) {
+    if (block.trim() === "") continue;
+    let eventType;
+    const dataLines = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) eventType = line.slice("event:".length).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice("data:".length).trim());
+    }
+    if (dataLines.length === 0) continue;
+    try {
+      events.push({ event: eventType, data: JSON.parse(dataLines.join("\n")) });
+    } catch {
+      // not a JSON SSE data frame — ignore rather than fail the parse.
+    }
+  }
+  return events;
 }
 
 // ── (a) generic-gateway/GLM x anthropic-messages: reasoning regression ──
@@ -135,36 +174,74 @@ async function postJson(url, headers, body, signal) {
 // budget + `output_config.effort` (NOT a top-level `effort` key — see
 // glm-reasoning-wire.integration.test.ts for the wire-byte proof this mirrors).
 
-async function runGlmAnthropicCell(cellId, label) {
+/** Z.AI's documented max_tokens ceiling for the GLM-5/4.6 family (mirrors model-port.ts). */
+const GLM_MAX_TOKENS = 131_072;
+
+/** GLM-5.2 thinking budgets per tier (mirrors model-port.ts GLM_BUDGET_TOKENS). */
+const GLM_TIER_BUDGET_TOKENS = { high: 16_000, max: 32_000 };
+
+async function runGlmAnthropicTierCell(cellId, label, { apiKey, model, baseUrl, tier }) {
+  const budgetTokens = GLM_TIER_BUDGET_TOKENS[tier];
+
+  try {
+    const { status, contentType, text } = await postRaw(
+      `${baseUrl}/messages`,
+      anthropicHeaders(apiKey),
+      {
+        model,
+        // The real ceiling (not a placeholder): reasoningRequestOptions clamps
+        // maxOutputTokens so `max_tokens = maxOutputTokens + budget_tokens`
+        // converges back to exactly this value for EVERY tier (see
+        // glm-reasoning-wire.integration.test.ts, the deterministic proof).
+        max_tokens: GLM_MAX_TOKENS,
+        messages: [{ role: "user", content: "Reply with exactly one short sentence." }],
+        thinking: { type: "enabled", budget_tokens: budgetTokens },
+        output_config: { effort: tier },
+        stream: true,
+      },
+    );
+    if (status !== 200) return cellFail(cellId, label, `HTTP ${status}`, { body: text });
+    if (!contentType.toLowerCase().includes("text/event-stream")) {
+      return cellFail(cellId, label, `response was not SSE (content-type: "${contentType}")`);
+    }
+
+    const events = parseSseEvents(text);
+    if (events.length === 0) return cellFail(cellId, label, "stream had no parseable SSE frames");
+
+    const reasoningPresent = events.some(
+      (e) => e.data?.type === "content_block_start" && e.data?.content_block?.type === "thinking",
+    );
+    const usagePresent = events.some(
+      (e) => e.data?.type === "message_delta" && typeof e.data?.usage?.output_tokens === "number",
+    );
+    cellPass(cellId, label, {
+      status,
+      reasoningPresent,
+      usagePresent,
+      maxTokens: GLM_MAX_TOKENS,
+      budgetTokens,
+      effort: tier,
+      baseUrl,
+    });
+  } catch (err) {
+    cellFail(cellId, label, `threw: ${err?.message ?? err}`);
+  }
+}
+
+async function runGlmAnthropicCell(cellIdHigh, labelHigh, cellIdMax, labelMax) {
   const required = requireEnv(["ANYCODE_API_KEY", "ANYCODE_MODEL"]);
-  if (!required.ok) return ownerGated(cellId, label, required.missing);
+  if (!required.ok) {
+    ownerGated(cellIdHigh, labelHigh, required.missing);
+    ownerGated(cellIdMax, labelMax, required.missing);
+    return;
+  }
 
   const apiKey = readEnv("ANYCODE_API_KEY");
   const model = readEnv("ANYCODE_MODEL");
   const baseUrl = normalizeAnthropicBaseUrl(readEnv("ANYCODE_BASE_URL") ?? "https://api.anthropic.com");
 
-  try {
-    const { status, json } = await postJson(
-      `${baseUrl}/messages`,
-      anthropicHeaders(apiKey),
-      {
-        model,
-        max_tokens: 1_024,
-        messages: [{ role: "user", content: "Reply with exactly one short sentence." }],
-        thinking: { type: "enabled", budget_tokens: 512 },
-        output_config: { effort: "high" },
-        stream: false,
-      },
-    );
-    if (status !== 200) return cellFail(cellId, label, `HTTP ${status}`, { body: json });
-
-    const content = Array.isArray(json.content) ? json.content : [];
-    const reasoningPresent = content.some((b) => b?.type === "thinking");
-    const usagePresent = typeof json.usage?.output_tokens === "number";
-    cellPass(cellId, label, { status, reasoningPresent, usagePresent, baseUrl });
-  } catch (err) {
-    cellFail(cellId, label, `threw: ${err?.message ?? err}`);
-  }
+  await runGlmAnthropicTierCell(cellIdHigh, labelHigh, { apiKey, model, baseUrl, tier: "high" });
+  await runGlmAnthropicTierCell(cellIdMax, labelMax, { apiKey, model, baseUrl, tier: "max" });
 }
 
 // ── (b) OpenAI x responses: text / stream / reasoning / tools / usage / abort / store:false ──
@@ -188,18 +265,28 @@ async function runOpenAIResponsesCell(cellId, label, { apiKey, model, baseUrl })
     return cellFail(cellId, label, `text threw: ${err?.message ?? err}`, facts);
   }
 
-  // streaming SSE.
+  // streaming SSE: a real Responses stream is `content-type: text/event-stream`
+  // carrying `response.*` frames. A 200 with a plain JSON body (e.g. a gateway
+  // that silently ignores `stream:true`) must FAIL here, not pass (W6-FIX #3).
   try {
-    const { status, json: raw } = await postJson(
+    const { status, contentType, text } = await postRaw(
       `${baseUrl}/responses`,
       openaiHeaders(apiKey),
       { model, input: "Reply with exactly one short sentence.", store: false, stream: true },
     );
     facts.streamStatus = status;
-    // postJson JSON-parses; an SSE body fails to parse and lands in `.raw` —
-    // that IS the expected shape here, we only need it non-empty and 200.
-    facts.streamNonEmpty = typeof raw?.raw === "string" ? raw.raw.length > 0 : true;
+    facts.streamContentType = contentType;
     if (status !== 200) return cellFail(cellId, label, `stream HTTP ${status}`, facts);
+    if (!contentType.toLowerCase().includes("text/event-stream")) {
+      return cellFail(cellId, label, `stream response was not SSE (content-type: "${contentType}")`, facts);
+    }
+    const responseFrames = parseSseEvents(text).filter(
+      (e) => typeof e.data?.type === "string" && e.data.type.startsWith("response."),
+    );
+    facts.streamFrameCount = responseFrames.length;
+    if (responseFrames.length === 0) {
+      return cellFail(cellId, label, "stream response had no `response.*` SSE frame", facts);
+    }
   } catch (err) {
     return cellFail(cellId, label, `stream threw: ${err?.message ?? err}`, facts);
   }
@@ -226,7 +313,9 @@ async function runOpenAIResponsesCell(cellId, label, { apiKey, model, baseUrl })
     return cellFail(cellId, label, `tools threw: ${err?.message ?? err}`, facts);
   }
 
-  // abort mid-request.
+  // abort mid-request — a failed-abort observation is a hard FAIL (W6-FIX #3):
+  // the whole point of this probe is proving the endpoint actually honors
+  // client-side abort, not merely completing without throwing.
   try {
     const controller = new AbortController();
     const promise = postJson(
@@ -237,9 +326,14 @@ async function runOpenAIResponsesCell(cellId, label, { apiKey, model, baseUrl })
     );
     controller.abort();
     await promise;
-    facts.abortRejected = false; // did not throw — unexpected but not fatal to the matrix
+    facts.abortRejected = false;
+    return cellFail(cellId, label, "abort: request completed instead of rejecting when aborted", facts);
   } catch (err) {
-    facts.abortRejected = err?.name === "AbortError" || String(err?.message ?? err).toLowerCase().includes("abort");
+    const aborted = err?.name === "AbortError" || String(err?.message ?? err).toLowerCase().includes("abort");
+    facts.abortRejected = aborted;
+    if (!aborted) {
+      return cellFail(cellId, label, `abort: rejected for a non-abort reason: ${err?.message ?? err}`, facts);
+    }
   }
 
   cellPass(cellId, label, facts);
@@ -345,7 +439,12 @@ async function runLocalNoAuthCell(cellId, label) {
 async function main() {
   console.log("[provider-live-smoke] TASK.43 W6 live matrix — every cell without env creds reports OWNER-GATED, never a fail.");
 
-  await runGlmAnthropicCell("(a)", "generic-gateway/GLM x anthropic-messages (reasoning)");
+  await runGlmAnthropicCell(
+    "(a1)",
+    "generic-gateway/GLM x anthropic-messages (reasoning, high)",
+    "(a2)",
+    "generic-gateway/GLM x anthropic-messages (reasoning, max)",
+  );
 
   const openaiCells = await runOpenAICell("(b)", "OpenAI x responses");
   if (openaiCells === undefined) {
