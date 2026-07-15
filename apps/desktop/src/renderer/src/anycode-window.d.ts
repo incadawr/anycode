@@ -149,6 +149,10 @@ declare global {
         connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
         connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
         connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
+        // TASK.45 W11-FIX (W13 live-dogfood finding): push fired after a real
+        // request outcome updates a connection's advisory health — no payload,
+        // same shape as `onEnginesChanged` above.
+        onProviderHealthChanged(callback: () => void): () => void;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config
       // management invoke-API. `get` returns the joined project/user/compat

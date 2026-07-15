@@ -170,6 +170,16 @@ const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
 const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
 const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
+// TASK.45 W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
+// (main/settings-ipc.ts) persists a real request outcome's advisory health
+// deliberately WITHOUT firing the normal `onMutation` broadcast (health must
+// never trigger the readiness/host-env/auto-tab side effects a real settings
+// mutation does) — but with zero push at all, an already-loaded renderer's
+// settings-store snapshot never reflected it live; only an UNRELATED settings
+// mutation happening to refresh the snapshot ever repainted a tile. Same
+// "duplicated on purpose" precedent as `ENGINES_CHANGED_CHANNEL` above
+// (main/index.ts holds the byte-identical source of truth).
+const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
@@ -318,6 +328,18 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CONNECTION_DELETE_CHANNEL, req) as Promise<SettingsMutationResult>,
     connectionCheck: (req: ConnectionCheckRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_CHECK_CHANNEL, req) as Promise<SettingsMutationResult>,
+    // TASK.45 W11-FIX (W13 live-dogfood finding): push fired after a real
+    // request outcome updates a connection's advisory health (main's
+    // `onProviderHealthEvent`). No payload — same "thin unsubscribe-returning
+    // wrapper" shape as `onEnginesChanged` above; the listener re-invokes
+    // `settings.get()` (settings-store.ts's `subscribeProviderHealth`).
+    onProviderHealthChanged: (callback: () => void): (() => void) => {
+      function listener(): void {
+        callback();
+      }
+      ipcRenderer.on(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
+    },
   },
   // P7.19/F22 W2 (design/slice-P7.19-cut.md §3/§4): `mcpConfig.*` — five more
   // thin invoke wrappers over the MCP config-management channels (main owns

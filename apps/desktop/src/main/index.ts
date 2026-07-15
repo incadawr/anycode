@@ -97,6 +97,13 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// TASK.45 W11-FIX (W13 live-dogfood finding): push-only, no payload — the
+// renderer re-fetches via `settings.get()` (settings-store.ts's
+// `subscribeProviderHealth`). Duplicated literal, not a `shared/**` export
+// (preload/index.ts holds the byte-identical copy) — same "duplicated on
+// purpose" precedent as `ENGINES_CHANGED_CHANNEL`.
+const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
+
 /**
  * Normalizes a raw host-reported `ProviderHealthEvent` into the shape
  * `applyConnectionHealthEvent` accepts, or `undefined` to drop it entirely
@@ -990,9 +997,21 @@ void app.whenReady().then(async () => {
         console.warn(`[main] dropping malformed provider-health event (kind=${JSON.stringify(event.kind)})`);
         return;
       }
-      void applyConnectionHealthEvent(settingsIpcDeps, connectionId, healthEvent).catch((error) => {
-        console.error(`[main] failed to record connection health`, error);
-      });
+      // TASK.45 W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
+      // deliberately never fires the normal `onMutation` broadcast (health
+      // must not trigger the readiness/host-env/auto-tab cascade a real
+      // settings mutation does) — but that also meant zero renderer push at
+      // all, so an already-loaded app's connection tile stayed on a stale
+      // reading until an unrelated mutation happened to refresh it. Pushed
+      // ONLY after the write actually lands (never on a failed persist —
+      // there is nothing new to reflect).
+      void applyConnectionHealthEvent(settingsIpcDeps, connectionId, healthEvent)
+        .then(() => {
+          win?.webContents.send(PROVIDER_HEALTH_CHANGED_CHANNEL);
+        })
+        .catch((error) => {
+          console.error(`[main] failed to record connection health`, error);
+        });
     },
   });
 

@@ -62,6 +62,7 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
     connectionSetActive: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     connectionDelete: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     connectionCheck: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
+    onProviderHealthChanged: vi.fn().mockReturnValue(() => {}),
     ...overrides,
   };
 }
@@ -194,6 +195,36 @@ describe("settings-store: connection CRUD (TASK.45 W12)", () => {
 
     expect(bridge.connectionCheck).toHaveBeenCalledWith({ id: "conn-1" });
     expect(store.getState().snapshot).toEqual(checked);
+  });
+});
+
+describe("settings-store: provider-health push (TASK.45 W11-FIX, W13 live-dogfood finding)", () => {
+  it("subscribeProviderHealth wires the bridge's push into a fresh load() and returns its unsubscribe", async () => {
+    let captured: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    const pushed = baseSnapshot({ providerReady: true });
+    const get = vi.fn().mockResolvedValueOnce(baseSnapshot()).mockResolvedValueOnce(pushed);
+    const bridge = fakeBridge({
+      get,
+      onProviderHealthChanged: vi.fn().mockImplementation((cb: () => void) => {
+        captured = cb;
+        return unsubscribe;
+      }),
+    });
+    const store = createSettingsStore(bridge);
+    await store.getState().load();
+    expect(get).toHaveBeenCalledTimes(1);
+
+    const returned = store.getState().subscribeProviderHealth();
+    expect(captured).toBeDefined();
+
+    captured?.();
+    await Promise.resolve();
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(store.getState().snapshot).toEqual(pushed);
+
+    returned();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
 

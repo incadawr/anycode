@@ -68,6 +68,10 @@ export interface SettingsBridge {
   connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
   connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
   connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
+  // TASK.45 W11-FIX (W13 live-dogfood finding): push fired after a real
+  // request outcome updates a connection's advisory health — no payload,
+  // same shape as `UpdatesBridge.onUpdateStatus` below.
+  onProviderHealthChanged(callback: () => void): () => void;
 }
 
 /**
@@ -154,6 +158,15 @@ export interface SettingsAppState {
   connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
   connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
   connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
+  /**
+   * TASK.45 W11-FIX (W13 live-dogfood finding): wires main's provider-health
+   * push into a fresh `load()` — no payload to merge, since the push only
+   * signals "a connection's advisory health changed on disk", the same
+   * "re-fetch on notify" shape as `onEnginesChanged`. Same one-time,
+   * whole-app-lifetime intent as `subscribeUpdates` below (also wired from
+   * `SettingsScreen.tsx`'s `SettingsDialog`).
+   */
+  subscribeProviderHealth(): () => void;
 
   // ── slice 2.6 (auto-updater, design §6) ──
   /** Last `UpdateStatus` pushed by main; `idle` until `subscribeUpdates` has wired the push channel (or nothing has happened yet in a dev build). */
@@ -356,6 +369,12 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
         set({ notice: describeMutationFailure(result.reason) });
       }
       return result;
+    },
+
+    subscribeProviderHealth(): () => void {
+      return api().onProviderHealthChanged(() => {
+        void get().load();
+      });
     },
 
     async addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult> {

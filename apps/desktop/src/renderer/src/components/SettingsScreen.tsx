@@ -1323,6 +1323,17 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
     return store.getState().subscribeUpdates();
   }, [store]);
 
+  // TASK.45 W11-FIX (W13 live-dogfood finding): same one-time,
+  // whole-app-lifetime wiring as `subscribeUpdates` above — a real request
+  // outcome's advisory health (main's `applyConnectionHealthEvent`)
+  // deliberately never fires the normal settings `onMutation` broadcast, so
+  // without this the connection grid stayed on a stale reading (Unchecked,
+  // or a prior status) until some UNRELATED settings mutation happened to
+  // refresh the snapshot.
+  useEffect(() => {
+    return store.getState().subscribeProviderHealth();
+  }, [store]);
+
   // R17 a11y: capture the pre-open focus when the dialog opens and restore it
   // when it closes. SettingsDialog is unconditionally mounted (see the note
   // below), so this is keyed on `open`, not mount; on close the `if (!open)
