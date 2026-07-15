@@ -333,12 +333,34 @@ function isStalledOutcome<T>(outcome: IteratorResult<T> | StalledOutcome): outco
 }
 
 /**
+ * The port's own stall-timeout error (never a provider error): distinguished
+ * by type so `describeRetryReason` can give it a fixed whitelist reason
+ * instead of routing it through `classifyProviderFailure`'s generic
+ * "unknown" bucket, which discards the actionable stall diagnostic (TASK.33
+ * W7b-FIX #3). The raw, interpolated message stays on `.message` for the
+ * host log (thrown verbatim on retry-exhaustion); only the class identity is
+ * used for the wire-crossing reason, never the message text itself.
+ */
+class StreamStallError extends Error {
+  constructor(timeoutMs: number) {
+    super(`stream stalled: no events for ${timeoutMs}ms`);
+    this.name = "StreamStallError";
+  }
+}
+
+/**
  * `stream_retry.reason` rides the wire and is rendered verbatim by the CLI and
- * renderer, so it must be the whitelist-derived safe message — NEVER the raw
- * `error.message`, which can embed a response body or auth header (TASK.33
- * W7b-FIX #2).
+ * renderer, so it must be a whitelist-derived safe message — NEVER raw
+ * provider `error.message` text, which can embed a response body or auth
+ * header (TASK.33 W7b-FIX #2). A `StreamStallError` is locally generated, not
+ * provider text, so it gets its own fixed, non-interpolated whitelist reason
+ * (W7b-FIX #3) rather than falling into `classifyProviderFailure`'s generic
+ * "unknown" -> "request failed" bucket.
  */
 function describeRetryReason(error: unknown): string {
+  if (error instanceof StreamStallError) {
+    return "stream_stalled";
+  }
   return classifyProviderFailure(error).safe.message;
 }
 
@@ -417,9 +439,7 @@ export class AiSdkModelPort implements ModelPort {
           const outcome = await nextWithStallTimeout(iterator, policy.stallTimeoutMs, attemptController.signal);
 
           if (isStalledOutcome(outcome)) {
-            const stallError = new Error(
-              `stream stalled: no events for ${policy.stallTimeoutMs}ms`,
-            );
+            const stallError = new StreamStallError(policy.stallTimeoutMs);
             // Actually cancel the underlying SDK call; it will never be read again.
             attemptController.abort(stallError);
             // Stall is the one mid-stream retry allowed by design: it ignores
