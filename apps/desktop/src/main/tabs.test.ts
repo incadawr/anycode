@@ -679,6 +679,47 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     expect(forkSpy.mock.calls[0]?.[2].env).toEqual({ PATH: "/base", ANYCODE_CONNECTION_ID: "conn-ok" });
   });
 
+  function pinEnvelopeManager(window: WindowLike, describeConnection?: TabHostManagerDeps["describeConnection"]) {
+    return new TabHostManager({
+      fork: liveForkRig().fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      describeConnection,
+      logger: silentLogger,
+    });
+  }
+
+  it("tab-port envelope carries the PINNED connection's {connectionId, providerId} (W10-FIX F2)", () => {
+    const { window, posted } = windowRig();
+    const manager = pinEnvelopeManager(window, (id) => (id === "conn-A" ? { providerId: "prov-A" } : undefined));
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, connectionId: "conn-A" });
+    manager.deliverTabPort(manager.getTab(created.ok ? created.tab.tabId : "")!);
+    const payload = posted.find((p) => p.channel === PORT_ENVELOPE_TYPE)?.payload as Record<string, unknown>;
+    expect(payload).toMatchObject({ connectionId: "conn-A", providerId: "prov-A" });
+  });
+
+  it("tab-port envelope OMITS pin fields for an unpinned (legacy) tab (W10-FIX F2)", () => {
+    const { window, posted } = windowRig();
+    const manager = pinEnvelopeManager(window, () => ({ providerId: "prov-A" }));
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    manager.deliverTabPort(manager.getTab(created.ok ? created.tab.tabId : "")!);
+    const payload = posted.find((p) => p.channel === PORT_ENVELOPE_TYPE)?.payload as Record<string, unknown>;
+    expect("connectionId" in payload).toBe(false);
+    expect("providerId" in payload).toBe(false);
+  });
+
+  it("tab-port envelope OMITS pin fields when the pinned connection is gone (W10-FIX F2)", () => {
+    const { window, posted } = windowRig();
+    const manager = pinEnvelopeManager(window, () => undefined); // connection deleted
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, connectionId: "conn-gone" });
+    manager.deliverTabPort(manager.getTab(created.ok ? created.tab.tabId : "")!);
+    const payload = posted.find((p) => p.channel === PORT_ENVELOPE_TYPE)?.payload as Record<string, unknown>;
+    expect("connectionId" in payload).toBe(false);
+    expect("providerId" in payload).toBe(false);
+  });
+
   it("resolveCredential receives the tab's pinned connectionId (per-tab oauth routing)", async () => {
     const seen: (string | undefined)[] = [];
     const { fork, hosts } = liveForkRig();

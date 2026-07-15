@@ -43,6 +43,17 @@ export interface PortEnvelope {
   tabId: string;
   /** The tab's workspace (= host cwd), known before the host forks. */
   workspace: string;
+  /**
+   * The provider connection this tab is pinned to (TASK.45 W10-FIX F2), so the
+   * renderer's ModelPill can target the PINNED connection's catalog + write-target
+   * instead of the current active one. Additive control-plane metadata — this is
+   * NOT the session-stream (shared/protocol.ts stays byte-untouched); absent for
+   * an unpinned/legacy tab (ModelPill then falls back to the active connection).
+   * `providerId` is main-derived from the connection at delivery time (a
+   * connection's `providerId` is immutable), so the renderer never guesses it.
+   */
+  connectionId?: string;
+  providerId?: string;
 }
 
 /** Page envelope for the host-exited notification (no ports attached). */

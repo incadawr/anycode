@@ -535,6 +535,14 @@ export interface PendingEngineChange {
 
 export interface DesktopState {
   connection: ConnectionPhase;
+  /**
+   * The provider connection this tab is pinned to (TASK.45 W10-FIX F2), delivered
+   * on the tab-port envelope (control plane, NOT a host message). Null for an
+   * unpinned/legacy tab — the ModelPill then targets the active connection. Set at
+   * port attach and stable for the tab's life (survives host respawns), so it lives
+   * outside the session slice a host_ready reset clears.
+   */
+  pinnedConnection: { connectionId: string; providerId: string } | null;
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
@@ -668,6 +676,8 @@ export interface DesktopState {
   setAwaitingHostReady(): void;
   /* */
   setHostExited(): void;
+  /** Records the tab's pinned connection from the tab-port envelope (TASK.45 W10-FIX F2). */
+  setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void;
   /** Sets or clears (null) the transient notice; the toast UI (MVP.5) dismisses through this. */
   setNotice(notice: Notice | null): void;
   /** Appends the local user's message to the transcript (the wire never echoes user input back, §3). */
@@ -1808,6 +1818,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
     return {
       connection: "awaiting_port",
+      // W10-FIX F2: pin is control-plane, set at port attach — OUTSIDE the session
+      // slice so a host_ready respawn reset never drops it.
+      pinnedConnection: null,
       workspace: null,
       model: null,
       mode: null,
@@ -2184,6 +2197,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       setAwaitingHostReady(): void {
         set({ connection: "awaiting_host_ready" });
+      },
+
+      setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
+        set({ pinnedConnection });
       },
 
       setHostExited(): void {

@@ -13,6 +13,7 @@ import {
   modelPickDisabled,
   pillLabel,
   resolvePid,
+  resolvePillTarget,
   shouldPersistOnAck,
 } from "./ModelPill.js";
 
@@ -23,6 +24,46 @@ describe("resolvePid", () => {
 
   it("passes through a catalog provider id unchanged", () => {
     expect(resolvePid("z-ai")).toBe("z-ai");
+  });
+});
+
+describe("resolvePillTarget (TASK.45 W10-FIX F2: pin-follows catalog + write-target)", () => {
+  const catalog = [
+    { id: "prov-A", models: [{ id: "a-model", name: "A Model" }] },
+    { id: "prov-B", models: [{ id: "b-model", name: "B Model" }] },
+  ];
+
+  it("a PINNED tab follows its pin's provider + connection, NOT the active one", () => {
+    // Tab pinned to conn-A (provider prov-A); the ACTIVE default is conn-B (prov-B).
+    const target = resolvePillTarget({ connectionId: "conn-A", providerId: "prov-A" }, "prov-B", "conn-B");
+    expect(target).toEqual({ providerId: "prov-A", writeTargetConnectionId: "conn-A" });
+    // The catalog the pill offers is the PINNED provider's models — never prov-B's.
+    const models = catalog.find((e) => e.id === target.providerId)?.models;
+    expect(modelMenuItems("a-model", models)).toEqual([{ id: "a-model", name: "A Model" }]);
+    // And the acked pick persists to the PINNED connection id, not the active one.
+    expect(buildConnectionUpdate(target.writeTargetConnectionId!, true, "a-model", "off")).toEqual({
+      id: "conn-A",
+      model: "a-model",
+      reasoningEffort: "off",
+    });
+  });
+
+  it("an UNPINNED (legacy) tab falls back to the active provider + connection (prior behaviour)", () => {
+    expect(resolvePillTarget(null, "prov-B", "conn-B")).toEqual({
+      providerId: "prov-B",
+      writeTargetConnectionId: "conn-B",
+    });
+    expect(resolvePillTarget(undefined, "prov-B", "conn-B")).toEqual({
+      providerId: "prov-B",
+      writeTargetConnectionId: "conn-B",
+    });
+  });
+
+  it("with no active connection AND no pin, both targets are undefined (env-override / fresh)", () => {
+    expect(resolvePillTarget(null, undefined, undefined)).toEqual({
+      providerId: undefined,
+      writeTargetConnectionId: undefined,
+    });
   });
 });
 

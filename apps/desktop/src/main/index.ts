@@ -894,6 +894,14 @@ void app.whenReady().then(async () => {
     // TASK.45 W10: fork env resolved for the tab's PINNED connection (session
     // pinning), not merely the current active one.
     env: (connectionId) => hostEnvForConnection(connectionId),
+    // TASK.45 W10-FIX F2: the pinned connection's immutable providerId for the
+    // tab-port envelope, so the renderer's ModelPill targets the PINNED
+    // connection's catalog + write-target. Undefined for a since-deleted pin.
+    describeConnection: (connectionId) => {
+      if (settings === null) return undefined;
+      const connection = connectionById(settings, connectionId);
+      return connection === undefined ? undefined : { providerId: connection.providerId };
+    },
     providerReady: () => providerReady,
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible

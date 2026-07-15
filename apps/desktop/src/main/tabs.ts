@@ -341,6 +341,14 @@ export interface TabHostManagerDeps {
    * with an undefined id. Absent = health tracking off (legacy tests unaffected).
    */
   onProviderHealthEvent?: (connectionId: string, event: ProviderHealthEvent) => void;
+  /**
+   * Resolves the immutable providerId of a pinned connection for the tab-port
+   * envelope (TASK.45 W10-FIX F2): main injects `(id) => connectionById(...)?.providerId`.
+   * Absent OR returning undefined -> the envelope omits BOTH pin fields (an
+   * unpinned/legacy tab, or a since-deleted connection), and the renderer's
+   * ModelPill falls back to the active connection's catalog + write-target.
+   */
+  describeConnection?: (connectionId: string) => { providerId: string } | undefined;
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
@@ -818,9 +826,21 @@ export class TabHostManager {
     }
     const channel = this.deps.createChannel();
     tab.proc.postMessage({ type: HOST_INIT_MESSAGE_TYPE }, [channel.port1]);
+    // TASK.45 W10-FIX F2: additive control-plane pin metadata. Both fields ride
+    // together or not at all — a since-deleted pin (describeConnection -> undefined)
+    // omits both so the renderer falls back to the active connection rather than
+    // targeting a dead one. This is NOT the session-stream (protocol.ts untouched).
+    const pin =
+      tab.connectionId !== undefined ? this.deps.describeConnection?.(tab.connectionId) : undefined;
     win.webContents.postMessage(
       PORT_ENVELOPE_TYPE,
-      { tabId: tab.tabId, workspace: tab.workspace },
+      {
+        tabId: tab.tabId,
+        workspace: tab.workspace,
+        ...(tab.connectionId !== undefined && pin !== undefined
+          ? { connectionId: tab.connectionId, providerId: pin.providerId }
+          : {}),
+      },
       [channel.port2],
     );
     this.logger.log(`[main] delivered fresh MessageChannel to tab ${tab.tabId}`);

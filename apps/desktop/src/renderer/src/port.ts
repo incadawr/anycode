@@ -94,6 +94,12 @@ export function connectTerminal(port: MessagePort): TerminalConnection {
 export interface HostPortMeta {
   tabId: string;
   workspace: string;
+  /**
+   * TASK.45 W10-FIX F2: the tab's pinned provider connection (additive control
+   * plane). Absent for an unpinned/legacy tab — the ModelPill then falls back to
+   * the active connection's catalog + write-target.
+   */
+  pinnedConnection?: { connectionId: string; providerId: string };
 }
 
 /**
@@ -115,10 +121,20 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
     }
     const port = event.ports[0];
     if (port) {
-      const envelope = data as { tabId?: unknown; workspace?: unknown };
+      const envelope = data as { tabId?: unknown; workspace?: unknown; connectionId?: unknown; providerId?: unknown };
       const tabId = typeof envelope.tabId === "string" ? envelope.tabId : "";
       const wsFromEnvelope = typeof envelope.workspace === "string" ? envelope.workspace : "";
-      cb(port, { tabId, workspace: wsFromEnvelope });
+      // TASK.45 W10-FIX F2: both pin fields present -> the tab is pinned; either
+      // absent -> unpinned (fall back to active in the ModelPill).
+      const pinnedConnection =
+        typeof envelope.connectionId === "string" && typeof envelope.providerId === "string"
+          ? { connectionId: envelope.connectionId, providerId: envelope.providerId }
+          : undefined;
+      cb(port, {
+        tabId,
+        workspace: wsFromEnvelope,
+        ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
+      });
     }
   }
   window.addEventListener("message", handleMessage);
@@ -186,8 +202,16 @@ export interface ConnectionRegistry {
 
    * race a closeTab that beat it to the punch) — the caller drops it with a
    * warn instead of resurrecting a closed tab.
+   *
+   * TASK.45 W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
+   * provider connection on its per-tab store so the ModelPill targets it.
    */
-  registerPort(tabId: string, workspace: string, port: MessagePort): boolean;
+  registerPort(
+    tabId: string,
+    workspace: string,
+    port: MessagePort,
+    pinnedConnection?: { connectionId: string; providerId: string },
+  ): boolean;
   /** Flips the given tab's connection/banner state to host-exited; a no-op for a tab that isn't registered. */
   markHostExited(tabId: string): void;
   /**
@@ -218,7 +242,7 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
       console.warn("[port] dropping port envelope with no tabId", meta);
       return;
     }
-    const attached = registry.registerPort(meta.tabId, meta.workspace, port);
+    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection);
     if (!attached) {
       console.warn("[port] dropping port for a closed/unknown tab", meta.tabId);
     }

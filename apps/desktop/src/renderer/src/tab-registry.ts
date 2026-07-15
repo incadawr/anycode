@@ -67,8 +67,16 @@ export interface TabRegistry {
    * store/transcript. Returns false — and registers nothing — if `tabId` has
 
    * delivery); the caller is expected to drop the port with a warn.
+   *
+   * TASK.45 W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
+   * provider connection on its per-tab store so the ModelPill targets it.
    */
-  registerPort(tabId: string, workspace: string, port: MessagePort): boolean;
+  registerPort(
+    tabId: string,
+    workspace: string,
+    port: MessagePort,
+    pinnedConnection?: { connectionId: string; providerId: string },
+  ): boolean;
   /**
    * Flips the tab's own store into `host_exited` and mirrors that onto the
    * tabs-store's `hostExited` flag (for the TabBar dot) — ONLY for this
@@ -320,7 +328,7 @@ export function createTabRegistry(
   }
 
   return {
-    registerPort(tabId, workspace, port): boolean {
+    registerPort(tabId, workspace, port, pinnedConnection): boolean {
       if (!tabId || closedTabIds.has(tabId)) {
         return false;
       }
@@ -372,6 +380,11 @@ export function createTabRegistry(
           }
         };
         entry.unsubscribeQueue = entry.store.subscribe(maybeDrain);
+      }
+      // W10-FIX F2: record the tab's pinned connection (stable for the tab's life;
+      // re-delivered on every respawn, so re-applying it is a harmless no-op).
+      if (pinnedConnection !== undefined) {
+        entry.store.getState().setPinnedConnection(pinnedConnection);
       }
       attach(entry, tabId, port);
       return true;

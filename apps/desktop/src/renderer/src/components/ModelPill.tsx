@@ -108,6 +108,26 @@ export function resolvePid(providerId: string | undefined): string {
 }
 
 /**
+ * Resolves the ModelPill's provider catalog + write-target for a tab (TASK.45
+ * W10-FIX F2): a PINNED tab follows its pin's providerId (catalog) and
+ * connectionId (write-target); an unpinned/legacy tab falls back to the ACTIVE
+ * connection (the prior behaviour). Both axes move together — the catalog the pill
+ * offers and the connection its pick persists to are always the SAME connection,
+ * so a default-switch never retargets a pinned session's model/effort writes.
+ * Exported for unit testing.
+ */
+export function resolvePillTarget(
+  pinnedConnection: { connectionId: string; providerId: string } | null | undefined,
+  activeProviderId: string | undefined,
+  activeConnectionId: string | undefined,
+): { providerId: string | undefined; writeTargetConnectionId: string | undefined } {
+  return {
+    providerId: pinnedConnection?.providerId ?? activeProviderId,
+    writeTargetConnectionId: pinnedConnection?.connectionId ?? activeConnectionId,
+  };
+}
+
+/**
  * Catalog display name for a model id: the catalog entry's `name` when the
  * id matches one of the provider's models, else the raw id (a free-text /
  * env-boot model with no catalog entry falls back to itself). Exported for
@@ -234,16 +254,26 @@ export function ModelPill() {
   const turnStatus = useTabStore((state) => state.turn.status);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
   const connection = useTabStore((state) => state.connection);
+  const pinnedConnection = useTabStore((state) => state.pinnedConnection);
   const ready = connection === "ready";
 
   const snapshot = useSettingsStore((state) => state.snapshot);
   const connectionUpdate = useSettingsStore((state) => state.connectionUpdate);
 
-  const providerId = snapshot ? activeProviderView(snapshot.settings).id : undefined;
-  // TASK.45 W10: the connection the model/effort write targets is the ACTIVE one
-  // (the renderer's default; the tab's own pin never crosses the session wire —
-  // zero-delta invariant). Undefined = no default configured (env-override / fresh).
-  const activeConnectionId = snapshot?.settings.provider.activeConnectionId;
+  // TASK.45 W10-FIX F2: both the model catalog AND the write-target follow this
+  // tab's PINNED connection (delivered on the tab-port envelope, control plane —
+  // NOT the session wire), falling back to the ACTIVE connection for an
+  // unpinned/legacy tab (the prior behaviour, preserved). This closes the F2
+  // defect where a pinned session offered the active provider's catalog to its
+  // pinned host and persisted the pick into the WRONG (active) connection after a
+  // default-switch. Undefined write-target = no connection configured (env-override
+  // / fresh) — the pick still reaches the host, but the ack skips the persist.
+  const activeProviderId = snapshot ? activeProviderView(snapshot.settings).id : undefined;
+  const { providerId, writeTargetConnectionId } = resolvePillTarget(
+    pinnedConnection,
+    activeProviderId,
+    snapshot?.settings.provider.activeConnectionId,
+  );
   const catalogModels = snapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
 
   const [open, setOpen] = useState(false);
@@ -377,7 +407,7 @@ export function ModelPill() {
       return;
     }
     if (id !== model) {
-      pendingPickRef.current = { kind: "model", value: id, connectionId: activeConnectionId };
+      pendingPickRef.current = { kind: "model", value: id, connectionId: writeTargetConnectionId };
       sendToHost({ type: "set_model", model: id });
     }
     close(true);
@@ -388,7 +418,7 @@ export function ModelPill() {
       return;
     }
     if (effort !== reasoningEffort) {
-      pendingPickRef.current = { kind: "effort", value: effort, connectionId: activeConnectionId };
+      pendingPickRef.current = { kind: "effort", value: effort, connectionId: writeTargetConnectionId };
       sendToHost({ type: "set_reasoning_effort", effort });
     }
     close(true);

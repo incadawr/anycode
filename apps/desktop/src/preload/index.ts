@@ -182,13 +182,26 @@ export type CodexLoginStartResult =
 // { tabId, workspace }, the host-exited envelope carries { tabId }; preload just
 // re-stamps the `type` and re-posts (still window.postMessage, since
 
-ipcRenderer.on(PORT_ENVELOPE_TYPE, (event, payload: { tabId: string; workspace: string }) => {
-  window.postMessage(
-    { type: PORT_ENVELOPE_TYPE, tabId: payload.tabId, workspace: payload.workspace },
-    "*",
-    event.ports,
-  );
-});
+ipcRenderer.on(
+  PORT_ENVELOPE_TYPE,
+  (event, payload: { tabId: string; workspace: string; connectionId?: string; providerId?: string }) => {
+    // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
+    // when present — additive control-plane, no session-stream change. Both fields
+    // ride together (main only sets them together) or are absent for an unpinned tab.
+    window.postMessage(
+      {
+        type: PORT_ENVELOPE_TYPE,
+        tabId: payload.tabId,
+        workspace: payload.workspace,
+        ...(payload.connectionId !== undefined && payload.providerId !== undefined
+          ? { connectionId: payload.connectionId, providerId: payload.providerId }
+          : {}),
+      },
+      "*",
+      event.ports,
+    );
+  },
+);
 
 ipcRenderer.on(HOST_EXITED_ENVELOPE_TYPE, (_event, payload: { tabId: string }) => {
   window.postMessage({ type: HOST_EXITED_ENVELOPE_TYPE, tabId: payload.tabId }, "*");

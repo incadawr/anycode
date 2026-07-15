@@ -184,6 +184,34 @@ describe("tab-registry — routing by tabId", () => {
     expect(registry.getStore("tab-b")?.getState().transcript).toHaveLength(0);
   });
 
+  it("records the tab-port envelope's pinned connection on the tab's store, and preserves it across respawn (W10-FIX F2)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-p", "/ws/p", asPort(port), { connectionId: "conn-A", providerId: "prov-A" });
+    expect(registry.getStore("tab-p")?.getState().pinnedConnection).toEqual({
+      connectionId: "conn-A",
+      providerId: "prov-A",
+    });
+
+    // A respawn re-delivers the same envelope — the pin persists (idempotent).
+    const respawnPort = new FakeMessagePort();
+    registry.registerPort("tab-p", "/ws/p", asPort(respawnPort), { connectionId: "conn-A", providerId: "prov-A" });
+    expect(registry.getStore("tab-p")?.getState().pinnedConnection).toEqual({
+      connectionId: "conn-A",
+      providerId: "prov-A",
+    });
+  });
+
+  it("leaves pinnedConnection null for an unpinned tab (no envelope pin) (W10-FIX F2)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+
+    registry.registerPort("tab-u", "/ws/u", asPort(new FakeMessagePort()));
+    expect(registry.getStore("tab-u")?.getState().pinnedConnection).toBeNull();
+  });
+
   it("auto-registers a tab on the first port for an unknown tabId (reload restoration, design §2.2)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
