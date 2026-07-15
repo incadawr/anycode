@@ -793,6 +793,132 @@ describe("AgentLoop.runTurn — terminal retry metadata (TASK.33 W7b)", () => {
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
   });
 
+  it("quota-coherence: retried on every attempt but offers no button — 3 stream_retry, terminal retry {attemptsMade:3, retryable:false, code:quota} (W7b-FIX #2)", async () => {
+    // Proves "we auto-retried but do NOT offer the manual button" is a coherent
+    // terminal state: a before-content quota-429 auto-retries (429 is retryable)
+    // yet a manual Try-again can never succeed.
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 0, reason: "quota" },
+        { type: "stream_retry", attempt: 2, maxAttempts: 3, delayMs: 0, reason: "quota" },
+        { type: "stream_retry", attempt: 3, maxAttempts: 3, delayMs: 0, reason: "quota" },
+        {
+          type: "error",
+          error: Object.assign(new Error("Insufficient quota for this account (code 1308)"), { statusCode: 429 }),
+        },
+      ],
+    ]);
+    const loop = makeLoop({ modelPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(3);
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 3,
+      maxAttempts: 3,
+      retryable: false,
+      hadModelOutput: false,
+      code: "quota",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("plain-connect-coherence: a thrown plain connect-Error offers the button — 0 stream_retry, terminal retry {attemptsMade:0, retryable:true, code:connect_timeout} (W7b-FIX #2)", async () => {
+    // Complement: no auto-retry happened (the shapeless Error gives the port
+    // nothing to act on), yet the class is transient so the manual button is
+    // offered — no maxAttempts key because the turn never retried.
+    const throwingPort: ModelPort = {
+      streamText: () =>
+        (async function* () {
+          yield { type: "start" } as ModelStreamEvent;
+          throw new Error("Cannot connect to API: Connect Timeout Error");
+        })(),
+    };
+    const loop = makeLoop({ modelPort: throwingPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 0,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("preserves hadModelOutput:true across a stall stream_retry that fired after model output (W7b-FIX #3)", async () => {
+    // The STALL retry path (model-port.ts) deliberately permits a stream_retry
+    // AFTER model output has already reached the consumer. Once output was
+    // delivered this turn, hadModelOutput must STAY true across the retry — a
+    // reset would make the terminal metadata claim no output was delivered and
+    // W8 would offer Try-again on a step whose re-send risks double-dispatch
+    // (TASK.33 invariant #1).
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "text_delta", id: "t1", text: "partial answer" },
+        {
+          type: "stream_retry",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 0,
+          reason: "stream stalled: no events for 90000ms",
+        },
+        { type: "error", error: new Error("boom after stall") },
+      ],
+    ]);
+    const loop = makeLoop({ modelPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 1,
+      maxAttempts: 3,
+      retryable: false,
+      hadModelOutput: true,
+      code: "unknown",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("keeps hadModelOutput:false when no output preceded the failure even after stream_retry (connect class stays green)", async () => {
+    // Complement to the fix: with no model output before the failure, the flag
+    // must remain false so a genuinely no-output connect failure still offers
+    // Try-again (retryable && !hadModelOutput).
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        {
+          type: "stream_retry",
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 0,
+          reason: "stream stalled: no events for 90000ms",
+        },
+        { type: "error", error: new Error("Cannot connect to API: Connect Timeout Error") },
+      ],
+    ]);
+    const loop = makeLoop({ modelPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = findErrorEvent(events);
+
+    expect(errorEvent?.retry).toEqual({
+      attemptsMade: 1,
+      maxAttempts: 3,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
   it("enriches the catch-throw error path (stream iterator threw) the same way as an in-stream error event", async () => {
     const throwingPort: ModelPort = {
       streamText: () =>

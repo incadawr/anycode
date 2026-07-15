@@ -525,8 +525,11 @@ export class AgentLoop {
       let streamErrored = false;
       let sawFinish = false;
       // Terminal-retry metadata counters (TASK.33 W7b): attemptsMade counts
-      // stream_retry events seen THIS TURN — unlike the accumulators above it is
-      // NOT reset on stream_retry (a retry increments it, it does not erase it).
+      // stream_retry events seen THIS TURN, and hadModelOutput records whether any
+      // model output reached the consumer this turn. Unlike the content
+      // accumulators below, NEITHER is reset on stream_retry — a retry increments
+      // attemptsMade, and once output was delivered hadModelOutput stays true
+      // across the retry (W7b-FIX #3: the stall retry may fire after output).
       let attemptsMade = 0;
       let maxAttempts: number | undefined;
       let hadModelOutput = false;
@@ -565,16 +568,20 @@ export class AgentLoop {
             case "stream_retry":
               attemptsMade += 1;
               maxAttempts = event.maxAttempts;
-              // hadModelOutput is already false here by construction: the port's
-              // own retry gate (isModelOutputEvent, provider/failure.ts) never
-              // emits stream_retry once model output has reached the consumer.
-              hadModelOutput = false;
-
-              // whole step is replayed from scratch, so every accumulator built up
-              // from the aborted attempt's partial events must be discarded — the
-              // eventual assistant message must reflect only the winning attempt.
-              // For a pre-first-event retry every one of these is already a no-op.
-              // Known cosmetic gap (out of scope for 2.3): any partial text already
+              // hadModelOutput is deliberately NOT reset here: the STALL retry path
+              // (model-port.ts) permits a stream_retry AFTER model output has
+              // already reached the consumer, so once output was delivered this
+              // turn the flag must stay true across the retry. Resetting it would
+              // make the terminal metadata claim no output was delivered, and W8
+              // would offer Try-again on a step whose re-send risks double-dispatch/
+              // double-bill (TASK.33 invariant #1).
+              //
+              // The CONTENT accumulators below still reset: the whole step is
+              // replayed from scratch, so every accumulator built up from the
+              // aborted attempt's partial events must be discarded — the eventual
+              // assistant message must reflect only the winning attempt. For a
+              // pre-first-event retry every one of these is already a no-op. Known
+              // cosmetic gap (out of scope for 2.3): any partial text already
               // rendered by the UI before the stall stays on screen; only the
               // written history is guaranteed clean.
               textParts.length = 0;
