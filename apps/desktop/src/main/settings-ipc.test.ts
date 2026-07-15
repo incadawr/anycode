@@ -161,6 +161,9 @@ class FakeVault implements VaultLike {
 class FakeOAuthRunner implements OAuthRunnerLike {
   outcome: OAuthOutcome = { ok: true };
   cancelled: string[] = [];
+  /** W11-FIX2 #2: records markConnectionDeleting/revert call order for handler-wiring pins. */
+  markedDeleting: string[] = [];
+  reverted: string[] = [];
   lastConnectionId: string | undefined;
   constructor(private readonly vault: FakeVault) {}
   async startFlow(_config: OAuthProviderConfig, connectionId: string): Promise<OAuthOutcome> {
@@ -172,6 +175,16 @@ class FakeOAuthRunner implements OAuthRunnerLike {
   }
   cancel(providerId: string): void {
     this.cancelled.push(providerId);
+  }
+  markConnectionDeleting(connectionId: string): () => void {
+    this.markedDeleting.push(connectionId);
+    let reverted = false;
+    return () => {
+      if (!reverted) {
+        reverted = true;
+        this.reverted.push(connectionId);
+      }
+    };
   }
 }
 
@@ -1011,6 +1024,73 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
   });
 });
 
+describe("handleConnectionDelete — tombstone wiring (W11-FIX2 #2, handler layer)", () => {
+  it("marks the connection deleting BEFORE the first clearSecret call", async () => {
+    const oauth = new FakeOAuthRunner(vault);
+    const markSpy = vi.spyOn(oauth, "markConnectionDeleting");
+    const clearSpy = vi.spyOn(vault, "clearSecret");
+    const deps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+    });
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-1
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    expect(oauth.markedDeleting).toEqual(["conn-1"]);
+    // The tombstone must be in place strictly before the FIRST vault-clear —
+    // otherwise a same-connection write settling in the window between the
+    // clear and the mark could still slip past the compensation's tombstone
+    // check and strand a blob under the just-deleted id.
+    const markCallOrder = markSpy.mock.invocationCallOrder[0];
+    const firstClearCallOrder = clearSpy.mock.invocationCallOrder[0];
+    expect(markCallOrder).toBeDefined();
+    expect(firstClearCallOrder).toBeDefined();
+    expect(markCallOrder as number).toBeLessThan(firstClearCallOrder as number);
+  });
+
+  it("commits the tombstone on a successful delete (no revert)", async () => {
+    const oauth = new FakeOAuthRunner(vault);
+    const deps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+    });
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-1
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    expect(oauth.markedDeleting).toEqual(["conn-1"]);
+    expect(oauth.reverted).toEqual([]);
+  });
+
+  it("reverts the tombstone when the LATE re-check aborts the delete (W10-FIX F3 abort path)", async () => {
+    const oauth = new FakeOAuthRunner(vault);
+    let calls = 0;
+    const connectionInUse = (id: string): boolean => {
+      calls += 1;
+      return id === "conn-1" && calls >= 2;
+    };
+    const deps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+      oauth,
+      connectionInUse,
+    });
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-1
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res).toEqual({ ok: false, reason: "connection_in_use" });
+    // The connection SURVIVES the aborted delete — its tombstone must not
+    // remain, or a later legitimate re-sign-in flow for it would regress M6
+    // (a superseded-but-alive write wrongly compensated away).
+    expect(oauth.markedDeleting).toEqual(["conn-1"]);
+    expect(oauth.reverted).toEqual(["conn-1"]);
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(1);
+  });
+});
+
 // ── TASK.45 W11: connection health classification + advisory persist ──
 
 describe("mapProviderFailureCodeToHealthStatus — classification table (401 ≠ 429 ≠ timeout ≠ bad-model)", () => {
@@ -1447,6 +1527,9 @@ describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
       },
       cancel() {
         /* no-op */
+      },
+      markConnectionDeleting() {
+        return () => undefined;
       },
     };
     const deps = makeDeps({

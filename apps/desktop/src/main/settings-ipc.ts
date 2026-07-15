@@ -82,6 +82,14 @@ export interface VaultLike {
 export interface OAuthRunnerLike {
   startFlow(config: OAuthProviderConfig, connectionId: string, opts: { allowWeak: boolean }): Promise<OAuthOutcome>;
   cancel(providerId: string): void;
+  /**
+   * Tombstones `connectionId` for the compensating clear (TASK.45 W11-FIX2
+   * #2) — REQUIRED (not optional): an optional custody hook is a hook that
+   * gets forgotten to wire up. Returns a revert closure the caller MUST
+   * invoke on every exit where the connection's metadata is NOT actually
+   * removed (see `handleConnectionDelete`).
+   */
+  markConnectionDeleting(connectionId: string): () => void;
 }
 
 export interface SettingsIpcDeps {
@@ -1244,25 +1252,42 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
     if (target !== undefined && target.providerId !== "") {
       deps.oauth?.cancel(target.providerId);
     }
-    // secrets-first (idempotent clears): both credential kinds, before metadata.
-    await deps.vault.clearSecret(connectionSecretKey(id, "api_key"));
-    await deps.vault.clearSecret(connectionSecretKey(id, "oauth"));
-    // W10-FIX F3 (layer b): re-check AFTER the awaits above. A resume that
-    // reserved/registered this pin in the window since the early check must not
-    // be clobbered — abort before removing metadata. Degradation: the secrets are
-    // already gone (keyless, recoverable), but the connection is never yanked out
-    // from under a now-live session (the custody defect this closes).
-    if (deps.connectionInUse?.(id) === true) {
-      return { ok: false, reason: "connection_in_use" };
+    // TASK.45 W11-FIX2 #2: tombstone this connectionId BEFORE the vault-clears
+    // below, so a same-connection oauth write that settles AFTER this delete's
+    // clears (superseded-but-deleted) is still compensated instead of skipped
+    // (W11-FIX M6's supersede-skip is for a SURVIVING connection only).
+    // Reverted on every exit below where metadata is NOT actually removed, so
+    // a connection that survives an aborted delete never carries a stale
+    // tombstone into its own future re-sign-in flows.
+    const revertTombstone = deps.oauth?.markConnectionDeleting(id);
+    let committed = false;
+    try {
+      // secrets-first (idempotent clears): both credential kinds, before metadata.
+      await deps.vault.clearSecret(connectionSecretKey(id, "api_key"));
+      await deps.vault.clearSecret(connectionSecretKey(id, "oauth"));
+      // W10-FIX F3 (layer b): re-check AFTER the awaits above. A resume that
+      // reserved/registered this pin in the window since the early check must not
+      // be clobbered — abort before removing metadata. Degradation: the secrets are
+      // already gone (keyless, recoverable), but the connection is never yanked out
+      // from under a now-live session (the custody defect this closes).
+      if (deps.connectionInUse?.(id) === true) {
+        return { ok: false, reason: "connection_in_use" };
+      }
+      const remaining = loaded.settings.provider.connections.filter((connection) => connection.id !== id);
+      const activeConnectionId =
+        loaded.settings.provider.activeConnectionId === id ? undefined : loaded.settings.provider.activeConnectionId;
+      const provider: ProviderSettingsV2 = {
+        connections: remaining,
+        ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
+      };
+      const result = await persistProvider(deps, loaded.settings, provider);
+      committed = result.ok;
+      return result;
+    } finally {
+      if (!committed) {
+        revertTombstone?.();
+      }
     }
-    const remaining = loaded.settings.provider.connections.filter((connection) => connection.id !== id);
-    const activeConnectionId =
-      loaded.settings.provider.activeConnectionId === id ? undefined : loaded.settings.provider.activeConnectionId;
-    const provider: ProviderSettingsV2 = {
-      connections: remaining,
-      ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
-    };
-    return persistProvider(deps, loaded.settings, provider);
   });
 }
 

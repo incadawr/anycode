@@ -352,6 +352,94 @@ describe("OAuthEngine.startFlow — refusals", () => {
   });
 });
 
+describe("OAuthEngine — tombstone vs sticky supersede (W11-FIX2 #2)", () => {
+  it("clears an orphaned blob when its connection is DELETED after being superseded (main discriminator — no orphan under a deleted id)", async () => {
+    const store = new FakeStore();
+    let releaseWriteA!: () => void;
+    const writeGateA = new Promise<void>((resolve) => (releaseWriteA = resolve));
+    let engine!: OAuthEngine;
+    let callCount = 0;
+    const realSet = store.setOAuthTokens.bind(store);
+    store.setOAuthTokens = async (id, blob, opts) => {
+      callCount += 1;
+      if (callCount === 1) {
+        // A DIFFERENT connection (conn-y) of the SAME provider signs in while
+        // A's write (conn-x) is gated — this supersedes A exactly like the
+        // W11-FIX M6 cross-connection test, and B's own independent write
+        // lands fully BEFORE A's gated write is released.
+        void engine.startFlow(config(), "conn-y", { allowWeak: false });
+        await writeGateA;
+      }
+      return realSet(id, blob, opts);
+    };
+    engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+    });
+    const outcomeA = engine.startFlow(config(), "conn-x", { allowWeak: false });
+    expect(await outcomeA).toEqual({ ok: false, reason: "cancelled" });
+    // Give B's own round trip time to fully land its blob under conn-y.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Delete-choreography for conn-x (settings-ipc's handleConnectionDelete,
+    // in order): cancel the provider's CURRENT in-flight flow (a no-op here —
+    // B already settled and delisted itself), tombstone conn-x BEFORE the
+    // vault-clear, then clear conn-x's own (currently empty) vault entry.
+    engine.cancel("acme");
+    const revert = engine.markConnectionDeleting("conn-x");
+    await store.clearOAuthTokens("conn-x");
+
+    // A's gated write now lands AFTER the delete's own clear already ran —
+    // exactly the interleaving the ruling names. Without the tombstone, the
+    // post-write compensation would skip (isSuperseded() is true) and strand
+    // A's blob under the just-deleted conn-x.
+    releaseWriteA();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(store.saved.some((s) => s.connectionId === "conn-x")).toBe(false);
+    // B's own valid blob for the SURVIVING connection must be untouched.
+    expect(store.saved.some((s) => s.connectionId === "conn-y")).toBe(true);
+    revert();
+  });
+
+  it("a reverted tombstone does not resurrect for a later supersede on the SAME (surviving) connection (stale-tombstone pin)", async () => {
+    const store = new FakeStore();
+    let releaseWriteA!: () => void;
+    const writeGateA = new Promise<void>((resolve) => (releaseWriteA = resolve));
+    let engine!: OAuthEngine;
+    let callCount = 0;
+    const realSet = store.setOAuthTokens.bind(store);
+    store.setOAuthTokens = async (id, blob, opts) => {
+      callCount += 1;
+      if (callCount === 1) {
+        void engine.startFlow(config(), "conn-acme", { allowWeak: false });
+        await writeGateA;
+      }
+      return realSet(id, blob, opts);
+    };
+    engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+    });
+
+    // An EARLIER delete attempt for this same connection was ABORTED (e.g. the
+    // W10-FIX F3 late re-check tripped) — the handler marks then immediately
+    // reverts, per the mark/revert contract, before this flow ever starts.
+    const revert = engine.markConnectionDeleting("conn-acme");
+    revert();
+
+    const outcomeA = engine.startFlow(config(), "conn-acme", { allowWeak: false });
+    expect(await outcomeA).toEqual({ ok: false, reason: "cancelled" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseWriteA();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Same assertion as the pre-existing M6 same-connection GREEN pin (this
+    // connection was never actually deleted) — a stale tombstone left behind
+    // by a reverted mark would wrongly wipe the superseding flow's fresh blob.
+    expect(store.saved.some((s) => s.connectionId === "conn-acme")).toBe(true);
+  });
+});
+
 describe("OAuthEngine — custody (I1)", () => {
   it("the outcome never carries a token value", async () => {
     const store = new FakeStore();

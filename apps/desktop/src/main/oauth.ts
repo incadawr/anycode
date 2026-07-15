@@ -131,6 +131,15 @@ export class OAuthEngine {
   private readonly logger: OAuthEngineDeps["logger"];
   /** In-flight flow per provider so `cancel` (and a superseding start) can settle it. */
   private readonly inFlight = new Map<string, { settle: (outcome: OAuthOutcome) => void; markSuperseded: () => void }>();
+  /**
+   * Connection ids currently being deleted (TASK.45 W11-FIX2 #2). Connection
+   * ids are uuids and never reused (§4.3), so membership here is permanently
+   * correct for that id: ANY blob under it is garbage, and the post-write
+   * compensation must clear it even if the flow that wrote it was superseded
+   * rather than explicitly cancelled. Populated/cleared only via
+   * `markConnectionDeleting`'s mark/revert pair.
+   */
+  private readonly deletedConnections = new Set<string>();
 
   constructor(deps: OAuthEngineDeps) {
     this.vault = deps.vault;
@@ -144,6 +153,24 @@ export class OAuthEngine {
   /** Aborts an in-flight flow for a provider (idempotent; unknown id is a no-op). */
   cancel(providerId: string): void {
     this.inFlight.get(providerId)?.settle({ ok: false, reason: "cancelled" });
+  }
+
+  /**
+   * Tombstones `connectionId` (TASK.45 W11-FIX2 #2): the caller (settings-ipc's
+   * `handleConnectionDelete`) MUST call this before its first vault-clear, so a
+   * same-connection write that settles (superseded) AFTER the delete's own
+   * clear still gets compensated instead of skipped. Returns a revert closure
+   * the caller MUST invoke on every exit path where the connection's metadata
+   * is NOT actually removed (e.g. the W10-FIX F3 late re-check abort) — a
+   * survived connection must never carry a stale tombstone into its own future
+   * re-sign-in flows (that would regress W11-FIX M6: a superseded-but-alive
+   * write wrongly compensated away). Idempotent revert.
+   */
+  markConnectionDeleting(connectionId: string): () => void {
+    this.deletedConnections.add(connectionId);
+    return () => {
+      this.deletedConnections.delete(connectionId);
+    };
   }
 
   /**
@@ -312,8 +339,15 @@ export class OAuthEngine {
       // would erase the new flow's own just-written valid blob. Cross-
       // connection (inFlight keyed by providerId): clearing would erase THIS
       // flow's own successful write even though nobody deleted its connection.
+      //
+      // W11-FIX2 #2: that skip is wrong when the connectionId was ALSO deleted
+      // — a supersede only proves ANOTHER flow now owns the providerId's
+      // in-flight slot, not that this connectionId is still alive. If it was
+      // deleted (tombstoned via markConnectionDeleting BEFORE the delete's own
+      // vault-clear), any blob under it is garbage regardless of supersede, so
+      // the tombstone wins over the supersede-skip.
       if (ctx.isSettled()) {
-        if (!ctx.isSuperseded()) {
+        if (!ctx.isSuperseded() || this.deletedConnections.has(ctx.connectionId)) {
           await this.vault.clearOAuthTokens(ctx.connectionId);
         }
         respondHtml(res, "Sign-in was cancelled. You can close this window.");
