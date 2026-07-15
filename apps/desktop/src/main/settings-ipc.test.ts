@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
 import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "../shared/settings.js";
-import { isKnownSecretKey } from "./host-env.js";
+import { ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import {
   buildSettingsSnapshot,
@@ -427,6 +427,21 @@ describe("projectCatalogSummary — value-only projection", () => {
       { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [] },
     ]);
   });
+
+  it("projects isCustom ONLY for the literal custom sentinel, never for a non-custom needsBaseUrl template like vLLM (TASK.43 W5-FIX #2/#5)", () => {
+    const summary = projectCatalogSummary([
+      { id: "vllm", name: "vLLM", auth: { kind: "api_key" }, baseUrl: "", models: [], isCustom: false },
+      { id: "custom", name: "Custom endpoint", auth: { kind: "api_key" }, baseUrl: "", models: [], isCustom: true },
+    ]);
+    const vllm = summary.find((e) => e.id === "vllm");
+    const custom = summary.find((e) => e.id === "custom");
+    // Both needsBaseUrl; only the custom sentinel is isCustom. The renderer's
+    // providerSecretKey/displayedProviderId key off this distinction.
+    expect(vllm?.needsBaseUrl).toBe(true);
+    expect(vllm?.isCustom).toBeUndefined();
+    expect(custom?.needsBaseUrl).toBe(true);
+    expect(custom?.isCustom).toBe(true);
+  });
 });
 
 describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5, cut Risk #3)", () => {
@@ -464,6 +479,24 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     expect(snap.providerReady).toBe(false);
   });
 
+  it("blocks readiness when the ANYCODE_PROVIDER_TRANSPORT env rung forces an unsupported transport (TASK.43 W5-FIX #1)", async () => {
+    // vLLM supports only chat-completions; settings.transport is UNSET, so the
+    // guard's only signal is the env override. Pre-W5-FIX the guard ignored the
+    // env rung entirely, saw the (supported) catalog default, and wrongly
+    // reported ready — contradicting the fork the env actually forces.
+    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: transportCatalog() }), {
+      provider: { id: VLLM_ID, model: "m" },
+    });
+    const snap = await buildSettingsSnapshot(
+      makeDeps({
+        catalogIds: TRANSPORT_CATALOG_IDS,
+        catalog: transportCatalog(),
+        bootEnv: { [ENV_PROVIDER_TRANSPORT]: "openai-responses" },
+      }),
+    );
+    expect(snap.providerReady).toBe(false);
+  });
+
   // main's real wiring always projects EVERY catalog entry (including custom)
   // into `deps.catalog` — `selectedTransportInfo` looks the selected id up
   // there, so the fixture must include it too.
@@ -489,6 +522,25 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
       makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: CUSTOM_CATALOG, isCustom: (id) => id === "custom" }),
     );
     expect(snap.providerReady).toBe(false);
+  });
+
+  it("an env-forced OpenAI transport on a keyless custom endpoint waives auth ⇒ ready (TASK.43 W5-FIX #1)", async () => {
+    // settings.transport UNSET; the env rung forces an OpenAI-family transport.
+    // Pre-W5-FIX the auth waiver read only settings.transport (unset ⇒ treated
+    // as anthropic-messages), demanded a key, and reported NOT ready — blind to
+    // the env transport the fork actually runs.
+    await handleSet(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      provider: { id: "custom", model: "m", baseUrl: "http://localhost:8000/v1" },
+    });
+    const snap = await buildSettingsSnapshot(
+      makeDeps({
+        catalogIds: TRANSPORT_CATALOG_IDS,
+        catalog: CUSTOM_CATALOG,
+        isCustom: (id) => id === "custom",
+        bootEnv: { [ENV_PROVIDER_TRANSPORT]: "openai-chat-completions" },
+      }),
+    );
+    expect(snap.providerReady).toBe(true);
   });
 });
 

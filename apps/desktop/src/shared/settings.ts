@@ -199,6 +199,14 @@ export interface CatalogSummaryEntry {
   authKind: CatalogAuthKind;
   models: { id: string; name?: string }[];
   needsBaseUrl?: boolean;
+  /**
+   * True ONLY for the literal `custom` sentinel entry (TASK.43 W5-FIX). Distinct
+   * from `needsBaseUrl`: a non-custom template (vLLM) also needs a base URL but
+   * keeps its own per-provider vault key, whereas the custom sentinel shares the
+   * bare legacy key. The renderer keys credential-slot + no-selection-fallback
+   * choices off this, never off `needsBaseUrl`.
+   */
+  isCustom?: boolean;
   /** Transport this endpoint uses when neither env nor settings pick one (TASK.43 W5). */
   defaultTransport?: ProviderTransportId;
   /** Every transport this endpoint is known to speak; a UI may only offer these (TASK.43 W5). */

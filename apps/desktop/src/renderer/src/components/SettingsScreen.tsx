@@ -362,7 +362,11 @@ export function isTransportUnsupported(
  * gets a per-provider key keyed on its declared authKind.
  */
 export function providerSecretKey(selectedEntry: CatalogSummaryEntry | undefined): SecretKey {
-  if (!selectedEntry || selectedEntry.needsBaseUrl) {
+  // Only no-selection (legacy) and the LITERAL custom sentinel share the bare
+  // legacy key (TASK.43 W5-FIX #2). A non-custom needsBaseUrl template (vLLM)
+  // keeps its own per-provider key — the broker reads `provider.vllm.apiKey`, so
+  // keying off `needsBaseUrl` here mis-routed the vLLM key to the legacy slot.
+  if (!selectedEntry || selectedEntry.isCustom) {
     return LEGACY_API_KEY;
   }
   return selectedEntry.authKind === "oauth" ? `provider.${selectedEntry.id}.oauth` : `provider.${selectedEntry.id}.apiKey`;
@@ -370,7 +374,7 @@ export function providerSecretKey(selectedEntry: CatalogSummaryEntry | undefined
 
 /**
  * The `<select>`'s displayed value: the real selected id, or — when nothing
- * is selected yet (legacy) — the catalog's own `needsBaseUrl` (custom) entry,
+ * is selected yet (legacy) — the catalog's own `custom` sentinel entry,
 
  * `""` only if the catalog carries no custom-style entry at all. Kept
  * separate from `selectedEntry`/`providerSecretKey` (which stay legitimately
@@ -381,7 +385,11 @@ export function displayedProviderId(catalog: CatalogSummary, id: string | undefi
   if (id) {
     return id;
   }
-  return catalog.find((entry) => entry.needsBaseUrl)?.id ?? "";
+  // Fall back to the custom sentinel, NOT the first needsBaseUrl entry (TASK.43
+  // W5-FIX #5): the W5 catalog orders vLLM before custom (both needsBaseUrl), so
+  // the old first-needsBaseUrl pick rendered "vLLM" as selected for a legacy
+  // no-id settings file.
+  return catalog.find((entry) => entry.isCustom)?.id ?? "";
 }
 
 /** Notice text shown after a provider change is accepted (exfil-mitigation, design §5/threat model 2.2: any redirect of credentials/prompts must be human-visible). */

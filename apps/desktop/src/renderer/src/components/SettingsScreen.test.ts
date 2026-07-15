@@ -62,6 +62,7 @@ const CUSTOM: CatalogSummaryEntry = {
   authKind: "api_key",
   models: [],
   needsBaseUrl: true,
+  isCustom: true,
 };
 
 const ACME_OAUTH: CatalogSummaryEntry = {
@@ -299,6 +300,13 @@ describe("providerSecretKey (ruling R6: legacy and the catalog's custom entry sh
   it("an oauth catalog entry -> its per-provider oauth key", () => {
     expect(providerSecretKey(ACME_OAUTH)).toBe("provider.acme.oauth");
   });
+
+  it("a NON-custom needsBaseUrl template (vLLM) -> its per-provider key, NOT the legacy slot (TASK.43 W5-FIX #2)", () => {
+    // vLLM needsBaseUrl but is not the custom sentinel; the broker reads
+    // provider.vllm.apiKey. Pre-W5-FIX this returned the bare legacy key, so a
+    // vLLM key never reached the server and clobbered the legacy/custom slot.
+    expect(providerSecretKey(VLLM)).toBe("provider.vllm.apiKey");
+  });
 });
 
 describe("displayedProviderId", () => {
@@ -312,6 +320,14 @@ describe("displayedProviderId", () => {
 
   it("falls back to empty string when the catalog has no custom-style entry at all", () => {
     expect(displayedProviderId([ANTHROPIC], undefined)).toBe("");
+  });
+
+  it("with vLLM ordered before custom, the no-selection fallback picks custom, NOT the first needsBaseUrl (TASK.43 W5-FIX #5)", () => {
+    // The real W5 catalog orders vllm before custom (both needsBaseUrl). The old
+    // first-needsBaseUrl fallback rendered "vLLM" as selected for a legacy
+    // no-id settings file; the fallback must key off the custom sentinel.
+    const w5Order: CatalogSummary = [ANTHROPIC, OPENAI, VLLM, CUSTOM];
+    expect(displayedProviderId(w5Order, undefined)).toBe("custom");
   });
 });
 

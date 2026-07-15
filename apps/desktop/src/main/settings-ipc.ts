@@ -47,7 +47,7 @@ import type {
   SettingsPatch,
   SettingsSnapshot,
 } from "../shared/settings.js";
-import { computeProviderReady, envOverrides, isKnownSecretKey } from "./host-env.js";
+import { computeProviderReady, envOverrides, isKnownSecretKey, resolveEffectiveTransport } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import type { SecretSetResult, Vault } from "./vault.js";
 
@@ -119,6 +119,8 @@ export interface CatalogEntryShape {
   auth: { kind: string };
   baseUrl: string;
   models: { id: string; name?: string }[];
+  /** True for the literal `custom` sentinel (TASK.43 W5-FIX); main supplies it from core's `isCustomProvider`. */
+  isCustom?: boolean;
   /** Wire transport fields (TASK.43 W5); `string`-typed to keep this module core-import-free. */
   defaultTransport?: string;
   supportedTransports?: readonly string[];
@@ -129,10 +131,11 @@ export interface CatalogEntryShape {
  * Projects the built-in catalog to the renderer-facing `CatalogSummary` (value
  * only — no baseUrl secret, no key). `needsBaseUrl` is set for an entry with an
  * empty baseUrl (e.g. the `custom`/`vllm` endpoints, whose baseUrl lives in
- * settings). `defaultTransport`/`supportedTransports`/`authOptional` (TASK.43
- * W5) are projected only when the source entry declares them, so a legacy
- * caller's plain `{id,name,auth,baseUrl,models}` fixtures keep producing the
- * exact same output as before this wave.
+ * settings). `isCustom` (TASK.43 W5-FIX) / `defaultTransport` /
+ * `supportedTransports` / `authOptional` (TASK.43 W5) are projected only when
+ * the source entry declares them, so a legacy caller's plain
+ * `{id,name,auth,baseUrl,models}` fixtures keep producing the exact same output
+ * as before this wave.
  */
 export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): CatalogSummary {
   return providers.map((entry) => ({
@@ -141,6 +144,7 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     authKind: entry.auth.kind === "oauth" ? "oauth" : "api_key",
     models: entry.models.map((m) => (m.name !== undefined ? { id: m.id, name: m.name } : { id: m.id })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : {}),
+    ...(entry.isCustom === true ? { isCustom: true } : {}),
     ...(entry.defaultTransport !== undefined ? { defaultTransport: entry.defaultTransport as ProviderTransportId } : {}),
     ...(entry.supportedTransports !== undefined
       ? { supportedTransports: entry.supportedTransports as ProviderTransportId[] }
@@ -186,14 +190,25 @@ function selectedTransportInfo(
   settings: AnycodeSettings,
 ): { authOptional: boolean; resolvedTransport?: string; supportedTransports?: readonly string[] } {
   const id = settings.provider.id;
+  // Legacy / no-catalog branches: still apply the env rung over settings, but
+  // there is no catalog entry to validate a transport against (TASK.43 W5-FIX).
+  const resolveLegacy = (): string | undefined =>
+    resolveEffectiveTransport({ bootEnv: deps.bootEnv, settingsTransport: settings.provider.transport }).value;
   if (id === undefined || id.trim() === "") {
-    return { authOptional: false, resolvedTransport: settings.provider.transport };
+    return { authOptional: false, resolvedTransport: resolveLegacy() };
   }
   const entry: CatalogSummaryEntry | undefined = deps.catalog?.find((e) => e.id === id);
   if (entry === undefined) {
-    return { authOptional: false, resolvedTransport: settings.provider.transport };
+    return { authOptional: false, resolvedTransport: resolveLegacy() };
   }
-  const resolvedTransport = settings.provider.transport ?? entry.defaultTransport;
+  // Env-inclusive ladder (env > settings > catalog default) so the readiness
+  // guard + the custom auth-waiver see the SAME transport the fork runs — the
+  // env rung was the gap that let readiness contradict the forked process.
+  const resolvedTransport = resolveEffectiveTransport({
+    bootEnv: deps.bootEnv,
+    settingsTransport: settings.provider.transport,
+    defaultTransport: entry.defaultTransport,
+  }).value;
   const isCustomEntry = deps.isCustom?.(id) === true;
   const authOptional =
     entry.authOptional === true ||

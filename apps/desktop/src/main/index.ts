@@ -50,6 +50,7 @@ import {
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
+  resolveEffectiveTransport,
   scrubSecretEnv,
   snapshotBootEnv,
   type ResolvedProviderSelection,
@@ -475,15 +476,27 @@ function selectedTransportInfo(current: AnycodeSettings): {
   supportedTransports?: readonly string[];
 } {
   const id = current.provider.id;
+  // Legacy / no-catalog branches: still apply the env rung over settings, but
+  // there is no catalog entry to validate a transport against (TASK.43 W5-FIX).
+  const resolveLegacy = (): string | undefined =>
+    resolveEffectiveTransport({ bootEnv, settingsTransport: current.provider.transport }).value;
   if (id === undefined || id.trim() === "") {
-    return { authOptional: false, resolvedTransport: current.provider.transport };
+    return { authOptional: false, resolvedTransport: resolveLegacy() };
   }
   const entry = findCatalogEntry(id);
   if (entry === undefined) {
-    return { authOptional: false, resolvedTransport: current.provider.transport };
+    return { authOptional: false, resolvedTransport: resolveLegacy() };
   }
-  const resolvedTransport = current.provider.transport ?? entry.defaultTransport;
-  const authOptional = entry.authOptional === true || (isCustomProvider(id) && resolvedTransport !== "anthropic-messages");
+  // Env-inclusive ladder (env > settings > catalog default) so the readiness
+  // guard + the custom auth-waiver see the SAME transport the fork runs.
+  const resolvedTransport = resolveEffectiveTransport({
+    bootEnv,
+    settingsTransport: current.provider.transport,
+    defaultTransport: entry.defaultTransport,
+  }).value;
+  const authOptional =
+    entry.authOptional === true ||
+    (isCustomProvider(id) && resolvedTransport !== undefined && resolvedTransport !== "anthropic-messages");
   return { authOptional, resolvedTransport, supportedTransports: entry.supportedTransports };
 }
 
@@ -751,7 +764,12 @@ void app.whenReady().then(async () => {
     logger: fileLogger,
     // Slice 2.5: catalog allow-list + projection + oauth wiring (additive).
     catalogIds: catalogProviderIds(),
-    catalog: projectCatalogSummary(getBuiltinCatalog().providers),
+    // Carry `isCustom` (TASK.43 W5-FIX #2/#5): core has no literal field, so it
+    // is derived per entry from `isCustomProvider` and folded into the projected
+    // summary the renderer consumes for credential-slot + fallback decisions.
+    catalog: projectCatalogSummary(
+      getBuiltinCatalog().providers.map((entry) => ({ ...entry, isCustom: isCustomProvider(entry.id) })),
+    ),
     authKindFor,
     isCustom: isCustomProvider,
     oauth: oauthEngine,
