@@ -6,6 +6,7 @@
  */
 
 import { COMPACTION_INSTRUCTION } from "../prompts/compaction.js";
+import { classifyProviderFailure } from "../provider/failure.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { TokenUsage } from "../types/events.js";
 import type { ChatMessage, HistoryItem } from "../types/history.js";
@@ -288,9 +289,13 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+/**
+ * Redacted description of a compaction stream failure. Surfaces as
+ * `compaction_end.error`, which crosses the host↔renderer wire and is rendered
+ * by the CLI, so it must be the whitelist-derived safe message — NEVER the raw
+ * `error.message`, which can embed a response body or auth header (TASK.33
+ * W7b-FIX #2).
+ */
 function errorText(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : JSON.stringify(error);
+  return classifyProviderFailure(error).safe.message;
 }

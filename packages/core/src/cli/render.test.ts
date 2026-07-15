@@ -77,7 +77,7 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
       },
     },
     { type: "finish", finishReason: "stop", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } },
-    { type: "error", error: new Error("boom") },
+    { type: "error", error: new Error("boom"), safe: { code: "unknown", message: "request failed" } },
     { type: "context_usage", estimatedTokens: 100, budgetTokens: 1000, source: "estimate" },
     { type: "subagent_start", toolCallId: "call-3", agentType: "explore", description: "map the auth module" },
   ];
@@ -95,7 +95,7 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
         "[tool result] Write (success): wrote 3 lines\n" +
         "[tool result] Bash (denied): denied by user\n" +
         "\n[usage] in=10 out=20 total=30\n" +
-        "\n[error] Error: boom\n" +
+        "\n[error] request failed [unknown]\n" +
         "\n[context: ~100/1000 tokens (estimate)]\n" +
         "\n[subagent call-3] start: explore — map the auth module\n",
     );
@@ -146,9 +146,27 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
     }
   });
 
+  it("renders ONLY the safe descriptor — a poisoned raw error never reaches the terminal (W7b-FIX #2)", () => {
+    const text = collect([
+      {
+        type: "error",
+        error: new Error("HTTP 500 Authorization: Bearer sk-test"),
+        safe: { code: "server", message: "server error", statusCode: 500 },
+      },
+    ]);
+    expect(text).not.toContain("sk-test");
+    expect(text).toBe("\n[error] server error (HTTP 500) [server]\n");
+  });
+
   it("paints the whole [error] line with the error role (red+bold)", () => {
-    const text = collect([{ type: "error", error: new Error("boom") }], COLOR);
-    expect(text).toBe("\x1b[31;1m\n[error] Error: boom\n\x1b[0m");
+    const text = collect([{ type: "error", error: new Error("boom"), safe: { code: "unknown", message: "request failed" } }], COLOR);
+    expect(text).toBe("\x1b[31;1m\n[error] request failed [unknown]\n\x1b[0m");
+  });
+
+  it("fails closed to a constant when the error carries no safe descriptor", () => {
+    const text = collect([{ type: "error", error: new Error("HTTP 500 Authorization: Bearer sk-test") }]);
+    expect(text).not.toContain("sk-test");
+    expect(text).toBe("\n[error] request failed\n");
   });
 
   it("appends a 'failed after N attempts' suffix when the error carries retry metadata (TASK.33 W7b)", () => {
@@ -157,9 +175,10 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
         type: "error",
         error: new Error("boom"),
         retry: { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout" },
+        safe: { code: "connect_timeout", message: "connect timeout" },
       },
     ]);
-    expect(text).toBe("\n[error] Error: boom (failed after 3 attempts)\n");
+    expect(text).toBe("\n[error] connect timeout [connect_timeout] (failed after 3 attempts)\n");
   });
 
   it("singularizes the suffix for a single attempt", () => {
@@ -168,9 +187,10 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
         type: "error",
         error: new Error("boom"),
         retry: { attemptsMade: 1, retryable: true, hadModelOutput: false, code: "network" },
+        safe: { code: "network", message: "network error" },
       },
     ]);
-    expect(text).toBe("\n[error] Error: boom (failed after 1 attempt)\n");
+    expect(text).toBe("\n[error] network error [network] (failed after 1 attempt)\n");
   });
 
   it("omits the suffix when retry metadata is present but no retry actually happened (attemptsMade: 0)", () => {
@@ -179,9 +199,10 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
         type: "error",
         error: new Error("boom"),
         retry: { attemptsMade: 0, retryable: false, hadModelOutput: false, code: "auth" },
+        safe: { code: "auth", message: "authentication failed", statusCode: 401 },
       },
     ]);
-    expect(text).toBe("\n[error] Error: boom\n");
+    expect(text).toBe("\n[error] authentication failed (HTTP 401) [auth]\n");
   });
 
   it("paints the whole [usage] line (finish event) with the usage/dim role", () => {

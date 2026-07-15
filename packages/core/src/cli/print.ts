@@ -102,6 +102,25 @@ export function readPromptFromStdin(input: NodeJS.ReadableStream): Promise<strin
 }
 
 /**
+ * stream-json projection of the redacted error descriptor (TASK.33 W7b-FIX #2).
+ * Numbers + whitelisted strings only; fails closed to a constant when `safe` is
+ * absent so a legacy/foreign producer can never leak the raw error text.
+ */
+function projectStreamError(
+  safe: { code: string; message: string; statusCode?: number } | undefined,
+): { type: "error"; message: string; code?: string; statusCode?: number } {
+  if (safe === undefined) {
+    return { type: "error", message: "request failed" };
+  }
+  return {
+    type: "error",
+    message: safe.message,
+    code: safe.code,
+    ...(safe.statusCode !== undefined ? { statusCode: safe.statusCode } : {}),
+  };
+}
+
+/**
  * Drives one non-interactive turn and shuts down through the shared exit path.
 
  * is always non-interactive (design §3.1: `interactive` is forced false before
@@ -118,16 +137,17 @@ export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
   };
 
   // stream-json NDJSON emitter (design §2.2): each AgentEvent as one JSON line.
-  // The `error` variant is projected to {type,message} because `error: unknown`
-
-  // matches renderEvent (render.ts). Each stringify is guarded so an
-  // unserializable event is skipped (fail-soft) rather than corrupting the stream.
+  // The `error` variant is projected from the redacted `safe` descriptor (never
+  // String(event.error), which can carry a raw response body / auth header —
+  // TASK.33 W7b-FIX #2), fail-closed to a constant when `safe` is absent. Each
+  // stringify is guarded so an unserializable event is skipped (fail-soft)
+  // rather than corrupting the stream.
   const emitStreamLine = (event: AgentEvent): void => {
     let line: string;
     try {
       line =
         event.type === "error"
-          ? JSON.stringify({ type: "error", message: String(event.error) })
+          ? JSON.stringify(projectStreamError(event.safe))
           : JSON.stringify(event);
     } catch {
       writeErr(`[warn] stream-json: unserializable ${event.type} event skipped\n`);

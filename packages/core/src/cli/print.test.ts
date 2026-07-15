@@ -125,7 +125,7 @@ describe("runPrintMode — stdout/stderr split + exit codes (design §3.3)", () 
 
   it("exit 1 on a stream-level error event (loop_end reason error)", async () => {
     async function* erroredTurn(): AsyncGenerator<AgentEvent, void, unknown> {
-      yield { type: "error", error: new Error("stream exploded") };
+      yield { type: "error", error: new Error("stream exploded"), safe: { code: "network", message: "network error" } };
       yield { type: "loop_end", reason: "error", turns: 1 };
     }
     const stdout = new PassThrough();
@@ -135,7 +135,8 @@ describe("runPrintMode — stdout/stderr split + exit codes (design §3.3)", () 
 
     const code = await runPrintMode(baseOpts(makeFakeLoop(() => erroredTurn()), fakes, stdout, stderr));
     expect(code).toBe(1);
-    expect(getErr()).toContain("[error] Error: stream exploded");
+    // Rendered from the redacted safe descriptor, never String(event.error).
+    expect(getErr()).toContain("[error] network error [network]");
     expect(fakes.dispose).toHaveBeenCalledTimes(1);
     expect(fakes.flush).toHaveBeenCalledTimes(1);
     expect(fakes.close).toHaveBeenCalledTimes(1);
@@ -677,9 +678,9 @@ describe("runPrintMode — stream-json output format (design §2.2)", () => {
     expect(deltas).toEqual(["Hel", "lo"]);
   });
 
-  it("projects the error variant to {type:'error',message} (JSON.stringify(Error) would be '{}' — hazard A7)", async () => {
+  it("projects the error variant to {type:'error',message,code} from the safe descriptor (JSON.stringify(Error) would be '{}' — hazard A7)", async () => {
     async function* turn(): AsyncGenerator<AgentEvent, void, unknown> {
-      yield { type: "error", error: new Error("boom") };
+      yield { type: "error", error: new Error("boom"), safe: { code: "unknown", message: "request failed" } };
       yield { type: "loop_end", reason: "error", turns: 1 };
     }
     const stdout = new PassThrough();
@@ -700,10 +701,35 @@ describe("runPrintMode — stream-json output format (design §2.2)", () => {
     expect(code).toBe(1);
     const lines = parseLines(getOut());
     const errorLine = lines.find((l) => l.type === "error" && l.message !== undefined);
-    expect(errorLine).toEqual({ type: "error", message: "Error: boom" });
+    expect(errorLine).toEqual({ type: "error", message: "request failed", code: "unknown" });
     expect(errorLine?.message).not.toBe("{}");
     expect(lines[lines.length - 1]!.type).toBe("result");
     expect(lines[lines.length - 1]!.subtype).toBe("error");
+  });
+
+  it("redacts the raw provider error in the stream-json error line (W7b-FIX #2)", async () => {
+    async function* turn(): AsyncGenerator<AgentEvent, void, unknown> {
+      yield {
+        type: "error",
+        error: new Error("HTTP 500 Authorization: Bearer sk-test"),
+        safe: { code: "server", message: "server error", statusCode: 500 },
+      };
+      yield { type: "loop_end", reason: "error", turns: 1 };
+    }
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const getOut = collect(stdout);
+    const fakes = makeFakeShutdown();
+
+    await runPrintMode(
+      structuredOpts(makeFakeLoop(() => turn()), fakes, stdout, stderr, structuredCtx({ format: "stream-json" })),
+    );
+
+    const out = getOut();
+    expect(out).not.toContain("sk-test");
+    const lines = parseLines(out);
+    const errorLine = lines.find((l) => l.type === "error" && l.message !== undefined);
+    expect(errorLine).toEqual({ type: "error", message: "server error", code: "server", statusCode: 500 });
   });
 
   it("skips an unserializable event (fail-soft) + warns on stderr; the NDJSON stream stays valid", async () => {

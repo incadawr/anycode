@@ -65,6 +65,14 @@ export type ModelStreamEvent =
    */
   | {
       type: "error";
+      /**
+       * RAW thrown value — in-process ONLY. Diagnosable at host-local sinks
+       * (session.ts process log, CLI ANYCODE_DEBUG_ERRORS) but NEVER serialized
+       * across a process boundary: a provider error can embed a response body or
+       * auth header in its `.message`/`.stack`. Every trust-boundary surface (wire
+       * serializer, CLI stdout/stream-json, renderer) renders from `safe`, never
+       * this field (TASK.33 W7b-FIX #2).
+       */
       error: unknown;
       retry?: {
         attemptsMade: number;
@@ -79,6 +87,16 @@ export type ModelStreamEvent =
         hadModelOutput: boolean;
         code: string;
       };
+      /**
+       * Whitelist-derived redacted descriptor (`ProviderFailureSafe` in
+       * provider/failure.ts) the loop attaches alongside `retry` from ONE
+       * `classifyProviderFailure` call. This is the ONLY field a trust boundary
+       * may surface: `message` is a fixed per-code string (never raw text),
+       * `code`/`statusCode` are safe by construction. Additive-optional and typed
+       * inline (string `code`, not the provider union) to keep this file free of a
+       * provider-layer dependency, same precedent as `retry.code`.
+       */
+      safe?: { code: string; message: string; statusCode?: number };
     }
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
   | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string };

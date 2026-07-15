@@ -19,6 +19,7 @@ vi.mock("../tools/to-model-tools.js", () => ({
 }));
 
 import { z } from "zod";
+import { APICallError } from "ai";
 import { AgentLoop, type AgentLoopConfig, type ContextBreakdown } from "./agent-loop.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import type { Tokenizer } from "../context/tokenizer.js";
@@ -557,6 +558,38 @@ describe("AgentLoop.runTurn — stream errors", () => {
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent).toMatchObject({ type: "error", error: { message: "network dead" } });
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("attaches a redacted `safe` descriptor to the terminal error while keeping the raw error in-process (W7b-FIX #2 / DoD-c)", async () => {
+    const poisoned = new APICallError({
+      message: "HTTP 500 Authorization: Bearer sk-test",
+      url: "https://api.example.com/v1",
+      requestBodyValues: { apiKey: "sk-test" },
+      statusCode: 500,
+      responseHeaders: { authorization: "Bearer sk-test" },
+      cause: new Error("cause sk-test"),
+      isRetryable: false,
+      data: undefined,
+    });
+    const throwingPort: ModelPort = {
+      streamText: () =>
+        (async function* () {
+          yield { type: "start" } as ModelStreamEvent;
+          throw poisoned;
+        })(),
+    };
+    const loop = makeLoop({ modelPort: throwingPort });
+
+    const events = await collect(loop.runTurn("hi"));
+    const errorEvent = events.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    // The whitelist-derived descriptor carries no secret; every trust boundary
+    // renders from it, never from `error`.
+    expect(errorEvent?.safe).toEqual({ code: "server", message: "server error", statusCode: 500 });
+    expect(JSON.stringify(errorEvent?.safe)).not.toContain("sk-test");
+    // Host-local diagnosability (TASK.2 DoD-c): the RAW error still rides the
+    // in-process event so session.ts's process log keeps the original text.
+    expect((errorEvent?.error as Error).message).toContain("sk-test");
   });
 
   it("ends cancelled (not error) when the consumer aborts synchronously upon receiving the yielded error event from a stream throw", async () => {

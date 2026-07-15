@@ -75,24 +75,33 @@ function appendSystemContext(systemPrompt: string | undefined, systemContext: st
 }
 
 /**
- * Terminal-retry metadata for an `{type:"error"}` event (TASK.33 W7b). Called
- * at yield time for every error event this turn — terminality is not knowable
- * yet (a `finish` may still arrive and forgive it), so every passing error
- * event gets the CURRENT per-turn counters, not just the last one.
+ * Terminal metadata for an `{type:"error"}` event (TASK.33 W7b / W7b-FIX #2):
+ * BOTH the retry counters AND the redacted `safe` descriptor, derived from ONE
+ * `classifyProviderFailure` call so the two can never diverge. Called at yield
+ * time for every error event this turn — terminality is not knowable yet (a
+ * `finish` may still arrive and forgive it), so every passing error event gets
+ * the CURRENT per-turn counters, not just the last one. The RAW error stays on
+ * the event for host-local diagnosis; every trust boundary renders `safe`.
  */
-function buildRetryMetadata(
+function buildErrorMetadata(
   error: unknown,
   attemptsMade: number,
   maxAttempts: number | undefined,
   hadModelOutput: boolean,
-): { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string } {
+): {
+  retry: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+  safe: { code: string; message: string; statusCode?: number };
+} {
   const classification = classifyProviderFailure(error);
   return {
-    attemptsMade,
-    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
-    retryable: classification.retryable,
-    hadModelOutput,
-    code: classification.code,
+    retry: {
+      attemptsMade,
+      ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+      retryable: classification.retryable,
+      hadModelOutput,
+      code: classification.code,
+    },
+    safe: classification.safe,
   };
 }
 
@@ -544,9 +553,12 @@ export class AgentLoop {
           abortSignal: signal,
         });
         for await (const event of stream) {
-          yield event.type === "error"
-            ? { ...event, retry: buildRetryMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput) }
-            : event;
+          if (event.type === "error") {
+            const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
+            yield { ...event, retry, safe };
+          } else {
+            yield event;
+          }
           if (isModelOutputEvent(event)) {
             hadModelOutput = true;
           }
@@ -603,7 +615,8 @@ export class AgentLoop {
         if (signal?.aborted) {
           yield* this.emitLoopEnd("cancelled", turn, signal);
         } else {
-          yield { type: "error", error, retry: buildRetryMetadata(error, attemptsMade, maxAttempts, hadModelOutput) };
+          const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
+          yield { type: "error", error, retry, safe };
           // The consumer may abort while paused on the yielded error event
           // (before this generator resumes) — re-check so a synchronous
           // abort there still ends the loop as "cancelled", not "error".

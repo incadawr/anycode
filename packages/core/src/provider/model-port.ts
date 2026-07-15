@@ -43,7 +43,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
-import { isModelOutputEvent } from "./failure.js";
+import { classifyProviderFailure, isModelOutputEvent } from "./failure.js";
 import { createLanguageModel } from "./language-model.js";
 import { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
@@ -332,11 +332,14 @@ function isStalledOutcome<T>(outcome: IteratorResult<T> | StalledOutcome): outco
   return "stalled" in outcome;
 }
 
+/**
+ * `stream_retry.reason` rides the wire and is rendered verbatim by the CLI and
+ * renderer, so it must be the whitelist-derived safe message — NEVER the raw
+ * `error.message`, which can embed a response body or auth header (TASK.33
+ * W7b-FIX #2).
+ */
 function describeRetryReason(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
+  return classifyProviderFailure(error).safe.message;
 }
 
 export class AiSdkModelPort implements ModelPort {

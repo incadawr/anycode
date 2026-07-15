@@ -457,7 +457,23 @@ export function renderEvent(
         event.retry && event.retry.attemptsMade > 0
           ? ` (failed after ${event.retry.attemptsMade} attempt${event.retry.attemptsMade === 1 ? "" : "s"})`
           : "";
-      write(paint("error", `\n[error] ${String(event.error)}${retrySuffix}\n`));
+      // Render EXCLUSIVELY from the whitelist-derived `safe` descriptor (TASK.33
+      // W7b-FIX #2) — never String(event.error), which can embed a raw response
+      // body or auth header. Fail closed to a constant when `safe` is absent.
+      const safe = event.safe;
+      const body = safe
+        ? `${safe.message}${safe.statusCode !== undefined ? ` (HTTP ${safe.statusCode})` : ""} [${safe.code}]`
+        : "request failed";
+      write(paint("error", `\n[error] ${body}${retrySuffix}\n`));
+      // Opt-in raw diagnostics to STDERR only (never stdout/transcript): the CLI
+      // otherwise keeps no raw record of a provider failure (unlike the desktop
+      // host process log), so ANYCODE_DEBUG_ERRORS=1 restores DoD-c
+      // diagnosability without ever leaking the raw text into normal output.
+      if (process.env.ANYCODE_DEBUG_ERRORS === "1") {
+        const raw = event.error;
+        const detail = raw instanceof Error ? `${String(raw)}${raw.stack ? `\n${raw.stack}` : ""}` : String(raw);
+        process.stderr.write(`[error:debug] ${detail}\n`);
+      }
       break;
     }
     case "loop_end":

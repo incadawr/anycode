@@ -539,6 +539,22 @@ describe("ContextManager.runCompaction — atomic on failure/abort", () => {
     expect(snapshot(history)).toBe(before);
   });
 
+  it("redacts a compaction model error into a safe message — no secret reaches result.error/compaction_end.error (W7b-FIX #2)", async () => {
+    const poisonedScript: ModelStreamEvent[] = [
+      { type: "start" },
+      { type: "error", error: new Error("HTTP 500 Authorization: Bearer sk-test") },
+    ];
+    const history = buildHistory(longMessages());
+    const manager = makeManager(history, new ScriptedModelPort(poisonedScript), { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain("sk-test");
+      expect(result.error).toBe("request failed");
+    }
+  });
+
   it("leaves history unchanged on an empty summary", async () => {
     const history = buildHistory(longMessages());
     const before = snapshot(history);
