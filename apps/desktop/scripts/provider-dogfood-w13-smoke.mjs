@@ -511,18 +511,55 @@ async function fillAndSubmitConnection(ctx, label, { name, model, baseUrl, trans
   assert(label, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
 }
 
-/** Opens Settings > Provider pane (idempotent) and creates a new "custom" connection via the Add tile. Returns its minted id. */
+/**
+ * Opens the provider connection UI and creates a new "custom" connection via
+ * it. Branches on which surface actually holds it: the normal case is the
+ * Settings dialog's Provider pane (Add tile), but App.tsx's `shouldShowWelcome`
+ * gate can ALSO mount WelcomeScreen instead on a truly empty profile —
+ * WelcomeScreen "renders full-window with no sidebar" (App.tsx), so there is
+ * no `.sidebar-settings` gear for `/settings/open` to click, and its own
+ * connection drawer auto-opens embedded on mount instead (same shared
+ * `/settings/provider/*` routes read/drive it, per `settingsProviderPaneState`
+ * — `provider-connections-ui-smoke.mjs`'s step2WelcomeEmptyState/
+ * step5WelcomeUnmountsAndDiskCustody precedent). Whether Welcome or Start
+ * shows is env-dependent (App.tsx's async `listAvailableEngines` Codex probe)
+ * but settles well before this function's first read, so a single up-front
+ * check is enough to pick the right flow. Returns the new connection's id.
+ */
 async function createConnectionViaGrid(ctx, label, opts) {
-  await apiActionRetry(ctx, label, "/settings/open", {});
-  await apiAction(ctx, label, "/settings/pane", { paneId: "provider" });
-  await pollProviderState(ctx, label, (s) => s.mounted === true);
-  const before = await apiOk(ctx, label, "GET", "/settings/provider");
-  const beforeIds = new Set(before.rows.map((r) => r.connectionId));
+  const preState = await apiOk(ctx, label, "GET", "/settings/provider");
+  const welcomeEmbedOpen = preState.mounted === false && preState.drawer?.open === true && preState.drawer?.embedded === true;
+  let beforeIds;
 
-  await apiAction(ctx, label, "/settings/provider/add", {});
-  await fillAndSubmitConnection(ctx, label, opts);
-  const closeResult = await apiOk(ctx, label, "POST", "/settings/provider/drawer/close", {});
-  assert(label, closeResult.ok === true, `drawer/close rejected: ${JSON.stringify(closeResult)}`);
+  if (welcomeEmbedOpen) {
+    // WelcomeScreen (App.tsx's shouldShowWelcome) only ever mounts on a
+    // profile with ZERO connections — `preState.rows` reads `[]` while
+    // unmounted regardless (settingsProviderPaneState), so there is nothing
+    // to diff against.
+    beforeIds = new Set();
+    await fillAndSubmitConnection(ctx, label, opts);
+    // The embedded drawer has no close affordance (settingsProviderDrawerClose
+    // -> {ok:false, reason:"no_close_affordance"} while embedded) — App's own
+    // providerReady gate unmounts it once the save lands, so wait for that
+    // instead of trying to close it.
+    const unmounted = await pollUntil(20_000, 300, async () => {
+      const state = await api(ctx, "GET", "/settings/provider");
+      return state.status === 200 && state.body?.drawer?.open === false ? state.body : undefined;
+    });
+    assert(label, unmounted !== null, "WelcomeScreen's embedded drawer never closed after saving the new connection's key");
+  } else {
+    await apiActionRetry(ctx, label, "/settings/open", {});
+    await apiAction(ctx, label, "/settings/pane", { paneId: "provider" });
+    await pollProviderState(ctx, label, (s) => s.mounted === true);
+    // `preState.rows` was taken pre-mount (always `[]`) — re-read now that the
+    // grid is actually mounted so pre-existing connections are diffed correctly.
+    const before = await apiOk(ctx, label, "GET", "/settings/provider");
+    beforeIds = new Set(before.rows.map((r) => r.connectionId));
+    await apiAction(ctx, label, "/settings/provider/add", {});
+    await fillAndSubmitConnection(ctx, label, opts);
+    const closeResult = await apiOk(ctx, label, "POST", "/settings/provider/drawer/close", {});
+    assert(label, closeResult.ok === true, `drawer/close rejected: ${JSON.stringify(closeResult)}`);
+  }
 
   const settingsDisk = readJsonDisk(label, ctx.settingsPath, "settings.json");
   const created = settingsDisk.provider.connections.find((c) => !beforeIds.has(c.id));
@@ -562,6 +599,20 @@ async function newTabReady(ctx, label, tag) {
  * `turnStatus:"idle"` — robust to an already-idle STALE reading from before
  * the prompt was even sent (the growth check), and to a same-instant already-
  * settled turn (no "running" catch required).
+ *
+ * The growth threshold is `beforeCount + 1`, NOT `beforeCount`: the facade's
+ * `sendPrompt` (automation.ts) calls `state.appendUserText` SYNCHRONOUSLY,
+ * before the `/tabs/:tabId/prompt` HTTP response even returns — so the
+ * transcript has already grown by exactly one (the user's own echoed
+ * message) by the time this function's first poll runs, regardless of
+ * whether the host has done anything at all yet. `pollUntil` checks its
+ * predicate before ever sleeping, so a plain `> beforeCount` check can be
+ * satisfied on the very first poll purely by that self-echo, with
+ * `turn.status` still reading a STALE "idle" from before `turn_started` -
+ * this raced and falsely "settled" turns with zero model-produced blocks
+ * (W13 scenario 2/3 diagnosis). Requiring `beforeCount + 1` demands at least
+ * one ADDITIONAL block past the guaranteed echo - i.e. real turn output
+ * (assistant text or a terminal error block).
  */
 async function sendPromptAndWaitIdle(ctx, label, tabId, text) {
   const before = await apiOk(ctx, label, "GET", `/state/${tabId}`);
@@ -572,7 +623,7 @@ async function sendPromptAndWaitIdle(ctx, label, tabId, text) {
     const state = await api(ctx, "GET", `/state/${tabId}`);
     if (state.status !== 200) return undefined;
     const tabState = state.body?.snapshot?.states?.[tabId];
-    const grew = (tabState?.transcript?.length ?? 0) > beforeCount;
+    const grew = (tabState?.transcript?.length ?? 0) > beforeCount + 1;
     return grew && tabState?.turn?.status === "idle" ? true : undefined;
   });
   assert(label, settled !== null, `turn never settled idle with a grown transcript within 60s (tab ${tabId})`);
