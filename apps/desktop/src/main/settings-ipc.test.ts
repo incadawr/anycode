@@ -7,7 +7,7 @@
  * discipline (fires on success, not on refusal).
  */
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +35,80 @@ import {
   type VaultLike,
 } from "./settings-ipc.js";
 import type { SecretSetResult } from "./vault.js";
+
+/**
+ * Controllable gate over the real settings/files IO (mutation-lock test, §2.3).
+ * When `armed`, every `loadSettings`/`saveSettings` performed by a handler parks
+ * on the queue after the real read (loads) or before the real write (saves) so a
+ * test can drive a deterministic interleave and observe the load/save order.
+ * Disarmed by default -> pure pass-through, so every other test is untouched.
+ */
+const ipcGate = vi.hoisted(() => {
+  const queue: Array<{ type: "load" | "save"; release: () => void }> = [];
+  const log: string[] = [];
+  let armed = false;
+  return {
+    queue,
+    log,
+    arm(): void {
+      armed = true;
+      queue.length = 0;
+      log.length = 0;
+    },
+    disarm(): void {
+      armed = false;
+    },
+    isArmed(): boolean {
+      return armed;
+    },
+    wait(type: "load" | "save"): Promise<void> {
+      log.push(type);
+      return new Promise<void>((resolve) => {
+        queue.push({ type, release: resolve });
+      });
+    },
+  };
+});
+
+vi.mock("../settings/files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../settings/files.js")>();
+  return {
+    ...actual,
+    loadSettings: async (...args: Parameters<typeof actual.loadSettings>) => {
+      const result = await actual.loadSettings(...args);
+      if (ipcGate.isArmed()) {
+        await ipcGate.wait("load");
+      }
+      return result;
+    },
+    saveSettings: async (...args: Parameters<typeof actual.saveSettings>) => {
+      if (ipcGate.isArmed()) {
+        await ipcGate.wait("save");
+      }
+      return actual.saveSettings(...args);
+    },
+  };
+});
+
+/** Drives an armed `ipcGate`: releases the front of the queue between microtask flushes until `p` settles. */
+async function drainGate(p: Promise<unknown>): Promise<void> {
+  let settled = false;
+  void p.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let i = 0; i < 500 && !settled; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const ev = ipcGate.queue.shift();
+    if (ev) {
+      ev.release();
+    }
+  }
+}
 
 const SECRET_VALUE = "sk-super-secret-do-not-leak";
 
@@ -119,6 +193,7 @@ beforeEach(async () => {
   settingsPath = join(dir, "settings.json");
   vault = new FakeVault();
   connSeq = 0;
+  ipcGate.disarm();
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -860,5 +935,254 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
     for (const res of responses) {
       expect(containsSecret(res)).toBe(false);
     }
+  });
+});
+
+// ── W9′-FIX #1: legacy writes target the ACTIVE connection, not first-match (§1.4) ──
+
+describe("W9′-FIX #1 — legacy writes target the ACTIVE connection (§1.4)", () => {
+  /** Fixture: two connections of the SAME provider bucket (each with a model so
+   * readiness can hinge on the credential), active = the SECOND. */
+  async function twoConnActiveSecond(deps: SettingsIpcDeps, providerId: string): Promise<void> {
+    await handleConnectionCreate(deps, { providerId, model: "m" }); // conn-1 (first ⇒ active by default)
+    await handleConnectionCreate(deps, { providerId, model: "m", setActive: true }); // conn-2 (now active)
+    expect((await loadSettings(settingsPath)).settings.provider.activeConnectionId).toBe("conn-2");
+  }
+
+  it("handleSetSecret routes a legacy key to the ACTIVE connection's key (not the first match)", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await twoConnActiveSecond(deps, "z-ai");
+    const res = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    expect(res.ok).toBe(true);
+    // The runtime reads the ACTIVE connection's key -> the write MUST land there.
+    expect(vault.store.get("provider.connection.conn-2.apiKey")).toBe(SECRET_VALUE);
+    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
+    // No new connection minted (find, don't create) and readiness reflects the active key.
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(2);
+    expect((await buildSettingsSnapshot(deps)).providerReady).toBe(true);
+  });
+
+  it("handleSet (legacy provider re-pick) keeps the ACTIVE connection active — no silent flip to first-match (§1.2)", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await twoConnActiveSecond(deps, "z-ai");
+    const res = await handleSet(deps, { provider: { id: "z-ai" } });
+    expect(res.ok).toBe(true);
+    // Re-selecting the same provider while conn-2 is active must NOT switch the
+    // account under the user to conn-1 (the pre-fix first-match behaviour).
+    expect((await loadSettings(settingsPath)).settings.provider.activeConnectionId).toBe("conn-2");
+  });
+
+  it("handleOAuthStart threads the ACTIVE connection id to the engine (not first-match)", async () => {
+    const runner = new FakeOAuthRunner(vault);
+    const deps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauth: runner,
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+    });
+    await twoConnActiveSecond(deps, "acme");
+    const res = await handleOAuthStart(deps, { providerId: "acme" });
+    expect(res.ok).toBe(true);
+    expect(runner.lastConnectionId).toBe("conn-2");
+  });
+
+  it("DoD item-4 extension — pre-W12 write-path with TWO connections lands the secret ONLY under the active key", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await twoConnActiveSecond(deps, "z-ai");
+    const setRes = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    expect(setRes.ok).toBe(true);
+    // Secret ONLY under the active connection; the first connection stays empty.
+    expect(vault.store.get("provider.connection.conn-2.apiKey")).toBe(SECRET_VALUE);
+    expect(vault.store.has("provider.connection.conn-1.apiKey")).toBe(false);
+    // Alias status (what the pre-W12 renderer reads) mirrors the active key.
+    const snap = await buildSettingsSnapshot(deps);
+    expect(snap.secrets.find((s) => s.key === "provider.z-ai.apiKey")?.set).toBe(true);
+    expect(snap.providerReady).toBe(true);
+  });
+});
+
+// ── W9′-FIX #2: settings mutation lock (§2.3) ──
+
+describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
+  it("serializes concurrent settings-set ‖ secret-set — neither read-modify-write is lost", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    ipcGate.arm();
+    const p = Promise.all([
+      handleSet(deps, { provider: { id: "z-ai", model: "USER-MODEL" } }),
+      handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE }),
+    ]);
+    await drainGate(p);
+    await p;
+    ipcGate.disarm();
+
+    // Under the lock the second load is STRICTLY after the first save (no shared
+    // base). Unlocked it is [load, load, save, save] -> a lost update.
+    expect(ipcGate.log).toEqual(["load", "save", "load"]);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toHaveLength(1);
+    const active = activeConnection(loaded.settings);
+    // The user's provider pick (model) survives — not clobbered by the racing write.
+    expect(active?.model).toBe("USER-MODEL");
+    // The secret landed on the ONE surviving connection (no orphan / no desync).
+    expect(vault.store.get(`provider.connection.${active?.id}.apiKey`)).toBe(SECRET_VALUE);
+    expect((await buildSettingsSnapshot(deps)).providerReady).toBe(true);
+  });
+
+  it("concurrent rule-adds both persist (lock covers handleAddRule — no lost update)", async () => {
+    const deps = makeDeps();
+    ipcGate.arm();
+    const p = Promise.all([
+      handleAddRule(deps, { toolName: "Bash", pattern: "git *" }),
+      handleAddRule(deps, { toolName: "Read" }),
+    ]);
+    await drainGate(p);
+    await p;
+    ipcGate.disarm();
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.permissions.alwaysAllow).toHaveLength(2);
+  });
+
+  it("an in-flight oauth flow does NOT block a concurrent settings-set (flow runs OUTSIDE the lock)", async () => {
+    let releaseFlow: () => void = () => undefined;
+    const flowGate = new Promise<void>((resolve) => {
+      releaseFlow = resolve;
+    });
+    const runner: OAuthRunnerLike = {
+      async startFlow() {
+        await flowGate; // hang until the test releases it
+        return { ok: true };
+      },
+      cancel() {
+        /* no-op */
+      },
+    };
+    const deps = makeDeps({
+      catalogIds: CATALOG_IDS,
+      authKindFor: (id) => (id === "acme" ? "oauth" : undefined),
+      oauth: runner,
+      oauthConfigFor: (id) => (id === "acme" ? OAUTH_CONFIG : undefined),
+    });
+    const oauthP = handleOAuthStart(deps, { providerId: "acme" }); // enters flow, hangs
+    // A concurrent settings-set must complete while the flow is still in flight.
+    const setRes = await handleSet(deps, { ui: { theme: "dark" } });
+    expect(setRes.ok).toBe(true);
+    releaseFlow();
+    expect((await oauthP).ok).toBe(true);
+  });
+});
+
+// ── W9′-FIX #3: refused secret-set rolls the connection back (§3.3) ──
+
+describe("W9′-FIX #3 — refusal rollback (§3.3)", () => {
+  it("a refused weak-storage secret-set leaves NO persisted connection", async () => {
+    vault.setResult = { ok: false, reason: "weak_storage_needs_consent" };
+    const setSpy = vi.spyOn(vault, "setSecret");
+    const res = await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
+    expect(res).toEqual({ ok: false, reason: "weak_storage_needs_consent" });
+    // The just-minted connection is rolled back — nothing persists.
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toEqual([]);
+    expect(loaded.settings.provider.activeConnectionId).toBeUndefined();
+    expect(setSpy).toHaveBeenCalledTimes(1); // no second write after rollback
+  });
+
+  it("convergence regress: consent granted → the same set persists ONE connection with the key", async () => {
+    await handleSet(makeDeps(), { security: { allowWeakSecretStorage: true } });
+    const res = await handleSetSecret(makeDeps(), { key: "provider.apiKey", value: SECRET_VALUE });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toHaveLength(1);
+    const active = activeConnection(loaded.settings);
+    expect(vault.store.get(`provider.connection.${active?.id}.apiKey`)).toBe(SECRET_VALUE);
+  });
+});
+
+// ── W9′-FIX #4: connection-key custody in handleSetSecret only (§4.3) ──
+
+describe("W9′-FIX #4 — connection-key custody (§4.3)", () => {
+  it("rejects a connection-key whose id is absent from the graph (not_found) — vault untouched", async () => {
+    const setSpy = vi.spyOn(vault, "setSecret");
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-nope.apiKey",
+      value: SECRET_VALUE,
+    });
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(vault.store.size).toBe(0);
+  });
+
+  it("rejects a connection-key whose suffix mismatches the connection's auth kind (invalid)", async () => {
+    // conn-1 is an api_key provider (z-ai); an .oauth key for it is invalid.
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-1.oauth",
+      value: SECRET_VALUE,
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(vault.store.has("provider.connection.conn-1.oauth")).toBe(false);
+  });
+
+  it("accepts a valid connection-key of the right kind (positive regress)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-1.apiKey",
+      value: SECRET_VALUE,
+    });
+    expect(res.ok).toBe(true);
+    expect(vault.store.get("provider.connection.conn-1.apiKey")).toBe(SECRET_VALUE);
+  });
+
+  it("clear stays permissive for a non-existent connection-key (custody fix must NOT touch clear)", async () => {
+    const res = await handleClearSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-nope.oauth",
+    });
+    expect(res.ok).toBe(true);
+  });
+});
+
+// ── W9′-FIX #5: validated merge — no quarantine-wipe of settings.json (§5.3) ──
+
+describe("W9′-FIX #5 — validated merge (§5.3)", () => {
+  it("rejects an invalid provider transport (invalid) and leaves settings.json intact (no quarantine)", async () => {
+    // Seed a valid baseline, capture its bytes.
+    await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai", model: "glm-4.6" } });
+    const before = await readFile(settingsPath, "utf8");
+
+    const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { transport: "bogus" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+
+    const after = await readFile(settingsPath, "utf8");
+    expect(after).toBe(before); // byte-identical: the bogus enum never persisted
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.corruptBackupPath).toBeUndefined(); // no quarantine on reload
+    expect(activeProviderView(loaded.settings).id).toBe("z-ai"); // config survived
+  });
+
+  it("rejects a type error in a non-provider section (tools.concurrency) as invalid", async () => {
+    const res = await handleSet(makeDeps(), { tools: { concurrency: "nope" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.corruptBackupPath).toBeUndefined();
+  });
+
+  it("unknown top-level keys still survive a valid merge (passthrough invariant preserved — validate-only)", async () => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: { connections: [] },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+        futureThing: { a: 1 },
+      }),
+    );
+    const res = await handleSet(makeDeps(), { ui: { theme: "dark" } });
+    expect(res.ok).toBe(true);
+    const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
+    expect(raw.futureThing).toEqual({ a: 1 }); // a future-version key is NOT stripped
+    expect((raw.ui as { theme: string }).theme).toBe("dark");
   });
 });
