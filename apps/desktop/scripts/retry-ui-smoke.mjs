@@ -361,6 +361,10 @@ function countStreamRetryBlocks(tabState) {
   return (tabState?.transcript ?? []).filter((b) => b?.kind === "stream_retry").length;
 }
 
+function loopEndBlocks(tabState) {
+  return (tabState?.transcript ?? []).filter((b) => b?.kind === "loop_end");
+}
+
 function findTerminalErrorBlock(tabState) {
   const blocks = tabState?.transcript ?? [];
   for (let i = blocks.length - 1; i >= 0; i -= 1) {
@@ -519,31 +523,58 @@ async function step5ObserveTerminalCard(ctx) {
   pass(5, `terminal card text would read "...${suffix}" (attemptsMade=${retry.attemptsMade}, maxAttempts=${retry.maxAttempts ?? "n/a"}, code=${retry.code})`);
 }
 
-// ── step 6: observe the Try-again button's presence via retryOffer ──
+// ── step 6: observe the Try-again button's presence — retryOffer state PLUS
+// a DOM-level probe that exactly one visible, enabled button really painted
+// on the block the offer names (codex W8-FIX #2: `retryOffer` alone only
+// proves the offer is armed, not that MessageList actually rendered the
+// button — a broken visibility condition or missing button would still pass
+// on state alone) ──
 
 async function step6ObserveTryAgainOffer(ctx) {
   const state = await getTabState(ctx, ctx.tabId);
   const offer = state?.retryOffer ?? null;
   assert(6, offer !== null, "retryOffer is null — the Try-again button would not render");
   assert(6, offer.text === PROMPT_TEXT, `retryOffer.text mismatch: expected the original prompt, got ${JSON.stringify(offer.text)}`);
+  ctx.retryBlockId = offer.loopEndBlockId;
   ctx.beforeClickRetryCount = countStreamRetryBlocks(state);
+
+  const buttonState = await apiOk(ctx, 6, "GET", `/tabs/${ctx.tabId}/try-again-button/${encodeURIComponent(ctx.retryBlockId)}`);
+  assert(6, buttonState?.ok === true, `try-again-button probe rejected: ${JSON.stringify(buttonState)}`);
+  assert(6, buttonState.count === 1, `expected exactly ONE rendered Try-again button on block ${ctx.retryBlockId}, DOM has ${buttonState.count}`);
+  assert(6, buttonState.visible === true, "the rendered Try-again button is not visible");
+  assert(6, buttonState.enabled === true, "the rendered Try-again button is not enabled");
+
   await saveScreenshot(ctx, "step6-try-again-offered");
-  pass(6, `Try-again offer armed for loop_end block ${offer.loopEndBlockId} (imageCount=${offer.imageCount})`);
+  pass(6, `Try-again button rendered (count=1, visible, enabled) on loop_end block ${ctx.retryBlockId}`);
 }
 
-// ── step 7: click Try-again — re-sends as a genuine new turn, one-shot consumed ──
+// ── step 7: click Try-again via a REAL DOM click on the rendered button
+// (codex W8-FIX #2: the pre-existing `/tabs/:tabId/retry` route calls
+// `dispatchTryAgain` directly, bypassing the button's own onClick — this
+// drives the actual `.retry-try-again-button` node's click path instead) —
+// re-sends as a genuine new turn, one-shot consumed ──
 
 async function step7ClickTryAgain(ctx) {
-  const result = await apiAction(ctx, 7, `/tabs/${ctx.tabId}/retry`, {});
-  assert(7, result.ok === true, `retry click rejected: ${JSON.stringify(result)}`);
+  const result = await apiAction(ctx, 7, `/tabs/${ctx.tabId}/try-again-button/${encodeURIComponent(ctx.retryBlockId)}/click`, {});
+  assert(7, result.ok === true, `try-again-button click rejected: ${JSON.stringify(result)}`);
 
   await waitUntilTab(ctx, 7, ctx.tabId, { turnStatus: "running" }, 15_000);
   const state = await getTabState(ctx, ctx.tabId);
   assert(7, state?.retryOffer === null, `retryOffer should be consumed (one-shot) after the click, got ${JSON.stringify(state?.retryOffer)}`);
-  pass(7, "Try-again click resent the prompt — a new turn is running against the connect-refused target, offer consumed");
+  pass(7, "real DOM click on the rendered Try-again button resent the prompt — a new turn is running against the connect-refused target, offer consumed");
 }
 
-// ── step 8: cancel actually interrupts the in-flight retry loop, no hang ──
+// ── step 8: cancel actually interrupts the in-flight retry loop, no hang.
+// codex W8-FIX #3: the pre-fix version only proved the turn settled idle
+// after /stop, which is equally true if the 2nd retry loop simply exhausted
+// on its own (a `stop` on no active turn still returns {ok:true}, and
+// `/wait {turnStatus:"idle"}` then succeeds immediately) — neither of which
+// distinguishes a genuine cancellation from natural exhaustion. This version
+// (a) requires the turn to still be RUNNING immediately before /stop is
+// issued, and (b) requires a freshly-appended terminal `loop_end` block with
+// `reason === "cancelled"` (not "error"/"max_turns"/"completed") after it
+// settles — the one signal that can only come from the cancel actually
+// landing. ──
 
 async function step8CancelMidRetry(ctx) {
   // Prove this is a REAL new turn hitting the connect-refused target again,
@@ -555,9 +586,27 @@ async function step8CancelMidRetry(ctx) {
   });
   assert(8, grew !== null, "no NEW stream_retry block appeared on the second (post Try-again) turn — cancel would be testing a settled turn, not a live one");
 
+  const beforeStop = await getTabState(ctx, ctx.tabId);
+  assert(
+    8,
+    beforeStop?.turn?.status === "running",
+    `turn must still be running immediately before /stop (it already settled on its own — cancel would be testing natural exhaustion, not interruption), got turnStatus=${JSON.stringify(beforeStop?.turn?.status)}`,
+  );
+  const loopEndCountBeforeStop = loopEndBlocks(beforeStop).length;
+
   await apiAction(ctx, 8, `/tabs/${ctx.tabId}/stop`, {});
   await waitUntilTab(ctx, 8, ctx.tabId, { turnStatus: "idle" }, 30_000);
-  pass(8, `cancel interrupted the in-flight retry loop (was mid-retry with ${grew} stream_retry blocks total) — turn settled idle, no hang`);
+
+  const afterStop = await getTabState(ctx, ctx.tabId);
+  const newLoopEnds = loopEndBlocks(afterStop).slice(loopEndCountBeforeStop);
+  assert(8, newLoopEnds.length > 0, "no NEW loop_end block appeared after /stop settled — cancel produced no observable terminal outcome");
+  const terminal = newLoopEnds.at(-1);
+  assert(
+    8,
+    terminal.reason === "cancelled",
+    `expected the new turn's loop_end to read reason:"cancelled" (proving /stop actually interrupted it), got reason:${JSON.stringify(terminal.reason)} — the retry loop may have merely exhausted on its own`,
+  );
+  pass(8, `cancel interrupted the in-flight retry loop (was mid-retry with ${grew} stream_retry blocks total) — turn settled idle with loop_end reason:"cancelled", no hang`);
 }
 
 // ── teardown ──
@@ -660,6 +709,7 @@ async function run() {
     firstTurnRetryCount: 0,
     firstTurnAttemptsMade: 0,
     beforeClickRetryCount: 0,
+    retryBlockId: null,
     teardownPromise: null,
     screenshotDir: join(desktopRoot, "out", "retry-smoke"),
   };
