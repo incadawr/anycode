@@ -2905,6 +2905,11 @@ export function createAutomationFacade(
       // MVP) — appendUserText is the transcript write, same as the real
       // button.
       state.appendUserText(requestId, text);
+      // TASK.33 W8: byte-parity with Composer.handleSend's direct-send
+      // branch — records what actually went on the wire so a live smoke
+      // driving turns through this facade can still exercise the Try-again
+      // offer (arming requires `lastSentMessage`).
+      state.recordSentMessage(text, []);
       const message: UiToHostMessage = { type: "user_message", requestId, text };
       registry.sendToTab(tabId, message);
       return { ok: true, requestId };

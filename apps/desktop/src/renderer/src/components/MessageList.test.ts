@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateStackStatus,
   FOLLOW_THRESHOLD_PX,
+  formatErrorRetrySuffix,
+  formatStreamRetryLine,
   groupTranscriptBlocks,
   isAtBottom,
   isTerminalStatus,
   needsSnap,
+  showTryAgainButton,
   shouldShowJumpButton,
   shouldShowTranscriptEmpty,
   stackBadgeText,
@@ -14,7 +17,7 @@ import {
   stackStatusClass,
   STARTER_CHIPS,
 } from "./MessageList.js";
-import type { ToolCallBlock, TranscriptBlock } from "../store.js";
+import type { ErrorRetryMeta, RetryOffer, ToolCallBlock, TranscriptBlock } from "../store.js";
 
 describe("shouldShowTranscriptEmpty (R11)", () => {
   it("shows only for a zero-block idle transcript", () => {
@@ -363,5 +366,50 @@ describe("groupTranscriptBlocks (TASK.31 — any adjacent terminal tool calls st
     expect(items[0]).toMatchObject({ kind: "tool_stack" });
     expect(items[1]).toMatchObject({ kind: "single", block: sep });
     expect(items[2]).toMatchObject({ kind: "tool_stack" });
+  });
+});
+
+function retryMeta(overrides: Partial<ErrorRetryMeta> = {}): ErrorRetryMeta {
+  return { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout", ...overrides };
+}
+
+describe("formatErrorRetrySuffix (TASK.33 W8 — mirrors cli/render.ts wording)", () => {
+  it("is empty when the event carries no retry metadata (pre-W7b byte parity)", () => {
+    expect(formatErrorRetrySuffix(undefined)).toBe("");
+  });
+
+  it("is empty when the turn never retried (attemptsMade === 0)", () => {
+    expect(formatErrorRetrySuffix(retryMeta({ attemptsMade: 0 }))).toBe("");
+  });
+
+  it("uses the singular 'attempt' for exactly one retry", () => {
+    expect(formatErrorRetrySuffix(retryMeta({ attemptsMade: 1 }))).toBe(" (failed after 1 attempt)");
+  });
+
+  it("uses the plural 'attempts' for more than one retry", () => {
+    expect(formatErrorRetrySuffix(retryMeta({ attemptsMade: 3 }))).toBe(" (failed after 3 attempts)");
+  });
+});
+
+describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry N/M in Xms: reason]')", () => {
+  it("formats attempt/limit/delay/reason", () => {
+    expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1/3 in 500ms: connect refused");
+    expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2/3 in 1000ms: ECONNRESET");
+  });
+});
+
+describe("showTryAgainButton (TASK.33 W8 button-visibility truth-table)", () => {
+  const offer: RetryOffer = { loopEndBlockId: "loop_end:turn-1", text: "hello", images: [] };
+
+  it("hidden when there is no armed offer at all (nonretryable / mid-stream — the store never arms `retry`)", () => {
+    expect(showTryAgainButton(null, "loop_end:turn-1")).toBe(false);
+  });
+
+  it("shown on the SPECIFIC loop_end block the offer names", () => {
+    expect(showTryAgainButton(offer, "loop_end:turn-1")).toBe(true);
+  });
+
+  it("hidden on any other block — an older failed turn's button never reappears once a newer turn supersedes it", () => {
+    expect(showTryAgainButton(offer, "loop_end:turn-0")).toBe(false);
   });
 });

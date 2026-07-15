@@ -1993,6 +1993,33 @@ body {
   background: var(--border);
 }
 
+/* TASK.33 W8: a quiet per-attempt line, same register as the loop-end
+   divider's label but without its own hairlines — several can stack. */
+.message-retry {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+/* One-shot Try-again offer, rendered inline with the loop-end divider. */
+.retry-try-again-button {
+  flex: none;
+  padding: 0.15rem var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+
+.retry-try-again-button:hover {
+  color: var(--text-1);
+  border-color: var(--text-3);
+}
+
 /* ── working row (R3 turn liveness) ── */
 
 /* The "is it alive?" fixture at the transcript tail. Flush-left in the

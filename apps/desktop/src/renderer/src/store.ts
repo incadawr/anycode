@@ -205,6 +205,15 @@ export interface WorkflowSubStatus {
   final: { status: "completed" | "failed" | "cancelled"; completedSteps: number; durationMs: number } | null;
 }
 
+/** TASK.33 W7b terminal-error retry metadata — mirrors the core AgentEvent's `error.retry` field (types/events.ts) 1:1. */
+export interface ErrorRetryMeta {
+  attemptsMade: number;
+  maxAttempts?: number;
+  retryable: boolean;
+  hadModelOutput: boolean;
+  code: string;
+}
+
 /**
  * One rendered block in the transcript. Streaming text/reasoning blocks
  * accumulate in place (MVP.4 rAF-batches the deltas that feed them); a
@@ -229,11 +238,25 @@ export type TranscriptBlock =
       /** Null until a `workflow_start` for this toolCallId arrives (only ever set for the Workflow tool). */
       workflow: WorkflowSubStatus | null;
     }
-  | { kind: "error"; id: string; error: SerializedError }
+  /**
+   * `retry` (TASK.33 W8) mirrors the core AgentEvent's additive-optional
+   * `error.retry` field 1:1 (types/events.ts) — absent for a pre-W7b core
+   * event. Feeds the "(failed after N attempts)" suffix (MessageList,
+   * wording mirrors cli/render.ts) and, via `lastErrorRetry` below, the
+   * terminal Try-again offer.
+   */
+  | { kind: "error"; id: string; error: SerializedError; retry?: ErrorRetryMeta }
   /** Renderer-only quota diagnostic; never reconstructed into prompt history. */
   | { kind: "usage_limit"; id: string; notice: UsageLimitNotice }
   | { kind: "output_truncated"; id: string }
-  | { kind: "loop_end"; id: string; reason: string; turns: number };
+  | { kind: "loop_end"; id: string; reason: string; turns: number }
+  /**
+   * One persisted line per `stream_retry` AgentEvent (TASK.33 W8), ADDITIVE to
+   * the existing one-slot `notice` toast (which still shows the LATEST retry
+   * only) — this gives the transcript a full history of every attempt this
+   * turn made, not just the last one.
+   */
+  | { kind: "stream_retry"; id: string; attempt: number; maxAttempts: number; delayMs: number; reason: string };
 
 /** Convenience alias for the tool_call variant of TranscriptBlock (used by ToolCallCard). */
 export type ToolCallBlock = Extract<TranscriptBlock, { kind: "tool_call" }>;
@@ -466,6 +489,37 @@ export interface QueuedPrompt {
 }
 
 /**
+ * TASK.33 W8 one-shot "Try again": the exact text+images actually put on the
+ * wire, snapshotted at send time by `recordSentMessage` (Composer's direct
+ * path, tab-registry's queue-drain/initial-prompt paths — the only three
+ * places a `user_message` is ever sent) so a later retry can replay the
+ * SAME content rather than re-deriving it from the (lossy, display-only)
+ * transcript `user_text` block.
+ */
+export interface LastSentMessage {
+  text: string;
+  images: readonly QueuedPromptImage[];
+}
+
+/**
+ * TASK.33 W8 armed Try-again state: set on `loop_end` when the turn ended in
+ * a retryable, no-model-output error (`ErrorRetryMeta.retryable &&
+ * !hadModelOutput`), null otherwise. `loopEndBlockId` ties the offer to the
+ * SPECIFIC `loop_end` transcript block it belongs to — MessageList shows the
+ * button only on that block, so an older failed turn's button (still in
+ * transcript history) never reappears once a newer turn supersedes it.
+ * Cleared on the next `turn_started` (covers BOTH "used" — a retry click
+ * always starts a new turn — and "a new turn started some other way") and by
+ * `consumeRetry()` synchronously at click time (one-shot even while the
+ * resend is merely queued, not yet an acknowledged turn).
+ */
+export interface RetryOffer {
+  loopEndBlockId: string;
+  text: string;
+  images: readonly QueuedPromptImage[];
+}
+
+/**
  * Codex-fixes TASK.39 (cut §2(k).3): a `set_model`/`set_engine_preset` the
  * host has ACCEPTED (an `engine_settings_changed{state:"pending"}` landed)
  * but not yet APPLIED (the matching `state:"applied"` — host/session.ts's
@@ -578,6 +632,18 @@ export interface DesktopState {
    */
   lastRewindResult: RewindResultInfo | null;
 
+  /** TASK.33 W8: the exact text+images last actually sent (see `LastSentMessage` doc). Part of the session slice. */
+  lastSentMessage: LastSentMessage | null;
+  /**
+   * TASK.33 W8: the CURRENT turn's most recent `error` AgentEvent's retry
+   * metadata (overwritten by every error this turn — only the last one before
+   * a `loop_end` matters), read by the `loop_end` handler to decide whether to
+   * arm `retry`. Part of the session slice; cleared on `turn_started`.
+   */
+  lastErrorRetry: ErrorRetryMeta | null;
+  /** TASK.33 W8 armed Try-again offer; see `RetryOffer` doc. Part of the session slice. */
+  retry: RetryOffer | null;
+
   /**
    * Prompt queue (slice P7.14 · F15): FIFO of prompts the user entered while a
    * turn was running, head = index 0. NOT part of the session slice — survives
@@ -608,6 +674,21 @@ export interface DesktopState {
   appendUserText(id: string, text: string): void;
   /** Appends a renderer-only persisted provider diagnostic; never sent to the host/model. */
   appendUsageLimitNotice(notice: UsageLimitNotice): void;
+  /**
+   * TASK.33 W8: snapshots the text+images just put on the wire as
+   * `lastSentMessage`, so a later terminal retryable failure can offer to
+   * replay this SAME content. Called at every `user_message` send site
+   * (Composer's direct path; tab-registry's queue-drain and initial-prompt
+   * paths) — NOT a new send path of its own.
+   */
+  recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void;
+  /**
+   * TASK.33 W8 one-shot consume: clears `retry` synchronously (so the button
+   * cannot be clicked twice even while the resend is merely queued, not yet
+   * an acknowledged turn) and returns the offer that was just cleared (null
+   * if there was none — a stale/double click).
+   */
+  consumeRetry(): RetryOffer | null;
   /**
    * Records a pending git request keyed by `requestId` so the matching
    * `git_result` can be dispatched (the caller sends the wire message itself
@@ -721,6 +802,12 @@ interface SessionSlice {
   checkpoints: WireCheckpointMeta[];
   /** Outcome of the last `rewind_request`, if any this session; null before the first one. */
   lastRewindResult: RewindResultInfo | null;
+  /** TASK.33 W8: the exact text+images last actually sent (see `LastSentMessage` doc). */
+  lastSentMessage: LastSentMessage | null;
+  /** TASK.33 W8: the CURRENT turn's most recent `error` AgentEvent's retry metadata; cleared on `turn_started`. */
+  lastErrorRetry: ErrorRetryMeta | null;
+  /** TASK.33 W8 armed Try-again offer; see `RetryOffer` doc. */
+  retry: RetryOffer | null;
 }
 
 function initialSessionSlice(): SessionSlice {
@@ -745,6 +832,9 @@ function initialSessionSlice(): SessionSlice {
     sessionTokens: null,
     checkpoints: [],
     lastRewindResult: null,
+    lastSentMessage: null,
+    lastErrorRetry: null,
+    retry: null,
   };
 }
 
@@ -1460,14 +1550,31 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           return;
 
         // ── loop end: footer block + turn goes idle again (immediate) ──
-        case "loop_end":
+        case "loop_end": {
           flushDeltas();
-          set((state) => ({
-            transcript: [
-              ...state.transcript,
-              { kind: "loop_end", id: `loop_end:${turnId}`, reason: event.reason, turns: event.turns },
-            ],
-          }));
+          const loopEndId = `loop_end:${turnId}`;
+          set((state) => {
+            const lastSent = state.lastSentMessage;
+            const retryMeta = state.lastErrorRetry;
+            // TASK.33 W8: arm the one-shot Try-again offer only for a terminal
+            // retryable failure that never reached model output — the exact
+            // gate the button's own visibility check re-derives from `retry`.
+            const armRetry =
+              event.reason === "error" &&
+              retryMeta !== null &&
+              retryMeta.retryable &&
+              !retryMeta.hadModelOutput &&
+              lastSent !== null;
+            return {
+              transcript: [
+                ...state.transcript,
+                { kind: "loop_end", id: loopEndId, reason: event.reason, turns: event.turns },
+              ],
+              ...(armRetry && lastSent !== null
+                ? { retry: { loopEndBlockId: loopEndId, text: lastSent.text, images: lastSent.images } }
+                : {}),
+            };
+          });
           // Slice P7.14: flip the turn to idle AND apply any non-"completed"
           // pause in ONE atomic set(). The drainer subscription (tab-registry
           // `maybeDrain`) fires SYNCHRONOUSLY on every set() and dispatches the
@@ -1487,6 +1594,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               : {}),
           }));
           return;
+        }
 
         // ── loop-internal bookkeeping with no transcript representation in
         // the frozen TranscriptBlock union (design §5 enumerates exactly:
@@ -1517,7 +1625,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // notice channel (same as turn_rejected/mode_change_rejected — a
         // later notice simply replaces an earlier one still showing);
         // context_usage is a pure status-bar reading, no notice ──
+        //
+        // TASK.33 W8: ADDITIVELY to that one-slot notice (which only ever
+        // shows the latest retry), a `stream_retry` also leaves a persisted
+        // transcript line per attempt — a full history of every attempt this
+        // turn made, not just the last one. A retry can only ever fire before
+        // any model output (isModelOutputEvent gates the port's own retry
+        // decision, provider/failure.ts) — text_start/reasoning_start are
+        // themselves model-output events, so no empty assistant_text/reasoning
+        // block can ever precede this line; the AI SDK's synthetic
+        // `{type:"start"}` between attempts is already a no-op below (the
+        // "start"/"turn_start"/tool_input_* case), so repeated attempts never
+        // plant an empty content block either (re-cut W8 note).
         case "stream_retry":
+          appendBlock({
+            kind: "stream_retry",
+            id: `stream_retry:${turnId}:${event.attempt}`,
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+            delayMs: event.delayMs,
+            reason: event.reason,
+          });
           set({
             notice: {
               kind: "stream_retry",
@@ -1569,16 +1697,29 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // the loop_end that follows (reason:"error") only closes the turn.
         // TODO(MVP.6): proper visual treatment; MessageList renders a minimal
         // line for now.
+        //
+        // TASK.33 W8: `event.retry` (additive-optional, W7b) rides through onto
+        // the transcript block unchanged, feeding MessageList's "(failed after
+        // N attempts)" suffix; `lastErrorRetry` records the CURRENT turn's most
+        // recent error's retry metadata (overwritten by every error this
+        // turn — only the last one before a `loop_end` matters), read by the
+        // `loop_end` handler above to decide whether to arm the Try-again offer.
         case "error":
           {
             const quota = parseUsageLimitNotice(event.error);
             appendBlock(
               quota
                 ? { kind: "usage_limit", id: `usage-limit:${turnId}:${errorSeq}`, notice: quota }
-                : { kind: "error", id: `error:${turnId}:${errorSeq}`, error: event.error },
+                : {
+                    kind: "error",
+                    id: `error:${turnId}:${errorSeq}`,
+                    error: event.error,
+                    ...(event.retry !== undefined ? { retry: event.retry } : {}),
+                  },
             );
           }
           errorSeq += 1;
+          set({ lastErrorRetry: event.retry ?? null });
           return;
 
         // ── Phase 3 subagent coarse-progress (design §3.3/§4.2, task 3.1.4):
@@ -1773,6 +1914,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             const inFlight = get().queueInFlight;
             set({
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId },
+              // TASK.33 W8: a new turn starting — whether via the Try-again
+              // click (already one-shot consumed by then) or any other
+              // send — retires the previous turn's retry bookkeeping so a
+              // stale offer never reappears on a later loop_end.
+              lastErrorRetry: null,
+              retry: null,
               ...(inFlight?.requestId === message.requestId ? { queueInFlight: null } : {}),
             });
             return;
@@ -2060,6 +2207,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       appendUsageLimitNotice(notice: UsageLimitNotice): void {
         appendBlock({ kind: "usage_limit", id: `usage-limit:restored:${errorSeq}`, notice });
         errorSeq += 1;
+      },
+
+      recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void {
+        set({ lastSentMessage: { text, images } });
+      },
+
+      consumeRetry(): RetryOffer | null {
+        const offer = get().retry;
+        if (offer !== null) {
+          set({ retry: null });
+        }
+        return offer;
       },
 
       gitRequestStarted(requestId: string, request: GitPendingRequest): void {

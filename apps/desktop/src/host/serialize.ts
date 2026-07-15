@@ -45,7 +45,11 @@ export function serializeError(error: unknown): SerializedError {
  */
 export function sanitizeAgentEvent(event: AgentEvent): WireAgentEvent {
   if (event.type === "error") {
-    return { type: "error", error: serializeError(event.error) };
+    return {
+      type: "error",
+      error: serializeError(event.error),
+      ...(event.retry !== undefined ? { retry: event.retry } : {}),
+    };
   }
   return event;
 }

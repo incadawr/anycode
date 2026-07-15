@@ -185,6 +185,9 @@ export function createTabRegistry(
   function dispatchInitialPrompt(entry: TabEntry, text: string): void {
     const requestId = crypto.randomUUID();
     entry.store.getState().appendUserText(requestId, text);
+    // TASK.33 W8: snapshot what actually went on the wire so a later terminal
+    // retryable failure can offer to replay this same content.
+    entry.store.getState().recordSentMessage(text, []);
     entry.connection?.send({ type: "user_message", requestId, text });
   }
 
@@ -203,6 +206,9 @@ export function createTabRegistry(
       return;
     }
     entry.store.getState().appendUserText(requestId, transcriptTextWithImages(item.text, item.images.length));
+    // TASK.33 W8: snapshot what actually went on the wire so a later terminal
+    // retryable failure can offer to replay this same content.
+    entry.store.getState().recordSentMessage(item.text, item.images);
     entry.connection?.send({
       type: "user_message",
       requestId,

@@ -15,7 +15,7 @@
  * region outside the aria-live column announces turn start/end exactly once.
  */
 import { useContext, useLayoutEffect, useRef, useState } from "react";
-import type { ToolCallBlock, ToolCallCardStatus, TranscriptBlock, TurnState } from "../store.js";
+import type { ErrorRetryMeta, RetryOffer, ToolCallBlock, ToolCallCardStatus, TranscriptBlock, TurnState } from "../store.js";
 import { TabContext } from "../tab-context.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { Markdown } from "./Markdown.js";
@@ -266,14 +266,55 @@ export function needsSnap(
   return !isAtBottom(scrollTop, scrollHeight, clientHeight, 0);
 }
 
+/**
+ * "(failed after N attempts)" terminal error-card suffix (TASK.33 W8) —
+ * mirrors `cli/render.ts`'s error-line wording verbatim (same event.retry
+ * shape, same "only surfaced when at least one retry actually happened"
+ * gate) so the desktop and CLI report an identical failure the same way.
+ * Exported for unit testing.
+ */
+export function formatErrorRetrySuffix(retry: ErrorRetryMeta | undefined): string {
+  return retry && retry.attemptsMade > 0
+    ? ` (failed after ${retry.attemptsMade} attempt${retry.attemptsMade === 1 ? "" : "s"})`
+    : "";
+}
+
+/**
+ * One `stream_retry` transcript line's text (TASK.33 W8) — mirrors
+ * `cli/render.ts`'s `[retry N/M in Xms: reason]` wording. Exported for unit
+ * testing.
+ */
+export function formatStreamRetryLine(attempt: number, maxAttempts: number, delayMs: number, reason: string): string {
+  return `Retry ${attempt}/${maxAttempts} in ${delayMs}ms: ${reason}`;
+}
+
+/**
+ * Try-again button visibility (TASK.33 W8): shown ONLY on the specific
+ * `loop_end` block the armed offer names (`RetryOffer.loopEndBlockId`) — an
+ * older failed turn's button (still sitting in transcript history) never
+ * reappears once a newer turn supersedes it. The retryable/hadModelOutput
+ * gate itself is already baked into whether `retry` is non-null at all (the
+ * store's `loop_end` reducer only arms it when both hold) — this predicate
+ * just answers "is THIS the block it belongs to". Exported for unit testing.
+ */
+export function showTryAgainButton(retry: RetryOffer | null, blockId: string): boolean {
+  return retry !== null && retry.loopEndBlockId === blockId;
+}
+
 export function MessageList({
   blocks,
   turn,
   workspace,
+  retry,
+  onTryAgain,
 }: {
   blocks: TranscriptBlock[];
   turn: TurnState;
   workspace: string | null;
+  /** TASK.33 W8 armed one-shot Try-again offer; null when nothing to offer. */
+  retry: RetryOffer | null;
+  /** TASK.33 W8: consumes `retry` and re-sends its content through the normal send/queue/busy path. */
+  onTryAgain: () => void;
 }) {
   // codex P7.3-F2 finding 2: the automation transcript-scroll probe
   // (automation.ts's transcriptScrollState/transcriptScrollTo) must be able to
@@ -599,6 +640,7 @@ export function MessageList({
                   <div className="message-text">
                     <span className="message-error-name">{block.error.name}</span>
                     {block.error.message ? `: ${block.error.message}` : ""}
+                    {formatErrorRetrySuffix(block.retry)}
                   </div>
                 </div>
               );
@@ -611,12 +653,23 @@ export function MessageList({
                   </div>
                 </div>
               );
+            case "stream_retry":
+              return (
+                <div key={block.id} className={`message message-retry${enterClass(block.id)}`}>
+                  {formatStreamRetryLine(block.attempt, block.maxAttempts, block.delayMs, block.reason)}
+                </div>
+              );
             case "loop_end":
               return (
                 <div key={block.id} className={`message message-loop-end${enterClass(block.id)}`}>
                   {block.reason === "max_turns"
                     ? `Stopped: reached the turn limit (${block.turns} turns). Raise it in Settings or ANYCODE_MAX_TURNS.`
                     : `Turn ended: ${block.reason} (${block.turns} turn${block.turns === 1 ? "" : "s"})`}
+                  {showTryAgainButton(retry, block.id) && (
+                    <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
+                      Try again
+                    </button>
+                  )}
                 </div>
               );
             case "output_truncated":

@@ -368,6 +368,18 @@ describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
     expect(findBlock(transcript, "user_text")?.id).toBe(userMessage.requestId);
   });
 
+  it("TASK.33 W8: records the dispatched text as lastSentMessage, so a later retryable failure can offer to replay it", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    registry.queueInitialPrompt("tab-a", "hello there");
+
+    expect(registry.getStore("tab-a")?.getState().lastSentMessage).toEqual({ text: "hello there", images: [] });
+  });
+
   it("queues and dispatches exactly once when host_ready arrives after the call", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
@@ -625,6 +637,22 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     port.emit({ type: "agent_event", turnId: "t2", event: { type: "loop_end", reason: "completed", turns: 1 } });
     expect(userMessages(port).map((m) => m.text)).toEqual(["a", "b"]);
     expect(store.getState().promptQueue).toHaveLength(0);
+  });
+
+  it("TASK.33 W8: records the drained item's text+images as lastSentMessage on dispatch", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+
+    port.emit({ type: "turn_started", requestId: "user-1", turnId: "t1" });
+    store.getState().enqueuePrompt({ text: "with image", images: [image] });
+    port.emit({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "completed", turns: 1 } });
+
+    expect(store.getState().lastSentMessage).toEqual({ text: "with image", images: [image] });
   });
 
   // Regression (P7.14/F15 W1 fix): the drainer subscription fires SYNCHRONOUSLY

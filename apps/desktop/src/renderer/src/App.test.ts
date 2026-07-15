@@ -9,7 +9,15 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SettingsSnapshot } from "../../shared/settings.js";
-import { computeGitPanelOpen, selectMainPaneView, shouldShowWelcome, shouldSuppressEscForDraft } from "./App.js";
+import type { UiToHostMessage } from "../../shared/protocol.js";
+import {
+  computeGitPanelOpen,
+  dispatchTryAgain,
+  selectMainPaneView,
+  shouldShowWelcome,
+  shouldSuppressEscForDraft,
+} from "./App.js";
+import { createDesktopStore, type RetryOffer } from "./store.js";
 
 function snapshot(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
@@ -101,5 +109,83 @@ describe("computeGitPanelOpen (design TASK.40 §2(f)) — shell-owned, not engin
 
   it("defaults to open when requested and shell is undefined — byte-identical to core's pre-TASK.40 behavior (no engine gating at all)", () => {
     expect(computeGitPanelOpen(true, undefined)).toBe(true);
+  });
+});
+
+describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/busy path)", () => {
+  function armRetry(store: ReturnType<typeof createDesktopStore>, offer: RetryOffer): void {
+    store.setState({ retry: offer });
+  }
+
+  it("no-op when nothing is armed (stale/double click) — sendToHost never called", () => {
+    const store = createDesktopStore();
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toEqual([]);
+  });
+
+  it("idle, no queue-in-flight ⇒ direct-sends through the SAME path as Composer.handleSend: echoes user_text, records the resend, puts user_message on the wire, and consumes the offer", () => {
+    const store = createDesktopStore();
+    armRetry(store, { loopEndBlockId: "loop_end:t1", text: "hello", images: [] });
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: "user_message", text: "hello" });
+    expect(store.getState().transcript.some((b) => b.kind === "user_text" && b.text === "hello")).toBe(true);
+    expect(store.getState().lastSentMessage).toEqual({ text: "hello", images: [] });
+    expect(store.getState().retry).toBeNull();
+  });
+
+  it("carries the offer's images through onto the wire message", () => {
+    const store = createDesktopStore();
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    armRetry(store, { loopEndBlockId: "loop_end:t1", text: "hello", images: [image] });
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent[0]).toMatchObject({ type: "user_message", text: "hello", images: [image.attachment] });
+  });
+
+  it("a turn already running ⇒ enqueues instead of direct-sending — busy is honored exactly like any other send", () => {
+    const store = createDesktopStore();
+    store.setState({ turn: { status: "running", turnId: "t1", requestId: "r1" } });
+    armRetry(store, { loopEndBlockId: "loop_end:t0", text: "hello", images: [] });
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toEqual([]);
+    expect(store.getState().promptQueue).toHaveLength(1);
+    expect(store.getState().promptQueue[0]).toMatchObject({ text: "hello" });
+    // Consumed regardless of which branch ends up replaying it — still one-shot.
+    expect(store.getState().retry).toBeNull();
+  });
+
+  it("a drained queue item still in flight (turn momentarily idle) ⇒ also enqueues, matching Composer's own in-flight-window guard", () => {
+    const store = createDesktopStore();
+    store.setState({ queueInFlight: { requestId: "in-flight", item: { id: "q1", text: "other", images: [] } } });
+    armRetry(store, { loopEndBlockId: "loop_end:t0", text: "hello", images: [] });
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toEqual([]);
+    expect(store.getState().promptQueue).toHaveLength(1);
+  });
+
+  it("one-shot: a second click right after the first finds nothing armed and sends nothing further", () => {
+    const store = createDesktopStore();
+    armRetry(store, { loopEndBlockId: "loop_end:t1", text: "hello", images: [] });
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toHaveLength(1);
   });
 });

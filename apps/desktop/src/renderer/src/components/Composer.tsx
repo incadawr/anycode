@@ -941,6 +941,9 @@ export function Composer() {
       // owns all transcript writes, and appendBlock flushes pending deltas
       // first so ordering stays consistent.
       tabStore.getState().appendUserText(requestId, transcriptTextWithImages(outgoing, images.length));
+      // TASK.33 W8: snapshot what actually went on the wire so a later
+      // terminal retryable failure can offer to replay this same content.
+      tabStore.getState().recordSentMessage(outgoing, images);
       sendToHost({
         type: "user_message",
         requestId,

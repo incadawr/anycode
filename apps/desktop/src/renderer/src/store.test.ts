@@ -806,6 +806,269 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
   });
 });
 
+describe("desktop store — TASK.33 W8 retry visibility + Try-again", () => {
+  function beginTurn(store: ReturnType<typeof createDesktopStore>, turnId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+  }
+
+  /** Drives one `error` (with the given retry metadata) followed by the `loop_end(error)` that closes the turn. */
+  function driveErrorThenLoopEnd(
+    store: ReturnType<typeof createDesktopStore>,
+    turnId: string,
+    retry?: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string },
+  ): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "error",
+        error: { name: "AI_APICallError", message: "Cannot connect to API: Connect Timeout Error" },
+        ...(retry !== undefined ? { retry } : {}),
+      },
+    });
+    store.getState().applyHostMessage({ type: "agent_event", turnId, event: { type: "loop_end", reason: "error", turns: 1 } });
+  }
+
+  it("stream_retry ADDITIONALLY leaves a persisted transcript line per attempt, on top of the existing one-slot notice", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 500, reason: "connect refused" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "stream_retry", attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "connect refused" },
+    });
+
+    const retryBlocks = store.getState().transcript.filter((b) => b.kind === "stream_retry");
+    expect(retryBlocks).toHaveLength(2);
+    expect(retryBlocks[0]).toMatchObject({ attempt: 1, maxAttempts: 3, delayMs: 500, reason: "connect refused" });
+    expect(retryBlocks[1]).toMatchObject({ attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "connect refused" });
+    expect(new Set(retryBlocks.map((b) => b.id)).size).toBe(2);
+    // The one-slot notice channel is untouched — still shows only the latest attempt.
+    expect(store.getState().notice?.kind).toBe("stream_retry");
+    expect(store.getState().notice?.text).toContain("attempt 2/3");
+  });
+
+  it("repeated stream_retry + the AI SDK's synthetic start between attempts never plants an empty content block (re-cut W8 note)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      // `{type:"start"}` is the AI SDK's synthetic per-attempt marker (fires
+      // before any model output) — already a no-op in the reducer, asserted
+      // here as a regression guard.
+      store.getState().applyHostMessage({ type: "agent_event", turnId, event: { type: "start" } });
+      store.getState().applyHostMessage({
+        type: "agent_event",
+        turnId,
+        event: { type: "stream_retry", attempt, maxAttempts: 3, delayMs: 100 * attempt, reason: "connect refused" },
+      });
+    }
+
+    const kinds = store.getState().transcript.map((b) => b.kind);
+    expect(kinds).toEqual(["stream_retry", "stream_retry", "stream_retry"]);
+    expect(store.getState().transcript.some((b) => b.kind === "assistant_text" || b.kind === "reasoning")).toBe(false);
+  });
+
+  it("error event's retry metadata rides onto the transcript block unchanged and updates lastErrorRetry", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+
+    const retry = { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout" };
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "error", error: { name: "AI_APICallError", message: "Cannot connect to API: Connect Timeout Error" }, retry },
+    });
+
+    expect(findBlock(store.getState().transcript, "error")?.retry).toEqual(retry);
+    expect(store.getState().lastErrorRetry).toEqual(retry);
+  });
+
+  it("a pre-W7b error carrying no retry field leaves the block's retry undefined and lastErrorRetry null (byte-identical fallback)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "error", error: { name: "ProviderError", message: "boom" } },
+    });
+
+    expect(findBlock(store.getState().transcript, "error")).not.toHaveProperty("retry");
+    expect(store.getState().lastErrorRetry).toBeNull();
+  });
+
+  describe("loop_end Try-again arming — button-visibility truth-table", () => {
+    it("retryable && !hadModelOutput ⇒ arms retry, keyed to the loop_end block, replaying the last-sent content", () => {
+      const { scheduler } = createManualScheduler();
+      const store = createDesktopStore(scheduler);
+      const turnId = "turn-1";
+      beginTurn(store, turnId);
+      store.getState().recordSentMessage("hello", []);
+
+      driveErrorThenLoopEnd(store, turnId, {
+        attemptsMade: 3,
+        maxAttempts: 3,
+        retryable: true,
+        hadModelOutput: false,
+        code: "connect_timeout",
+      });
+
+      const loopEndBlock = findBlock(store.getState().transcript, "loop_end");
+      expect(loopEndBlock).toBeDefined();
+      expect(store.getState().retry).toEqual({ loopEndBlockId: loopEndBlock?.id, text: "hello", images: [] });
+    });
+
+    it("nonretryable (auth/400/quota) ⇒ no offer", () => {
+      const { scheduler } = createManualScheduler();
+      const store = createDesktopStore(scheduler);
+      const turnId = "turn-1";
+      beginTurn(store, turnId);
+      store.getState().recordSentMessage("hello", []);
+
+      driveErrorThenLoopEnd(store, turnId, { attemptsMade: 0, retryable: false, hadModelOutput: false, code: "auth" });
+
+      expect(store.getState().retry).toBeNull();
+    });
+
+    it("mid-stream (hadModelOutput true) ⇒ no offer even when otherwise retryable", () => {
+      const { scheduler } = createManualScheduler();
+      const store = createDesktopStore(scheduler);
+      const turnId = "turn-1";
+      beginTurn(store, turnId);
+      store.getState().recordSentMessage("hello", []);
+
+      driveErrorThenLoopEnd(store, turnId, {
+        attemptsMade: 1,
+        maxAttempts: 3,
+        retryable: true,
+        hadModelOutput: true,
+        code: "server",
+      });
+
+      expect(store.getState().retry).toBeNull();
+    });
+
+    it("a loop_end that did not end in error ⇒ no offer, even with retryable metadata lingering from an earlier turn", () => {
+      const { scheduler } = createManualScheduler();
+      const store = createDesktopStore(scheduler);
+      const turnId = "turn-1";
+      beginTurn(store, turnId);
+      store.getState().recordSentMessage("hello", []);
+
+      store.getState().applyHostMessage({ type: "agent_event", turnId, event: { type: "loop_end", reason: "cancelled", turns: 1 } });
+
+      expect(store.getState().retry).toBeNull();
+    });
+
+    it("no lastSentMessage recorded ⇒ no offer even when otherwise eligible (nothing to replay)", () => {
+      const { scheduler } = createManualScheduler();
+      const store = createDesktopStore(scheduler);
+      const turnId = "turn-1";
+      beginTurn(store, turnId);
+      // Deliberately no recordSentMessage call.
+
+      driveErrorThenLoopEnd(store, turnId, {
+        attemptsMade: 3,
+        maxAttempts: 3,
+        retryable: true,
+        hadModelOutput: false,
+        code: "connect_timeout",
+      });
+
+      expect(store.getState().retry).toBeNull();
+    });
+  });
+
+  it("turn_started clears both lastErrorRetry and retry, so a stale offer never reappears on a later loop_end", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+    store.getState().recordSentMessage("hello", []);
+    driveErrorThenLoopEnd(store, turnId, {
+      attemptsMade: 3,
+      maxAttempts: 3,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+    expect(store.getState().retry).not.toBeNull();
+    expect(store.getState().lastErrorRetry).not.toBeNull();
+
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-2", turnId: "turn-2" });
+
+    expect(store.getState().retry).toBeNull();
+    expect(store.getState().lastErrorRetry).toBeNull();
+  });
+
+  it("recordSentMessage snapshots text+images; consumeRetry is one-shot — returns the armed offer once, then null, clearing state.retry", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+
+    store.getState().recordSentMessage("draft", [image]);
+    expect(store.getState().lastSentMessage).toEqual({ text: "draft", images: [image] });
+
+    // Nothing armed yet — a stray click before any failure is a no-op.
+    expect(store.getState().consumeRetry()).toBeNull();
+
+    driveErrorThenLoopEnd(store, turnId, {
+      attemptsMade: 3,
+      maxAttempts: 3,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+
+    const armed = store.getState().retry;
+    expect(armed).not.toBeNull();
+    expect(store.getState().consumeRetry()).toEqual(armed);
+    expect(store.getState().retry).toBeNull();
+    // One-shot: a second (stale/double) click consumes nothing further.
+    expect(store.getState().consumeRetry()).toBeNull();
+  });
+
+  it("performReset (host respawn) clears lastSentMessage/lastErrorRetry/retry — part of the session slice", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+    store.getState().recordSentMessage("hello", []);
+    driveErrorThenLoopEnd(store, turnId, {
+      attemptsMade: 3,
+      maxAttempts: 3,
+      retryable: true,
+      hadModelOutput: false,
+      code: "connect_timeout",
+    });
+    expect(store.getState().retry).not.toBeNull();
+
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s2" });
+
+    expect(store.getState().retry).toBeNull();
+    expect(store.getState().lastErrorRetry).toBeNull();
+    expect(store.getState().lastSentMessage).toBeNull();
+  });
+});
+
 describe("desktop store — Wave-1 revision actions", () => {
   it("appendUserText appends a user_text block and setAwaitingHostReady sets the handshake phase", () => {
     const { scheduler } = createManualScheduler();

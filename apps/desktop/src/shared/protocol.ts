@@ -128,8 +128,19 @@ export interface ShellCapabilitiesProjection {
   terminal: boolean;
 }
 
-/** AgentEvent after sanitization: the {type:"error"} variant carries SerializedError instead of unknown. */
-export type WireAgentEvent = Exclude<AgentEvent, { type: "error" }> | { type: "error"; error: SerializedError };
+/**
+ * AgentEvent after sanitization: the {type:"error"} variant carries
+ * SerializedError instead of unknown. `retry` (TASK.33 W8) rides through
+ * unchanged from the core event — additive-optional, so a pre-W7b core
+ * event (no `retry` field) produces a byte-identical wire event.
+ */
+export type WireAgentEvent =
+  | Exclude<AgentEvent, { type: "error" }>
+  | {
+      type: "error";
+      error: SerializedError;
+      retry?: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+    };
 
 /** UI-safe subset of ToolMetadata (flat data only, no schemas/handlers). */
 export interface WireToolMeta {

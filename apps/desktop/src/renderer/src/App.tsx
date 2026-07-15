@@ -30,7 +30,7 @@ import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
 import { useTabsStore } from "./tabs-store.js";
 import { tabRegistry, type DesktopStoreApi } from "./tab-registry.js";
-import { TabContext, useTabStore } from "./tab-context.js";
+import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "./tab-context.js";
 import { useSettingsStore } from "./settings-store.js";
 import { applyThemePreference } from "./theme.js";
 import type { SettingsSnapshot } from "../../shared/settings.js";
@@ -42,7 +42,9 @@ import { Sidebar, SIDEBAR_SEARCH_EVENT } from "./components/Sidebar.js";
 import { WindowControls } from "./components/WindowControls.js";
 import { SessionHeader } from "./components/SessionHeader.js";
 import { MessageList } from "./components/MessageList.js";
-import { Composer } from "./components/Composer.js";
+import { Composer, shouldEnqueue } from "./components/Composer.js";
+import { transcriptTextWithImages } from "./queue-format.js";
+import type { UiToHostMessage } from "../../shared/protocol.js";
 import { FOCUS_MODE_MENU_EVENT } from "./components/ModeMenu.js";
 import { RUN_ACTION_EVENT } from "./slash-menu.js";
 import { ConnectedPermissionModal } from "./components/PermissionModal.js";
@@ -125,6 +127,38 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
   return panelOpen && (shellGitReadOnly ?? true);
 }
 
+/**
+ * TASK.33 W8 Try-again dispatch: consumes the one-shot offer (`consumeRetry`
+ * — a no-op on a stale/double click once already consumed) and re-sends its
+ * text+images through the EXACT SAME enqueue-vs-direct-send decision as
+ * Composer.handleSend (`shouldEnqueue`), so busy/queue/cancel/permission/
+ * max-turns behave for a retry exactly as they do for any other turn. Records
+ * the resend via `recordSentMessage` too, same as every other send site — if
+ * THIS retry also fails retryably-with-no-output, a fresh offer arms again.
+ * Exported for unit testing against a real `createDesktopStore()` instance
+ * (no jsdom in this package — see App.test.ts's header).
+ */
+export function dispatchTryAgain(store: DesktopStoreApi, sendToHost: (message: UiToHostMessage) => void): void {
+  const offer = store.getState().consumeRetry();
+  if (offer === null) {
+    return;
+  }
+  const state = store.getState();
+  if (shouldEnqueue(state.turn.status, state.queueInFlight)) {
+    state.enqueuePrompt({ text: offer.text, images: offer.images });
+    return;
+  }
+  const requestId = crypto.randomUUID();
+  state.appendUserText(requestId, transcriptTextWithImages(offer.text, offer.images.length));
+  state.recordSentMessage(offer.text, offer.images);
+  sendToHost({
+    type: "user_message",
+    requestId,
+    text: offer.text,
+    ...(offer.images.length > 0 ? { images: offer.images.map((image) => image.attachment) } : {}),
+  });
+}
+
 interface ActiveTabBodyProps {
   tabId: string;
   sidebarCollapsed: boolean;
@@ -140,6 +174,12 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
   const workspace = useTabStore((state) => state.workspace);
+  // TASK.33 W8: the armed one-shot Try-again offer (null when nothing to
+  // offer) — MessageList shows the button only on the loop_end block it names.
+  const retry = useTabStore((state) => state.retry);
+  const tabStoreApi = useTabStoreApi();
+  const sendToHost = useTabSend();
+  const handleTryAgain = useCallback(() => dispatchTryAgain(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
   const engine = useTabStore((state) => state.engine);
   const shell = useTabStore((state) => state.shell);
   const gitPanelOpenRequested = useTabStore((state) => state.git.panelOpen);
@@ -205,7 +245,14 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
             </div>
           )}
 
-          <MessageList key={tabId} blocks={transcript} turn={turn} workspace={workspace} />
+          <MessageList
+            key={tabId}
+            blocks={transcript}
+            turn={turn}
+            workspace={workspace}
+            retry={retry}
+            onTryAgain={handleTryAgain}
+          />
 
           <Composer />
         </div>
