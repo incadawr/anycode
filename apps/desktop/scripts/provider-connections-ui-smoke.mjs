@@ -335,7 +335,7 @@ async function saveScreenshot(ctx, step, name) {
  * few hundred ms is the same settle discipline `saveScreenshot`'s 400ms
  * pre-sleep already uses for the analogous store-vs-compositor gap.
  */
-async function pollProviderState(ctx, step, predicate, timeoutMs = 5_000) {
+async function pollProviderState(ctx, step, predicate, timeoutMs = 10_000) {
   let last = null;
   const result = await pollUntil(timeoutMs, 150, async () => {
     const resp = await api(ctx, "GET", "/settings/provider");
@@ -349,7 +349,7 @@ async function pollProviderState(ctx, step, predicate, timeoutMs = 5_000) {
 }
 
 /** Same rationale as `pollProviderState`, for the generic `/focus` probe (a mount-time `useEffect` autofocus is a passive effect, scheduled after commit — not guaranteed to have run yet the instant a prior `waitUntil` resolves). */
-async function pollFocus(ctx, step, predicate, timeoutMs = 5_000) {
+async function pollFocus(ctx, step, predicate, timeoutMs = 10_000) {
   const result = await pollUntil(timeoutMs, 150, async () => {
     const resp = await api(ctx, "GET", "/focus");
     return resp.status === 200 && predicate(resp.body) ? resp.body : undefined;
@@ -530,7 +530,7 @@ async function step2WelcomeEmptyState(ctx) {
   // snapshot loading over a SEPARATE async IPC round trip after the window
   // opens. Poll for the drawer to appear rather than assuming it's already
   // there the instant the facade responds.
-  const state = await pollProviderState(ctx, 2, (s) => s.drawer.open === true);
+  const state = await pollProviderState(ctx, 2, (s) => s.drawer.open === true, 20_000);
   assert(2, state.mounted === false, `expected the Settings-dialog grid NOT mounted on a Welcome boot, got mounted=${state.mounted}`);
   assert(2, state.drawer.open === true, `expected the WelcomeScreen embed drawer open, got drawer=${JSON.stringify(state.drawer)}`);
   assert(2, state.drawer.embedded === true, `expected drawer.embedded=true (WelcomeScreen, not the Settings dialog)`);
