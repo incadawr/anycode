@@ -903,10 +903,23 @@ async function persistProvider(
   return { ok: true, snapshot };
 }
 
+/** Same as `persistProvider`, plus the authoritative minted id (TASK.45 W12-FIX2 §1, connection-create only). */
+async function persistProviderWithCreatedId(
+  deps: SettingsIpcDeps,
+  settings: AnycodeSettings,
+  provider: ProviderSettingsV2,
+  createdConnectionId: string,
+): Promise<SettingsMutationResult> {
+  const result = await persistProvider(deps, settings, provider);
+  return result.ok ? { ...result, createdConnectionId } : result;
+}
+
 /**
  * connection-create: mint a new connection. `providerId` must be a catalog entry
  * (trust boundary). `setActive` — or being the first connection — makes it the
- * default for new sessions. Read-only settings refuse.
+ * default for new sessions. Read-only settings refuse. The success arm carries
+ * `createdConnectionId` (TASK.45 W12-FIX2 §1) — the authoritative minted id, so
+ * a caller never has to diff the snapshot to guess which entry is new.
  */
 export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = connectionCreateSchema.safeParse(raw);
@@ -938,7 +951,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       connections: [...loaded.settings.provider.connections, connection],
       ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
     };
-    return persistProvider(deps, loaded.settings, provider);
+    return persistProviderWithCreatedId(deps, loaded.settings, provider, id);
   });
 }
 

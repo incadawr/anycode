@@ -37,6 +37,7 @@ import type {
   ProviderConnection,
   ProviderTransportId,
   SecretStatus,
+  SettingsMutationResult,
 } from "../../../shared/settings.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey } from "./ConnectionTile.js";
@@ -52,17 +53,15 @@ import {
 import { X } from "./icons.js";
 
 /**
- * The connection `connection-create` just minted: the one entry in `after`
- * whose id wasn't already in `before`. `undefined` if none is new (e.g. a
- * stale/duplicate response) — the caller then leaves `createdConnectionId`
- * unset rather than guessing. Exported for unit testing.
+ * The connection `connection-create` just minted (TASK.45 W12-FIX2 §1):
+ * main is the authority — `result.createdConnectionId` on a successful
+ * result IS the id, never a diff of the snapshot against a stale `before`
+ * prop (that heuristic picked the WRONG connection whenever two unseen ids
+ * appeared at once). `undefined` on a refusal, or fail-closed when a
+ * same-build ok-result somehow lacks the field. Exported for unit testing.
  */
-export function findNewlyCreatedConnection(
-  before: readonly ProviderConnection[],
-  after: readonly ProviderConnection[],
-): ProviderConnection | undefined {
-  const priorIds = new Set(before.map((c) => c.id));
-  return after.find((c) => !priorIds.has(c.id));
+export function resolveCreatedConnectionId(result: SettingsMutationResult): string | undefined {
+  return result.ok ? result.createdConnectionId : undefined;
 }
 
 /**
@@ -197,11 +196,9 @@ export function ConnectionDrawerFields({
         ...(transport ? { transport } : {}),
         ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
       });
-      if (result.ok) {
-        const created = findNewlyCreatedConnection(connections, result.snapshot.settings.provider.connections);
-        if (created) {
-          setCreatedConnectionId(created.id);
-        }
+      const createdId = resolveCreatedConnectionId(result);
+      if (createdId !== undefined) {
+        setCreatedConnectionId(createdId);
       }
     } finally {
       setCreating(false);

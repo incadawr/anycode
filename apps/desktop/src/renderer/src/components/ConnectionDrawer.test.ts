@@ -6,34 +6,54 @@
  * behavior is proven live by `provider-connections-ui-smoke.mjs` instead.
  */
 import { describe, expect, it } from "vitest";
-import type { ProviderConnection } from "../../../shared/settings.js";
-import { buildConnectionUpdatePayload, findNewlyCreatedConnection, resolveDrawerOAuthStartArgs } from "./ConnectionDrawer.js";
+import type { ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
+import { buildConnectionUpdatePayload, resolveCreatedConnectionId, resolveDrawerOAuthStartArgs } from "./ConnectionDrawer.js";
 
 function conn(id: string, providerId = "z-ai"): ProviderConnection {
   return { id, providerId };
 }
 
-describe("findNewlyCreatedConnection (the add-flow's create→id resolution)", () => {
-  it("finds the one connection present in `after` but not `before`", () => {
-    const before = [conn("conn-1")];
-    const after = [conn("conn-1"), conn("conn-2")];
-    expect(findNewlyCreatedConnection(before, after)?.id).toBe("conn-2");
+function okResult(connections: ProviderConnection[], createdConnectionId?: string): SettingsMutationResult {
+  return {
+    ok: true,
+    snapshot: {
+      settings: {
+        version: 2,
+        provider: { connections },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      secrets: [],
+      providerReady: false,
+      envOverrides: [],
+      readOnly: false,
+    },
+    ...(createdConnectionId !== undefined ? { createdConnectionId } : {}),
+  };
+}
+
+describe("resolveCreatedConnectionId (TASK.45 W12-FIX2 §1: authoritative created-id, codex W12-FIX review #1)", () => {
+  // §1.2 — authoritative-vs-diff discriminant: the snapshot carries TWO ids the
+  // drawer never saw before (B then C, in that array order), and the result
+  // names C authoritatively. The now-removed diff-heuristic (`after.find` of
+  // the first unseen entry) would have picked B — reverting to it turns this
+  // red.
+  it("§1.2 resolves the field's own value even when the snapshot carries a different, earlier-ordered unseen id", () => {
+    const result = okResult([conn("conn-a"), conn("conn-b"), conn("conn-c")], "conn-c");
+    expect(resolveCreatedConnectionId(result)).toBe("conn-c");
   });
 
-  it("a fresh install (no prior connections) — the first-ever connection is 'new'", () => {
-    const after = [conn("conn-1")];
-    expect(findNewlyCreatedConnection([], after)?.id).toBe("conn-1");
+  // §1.3 — fail-closed: no field on the ok-result -> undefined, never guessed
+  // from the snapshot.
+  it("§1.3 undefined when the ok-result carries no createdConnectionId (fail-closed, no guessing)", () => {
+    const result = okResult([conn("conn-a"), conn("conn-b")]);
+    expect(resolveCreatedConnectionId(result)).toBeUndefined();
   });
 
-  it("undefined when nothing new appears (a stale/duplicate response)", () => {
-    const before = [conn("conn-1")];
-    expect(findNewlyCreatedConnection(before, before)).toBeUndefined();
-  });
-
-  it("picks the correct new connection even among several existing ones (two connections of the same provider)", () => {
-    const before = [conn("conn-1", "openai"), conn("conn-2", "openai")];
-    const after = [conn("conn-1", "openai"), conn("conn-2", "openai"), conn("conn-3", "openai")];
-    expect(findNewlyCreatedConnection(before, after)?.id).toBe("conn-3");
+  it("undefined on a refusal", () => {
+    expect(resolveCreatedConnectionId({ ok: false, reason: "invalid" })).toBeUndefined();
   });
 });
 

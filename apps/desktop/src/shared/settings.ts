@@ -321,7 +321,18 @@ export type SettingsMutationReason =
  * without a second get, or a typed reason on refusal.
  */
 export type SettingsMutationResult =
-  | { ok: true; snapshot: SettingsSnapshot }
+  | {
+      ok: true;
+      snapshot: SettingsSnapshot;
+      /**
+       * The connection id `connection-create` just minted (TASK.45 W12-FIX2
+       * §1) — additive/optional. Populated ONLY by the connection-create
+       * channel; every other mutating channel never sets it. Lets a caller
+       * target the connection it just created authoritatively instead of
+       * diffing the snapshot to guess which entry is new.
+       */
+      createdConnectionId?: string;
+    }
   | { ok: false; reason: SettingsMutationReason };
 
 // ── OAuth channel payloads (companions to OAUTH_START/CANCEL_CHANNEL) ──

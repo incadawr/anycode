@@ -945,6 +945,23 @@ describe("connection CRUD write-path end-to-end (W12, DoD item 4 replacement —
   });
 });
 
+// ── TASK.45 W12-FIX2 §1: connection-create returns the authoritative minted id ──
+
+describe("handleConnectionCreate — createdConnectionId (W12-FIX2 §1, codex W12-FIX review #1)", () => {
+  // §1.1 — hits ONLY the handler layer: the id is already in the handler's hand
+  // (`genConnectionId`) before persistProvider ever runs. Reverting the hunk that
+  // threads it onto the ok-result turns this red — the field is simply absent.
+  it("§1.1 ok-result carries createdConnectionId, equal to the minted connection's id in the snapshot", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    const res = await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.6" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.createdConnectionId).toBe("conn-1");
+      expect(res.snapshot.settings.provider.connections.map((c) => c.id)).toEqual(["conn-1"]);
+    }
+  });
+});
+
 describe("handleSet — refine-rejects a wholesale connections graph (DoD item 6)", () => {
   it("rejects a wholesale connections array through the generic settings-set path", async () => {
     const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), {
