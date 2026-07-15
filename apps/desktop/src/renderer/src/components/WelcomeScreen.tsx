@@ -4,9 +4,7 @@
  * -> quit` boot path): rendered by App.tsx precisely when the app is
  * unconfigured (`!providerReady && tabs.length === 0`, `shouldShowWelcome`
  * in ../App.tsx). There is nothing else on screen in that state — main
- * opened the window with zero hosts — so this embeds `ProviderSettings`
- * directly (no dialog chrome) rather than requiring an extra click through a
- * modal just to reach the only thing there is to do.
+ * opened the window with zero hosts.
  *
  * Deliberately owns no readiness logic itself: App.tsx decides WHETHER to
  * mount this component at all (off the settings-store's `snapshot` +
@@ -15,15 +13,23 @@
  * session explicitly.
  *
  * R11 restage (slice-R11-cut.md §2.2): full first-run redesign — brand beat
- * (wordmark + mode-ramp motif) + the carved `ProviderSettings` (only the
- * provider step, not all seven settings sections) + an honest two-beat
+ * (wordmark + mode-ramp motif) + a first-connection form + an honest two-beat
  * progress footer. Auto-advance is still App's declarative unmount above —
  * this component adds no readiness state of its own.
+ *
+ * TASK.45 W12 (cut §"Отдельный first-run empty state в WelcomeScreen"): this no
+ * longer embeds the full `ProviderSettings` grid (management screen) — it
+ * embeds `ConnectionDrawerFields` (the SAME add/edit form the Settings grid's
+ * drawer uses) directly, chrome-free, narrowed to ONE connection. A fresh
+ * install has no connections yet ("add" mode); reopening mid-setup (a
+ * connection exists but isn't ready yet — e.g. metadata saved, credential not
+ * yet entered) resumes editing that SAME first connection rather than minting
+ * a second one on every restart.
  */
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
-import { ProviderSettings } from "./SettingsScreen.js";
+import { ConnectionDrawerFields } from "./ConnectionDrawer.js";
 import { BrandMark } from "./icons.js";
 import "../settings.css";
 
@@ -77,7 +83,17 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
           </div>
         )}
 
-        <ProviderSettings store={store} />
+        {snapshot && (
+          <ConnectionDrawerFields
+            mode={snapshot.settings.provider.connections.length === 0 ? "add" : "edit"}
+            editConnection={snapshot.settings.provider.connections[0]}
+            catalog={snapshot.catalog ?? []}
+            connections={snapshot.settings.provider.connections}
+            secrets={snapshot.secrets}
+            readOnly={snapshot.readOnly}
+            store={store}
+          />
+        )}
 
         {notice && (
           <div className="settings-notice" role="alert">
