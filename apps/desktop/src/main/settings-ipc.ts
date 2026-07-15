@@ -271,7 +271,10 @@ const connectionUpdateSchema = z
     id: z.string().min(1),
     label: z.string().optional(),
     model: z.string().optional(),
-    transport: transportEnum.optional(),
+    // `""` sentinel (§3): clears an explicit transport back to catalog
+    // default. `connectionCreateSchema` deliberately does NOT get this union
+    // — at create time an omitted transport already means "use the default".
+    transport: z.union([transportEnum, z.literal("")]).optional(),
     baseUrl: z.string().optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
   })
@@ -960,25 +963,40 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (existing === undefined) {
       return { ok: false, reason: "not_found" };
     }
+    // W12-FIX §3: `""` is the clear-to-default sentinel (mirrors the existing
+    // baseUrl/model `""`-convention on this same channel) — normalize BEFORE
+    // comparing/persisting so `""` never lands on disk as a value.
+    const normalizedTransport = req.transport === "" ? undefined : req.transport;
     // TASK.45 §3 (Фаза 3): editing a significant ENDPOINT field invalidates the
     // last observed health — a health status confirmed against the OLD
     // model/transport/baseUrl must not linger under the new one. A label-only
     // edit (or a no-op resend of the same value) leaves health untouched.
     const endpointChanged =
       (req.model !== undefined && req.model !== existing.model) ||
-      (req.transport !== undefined && req.transport !== existing.transport) ||
+      (req.transport !== undefined && normalizedTransport !== existing.transport) ||
       (req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl);
     const updatedConnection: ProviderConnection = {
       ...existing,
       ...(req.label !== undefined ? { label: req.label } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
-      ...(req.transport !== undefined ? { transport: req.transport } : {}),
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
       ...(endpointChanged
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
+    // Transport clear (`""`) must remove the key entirely, not merely spread
+    // `undefined` over it — `normalizedTransport === undefined` here can mean
+    // EITHER "not sent" (leave `existing.transport` alone, already carried by
+    // the spread above) OR "sent as `""`" (must delete it), so this needs an
+    // explicit branch rather than a spread.
+    if (req.transport !== undefined) {
+      if (normalizedTransport === undefined) {
+        delete updatedConnection.transport;
+      } else {
+        updatedConnection.transport = normalizedTransport;
+      }
+    }
     const provider: ProviderSettingsV2 = {
       ...loaded.settings.provider,
       connections: loaded.settings.provider.connections.map((connection) =>

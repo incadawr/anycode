@@ -390,7 +390,14 @@ export interface ConnectionUpdateRequest {
   id: string;
   label?: string;
   model?: string;
-  transport?: ProviderTransportId;
+  /**
+   * `""` is a sentinel (TASK.45 W12-FIX §3, same convention as `baseUrl`/
+   * `model` on this channel): absent = keep the current value, an enum value
+   * = set it, `""` = clear an explicit choice back to catalog default. `""`
+   * is NEVER itself persisted — the handler normalizes it to `undefined`
+   * before writing, so a cleared connection carries no `transport` key.
+   */
+  transport?: ProviderTransportId | "";
   baseUrl?: string;
   reasoningEffort?: ReasoningEffort;
 }

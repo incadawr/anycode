@@ -1581,6 +1581,56 @@ describe("handleConnectionUpdate — resets health on a significant ENDPOINT fie
   });
 });
 
+// ── TASK.45 W12-FIX §3: `""`-sentinel clears transport back to catalog default (codex W12 review #3) ──
+
+describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)', () => {
+  // §3.1 — the handler layer: reverting either the zod union (`""` refused
+  // `invalid`) or the normalize-before-persist step turns this red.
+  it('§3.1 update {transport:""} on an explicit transport clears it: no `transport` key on disk, health resets', async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T04:00:00.000Z" });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.5", transport: "openai-chat-completions" }); // conn-1
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", transport: "" });
+    expect(res.ok).toBe(true);
+
+    // Disk guard (anti-regression on the persisted schema): raw file content,
+    // not a snapshot projection — the `""` sentinel must NEVER be written,
+    // and the key must be absent entirely (not merely `transport: undefined`).
+    const raw = await readFile(settingsPath, "utf8");
+    expect(raw).not.toContain('"transport"');
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.transport).toBeUndefined();
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("unchecked");
+  });
+
+  // §3.2 — normalization: clearing an ALREADY-absent transport is a true
+  // no-op for health (a naive `req.transport !== undefined` comparison,
+  // instead of comparing the NORMALIZED value against `existing.transport`,
+  // would wrongly reset health here).
+  it('§3.2 update {transport:""} when transport was already absent is a health no-op', async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.5" }); // conn-1, no transport
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", transport: "" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.transport).toBeUndefined();
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("ready");
+  });
+
+  // §3.4 — regress: omitting transport entirely on update keeps the old value.
+  it("§3.4 update WITHOUT the transport field keeps the existing transport (regress)", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.5", transport: "openai-responses" }); // conn-1
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", label: "Work" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.transport).toBe("openai-responses");
+  });
+});
+
 describe("handleConnectionCheck — probe (TASK.45 W11)", () => {
   it("with NO probe wired (default), behaves byte-identically to the W9 scaffold: no network call, health untouched", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
