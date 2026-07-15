@@ -548,6 +548,38 @@ describe("automation facade — tryAgain (design TASK.33 W8)", () => {
     expect(second).toEqual({ ok: false, reason: "no_retry_offer" });
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(1);
   });
+
+  // W8-FIX #1 (App.tsx's dispatchTryAgain) bails without consuming the offer
+  // when `connection !== "ready"`, so a click made while disconnected leaves
+  // it armed for when the connection returns. The facade route used to skip
+  // that gate entirely: it only checked "does an offer exist" and then
+  // unconditionally returned {ok:true}, lying about a send that never
+  // happened — a smoke driving this route through a disconnected tab would
+  // see false success and mask a real regression.
+  it("an offer is armed but connection isn't ready -> {ok:false, reason:'not_ready'}, sending nothing and leaving the offer armed (mirrors dispatchTryAgain's own readiness gate)", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const offer: RetryOffer = { loopEndBlockId: "loop_end:t1", text: "hello again", images: [] };
+    registry.getStore(tabId)!.setState({ retry: offer, connection: "host_exited" });
+
+    const result = facade.tryAgain(tabId);
+
+    expect(result).toEqual({ ok: false, reason: "not_ready" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
+    expect(registry.getStore(tabId)!.getState().retry).toEqual(offer);
+  });
+
+  it("still succeeds when the offer is armed and the tab IS ready — the not_ready gate doesn't regress the happy path", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const offer: RetryOffer = { loopEndBlockId: "loop_end:t1", text: "hello again", images: [] };
+    registry.getStore(tabId)!.setState({ retry: offer, connection: "ready" });
+
+    const result = facade.tryAgain(tabId);
+
+    expect(result).toEqual({ ok: true });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(1);
+  });
 });
 
 describe("automation facade — tab-lifecycle passthrough (window.anycode bridge)", () => {
