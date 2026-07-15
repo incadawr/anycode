@@ -17,9 +17,11 @@ import { activeConnection, activeProviderView } from "../shared/settings.js";
 import { ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import {
+  applyConnectionHealthEvent,
   buildSettingsSnapshot,
   handleAddRule,
   handleClearSecret,
+  handleConnectionCheck,
   handleConnectionCreate,
   handleConnectionDelete,
   handleConnectionSetActive,
@@ -29,7 +31,9 @@ import {
   handleOAuthStart,
   handleSet,
   handleSetSecret,
+  mapProviderFailureCodeToHealthStatus,
   projectCatalogSummary,
+  type ConnectionProbeOutcome,
   type OAuthRunnerLike,
   type SettingsIpcDeps,
   type VaultLike,
@@ -968,6 +972,241 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
   });
 });
 
+// ── TASK.45 W11: connection health classification + advisory persist ──
+
+describe("mapProviderFailureCodeToHealthStatus — classification table (401 ≠ 429 ≠ timeout ≠ bad-model)", () => {
+  it("maps auth (401) to auth_invalid", () => {
+    expect(mapProviderFailureCodeToHealthStatus("auth")).toBe("auth_invalid");
+  });
+
+  it("maps forbidden (403) to forbidden — distinct from auth_invalid", () => {
+    expect(mapProviderFailureCodeToHealthStatus("forbidden")).toBe("forbidden");
+  });
+
+  it("maps rate_limited (429) and quota (429 quota-exhaustion) to rate_limited — never auth_invalid", () => {
+    expect(mapProviderFailureCodeToHealthStatus("rate_limited")).toBe("rate_limited");
+    expect(mapProviderFailureCodeToHealthStatus("quota")).toBe("rate_limited");
+  });
+
+  it("maps connect_timeout/network/server to unreachable — distinct from auth_invalid and rate_limited", () => {
+    expect(mapProviderFailureCodeToHealthStatus("connect_timeout")).toBe("unreachable");
+    expect(mapProviderFailureCodeToHealthStatus("network")).toBe("unreachable");
+    expect(mapProviderFailureCodeToHealthStatus("server")).toBe("unreachable");
+  });
+
+  it("maps a bad-model-shaped failure (\"unknown\") to misconfigured — NEVER auth_invalid", () => {
+    const status = mapProviderFailureCodeToHealthStatus("unknown");
+    expect(status).toBe("misconfigured");
+    expect(status).not.toBe("auth_invalid");
+  });
+
+  it("defaults an unrecognised future code to unreachable, never a credential-is-bad bucket", () => {
+    const status = mapProviderFailureCodeToHealthStatus("some_future_code");
+    expect(status).toBe("unreachable");
+    expect(status).not.toBe("auth_invalid");
+    expect(status).not.toBe("forbidden");
+  });
+});
+
+describe("applyConnectionHealthEvent — advisory persist round-trip + \"Last known\" after restart", () => {
+  it("persists {status, at, safeCode} for a failure event and survives a fresh reload (advisory, not a live status)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T00:00:00.000Z" });
+
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "auth" });
+
+    // "Last known" (task doc §3): a completely fresh load — simulating a
+    // restart — still reads back the exact same advisory record.
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "auth_invalid",
+      at: "2026-07-15T00:00:00.000Z",
+      safeCode: "auth",
+    });
+  });
+
+  it("persists {status: ready} with no safeCode for a success event", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T00:00:00.000Z" });
+
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "ready",
+      at: "2026-07-15T00:00:00.000Z",
+    });
+  });
+
+  it("is a race-safe no-op when the connection was deleted mid-flight", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" });
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+
+    await expect(applyConnectionHealthEvent(deps, "conn-1", { kind: "success" })).resolves.toBeUndefined();
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toEqual([]);
+  });
+
+  it("never fires onMutation — health is advisory and must not trigger the readiness/auto-tab refresh a real settings mutation does", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const onMutation = vi.fn();
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, onMutation });
+
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "rate_limited" });
+
+    expect(onMutation).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleSetSecret / handleClearSecret — reset health to unchecked (cut §W11 \"replace/clear key -> unchecked\")", () => {
+  it("a first-time secret-set on a connection resets health to unchecked", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T01:00:00.000Z" });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "auth" }); // pre-existing auth_invalid
+
+    const res = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "unchecked",
+      at: "2026-07-15T01:00:00.000Z",
+    });
+  });
+
+  it("clearing a secret also resets health to unchecked", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T02:00:00.000Z" });
+    await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" }); // ready
+
+    const res = await handleClearSecret(deps, { key: "provider.z-ai.apiKey" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "unchecked",
+      at: "2026-07-15T02:00:00.000Z",
+    });
+  });
+
+  it("a refused (weak-storage) secret-set does NOT reset health — nothing actually changed", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "auth" });
+    vault.setResult = { ok: false, reason: "weak_storage_needs_consent" };
+
+    const res = await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    expect(res).toEqual({ ok: false, reason: "weak_storage_needs_consent" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("auth_invalid");
+  });
+});
+
+describe("handleConnectionUpdate — resets health on a significant ENDPOINT field edit only", () => {
+  it("changing model/transport/baseUrl resets health to unchecked", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-4.5" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T03:00:00.000Z" });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", model: "glm-5.2" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "unchecked",
+      at: "2026-07-15T03:00:00.000Z",
+    });
+  });
+
+  it("a label-only edit (or resending the SAME model) leaves health untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-4.5" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", label: "Work", model: "glm-4.5" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("ready");
+  });
+});
+
+describe("handleConnectionCheck — probe (TASK.45 W11)", () => {
+  it("with NO probe wired (default), behaves byte-identically to the W9 scaffold: no network call, health untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleSetSecret(deps, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+
+    const res = await handleConnectionCheck(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    // Never billed, never probed: health is whatever secret-set already reset it
+    // to (unchecked) — connection-check with no probe dep writes NOTHING.
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("unchecked");
+  });
+
+  it("not_found for an unknown id — never calls the probe", async () => {
+    const probeConnection = vi.fn<(...args: unknown[]) => Promise<ConnectionProbeOutcome>>();
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, probeConnection });
+    const res = await handleConnectionCheck(deps, { id: "conn-nope" });
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+    expect(probeConnection).not.toHaveBeenCalled();
+  });
+
+  it("never probes a connection with no resolvable credential (nothing to check with)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1, keyless
+    const probeConnection = vi.fn<(...args: unknown[]) => Promise<ConnectionProbeOutcome>>();
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, probeConnection });
+
+    const res = await handleConnectionCheck(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    expect(probeConnection).not.toHaveBeenCalled();
+  });
+
+  it("a wired probe's ok:true writes ready; ok:false classifies + writes safeCode — through the SAME table", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const bootstrap = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleSetSecret(bootstrap, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+
+    const ok: ConnectionProbeOutcome = { ok: true };
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T04:00:00.000Z", probeConnection: async () => ok });
+    const res = await handleConnectionCheck(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "ready",
+      at: "2026-07-15T04:00:00.000Z",
+    });
+
+    const failing: ConnectionProbeOutcome = { ok: false, code: "auth" };
+    const deps2 = makeDeps({
+      catalogIds: CATALOG_IDS,
+      now: () => "2026-07-15T05:00:00.000Z",
+      probeConnection: async () => failing,
+    });
+    await handleConnectionCheck(deps2, { id: "conn-1" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "auth_invalid",
+      at: "2026-07-15T05:00:00.000Z",
+      safeCode: "auth",
+    });
+  });
+
+  it("never falls back to a billable request — connection-check calls the probe AT MOST once", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const bootstrap = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleSetSecret(bootstrap, { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const probeConnection = vi.fn<(...args: unknown[]) => Promise<ConnectionProbeOutcome>>().mockResolvedValue({ ok: true });
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, probeConnection });
+
+    await handleConnectionCheck(deps, { id: "conn-1" });
+
+    expect(probeConnection).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── W9′-FIX #1: legacy writes target the ACTIVE connection, not first-match (§1.4) ──
 
 describe("W9′-FIX #1 — legacy writes target the ACTIVE connection (§1.4)", () => {
@@ -1046,8 +1285,11 @@ describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
     ipcGate.disarm();
 
     // Under the lock the second load is STRICTLY after the first save (no shared
-    // base). Unlocked it is [load, load, save, save] -> a lost update.
-    expect(ipcGate.log).toEqual(["load", "save", "load"]);
+    // base). Unlocked it is [load, load, save, save] -> a lost update. The
+    // trailing "save" is handleSetSecret's OWN write (TASK.45 W11): it persists
+    // the `lastHealth: unchecked` reset onto the connection right after the vault
+    // write, inside the SAME lock critical section — ordering is unaffected.
+    expect(ipcGate.log).toEqual(["load", "save", "load", "save"]);
 
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.provider.connections).toHaveLength(1);

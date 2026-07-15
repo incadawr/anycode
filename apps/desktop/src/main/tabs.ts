@@ -24,6 +24,7 @@ import {
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { ENV_CONNECTION_ID } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import {
@@ -285,6 +286,14 @@ export interface TabHostManagerDeps {
    * active one (a resumed session stays on its own account).
    */
   resolveCredential?: (connectionId?: string) => Promise<string | undefined>;
+  /**
+   * A core host's real request outcome for its pinned connection (TASK.45 W11:
+   * runtime auth failure/rate limit/network-server error/successful generation).
+   * Called ONLY for a tab with a `connectionId` — an unpinned (legacy) tab has no
+   * saved plaquette to paint, so its event is dropped here rather than forwarded
+   * with an undefined id. Absent = health tracking off (legacy tests unaffected).
+   */
+  onProviderHealthEvent?: (connectionId: string, event: ProviderHealthEvent) => void;
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
@@ -529,6 +538,15 @@ export class TabHostManager {
     }
     if (data.type === ENGINE_PROCESS_REGISTRATION_TYPE) {
       this.registerEngineProcess(tab, child, message);
+      return;
+    }
+    if (data.type === PROVIDER_HEALTH_EVENT_TYPE) {
+      // TASK.45 W11: bind to THIS proc's pinned connectionId — never the active
+      // one, never a sibling tab's. No pin (legacy/env-override boot) -> nothing
+      // to paint, the event is dropped.
+      if (tab.connectionId !== undefined) {
+        this.deps.onProviderHealthEvent?.(tab.connectionId, message as ProviderHealthEvent);
+      }
       return;
     }
     if (data.type !== CREDENTIAL_REQUEST_TYPE || typeof data.requestId !== "string") {

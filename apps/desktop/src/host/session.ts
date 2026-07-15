@@ -438,6 +438,19 @@ export interface SessionOptions {
   };
   /** Multimodal send-path capability gate, mirroring the CLI image staging guard. */
   imageInputEnabled?: () => boolean;
+  /**
+   * TASK.45 W11: reports a real request outcome for the connection this session
+   * is pinned to (a runtime auth failure, rate limit, network/server error, or a
+   * successful generation) so main can classify + persist advisory connection
+   * health. `code` mirrors core's `ProviderFailureCode` (provider/failure.ts) as
+   * a plain string — the SAME classification `classifyProviderFailure` already
+   * attached to the event's `safe` field (never reclassified here). Host/index.ts
+   * wires this ONLY for the core engine (Codex owns its own account, outside the
+   * core provider catalog) by posting a `ProviderHealthEvent` on parentPort; main
+   * (tabs.ts) resolves the CALLER's pinned connectionId, so Session itself stays
+   * connection-agnostic. Absent in every legacy test -> a silent no-op.
+   */
+  reportProviderHealth?: (event: { kind: "success" } | { kind: "failure"; code: string }) => void;
   /** Capability gate: false for a known catalog model without reasoning support. */
   reasoningSupported?: boolean;
   /** Effort levels the boot model supports (for the UI selector + set_reasoning_effort validation). */
@@ -479,6 +492,8 @@ export class Session {
   private readonly onContinuationComplete: (() => Promise<void>) | undefined;
   private readonly onWorkspaceTransition: SessionOptions["onWorkspaceTransition"];
   private readonly worktreeControl: SessionOptions["worktreeControl"];
+  /** TASK.45 W11: undefined for Codex / every legacy test -> no-op. */
+  private readonly reportProviderHealth: SessionOptions["reportProviderHealth"];
   // Slice P7.15 (F14): mutable — a mid-session set_model updates the live model.
   private model: string;
   private readonly sessionId: string;
@@ -560,6 +575,7 @@ export class Session {
     this.onContinuationComplete = options.onContinuationComplete;
     this.onWorkspaceTransition = options.onWorkspaceTransition;
     this.worktreeControl = options.worktreeControl;
+    this.reportProviderHealth = options.reportProviderHealth;
     this.model = options.model;
     this.sessionId = options.sessionId;
     this.persistence = options.persistence;
@@ -1245,6 +1261,15 @@ export class Session {
           // TASK.2 DoD-c: the raw provider failure reaches the process log
           // (stdio:"inherit" -> app log), not only the transcript block.
           console.error(`[host] provider stream error: ${describeError(event.error)}`);
+          // TASK.45 W11: relay the core loop's OWN classification (event.safe.code)
+          // verbatim — never reclassified here. Absent `safe` (a legacy/foreign
+          // producer) defaults to "unknown" rather than dropping the signal.
+          this.reportProviderHealth?.({ kind: "failure", code: event.safe?.code ?? "unknown" });
+        }
+        if (event.type === "finish") {
+          // TASK.45 W11: a model step that reached a finish reason completed a
+          // real request against the pinned connection's credential/endpoint.
+          this.reportProviderHealth?.({ kind: "success" });
         }
         if (event.type === "tool_result") {
           await this.emitAfterSnapshot(event.outcome);

@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/credentials.js";
 import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
 import {
   DEFAULT_BREAKER_LIMITS,
@@ -636,6 +637,76 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     manager.createTab({ workspace: "/b", sessionId: "sb", resume: false, connectionId: "conn-b" });
     manager.createTab({ workspace: "/c", sessionId: "sc", resume: false }); // legacy, unpinned
     expect(manager.pinnedConnectionIds()).toEqual(new Set(["conn-a", "conn-b"]));
+  });
+});
+
+describe("TabHostManager — provider health event binding (TASK.45 W11)", () => {
+  it("binds a health event to the PINNED connection of the host that sent it", async () => {
+    const { fork, hosts } = liveForkRig();
+    const seen: Array<{ connectionId: string; event: ProviderHealthEvent }> = [];
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      onProviderHealthEvent: (connectionId, event) => {
+        seen.push({ connectionId, event });
+      },
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-work" });
+    await flush();
+    hosts[0]!.emit("message", { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "failure", code: "auth" });
+    await flush();
+    expect(seen).toEqual([
+      { connectionId: "conn-work", event: { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "failure", code: "auth" } },
+    ]);
+  });
+
+  it("never forwards a health event from an unpinned (legacy) tab — no connection to paint", async () => {
+    const { fork, hosts } = liveForkRig();
+    const seen: unknown[] = [];
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      onProviderHealthEvent: (connectionId, event) => {
+        seen.push({ connectionId, event });
+      },
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false }); // no connectionId
+    await flush();
+    hosts[0]!.emit("message", { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" });
+    await flush();
+    expect(seen).toEqual([]);
+  });
+
+  it("routes each tab's own event to its OWN connectionId — never a sibling tab's", async () => {
+    const { fork, hosts } = liveForkRig();
+    const seen: Array<{ connectionId: string; event: ProviderHealthEvent }> = [];
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      onProviderHealthEvent: (connectionId, event) => {
+        seen.push({ connectionId, event });
+      },
+    });
+    manager.createTab({ workspace: "/a", sessionId: "sa", resume: false, connectionId: "conn-a" });
+    manager.createTab({ workspace: "/b", sessionId: "sb", resume: false, connectionId: "conn-b" });
+    await flush();
+    hosts[1]!.emit("message", { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" });
+    await flush();
+    expect(seen).toEqual([
+      { connectionId: "conn-b", event: { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" } },
+    ]);
   });
 });
 

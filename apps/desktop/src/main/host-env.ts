@@ -384,6 +384,18 @@ export function envOverrides(bootEnv: NodeJS.ProcessEnv): string[] {
   return PROVIDER_ENV_KEYS.filter((name) => envPresent(bootEnv, name));
 }
 
+/**
+ * True when a live core host's provider-health event must NOT be bound to any
+ * saved connection plaquette (TASK.45 W11, cut §W11 env-override rule): a
+ * non-blank `ANYCODE_API_KEY` boot-snapshot override means the request that
+ * just succeeded/failed actually ran on a DIFFERENT, ephemeral credential — the
+ * env-override "connection" has no persisted tile to paint, so its outcome
+ * would otherwise wrongly color the stored connection's plaquette.
+ */
+export function shouldSkipConnectionHealthBinding(bootEnv: NodeJS.ProcessEnv): boolean {
+  return bootEnvHas(bootEnv, ENV_API_KEY);
+}
+
 
 
 export interface ReadinessParams {

@@ -242,6 +242,7 @@ import {
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
+import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import {
   WORKTREE_CLEANUP_ENV,
   WORKTREE_TRANSITION_MESSAGE_TYPE,
@@ -1386,6 +1387,17 @@ async function boot(): Promise<void> {
           continuationPending: false,
           continuationMode: null,
         });
+      },
+      // TASK.45 W11: core-only (Codex owns its own account, outside the core
+      // provider catalog — its Session construction above never wires this).
+      // Main resolves the pinned connectionId per-proc (tabs.ts); the host stays
+      // connection-agnostic and only relays the loop's own classification.
+      reportProviderHealth: (event) => {
+        const message: ProviderHealthEvent =
+          event.kind === "success"
+            ? { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" }
+            : { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "failure", code: event.code };
+        process.parentPort.postMessage(message);
       },
       onWorkspaceTransition: async (transition: WorkspaceTransition) => {
         const rollback = async (): Promise<void> => {

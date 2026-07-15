@@ -289,6 +289,8 @@ export interface HarnessOptions {
   continuationMode?: "model" | "none";
   onContinuationReady?: () => Promise<void>;
   onContinuationComplete?: () => Promise<void>;
+  /** TASK.45 W11: surfaced directly to Session; omitted -> no-op (every pre-existing test unaffected). */
+  reportProviderHealth?: SessionOptions["reportProviderHealth"];
 }
 
 export interface Harness {
@@ -446,6 +448,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.continuationMode !== undefined ? { continuationMode: options.continuationMode } : {}),
     ...(options.onContinuationReady !== undefined ? { onContinuationReady: options.onContinuationReady } : {}),
     ...(options.onContinuationComplete !== undefined ? { onContinuationComplete: options.onContinuationComplete } : {}),
+    ...(options.reportProviderHealth !== undefined ? { reportProviderHealth: options.reportProviderHealth } : {}),
   });
   session.bindPort(nodeWirePort(hostPort));
 

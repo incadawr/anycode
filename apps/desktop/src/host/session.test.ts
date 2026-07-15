@@ -608,6 +608,107 @@ describe("Session — stream bridge", () => {
   });
 });
 
+describe("Session — provider health reporting (TASK.45 W11)", () => {
+  it("reports a failure with the core loop's OWN classified code (401 -> auth) on a stream error", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const events: Array<{ kind: "success" } | { kind: "failure"; code: string }> = [];
+    const error = Object.assign(new Error("invalid api key"), { statusCode: 401 });
+    const h = createHarness({
+      steps: [[{ type: "error", error }]],
+      reportProviderHealth: (event) => events.push(event),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      expect(events).toEqual([{ kind: "failure", code: "auth" }]);
+    } finally {
+      consoleError.mockRestore();
+      h.close();
+    }
+  });
+
+  it("reports a failure with code \"unknown\" for a bad-model-shaped 400 — never auth", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const events: Array<{ kind: "success" } | { kind: "failure"; code: string }> = [];
+    const error = Object.assign(new Error("invalid request: unknown model"), { statusCode: 400 });
+    const h = createHarness({
+      steps: [[{ type: "error", error }]],
+      reportProviderHealth: (event) => events.push(event),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      expect(events).toEqual([{ kind: "failure", code: "unknown" }]);
+    } finally {
+      consoleError.mockRestore();
+      h.close();
+    }
+  });
+
+  it("reports a failure with code \"rate_limited\" on a 429 and \"server\" on a 503, distinct from auth", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const events: Array<{ kind: "success" } | { kind: "failure"; code: string }> = [];
+    const rateLimited = Object.assign(new Error("too many requests"), { statusCode: 429 });
+    const serverError = Object.assign(new Error("server error"), { statusCode: 503 });
+    const h = createHarness({
+      steps: [[{ type: "error", error: rateLimited }], [{ type: "error", error: serverError }]],
+      reportProviderHealth: (event) => events.push(event),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(agentEventOf("loop_end"));
+      h.send({ type: "user_message", requestId: "r2", text: "again" });
+      await h.waitUntil(() => events.length >= 2);
+
+      expect(events).toEqual([
+        { kind: "failure", code: "rate_limited" },
+        { kind: "failure", code: "server" },
+      ]);
+    } finally {
+      consoleError.mockRestore();
+      h.close();
+    }
+  });
+
+  it("reports success on a normal finish, and never fires for a legacy caller that omits the seam", async () => {
+    const events: Array<{ kind: "success" } | { kind: "failure"; code: string }> = [];
+    const h = createHarness({
+      steps: [textStep("hello")],
+      reportProviderHealth: (event) => events.push(event),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      expect(events).toEqual([{ kind: "success" }]);
+    } finally {
+      h.close();
+    }
+
+    // Legacy caller (no reportProviderHealth seam): the exact same script must
+    // not throw — the field is a pure no-op when absent.
+    const legacy = createHarness({ steps: [textStep("hello")] });
+    try {
+      legacy.send({ type: "ui_ready" });
+      await legacy.waitFor(isHostReady);
+      legacy.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await expect(legacy.waitFor(agentEventOf("loop_end"))).resolves.toBeTruthy();
+    } finally {
+      legacy.close();
+    }
+  });
+});
+
 describe("Session — multimodal attachments", () => {
   const image: ImageAttachment = { mediaType: "image/png", data: "QUJD", sourcePath: "shot.png" };
 

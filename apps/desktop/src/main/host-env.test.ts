@@ -19,6 +19,7 @@ import {
   resolveEffectiveTransport,
   scrubSecretEnv,
   secretEnvFor,
+  shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
 } from "./host-env.js";
 import { resolveProviderSelection, type ProviderSelectionDeps } from "./token-broker.js";
@@ -411,6 +412,24 @@ describe("envOverrides", () => {
 
   it("includes ANYCODE_REASONING_EFFORT (F14 §2.4 ladder addition)", () => {
     expect(envOverrides({ ANYCODE_REASONING_EFFORT: "high" })).toEqual([ENV_REASONING_EFFORT]);
+  });
+});
+
+describe("shouldSkipConnectionHealthBinding (TASK.45 W11 env-override rule)", () => {
+  it("skips binding when ANYCODE_API_KEY is a non-blank boot-snapshot override", () => {
+    expect(shouldSkipConnectionHealthBinding({ ANYCODE_API_KEY: "sk-env-override" })).toBe(true);
+  });
+
+  it("does NOT skip when ANYCODE_API_KEY is absent", () => {
+    expect(shouldSkipConnectionHealthBinding({})).toBe(false);
+  });
+
+  it("does NOT skip on a blank/whitespace-only ANYCODE_API_KEY (treated as absent)", () => {
+    expect(shouldSkipConnectionHealthBinding({ ANYCODE_API_KEY: "   " })).toBe(false);
+  });
+
+  it("ignores an unrelated override (ANYCODE_MODEL alone does not gate health binding)", () => {
+    expect(shouldSkipConnectionHealthBinding({ ANYCODE_MODEL: "gpt-5.1" })).toBe(false);
   });
 });
 

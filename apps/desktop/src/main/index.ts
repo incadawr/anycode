@@ -54,6 +54,7 @@ import {
   connectionSecretKey,
   resolveEffectiveTransport,
   scrubSecretEnv,
+  shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
   type ResolvedProviderSelection,
 } from "./host-env.js";
@@ -62,7 +63,13 @@ import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
-import { handleSet, projectCatalogSummary, registerSettingsIpc, type SettingsIpcDeps } from "./settings-ipc.js";
+import {
+  applyConnectionHealthEvent,
+  handleSet,
+  projectCatalogSummary,
+  registerSettingsIpc,
+  type SettingsIpcDeps,
+} from "./settings-ipc.js";
 import { TabHostManager } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc } from "./tab-ipc.js";
@@ -871,6 +878,25 @@ void app.whenReady().then(async () => {
         return undefined;
       }
       return getAccessTokenFor(connection.id, connection.providerId);
+    },
+    // TASK.45 W11: a core host's real request outcome for its pinned connection.
+    // `settingsIpcDeps` is declared further below in this SAME function scope —
+    // this callback only ever fires long after boot() has finished (the next
+    // agent_event/finish on a live tab), by which point it is long since
+    // assigned (same forward-reference precedent as `connectionInUse` above
+    // closing over `manager`). Env-override (`ANYCODE_API_KEY` in the boot
+    // snapshot) means the pinned connection's OWN credential is not what
+    // actually ran — its saved plaquette must not be painted from a request
+    // that used a different, ephemeral key (cut §W11 env-override rule).
+    onProviderHealthEvent: (connectionId, event) => {
+      if (shouldSkipConnectionHealthBinding(bootEnv)) {
+        return;
+      }
+      const healthEvent =
+        event.kind === "success" ? ({ kind: "success" } as const) : { kind: "failure" as const, code: event.code ?? "unknown" };
+      void applyConnectionHealthEvent(settingsIpcDeps, connectionId, healthEvent).catch((error) => {
+        console.error(`[main] failed to record connection health`, error);
+      });
     },
   });
 

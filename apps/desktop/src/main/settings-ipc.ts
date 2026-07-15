@@ -51,6 +51,7 @@ import type {
   OAuthStartResult,
   PermissionRuleAddRequest,
   ProviderConnection,
+  ProviderHealthStatus,
   ProviderSettingsV2,
   ProviderTransportId,
   SecretKey,
@@ -117,7 +118,20 @@ export interface SettingsIpcDeps {
    * sessions to protect (unit fixtures) so delete behaves as before.
    */
   connectionInUse?: (connectionId: string) => boolean;
+  /**
+   * TASK.45 W11: an optional free provider-specific probe for `connection-check`.
+   * `handleConnectionCheck` calls this AT MOST once per invocation and NEVER
+   * falls back to a billable generation request. Absent = the W9 scaffold
+   * behaviour — `connection-check` validates the id and returns the current
+   * snapshot untouched (byte-compatible; no network call, no health write).
+   */
+  probeConnection?: (connection: ProviderConnection, credential: string) => Promise<ConnectionProbeOutcome>;
+  /** Injectable ISO-timestamp clock for `lastHealth.at` (tests only; defaults to `new Date().toISOString()`). */
+  now?: () => string;
 }
+
+/** Outcome of an explicit `connection-check` probe (TASK.45 W11). */
+export type ConnectionProbeOutcome = { ok: true } | { ok: false; code: string };
 
 /** A fresh opaque connection id for a connection minted by main (`conn-<uuid>`). */
 function defaultConnectionId(): string {
@@ -778,7 +792,22 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
       }
       return { ok: false, reason: result.reason };
     }
-    const snapshot = await snapshotFrom(deps, updatedSettings, false);
+    // TASK.45 W11: a stored/replaced credential has not yet been confirmed by a
+    // real request or explicit check — reset health to `unchecked` (never leave
+    // a stale auth_invalid/etc. from a NOW-superseded key).
+    let finalSettings = updatedSettings;
+    const targetConnMatch = /^provider\.connection\.([^.]+)\./.exec(targetKey);
+    if (targetConnMatch?.[1] !== undefined) {
+      const withHealth = withConnectionHealth(updatedSettings, targetConnMatch[1], {
+        status: "unchecked",
+        at: (deps.now ?? defaultNowIso)(),
+      });
+      if (withHealth !== undefined) {
+        finalSettings = withHealth;
+        await saveSettings(deps.settingsPath, finalSettings);
+      }
+    }
+    const snapshot = await snapshotFrom(deps, finalSettings, false);
     await emitMutation(deps, snapshot);
     return { ok: true, snapshot };
   });
@@ -806,10 +835,25 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
     const { targetKey } = translateSecretKey(key, loaded.settings, deps.genConnectionId ?? defaultConnectionId, {
       create: false,
     });
+    let finalSettings = loaded.settings;
     if (targetKey !== undefined) {
       await deps.vault.clearSecret(targetKey);
+      // TASK.45 W11: a cleared credential resets health to `unchecked` too (cut
+      // §W11: "replace/clear key -> unchecked") — never leave a stale
+      // auth_invalid/etc. pinned to a now-empty credential slot.
+      const targetConnMatch = /^provider\.connection\.([^.]+)\./.exec(targetKey);
+      if (targetConnMatch?.[1] !== undefined) {
+        const withHealth = withConnectionHealth(loaded.settings, targetConnMatch[1], {
+          status: "unchecked",
+          at: (deps.now ?? defaultNowIso)(),
+        });
+        if (withHealth !== undefined) {
+          finalSettings = withHealth;
+          await saveSettings(deps.settingsPath, finalSettings);
+        }
+      }
     }
-    const snapshot = await snapshotFrom(deps, loaded.settings, false);
+    const snapshot = await snapshotFrom(deps, finalSettings, false);
     await emitMutation(deps, snapshot);
     return { ok: true, snapshot };
   });
@@ -913,6 +957,102 @@ export async function handleOAuthCancel(deps: SettingsIpcDeps, raw: unknown): Pr
   deps.oauth?.cancel(parsed.data.providerId);
 }
 
+// ── connection health (TASK.45 W11, advisory — never a readiness source) ──
+
+/** `lastHealth.at` clock; overridable via `deps.now` (tests only). */
+function defaultNowIso(): string {
+  return new Date().toISOString();
+}
+
+/**
+ * Maps core's `ProviderFailureCode` (provider/failure.ts, relayed verbatim over
+ * the host<->main wire as a plain string — see shared/provider-health.ts) onto
+ * TASK.45's `ProviderHealthStatus` table. `quota` collapses into `rate_limited`
+ * (both a 429-class limit; neither marks the credential itself invalid).
+ * `unknown` (an unclassified failure, e.g. a 400 "bad model" request) maps to
+ * `misconfigured` — DELIBERATELY never `auth_invalid`: a bad model/schema
+ * request must never paint a working credential red. An unrecognised future
+ * code (forward-compat with a new core failure bucket) defaults to
+ * `unreachable` rather than either "credential is bad" bucket.
+ */
+const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = {
+  auth: "auth_invalid",
+  forbidden: "forbidden",
+  rate_limited: "rate_limited",
+  quota: "rate_limited",
+  connect_timeout: "unreachable",
+  network: "unreachable",
+  server: "unreachable",
+  unknown: "misconfigured",
+};
+
+/** Pure classification (TASK.45 W11 gate: 401/429/timeout/bad-model all discriminate). */
+export function mapProviderFailureCodeToHealthStatus(code: string): ProviderHealthStatus {
+  return FAILURE_CODE_TO_HEALTH[code] ?? "unreachable";
+}
+
+/**
+ * Pure merge of `lastHealth` onto one connection; `undefined` when the
+ * connection no longer exists (race-safe no-op — deleted mid-flight). Callers
+ * that already hold the settings lock use this directly (no re-entrant lock);
+ * `applyConnectionHealthEvent` below is the ONE lock-acquiring entry point for
+ * callers outside a handler's own critical section.
+ */
+function withConnectionHealth(
+  settings: AnycodeSettings,
+  connectionId: string,
+  lastHealth: { status: ProviderHealthStatus; at: string; safeCode?: string },
+): AnycodeSettings | undefined {
+  if (!settings.provider.connections.some((connection) => connection.id === connectionId)) {
+    return undefined;
+  }
+  return {
+    ...settings,
+    provider: {
+      ...settings.provider,
+      connections: settings.provider.connections.map((connection) =>
+        connection.id === connectionId ? { ...connection, lastHealth } : connection,
+      ),
+    },
+  };
+}
+
+/**
+ * Persists an advisory health signal for one connection (TASK.45 W11): a
+ * runtime request outcome reported by a pinned core host (main/tabs.ts ->
+ * main/index.ts), or a `connection-check` probe result. NEVER fires
+ * `onMutation` — health is advisory (task doc §3: "not a runtime-readiness
+ * source") and must not trigger the readiness/host-env/auto-tab side effects a
+ * real settings mutation does. Read-only settings or a since-deleted connection
+ * are silent no-ops (race-safe). Acquires the settings lock itself — callers
+ * that already hold it (handleSetSecret/handleClearSecret/handleConnectionUpdate)
+ * must use `withConnectionHealth` directly instead, or this would deadlock.
+ */
+export async function applyConnectionHealthEvent(
+  deps: SettingsIpcDeps,
+  connectionId: string,
+  event: { kind: "success" } | { kind: "failure"; code: string },
+): Promise<void> {
+  const status: ProviderHealthStatus =
+    event.kind === "success" ? "ready" : mapProviderFailureCodeToHealthStatus(event.code);
+  const lastHealth = {
+    status,
+    at: (deps.now ?? defaultNowIso)(),
+    ...(event.kind === "failure" ? { safeCode: event.code } : {}),
+  };
+  await withSettingsLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return;
+    }
+    const updated = withConnectionHealth(loaded.settings, connectionId, lastHealth);
+    if (updated === undefined) {
+      return;
+    }
+    await saveSettings(deps.settingsPath, updated);
+  });
+}
+
 // ── connection CRUD handlers (TASK.45 W9, main-authoritative) ──
 
 /** Persists a new provider settings block, then returns a fresh snapshot + fires onMutation. */
@@ -967,7 +1107,12 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
   });
 }
 
-/** connection-update: patch a connection's metadata (never its credential). `not_found` for an unknown id. */
+/**
+ * connection-update: patch a connection's metadata (never its credential).
+ * `not_found` for an unknown id. TASK.45 W11: a real edit to model/transport/
+ * baseUrl resets `lastHealth` to `unchecked` (a label-only edit or a resend of
+ * the SAME value leaves it untouched).
+ */
 export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = connectionUpdateSchema.safeParse(raw);
   if (!parsed.success) {
@@ -983,6 +1128,14 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (existing === undefined) {
       return { ok: false, reason: "not_found" };
     }
+    // TASK.45 §3 (Фаза 3): editing a significant ENDPOINT field invalidates the
+    // last observed health — a health status confirmed against the OLD
+    // model/transport/baseUrl must not linger under the new one. A label-only
+    // edit (or a no-op resend of the same value) leaves health untouched.
+    const endpointChanged =
+      (req.model !== undefined && req.model !== existing.model) ||
+      (req.transport !== undefined && req.transport !== existing.transport) ||
+      (req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl);
     const updatedConnection: ProviderConnection = {
       ...existing,
       ...(req.label !== undefined ? { label: req.label } : {}),
@@ -990,6 +1143,9 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       ...(req.transport !== undefined ? { transport: req.transport } : {}),
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+      ...(endpointChanged
+        ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
+        : {}),
     };
     const provider: ProviderSettingsV2 = {
       ...loaded.settings.provider,
@@ -1071,10 +1227,15 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
 }
 
 /**
- * connection-check: scaffold (TASK.45 W9). Health classification + the free
- * provider probe are W11 — W9 only validates the id exists and returns the
- * current snapshot (NEVER a hidden billable request), so the renderer contract
- * exists end-to-end.
+ * connection-check (TASK.45 W11 wires the probe over the W9 scaffold): runs
+ * `deps.probeConnection` AT MOST once, NEVER as a fallback billable request —
+ * absent (the default) this behaves byte-identically to the W9 scaffold (id
+ * validated, current snapshot returned, no network call at all). A connection
+ * with no resolvable credential is left untouched (nothing to probe with —
+ * same as "needs_credential", which W11 never writes itself). The probe result
+ * is classified through the SAME `mapProviderFailureCodeToHealthStatus` table
+ * every runtime event uses (`applyConnectionHealthEvent`), never a bespoke
+ * check-only classifier.
  */
 export async function handleConnectionCheck(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = connectionIdSchema.safeParse(raw);
@@ -1082,10 +1243,25 @@ export async function handleConnectionCheck(deps: SettingsIpcDeps, raw: unknown)
     return { ok: false, reason: "invalid" };
   }
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  if (!loaded.settings.provider.connections.some((connection) => connection.id === parsed.data.id)) {
+  const connection = loaded.settings.provider.connections.find((c) => c.id === parsed.data.id);
+  if (connection === undefined) {
     return { ok: false, reason: "not_found" };
   }
-  const snapshot = await snapshotFrom(deps, loaded.settings, loaded.readOnly);
+  // A read-only settings.json (newer-than-this-binary) can never persist a probe
+  // result — skip the network call entirely rather than fire it and discard it.
+  if (!loaded.readOnly && deps.probeConnection !== undefined) {
+    const kind = connection.providerId === "" ? "api_key" : deps.authKindFor?.(connection.providerId) ?? "api_key";
+    const credential = await deps.vault.getSecretValue(connectionSecretKey(connection.id, kind));
+    if (credential !== undefined && credential !== "") {
+      const outcome = await deps.probeConnection(connection, credential);
+      await applyConnectionHealthEvent(
+        deps,
+        connection.id,
+        outcome.ok ? { kind: "success" } : { kind: "failure", code: outcome.code },
+      );
+    }
+  }
+  const snapshot = await buildSettingsSnapshot(deps);
   return { ok: true, snapshot };
 }
 
