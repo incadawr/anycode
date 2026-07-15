@@ -322,6 +322,35 @@ async function saveScreenshot(ctx, step, name) {
   }
 }
 
+/**
+ * Polls `GET /settings/provider` until `predicate` matches. Needed because
+ * the facade's own `waitUntil` guards (settingsProviderDrawerSaveKey etc.)
+ * only wait for the Zustand STORE reference to change, not for React to have
+ * re-rendered the DOM this script's probes read from — a real, if usually
+ * sub-frame, gap between "store updated" and "DOM reflects it". A single
+ * immediate read right after a mutating action can race that gap; polling a
+ * few hundred ms is the same settle discipline `saveScreenshot`'s 400ms
+ * pre-sleep already uses for the analogous store-vs-compositor gap.
+ */
+async function pollProviderState(ctx, step, predicate, timeoutMs = 5_000) {
+  const result = await pollUntil(timeoutMs, 150, async () => {
+    const resp = await api(ctx, "GET", "/settings/provider");
+    return resp.status === 200 && predicate(resp.body) ? resp.body : undefined;
+  });
+  assert(step, result !== null, `GET /settings/provider predicate never matched within ${timeoutMs}ms`);
+  return result;
+}
+
+/** Same rationale as `pollProviderState`, for the generic `/focus` probe (a mount-time `useEffect` autofocus is a passive effect, scheduled after commit — not guaranteed to have run yet the instant a prior `waitUntil` resolves). */
+async function pollFocus(ctx, step, predicate, timeoutMs = 5_000) {
+  const result = await pollUntil(timeoutMs, 150, async () => {
+    const resp = await api(ctx, "GET", "/focus");
+    return resp.status === 200 && predicate(resp.body) ? resp.body : undefined;
+  });
+  assert(step, result !== null, `GET /focus predicate never matched within ${timeoutMs}ms`);
+  return result;
+}
+
 function readJsonDisk(step, path, label) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -496,7 +525,7 @@ async function step2WelcomeEmptyState(ctx) {
   assert(2, state.drawer.stage === "template", `expected stage="template" before any connection exists, got ${state.drawer.stage}`);
   assert(2, state.drawer.templateLocked === false, "expected the Provider select unlocked pre-creation");
 
-  const focus = await apiOk(ctx, 2, "GET", "/focus");
+  const focus = await pollFocus(ctx, 2, (f) => f.present === true && f.tagName === "select");
   assert(
     2,
     focus.present === true && focus.tagName === "select",
@@ -518,7 +547,7 @@ async function step3CreateConnectionA(ctx) {
   const submitResult = await apiOk(ctx, 3, "POST", "/settings/provider/drawer/submit", {});
   assert(3, submitResult.ok === true, `drawer/submit ("Create connection") rejected: ${JSON.stringify(submitResult)}`);
 
-  const afterCreate = await apiOk(ctx, 3, "GET", "/settings/provider");
+  const afterCreate = await pollProviderState(ctx, 3, (s) => s.drawer.stage === "credential");
   assert(3, afterCreate.drawer.stage === "credential", `expected stage to flip to "credential" right after connection-create, got ${afterCreate.drawer.stage}`);
   assert(3, afterCreate.drawer.templateLocked === true, "expected the Provider select LOCKED once the connection exists (provider identity is fixed at creation)");
   assert(3, afterCreate.drawer.providerId === "anthropic", `expected providerId="anthropic" to survive creation, got ${afterCreate.drawer.providerId}`);
@@ -545,7 +574,7 @@ async function step4SaveKeyA(ctx) {
   const saveKey = await apiOk(ctx, 4, "POST", "/settings/provider/drawer/save-key", {});
   assert(4, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
 
-  const afterSave = await apiOk(ctx, 4, "GET", "/settings/provider");
+  const afterSave = await pollProviderState(ctx, 4, (s) => s.drawer.apiKeyEntered === false && s.drawer.credentialStatusText !== null);
   assert(
     4,
     afterSave.drawer.apiKeyEntered === false,
@@ -592,7 +621,7 @@ async function step6GridShowsConnectionA(ctx) {
   const paneResult = await apiOk(ctx, 6, "POST", "/settings/pane", { paneId: "provider" });
   assert(6, paneResult.ok === true, `settings/pane provider rejected: ${JSON.stringify(paneResult)}`);
 
-  const state = await apiOk(ctx, 6, "GET", "/settings/provider");
+  const state = await pollProviderState(ctx, 6, (s) => s.mounted === true && s.rows.length === 1);
   assert(6, state.mounted === true, "expected the Settings-dialog grid mounted once the provider pane is selected");
   assert(6, state.rows.length === 1, `expected exactly 1 tile in the grid, got ${state.rows.length}: ${JSON.stringify(state.rows)}`);
   const row = state.rows[0];
@@ -611,7 +640,7 @@ async function step7AddConnectionB(ctx) {
   const addResult = await apiOk(ctx, 7, "POST", "/settings/provider/add", {});
   assert(7, addResult.ok === true, `provider/add rejected: ${JSON.stringify(addResult)}`);
 
-  const focus = await apiOk(ctx, 7, "GET", "/focus");
+  const focus = await pollFocus(ctx, 7, (f) => f.present === true && f.tagName === "input");
   assert(
     7,
     focus.present === true && focus.tagName === "input",
@@ -627,7 +656,7 @@ async function step7AddConnectionB(ctx) {
   const submitResult = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/submit", {});
   assert(7, submitResult.ok === true, `drawer/submit rejected: ${JSON.stringify(submitResult)}`);
 
-  const afterCreate = await apiOk(ctx, 7, "GET", "/settings/provider");
+  const afterCreate = await pollProviderState(ctx, 7, (s) => s.drawer.stage === "credential");
   assert(7, afterCreate.drawer.stage === "credential", `expected stage="credential" after creating connection B, got ${afterCreate.drawer.stage}`);
   const setKey = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/set", { apiKey: "sk-welcome-smoke-key-2" });
   assert(7, setKey.ok === true, `drawer/set (apiKey) rejected: ${JSON.stringify(setKey)}`);
@@ -648,7 +677,7 @@ async function step7AddConnectionB(ctx) {
 }
 
 async function step8GridShowsTwoSameProviderConnections(ctx) {
-  const state = await apiOk(ctx, 8, "GET", "/settings/provider");
+  const state = await pollProviderState(ctx, 8, (s) => s.rows.length === 2);
   assert(8, state.rows.length === 2, `expected 2 tiles, got ${state.rows.length}`);
   const rowA = state.rows.find((r) => r.connectionId === ctx.connAId);
   const rowB = state.rows.find((r) => r.connectionId === ctx.connBId);
@@ -671,7 +700,7 @@ async function step9EditConnectionBNoOp(ctx) {
   const menuResult = await apiOk(ctx, 9, "POST", "/settings/provider/menu", { connectionId: ctx.connBId, action: "edit" });
   assert(9, menuResult.ok === true, `menu edit rejected: ${JSON.stringify(menuResult)}`);
 
-  const state = await apiOk(ctx, 9, "GET", "/settings/provider");
+  const state = await pollProviderState(ctx, 9, (s) => s.drawer.open === true);
   assert(9, state.drawer.open === true && state.drawer.embedded === false, `expected the Settings-dialog (non-embedded) drawer open for edit, got ${JSON.stringify(state.drawer)}`);
   assert(9, state.drawer.stage === "credential", `expected an existing connection's edit drawer to open straight into "credential" stage, got ${state.drawer.stage}`);
   assert(9, state.drawer.templateLocked === true, "expected the Provider select locked while editing an existing connection");
@@ -729,7 +758,7 @@ async function step10CreateAndDeleteThrowaway(ctx) {
   const deleteResult = await apiAction(ctx, 10, "/settings/provider/menu", { connectionId: throwaway.id, action: "delete" });
   assert(10, deleteResult.ok === true, `menu delete rejected: ${JSON.stringify(deleteResult)}`);
 
-  const state = await apiOk(ctx, 10, "GET", "/settings/provider");
+  const state = await pollProviderState(ctx, 10, (s) => s.rows.length === 2);
   assert(10, state.rows.length === 2, `expected 2 tiles after deleting the throwaway connection, got ${state.rows.length}: ${JSON.stringify(state.rows)}`);
   assert(10, state.rows.some((r) => r.connectionId === ctx.connAId), "connection A must survive an unrelated connection's delete");
   assert(10, state.rows.some((r) => r.connectionId === ctx.connBId), "connection B must survive an unrelated connection's delete");
@@ -806,7 +835,7 @@ async function step12CreateCustomConnection(ctx) {
   assert(12, connC.baseUrl === `http://127.0.0.1:${ctx.refusedPort}`, `on-disk custom connection baseUrl mismatch: ${connC.baseUrl}`);
   ctx.connCId = connC.id;
 
-  const state = await apiOk(ctx, 12, "GET", "/settings/provider");
+  const state = await pollProviderState(ctx, 12, (s) => s.rows.length === 3);
   assert(12, state.rows.length === 3, `expected 3 tiles after the custom connection, got ${state.rows.length}`);
 
   pass(12, `connection C created (${connC.id}, "custom" template, Base URL field correctly shown/settable, points at reserved connect-refused port ${ctx.refusedPort})`);
@@ -820,7 +849,7 @@ async function step13SelectConnectionCIndependence(ctx) {
   const tileResult = await apiOk(ctx, 13, "POST", "/settings/provider/tile", { connectionId: ctx.connCId });
   assert(13, tileResult.ok === true, `tile select rejected: ${JSON.stringify(tileResult)}`);
 
-  const after = await apiOk(ctx, 13, "GET", "/settings/provider");
+  const after = await pollProviderState(ctx, 13, (s) => s.rows.find((r) => r.connectionId === ctx.connCId)?.selected === true);
   const rowC = after.rows.find((r) => r.connectionId === ctx.connCId);
   const rowAAfter = after.rows.find((r) => r.connectionId === ctx.connAId);
   const rowBAfter = after.rows.find((r) => r.connectionId === ctx.connBId);
@@ -913,7 +942,7 @@ async function step18EnvBannerZeroConnections(ctx) {
   const paneResult = await apiOk(ctx, 18, "POST", "/settings/pane", { paneId: "provider" });
   assert(18, paneResult.ok === true, `settings/pane provider rejected: ${JSON.stringify(paneResult)}`);
 
-  const state = await apiOk(ctx, 18, "GET", "/settings/provider");
+  const state = await pollProviderState(ctx, 18, (s) => s.mounted === true);
   assert(18, state.mounted === true, "expected the grid mounted (Settings dialog open, provider pane selected)");
   assert(18, state.rows.length === 0, `expected ZERO stored connections on this fresh profile, got ${state.rows.length}`);
   assert(
@@ -944,7 +973,7 @@ async function step19EnvBannerIndependentOfConnectionHealth(ctx) {
   const closeResult = await apiOk(ctx, 19, "POST", "/settings/provider/drawer/close", {});
   assert(19, closeResult.ok === true, `drawer/close rejected: ${JSON.stringify(closeResult)}`);
 
-  const state = await apiOk(ctx, 19, "GET", "/settings/provider");
+  const state = await pollProviderState(ctx, 19, (s) => s.rows.length === 1);
   assert(19, state.rows.length === 1, `expected exactly 1 stored connection now, got ${state.rows.length}`);
   const row = state.rows[0];
   assert(
