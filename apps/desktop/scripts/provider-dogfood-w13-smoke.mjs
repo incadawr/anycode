@@ -998,12 +998,16 @@ async function runMainProfile(mocks) {
 
     // ── scenario 9: key rotation resets health to Unchecked, next real request repaints it ──
     await runScenario(9, "key rotation resets health to Unchecked; next real request repaints it", async () => {
+      // Scenario 8b's own ending explicitly /settings/close's the dialog
+      // (after its catalog-default turn) — connectionRow's grid read needs
+      // the pane mounted (settingsProviderPaneState reads rows:[] while
+      // unmounted), so this scenario cannot inherit 8b's dialog state.
+      await apiActionRetry(ctx, "9", "/settings/open", {});
+      await apiAction(ctx, "9", "/settings/pane", { paneId: "provider" });
       const rowBefore = await connectionRow(ctx, "9", ids.I);
       assert("9", rowBefore.statusText === "Ready" && rowBefore.statusTone === "ok", `expected connection I to read Ready/ok from scenario 8b's successful turn, got ${rowBefore.statusText}/${rowBefore.statusTone}`);
       await saveScreenshot(ctx, "9-before-rotation");
 
-      await apiActionRetry(ctx, "9", "/settings/open", {});
-      await apiAction(ctx, "9", "/settings/pane", { paneId: "provider" });
       await apiAction(ctx, "9", "/settings/provider/menu", { connectionId: ids.I, action: "replace_key" });
       await pollProviderState(ctx, "9", (s) => s.drawer.open === true);
       const setKey = await apiOk(ctx, "9", "POST", "/settings/provider/drawer/set", { apiKey: "sk-mock-i-2" });
@@ -1033,6 +1037,10 @@ async function runMainProfile(mocks) {
 
     // ── scenario 5: restart persists the last real health reading (last-known) ──
     await runScenario(5, "restart persists the last real health reading (no reset to Unchecked)", async () => {
+      // Scenario 9's own ending explicitly /settings/close's the dialog —
+      // same reason as 9's own fix above, this scenario cannot inherit it.
+      await apiActionRetry(ctx, "5", "/settings/open", {});
+      await apiAction(ctx, "5", "/settings/pane", { paneId: "provider" });
       const rowBefore = await connectionRow(ctx, "5", ids.C);
       assert("5", rowBefore.statusText === "Key invalid" && rowBefore.statusTone === "danger", `expected connection C to still read Key invalid/danger from scenario 2 before restart, got ${rowBefore.statusText}/${rowBefore.statusTone}`);
 
