@@ -451,6 +451,39 @@ describe("resolveBootSession", () => {
       await persistence.close();
     }
   });
+
+  it("pins the fork's connectionId onto a newly created session (TASK.45 W10)", async () => {
+    const persistence = new SqlitePersistenceAdapter(":memory:");
+    try {
+      const result = await resolveBootSession(persistence, {
+        args: { sessionId: "pinned", resume: false },
+        workspace: "/ws",
+        model: "m1",
+        connectionId: "conn-work",
+      });
+      expect(result.sessionMeta.connectionId).toBe("conn-work");
+      expect((await persistence.getSession("pinned"))?.connectionId).toBe("conn-work");
+    } finally {
+      await persistence.close();
+    }
+  });
+
+  it("does not overwrite an existing session's pinned connectionId on resume (TASK.45 W10)", async () => {
+    const persistence = new SqlitePersistenceAdapter(":memory:");
+    try {
+      await persistence.createSession({ id: "s1", workspace: "/ws", model: "m1", mode: "build", connectionId: "conn-original" });
+      const result = await resolveBootSession(persistence, {
+        args: { sessionId: "s1", resume: true },
+        workspace: "/ws",
+        model: "m1",
+        connectionId: "conn-different",
+      });
+      expect(result.sessionMeta.connectionId).toBe("conn-original");
+      expect((await persistence.getSession("s1"))?.connectionId).toBe("conn-original");
+    } finally {
+      await persistence.close();
+    }
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

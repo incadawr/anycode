@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  buildDefaultsPatch,
+  buildConnectionUpdate,
   chainWrite,
   modelDisplayName,
   modelMenuItems,
@@ -129,22 +129,27 @@ describe("shouldPersistOnAck (design §2.4 ack-gating)", () => {
   });
 });
 
-describe("buildDefaultsPatch (design §2.4 persisted snapshot)", () => {
-  it("writes both provider.model and defaults[pid] on a model pick", () => {
-    expect(buildDefaultsPatch("z-ai", true, "glm-4.6", "off")).toEqual({
-      provider: { model: "glm-4.6", defaults: { "z-ai": { model: "glm-4.6", reasoningEffort: "off" } } },
+describe("buildConnectionUpdate (TASK.45 W10 connection-update write)", () => {
+  it("writes id + model + effort on a model pick", () => {
+    expect(buildConnectionUpdate("conn-1", true, "glm-4.6", "off")).toEqual({
+      id: "conn-1",
+      model: "glm-4.6",
+      reasoningEffort: "off",
     });
   });
 
-  it("writes ONLY defaults[pid] on an effort pick (top-level provider.model untouched)", () => {
-    expect(buildDefaultsPatch("z-ai", false, "glm-5.2", "high")).toEqual({
-      provider: { defaults: { "z-ai": { model: "glm-5.2", reasoningEffort: "high" } } },
+  it("writes ONLY id + effort on an effort pick (the model is left untouched)", () => {
+    expect(buildConnectionUpdate("conn-1", false, "glm-5.2", "high")).toEqual({
+      id: "conn-1",
+      reasoningEffort: "high",
     });
   });
 
-  it("keys defaults by the given pid, including \"custom\"", () => {
-    expect(buildDefaultsPatch("custom", true, "some-model", "max")).toEqual({
-      provider: { model: "some-model", defaults: { custom: { model: "some-model", reasoningEffort: "max" } } },
+  it("targets the given connection id verbatim", () => {
+    expect(buildConnectionUpdate("conn-custom", true, "some-model", "max")).toEqual({
+      id: "conn-custom",
+      model: "some-model",
+      reasoningEffort: "max",
     });
   });
 });
@@ -180,57 +185,58 @@ describe("ack-gated persist sequence (design §2.4 clobber-race closure)", () =>
 // pick (not recomputed from the settings snapshot at ack time), and
 // ack-triggered persist writes serialized so fast back-to-back picks land
 // in ack order rather than write-completion order.
-describe("captured-pid persist (defect #1: pid captured at pick time, not ack time)", () => {
-  // Mirrors the shape ModelPill's own pendingPickRef holds post-fix: `pid` is
-  // part of the pending record itself, set once at pick time.
-  interface PendingPickWithPid {
+describe("captured-connectionId persist (defect #1: id captured at pick time, not ack time)", () => {
+  // Mirrors the shape ModelPill's own pendingPickRef holds post-W10: the
+  // connection id is part of the pending record itself, set once at pick time.
+  interface PendingPickWithConn {
     kind: "model" | "effort";
     value: string;
-    pid: string;
+    connectionId?: string;
   }
 
   // Mirrors the exact ack-effect body in ModelPill.tsx: gate on
-  // shouldPersistOnAck as before, but build the patch from `pending.pid` —
-  // the pid captured at pick time — never a pid recomputed "now".
+  // shouldPersistOnAck as before, but build the request from
+  // `pending.connectionId` — the connection captured at pick time — never one
+  // recomputed "now".
   function simulateAckPersist(
-    pending: PendingPickWithPid | null,
+    pending: PendingPickWithConn | null,
     ackKind: "model" | "effort",
     ackValue: string,
     isModelPick: boolean,
     model: string,
-    reasoningEffort: Parameters<typeof buildDefaultsPatch>[3],
+    reasoningEffort: Parameters<typeof buildConnectionUpdate>[3],
   ) {
-    if (pending && shouldPersistOnAck(pending, ackKind, ackValue)) {
-      return buildDefaultsPatch(pending.pid, isModelPick, model, reasoningEffort);
+    if (pending && shouldPersistOnAck(pending, ackKind, ackValue) && pending.connectionId !== undefined) {
+      return buildConnectionUpdate(pending.connectionId, isModelPick, model, reasoningEffort);
     }
     return null;
   }
 
-  it("persists to the pid captured at pick time, even though the provider (and its pid) changed before the ack arrived", () => {
-    // User picked model "glm-4.6" while provider P1 (pid "p1") was active —
-    // "p1" is captured into the pending record right then. Before P1's
-    // model_changed ack lands, the user switches providers in Settings to P2
-    // (whose pid would now be "p2" if re-read from the snapshot).
-    const pending: PendingPickWithPid = { kind: "model", value: "glm-4.6", pid: "p1" };
+  it("persists to the connection captured at pick time, even though the active connection changed before the ack arrived", () => {
+    // User picked model "glm-4.6" while connection "conn-1" was active — it is
+    // captured into the pending record right then. Before its model_changed ack
+    // lands, the user switches the active connection in Settings to "conn-2".
+    const pending: PendingPickWithConn = { kind: "model", value: "glm-4.6", connectionId: "conn-1" };
 
-    const patch = simulateAckPersist(pending, "model", "glm-4.6", true, "glm-4.6", "off");
+    const req = simulateAckPersist(pending, "model", "glm-4.6", true, "glm-4.6", "off");
 
-    expect(patch).toEqual({
-      provider: { model: "glm-4.6", defaults: { p1: { model: "glm-4.6", reasoningEffort: "off" } } },
-    });
-    // The corrupting outcome this defect produced: writing under the NOW-
-    // current pid instead of the pick's own pid.
-    expect(patch?.provider?.defaults).not.toHaveProperty("p2");
+    expect(req).toEqual({ id: "conn-1", model: "glm-4.6", reasoningEffort: "off" });
+    // The corrupting outcome this defect produced: writing to the NOW-active
+    // connection instead of the pick's own.
+    expect(req?.id).not.toBe("conn-2");
   });
 
-  it("does the same for an effort pick against a captured pid", () => {
-    const pending: PendingPickWithPid = { kind: "effort", value: "high", pid: "p1" };
+  it("does the same for an effort pick against a captured connection", () => {
+    const pending: PendingPickWithConn = { kind: "effort", value: "high", connectionId: "conn-1" };
 
-    const patch = simulateAckPersist(pending, "effort", "high", false, "glm-4.6", "high");
+    const req = simulateAckPersist(pending, "effort", "high", false, "glm-4.6", "high");
 
-    expect(patch).toEqual({
-      provider: { defaults: { p1: { model: "glm-4.6", reasoningEffort: "high" } } },
-    });
+    expect(req).toEqual({ id: "conn-1", reasoningEffort: "high" });
+  });
+
+  it("skips the write when no connection was active at pick time (env-override / fresh)", () => {
+    const pending: PendingPickWithConn = { kind: "model", value: "glm-4.6", connectionId: undefined };
+    expect(simulateAckPersist(pending, "model", "glm-4.6", true, "glm-4.6", "off")).toBeNull();
   });
 });
 

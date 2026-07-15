@@ -19,23 +19,24 @@
  * would reject.
  *
  * Persist (§2.4, the owner-pain half): a pick does NOT persist optimistically.
- * The component remembers the pending pick in a ref and only writes
- * `settings.provider.defaults[pid]` once the corresponding store field
- * (`model` / `reasoningEffort`) actually lands the picked value — i.e. once
- * the host has ACKed it via `model_changed` / `reasoning_effort_changed`
- * (store.ts already turns those into the plain field updates this component
- * watches). A busy-rejected pick, a resume's `host_ready`, or an unrelated
- * field update can never match a stale/absent pending pick, so none of them
- * ever persists — closing the clobber race the design calls out. The pending
- * record captures its target `pid` at PICK time (not recomputed from the
- * settings snapshot at ACK time — the active provider can change in between),
- * and every ack-triggered write is chained through `chainWrite` so fast
+ * The component remembers the pending pick in a ref and only writes the
+ * connection's model/effort (TASK.45 W10: a main-authoritative `connection-update`
+ * IPC by the ACTIVE connection id, off the retired v1-patch `defaults[pid]` shim)
+ * once the corresponding store field (`model` / `reasoningEffort`) actually lands
+ * the picked value — i.e. once the host has ACKed it via `model_changed` /
+ * `reasoning_effort_changed` (store.ts already turns those into the plain field
+ * updates this component watches). A busy-rejected pick, a resume's `host_ready`,
+ * or an unrelated field update can never match a stale/absent pending pick, so
+ * none of them ever persists — closing the clobber race the design calls out. The
+ * pending record captures its target connection id at PICK time (not recomputed
+ * from the settings snapshot at ACK time — the active connection can change in
+ * between), and every ack-triggered write is chained through `chainWrite` so fast
  * back-to-back picks persist in ack order rather than write-completion order.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { ReasoningEffort } from "@anycode/core";
-import type { SettingsPatch } from "../../../shared/settings.js";
+import type { ConnectionUpdateRequest } from "../../../shared/settings.js";
 import { activeProviderView } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useSettingsStore } from "../settings-store.js";
@@ -87,12 +88,14 @@ const MODEL_PILL_POPOVER_WIDTH = 240;
 interface PendingPick {
   kind: "model" | "effort";
   value: string;
-  // The defaults key this pick was made against, captured via `resolvePid`
-  // at PICK time (codex P2 defect: recomputing `pid` from the settings
-  // snapshot again at ACK time is wrong — the provider can change in
-  // Settings between the send and the ack, so the ack must persist to the
-  // provider it was actually picked for, never whatever is current now).
-  pid: string;
+  // The connection id this pick was made against, captured at PICK time (codex
+  // P2 defect: recomputing it from the settings snapshot again at ACK time is
+  // wrong — the active connection can change in Settings between the send and
+  // the ack, so the ack must persist to the connection it was actually picked
+  // for, never whatever is current now). Undefined = no active connection at
+  // pick time (env-override / fresh) — the pick still sends to the host, but
+  // there is nothing to persist against, so the ack skips the write.
+  connectionId?: string;
 }
 
 /**
@@ -185,26 +188,23 @@ export function shouldPersistOnAck(
 }
 
 /**
- * The per-provider defaults patch persisted on an acked pick (design §2.4):
- * both fields of the snapshot are written together — a model pick's ack
- * carries the re-resolved effort for the new model, an effort pick's ack
- * carries the still-current model — so `defaults[pid]` is always a
- * complete, honest snapshot of "what this provider is set to right now".
- * `provider.model` (the top-level field the readiness gate and legacy
- * readers use) is ALSO updated, but only on a model pick — an effort-only
- * pick must not touch it. Exported for unit testing.
+ * The connection-update request persisted on an acked pick (TASK.45 W10): the
+ * ACTIVE connection's `reasoningEffort` is always written (the connection is the
+ * source of truth the readiness gate + host-env ladder read, so it doubles as
+ * the former top-level `provider.model`); `model` is written only on a MODEL
+ * pick — an effort-only pick must not retarget the model. `id` is the connection
+ * captured at pick time. Exported for unit testing.
  */
-export function buildDefaultsPatch(
-  pid: string,
+export function buildConnectionUpdate(
+  connectionId: string,
   isModelPick: boolean,
   model: string,
   reasoningEffort: ReasoningEffort,
-): SettingsPatch {
+): ConnectionUpdateRequest {
   return {
-    provider: {
-      ...(isModelPick ? { model } : {}),
-      defaults: { [pid]: { model, reasoningEffort } },
-    },
+    id: connectionId,
+    ...(isModelPick ? { model } : {}),
+    reasoningEffort,
   };
 }
 
@@ -237,10 +237,13 @@ export function ModelPill() {
   const ready = connection === "ready";
 
   const snapshot = useSettingsStore((state) => state.snapshot);
-  const setPatch = useSettingsStore((state) => state.setPatch);
+  const connectionUpdate = useSettingsStore((state) => state.connectionUpdate);
 
   const providerId = snapshot ? activeProviderView(snapshot.settings).id : undefined;
-  const pid = resolvePid(providerId);
+  // TASK.45 W10: the connection the model/effort write targets is the ACTIVE one
+  // (the renderer's default; the tab's own pin never crosses the session wire —
+  // zero-delta invariant). Undefined = no default configured (env-override / fresh).
+  const activeConnectionId = snapshot?.settings.provider.activeConnectionId;
   const catalogModels = snapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
 
   const [open, setOpen] = useState(false);
@@ -374,7 +377,7 @@ export function ModelPill() {
       return;
     }
     if (id !== model) {
-      pendingPickRef.current = { kind: "model", value: id, pid };
+      pendingPickRef.current = { kind: "model", value: id, connectionId: activeConnectionId };
       sendToHost({ type: "set_model", model: id });
     }
     close(true);
@@ -385,7 +388,7 @@ export function ModelPill() {
       return;
     }
     if (effort !== reasoningEffort) {
-      pendingPickRef.current = { kind: "effort", value: effort, pid };
+      pendingPickRef.current = { kind: "effort", value: effort, connectionId: activeConnectionId };
       sendToHost({ type: "set_reasoning_effort", effort });
     }
     close(true);
@@ -400,9 +403,12 @@ export function ModelPill() {
     const pending = pendingPickRef.current;
     if (pending && shouldPersistOnAck(pending, "model", model)) {
       pendingPickRef.current = null;
-      writeChainRef.current = chainWrite(writeChainRef.current, () =>
-        setPatch(buildDefaultsPatch(pending.pid, true, model, reasoningEffort)),
-      );
+      const connectionId = pending.connectionId;
+      if (connectionId !== undefined) {
+        writeChainRef.current = chainWrite(writeChainRef.current, () =>
+          connectionUpdate(buildConnectionUpdate(connectionId, true, model, reasoningEffort)),
+        );
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately
     // keyed on `model` alone: this effect's job is "did `model` just become
@@ -418,9 +424,12 @@ export function ModelPill() {
     const pending = pendingPickRef.current;
     if (pending && shouldPersistOnAck(pending, "effort", reasoningEffort)) {
       pendingPickRef.current = null;
-      writeChainRef.current = chainWrite(writeChainRef.current, () =>
-        setPatch(buildDefaultsPatch(pending.pid, false, model, reasoningEffort)),
-      );
+      const connectionId = pending.connectionId;
+      if (connectionId !== undefined) {
+        writeChainRef.current = chainWrite(writeChainRef.current, () =>
+          connectionUpdate(buildConnectionUpdate(connectionId, false, model, reasoningEffort)),
+        );
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- same discipline
     // as the model-watching effect above, keyed on `reasoningEffort` alone.

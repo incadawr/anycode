@@ -82,9 +82,21 @@ export type CreateTabResult =
   | { ok: true; tabId: string; workspace: string }
   | {
       ok: false;
-      reason: "cancelled" | "max_tabs" | "session_not_found" | "already_open" | "not_ready" | "worktree_unavailable";
+      reason:
+        | "cancelled"
+        | "max_tabs"
+        | "session_not_found"
+        | "already_open"
+        | "not_ready"
+        | "worktree_unavailable"
+        // The session was pinned to a provider connection that has since been
+        // deleted (TASK.45 W10). Resume must NOT silently fall back to the current
+        // default — the renderer offers a replacement instead. `connectionId` is
+        // the missing pin, for the actionable notice.
+        | "connection_missing";
       focusTabId?: string; // already_open -> renderer focuses this tab
       worktreePath?: string; // actionable recovery detail for worktree_unavailable
+      connectionId?: string; // connection_missing -> the deleted pin
     };
 
 /** Result of a close-tab request; main refuses to close the last remaining tab or an id it doesn't know about. */

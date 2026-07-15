@@ -101,6 +101,7 @@ import type {
 } from "../shared/profile-config.js";
 import { TERMINAL_PORT_ENVELOPE_TYPE, type TerminalPortEnvelope } from "../shared/terminal.js";
 import {
+  CONNECTION_UPDATE_CHANNEL,
   OAUTH_CANCEL_CHANNEL,
   OAUTH_START_CHANNEL,
   PERMISSION_RULE_ADD_CHANNEL,
@@ -110,6 +111,7 @@ import {
   SETTINGS_SET_CHANNEL,
 } from "../shared/settings.js";
 import type {
+  ConnectionUpdateRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -273,6 +275,10 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(OAUTH_START_CHANNEL, { providerId }) as Promise<OAuthStartResult>,
     oauthCancel: (providerId: string): Promise<void> =>
       ipcRenderer.invoke(OAUTH_CANCEL_CHANNEL, { providerId }) as Promise<void>,
+    // TASK.45 W10: ModelPill's model/effort write, main-authoritative by connection
+    // id (off the v1-patch shim). Returns a fresh snapshot; never carries a secret.
+    connectionUpdate: (req: ConnectionUpdateRequest): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(CONNECTION_UPDATE_CHANNEL, req) as Promise<SettingsMutationResult>,
   },
   // P7.19/F22 W2 (design/slice-P7.19-cut.md §3/§4): `mcpConfig.*` — five more
   // thin invoke wrappers over the MCP config-management channels (main owns

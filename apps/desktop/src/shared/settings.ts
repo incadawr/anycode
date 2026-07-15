@@ -306,7 +306,14 @@ export interface SettingsSnapshot {
 
 // ── mutating-channel result shape (all mutators return a fresh snapshot) ──
 
-export type SettingsMutationReason = "invalid" | "read_only" | "weak_storage_needs_consent" | "not_found";
+export type SettingsMutationReason =
+  | "invalid"
+  | "read_only"
+  | "weak_storage_needs_consent"
+  | "not_found"
+  // A connection-delete blocked because the connection is pinned to a live
+  // session (TASK.45 W10 delete-guard). The renderer explains it is in use.
+  | "connection_in_use";
 
 /**
  * Response of every mutating channel (settings-set / secret-set / secret-clear /
@@ -448,6 +455,15 @@ export function activeConnection(settings: AnycodeSettings): ProviderConnection 
     return undefined;
   }
   return connections.find((connection) => connection.id === activeConnectionId);
+}
+
+/**
+ * The connection with a given id, or `undefined` when it does not exist (e.g. a
+ * session pinned to a since-deleted connection, TASK.45 W10). Pure/value-only so
+ * both main (runtime resolution + resume matrix) and the renderer can use it.
+ */
+export function connectionById(settings: AnycodeSettings, connectionId: string): ProviderConnection | undefined {
+  return settings.provider.connections.find((connection) => connection.id === connectionId);
 }
 
 /**

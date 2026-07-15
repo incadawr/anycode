@@ -19,6 +19,7 @@ import type {
   WorkspacePickResult,
 } from "../../shared/tabs";
 import type {
+  ConnectionUpdateRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -132,6 +133,9 @@ declare global {
         // ever returns — oauthStart resolves with a fresh snapshot on success.
         oauthStart(providerId: string): Promise<OAuthStartResult>;
         oauthCancel(providerId: string): Promise<void>;
+        // TASK.45 W10: main-authoritative connection metadata update (ModelPill's
+        // model/effort write path, off the v1-patch shim). Never carries a secret.
+        connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config
       // management invoke-API. `get` returns the joined project/user/compat

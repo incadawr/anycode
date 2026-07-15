@@ -24,6 +24,7 @@ import {
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { ENV_CONNECTION_ID } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import {
   ENGINE_PROCESS_REGISTRATION_TYPE,
@@ -114,6 +115,15 @@ export interface TabHost {
   pendingWorktreeCleanup?: WorktreeCleanupIntent;
   /* */
   sessionId: string;
+  /**
+   * The provider connection pinned to this session (TASK.45 W10, core engine
+   * only). Fixed at createTab from the active connection (new) or the session's
+   * stored connectionId (resume), and retained across every respawn — a respawn
+   * never silently follows a default-switch to another account. Absent = a
+   * legacy/unpinned tab (env-override boot, or a pre-W10 resumed session):
+   * the host runs on the current default and no ANYCODE_CONNECTION_ID is stamped.
+   */
+  connectionId?: string;
   /** Engine choice is main-owned and retained across every host respawn. */
   engine: EngineId;
   /**
@@ -239,8 +249,14 @@ export interface TabHostManagerDeps {
 
    * its current host env so a key rotation persisted to the vault is picked up by
    * the next respawn without a manager restart. Defaults to `() => process.env`.
+   *
+   * TASK.45 W10: main resolves the env for a SPECIFIC pinned connection id when
+   * given one (a resumed non-active connection, or a tab whose default has since
+   * changed), falling back to the active-connection env for `undefined`. Called
+   * at every spawn/respawn with `tab.connectionId`, so a mutation-refreshed
+   * per-connection env (fresh key after a replace) is picked up on respawn.
    */
-  env?: () => NodeJS.ProcessEnv;
+  env?: (connectionId?: string) => NodeJS.ProcessEnv;
   /**
 
    * refuses with `not_ready` instead of spawning a keyless host. Absent = always
@@ -263,8 +279,12 @@ export interface TabHostManagerDeps {
    * the host is tab-agnostic). Absent OR resolving `undefined` -> the response
    * carries no `apiKey` and the host falls back to its fork's static env key.
    * Only oauth-mode hosts ever send a request; api_key hosts never do.
+   *
+   * TASK.45 W10: called with the requesting tab's pinned `connectionId` so the
+   * fresh oauth token is minted for THAT connection, not merely the current
+   * active one (a resumed session stays on its own account).
    */
-  resolveCredential?: () => Promise<string | undefined>;
+  resolveCredential?: (connectionId?: string) => Promise<string | undefined>;
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
@@ -298,7 +318,7 @@ export class TabHostManager {
   /* */
   private readonly bindings = new Map<string, string>();
   private readonly limits: BreakerLimits;
-  private readonly env: () => NodeJS.ProcessEnv;
+  private readonly env: (connectionId?: string) => NodeJS.ProcessEnv;
   private readonly isReady: () => boolean;
   private readonly isEngineReady: (engine: EngineId) => boolean;
   private readonly now: () => number;
@@ -363,6 +383,22 @@ export class TabHostManager {
   }
 
   /**
+   * The set of provider connection ids pinned to a LIVE session (TASK.45 W10).
+   * Main reads it to (a) keep each pinned connection's fork-env fresh across a
+   * settings mutation, and (b) refuse deleting a connection an open session still
+   * depends on (delete-guard). Excludes legacy/unpinned tabs (no connectionId).
+   */
+  pinnedConnectionIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const tab of this.tabs.values()) {
+      if (tab.connectionId !== undefined) {
+        ids.add(tab.connectionId);
+      }
+    }
+    return ids;
+  }
+
+  /**
    * Creates a tab, binds its session, and spawns the first host. Enforces the
    * session->tab binding (already_open) and MAX_TABS. Does NOT deliver the port
    * — the caller does that once (createTab flow) after the renderer exists.
@@ -377,6 +413,8 @@ export class TabHostManager {
     /** Draft engine model/preset ids (TASK.39). Opaque here; the host validates them. */
     engineModel?: string;
     enginePreset?: string;
+    /** Pinned provider connection (TASK.45 W10, core only); stamped into the fork env + persisted by the host. */
+    connectionId?: string;
   }): CreateTabResult {
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
@@ -402,6 +440,7 @@ export class TabHostManager {
       projectRoot,
       ...(worktree !== undefined ? { worktree } : {}),
       sessionId: params.sessionId,
+      ...(params.connectionId !== undefined ? { connectionId: params.connectionId } : {}),
       engine,
       engineModel: argvId(params.engineModel),
       enginePreset: argvId(params.enginePreset),
@@ -442,7 +481,12 @@ export class TabHostManager {
     const child = this.deps.fork(this.deps.hostEntry, args, {
       cwd: tab.workspace,
       env: {
-        ...this.env(),
+        // TASK.45 W10: base env resolved for THIS tab's pinned connection (main
+        // keeps a per-connection env fresh across mutations); ANYCODE_CONNECTION_ID
+        // is stamped per-fork from `tab.connectionId` (never baked into the shared
+        // base env — a legacy/unpinned tab must not inherit another tab's pin).
+        ...this.env(tab.connectionId),
+        ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
         ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}),
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
       },
@@ -493,7 +537,8 @@ export class TabHostManager {
     const requestId = data.requestId;
     let apiKey: string | undefined;
     try {
-      apiKey = this.deps.resolveCredential !== undefined ? await this.deps.resolveCredential() : undefined;
+      apiKey =
+        this.deps.resolveCredential !== undefined ? await this.deps.resolveCredential(tab.connectionId) : undefined;
     } catch (error) {
       this.logger.warn(`[main] credential resolution failed`, error);
       apiKey = undefined;

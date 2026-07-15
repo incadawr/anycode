@@ -46,7 +46,7 @@ import {
 import type { FileIoLogger } from "../settings/files.js";
 import { defaultSecretsPath, defaultSettingsPath, loadSettings } from "../settings/files.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
-import { activeConnection, activeProviderView } from "../shared/settings.js";
+import { activeConnection, activeProviderView, connectionById } from "../shared/settings.js";
 import {
   applySubagentsHomeOverride,
   buildHostEnv,
@@ -261,6 +261,16 @@ let codexReady = false;
  * up by the next respawn.
  */
 let currentHostEnv: NodeJS.ProcessEnv = {};
+/**
+ * Per-pinned-connection host env (TASK.45 W10). A tab pinned to a connection that
+ * is NOT the current active one (a resumed non-active connection, or one whose
+ * default has since changed) forks with the env resolved for ITS connection, so
+ * a default-switch never retargets a live session's account. Rebuilt on every
+ * `refreshProviderState` for the connections the manager reports as live-pinned,
+ * so a key-replace on a pinned connection is picked up on its next respawn. A
+ * pin equal to the active connection resolves to `currentHostEnv` (always fresh).
+ */
+let hostEnvByConnection = new Map<string, NodeJS.ProcessEnv>();
 /**
  * A `--resume`/ANYCODE_RESUME id parked while unconfigured: consumed by the
  * first explicit initial-tab launch (ready boot or the deferred flow).
@@ -514,14 +524,9 @@ function selectedTransportInfo(current: AnycodeSettings): {
   return { authOptional, resolvedTransport, supportedTransports: entry.supportedTransports };
 }
 
-/**
- * Recomputes the host fork env + readiness from the current settings/vault
-
-
- * scrub never changes the outcome.
- */
-async function refreshProviderState(): Promise<void> {
-  const current: AnycodeSettings =
+/** Current settings, or the empty v2 default (pre-load / fresh install). */
+function currentSettings(): AnycodeSettings {
+  return (
     settings ?? {
       version: 2,
       provider: { connections: [] },
@@ -529,12 +534,27 @@ async function refreshProviderState(): Promise<void> {
       permissions: { alwaysAllow: [] },
       ui: { theme: "system" },
       security: { allowWeakSecretStorage: false },
-    };
-  // Catalog resolution (slice 2.5 + TASK.45 v2): main resolves the ACTIVE
-  // connection's baseUrl/model/credential; buildHostEnv stays core-free via the
-  // injected fns. No active/custom/bare connection -> resolveProviderSelection
-  // yields undefined -> buildHostEnv takes the active-connection legacy branch,
-  // whose credential is `resolveLegacyCredential`.
+    }
+  );
+}
+
+/**
+ * A copy of `current` with the active connection overridden to `connectionId`
+ * (TASK.45 W10): routes every existing active-connection resolver
+ * (resolveProviderSelection / activeCredential / activeProviderView) at the
+ * PINNED connection without duplicating any of that logic. Used to build a fork
+ * env for a session pinned to a non-active connection (resume / post-switch).
+ */
+function settingsPinnedTo(current: AnycodeSettings, connectionId: string): AnycodeSettings {
+  return { ...current, provider: { ...current.provider, activeConnectionId: connectionId } };
+}
+
+/**
+ * Builds the host fork env for a given settings view (its active connection).
+ * Shared by the active-connection env (`currentHostEnv`) and every pinned
+ * connection env — same core-free resolution path, just a different view.
+ */
+async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.ProcessEnv> {
   const resolveSelection = (): Promise<ResolvedProviderSelection | undefined> =>
     resolveProviderSelection({
       settings: current,
@@ -542,14 +562,27 @@ async function refreshProviderState(): Promise<void> {
       getApiKey: (connectionId) => getSecret(connectionSecretKey(connectionId, "api_key")),
       getAccessToken: getAccessTokenFor,
     });
-  currentHostEnv = await buildHostEnv({
+  const env = await buildHostEnv({
     bootEnv,
     settings: current,
     getSecret,
     resolveSelection,
     resolveActiveCredential: resolveActiveCredential(current),
   });
-  applySubagentsHomeOverride(currentHostEnv, resolveSubagentsHome(bootEnv, app.isPackaged));
+  applySubagentsHomeOverride(env, resolveSubagentsHome(bootEnv, app.isPackaged));
+  return env;
+}
+
+/**
+ * Recomputes the host fork env + readiness from the current settings/vault so a
+ * scrub never changes the outcome. Also rebuilds the per-pinned-connection env
+ * cache (TASK.45 W10) for every connection a live tab is pinned to that is NOT
+ * the active one, so a resumed/pinned session keeps its own account and a
+ * key-replace on that connection is honoured on its next respawn.
+ */
+async function refreshProviderState(): Promise<void> {
+  const current = currentSettings();
+  currentHostEnv = await buildHostEnvFor(current);
   const transportInfo = selectedTransportInfo(current);
   const credential = activeCredential(current);
   providerReady = await computeProviderReady({
@@ -561,6 +594,66 @@ async function refreshProviderState(): Promise<void> {
     resolvedTransport: transportInfo.resolvedTransport,
     supportedTransports: transportInfo.supportedTransports,
   });
+
+  const activeId = current.provider.activeConnectionId;
+  const next = new Map<string, NodeJS.ProcessEnv>();
+  for (const id of manager?.pinnedConnectionIds() ?? new Set<string>()) {
+    // A pin equal to the active connection uses `currentHostEnv`; a deleted pin
+    // (blocked from deletion while live, but defensive) has no env to build.
+    if (id !== activeId && connectionById(current, id) !== undefined) {
+      next.set(id, await buildHostEnvFor(settingsPinnedTo(current, id)));
+    }
+  }
+  hostEnvByConnection = next;
+}
+
+/**
+ * The fork base env for a tab pinned to `connectionId` (TASK.45 W10). Active pin
+ * (or none) -> the always-fresh `currentHostEnv`; a non-active pin -> its cached
+ * per-connection env, falling back to `currentHostEnv` only if the cache has not
+ * been primed yet (`ensurePinnedEnv` primes it before a resume spawns).
+ */
+function hostEnvForConnection(connectionId?: string): NodeJS.ProcessEnv {
+  if (connectionId === undefined || connectionId === currentSettings().provider.activeConnectionId) {
+    return currentHostEnv;
+  }
+  return hostEnvByConnection.get(connectionId) ?? currentHostEnv;
+}
+
+/**
+ * Primes the per-connection env cache for a pinned connection before its tab
+ * spawns (TASK.45 W10). A no-op for the active connection (uses currentHostEnv)
+ * or a missing one (the caller has already refused `connection_missing`).
+ */
+async function ensurePinnedEnv(connectionId: string): Promise<void> {
+  const current = currentSettings();
+  if (connectionId === current.provider.activeConnectionId) {
+    return;
+  }
+  if (connectionById(current, connectionId) === undefined) {
+    return;
+  }
+  hostEnvByConnection.set(connectionId, await buildHostEnvFor(settingsPinnedTo(current, connectionId)));
+}
+
+/**
+ * Resolves a resumed session's pinned connection (TASK.45 W10 resume matrix):
+ *  - no pin (legacy session) -> ok, no connection id (resume on current default);
+ *  - pin still exists -> prime its env + ok with the id;
+ *  - pin deleted -> refusal carrying the missing id (renderer replacement flow).
+ */
+async function resolveResumePin(meta: {
+  connectionId?: string;
+}): Promise<{ ok: true; connectionId?: string } | { ok: false; connectionId: string }> {
+  const pinnedId = meta.connectionId;
+  if (pinnedId === undefined) {
+    return { ok: true };
+  }
+  if (connectionById(currentSettings(), pinnedId) === undefined) {
+    return { ok: false, connectionId: pinnedId };
+  }
+  await ensurePinnedEnv(pinnedId);
+  return { ok: true, connectionId: pinnedId };
 }
 
 /**
@@ -588,10 +681,23 @@ async function startInitialTab(opts: {
   let workspace: string;
   let sessionId: string;
   let resume: boolean;
+  // TASK.45 W10: the initial tab pins to a connection too. A resume re-pins to
+  // the session's stored connection (a deleted pin is NOT silently switched to
+  // the default — the tab is skipped so the picker surfaces the replacement); a
+  // new session pins to the current active connection.
+  let connectionId: string | undefined;
   if (resumed !== null) {
+    const pin = await resolveResumePin(resumed);
+    if (!pin.ok) {
+      console.warn(
+        `[main] session ${resumed.id} is pinned to a deleted connection (${pin.connectionId}); not auto-resuming — choose a replacement in the session picker`,
+      );
+      return;
+    }
     workspace = resumed.workspace;
     sessionId = resumed.id;
     resume = true;
+    connectionId = pin.connectionId;
     console.log(`[main] resuming session ${resumed.id} in ${resumed.workspace}`);
   } else {
     const resolvedWorkspace = resolveWorkspace({ prompt: opts.promptForWorkspace });
@@ -607,10 +713,16 @@ async function startInitialTab(opts: {
     workspace = resolvedWorkspace;
     sessionId = randomUUID();
     resume = false;
+    connectionId = settings?.provider.activeConnectionId;
     console.log(`[main] workspace: ${workspace}`);
   }
 
-  const created = manager.createTab({ workspace, sessionId, resume });
+  const created = manager.createTab({
+    workspace,
+    sessionId,
+    resume,
+    ...(connectionId !== undefined ? { connectionId } : {}),
+  });
   if (!created.ok) {
     console.error(`[main] failed to create initial tab: ${created.reason}`);
     return;
@@ -729,7 +841,9 @@ void app.whenReady().then(async () => {
     getWindow: () => win,
 
 
-    env: () => currentHostEnv,
+    // TASK.45 W10: fork env resolved for the tab's PINNED connection (session
+    // pinning), not merely the current active one.
+    env: (connectionId) => hostEnvForConnection(connectionId),
     providerReady: () => providerReady,
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
@@ -742,15 +856,17 @@ void app.whenReady().then(async () => {
       ...(engine === "codex" && codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
     }),
     reapEngineProcess: createEngineProcessReaper(),
-    // Credential channel (slice 2.5 §3.3 + TASK.45 v2): an oauth-mode host asks
-    // main for a fresh access token per attempt; resolve it for the ACTIVE oauth
-    // connection (undefined for api_key / legacy -> the host keeps its static env
-    // key). Session-pinning of this to the tab's own connection is W10.
-    resolveCredential: async () => {
+    // Credential channel (slice 2.5 §3.3 + TASK.45 W10): an oauth-mode host asks
+    // main for a fresh access token per attempt; resolve it for the tab's PINNED
+    // connection (its own account across a default-switch), falling back to the
+    // active one for an unpinned/legacy tab. Undefined for api_key / legacy ->
+    // the host keeps its static env key.
+    resolveCredential: async (connectionId) => {
       if (settings === null) {
         return undefined;
       }
-      const connection = activeConnection(settings);
+      const connection =
+        connectionId !== undefined ? connectionById(settings, connectionId) : activeConnection(settings);
       if (connection === undefined || connection.providerId === "" || authKindFor(connection.providerId) !== "oauth") {
         return undefined;
       }
@@ -762,6 +878,10 @@ void app.whenReady().then(async () => {
     manager,
     persistence,
     dialog,
+    // TASK.45 W10: a NEW core session pins to the active connection; a RESUMED
+    // one re-pins to its stored connection (or refuses `connection_missing`).
+    activeConnectionId: () => settings?.provider.activeConnectionId,
+    resolveResumePin,
     validateWorktreeResume: async (meta) => {
       if (meta.worktree === undefined || meta.projectRoot === undefined) return false;
       try {
@@ -815,6 +935,9 @@ void app.whenReady().then(async () => {
     isCustom: isCustomProvider,
     oauth: oauthEngine,
     oauthConfigFor: (id) => oauthConfigFromEntry(findCatalogEntry(id)),
+    // TASK.45 W10 delete-guard: refuse deleting a connection an open session is
+    // pinned to (it still resolves that connection's credential on every respawn).
+    connectionInUse: (connectionId) => manager?.pinnedConnectionIds().has(connectionId) ?? false,
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
       await refreshProviderState();

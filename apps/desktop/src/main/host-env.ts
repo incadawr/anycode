@@ -37,6 +37,15 @@ export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
  * as every other var above (host-env stays core-free).
  */
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
+/**
+ * The provider connection pinned to a tab's session (TASK.45 W10). Informational
+ * for the host: it is NOT a secret and NOT a credential — the resolved
+ * credential rides ANYCODE_API_KEY as before. The host only reads this to persist
+ * the pin into its session metadata (host/index.ts), so a resume resolves the
+ * same connection. Stamped per-fork by the TabHostManager from `TabHost.connectionId`,
+ * never baked into the shared boot env, so a legacy (unpinned) tab carries none.
+ */
+export const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
 
 /** The vault key allow-list (2.2 = one key; 2.5.2 generalises via isKnownSecretKey). */
 export const SECRET_KEYS: readonly SecretKey[] = ["provider.apiKey"];

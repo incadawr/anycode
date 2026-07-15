@@ -263,6 +263,14 @@ import {
  * shared/credentials.js constant).
  */
 const ENV_SETTINGS_PATH = "ANYCODE_SETTINGS_PATH";
+/**
+ * Mirrors main/host-env.ts's `ENV_CONNECTION_ID` (TASK.45 W10) — kept in sync by
+ * contract, same convention as `ENV_SETTINGS_PATH` above (host does not import
+ * main/*). Informational: the pinned provider connection id main stamped into
+ * this fork's env, persisted verbatim into the session row so resume resolves
+ * the same connection. Never a credential — the resolved key rides ANYCODE_API_KEY.
+ */
+const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
 import { resolveExtensionsHomeOverride } from "./dev-home.js";
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
@@ -656,10 +664,15 @@ async function boot(): Promise<void> {
     // cli/main.ts:239-259; the initial history is NOT re-appended to the sink).
     const dbPath = envConfig.dbPath ?? join(homedir(), ".anycode", "anycode.sqlite");
     persistence = new SqlitePersistenceAdapter(dbPath);
+    const forkConnectionId = process.env[ENV_CONNECTION_ID];
     const resolvedSession = await resolveBootSession(persistence, {
       args,
       workspace,
       model: envConfig.model,
+      // TASK.45 W10: pin the fork's provider connection onto a NEW session (main
+      // stamped it into the fork env). A resumed existing session ignores it and
+      // keeps its own stored pin (resolveBootSession invariant).
+      ...(forkConnectionId !== undefined && forkConnectionId.trim() !== "" ? { connectionId: forkConnectionId } : {}),
     });
     let sessionMeta = resolvedSession.sessionMeta;
     const { initialHistory, resumedMissing } = resolvedSession;

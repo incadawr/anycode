@@ -119,9 +119,13 @@ export interface BootSessionResult {
  */
 export async function resolveBootSession(
   persistence: PersistencePort,
-  opts: { args: HostArgs; workspace: string; model: string },
+  opts: { args: HostArgs; workspace: string; model: string; connectionId?: string },
 ): Promise<BootSessionResult> {
-  const { args, workspace, model } = opts;
+  const { args, workspace, model, connectionId } = opts;
+  // TASK.45 W10: the pinned provider connection is written only on session
+  // CREATION. A resumed existing session keeps whatever it was pinned to — main
+  // never re-pins a live thread to the current default (session-pinning invariant).
+  const pin = connectionId !== undefined && connectionId !== "" ? { connectionId } : {};
 
   if (args.resume && args.sessionId !== undefined) {
     const existing = await persistence.getSession(args.sessionId);
@@ -134,13 +138,14 @@ export async function resolveBootSession(
       workspace,
       model,
       mode: "build",
+      ...pin,
     });
     return { sessionMeta, initialHistory: [], resumedMissing: true };
   }
 
   // `--session <id>` (id supplied by main) or no id at all (legacy/dev boot).
   const id = args.sessionId ?? randomUUID();
-  const sessionMeta = await persistence.createSession({ id, workspace, model, mode: "build" });
+  const sessionMeta = await persistence.createSession({ id, workspace, model, mode: "build", ...pin });
   return { sessionMeta, initialHistory: [], resumedMissing: false };
 }
 

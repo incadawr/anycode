@@ -536,6 +536,109 @@ describe("TabHostManager — credential channel (slice 2.5 §3.3)", () => {
   });
 });
 
+describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
+  it("stamps ANYCODE_CONNECTION_ID from the tab's connectionId and keeps it across respawn", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({ PATH: "/base" }),
+      logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-work" });
+    expect(created.ok).toBe(true);
+    // Respawn (sub-healthy exit still respawns below the per-tab cap).
+    hosts[0]!.emit("exit", 1);
+    expect(envs).toEqual([
+      { PATH: "/base", ANYCODE_CONNECTION_ID: "conn-work" },
+      { PATH: "/base", ANYCODE_CONNECTION_ID: "conn-work" },
+    ]);
+  });
+
+  it("omits ANYCODE_CONNECTION_ID for an unpinned (legacy) tab", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({ PATH: "/base" }),
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    expect(envs[0]).toEqual({ PATH: "/base" });
+    expect(envs[0] && "ANYCODE_CONNECTION_ID" in envs[0]).toBe(false);
+  });
+
+  it("resolves the fork's base env for the tab's pinned connection id", () => {
+    const seen: (string | undefined)[] = [];
+    const { hosts } = liveForkRig();
+    const manager = new TabHostManager({
+      fork: () => {
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: (connectionId?: string) => {
+        seen.push(connectionId);
+        return { PATH: "/base" };
+      },
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-42" });
+    expect(seen).toEqual(["conn-42"]);
+  });
+
+  it("resolveCredential receives the tab's pinned connectionId (per-tab oauth routing)", async () => {
+    const seen: (string | undefined)[] = [];
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      logger: silentLogger,
+      resolveCredential: async (connectionId?: string) => {
+        seen.push(connectionId);
+        return "tok";
+      },
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-oauth" });
+    await flush();
+    hosts[0]!.emit("message", { type: CREDENTIAL_REQUEST_TYPE, requestId: "req-1" });
+    await flush();
+    expect(seen).toEqual(["conn-oauth"]);
+  });
+
+  it("pinnedConnectionIds reflects the live tabs' connections", () => {
+    const { fork } = liveForkRig();
+    const manager = makeManager(fork, windowRig().window);
+    manager.createTab({ workspace: "/a", sessionId: "sa", resume: false, connectionId: "conn-a" });
+    manager.createTab({ workspace: "/b", sessionId: "sb", resume: false, connectionId: "conn-b" });
+    manager.createTab({ workspace: "/c", sessionId: "sc", resume: false }); // legacy, unpinned
+    expect(manager.pinnedConnectionIds()).toEqual(new Set(["conn-a", "conn-b"]));
+  });
+});
+
 describe("TabHostManager — close guards", () => {
   it("refuses to close the last remaining tab and unknown tabs", async () => {
     const { fork } = liveForkRig();

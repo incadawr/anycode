@@ -44,6 +44,15 @@ export interface DialogLike {
   }): Promise<{ canceled: boolean; filePaths: string[] }>;
 }
 
+/**
+ * Resolution of a resumed session's pinned provider connection (TASK.45 W10):
+ * `ok` with the connection id to re-pin the tab to (undefined = a legacy session
+ * with no pin — resume on the current default, documented behaviour), or a
+ * refusal carrying the deleted connection's id (the renderer offers a
+ * replacement instead of silently switching accounts).
+ */
+export type ResumePinResult = { ok: true; connectionId?: string } | { ok: false; connectionId: string };
+
 export interface TabIpcDeps {
   manager: TabHostManager;
   /** Only the picker/resume reads main uses (§2.3); no new port methods needed. */
@@ -51,6 +60,18 @@ export interface TabIpcDeps {
   dialog: DialogLike;
   /** Production gate proves the path is still a registered worktree on the persisted branch. */
   validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
+  /**
+   * The active provider connection id, pinned onto a NEW core session at creation
+   * (TASK.45 W10). Undefined = no default configured (a fresh install, or an
+   * env-override boot) — the tab stays unpinned and runs on the current default.
+   * Never consulted for a non-core engine (Codex owns its own account).
+   */
+  activeConnectionId?(): string | undefined;
+  /**
+   * Resolves the connection a RESUMED session is pinned to (TASK.45 W10). Absent
+   * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
+   */
+  resolveResumePin?(meta: SessionMeta): Promise<ResumePinResult>;
 }
 
 /** exported for tests (tab-ipc.test.ts): the fail-closed request schema. */
@@ -125,6 +146,11 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       workspace = dialogWorkspace;
     }
+    // TASK.45 W10: a NEW core session is pinned to the active connection at
+    // creation (main stamps it into the fork env, the host persists it), so a
+    // later default-switch never retargets this session's account. Codex owns
+    // its own account, so a codex tab is never pinned to a core connection.
+    const newConnectionId = engine === "core" ? deps.activeConnectionId?.() : undefined;
     const result = deps.manager.createTab({
       workspace,
       sessionId: randomUUID(),
@@ -135,6 +161,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       // session-creating spawn.
       ...(req.engineModel !== undefined ? { engineModel: req.engineModel } : {}),
       ...(req.enginePreset !== undefined ? { enginePreset: req.enginePreset } : {}),
+      ...(newConnectionId !== undefined ? { connectionId: newConnectionId } : {}),
     });
     if (!result.ok) {
       return result;
@@ -165,6 +192,18 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   if (openInTabId !== undefined) {
     return { ok: false, reason: "already_open", focusTabId: openInTabId };
   }
+  // TASK.45 W10: resume resolves the connection the session was pinned to. A
+  // deleted pin refuses `connection_missing` (renderer offers a replacement — no
+  // silent switch to the current default); a legacy session (no pin) resolves
+  // `{ok:true}` with no connectionId and resumes on the current default.
+  let pinnedConnectionId: string | undefined;
+  if (deps.resolveResumePin !== undefined) {
+    const pin = await deps.resolveResumePin(meta);
+    if (!pin.ok) {
+      return { ok: false, reason: "connection_missing", connectionId: pin.connectionId };
+    }
+    pinnedConnectionId = pin.connectionId;
+  }
   const result = deps.manager.createTab({
     workspace: meta.workspace,
     ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
@@ -172,6 +211,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     sessionId: req.sessionId,
     resume: true,
     engine,
+    ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
   });
   if (!result.ok) {
     return result;

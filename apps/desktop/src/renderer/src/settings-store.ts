@@ -31,6 +31,7 @@
 import { create } from "zustand";
 import type {
   AlwaysAllowRule,
+  ConnectionUpdateRequest,
   OAuthStartReason,
   OAuthStartResult,
   PermissionRuleAddRequest,
@@ -54,6 +55,9 @@ export interface SettingsBridge {
   // typed refusal reason) out.
   oauthStart(providerId: string): Promise<OAuthStartResult>;
   oauthCancel(providerId: string): Promise<void>;
+  // TASK.45 W10: main-authoritative connection metadata update (ModelPill's
+  // model/effort write). Never carries a secret; resolves with a fresh snapshot.
+  connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
 }
 
 /**
@@ -120,6 +124,12 @@ export interface SettingsAppState {
    * `{ok:false, reason:"cancelled"}`.
    */
   oauthCancel(providerId: string): Promise<void>;
+  /**
+   * TASK.45 W10: updates a connection's metadata (model/effort) main-authoritatively
+   * by id — ModelPill's write path off the v1-patch shim. Refreshes the snapshot on
+   * success; a refusal sets a `notice`. Never carries a secret.
+   */
+  connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
 
   // ── slice 2.6 (auto-updater, design §6) ──
   /** Last `UpdateStatus` pushed by main; `idle` until `subscribeUpdates` has wired the push channel (or nothing has happened yet in a dev build). */
@@ -145,6 +155,8 @@ export function describeMutationFailure(reason: SettingsMutationReason): string 
       return "This system has no secure OS keychain available.";
     case "not_found":
       return "That connection no longer exists — refresh and try again.";
+    case "connection_in_use":
+      return "This connection is in use by an open task. Close that task before deleting it.";
     default: {
       const exhaustive: never = reason;
       return exhaustive;
@@ -239,6 +251,16 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
 
     async setPatch(patch: SettingsPatch): Promise<SettingsMutationResult> {
       const result = await api().set(patch);
+      if (result.ok) {
+        set({ snapshot: result.snapshot });
+      } else {
+        set({ notice: describeMutationFailure(result.reason) });
+      }
+      return result;
+    },
+
+    async connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult> {
+      const result = await api().connectionUpdate(req);
       if (result.ok) {
         set({ snapshot: result.snapshot });
       } else {

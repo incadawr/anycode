@@ -101,6 +101,8 @@ interface CallbackContext {
   redirectUri: () => string;
   opts: { allowWeak: boolean };
   settle: (outcome: OAuthOutcome) => void;
+  /** Whether the flow already settled (cancelled/timed-out) — TASK.45 W10 §6.5 skip-persist guard. */
+  isSettled: () => boolean;
 }
 
 export class OAuthEngine {
@@ -168,6 +170,7 @@ export class OAuthEngine {
           redirectUri: () => redirectUri,
           opts,
           settle,
+          isSettled: () => settled,
         });
       });
 
@@ -240,6 +243,14 @@ export class OAuthEngine {
 
     try {
       const blob = await this.exchangeCode(ctx.config, code, ctx.redirectUri(), ctx.verifier);
+      // Residual §6.5: if the flow settled (cancelled — e.g. the connection was
+      // deleted) WHILE the token exchange was in flight, do NOT persist. The
+      // engine persists by connectionId; writing now would strand a blob under a
+      // connection id that no longer exists (the delete's secret-clear already ran).
+      if (ctx.isSettled()) {
+        respondHtml(res, "Sign-in was cancelled. You can close this window.");
+        return;
+      }
       const stored = await this.vault.setOAuthTokens(ctx.connectionId, blob, {
         allowWeak: ctx.opts.allowWeak,
       });

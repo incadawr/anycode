@@ -31,6 +31,11 @@ export function describeCreateTabFailure(result: Extract<CreateTabResult, { ok: 
       return "Configure a provider (API key + model) before opening a tab.";
     case "worktree_unavailable":
       return `This session's worktree is missing or no longer registered${result.worktreePath ? `: ${result.worktreePath}` : ""}. Restore or re-register that path with Git before resuming.`;
+    case "connection_missing":
+      // TASK.45 W10: the pinned provider connection was deleted. Resume must not
+      // silently switch this session to the current default — route the user to
+      // Settings to choose a replacement (the full in-place picker is W12).
+      return "This task's provider connection was deleted. Open Settings and choose a replacement connection before resuming this task.";
     default: {
       const _exhaustive: never = result.reason;
       return _exhaustive;

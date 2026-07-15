@@ -295,6 +295,92 @@ describe("handleCreate — persisted engine identity", () => {
   });
 });
 
+describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", () => {
+  function resumeMeta(over: Record<string, unknown> = {}) {
+    return {
+      id: "s-resume",
+      workspace: "/project",
+      model: "m",
+      mode: "build" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    };
+  }
+
+  it("pins a NEW core tab to the active connection", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      activeConnectionId: () => "conn-active",
+    };
+    await handleCreate(deps, { kind: "new", workspace: "/x" });
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn-active", resume: false }));
+  });
+
+  it("does NOT pin a new codex tab to a core connection", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      activeConnectionId: () => "conn-active",
+    };
+    await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex" });
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ engine: "codex" }));
+    const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("connectionId" in call).toBe(false);
+  });
+
+  it("resume (alive): re-pins the tab to the session's stored connection", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x" }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-x" }),
+      listSessions: async () => [],
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/project" });
+    expect(resolveResumePin).toHaveBeenCalledOnce();
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ resume: true, connectionId: "conn-x" }));
+  });
+
+  it("resume (deleted): refuses connection_missing and never spawns", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveResumePin = vi.fn(async () => ({ ok: false as const, connectionId: "conn-gone" }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-gone" }),
+      listSessions: async () => [],
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+    expect(res).toEqual({ ok: false, reason: "connection_missing", connectionId: "conn-gone" });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("resume (legacy, no connectionId): falls back to the current default with no pin", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveResumePin = vi.fn(async () => ({ ok: true as const }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta(), // no connectionId
+      listSessions: async () => [],
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/project" });
+    const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("connectionId" in call).toBe(false);
+  });
+});
+
 describe("handleCreate — guard order canSpawn -> atCapacity -> dialog/skip (R7)", () => {
   it("!canSpawn short-circuits before atCapacity and dialog", async () => {
     const order: string[] = [];

@@ -111,6 +111,12 @@ export interface SettingsIpcDeps {
   oauthConfigFor?: (providerId: string) => OAuthProviderConfig | undefined;
   /** Mints an opaque connection id (`conn-<uuid>`). Injected for determinism in tests. */
   genConnectionId?: () => string;
+  /**
+   * True when a connection is pinned to a LIVE session (TASK.45 W10 delete-guard).
+   * Main injects `(id) => manager.pinnedConnectionIds().has(id)`. Absent = no live
+   * sessions to protect (unit fixtures) so delete behaves as before.
+   */
+  connectionInUse?: (connectionId: string) => boolean;
 }
 
 /** A fresh opaque connection id for a connection minted by main (`conn-<uuid>`). */
@@ -1018,8 +1024,14 @@ export async function handleConnectionSetActive(deps: SettingsIpcDeps, raw: unkn
  * connection-delete: clear the connection's vault secrets FIRST, then remove its
  * metadata (design order: a crash leaves a visible keyless connection, never an
  * orphan secret). Idempotent: deleting an already-gone connection succeeds. If
- * the deleted connection was active, the active id is cleared (W10 owns the
- * live-session guard + resume replacement).
+ * the deleted connection was active, the active id is cleared.
+ *
+ * TASK.45 W10:
+ *  - delete-guard: a connection pinned to a LIVE session refuses `connection_in_use`
+ *    and touches nothing (no secret cleared, no metadata removed).
+ *  - residual §6.5: an in-flight oauth flow for the deleted connection's provider
+ *    is cancelled BEFORE the secrets are cleared, so the engine cannot persist a
+ *    token blob back under the just-deleted connection id.
  */
 export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = connectionIdSchema.safeParse(raw);
@@ -1032,6 +1044,18 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
       return { ok: false, reason: "read_only" };
     }
     const id = parsed.data.id;
+    // Delete-guard: a live session still resolves this connection's credential on
+    // every respawn — pulling it out from under an open thread is refused.
+    if (deps.connectionInUse?.(id) === true) {
+      return { ok: false, reason: "connection_in_use" };
+    }
+    // Residual §6.5: cancel any in-flight oauth flow for this connection's
+    // provider before clearing, so a racing callback cannot re-persist a blob
+    // under the deleted id (the flow persists by connectionId, outside this lock).
+    const target = loaded.settings.provider.connections.find((connection) => connection.id === id);
+    if (target !== undefined && target.providerId !== "") {
+      deps.oauth?.cancel(target.providerId);
+    }
     // secrets-first (idempotent clears): both credential kinds, before metadata.
     await deps.vault.clearSecret(connectionSecretKey(id, "api_key"));
     await deps.vault.clearSecret(connectionSecretKey(id, "oauth"));
