@@ -333,11 +333,15 @@ async function saveScreenshot(ctx, step, name) {
  * pre-sleep already uses for the analogous store-vs-compositor gap.
  */
 async function pollProviderState(ctx, step, predicate, timeoutMs = 5_000) {
+  let last = null;
   const result = await pollUntil(timeoutMs, 150, async () => {
     const resp = await api(ctx, "GET", "/settings/provider");
+    if (resp.status === 200) {
+      last = resp.body;
+    }
     return resp.status === 200 && predicate(resp.body) ? resp.body : undefined;
   });
-  assert(step, result !== null, `GET /settings/provider predicate never matched within ${timeoutMs}ms`);
+  assert(step, result !== null, `GET /settings/provider predicate never matched within ${timeoutMs}ms; last seen: ${JSON.stringify(last)}`);
   return result;
 }
 
