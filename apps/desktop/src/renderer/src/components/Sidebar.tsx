@@ -15,10 +15,11 @@ import type { KeyboardEvent } from "react";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { TabInfo } from "../tabs-store.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useSettingsStore } from "../settings-store.js";
 import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { rowStatusKind, useTabStatusStore, type RowStatusKind } from "../tab-status-store.js";
 import { nextRovingIndex } from "./ModeMenu.js";
-import { handleCreateTabResult } from "./SessionPicker.js";
+import { handleCreateTabResult, resolveConnectionMissingAction } from "./SessionPicker.js";
 import { highlight } from "./highlight.js";
 import { ArrowUp, Chevron, Collapse, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, X } from "./icons.js";
 
@@ -395,6 +396,13 @@ export function Sidebar({
   // Sidebar at human cadence — never per transcript delta.
   const statuses = useTabStatusStore((state) => state.statuses);
   const [notice, setNotice] = useState<string | null>(null);
+  // W10-FIX F1: a `connection_missing` resume becomes actionable — when set, the
+  // notice toast offers a "Resume on the current connection" button that re-invokes
+  // resume with this replacement id (an explicit user choice, never an auto-switch).
+  const [noticeAction, setNoticeAction] = useState<{ sessionId: string; replacementConnectionId: string } | null>(null);
+  // The current default connection to re-pin onto (F1). Undefined = none configured
+  // (fresh install / env-override) — the notice then points to Settings, no button.
+  const activeConnectionId = useSettingsStore((state) => state.snapshot?.settings.provider.activeConnectionId);
   // R9 filter state. `query !== ""` = filter active: groups force-expand,
   // chevrons hide, zero-match empty state arms Enter-to-create.
   const [query, setQuery] = useState("");
@@ -435,22 +443,29 @@ export function Sidebar({
    * NOT the "Untitled task" display fallback.
    */
   const resumeSession = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, replacementConnectionId?: string) => {
       const session = sessions?.find((s) => s.id === sessionId);
       if (!session) {
         return;
       }
       try {
-        const result = await window.anycode.createTab({ kind: "resume", sessionId: session.id });
+        const result = await window.anycode.createTab({
+          kind: "resume",
+          sessionId: session.id,
+          // W10-FIX F1: explicit re-pin target (only ever set by the notice button).
+          ...(replacementConnectionId !== undefined ? { replacementConnectionId } : {}),
+        });
         const message = handleCreateTabResult(result, { onTabCreated, onFocusTab }, { title: session.title });
-        if (message) {
-          setNotice(message);
-        }
+        setNotice(message);
+        // W10-FIX F1: arm the re-pin button ONLY for connection_missing AND when a
+        // current connection exists to re-pin onto; null on every other outcome.
+        setNoticeAction(resolveConnectionMissingAction(result, session.id, activeConnectionId));
       } catch (err) {
         setNotice(err instanceof Error ? err.message : "Failed to resume task.");
+        setNoticeAction(null);
       }
     },
-    [sessions, onTabCreated, onFocusTab],
+    [sessions, onTabCreated, onFocusTab, activeConnectionId],
   );
 
   const closeProjectMenu = useCallback((returnFocus: boolean) => {
@@ -490,9 +505,11 @@ export function Sidebar({
         const message = handleCreateTabResult(result, { onTabCreated, onFocusTab });
         if (message) {
           setNotice(message);
+          setNoticeAction(null); // a fresh notice supersedes any armed re-pin action
         }
       } catch (err) {
         setNotice(err instanceof Error ? err.message : "Failed to create a new task.");
+        setNoticeAction(null);
       }
     },
     [onTabCreated, onFocusTab],
@@ -502,6 +519,7 @@ export function Sidebar({
   const removeProjectFromList = useCallback((workspace: string) => {
     if (!useTabsStore.getState().hideWorkspace(workspace)) {
       setNotice("Close this project's open tasks first");
+      setNoticeAction(null);
     }
   }, []);
 
@@ -853,11 +871,28 @@ export function Sidebar({
         {notice && (
           <div className="notice-toast sidebar-notice" role="status">
             <span className="notice-toast-text">{notice}</span>
+            {noticeAction && (
+              <button
+                type="button"
+                className="notice-toast-action"
+                onClick={() => {
+                  const action = noticeAction;
+                  setNotice(null);
+                  setNoticeAction(null);
+                  void resumeSession(action.sessionId, action.replacementConnectionId);
+                }}
+              >
+                Resume on the current connection
+              </button>
+            )}
             <button
               type="button"
               className="notice-toast-dismiss"
               aria-label="Dismiss notice"
-              onClick={() => setNotice(null)}
+              onClick={() => {
+                setNotice(null);
+                setNoticeAction(null);
+              }}
             >
               <X />
             </button>
