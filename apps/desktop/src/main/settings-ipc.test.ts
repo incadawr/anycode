@@ -1127,6 +1127,73 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
   });
 });
 
+// ── TASK.45 W12-FIX §2: auto-promote a successor when the ACTIVE connection is deleted (codex W12 review #2) ──
+
+describe("handleConnectionDelete — auto-promotes a successor when the ACTIVE connection is deleted (W12-FIX §2)", () => {
+  // §2.1 — the core fix: reverting `remaining[0]?.id` back to `undefined`
+  // turns this red (active would be cleared instead of promoted).
+  it("§2.1 deleting the active connection promotes the first REMAINING connection (array order)", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai" }); // conn-1 (A, active by default)
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-2 (B)
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.activeConnectionId).toBe("conn-2");
+  });
+
+  // §2.2 — deleting a NON-active connection must not touch active (regress).
+  it("§2.2 deleting a non-active connection leaves active untouched", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai" }); // conn-1 (A, active)
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-2 (B)
+    const res = await handleConnectionDelete(deps, { id: "conn-2" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.activeConnectionId).toBe("conn-1");
+  });
+
+  // §2.3 — deleting the LAST connection still clears active (no successor to promote).
+  it("§2.3 deleting the only remaining connection clears active (no successor)", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai" }); // conn-1 (active, only connection)
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.activeConnectionId).toBeUndefined();
+  });
+
+  // §2.4 — the W10-FIX F3 abort guard (both legs) must still leave active
+  // completely untouched — the promotion logic must never run on an aborted
+  // delete (existing W10-FIX assertions above are NOT edited by this test).
+  it("§2.4 an ABORTED delete (connection_in_use, early guard) never promotes — active untouched", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, connectionInUse: (id) => id === "conn-1" });
+    await handleConnectionCreate(deps, { providerId: "z-ai" }); // conn-1 (A, active)
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-2 (B)
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res).toEqual({ ok: false, reason: "connection_in_use" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.activeConnectionId).toBe("conn-1");
+    expect(loaded.settings.provider.connections).toHaveLength(2);
+  });
+
+  it("§2.4b an ABORTED delete (connection_in_use, LATE re-check) never promotes — active untouched", async () => {
+    let calls = 0;
+    const connectionInUse = (id: string): boolean => {
+      calls += 1;
+      return id === "conn-1" && calls >= 2;
+    };
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, connectionInUse });
+    await handleConnectionCreate(deps, { providerId: "z-ai" }); // conn-1 (A, active)
+    await handleConnectionCreate(deps, { providerId: "acme" }); // conn-2 (B)
+    const res = await handleConnectionDelete(deps, { id: "conn-1" });
+    expect(res).toEqual({ ok: false, reason: "connection_in_use" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.activeConnectionId).toBe("conn-1");
+    expect(loaded.settings.provider.connections).toHaveLength(2);
+  });
+});
+
 describe("handleConnectionDelete — tombstone wiring (W11-FIX2 #2, handler layer)", () => {
   it("marks the connection deleting BEFORE the first clearSecret call", async () => {
     const oauth = new FakeOAuthRunner(vault);
