@@ -402,14 +402,20 @@ describe("showTryAgainButton (TASK.33 W8 button-visibility truth-table)", () => 
   const offer: RetryOffer = { loopEndBlockId: "loop_end:turn-1", text: "hello", images: [] };
 
   it("hidden when there is no armed offer at all (nonretryable / mid-stream — the store never arms `retry`)", () => {
-    expect(showTryAgainButton(null, "loop_end:turn-1")).toBe(false);
+    expect(showTryAgainButton(null, "loop_end:turn-1", "ready")).toBe(false);
   });
 
-  it("shown on the SPECIFIC loop_end block the offer names", () => {
-    expect(showTryAgainButton(offer, "loop_end:turn-1")).toBe(true);
+  it("shown on the SPECIFIC loop_end block the offer names, while connected", () => {
+    expect(showTryAgainButton(offer, "loop_end:turn-1", "ready")).toBe(true);
   });
 
   it("hidden on any other block — an older failed turn's button never reappears once a newer turn supersedes it", () => {
-    expect(showTryAgainButton(offer, "loop_end:turn-0")).toBe(false);
+    expect(showTryAgainButton(offer, "loop_end:turn-0", "ready")).toBe(false);
+  });
+
+  it("hidden while the connection is not ready (TASK.33 W8-FIX #1) — a click would silently drop the resend since setHostExited preserves the armed offer", () => {
+    expect(showTryAgainButton(offer, "loop_end:turn-1", "host_exited")).toBe(false);
+    expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_port")).toBe(false);
+    expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_host_ready")).toBe(false);
   });
 });

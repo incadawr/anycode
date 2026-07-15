@@ -15,7 +15,15 @@
  * region outside the aria-live column announces turn start/end exactly once.
  */
 import { useContext, useLayoutEffect, useRef, useState } from "react";
-import type { ErrorRetryMeta, RetryOffer, ToolCallBlock, ToolCallCardStatus, TranscriptBlock, TurnState } from "../store.js";
+import type {
+  ConnectionPhase,
+  ErrorRetryMeta,
+  RetryOffer,
+  ToolCallBlock,
+  ToolCallCardStatus,
+  TranscriptBlock,
+  TurnState,
+} from "../store.js";
 import { TabContext } from "../tab-context.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { Markdown } from "./Markdown.js";
@@ -295,22 +303,30 @@ export function formatStreamRetryLine(attempt: number, maxAttempts: number, dela
  * reappears once a newer turn supersedes it. The retryable/hadModelOutput
  * gate itself is already baked into whether `retry` is non-null at all (the
  * store's `loop_end` reducer only arms it when both hold) — this predicate
- * just answers "is THIS the block it belongs to". Exported for unit testing.
+ * just answers "is THIS the block it belongs to". TASK.33 W8-FIX #1: also
+ * requires `connection === "ready"` — `setHostExited` (store.ts) preserves
+ * the armed offer across a dropped connection, so without this the button
+ * would stay clickable while there is no port to send on
+ * (`dispatchTryAgain`'s own readiness guard would then just no-op the click,
+ * confusingly). Exported for unit testing.
  */
-export function showTryAgainButton(retry: RetryOffer | null, blockId: string): boolean {
-  return retry !== null && retry.loopEndBlockId === blockId;
+export function showTryAgainButton(retry: RetryOffer | null, blockId: string, connection: ConnectionPhase): boolean {
+  return retry !== null && retry.loopEndBlockId === blockId && connection === "ready";
 }
 
 export function MessageList({
   blocks,
   turn,
   workspace,
+  connection,
   retry,
   onTryAgain,
 }: {
   blocks: TranscriptBlock[];
   turn: TurnState;
   workspace: string | null;
+  /** TASK.33 W8-FIX #1: gates the rendered Try-again button on connection readiness. */
+  connection: ConnectionPhase;
   /** TASK.33 W8 armed one-shot Try-again offer; null when nothing to offer. */
   retry: RetryOffer | null;
   /** TASK.33 W8: consumes `retry` and re-sends its content through the normal send/queue/busy path. */
@@ -661,11 +677,15 @@ export function MessageList({
               );
             case "loop_end":
               return (
-                <div key={block.id} className={`message message-loop-end${enterClass(block.id)}`}>
+                <div
+                  key={block.id}
+                  data-block-id={block.id}
+                  className={`message message-loop-end${enterClass(block.id)}`}
+                >
                   {block.reason === "max_turns"
                     ? `Stopped: reached the turn limit (${block.turns} turns). Raise it in Settings or ANYCODE_MAX_TURNS.`
                     : `Turn ended: ${block.reason} (${block.turns} turn${block.turns === 1 ? "" : "s"})`}
-                  {showTryAgainButton(retry, block.id) && (
+                  {showTryAgainButton(retry, block.id, connection) && (
                     <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
                       Try again
                     </button>

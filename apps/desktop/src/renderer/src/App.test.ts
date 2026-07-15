@@ -113,8 +113,11 @@ describe("computeGitPanelOpen (design TASK.40 §2(f)) — shell-owned, not engin
 });
 
 describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/busy path)", () => {
+  // An offer only ever arms while connected (the loop_end reducer that sets
+  // `retry` runs on a live `host_ready`-derived turn) — `connection: "ready"`
+  // is the realistic precondition every case here starts from.
   function armRetry(store: ReturnType<typeof createDesktopStore>, offer: RetryOffer): void {
-    store.setState({ retry: offer });
+    store.setState({ retry: offer, connection: "ready" });
   }
 
   it("no-op when nothing is armed (stale/double click) — sendToHost never called", () => {
@@ -187,5 +190,19 @@ describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/
     dispatchTryAgain(store, (m) => sent.push(m));
 
     expect(sent).toHaveLength(1);
+  });
+
+  it("connection not ready (host exited after the offer armed) ⇒ the offer survives UNCONSUMED and nothing reaches the wire — a stale click on a button that should have been hidden must not silently drop the resend", () => {
+    const store = createDesktopStore();
+    const offer: RetryOffer = { loopEndBlockId: "loop_end:t1", text: "hello", images: [] };
+    armRetry(store, offer);
+    store.setState({ connection: "host_exited" });
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toEqual([]);
+    expect(store.getState().retry).toEqual(offer);
+    expect(store.getState().transcript.some((b) => b.kind === "user_text")).toBe(false);
   });
 });

@@ -137,8 +137,20 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
  * THIS retry also fails retryably-with-no-output, a fresh offer arms again.
  * Exported for unit testing against a real `createDesktopStore()` instance
  * (no jsdom in this package — see App.test.ts's header).
+ *
+ * TASK.33 W8-FIX #1: `setHostExited` deliberately preserves an armed `retry`
+ * (store.ts) so the offer survives a host restart, but that also means the
+ * button can still be showing (or a stale click can still land) while
+ * `connection !== "ready"` — with no active port, a direct `sendToHost` would
+ * be silently dropped. Bail out BEFORE consuming the offer so a click made
+ * while disconnected leaves it armed for when the connection comes back,
+ * matching every other send site's readiness gate (automation.ts's
+ * `sendPrompt`, SessionHeader.tsx, ModelPill.tsx).
  */
 export function dispatchTryAgain(store: DesktopStoreApi, sendToHost: (message: UiToHostMessage) => void): void {
+  if (store.getState().connection !== "ready") {
+    return;
+  }
   const offer = store.getState().consumeRetry();
   if (offer === null) {
     return;
@@ -250,6 +262,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
             blocks={transcript}
             turn={turn}
             workspace={workspace}
+            connection={connection}
             retry={retry}
             onTryAgain={handleTryAgain}
           />
