@@ -44,8 +44,11 @@
  * `packages/core/src/provider/catalog-data.ts`'s `CUSTOM_PROVIDER_ID` entry)
  * pointed at one such port; step 15 selects it as the default connection,
  * opens a real tab, sends a prompt, and asserts the terminal transcript block
- * carries a `code:"network"` classification
- * (`packages/core/src/provider/failure.ts`) against THAT EXACT reserved
+ * carries a connect-class classification (`code:"connect_timeout"` — the AI
+ * SDK's own "Cannot connect to API: ..." wrapper trips
+ * `classifyProviderFailure`'s `CONNECT_TIMEOUT_PATTERN`,
+ * `packages/core/src/provider/failure.ts`, before the ECONNREFUSED-code
+ * network bucket — both mean the same thing here) against THAT EXACT reserved
  * port. Since the port is unique to this run and the connection's baseUrl
  * came from nothing but `POST /settings/provider/drawer/set` +
  * `connection-create`/`connection-update` IPC, a successful connect-refused
@@ -929,10 +932,19 @@ async function step15E2ECredentialPickup(ctx) {
   }
   assert(15, errorBlock !== null, `no terminal error block in the transcript after the turn settled idle: ${JSON.stringify(blocks.slice(-5))}`);
   assert(15, errorBlock.retry !== undefined, "terminal error block carries no `retry` metadata");
+  // The AI SDK wraps a connect-refused failure as "Cannot connect to API:
+  // connect ECONNREFUSED ..." — classifyProviderFailure's CONNECT_TIMEOUT_PATTERN
+  // (packages/core/src/provider/failure.ts) matches "cannot connect to api"
+  // BEFORE the ECONNREFUSED-code network-bucket check, so the correct,
+  // documented (failure.test.ts's own pinned cases) classification here is
+  // "connect_timeout", not "network" — both mean the same thing for this
+  // script's purpose (the request never reached anywhere but the reserved
+  // port), confirmed live by the host's own stderr: "Cannot connect to API:
+  // connect ECONNREFUSED 127.0.0.1:<refusedPort>".
   assert(
     15,
-    errorBlock.retry.code === "network",
-    `expected a "network" classified failure (ECONNREFUSED against the reserved local port) — proof the host fork resolved connection C's OWN baseUrl, got code="${errorBlock.retry.code}", message=${JSON.stringify(errorBlock.error?.message)}`,
+    errorBlock.retry.code === "connect_timeout" || errorBlock.retry.code === "network",
+    `expected a connect-class failure (ECONNREFUSED against the reserved local port) — proof the host fork resolved connection C's OWN baseUrl, got code="${errorBlock.retry.code}", message=${JSON.stringify(errorBlock.error?.message)}`,
   );
   assert(15, errorBlock.retry.retryable === true, `expected retryable=true for a connect-refused failure, got ${errorBlock.retry.retryable}`);
   assert(15, errorBlock.retry.hadModelOutput === false, `expected hadModelOutput=false (failure before any content), got ${errorBlock.retry.hadModelOutput}`);
@@ -940,7 +952,7 @@ async function step15E2ECredentialPickup(ctx) {
   await saveScreenshot(ctx, 15, "04-e2e-connect-refused-proof");
   pass(
     15,
-    `SNAPSHOT PROOF (TASK.45 W12 "снятие шва"): a real host fork dispatched a real HTTP request to connection C's OWN baseUrl (http://127.0.0.1:${ctx.refusedPort}, unique to this run) and failed with a "network"/ECONNREFUSED classification — the credential+endpoint came ONLY from drawer -> connection-create/update + secret-set IPC, zero legacy write-seam involved`,
+    `SNAPSHOT PROOF (TASK.45 W12 "снятие шва"): a real host fork dispatched a real HTTP request to connection C's OWN baseUrl (http://127.0.0.1:${ctx.refusedPort}, unique to this run) and failed with code="${errorBlock.retry.code}" (ECONNREFUSED under the hood) — the credential+endpoint came ONLY from drawer -> connection-create/update + secret-set IPC, zero legacy write-seam involved`,
   );
 }
 
