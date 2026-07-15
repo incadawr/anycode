@@ -895,6 +895,68 @@ describe("agent-card expand route (design/slice-P7.18-cut.md §4 W4)", () => {
   });
 });
 
+describe("try-again-button route (TASK.33 W8-FIX #2)", () => {
+  it("401s GET /tabs/:tabId/try-again-button/:blockId without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/try-again-button/loop_end%3At1"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /tabs/:tabId/try-again-button/:blockId -> tryAgainButtonState", async () => {
+    const facadeResult = { ok: true, count: 1, visible: true, enabled: true };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/try-again-button/loop_end%3At1"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"tryAgainButtonState"');
+    expect(calls[0]).toContain('["tab-a","loop_end:t1"]');
+  });
+
+  it("GET /tabs/:tabId/try-again-button/:blockId decodes URL-encoded tabId AND blockId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true, count: 0, visible: false, enabled: false });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(h, `/tabs/${encodeURIComponent("tab a")}/try-again-button/${encodeURIComponent("loop_end:t 1")}`),
+      { headers: auth() },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","loop_end:t 1"]');
+  });
+});
+
+describe("try-again-button click route (TASK.33 W8-FIX #2)", () => {
+  it("401s POST /tabs/:tabId/try-again-button/:blockId/click without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/try-again-button/loop_end%3At1/click"), { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /tabs/:tabId/try-again-button/:blockId/click -> tryAgainButtonClick", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/try-again-button/loop_end%3At1/click"), {
+      method: "POST",
+      headers: auth(),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls[0]).toContain('"tryAgainButtonClick"');
+    expect(calls[0]).toContain('["tab-a","loop_end:t1"]');
+  });
+
+  it("POST /tabs/:tabId/try-again-button/:blockId/click decodes URL-encoded tabId AND blockId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(h, `/tabs/${encodeURIComponent("tab a")}/try-again-button/${encodeURIComponent("loop_end:t 1")}/click`),
+      { method: "POST", headers: auth() },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","loop_end:t 1"]');
+  });
+});
+
 describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
   it("401s GET /start-screen without a token", async () => {
     const h = await boot();

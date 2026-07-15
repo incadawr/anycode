@@ -53,6 +53,8 @@ import {
   modelPillPick,
   agentCardState,
   agentCardExpand,
+  tryAgainButtonState,
+  tryAgainButtonClick,
   settingsState,
   settingsOpen,
   settingsClose,
@@ -297,6 +299,20 @@ describe("agent-card thin facade commands forward method + args (design/slice-P7
     const deps = fakeDeps();
     await agentCardExpand(deps, "tab-a", "call-1");
     expect(deps.callFacade).toHaveBeenCalledWith("agentCardExpand", ["tab-a", "call-1"]);
+  });
+});
+
+describe("try-again-button thin facade commands forward method + args (TASK.33 W8-FIX #2)", () => {
+  it("tryAgainButtonState -> callFacade('tryAgainButtonState', [tabId, blockId])", async () => {
+    const deps = fakeDeps();
+    await tryAgainButtonState(deps, "tab-a", "loop_end:t1");
+    expect(deps.callFacade).toHaveBeenCalledWith("tryAgainButtonState", ["tab-a", "loop_end:t1"]);
+  });
+
+  it("tryAgainButtonClick -> callFacade('tryAgainButtonClick', [tabId, blockId])", async () => {
+    const deps = fakeDeps();
+    await tryAgainButtonClick(deps, "tab-a", "loop_end:t1");
+    expect(deps.callFacade).toHaveBeenCalledWith("tryAgainButtonClick", ["tab-a", "loop_end:t1"]);
   });
 });
 

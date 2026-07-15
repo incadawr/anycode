@@ -547,6 +547,35 @@ export interface AgentCardDom {
   clickToggle(tabId: string, toolCallId: string): boolean;
 }
 
+/** `tryAgainButtonState`'s ok-shape (TASK.33 W8-FIX #2): a DOM-level truth for whether the rendered Try-again button really exists on a given `loop_end` block, so a live smoke can assert on it directly instead of trusting `retryOffer` store state alone (which proves the offer is armed, not that the button actually painted). */
+export interface TryAgainButtonState {
+  ok: true;
+  count: number;
+  visible: boolean;
+  enabled: boolean;
+}
+
+/** Parsed read of one `loop_end` block's `.retry-try-again-button` children (TASK.33 W8-FIX #2) — `count` rides through uncollapsed (rather than the facade reducing it to a boolean) so the caller itself can assert "exactly one", since more than one would itself be the defect this probe exists to catch. */
+export interface TryAgainButtonDomState {
+  count: number;
+  visible: boolean;
+  enabled: boolean;
+}
+
+/**
+ * DOM accessor DI for `tryAgainButtonState`/`tryAgainButtonClick` (TASK.33
+ * W8-FIX #2), same injectable-for-tests discipline as `AgentCardDom`. `state`
+ * returns `null` when the named `loop_end` block isn't in the DOM at all
+ * (transcript not mounted for this tab, or no block carries this exact id) —
+ * the facade turns that into the valid-empty `TryAgainButtonState` reading
+ * (`count:0`), never an error.
+ */
+export interface TryAgainButtonDom {
+  state(tabId: string, blockId: string): TryAgainButtonDomState | null;
+  /** A real `.click()` on the block's own `.retry-try-again-button` — the exact node the rendered button's `onClick` fires from (App.tsx's `dispatchTryAgain`), unlike the `tryAgain` facade method above which calls `dispatchTryAgain` directly. Returns `false` (no-op) if the block isn't rendered, or doesn't carry exactly one such button. */
+  click(tabId: string, blockId: string): boolean;
+}
+
 /**
  * `settingsState()`'s shape (design/slice-P7.16-cut.md §5 W4): a live read
  * that deliberately mixes two sources — `permissions.groups` comes from the
@@ -1354,6 +1383,15 @@ export interface AutomationFacade {
   // the button's own onClick calls, so a live smoke exercises the exact
   // send/queue/busy decision the product makes, not a re-derived guess of it.
   tryAgain(tabId: string): FacadeResult;
+  // TASK.33 W8-FIX #2: a DOM-level probe/driver pair for the Try-again
+  // button, distinct from `tryAgain` above — `tryAgain` calls
+  // `dispatchTryAgain` directly (a facade shortcut that bypasses the
+  // rendered button's own onClick wiring entirely), while
+  // `tryAgainButtonClick` fires a REAL `.click()` on the button DOM node
+  // itself, so a live smoke exercises the actual render + click-handler
+  // wiring, not just the dispatch function in isolation.
+  tryAgainButtonState(tabId: string, blockId: string): TryAgainButtonState | FacadeErr;
+  tryAgainButtonClick(tabId: string, blockId: string): FacadeResult;
   respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult;
   setMode(tabId: string, mode: string): FacadeResult;
   stop(tabId: string): FacadeResult;
@@ -1772,6 +1810,52 @@ function realAgentCardDom(): AgentCardDom {
         return false;
       }
       toggle.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real Try-again-button DOM accessor (TASK.33 W8-FIX #2): same laziness
+ * discipline as `realAgentCardDom` (safe to evaluate as a default parameter
+ * outside a browser; tests always pass an explicit `tryAgainButtonDom` and
+ * never reach this). Scoped to the SAME `data-tab-id`-tagged `.message-list`
+ * node `realAgentCardDom` guards on; the `loop_end` block itself is located
+ * by `data-block-id` (MessageList.tsx stamps it on every `loop_end` block,
+ * same posture as `ToolCallCard`'s `data-tool-call-id`). `state`'s `count`
+ * deliberately isn't collapsed to a boolean here either — this accessor is
+ * the one place that would notice a rendering bug that painted the button
+ * twice.
+ */
+function realTryAgainButtonDom(): TryAgainButtonDom {
+  function block(tabId: string, blockId: string): HTMLElement | null {
+    const containers = document.querySelectorAll<HTMLDivElement>(
+      `.message-list[data-tab-id="${CSS.escape(tabId)}"]`,
+    );
+    const container = containers.length === 1 ? containers[0] : null;
+    return container?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"]`) ?? null;
+  }
+  return {
+    state(tabId, blockId) {
+      const el = block(tabId, blockId);
+      if (!el) {
+        return null;
+      }
+      const buttons = el.querySelectorAll<HTMLButtonElement>(".retry-try-again-button");
+      const only = buttons.length === 1 ? buttons[0]! : null;
+      return {
+        count: buttons.length,
+        visible: only !== null && only.offsetParent !== null,
+        enabled: only !== null && !only.disabled,
+      };
+    },
+    click(tabId, blockId) {
+      const el = block(tabId, blockId);
+      const buttons = el?.querySelectorAll<HTMLButtonElement>(".retry-try-again-button") ?? [];
+      if (buttons.length !== 1) {
+        return false;
+      }
+      buttons[0]!.click();
       return true;
     },
   };
@@ -2852,6 +2936,7 @@ export function createAutomationFacade(
   hooksPanelDom: HooksPanelDom = realHooksPanelDom(),
   checkpointPanelDom: CheckpointPanelDom = realCheckpointPanelDom(),
   transcriptBlockDom: TranscriptBlockDom = realTranscriptBlockDom(),
+  tryAgainButtonDom: TryAgainButtonDom = realTryAgainButtonDom(),
 ): AutomationFacade {
   return {
     snapshot(transcriptTail?: number): SnapshotJson {
@@ -2947,6 +3032,44 @@ export function createAutomationFacade(
       // driver uses — no second path.
       dispatchTryAgain(store, (msg) => registry.sendToTab(tabId, msg));
       return { ok: true };
+    },
+
+    tryAgainButtonState(tabId: string, blockId: string): TryAgainButtonState | FacadeErr {
+      // Same two structural refusals as agentCardState (TASK.33 W8-FIX #2):
+      // the button only ever lives inside the active tab's mounted transcript.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const state = tryAgainButtonDom.state(tabId, blockId);
+      if (state === null) {
+        // A valid reading, not an error (agentCardState precedent): the
+        // transcript isn't mounted for this tab yet, or no block with this
+        // exact id has landed there yet.
+        return { ok: true, count: 0, visible: false, enabled: false };
+      }
+      return { ok: true, ...state };
+    },
+
+    tryAgainButtonClick(tabId: string, blockId: string): FacadeResult {
+      // Same two structural refusals as tryAgainButtonState above.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      // A real click on the button's own DOM node (TASK.33 W8-FIX #2) — not
+      // a call into `dispatchTryAgain` directly, unlike `tryAgain` above.
+      // React's onClick fires synchronously off a native `.click()` (same as
+      // every other click-driver in this file), and the handler it wires to
+      // (`handleTryAgain` in App.tsx) IS `dispatchTryAgain`, so this still
+      // exercises the exact same send/queue/busy decision — just through the
+      // real render + event-handler path instead of skipping straight to it.
+      const clicked = tryAgainButtonDom.click(tabId, blockId);
+      return clicked ? { ok: true } : { ok: false, reason: "not_present" };
     },
 
     respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult {

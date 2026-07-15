@@ -108,7 +108,7 @@ missing/bad token → `401`.
 | `POST /tabs/:tabId/permission` | `{behavior:"allow"\|"deny", requestId?}` | `{ok:true}` |
 | `POST /tabs/:tabId/mode` | `{mode}` | `{ok:true}` |
 | `POST /tabs/:tabId/stop` | `{}` | `{ok:true}` |
-| `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"}` — clicks the one-shot Try-again offer (TASK.33 W8), the SAME `dispatchTryAgain` App.tsx's button uses; `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field |
+| `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"}` — clicks the one-shot Try-again offer (TASK.33 W8) by calling `dispatchTryAgain` directly (a facade shortcut, NOT a DOM click — see the try-again-button probe/driver below for that); `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field |
 | `POST /tabs/:tabId/select` | `{}` | `{ok:true}` |
 | `POST /tabs/:tabId/close` | `{}` | `{ok:true}` |
 | `POST /tabs` | `{kind:"new", workspace}` | `{ok:true, tabId, sessionId, workspace}` (bypasses the native open dialog) |
@@ -526,6 +526,40 @@ commits within the poll deadline (a genuine no-op click).
 ```bash
 curl "${A[@]}" "$B/tabs/$TAB/agent-card/$TOOL_CALL_ID"
 curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/agent-card/$TOOL_CALL_ID/expand -d '{}'
+```
+
+### Try-again button probe/driver (TASK.33 W8-FIX #2)
+
+`POST /tabs/:tabId/retry` above (the pre-existing route) calls
+`dispatchTryAgain` directly — a facade shortcut that proves the resend logic
+works but bypasses the RENDERED button's own DOM/onClick wiring entirely, so
+it can't catch a broken `MessageList` visibility condition, a missing button,
+or a handler-wiring regression. These two routes are a DOM-level
+probe/driver pair for the actual `.retry-try-again-button` node, same "no
+mirrored state" discipline as the agent-card probe above: `GET
+.../try-again-button/:blockId` reads `count`/`visible`/`enabled` straight off
+the `loop_end` block's own `data-block-id`-tagged DOM node (`count`
+deliberately isn't collapsed to a boolean — more than one button on the same
+block is itself a defect this probe exists to catch); `POST
+.../try-again-button/:blockId/click` fires a REAL `.click()` on that exact
+button — the same node a user's mouse would hit, running through the
+button's own `onClick` (which calls the SAME `dispatchTryAgain` the `retry`
+route above short-circuits to). Refuses `tab_not_active`/`unknown_tab` like
+the agent-card probe/driver; `ok:true, count:0, visible:false, enabled:false`
+is a normal reading, not an error — the block hasn't landed in the transcript
+yet, or carries no such button (no armed offer, or a different block).
+`{ok:false, reason:"not_present"}` from the click route covers both "no
+button there" and "more than one" — a caller wanting the "exactly one"
+guarantee asserts on the GET probe's `count` first.
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /tabs/:tabId/try-again-button/:blockId` | — | `{ok:true, count, visible, enabled}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"}` |
+| `POST /tabs/:tabId/try-again-button/:blockId/click` | `{}` | `{ok:true}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"\|"not_present"}` |
+
+```bash
+curl "${A[@]}" "$B/tabs/$TAB/try-again-button/$LOOP_END_BLOCK_ID"
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/try-again-button/$LOOP_END_BLOCK_ID/click -d '{}'
 ```
 
 ### MCP Servers pane probe/driver (slice P7.19 F22, W4)

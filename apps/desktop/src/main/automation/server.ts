@@ -74,6 +74,8 @@ import {
   ctxPopoverOpen,
   agentCardState,
   agentCardExpand,
+  tryAgainButtonState,
+  tryAgainButtonClick,
   settingsState,
   settingsOpen,
   settingsClose,
@@ -561,6 +563,11 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "agent-card") {
     return agentCardState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
+  // Try-again button probe (TASK.33 W8-FIX #2): `/tabs/:tabId/try-again-button/:blockId`
+  // — same per-block-scoped GET shape as the agent-card probe above.
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "try-again-button") {
+    return tryAgainButtonState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
   if (method === "GET" && pathname === "/start-screen") {
     return startScreenState(deps);
   }
@@ -958,6 +965,22 @@ async function route(
   ) {
     parseBody(rawBody, emptyBody);
     return agentCardExpand(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // Try-again button click driver (TASK.33 W8-FIX #2):
+  // `/tabs/:tabId/try-again-button/:blockId/click` — one segment deeper than
+  // the try-again-button GET probe above, same `parts.length === 5` shape as
+  // the agent-card expand route. Fires a REAL DOM click on the button, not
+  // the pre-existing `POST /tabs/:tabId/retry` facade shortcut (`tryAgain`,
+  // which calls `dispatchTryAgain` directly).
+  if (
+    method === "POST" &&
+    parts[0] === "tabs" &&
+    parts.length === 5 &&
+    parts[2] === "try-again-button" &&
+    parts[4] === "click"
+  ) {
+    parseBody(rawBody, emptyBody);
+    return tryAgainButtonClick(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
 
   throw new HttpError(404, { error: "not_found" });

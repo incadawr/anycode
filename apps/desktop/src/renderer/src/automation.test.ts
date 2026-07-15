@@ -41,6 +41,7 @@ import {
   type HooksPanelDom,
   type CheckpointPanelDom,
   type TranscriptBlockDom,
+  type TryAgainButtonDom,
 } from "./automation.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
@@ -4496,6 +4497,147 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         { type: "ui_ready" },
         { type: "rewind_request", requestId: sentRequestId, checkpointId: "explicit-id", scope: "files" },
       ]);
+    });
+  });
+});
+
+describe("automation facade — tryAgainButtonState/tryAgainButtonClick (TASK.33 W8-FIX #2)", () => {
+  /** Builds a facade wired ONLY for the try-again-button methods — every other DOM/store slot keeps its own real default (never exercised by these tests). */
+  function buildFacade(registry: TabRegistry, tabsStore: TabsStoreApi, tryAgainButtonDom?: TryAgainButtonDom) {
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      tryAgainButtonDom,
+    );
+  }
+
+  describe("tryAgainButtonState", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active)", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const tryAgainButtonDom: TryAgainButtonDom = { state: () => null, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonState(tabId, "loop_end:t1")).toEqual({ ok: false, reason: "tab_not_active" });
+    });
+
+    it("rejects an unknown tabId (unknown_tab)", () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const tryAgainButtonDom: TryAgainButtonDom = { state: () => null, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonState("ghost", "loop_end:t1")).toEqual({ ok: false, reason: "unknown_tab" });
+    });
+
+    it("reports the empty default shape (not an error) when the block isn't rendered yet", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const tryAgainButtonDom: TryAgainButtonDom = { state: () => null, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonState(tabId, "loop_end:t1")).toEqual({
+        ok: true,
+        count: 0,
+        visible: false,
+        enabled: false,
+      });
+    });
+
+    it("queries tryAgainButtonDom.state with the EXACT tabId + blockId requested", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const seen: Array<[string, string]> = [];
+      const tryAgainButtonDom: TryAgainButtonDom = {
+        state: (t, id) => {
+          seen.push([t, id]);
+          return null;
+        },
+        click: vi.fn(() => false),
+      };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      facade.tryAgainButtonState(tabId, "loop_end:t42");
+      expect(seen).toEqual([[tabId, "loop_end:t42"]]);
+    });
+
+    it("spreads a found button's count/visible/enabled verbatim — count>1 rides through uncollapsed, since more than one button is itself the defect this probe exists to catch", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const tryAgainButtonDom: TryAgainButtonDom = {
+        state: () => ({ count: 2, visible: true, enabled: true }),
+        click: vi.fn(() => false),
+      };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonState(tabId, "loop_end:t1")).toEqual({
+        ok: true,
+        count: 2,
+        visible: true,
+        enabled: true,
+      });
+    });
+  });
+
+  describe("tryAgainButtonClick", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active), touching no DOM click", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const tryAgainButtonDom: TryAgainButtonDom = { state: () => null, click: vi.fn(() => true) };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonClick(tabId, "loop_end:t1")).toEqual({ ok: false, reason: "tab_not_active" });
+      expect(tryAgainButtonDom.click).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown tabId (unknown_tab), touching no DOM click", () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const tryAgainButtonDom: TryAgainButtonDom = { state: () => null, click: vi.fn(() => true) };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonClick("ghost", "loop_end:t1")).toEqual({ ok: false, reason: "unknown_tab" });
+      expect(tryAgainButtonDom.click).not.toHaveBeenCalled();
+    });
+
+    it("fires a REAL click via tryAgainButtonDom.click() with the exact tabId + blockId, returning {ok:true}", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const seen: Array<[string, string]> = [];
+      const tryAgainButtonDom: TryAgainButtonDom = {
+        state: () => null,
+        click: (t, id) => {
+          seen.push([t, id]);
+          return true;
+        },
+      };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonClick(tabId, "loop_end:t42")).toEqual({ ok: true });
+      expect(seen).toEqual([[tabId, "loop_end:t42"]]);
+    });
+
+    it("returns {ok:false, reason:'not_present'} when nothing was there to click (missing or ambiguous button)", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const tryAgainButtonDom: TryAgainButtonDom = { state: () => null, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, tryAgainButtonDom);
+      expect(facade.tryAgainButtonClick(tabId, "loop_end:t1")).toEqual({ ok: false, reason: "not_present" });
     });
   });
 });

@@ -461,6 +461,18 @@ export function agentCardExpand(deps: HandlerDeps, tabId: string, toolCallId: st
   return deps.callFacade("agentCardExpand", [tabId, toolCallId]);
 }
 
+// --- Try-again button probe/driver (TASK.33 W8-FIX #2): same thin-wrapper
+// discipline as the agent-card probe/driver above — the facade owns every
+// guard, this layer only forwards method + args. ---
+
+export function tryAgainButtonState(deps: HandlerDeps, tabId: string, blockId: string): Promise<unknown> {
+  return deps.callFacade("tryAgainButtonState", [tabId, blockId]);
+}
+
+export function tryAgainButtonClick(deps: HandlerDeps, tabId: string, blockId: string): Promise<unknown> {
+  return deps.callFacade("tryAgainButtonClick", [tabId, blockId]);
+}
+
 // --- Settings probe/driver (slice-P7.16-cut.md §5 W4): thin wrappers over the
 // frozen facade contract, same discipline as the transcript-scroll /
 // todo-panel / start-screen / prompt-queue / model-pill probes above — the
