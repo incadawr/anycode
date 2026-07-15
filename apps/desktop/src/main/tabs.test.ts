@@ -19,6 +19,7 @@ import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shar
 import {
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
+  createPinReservations,
   decideRespawn,
   type HostForkFn,
   type TabHostManagerDeps,
@@ -161,6 +162,38 @@ describe("decideRespawn — pure breaker accounting", () => {
   it("the per-tab breaker takes precedence over the global one", () => {
     const d = decideRespawn({ uptimeMs: 10, rapidRespawns: 5, stormForks: 12 });
     expect(d).toMatchObject({ action: "give_up", reason: "per_tab_crash_loop" });
+  });
+});
+
+describe("createPinReservations — in-flight pin refcount (W10-FIX F3, layer a)", () => {
+  it("holds while ANY reservation is outstanding and drops only at zero", () => {
+    const r = createPinReservations();
+    expect(r.has("A")).toBe(false);
+    r.reserve("A");
+    r.reserve("A"); // two concurrent resumes of the same pin
+    expect(r.has("A")).toBe(true);
+    r.release("A");
+    // guard still holds — one release does not clear a doubly-reserved pin
+    expect(r.has("A")).toBe(true);
+    r.release("A");
+    expect(r.has("A")).toBe(false);
+  });
+
+  it("never underflows on over-release", () => {
+    const r = createPinReservations();
+    r.reserve("B");
+    r.release("B");
+    r.release("B"); // extra release must not wedge a stuck-negative count
+    expect(r.has("B")).toBe(false);
+    r.reserve("B");
+    expect(r.has("B")).toBe(true);
+  });
+
+  it("tracks distinct pins independently", () => {
+    const r = createPinReservations();
+    r.reserve("A");
+    expect(r.has("A")).toBe(true);
+    expect(r.has("B")).toBe(false);
   });
 });
 
@@ -605,6 +638,45 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     });
     manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-42" });
     expect(seen).toEqual(["conn-42"]);
+  });
+
+  it("REFUSES to fork a pinned tab whose connection env is unavailable — never falls back (W10-FIX F3 fail-closed)", () => {
+    const { window, hostExited } = windowRig();
+    const forkSpy = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const manager = new TabHostManager({
+      fork: forkSpy,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      // The pinned connection's per-connection env is gone (deleted mid-resume):
+      // undefined must NOT fall back to the active env under this pin's id.
+      env: (id?: string) => (id === "conn-gone" ? undefined : { PATH: "/base" }),
+      logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, connectionId: "conn-gone" });
+    expect(created.ok).toBe(true);
+    const tabId = created.ok ? created.tab.tabId : "";
+    // Custody invariant: the wrong-account fork never happened.
+    expect(forkSpy).not.toHaveBeenCalled();
+    // Surfaced as a host-exit (renderer replacement flow), terminal — no respawn.
+    expect(hostExited).toEqual([tabId]);
+    expect(manager.getTab(tabId)?.state).toBe("crash_looped");
+  });
+
+  it("still forks a pinned tab whose connection env IS available (fail-closed is miss-only)", () => {
+    const { window } = windowRig();
+    const forkSpy = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const manager = new TabHostManager({
+      fork: forkSpy,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: (id?: string) => (id === "conn-ok" ? { PATH: "/base" } : undefined),
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, connectionId: "conn-ok" });
+    expect(forkSpy).toHaveBeenCalledOnce();
+    expect(forkSpy.mock.calls[0]?.[2].env).toEqual({ PATH: "/base", ANYCODE_CONNECTION_ID: "conn-ok" });
   });
 
   it("resolveCredential receives the tab's pinned connectionId (per-tab oauth routing)", async () => {

@@ -70,7 +70,7 @@ import {
   registerSettingsIpc,
   type SettingsIpcDeps,
 } from "./settings-ipc.js";
-import { TabHostManager } from "./tabs.js";
+import { TabHostManager, createPinReservations } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
@@ -278,6 +278,14 @@ let currentHostEnv: NodeJS.ProcessEnv = {};
  * pin equal to the active connection resolves to `currentHostEnv` (always fresh).
  */
 let hostEnvByConnection = new Map<string, NodeJS.ProcessEnv>();
+/**
+ * In-flight pinned-connection reservations (TASK.45 W10-FIX F3, layer a). A resume
+ * synchronously reserves its pin BEFORE priming the env and releases it once the
+ * tab is registered (or on failure), so the delete-guard's `connectionInUse` sees
+ * the pin as in-use across the whole window — registered ∪ pending — closing the
+ * resume/delete TOCTOU with no lock in the resume path (the §3.2 deadlock).
+ */
+const pinReservations = createPinReservations();
 /**
  * A `--resume`/ANYCODE_RESUME id parked while unconfigured: consumed by the
  * first explicit initial-tab launch (ready boot or the deferred flow).
@@ -617,14 +625,22 @@ async function refreshProviderState(): Promise<void> {
 /**
  * The fork base env for a tab pinned to `connectionId` (TASK.45 W10). Active pin
  * (or none) -> the always-fresh `currentHostEnv`; a non-active pin -> its cached
- * per-connection env, falling back to `currentHostEnv` only if the cache has not
- * been primed yet (`ensurePinnedEnv` primes it before a resume spawns).
+ * per-connection env.
+ *
+ * TASK.45 W10-FIX F3 (layer c, fail-closed): a cache-MISS for a pinned non-active
+ * id returns `undefined` — NEVER `currentHostEnv`. The only way a live-pinned
+ * non-active connection is absent from the cache is that its connection was
+ * deleted (`refreshProviderState` drops deleted pins), so falling back to the
+ * active env would run the wrong account's credentials under this pin's
+ * ANYCODE_CONNECTION_ID. The spawn path (main/tabs.ts) refuses to fork on
+ * `undefined` instead. A healthy pin is always primed by `ensurePinnedEnv` /
+ * `refreshProviderState` before it spawns, so this only ever bites the deleted case.
  */
-function hostEnvForConnection(connectionId?: string): NodeJS.ProcessEnv {
+function hostEnvForConnection(connectionId?: string): NodeJS.ProcessEnv | undefined {
   if (connectionId === undefined || connectionId === currentSettings().provider.activeConnectionId) {
     return currentHostEnv;
   }
-  return hostEnvByConnection.get(connectionId) ?? currentHostEnv;
+  return hostEnvByConnection.get(connectionId);
 }
 
 /**
@@ -646,21 +662,38 @@ async function ensurePinnedEnv(connectionId: string): Promise<void> {
 /**
  * Resolves a resumed session's pinned connection (TASK.45 W10 resume matrix):
  *  - no pin (legacy session) -> ok, no connection id (resume on current default);
- *  - pin still exists -> prime its env + ok with the id;
+ *  - pin still exists -> reserve + prime its env + ok with the id;
  *  - pin deleted -> refusal carrying the missing id (renderer replacement flow).
+ *
+ * TASK.45 W10-FIX F3 (layer a): the existence check and the reservation are done
+ * SYNCHRONOUSLY (before the first `await`, one microtask — JS atomicity), so a
+ * concurrent `handleConnectionDelete` either sees the reservation and refuses
+ * `connection_in_use`, or has already removed the connection so this refuses
+ * `connection_missing`. The `ok` result carries a `release` the caller invokes in
+ * a `finally` AFTER `manager.createTab` (by which point the pin is visible via the
+ * registered tab) and on every failure path, so the pin is never briefly
+ * unguarded. Deliberately takes NO settings lock (the §3.2 re-entrant deadlock).
  */
 async function resolveResumePin(meta: {
   connectionId?: string;
-}): Promise<{ ok: true; connectionId?: string } | { ok: false; connectionId: string }> {
+}): Promise<{ ok: true; connectionId?: string; release: () => void } | { ok: false; connectionId: string }> {
   const pinnedId = meta.connectionId;
   if (pinnedId === undefined) {
-    return { ok: true };
+    return { ok: true, release: () => {} };
   }
+  // Synchronous check + reserve (no await between them): the reservation makes the
+  // pin `connectionInUse` for any delete that races past this point.
   if (connectionById(currentSettings(), pinnedId) === undefined) {
     return { ok: false, connectionId: pinnedId };
   }
-  await ensurePinnedEnv(pinnedId);
-  return { ok: true, connectionId: pinnedId };
+  pinReservations.reserve(pinnedId);
+  try {
+    await ensurePinnedEnv(pinnedId);
+  } catch (error) {
+    pinReservations.release(pinnedId);
+    throw error;
+  }
+  return { ok: true, connectionId: pinnedId, release: () => pinReservations.release(pinnedId) };
 }
 
 /**
@@ -693,6 +726,9 @@ async function startInitialTab(opts: {
   // the default — the tab is skipped so the picker surfaces the replacement); a
   // new session pins to the current active connection.
   let connectionId: string | undefined;
+  // W10-FIX F3: released once the tab is registered (or on any early return) so
+  // the resume/delete reservation never outlives the window it guards.
+  let releasePin: (() => void) | undefined;
   if (resumed !== null) {
     const pin = await resolveResumePin(resumed);
     if (!pin.ok) {
@@ -705,6 +741,7 @@ async function startInitialTab(opts: {
     sessionId = resumed.id;
     resume = true;
     connectionId = pin.connectionId;
+    releasePin = pin.release;
     console.log(`[main] resuming session ${resumed.id} in ${resumed.workspace}`);
   } else {
     const resolvedWorkspace = resolveWorkspace({ prompt: opts.promptForWorkspace });
@@ -724,18 +761,24 @@ async function startInitialTab(opts: {
     console.log(`[main] workspace: ${workspace}`);
   }
 
-  const created = manager.createTab({
-    workspace,
-    sessionId,
-    resume,
-    ...(connectionId !== undefined ? { connectionId } : {}),
-  });
-  if (!created.ok) {
-    console.error(`[main] failed to create initial tab: ${created.reason}`);
-    return;
-  }
-  if (opts.deliverNow) {
-    manager.deliverTabPort(created.tab);
+  try {
+    const created = manager.createTab({
+      workspace,
+      sessionId,
+      resume,
+      ...(connectionId !== undefined ? { connectionId } : {}),
+    });
+    if (!created.ok) {
+      console.error(`[main] failed to create initial tab: ${created.reason}`);
+      return;
+    }
+    if (opts.deliverNow) {
+      manager.deliverTabPort(created.tab);
+    }
+  } finally {
+    // The tab (if created) is now registered, so its pin is guarded by the
+    // registered set — safe to drop the in-flight reservation.
+    releasePin?.();
   }
 }
 
@@ -963,7 +1006,10 @@ void app.whenReady().then(async () => {
     oauthConfigFor: (id) => oauthConfigFromEntry(findCatalogEntry(id)),
     // TASK.45 W10 delete-guard: refuse deleting a connection an open session is
     // pinned to (it still resolves that connection's credential on every respawn).
-    connectionInUse: (connectionId) => manager?.pinnedConnectionIds().has(connectionId) ?? false,
+    // W10-FIX F3: "in use" is registered ∪ pending — a resume that has RESERVED a
+    // pin but not yet registered its tab counts too, closing the resume/delete race.
+    connectionInUse: (connectionId) =>
+      (manager?.pinnedConnectionIds().has(connectionId) ?? false) || pinReservations.has(connectionId),
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
       await refreshProviderState();

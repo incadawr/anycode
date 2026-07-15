@@ -78,6 +78,46 @@ export const DEFAULT_BREAKER_LIMITS: BreakerLimits = {
   exitDeadlineMs: 2000,
 };
 
+/**
+ * Synchronous refcount of pinned connections a resume has RESERVED but not yet
+ * registered a live tab for (TASK.45 W10-FIX F3, layer a). `resolveResumePin`
+ * reserves a pin BEFORE the first await of its env-prime and releases it once
+ * `manager.createTab` has registered the tab (or on any failure), so the pin is
+ * continuously "in use" — reserved OR registered — with no TOCTOU gap a
+ * concurrent connection-delete could slip through. Kept a pure factory (no
+ * Electron) so the refcount semantics are unit-testable directly; `main/index.ts`
+ * owns the single instance and unions it with the registered set for the
+ * delete-guard (`connectionInUse` = registered ∪ pending).
+ */
+export interface PinReservations {
+  /** Reserves one in-flight hold on `connectionId` (refcount +1). */
+  reserve(connectionId: string): void;
+  /** Releases one hold (refcount -1; the key is dropped at zero). Never goes negative. */
+  release(connectionId: string): void;
+  /** True while at least one hold is outstanding for `connectionId`. */
+  has(connectionId: string): boolean;
+}
+
+export function createPinReservations(): PinReservations {
+  const counts = new Map<string, number>();
+  return {
+    reserve(connectionId: string): void {
+      counts.set(connectionId, (counts.get(connectionId) ?? 0) + 1);
+    },
+    release(connectionId: string): void {
+      const next = (counts.get(connectionId) ?? 0) - 1;
+      if (next > 0) {
+        counts.set(connectionId, next);
+      } else {
+        counts.delete(connectionId);
+      }
+    },
+    has(connectionId: string): boolean {
+      return (counts.get(connectionId) ?? 0) > 0;
+    },
+  };
+}
+
 /** Bounds a draft engine id before it becomes argv; mirrors the host-side parser's own bound. */
 const MAX_ENGINE_ARG_LENGTH = 128;
 
@@ -256,8 +296,15 @@ export interface TabHostManagerDeps {
    * changed), falling back to the active-connection env for `undefined`. Called
    * at every spawn/respawn with `tab.connectionId`, so a mutation-refreshed
    * per-connection env (fresh key after a replace) is picked up on respawn.
+   *
+   * TASK.45 W10-FIX F3 (layer c, fail-closed fork): returns `undefined` for a
+   * pinned NON-active connection whose per-connection env is unavailable (its
+   * connection was deleted out from under a mid-flight resume). The spawn path
+   * REFUSES to fork on `undefined` rather than falling back to the active
+   * connection's env — forking with one connection's credentials while stamping
+   * ANOTHER connection's ANYCODE_CONNECTION_ID is the custody defect this closes.
    */
-  env?: (connectionId?: string) => NodeJS.ProcessEnv;
+  env?: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   /**
 
    * refuses with `not_ready` instead of spawning a keyless host. Absent = always
@@ -327,7 +374,7 @@ export class TabHostManager {
   /* */
   private readonly bindings = new Map<string, string>();
   private readonly limits: BreakerLimits;
-  private readonly env: (connectionId?: string) => NodeJS.ProcessEnv;
+  private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
   private readonly isEngineReady: (engine: EngineId) => boolean;
   private readonly now: () => number;
@@ -484,6 +531,23 @@ export class TabHostManager {
       if (tab.engineModel !== null) args.push("--engine-model", tab.engineModel);
       if (tab.enginePreset !== null) args.push("--engine-preset", tab.enginePreset);
     }
+    // TASK.45 W10-FIX F3 (layer c): resolve the pinned base env BEFORE forking. A
+    // `undefined` here means the tab is pinned to a connection whose per-connection
+    // env is no longer available (deleted mid-resume). Refuse to fork rather than
+    // silently fall back to the active connection's env while still stamping this
+    // pin's ANYCODE_CONNECTION_ID — that would run the WRONG account's credentials
+    // under this pin (the custody defect). Surface it as a host-exit so the
+    // renderer's replacement flow (F1) can recover; never respawn a refused fork.
+    const baseEnv = this.env(tab.connectionId);
+    if (baseEnv === undefined) {
+      this.logger.error(
+        `[main] tab ${tab.tabId} pinned to unavailable connection ${tab.connectionId ?? "?"}; refusing to spawn`,
+      );
+      tab.proc = null;
+      tab.state = "crash_looped";
+      this.notifyHostExited(tab.tabId);
+      return;
+    }
     tab.hostGeneration += 1;
     tab.engineProcess = null;
     const cleanup = tab.pendingWorktreeCleanup;
@@ -494,7 +558,7 @@ export class TabHostManager {
         // keeps a per-connection env fresh across mutations); ANYCODE_CONNECTION_ID
         // is stamped per-fork from `tab.connectionId` (never baked into the shared
         // base env — a legacy/unpinned tab must not inherit another tab's pin).
-        ...this.env(tab.connectionId),
+        ...baseEnv,
         ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
         ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}),
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),

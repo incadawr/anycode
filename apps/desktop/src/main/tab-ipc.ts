@@ -50,8 +50,15 @@ export interface DialogLike {
  * with no pin — resume on the current default, documented behaviour), or a
  * refusal carrying the deleted connection's id (the renderer offers a
  * replacement instead of silently switching accounts).
+ *
+ * TASK.45 W10-FIX F3: the `ok` branch carries a `release` the caller MUST invoke
+ * (in a `finally`) once the tab is registered or on any failure — it drops the
+ * synchronous pin reservation that guards the resume/delete race. Optional so
+ * legacy wiring / unit fixtures that don't reserve stay source-compatible.
  */
-export type ResumePinResult = { ok: true; connectionId?: string } | { ok: false; connectionId: string };
+export type ResumePinResult =
+  | { ok: true; connectionId?: string; release?: () => void }
+  | { ok: false; connectionId: string };
 
 export interface TabIpcDeps {
   manager: TabHostManager;
@@ -197,27 +204,37 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // silent switch to the current default); a legacy session (no pin) resolves
   // `{ok:true}` with no connectionId and resumes on the current default.
   let pinnedConnectionId: string | undefined;
+  // W10-FIX F3: released in the `finally` below (after createTab registers the
+  // tab, or on any failure) so the resume/delete reservation is never briefly
+  // unguarded. Resolved AFTER the already_open guard above so an already-open
+  // resume never touches the reservation (guard order preserved).
+  let releasePin: (() => void) | undefined;
   if (deps.resolveResumePin !== undefined) {
     const pin = await deps.resolveResumePin(meta);
     if (!pin.ok) {
       return { ok: false, reason: "connection_missing", connectionId: pin.connectionId };
     }
     pinnedConnectionId = pin.connectionId;
+    releasePin = pin.release;
   }
-  const result = deps.manager.createTab({
-    workspace: meta.workspace,
-    ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
-    ...(meta.worktree !== undefined ? { worktree: meta.worktree } : {}),
-    sessionId: req.sessionId,
-    resume: true,
-    engine,
-    ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
-  });
-  if (!result.ok) {
-    return result;
+  try {
+    const result = deps.manager.createTab({
+      workspace: meta.workspace,
+      ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
+      ...(meta.worktree !== undefined ? { worktree: meta.worktree } : {}),
+      sessionId: req.sessionId,
+      resume: true,
+      engine,
+      ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
+    });
+    if (!result.ok) {
+      return result;
+    }
+    deps.manager.deliverTabPort(result.tab);
+    return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
+  } finally {
+    releasePin?.();
   }
-  deps.manager.deliverTabPort(result.tab);
-  return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
 }
 
 /**

@@ -1183,8 +1183,16 @@ export async function handleConnectionSetActive(deps: SettingsIpcDeps, raw: unkn
  * the deleted connection was active, the active id is cleared.
  *
  * TASK.45 W10:
- *  - delete-guard: a connection pinned to a LIVE session refuses `connection_in_use`
- *    and touches nothing (no secret cleared, no metadata removed).
+ *  - delete-guard (EARLY): a connection pinned to a LIVE session refuses
+ *    `connection_in_use` and touches nothing (no secret cleared, no metadata
+ *    removed). This zero-touch guarantee holds ONLY for the early check.
+ *  - W10-FIX F3 delete-guard (LATE re-check): a resume may reserve/register this
+ *    pin AFTER the early check passed but WHILE the secret-clears below await. A
+ *    second `connectionInUse` check runs before metadata is removed; if it trips,
+ *    the delete aborts `connection_in_use` WITHOUT removing metadata — but the
+ *    secrets are already cleared, leaving a visible, recoverable keyless
+ *    connection (consistent with the "a crash leaves a keyless connection, never
+ *    an orphan secret" design posture), never a session pulled out from under.
  *  - residual §6.5: an in-flight oauth flow for the deleted connection's provider
  *    is cancelled BEFORE the secrets are cleared, so the engine cannot persist a
  *    token blob back under the just-deleted connection id.
@@ -1215,6 +1223,14 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
     // secrets-first (idempotent clears): both credential kinds, before metadata.
     await deps.vault.clearSecret(connectionSecretKey(id, "api_key"));
     await deps.vault.clearSecret(connectionSecretKey(id, "oauth"));
+    // W10-FIX F3 (layer b): re-check AFTER the awaits above. A resume that
+    // reserved/registered this pin in the window since the early check must not
+    // be clobbered — abort before removing metadata. Degradation: the secrets are
+    // already gone (keyless, recoverable), but the connection is never yanked out
+    // from under a now-live session (the custody defect this closes).
+    if (deps.connectionInUse?.(id) === true) {
+      return { ok: false, reason: "connection_in_use" };
+    }
     const remaining = loaded.settings.provider.connections.filter((connection) => connection.id !== id);
     const activeConnectionId =
       loaded.settings.provider.activeConnectionId === id ? undefined : loaded.settings.provider.activeConnectionId;

@@ -379,6 +379,36 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
     expect("connectionId" in call).toBe(false);
   });
+
+  it("resume (alive): releases the pin reservation after createTab succeeds (W10-FIX F3)", async () => {
+    const { manager } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const release = vi.fn();
+    const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x", release }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-x" }),
+      listSessions: async () => [],
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+    expect(res.ok).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("resume: releases the pin reservation even when createTab FAILS (W10-FIX F3 finally)", async () => {
+    const { manager } = makeManager({ createFails: true });
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const release = vi.fn();
+    const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x", release }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ connectionId: "conn-x" }),
+      listSessions: async () => [],
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+    expect(res.ok).toBe(false);
+    expect(release).toHaveBeenCalledOnce();
+  });
 });
 
 describe("handleCreate — guard order canSpawn -> atCapacity -> dialog/skip (R7)", () => {
