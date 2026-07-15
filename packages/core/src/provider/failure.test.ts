@@ -76,7 +76,8 @@ describe("classifyProviderFailure", () => {
     expect(result.code).toBe("connect_timeout");
     expect(result.retryable).toBe(true);
     expect(isRetryableStreamError(error)).toBe(true);
-    expect(result.safe).toEqual({ code: "connect_timeout", message: "Cannot connect to API: Connect Timeout Error" });
+    // safe.message is the whitelisted per-code string, not the raw provider text (W7b-FIX #1).
+    expect(result.safe).toEqual({ code: "connect_timeout", message: "connect timeout" });
   });
 
   it("never leaks a raw response body/headers into `safe`", () => {
@@ -96,6 +97,29 @@ describe("classifyProviderFailure", () => {
     expect(serialized).not.toContain("do-not-leak");
     expect(serialized).not.toContain("sk-should-not-leak");
     expect(serialized).not.toContain("raw-body-should-not-leak");
+  });
+
+  it("derives safe.message from the code and never leaks a secret embedded in the raw error message (W7b-FIX #1)", () => {
+    // A provider/custom error that embeds a response body or auth header directly
+    // in its `.message` must never reach `safe` — the redaction derives the human
+    // string from the classified `code`, not the raw text.
+    const secret = "Bearer sk-leak-9f3a2b";
+    const error = apiCallError({
+      message: `HTTP 500 upstream body={"token":"x"} Authorization: ${secret}`,
+      statusCode: 500,
+      isRetryable: true,
+    });
+
+    const result = classifyProviderFailure(error);
+
+    // The whitelisted per-code string, never the raw provider text.
+    expect(result.safe.message).toBe("server error");
+    // The secret is absent from the message AND the entire serialized descriptor.
+    expect(result.safe.message).not.toContain(secret);
+    const serialized = JSON.stringify(result.safe);
+    expect(serialized).not.toContain("sk-leak-9f3a2b");
+    expect(serialized).not.toContain("Bearer");
+    expect(serialized).not.toContain("Authorization");
   });
 
   it("classifies 401 as auth, non-retryable — consistent with isRetryableStreamError", () => {
@@ -183,5 +207,39 @@ describe("classifyProviderFailure", () => {
 
     expect(result).toMatchObject({ code: "unknown", retryable: false });
     expect(isRetryableStreamError(error)).toBe(false);
+  });
+});
+
+/**
+ * The three cases where `retryable` (manual-retry worthiness — the Try-again
+ * gate) INTENTIONALLY diverges from `isRetryableStreamError` (the auto-retry
+ * decision), per Fable ruling (D). Each is a DOUBLE assert so it goes red if
+ * EITHER side is later "fixed" to match the other: the divergence is the
+ * contract, not a bug (W7b-FIX #2).
+ */
+describe("classifyProviderFailure — intentional divergence from isRetryableStreamError (W7b-FIX #2 pins)", () => {
+  it("(a) quota-429: manual retry is hopeless (retryable:false) yet the port auto-retries a 429 (isRetryableStreamError:true)", () => {
+    const error = apiCallError({
+      message: "request failed",
+      statusCode: 429,
+      data: { error: { code: "1308", message: "quota exceeded" } },
+    });
+
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "quota", retryable: false });
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
+  it("(b) plain connect-timeout Error: transient so a manual retry may succeed (retryable:true) yet the port cannot auto-retry a shapeless Error (isRetryableStreamError:false)", () => {
+    const error = new Error("Cannot connect to API: Connect Timeout Error");
+
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "connect_timeout", retryable: true });
+    expect(isRetryableStreamError(error)).toBe(false);
+  });
+
+  it("(c) 400 with isRetryable:true: deterministic so a manual retry is hopeless (retryable:false) yet the port honors the provider flag (isRetryableStreamError:true)", () => {
+    const error = apiCallError({ message: "invalid request", statusCode: 400, isRetryable: true });
+
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "unknown", retryable: false });
+    expect(isRetryableStreamError(error)).toBe(true);
   });
 });

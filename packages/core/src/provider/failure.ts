@@ -79,9 +79,34 @@ export interface ProviderFailureSafe {
 
 export interface ProviderFailureClassification {
   code: ProviderFailureCode;
+  /**
+   * Whether a MANUAL retry (W8's Try-again button) has a chance of succeeding —
+   * NOT the auto-retry decision. Auto-retry is decided solely by
+   * `isRetryableStreamError` (retry.ts) and is observable via the terminal
+   * metadata's `attemptsMade`; the two fields intentionally diverge (see
+   * `classifyProviderFailure`).
+   */
   retryable: boolean;
   safe: ProviderFailureSafe;
 }
+
+/**
+ * Stable, whitelisted human string per failure code. `safe.message` is derived
+ * from the classified `code`, NEVER from the raw provider error text — a
+ * provider or custom error that embeds a response body or auth header in its
+ * `.message` can therefore never leak it through the redacted descriptor
+ * (TASK.33 W7b-FIX #1). `safe.code`/`safe.statusCode` are already safe.
+ */
+const SAFE_MESSAGES: Record<ProviderFailureCode, string> = {
+  connect_timeout: "connect timeout",
+  network: "network error",
+  rate_limited: "rate limited",
+  auth: "authentication failed",
+  forbidden: "forbidden",
+  server: "server error",
+  quota: "quota exhausted",
+  unknown: "request failed",
+};
 
 /** Undici/fetch wraps transient failures behind `TypeError: fetch failed`, cause carrying the errno. */
 const RETRYABLE_NETWORK_CODES = new Set([
@@ -145,23 +170,35 @@ function isQuotaFailure(error: unknown, message: string): boolean {
 
 /**
  * Classifies a provider failure into a stable `code` + `retryable` + redacted
- * `safe` descriptor. LAYERS OVER `isRetryableStreamError` — it does not change
- * the retry policy, only names the failure for terminal metadata (loop) and
- * health/UI surfaces: known non-retryable buckets (auth/forbidden/quota/400)
- * are consistent with `isRetryableStreamError` returning false for the same
- * error; known retryable buckets (connect_timeout/network/rate_limited/server)
- * are consistent with it returning true. `quota` is the one deliberate
- * OVERRIDE — a 429 quota-exhaustion response would otherwise fall into the
- * generically-retryable rate-limit bucket, but retrying it can never succeed.
+ * `safe` descriptor. LAYERS OVER `isRetryableStreamError` (retry.ts) without
+ * changing the retry policy; it only names the failure for terminal metadata
+ * (loop) and health/UI surfaces.
+ *
+ * `retryable` means whether a MANUAL retry has a chance of succeeding — it gates
+ * W8's Try-again button. It is NOT the auto-retry decision: auto-retry is made
+ * solely by `isRetryableStreamError` in the model port and is observable via the
+ * terminal metadata's `attemptsMade`. The two INTENTIONALLY diverge in three
+ * cases:
+ *   (a) quota-429 — 429 is a retryable status code, so the port auto-retries, but
+ *       a manual retry of a quota-exhausted account can never succeed ⇒ `false`.
+ *   (b) a plain `Error` with connect-timeout text — it does NOT auto-retry (the
+ *       form carries no statusCode/errno/isRetryable for the port to act on), yet
+ *       the class is transient and a manual retry may succeed ⇒ `true`.
+ *   (c) `APICallError{statusCode:400, isRetryable:true}` — the port auto-retries
+ *       on the provider flag, but the 400 class is deterministic for re-sending
+ *       the same message ⇒ `false`.
+ * These three divergences are pinned in failure.test.ts (double-assert pins).
  */
 export function classifyProviderFailure(error: unknown): ProviderFailureClassification {
   const statusCode = extractStatusCode(error);
   const message = extractMessage(error);
 
+  // `safe.message` is derived from the classified `code` (SAFE_MESSAGES), NEVER
+  // from `message` — the raw text is used only for classification below.
   const build = (code: ProviderFailureCode, retryable: boolean): ProviderFailureClassification => ({
     code,
     retryable,
-    safe: { code, message, ...(statusCode !== undefined ? { statusCode } : {}) },
+    safe: { code, message: SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
   });
 
   if (isQuotaFailure(error, message)) {
