@@ -147,6 +147,8 @@ export interface AutomationServerDeps {
   /** Discovery file path (default ~/.anycode/automation.json). Injectable for tests. */
   infoPath?: string;
   logger?: { log(...a: unknown[]): void; warn(...a: unknown[]): void; error(...a: unknown[]): void };
+  /** Forwarded to `HandlerDeps.activeConnectionId` (TASK.45 W10, `createTabNew`'s pin). */
+  activeConnectionId?: () => string | undefined;
 }
 
 export interface AutomationServerHandle {
@@ -168,7 +170,13 @@ const modeBody = z.object({ mode: z.string() });
 const emptyBody = z.object({}).passthrough();
 const createTabBody = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("new"), workspace: z.string().min(1) }),
-  z.object({ kind: z.literal("resume"), sessionId: z.string().min(1) }),
+  z.object({
+    kind: z.literal("resume"),
+    sessionId: z.string().min(1),
+    // TASK.45 W10-FIX F1 (W13 live-dogfood finding): mirrors tab-ipc.ts's own
+    // `createTabRequestSchema` bounds-only optional re-pin target.
+    replacementConnectionId: z.string().min(1).max(128).optional(),
+  }),
 ]);
 const waitBody = z.object({
   tabId: z.string().min(1),
@@ -679,7 +687,7 @@ async function route(
   // Action plane
   if (method === "POST" && pathname === "/tabs") {
     const body = parseBody(rawBody, createTabBody);
-    return body.kind === "new" ? createTabNew(deps, body.workspace) : resumeTab(deps, body.sessionId);
+    return body.kind === "new" ? createTabNew(deps, body.workspace) : resumeTab(deps, body.sessionId, body.replacementConnectionId);
   }
   if (method === "POST" && pathname === "/wait") {
     const body = parseBody(rawBody, waitBody);
@@ -1193,6 +1201,7 @@ export function startAutomationServer(deps: AutomationServerDeps): Promise<Autom
     getWindow: deps.getWindow,
     manager: deps.manager,
     app: deps.app,
+    activeConnectionId: deps.activeConnectionId,
   };
 
   const server = createServer((req, res) => {

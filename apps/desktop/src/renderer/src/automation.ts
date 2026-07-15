@@ -1553,7 +1553,7 @@ export interface AutomationFacade {
   setMode(tabId: string, mode: string): FacadeResult;
   stop(tabId: string): FacadeResult;
   selectTab(tabId: string): FacadeResult;
-  resumeSession(sessionId: string): Promise<CreateTabResult>;
+  resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult>;
   closeTab(tabId: string): Promise<{ ok: boolean; reason?: string }>;
   listSessions(): Promise<SessionSummary[]>;
   // ── project (design/slice-GUI-P1-cut.md §2F.5) — each mirrors exactly one
@@ -3616,7 +3616,7 @@ export function createAutomationFacade(
       return { ok: true };
     },
 
-    resumeSession(sessionId: string): Promise<CreateTabResult> {
+    resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult> {
       // Full picker path (design §3.2/§4.2): bridge -> zod -> getSession ->
       // workspace from the persisted session's own meta. No renderer-side
       // bookkeeping beyond this call — the resulting tab's port delivery
@@ -3624,8 +3624,13 @@ export function createAutomationFacade(
       // would for a real picker click (tab-registry.ts's `registerPort`
       // auto-registration, App.tsx's own comment on `handleTabCreated`); the
       // orchestrator addresses tabs by the returned `tabId` directly rather
-      // than relying on "active tab".
-      return bridge.createTab({ kind: "resume", sessionId });
+      // than relying on "active tab". `replacementConnectionId` (TASK.45
+      // W10-FIX F1) forwards the caller's explicit re-pin target straight
+      // into the SAME `createTab` bridge call the session picker's own
+      // replacement flow makes — omitted entirely when undefined.
+      return bridge.createTab(
+        replacementConnectionId !== undefined ? { kind: "resume", sessionId, replacementConnectionId } : { kind: "resume", sessionId },
+      );
     },
 
     async closeTab(tabId: string): Promise<{ ok: boolean; reason?: string }> {

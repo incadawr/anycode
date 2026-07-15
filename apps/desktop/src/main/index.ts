@@ -1218,7 +1218,16 @@ void app.whenReady().then(async () => {
   if (__ANYCODE_DEV_AUTOMATION__ && process.env.ANYCODE_AUTOMATION === "1" && !app.isPackaged && automationManager !== null) {
     try {
       const { startAutomationServer } = await import("./automation/server.js");
-      await startAutomationServer({ getWindow: () => win, manager: automationManager, app });
+      await startAutomationServer({
+        getWindow: () => win,
+        manager: automationManager,
+        app,
+        // TASK.45 W10 (W13 live-dogfood finding): same source `registerTabIpc`'s
+        // `handleCreate` pins a real "new" tab from — without this, every
+        // automation-created tab silently spawned unpinned regardless of the
+        // active connection.
+        activeConnectionId: () => settings?.provider.activeConnectionId,
+      });
     } catch (error) {
       console.error("[main] automation server failed to start", error);
     }

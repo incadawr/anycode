@@ -52,7 +52,7 @@ export interface AppLike {
  * are the real ones from tabs.ts.
  */
 export interface ManagerLike {
-  createTab(params: { workspace: string; sessionId: string; resume: boolean }): CreateTabResult;
+  createTab(params: { workspace: string; sessionId: string; resume: boolean; connectionId?: string }): CreateTabResult;
   deliverTabPort(tab: TabHost): void;
   listTabs(): ReadonlyArray<TabSummary>;
   killHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" };
@@ -76,6 +76,17 @@ export interface HandlerDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Wait poll interval (design §4.3: 150ms); injectable so tests run instantly. */
   pollMs?: number;
+  /**
+   * The active provider connection id (TASK.45 W10), same source
+   * `registerTabIpc`'s `handleCreate` pins a real "new" tab from
+   * (`main/index.ts`'s `() => settings?.provider.activeConnectionId`).
+   * Undefined = no default configured (a fresh install, or an env-override
+   * boot) — `createTabNew` below then spawns unpinned, byte-identical to the
+   * real dialog-driven path in that same situation. Absent entirely in a
+   * fixture/test HandlerDeps -> `createTabNew` stays byte-identical to before
+   * this field existed.
+   */
+  activeConnectionId?: () => string | undefined;
 }
 
 /* */
@@ -252,6 +263,13 @@ export function selectTab(deps: HandlerDeps, tabId: string): Promise<unknown> {
  * `POST /tabs {kind:"new"}` (design §4.2): the sanctioned dialog bypass (§1) —
  * the same `manager.createTab` + `deliverTabPort` the tab-ipc "new" handler
  * runs AFTER `dialog.showOpenDialog`, with the workspace supplied directly.
+ * TASK.45 W10 (W13 live-dogfood finding): a real "new" tab pins to the active
+ * connection at creation (`tab-ipc.ts`'s `handleCreate`) — this bypass must
+ * mirror that pin, or every automation-created tab silently spawns unpinned
+ * regardless of which connection is active, and the whole session-pinning
+ * surface (default-switch isolation, resume/replacement) becomes untestable
+ * over this channel. `deps.activeConnectionId` absent (fixture/test deps
+ * without the field) -> `undefined`, byte-identical to before this fix.
  */
 export function createTabNew(
   deps: HandlerDeps,
@@ -259,7 +277,13 @@ export function createTabNew(
 ):
   | { ok: true; tabId: string; sessionId: string; workspace: string }
   | { ok: false; reason: string; focusTabId?: string } {
-  const result = deps.manager.createTab({ workspace, sessionId: randomUUID(), resume: false });
+  const connectionId = deps.activeConnectionId?.();
+  const result = deps.manager.createTab({
+    workspace,
+    sessionId: randomUUID(),
+    resume: false,
+    ...(connectionId !== undefined ? { connectionId } : {}),
+  });
   if (!result.ok) {
     return { ok: false, reason: result.reason, ...(result.focusTabId !== undefined ? { focusTabId: result.focusTabId } : {}) };
   }
@@ -267,9 +291,16 @@ export function createTabNew(
   return { ok: true, tabId: result.tab.tabId, sessionId: result.tab.sessionId, workspace: result.tab.workspace };
 }
 
-/** `POST /tabs {kind:"resume"}` (design §4.2): full picker path through the facade/bridge. */
-export function resumeTab(deps: HandlerDeps, sessionId: string): Promise<unknown> {
-  return deps.callFacade("resumeSession", [sessionId]);
+/**
+ * `POST /tabs {kind:"resume"}` (design §4.2): full picker path through the
+ * facade/bridge. `replacementConnectionId` (TASK.45 W10-FIX F1, W13
+ * live-dogfood finding) forwards the caller's explicit re-pin target to the
+ * SAME `resumeSession` facade method — omitted entirely when undefined so a
+ * caller that never supplies it exercises the byte-identical bare-resume path
+ * as before this fix.
+ */
+export function resumeTab(deps: HandlerDeps, sessionId: string, replacementConnectionId?: string): Promise<unknown> {
+  return deps.callFacade("resumeSession", replacementConnectionId !== undefined ? [sessionId, replacementConnectionId] : [sessionId]);
 }
 
 export function closeTab(deps: HandlerDeps, tabId: string): Promise<unknown> {
