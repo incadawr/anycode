@@ -1074,8 +1074,16 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
         return { ok: false, reason: "connection_in_use" };
       }
       const remaining = loaded.settings.provider.connections.filter((connection) => connection.id !== id);
+      // W12-FIX §2: deleting the ACTIVE connection promotes a deterministic
+      // successor — the first remaining connection in array order — rather
+      // than leaving `activeConnectionId` undefined with connections still
+      // present (a state only a Welcome-embed dead-end and a manual
+      // settings.json edit could ever recover from). Deleting a non-active
+      // connection, or the last connection, is unchanged.
       const activeConnectionId =
-        loaded.settings.provider.activeConnectionId === id ? undefined : loaded.settings.provider.activeConnectionId;
+        loaded.settings.provider.activeConnectionId === id
+          ? remaining[0]?.id
+          : loaded.settings.provider.activeConnectionId;
       const provider: ProviderSettingsV2 = {
         connections: remaining,
         ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
