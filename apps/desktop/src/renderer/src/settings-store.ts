@@ -269,219 +269,242 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
     return updatesBridge ?? realUpdatesBridge();
   }
 
-  return create<SettingsAppState>()((set, get) => ({
-    snapshot: null,
-    loadError: null,
-    notice: null,
-    pendingConsent: null,
-    oauthPendingProviderId: null,
-    updateStatus: { kind: "idle" },
+  // Renderer store snapshot race guard (TASK.45 block-45 F1): `load()` is
+  // unsequenced against every mutating action, so a health-push-triggered
+  // `load()` started before a mutation can resolve AFTER it (its own slow
+  // secret-presence probing lands late) and clobber fresh state with a stale
+  // read. `snapshotEpoch` is bumped by every ok-arm mutation commit
+  // (`commitSnapshot`) and by every `load()` taking its ticket; a `load()`
+  // only commits (snapshot OR loadError) if its ticket still matches the
+  // current epoch when its bridge call resolves — a stale load discards its
+  // result entirely.
+  let snapshotEpoch = 0;
 
-    async load(): Promise<void> {
-      try {
-        const snapshot = await api().get();
-        set({ snapshot, loadError: null });
-      } catch (err) {
-        set({ loadError: err instanceof Error ? err.message : "Failed to load settings." });
-      }
-    },
+  return create<SettingsAppState>()((set, get) => {
+    function commitSnapshot(snapshot: SettingsSnapshot, extra?: Partial<SettingsAppState>): void {
+      snapshotEpoch += 1;
+      set({ snapshot, ...extra });
+    }
 
-    async setPatch(patch: SettingsPatch): Promise<SettingsMutationResult> {
-      const result = await api().set(patch);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+    return {
+      snapshot: null,
+      loadError: null,
+      notice: null,
+      pendingConsent: null,
+      oauthPendingProviderId: null,
+      updateStatus: { kind: "idle" },
 
-    async connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult> {
-      const result = await api().connectionUpdate(req);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async load(): Promise<void> {
+        const epoch = ++snapshotEpoch;
+        try {
+          const snapshot = await api().get();
+          if (epoch === snapshotEpoch) {
+            set({ snapshot, loadError: null });
+          }
+        } catch (err) {
+          if (epoch === snapshotEpoch) {
+            set({ loadError: err instanceof Error ? err.message : "Failed to load settings." });
+          }
+        }
+      },
 
-    async setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult> {
-      const result = await api().setSecret(key, value);
-      if (result.ok) {
-        set({ snapshot: result.snapshot, pendingConsent: null });
-      } else if (result.reason === "weak_storage_needs_consent") {
-        // Park the value for one retry round-trip (§4/CUSTODY) instead of
-        // surfacing it as a plain notice — SettingsScreen renders the
-        // ConsentDialog off `pendingConsent !== null`.
-        set({ pendingConsent: { key, value } });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async setPatch(patch: SettingsPatch): Promise<SettingsMutationResult> {
+        const result = await api().set(patch);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async clearSecret(key: SecretKey): Promise<SettingsMutationResult> {
-      const result = await api().clearSecret(key);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult> {
+        const result = await api().connectionUpdate(req);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult> {
-      const result = await api().connectionCreate(req);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult> {
+        const result = await api().setSecret(key, value);
+        if (result.ok) {
+          commitSnapshot(result.snapshot, { pendingConsent: null });
+        } else if (result.reason === "weak_storage_needs_consent") {
+          // Park the value for one retry round-trip (§4/CUSTODY) instead of
+          // surfacing it as a plain notice — SettingsScreen renders the
+          // ConsentDialog off `pendingConsent !== null`.
+          set({ pendingConsent: { key, value } });
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult> {
-      const result = await api().connectionSetActive(req);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async clearSecret(key: SecretKey): Promise<SettingsMutationResult> {
+        const result = await api().clearSecret(key);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult> {
-      const result = await api().connectionDelete(req);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult> {
+        const result = await api().connectionCreate(req);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult> {
-      const result = await api().connectionCheck(req);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult> {
+        const result = await api().connectionSetActive(req);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    subscribeProviderHealth(): () => void {
-      return api().onProviderHealthChanged(() => {
-        void get().load();
-      });
-    },
+      async connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult> {
+        const result = await api().connectionDelete(req);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult> {
-      const result = await api().addRule(rule);
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      async connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult> {
+        const result = await api().connectionCheck(req);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async removeRule(rule: AlwaysAllowRule): Promise<SettingsMutationResult> {
-      const current = get().snapshot;
-      const alwaysAllow = withoutRule(current?.settings.permissions.alwaysAllow ?? [], rule);
-      const result = await api().set({ permissions: { alwaysAllow } });
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(result.reason) });
-      }
-      return result;
-    },
+      subscribeProviderHealth(): () => void {
+        return api().onProviderHealthChanged(() => {
+          void get().load();
+        });
+      },
 
-    async acceptWeakStorageConsent(): Promise<SettingsMutationResult | null> {
-      const pending = get().pendingConsent;
-      if (!pending) {
-        return null;
-      }
-      const consentResult = await api().set({ security: { allowWeakSecretStorage: true } });
-      if (!consentResult.ok) {
-        set({ pendingConsent: null, notice: describeMutationFailure(consentResult.reason) });
-        return consentResult;
-      }
-      set({ snapshot: consentResult.snapshot });
-      const retryResult = await api().setSecret(pending.key, pending.value);
-      // Unconditional clear: whether the retry succeeded or failed for some
-      // OTHER reason, the parked plaintext must not survive past this single
-      // retry attempt (CUSTODY) — a second weak_storage_needs_consent here
-      // (shouldn't happen: consent was just persisted) would otherwise loop.
-      set({ pendingConsent: null });
-      if (retryResult.ok) {
-        set({ snapshot: retryResult.snapshot });
-      } else {
-        set({ notice: describeMutationFailure(retryResult.reason) });
-      }
-      return retryResult;
-    },
+      async addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult> {
+        const result = await api().addRule(rule);
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    declineWeakStorageConsent(): void {
-      set({ pendingConsent: null });
-    },
+      async removeRule(rule: AlwaysAllowRule): Promise<SettingsMutationResult> {
+        const current = get().snapshot;
+        const alwaysAllow = withoutRule(current?.settings.permissions.alwaysAllow ?? [], rule);
+        const result = await api().set({ permissions: { alwaysAllow } });
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
 
-    setNotice(text: string | null): void {
-      set({ notice: text });
-    },
+      async acceptWeakStorageConsent(): Promise<SettingsMutationResult | null> {
+        const pending = get().pendingConsent;
+        if (!pending) {
+          return null;
+        }
+        const consentResult = await api().set({ security: { allowWeakSecretStorage: true } });
+        if (!consentResult.ok) {
+          set({ pendingConsent: null, notice: describeMutationFailure(consentResult.reason) });
+          return consentResult;
+        }
+        commitSnapshot(consentResult.snapshot);
+        const retryResult = await api().setSecret(pending.key, pending.value);
+        // Unconditional clear: whether the retry succeeded or failed for some
+        // OTHER reason, the parked plaintext must not survive past this single
+        // retry attempt (CUSTODY) — a second weak_storage_needs_consent here
+        // (shouldn't happen: consent was just persisted) would otherwise loop.
+        set({ pendingConsent: null });
+        if (retryResult.ok) {
+          commitSnapshot(retryResult.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(retryResult.reason) });
+        }
+        return retryResult;
+      },
 
-    async oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult> {
-      set({ oauthPendingProviderId: providerId });
-      // Two-arg form ONLY when connectionId is present (not `(providerId,
-      // undefined)`) — preserves the exact call shape existing bridge mocks
-      // assert on for the legacy (absent-connectionId) path.
-      const result = connectionId !== undefined ? await api().oauthStart(providerId, connectionId) : await api().oauthStart(providerId);
-      // Unconditional clear, mirroring acceptWeakStorageConsent's discipline:
-      // the pending flag must not survive past this one round-trip regardless
-      // of how it resolved.
-      set({ oauthPendingProviderId: null });
-      if (result.ok) {
-        set({ snapshot: result.snapshot });
-      } else {
-        set({ notice: describeOAuthFailure(result.reason) });
-      }
-      return result;
-    },
+      declineWeakStorageConsent(): void {
+        set({ pendingConsent: null });
+      },
 
-    async oauthCancel(providerId: string): Promise<void> {
-      await api().oauthCancel(providerId);
-    },
+      setNotice(text: string | null): void {
+        set({ notice: text });
+      },
 
-    subscribeUpdates(): () => void {
-      return updatesApi().onUpdateStatus((status) => set({ updateStatus: status }));
-    },
+      async oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult> {
+        set({ oauthPendingProviderId: providerId });
+        // Two-arg form ONLY when connectionId is present (not `(providerId,
+        // undefined)`) — preserves the exact call shape existing bridge mocks
+        // assert on for the legacy (absent-connectionId) path.
+        const result = connectionId !== undefined ? await api().oauthStart(providerId, connectionId) : await api().oauthStart(providerId);
+        // Unconditional clear, mirroring acceptWeakStorageConsent's discipline:
+        // the pending flag must not survive past this one round-trip regardless
+        // of how it resolved.
+        set({ oauthPendingProviderId: null });
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeOAuthFailure(result.reason) });
+        }
+        return result;
+      },
 
-    async checkForUpdates(): Promise<UpdateActionResult> {
-      const result = await updatesApi().check();
-      if (!result.ok) {
-        set({ notice: describeUpdateActionFailure(result.reason) });
-      }
-      return result;
-    },
+      async oauthCancel(providerId: string): Promise<void> {
+        await api().oauthCancel(providerId);
+      },
 
-    async downloadUpdate(): Promise<UpdateActionResult> {
-      const result = await updatesApi().download();
-      if (!result.ok) {
-        set({ notice: describeUpdateActionFailure(result.reason) });
-      }
-      return result;
-    },
+      subscribeUpdates(): () => void {
+        return updatesApi().onUpdateStatus((status) => set({ updateStatus: status }));
+      },
 
-    async installUpdate(): Promise<UpdateActionResult> {
-      const result = await updatesApi().install();
-      if (!result.ok) {
-        set({ notice: describeUpdateActionFailure(result.reason) });
-      }
-      return result;
-    },
-  }));
+      async checkForUpdates(): Promise<UpdateActionResult> {
+        const result = await updatesApi().check();
+        if (!result.ok) {
+          set({ notice: describeUpdateActionFailure(result.reason) });
+        }
+        return result;
+      },
+
+      async downloadUpdate(): Promise<UpdateActionResult> {
+        const result = await updatesApi().download();
+        if (!result.ok) {
+          set({ notice: describeUpdateActionFailure(result.reason) });
+        }
+        return result;
+      },
+
+      async installUpdate(): Promise<UpdateActionResult> {
+        const result = await updatesApi().install();
+        if (!result.ok) {
+          set({ notice: describeUpdateActionFailure(result.reason) });
+        }
+        return result;
+      },
+    };
+  });
 }
 
 export type SettingsStoreApi = ReturnType<typeof createSettingsStore>;

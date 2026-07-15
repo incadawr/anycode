@@ -67,6 +67,17 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
   };
 }
 
+/** A manually-resolved/rejected promise, for tests that need to hold a bridge call open to force a specific resolution order. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function fakeUpdatesBridge(overrides: Partial<UpdatesBridge> = {}): UpdatesBridge {
   return {
     check: vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult),
@@ -96,6 +107,80 @@ describe("settings-store: load", () => {
 
     expect(store.getState().loadError).toBe("ipc down");
     expect(store.getState().snapshot).toBeNull();
+  });
+});
+
+describe("settings-store: snapshot epoch guard (TASK.45 block-45 F1 — unsequenced load() vs. mutation race)", () => {
+  it("clobber: a load() that started before a mutation, but resolves after it, does not overwrite the mutation's fresh snapshot", async () => {
+    const held = deferred<SettingsSnapshot>();
+    const fresh = baseSnapshot({ settings: { ...baseSettings(), ui: { theme: "dark" } } });
+    const stale = baseSnapshot({ settings: { ...baseSettings(), ui: { theme: "light" } } });
+    const bridge = fakeBridge({
+      get: vi.fn().mockReturnValue(held.promise),
+      connectionUpdate: vi.fn().mockResolvedValue({ ok: true, snapshot: fresh } satisfies SettingsMutationResult),
+    });
+    const store = createSettingsStore(bridge);
+
+    const loadPromise = store.getState().load();
+    await store.getState().connectionUpdate({ id: "conn-1", model: "glm-5.2" });
+    expect(store.getState().snapshot).toEqual(fresh);
+
+    held.resolve(stale);
+    await loadPromise;
+
+    expect(store.getState().snapshot).toEqual(fresh);
+  });
+
+  it("overlap: two concurrent load()s — the newer one's snapshot wins even when the older one resolves last", async () => {
+    const older = deferred<SettingsSnapshot>();
+    const newer = deferred<SettingsSnapshot>();
+    const get = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const bridge = fakeBridge({ get });
+    const store = createSettingsStore(bridge);
+
+    const olderLoad = store.getState().load();
+    const newerLoad = store.getState().load();
+
+    const newerSnapshot = baseSnapshot({ providerReady: true });
+    newer.resolve(newerSnapshot);
+    await newerLoad;
+    expect(store.getState().snapshot).toEqual(newerSnapshot);
+
+    older.resolve(baseSnapshot({ readOnly: true }));
+    await olderLoad;
+
+    expect(store.getState().snapshot).toEqual(newerSnapshot);
+  });
+
+  it("stale-error: a load() that rejects after a mutation committed leaves loadError null (must not paint an error over healthy fresh state)", async () => {
+    const held = deferred<SettingsSnapshot>();
+    const fresh = baseSnapshot({ settings: { ...baseSettings(), ui: { theme: "dark" } } });
+    const bridge = fakeBridge({
+      get: vi.fn().mockReturnValue(held.promise),
+      set: vi.fn().mockResolvedValue({ ok: true, snapshot: fresh } satisfies SettingsMutationResult),
+    });
+    const store = createSettingsStore(bridge);
+
+    const loadPromise = store.getState().load();
+    await store.getState().setPatch({ ui: { theme: "dark" } });
+    expect(store.getState().snapshot).toEqual(fresh);
+
+    held.reject(new Error("ipc down"));
+    await loadPromise;
+
+    expect(store.getState().loadError).toBeNull();
+    expect(store.getState().snapshot).toEqual(fresh);
+  });
+
+  it("control: a plain uncontested load() still commits (the guard doesn't brick the happy path)", async () => {
+    const snapshot = baseSnapshot({ providerReady: true });
+    const bridge = fakeBridge({ get: vi.fn().mockResolvedValue(snapshot) });
+    const store = createSettingsStore(bridge);
+
+    await store.getState().load();
+
+    expect(store.getState().snapshot).toEqual(snapshot);
+    expect(store.getState().loadError).toBeNull();
   });
 });
 
