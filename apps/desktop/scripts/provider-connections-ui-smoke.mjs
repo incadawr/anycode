@@ -580,18 +580,20 @@ async function step4SaveKeyA(ctx) {
   const beforeSave = await apiOk(ctx, 4, "GET", "/settings/provider");
   assert(4, beforeSave.drawer.apiKeyEntered === true, "expected apiKeyEntered=true right after typing the key");
 
+  // Saving connection A's key is the SAME action that flips providerReady
+  // true (it is the only connection, and the model was already set at
+  // creation) — App.tsx's shouldShowWelcome gate can unmount WelcomeScreen
+  // essentially atomically with the vault write completing, so there is no
+  // stable post-save frame here with the drawer still open to read
+  // apiKeyEntered/credentialStatusText off of (confirmed live: a poll
+  // for either field after this exact save saw drawer.open flip to false
+  // instead). That transient-custody assertion is exercised in step 7
+  // instead, where saving connection B's key does NOT unmount anything
+  // (Welcome is already long gone by then).
   const saveKey = await apiOk(ctx, 4, "POST", "/settings/provider/drawer/save-key", {});
   assert(4, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
 
-  const afterSave = await pollProviderState(ctx, 4, (s) => s.drawer.apiKeyEntered === false && s.drawer.credentialStatusText !== null);
-  assert(
-    4,
-    afterSave.drawer.apiKeyEntered === false,
-    `custody: expected the plaintext key field cleared the instant Save was clicked, got apiKeyEntered=${afterSave.drawer.apiKeyEntered}`,
-  );
-  assert(4, afterSave.drawer.credentialStatusText !== null, "expected a non-null credentialStatusText once the key round-trips through the vault");
-
-  pass(4, `key saved for connection A; plaintext field cleared post-submit (custody), credentialStatusText="${afterSave.drawer.credentialStatusText}"`);
+  pass(4, `key saved for connection A (drawer/save-key ok:true) — providerReady may flip synchronously with this save, verified in step 5`);
 }
 
 async function step5WelcomeUnmountsAndDiskCustody(ctx) {
@@ -669,8 +671,24 @@ async function step7AddConnectionB(ctx) {
   assert(7, afterCreate.drawer.stage === "credential", `expected stage="credential" after creating connection B, got ${afterCreate.drawer.stage}`);
   const setKey = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/set", { apiKey: "sk-welcome-smoke-key-2" });
   assert(7, setKey.ok === true, `drawer/set (apiKey) rejected: ${JSON.stringify(setKey)}`);
+  const beforeSaveKey = await apiOk(ctx, 7, "GET", "/settings/provider");
+  assert(7, beforeSaveKey.drawer.apiKeyEntered === true, "expected apiKeyEntered=true right after typing connection B's key");
   const saveKey = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/save-key", {});
   assert(7, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
+
+  // Unlike connection A's save (step 4 — that save flips providerReady and
+  // unmounts WelcomeScreen essentially atomically, leaving no stable frame
+  // to observe), this is the Settings dialog: nothing unmounts here, so the
+  // custody assertion (plaintext field cleared) and the credential-status
+  // read are both genuinely observable.
+  const afterSaveKey = await pollProviderState(ctx, 7, (s) => s.drawer.apiKeyEntered === false && s.drawer.credentialStatusText !== null);
+  assert(
+    7,
+    afterSaveKey.drawer.apiKeyEntered === false,
+    `custody: expected the plaintext key field cleared the instant Save was clicked, got apiKeyEntered=${afterSaveKey.drawer.apiKeyEntered}`,
+  );
+  assert(7, afterSaveKey.drawer.credentialStatusText !== null, "expected a non-null credentialStatusText once connection B's key round-trips through the vault");
+
   const closeResult = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/close", {});
   assert(7, closeResult.ok === true, `drawer/close rejected: ${JSON.stringify(closeResult)}`);
 
@@ -682,7 +700,7 @@ async function step7AddConnectionB(ctx) {
   assert(7, connB.id !== ctx.connAId, "connection B minted the SAME id as connection A — CRUD id generation regressed");
   ctx.connBId = connB.id;
 
-  pass(7, `connection B created (${connB.id}) via the Settings grid's Add tile, focus correctly landed on Label input on open`);
+  pass(7, `connection B created (${connB.id}) via the Settings grid's Add tile, focus correctly landed on Label input on open, key-save custody confirmed (field cleared, credentialStatusText="${afterSaveKey.drawer.credentialStatusText}")`);
 }
 
 async function step8GridShowsTwoSameProviderConnections(ctx) {
