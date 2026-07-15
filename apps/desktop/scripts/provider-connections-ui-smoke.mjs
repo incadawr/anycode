@@ -518,7 +518,12 @@ async function phase1Launch() {
 }
 
 async function step2WelcomeEmptyState(ctx) {
-  const state = await apiOk(ctx, 2, "GET", "/settings/provider");
+  // The facade installs (and GET /state starts answering 200) BEFORE
+  // WelcomeScreen actually mounts: mounting depends on the settings
+  // snapshot loading over a SEPARATE async IPC round trip after the window
+  // opens. Poll for the drawer to appear rather than assuming it's already
+  // there the instant the facade responds.
+  const state = await pollProviderState(ctx, 2, (s) => s.drawer.open === true);
   assert(2, state.mounted === false, `expected the Settings-dialog grid NOT mounted on a Welcome boot, got mounted=${state.mounted}`);
   assert(2, state.drawer.open === true, `expected the WelcomeScreen embed drawer open, got drawer=${JSON.stringify(state.drawer)}`);
   assert(2, state.drawer.embedded === true, `expected drawer.embedded=true (WelcomeScreen, not the Settings dialog)`);
