@@ -67,9 +67,20 @@
  *                   the reserved connect-refused port, which is always
  *                   ephemeral).
  *
- * Each of the 8 frozen steps prints `[step N] PASS/FAIL <detail>`; the first
- * FAIL tears down and exits 1. PNG evidence is written to
- * `apps/desktop/out/retry-smoke/step-*.png`.
+ * Each step prints `[step N] PASS/FAIL <detail>`; the first FAIL tears down
+ * and exits 1. PNG evidence is written to `apps/desktop/out/retry-smoke/step-*.png`.
+ *
+ * Steps 1-8 are frozen (do not renumber/edit). Steps 9-11 (TASK.33 FIX-A) are
+ * a discriminating CROSS-RESPAWN extension: they re-arm a fresh Try-again
+ * offer, force a REAL host respawn via the dev-only `POST
+ * /tabs/:tabId/host/kill` route (never the `/tabs/:tabId/retry` state
+ * shortcut — that route bypasses the DOM and would mask the exact defect
+ * this proves fixed), and assert the standalone fallback Try-again row
+ * (`MessageList.tsx`'s `showStandaloneRetry`) is genuinely present and
+ * clickable in the REAL post-respawn DOM — not just that `store.ts`'s
+ * `retry` state survived. Step 11's DOM assertion is the discriminator: it
+ * fails on pre-fix HEAD because hydration never reproduces the anchored
+ * button's `loop_end` block.
  */
 
 import { execFileSync, spawn } from "node:child_process";
@@ -84,7 +95,7 @@ const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
 const DISCOVERY_PATH = join(homedir(), ".anycode", "automation.json");
-const TOTAL_STEPS = 8;
+const TOTAL_STEPS = 11;
 const LAUNCH_TIMEOUT_MS = 120_000;
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;
@@ -357,12 +368,44 @@ async function getTabState(ctx, tabId) {
   return resp.body?.snapshot?.states?.[tabId] ?? null;
 }
 
+/** Main-plane pid for a tab's CURRENT host child (`GET /state/:tabId`'s top-level `tabs[]`, not the renderer-plane `snapshot`) — used to prove a respawn genuinely happened. */
+async function getMainTabPid(ctx, tabId) {
+  const resp = await api(ctx, "GET", `/state/${tabId}`);
+  if (resp.status !== 200) {
+    return null;
+  }
+  const entry = (resp.body?.tabs ?? []).find((t) => t.tabId === tabId);
+  return typeof entry?.pid === "number" ? entry.pid : null;
+}
+
 function countStreamRetryBlocks(tabState) {
   return (tabState?.transcript ?? []).filter((b) => b?.kind === "stream_retry").length;
 }
 
 function loopEndBlocks(tabState) {
   return (tabState?.transcript ?? []).filter((b) => b?.kind === "loop_end");
+}
+
+/** Count of `user_text` blocks carrying an exact text — used to prove a resend appended exactly ONE new turn (no double-dispatch). */
+function countUserTextBlocks(tabState, text) {
+  return (tabState?.transcript ?? []).filter((b) => b?.kind === "user_text" && b?.text === text).length;
+}
+
+/** Polls the try-again-button DOM probe until it reads {count:1, visible:true, enabled:true} or the deadline passes — returns the LAST reading either way (never throws). */
+async function pollTryAgainButtonState(ctx, blockId, timeoutMs, pollMs = 300) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  for (;;) {
+    last = await api(ctx, "GET", `/tabs/${ctx.tabId}/try-again-button/${encodeURIComponent(blockId)}`);
+    const body = last.body;
+    if (body?.ok === true && body.count === 1 && body.visible === true && body.enabled === true) {
+      return body;
+    }
+    if (Date.now() >= deadline) {
+      return body ?? null;
+    }
+    await sleep(pollMs);
+  }
 }
 
 function findTerminalErrorBlock(tabState) {
@@ -609,6 +652,107 @@ async function step8CancelMidRetry(ctx) {
   pass(8, `cancel interrupted the in-flight retry loop (was mid-retry with ${grew} stream_retry blocks total) — turn settled idle with loop_end reason:"cancelled", no hang`);
 }
 
+// ── step 9 (TASK.33 FIX-A): re-arm a FRESH Try-again offer — step 8's
+// cancelled turn arms nothing (loop_end reason:"cancelled", not "error"), so
+// a third, genuinely-retryable-to-exhaustion turn is needed before the
+// cross-respawn steps below have anything to lose ──
+
+async function step9RearmRetryOffer(ctx) {
+  const result = await apiOk(ctx, 9, "POST", `/tabs/${ctx.tabId}/prompt`, { text: PROMPT_TEXT });
+  assert(9, result?.ok === true, `prompt send rejected: ${JSON.stringify(result)}`);
+
+  await waitUntilTab(ctx, 9, ctx.tabId, { turnStatus: "running" }, 30_000);
+  await waitUntilTab(ctx, 9, ctx.tabId, { turnStatus: "idle" }, 60_000);
+
+  const state = await getTabState(ctx, ctx.tabId);
+  const offer = state?.retryOffer ?? null;
+  assert(9, offer !== null, "retryOffer is null after the re-arming turn settled — the offer failed to arm");
+  assert(9, offer.text === PROMPT_TEXT, `retryOffer.text mismatch: expected the original prompt, got ${JSON.stringify(offer.text)}`);
+  ctx.retryBlockId = offer.loopEndBlockId;
+  ctx.preRespawnUserTextCount = countUserTextBlocks(state, PROMPT_TEXT);
+
+  const buttonState = await apiOk(ctx, 9, "GET", `/tabs/${ctx.tabId}/try-again-button/${encodeURIComponent(ctx.retryBlockId)}`);
+  assert(9, buttonState?.ok === true, `try-again-button probe rejected: ${JSON.stringify(buttonState)}`);
+  assert(9, buttonState.count === 1, `expected exactly ONE rendered Try-again button (live anchor, pre-respawn) on block ${ctx.retryBlockId}, DOM has ${buttonState.count}`);
+
+  pass(9, `Try-again offer re-armed on loop_end block ${ctx.retryBlockId} (live anchored button present, count=1)`);
+}
+
+// ── step 10 (TASK.33 FIX-A): force a REAL host respawn via the dev-only
+// host-kill lever (never the /retry state-shortcut route — that bypasses the
+// DOM and would mask the exact defect this smoke exists to catch). Proof of
+// a genuine respawn is the tab's main-plane pid changing (`manager.killHost`
+// -> `handleExit` fires notifyHostExited + spawnTabHost + deliverTabPort
+// synchronously back-to-back, so the renderer-plane "host_exited" connection
+// phase can flicker for less than one poll interval — a main-plane pid
+// change is the unambiguous, race-free signal). Then waits for the
+// connection to actually reach "ready" again and confirms the STATE layer
+// (W8-FIX #3) survived the respawn ──
+
+async function step10RespawnHost(ctx) {
+  const prePid = await getMainTabPid(ctx, ctx.tabId);
+  assert(10, typeof prePid === "number", `pre-kill host pid unavailable: ${JSON.stringify(prePid)}`);
+
+  const killResult = await apiAction(ctx, 10, `/tabs/${ctx.tabId}/host/kill`, {});
+  assert(10, killResult.ok === true, `host/kill rejected: ${JSON.stringify(killResult)}`);
+
+  const respawnedPid = await pollUntil(30_000, 200, async () => {
+    const pid = await getMainTabPid(ctx, ctx.tabId);
+    return typeof pid === "number" && pid !== prePid ? pid : undefined;
+  });
+  assert(10, respawnedPid !== null, `no new host pid observed within 30s of the kill (still pid ${prePid}) — the host never actually respawned`);
+
+  await waitUntilTab(ctx, 10, ctx.tabId, { connection: "ready" }, 90_000);
+
+  const state = await getTabState(ctx, ctx.tabId);
+  const offer = state?.retryOffer ?? null;
+  assert(10, offer !== null, "retryOffer lost across the respawn — the W8-FIX #3 state layer regressed");
+  assert(10, offer.text === PROMPT_TEXT, `post-respawn retryOffer.text mismatch: expected the original prompt, got ${JSON.stringify(offer.text)}`);
+  assert(10, offer.loopEndBlockId === ctx.retryBlockId, `post-respawn retryOffer.loopEndBlockId changed: expected ${ctx.retryBlockId}, got ${offer.loopEndBlockId}`);
+
+  pass(10, `host respawned (pid ${prePid} -> ${respawnedPid}); connection is ready again; state.retryOffer survived, still naming block ${ctx.retryBlockId}`);
+}
+
+// ── step 11 (TASK.33 FIX-A): the discriminator. Reads the REAL post-respawn
+// DOM for the standalone fallback Try-again row (MessageList.tsx's
+// `showStandaloneRetry`) via the EXISTING try-again-button probe/driver
+// (zero automation-facade changes — the fallback row carries the same
+// `data-block-id` the anchored button used) — this assertion MUST fail on
+// pre-fix HEAD (88cb263) because hydration never reproduces a `loop_end`
+// block, so no `[data-block-id]` node exists for the probe to find. Then
+// fires a REAL `.click()` and proves one-shot consumption + exactly one
+// genuine re-dispatched `user_text` turn (no double-dispatch) ──
+
+async function step11ClickPostRespawnFallback(ctx) {
+  const buttonState = await pollTryAgainButtonState(ctx, ctx.retryBlockId, 20_000);
+  assert(
+    11,
+    buttonState?.ok === true && buttonState.count === 1 && buttonState.visible === true && buttonState.enabled === true,
+    `post-respawn DOM never showed exactly one visible/enabled Try-again button on block ${ctx.retryBlockId} — got ${JSON.stringify(buttonState)} (this is the discriminating assertion: it fails on pre-fix HEAD because hydration drops the loop_end anchor)`,
+  );
+
+  await saveScreenshot(ctx, "step11-post-respawn-fallback-button");
+
+  const result = await apiAction(ctx, 11, `/tabs/${ctx.tabId}/try-again-button/${encodeURIComponent(ctx.retryBlockId)}/click`, {});
+  assert(11, result.ok === true, `try-again-button click rejected: ${JSON.stringify(result)}`);
+
+  await waitUntilTab(ctx, 11, ctx.tabId, { turnStatus: "running" }, 15_000);
+  const state = await getTabState(ctx, ctx.tabId);
+  assert(11, state?.retryOffer === null, `retryOffer should be consumed (one-shot) after the click, got ${JSON.stringify(state?.retryOffer)}`);
+
+  const postClickUserTextCount = countUserTextBlocks(state, PROMPT_TEXT);
+  assert(
+    11,
+    postClickUserTextCount === ctx.preRespawnUserTextCount + 1,
+    `expected exactly ONE new user_text re-dispatch after the click (no double-dispatch): had ${ctx.preRespawnUserTextCount} before, now ${postClickUserTextCount}`,
+  );
+
+  pass(
+    11,
+    `real DOM click on the post-respawn standalone fallback row resent the prompt — offer consumed (one-shot), exactly one new user_text turn dispatched (${ctx.preRespawnUserTextCount} -> ${postClickUserTextCount})`,
+  );
+}
+
 // ── teardown ──
 
 /**
@@ -710,6 +854,7 @@ async function run() {
     firstTurnAttemptsMade: 0,
     beforeClickRetryCount: 0,
     retryBlockId: null,
+    preRespawnUserTextCount: 0,
     teardownPromise: null,
     screenshotDir: join(desktopRoot, "out", "retry-smoke"),
   };
@@ -725,6 +870,9 @@ async function run() {
     await step6ObserveTryAgainOffer(ctx);
     await step7ClickTryAgain(ctx);
     await step8CancelMidRetry(ctx);
+    await step9RearmRetryOffer(ctx);
+    await step10RespawnHost(ctx);
+    await step11ClickPostRespawnFallback(ctx);
   } catch (err) {
     failedStep = err instanceof SmokeFailure ? err.step : "unknown";
     if (!(err instanceof SmokeFailure)) {
