@@ -62,6 +62,15 @@ import {
   settingsSelectPane,
   settingsPermissionAdd,
   settingsPermissionRemove,
+  settingsProviderPaneState,
+  settingsProviderAddOpen,
+  settingsProviderTileClick,
+  settingsProviderMenuAction,
+  settingsProviderDrawerSet,
+  settingsProviderDrawerSubmit,
+  settingsProviderDrawerSaveKey,
+  settingsProviderDrawerClearKey,
+  settingsProviderDrawerClose,
   mcpPaneState,
   mcpToggle,
   mcpImportOpen,
@@ -391,6 +400,62 @@ describe("settings thin facade commands forward method + args (design/slice-P7.1
     const deps = fakeDeps();
     await settingsPermissionRemove(deps, "Edit", undefined);
     expect(deps.callFacade).toHaveBeenCalledWith("settingsPermissionRemove", [{ toolName: "Edit", pattern: undefined }]);
+  });
+});
+
+describe("Provider connections pane thin facade commands forward method + args (TASK.45 W12)", () => {
+  it("settingsProviderPaneState -> callFacade('settingsProviderPaneState', [])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderPaneState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderPaneState", []);
+  });
+
+  it("settingsProviderAddOpen -> callFacade('settingsProviderAddOpen', [])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderAddOpen(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderAddOpen", []);
+  });
+
+  it("settingsProviderTileClick -> callFacade('settingsProviderTileClick', [{connectionId}])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderTileClick(deps, "conn-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderTileClick", [{ connectionId: "conn-1" }]);
+  });
+
+  it("settingsProviderMenuAction -> callFacade('settingsProviderMenuAction', [{connectionId, action}])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderMenuAction(deps, "conn-1", "delete");
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderMenuAction", [{ connectionId: "conn-1", action: "delete" }]);
+  });
+
+  it("settingsProviderDrawerSet -> callFacade('settingsProviderDrawerSet', [args])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderDrawerSet(deps, { label: "Work", model: "glm-5.2" });
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderDrawerSet", [{ label: "Work", model: "glm-5.2" }]);
+  });
+
+  it("settingsProviderDrawerSubmit -> callFacade('settingsProviderDrawerSubmit', [])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderDrawerSubmit(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderDrawerSubmit", []);
+  });
+
+  it("settingsProviderDrawerSaveKey -> callFacade('settingsProviderDrawerSaveKey', [])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderDrawerSaveKey(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderDrawerSaveKey", []);
+  });
+
+  it("settingsProviderDrawerClearKey -> callFacade('settingsProviderDrawerClearKey', [])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderDrawerClearKey(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderDrawerClearKey", []);
+  });
+
+  it("settingsProviderDrawerClose -> callFacade('settingsProviderDrawerClose', [])", async () => {
+    const deps = fakeDeps();
+    await settingsProviderDrawerClose(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderDrawerClose", []);
   });
 });
 

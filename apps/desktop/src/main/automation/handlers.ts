@@ -520,6 +520,54 @@ export function settingsPermissionRemove(deps: HandlerDeps, toolName: string, pa
   return deps.callFacade("settingsPermissionRemove", [{ toolName, pattern }]);
 }
 
+// --- Provider connections grid/drawer probe/driver (TASK.45 W12): thin
+// wrappers over the frozen facade contract, same discipline as the settings
+// probe/driver above — the facade owns every guard (grid_not_mounted /
+// connection_not_found / drawer_not_open / submit_disabled / did_not_settle /
+// no_close_affordance / etc.), this layer only forwards method + args.
+// Global (app-level) commands: no `:tabId` — the provider pane lives inside
+// the global Settings dialog (or WelcomeScreen's first-run embed), same
+// posture as the settings/MCP/skills probe/drivers above. ---
+
+export function settingsProviderPaneState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("settingsProviderPaneState", []);
+}
+
+export function settingsProviderAddOpen(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("settingsProviderAddOpen", []);
+}
+
+export function settingsProviderTileClick(deps: HandlerDeps, connectionId: string): Promise<unknown> {
+  return deps.callFacade("settingsProviderTileClick", [{ connectionId }]);
+}
+
+export function settingsProviderMenuAction(deps: HandlerDeps, connectionId: string, action: string): Promise<unknown> {
+  return deps.callFacade("settingsProviderMenuAction", [{ connectionId, action }]);
+}
+
+export function settingsProviderDrawerSet(
+  deps: HandlerDeps,
+  args: { providerId?: string; label?: string; model?: string; transport?: string; baseUrl?: string; apiKey?: string },
+): Promise<unknown> {
+  return deps.callFacade("settingsProviderDrawerSet", [args]);
+}
+
+export function settingsProviderDrawerSubmit(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("settingsProviderDrawerSubmit", []);
+}
+
+export function settingsProviderDrawerSaveKey(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("settingsProviderDrawerSaveKey", []);
+}
+
+export function settingsProviderDrawerClearKey(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("settingsProviderDrawerClearKey", []);
+}
+
+export function settingsProviderDrawerClose(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("settingsProviderDrawerClose", []);
+}
+
 // --- MCP Servers pane probe/driver (slice-P7.19-cut.md §4 W4): thin wrappers
 // over the frozen facade contract, same discipline as the settings
 // probe/driver above — the facade owns every guard (pane_not_mounted /

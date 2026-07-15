@@ -83,6 +83,15 @@ import {
   settingsSelectPane,
   settingsPermissionAdd,
   settingsPermissionRemove,
+  settingsProviderPaneState,
+  settingsProviderAddOpen,
+  settingsProviderTileClick,
+  settingsProviderMenuAction,
+  settingsProviderDrawerSet,
+  settingsProviderDrawerSubmit,
+  settingsProviderDrawerSaveKey,
+  settingsProviderDrawerClearKey,
+  settingsProviderDrawerClose,
   mcpPaneState,
   mcpToggle,
   mcpImportOpen,
@@ -268,6 +277,30 @@ const settingsPermissionRemoveBody = z.object({
   toolName: z.string().min(1).max(128),
   pattern: z.string().max(4096).optional(),
 });
+
+// ── provider connections grid/drawer bodies (TASK.45 W12): global (app-level)
+// routes, no `:tabId` segment — same posture as the settings bodies above,
+// the provider pane is not per-tab. `action` mirrors the frozen
+// `ProviderMenuAction` union (automation.ts); every drawer-set field is
+// optional (a caller sets only the fields it cares about, same convention as
+// the facade's own `settingsProviderDrawerSet` signature). ──
+const providerTileBody = z.object({ connectionId: z.string().min(1).max(256) }).strict();
+const providerMenuActionBody = z
+  .object({
+    connectionId: z.string().min(1).max(256),
+    action: z.enum(["edit", "replace_key", "check", "delete"]),
+  })
+  .strict();
+const providerDrawerSetBody = z
+  .object({
+    providerId: z.string().max(256).optional(),
+    label: z.string().max(256).optional(),
+    model: z.string().max(256).optional(),
+    transport: z.string().max(64).optional(),
+    baseUrl: z.string().max(4096).optional(),
+    apiKey: z.string().max(8192).optional(),
+  })
+  .strict();
 
 // ── MCP Servers pane bodies (slice-P7.19-cut.md §4 W4): global (app-level)
 // routes, no `:tabId` segment — same posture as the settings bodies above.
@@ -611,6 +644,12 @@ async function route(
   if (method === "GET" && pathname === "/settings/shortcuts") {
     return shortcutsPaneState(deps);
   }
+  // Provider connections pane probe (TASK.45 W12): a DEDICATED route — every
+  // prior `/settings*` probe above stays byte-untouched (§4 custody), same
+  // "own probe, no widening" posture as the Profile/Shortcuts pane probes.
+  if (method === "GET" && pathname === "/settings/provider") {
+    return settingsProviderPaneState(deps);
+  }
   // LSP / Hooks panel probes (slice-P7.25-cut.md §3 W3): same `?tabId=` query
   // shape as `GET /transcript/scroll` above — the panels aren't per-tab DOM
   // (App.tsx mounts them once for the active tab, not per data-tab-id), so a
@@ -707,6 +746,43 @@ async function route(
   if (method === "POST" && pathname === "/settings/permissions/remove") {
     const body = parseBody(rawBody, settingsPermissionRemoveBody);
     return settingsPermissionRemove(deps, body.toolName, body.pattern);
+  }
+  // Provider connections grid/drawer routes (TASK.45 W12): mirror the SAME DOM
+  // paths ConnectionTile/ConnectionDrawer themselves use (the "+ Add
+  // connection" tile, a tile's select button, its overflow menu's four
+  // actions, the drawer's own fields/buttons), through the facade's thin
+  // wrappers — no second path.
+  if (method === "POST" && pathname === "/settings/provider/add") {
+    parseBody(rawBody, emptyBody);
+    return settingsProviderAddOpen(deps);
+  }
+  if (method === "POST" && pathname === "/settings/provider/tile") {
+    const body = parseBody(rawBody, providerTileBody);
+    return settingsProviderTileClick(deps, body.connectionId);
+  }
+  if (method === "POST" && pathname === "/settings/provider/menu") {
+    const body = parseBody(rawBody, providerMenuActionBody);
+    return settingsProviderMenuAction(deps, body.connectionId, body.action);
+  }
+  if (method === "POST" && pathname === "/settings/provider/drawer/set") {
+    const body = parseBody(rawBody, providerDrawerSetBody);
+    return settingsProviderDrawerSet(deps, body);
+  }
+  if (method === "POST" && pathname === "/settings/provider/drawer/submit") {
+    parseBody(rawBody, emptyBody);
+    return settingsProviderDrawerSubmit(deps);
+  }
+  if (method === "POST" && pathname === "/settings/provider/drawer/save-key") {
+    parseBody(rawBody, emptyBody);
+    return settingsProviderDrawerSaveKey(deps);
+  }
+  if (method === "POST" && pathname === "/settings/provider/drawer/clear-key") {
+    parseBody(rawBody, emptyBody);
+    return settingsProviderDrawerClearKey(deps);
+  }
+  if (method === "POST" && pathname === "/settings/provider/drawer/close") {
+    parseBody(rawBody, emptyBody);
+    return settingsProviderDrawerClose(deps);
   }
   // MCP Servers pane routes (slice-P7.19-cut.md §4 W4): mirror the SAME DOM
   // paths McpServersPane.tsx itself uses (the row's enable switch, the

@@ -942,6 +942,60 @@ The persisted override lands at the SAME `ANYCODE_SETTINGS_PATH`-overridable
 its own. See `apps/desktop/scripts/keybindings-ui-smoke.mjs` for the
 reference wiring.
 
+### Provider connections pane probe/driver (TASK.45 W12)
+
+Mirrors the Settings dialog's Provider pane (`ConnectionTile`/
+`ConnectionDrawer.tsx`) — a DEDICATED route, every prior `/settings*` probe
+above stays byte-untouched. `GET /settings/provider` reads the mounted grid
+AND the drawer (either the Settings dialog's `ConnectionDrawer` or
+WelcomeScreen's chrome-free first-run embed) in one read, same "no mirrored
+state" discipline as every other pane probe: `mounted:false` when the grid
+isn't rendered, `drawer.open:false` when neither embed is. `rows[].statusTone`
+is the tile's own `connection-tile-status-<tone>` class suffix (never a
+re-derived guess); `drawer.stage` is `"template"` before a connection exists
+yet or `"credential"` once metadata is minted and the credential section has
+activated (add/edit sequencing, TASK.45's own cut).
+
+`POST .../provider/add` clicks the trailing "+ Add connection" tile.
+`POST .../provider/tile` clicks a tile's own select button (make-default for
+new sessions — a no-op, `{ok:true}`, if it's already the default).
+`POST .../provider/menu` opens a tile's overflow menu (if not already open)
+and invokes ONE of its four actions (`edit`|`replace_key`|`check`|`delete`);
+`delete` additionally drives the inline confirm popover's own Delete button —
+a distinct node from the menu item that opened it. `POST
+.../provider/drawer/set` drives the drawer's fields via the same
+native-setter discipline as every other form driver in this channel, setting
+only the fields present in the body. `POST .../provider/drawer/submit` /
+`save-key` / `clear-key` click the drawer's own buttons and settle once the
+settings-store's `snapshot` object reference changes (a fresh object on every
+successful `connectionCreate`/`Update`/`setSecret`/`clearSecret` round-trip —
+more reliable than the rendered text, which can read byte-identical
+before/after a same-shaped credential replace). `POST .../provider/drawer/close`
+mirrors X-then-Done-then-refusal — the WelcomeScreen embed has neither.
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /settings/provider` | — | `{mounted, envOverrideVisible, rows:[{connectionId, providerName, displayName, model, statusText, statusTone, selected, menuOpen, confirmingDelete}], drawer:{open, embedded, stage, providerId, templateLocked, label, model, transport, transportOptions, baseUrlVisible, baseUrl, authKind, apiKeyEntered, credentialStatusText, oauthPending, primaryButtonLabel, primaryButtonEnabled, saveKeyEnabled, clearKeyEnabled}}` |
+| `POST /settings/provider/add` | `{}` | `{ok:true}` \| `{ok:false, reason:"grid_not_mounted"\|"add_tile_not_present"\|"did_not_open"}` |
+| `POST /settings/provider/tile` | `{connectionId}` | `{ok:true}` \| `{ok:false, reason:"grid_not_mounted"\|"connection_not_found"\|"tile_not_present"\|"did_not_settle"}` |
+| `POST /settings/provider/menu` | `{connectionId, action:"edit"\|"replace_key"\|"check"\|"delete"}` | `{ok:true}` \| `{ok:false, reason:"grid_not_mounted"\|"connection_not_found"\|"menu_trigger_not_present"\|"menu_did_not_open"\|"menu_item_not_present"\|"confirm_did_not_open"\|"confirm_delete_not_present"\|"did_not_settle"}` |
+| `POST /settings/provider/drawer/set` | `{providerId?, label?, model?, transport?, baseUrl?, apiKey?}` | `{ok:true}` \| `{ok:false, reason:"drawer_not_open"\|"<field>_unavailable"}` |
+| `POST /settings/provider/drawer/submit` | `{}` | `{ok:true}` \| `{ok:false, reason:"drawer_not_open"\|"submit_disabled"\|"button_not_present"\|"did_not_settle"}` |
+| `POST /settings/provider/drawer/save-key` | `{}` | `{ok:true}` \| `{ok:false, reason:"drawer_not_open"\|"save_key_disabled"\|"button_not_present"\|"did_not_settle"}` |
+| `POST /settings/provider/drawer/clear-key` | `{}` | `{ok:true}` \| `{ok:false, reason:"drawer_not_open"\|"clear_key_disabled"\|"button_not_present"\|"did_not_settle"}` |
+| `POST /settings/provider/drawer/close` | `{}` | `{ok:true}` \| `{ok:false, reason:"no_close_affordance"\|"close_control_not_present"\|"did_not_close"}` |
+
+```bash
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/pane -d '{"paneId":"provider"}'
+curl "${A[@]}" "$B/settings/provider"
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/add -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/set -d '{"providerId":"z-ai","label":"Work"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/submit -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/set -d '{"apiKey":"sk-..."}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/save-key -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/close -d '{}'
+```
+
 ### LSP / Hooks panel probes/drivers (slice P7.25 F3, W3)
 
 Mirrors `LspPanel.tsx`/`HooksPanel.tsx` (`design/slice-P7.25-cut.md` §3 W3) —

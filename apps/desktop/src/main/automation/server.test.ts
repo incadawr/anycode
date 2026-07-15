@@ -2374,6 +2374,211 @@ describe("Skills pane routes (design/slice-P7.20-cut.md §5 W4)", () => {
   });
 });
 
+describe("Provider connections pane routes (TASK.45 W12)", () => {
+  const PROVIDER_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
+    { path: "/settings/provider/add", body: {} },
+    { path: "/settings/provider/tile", body: { connectionId: "conn-1" } },
+    { path: "/settings/provider/menu", body: { connectionId: "conn-1", action: "edit" } },
+    { path: "/settings/provider/drawer/set", body: { label: "Work" } },
+    { path: "/settings/provider/drawer/submit", body: {} },
+    { path: "/settings/provider/drawer/save-key", body: {} },
+    { path: "/settings/provider/drawer/clear-key", body: {} },
+    { path: "/settings/provider/drawer/close", body: {} },
+  ];
+
+  it("401s GET /settings/provider without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/settings/provider"));
+    expect(res.status).toBe(401);
+  });
+
+  it("401s every POST /settings/provider/* route without a token", async () => {
+    const h = await boot();
+    for (const route of PROVIDER_POST_ROUTES) {
+      const res = await fetch(url(h, route.path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(route.body),
+      });
+      expect(res.status, `${route.path} should 401 without a token`).toBe(401);
+    }
+  });
+
+  it("GET /settings/provider -> settingsProviderPaneState (dedicated route, distinct from GET /settings and every other pane probe)", async () => {
+    const facadeResult = {
+      mounted: true,
+      envOverrideVisible: false,
+      rows: [{ connectionId: "conn-1", providerName: "Z.AI", displayName: "Z.AI", model: "glm-5.2", statusText: "Ready", statusTone: "ok", selected: true, menuOpen: false, confirmingDelete: false }],
+      drawer: { open: false, embedded: false, stage: null, providerId: null, templateLocked: false, label: null, model: null, transport: null, transportOptions: [], baseUrlVisible: false, baseUrl: null, authKind: null, apiKeyEntered: false, credentialStatusText: null, oauthPending: false, primaryButtonLabel: null, primaryButtonEnabled: false, saveKeyEnabled: false, clearKeyEnabled: false },
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/provider"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"settingsProviderPaneState"');
+    expect(calls[0]).toContain("[]");
+  });
+
+  describe("zod fail-closed on POST /settings/provider/* bodies — callFacade never reached", () => {
+    it("POST /settings/provider/tile — empty object (missing connectionId) -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/tile"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/provider/menu — missing action -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/menu"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ connectionId: "conn-1" }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/provider/menu — invalid action literal -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/menu"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ connectionId: "conn-1", action: "duplicate" }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/provider/drawer/set — unknown field -> 400 (strict schema)", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/drawer/set"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ bogus: "x" }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("junk JSON on every POST /settings/provider/* route -> 400, facade never invoked", async () => {
+      for (const route of PROVIDER_POST_ROUTES) {
+        const { window, calls } = fakeWindowCapture();
+        const h = await boot({ getWindow: () => window });
+        const res = await fetch(url(h, route.path), { method: "POST", headers: auth(), body: "{not json" });
+        expect(res.status, `${route.path} should 400 on junk JSON`).toBe(400);
+        expect(calls).toHaveLength(0);
+      }
+    });
+  });
+
+  describe("happy path — each route forwards to its facade method and returns the facade result", () => {
+    it("POST /settings/provider/add -> settingsProviderAddOpen()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/add"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderAddOpen"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/provider/tile -> settingsProviderTileClick([{connectionId}])", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/tile"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ connectionId: "conn-1" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderTileClick"');
+      expect(calls[0]).toContain('[{"connectionId":"conn-1"}]');
+    });
+
+    it("POST /settings/provider/menu -> settingsProviderMenuAction([{connectionId, action}])", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/menu"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ connectionId: "conn-1", action: "delete" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderMenuAction"');
+      expect(calls[0]).toContain('[{"connectionId":"conn-1","action":"delete"}]');
+    });
+
+    it("POST /settings/provider/drawer/set -> settingsProviderDrawerSet([args]), forwarding only the provided fields", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/drawer/set"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ label: "Work", model: "glm-5.2" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderDrawerSet"');
+      expect(calls[0]).toContain('[{"label":"Work","model":"glm-5.2"}]');
+    });
+
+    it("POST /settings/provider/drawer/submit -> settingsProviderDrawerSubmit()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/drawer/submit"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderDrawerSubmit"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/provider/drawer/save-key -> settingsProviderDrawerSaveKey()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/drawer/save-key"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderDrawerSaveKey"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/provider/drawer/clear-key -> settingsProviderDrawerClearKey()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/drawer/clear-key"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderDrawerClearKey"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/provider/drawer/close -> settingsProviderDrawerClose()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/provider/drawer/close"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"settingsProviderDrawerClose"');
+      expect(calls[0]).toContain("[]");
+    });
+  });
+});
+
 describe("Subagents pane routes (design/slice-P7.21-cut.md §4 W4)", () => {
   const SUBAGENTS_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
     { path: "/settings/subagents/editor/open", body: {} },
