@@ -996,6 +996,28 @@ curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/save-key -d '{}'
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/close -d '{}'
 ```
 
+### Generic focus probe (TASK.45 W12-smoke)
+
+A DEDICATED, shell-level route — no pane above is widened to carry this.
+`document.activeElement` is read directly, so it works regardless of which
+screen/dialog is mounted (WelcomeScreen, the Settings dialog, or neither).
+Added because no existing probe surfaced which element is focused, which a
+live a11y smoke (initial focus on mount, focus-trap/return) needs to assert
+against the real DOM rather than re-deriving it from local component state.
+`present:false` (every other field `null`/`false`) is a normal reading, not
+an error — focus sits on `<body>` or nothing focusable exists yet.
+
+| Method / path | Returns |
+|---|---|
+| `GET /focus` | `{present, tagName:string\|null, role:string\|null, ariaLabel:string\|null, className:string\|null, disabled}` |
+
+```bash
+curl "${A[@]}" "$B/focus"
+```
+
+See `apps/desktop/scripts/provider-connections-ui-smoke.mjs` for the
+reference wiring.
+
 ### LSP / Hooks panel probes/drivers (slice P7.25 F3, W3)
 
 Mirrors `LspPanel.tsx`/`HooksPanel.tsx` (`design/slice-P7.25-cut.md` §3 W3) —

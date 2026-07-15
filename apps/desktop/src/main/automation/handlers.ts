@@ -568,6 +568,15 @@ export function settingsProviderDrawerClose(deps: HandlerDeps): Promise<unknown>
   return deps.callFacade("settingsProviderDrawerClose", []);
 }
 
+// --- Generic focus probe (TASK.45 W12-smoke): thin wrapper, same discipline
+// as every other probe above — no pane owns this, it reads
+// `document.activeElement` directly (see FocusState's doc comment in
+// renderer/src/automation.ts). ---
+
+export function focusState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("focusState", []);
+}
+
 // --- MCP Servers pane probe/driver (slice-P7.19-cut.md §4 W4): thin wrappers
 // over the frozen facade contract, same discipline as the settings
 // probe/driver above — the facade owns every guard (pane_not_mounted /

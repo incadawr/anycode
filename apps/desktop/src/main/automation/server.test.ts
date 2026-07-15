@@ -1871,6 +1871,23 @@ describe("settings routes (design/slice-P7.16-cut.md §5 W4)", () => {
     expect(calls[0]).toContain("[]");
   });
 
+  it("401 GET /focus without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/focus"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /focus -> focusState (TASK.45 W12-smoke)", async () => {
+    const facadeResult = { present: true, tagName: "select", role: null, ariaLabel: null, className: "settings-field-select", disabled: false };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/focus"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"focusState"');
+    expect(calls[0]).toContain("[]");
+  });
+
   it("unknown /settings/bogus -> 404", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/settings/bogus"), {

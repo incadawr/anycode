@@ -71,6 +71,7 @@ import {
   settingsProviderDrawerSaveKey,
   settingsProviderDrawerClearKey,
   settingsProviderDrawerClose,
+  focusState,
   mcpPaneState,
   mcpToggle,
   mcpImportOpen,
@@ -456,6 +457,14 @@ describe("Provider connections pane thin facade commands forward method + args (
     const deps = fakeDeps();
     await settingsProviderDrawerClose(deps);
     expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderDrawerClose", []);
+  });
+});
+
+describe("generic focus probe forwards method + args (TASK.45 W12-smoke)", () => {
+  it("focusState -> callFacade('focusState', [])", async () => {
+    const deps = fakeDeps();
+    await focusState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("focusState", []);
   });
 });
 

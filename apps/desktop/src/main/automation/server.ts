@@ -92,6 +92,7 @@ import {
   settingsProviderDrawerSaveKey,
   settingsProviderDrawerClearKey,
   settingsProviderDrawerClose,
+  focusState,
   mcpPaneState,
   mcpToggle,
   mcpImportOpen,
@@ -649,6 +650,12 @@ async function route(
   // "own probe, no widening" posture as the Profile/Shortcuts pane probes.
   if (method === "GET" && pathname === "/settings/provider") {
     return settingsProviderPaneState(deps);
+  }
+  // Generic focus probe (TASK.45 W12-smoke): a DEDICATED route — no pane
+  // above is widened to carry this, `document.activeElement` is shell-level,
+  // not owned by any one pane/screen.
+  if (method === "GET" && pathname === "/focus") {
+    return focusState(deps);
   }
   // LSP / Hooks panel probes (slice-P7.25-cut.md §3 W3): same `?tabId=` query
   // shape as `GET /transcript/scroll` above — the panels aren't per-tab DOM

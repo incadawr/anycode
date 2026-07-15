@@ -1504,6 +1504,25 @@ export interface ProviderPaneState {
   drawer: ProviderDrawerView;
 }
 
+/**
+ * `focusState()`'s shape (TASK.45 W12-smoke): a generic, dev-only read of
+ * `document.activeElement` — no pane owns this (unlike every probe above), so
+ * it carries no "mounted"/"not applicable" refusal, only `present: false` when
+ * focus sits on `<body>` or nothing focusable exists yet. Exists because no
+ * existing probe surfaces which element is focused, which a live a11y smoke
+ * (initial focus on mount, focus-trap/return, roving tabindex) needs to
+ * assert against the REAL DOM rather than re-deriving it from local component
+ * state that could drift from what a keyboard/SR user actually lands on.
+ */
+export interface FocusState {
+  present: boolean;
+  tagName: string | null;
+  role: string | null;
+  ariaLabel: string | null;
+  className: string | null;
+  disabled: boolean;
+}
+
 /* */
 export interface AnycodeBridge {
   createTab(request: CreateTabRequest): Promise<CreateTabResult>;
@@ -1750,6 +1769,9 @@ export interface AutomationFacade {
   settingsProviderDrawerSaveKey(): Promise<FacadeResult>;
   settingsProviderDrawerClearKey(): Promise<FacadeResult>;
   settingsProviderDrawerClose(): Promise<FacadeResult>;
+  // ── generic focus probe (TASK.45 W12-smoke): see FocusState's doc comment
+  // above — no pane owns this, it reads `document.activeElement` directly. ──
+  focusState(): FocusState;
 }
 
 /** The real `window.anycode` bridge, resolved lazily (only read when a caller omits the `bridge` DI parameter — never at module load, so this file stays importable from a plain Node test context with no `window`). */
@@ -5400,6 +5422,22 @@ export function createAutomationFacade(
       }
       const closed = await waitUntil(() => providerPaneDom.drawer() === null, PROVIDER_PANE_COMMIT_DEADLINE_MS);
       return closed ? { ok: true } : { ok: false, reason: "did_not_close" };
+    },
+
+    focusState(): FocusState {
+      const el = document.activeElement;
+      if (!(el instanceof HTMLElement) || el === document.body) {
+        return { present: false, tagName: null, role: null, ariaLabel: null, className: null, disabled: false };
+      }
+      const disabled = "disabled" in el && typeof (el as HTMLButtonElement).disabled === "boolean" ? (el as HTMLButtonElement).disabled : false;
+      return {
+        present: true,
+        tagName: el.tagName.toLowerCase(),
+        role: el.getAttribute("role"),
+        ariaLabel: el.getAttribute("aria-label"),
+        className: el.className || null,
+        disabled,
+      };
     },
   };
 }
