@@ -244,6 +244,77 @@ describe("OAuthEngine.startFlow — refusals", () => {
     expect(store.saved).toEqual([]);
   });
 
+  it("does NOT clear the fresh blob of a SAME-connection superseding flow (W11-FIX M6)", async () => {
+    const store = new FakeStore();
+    let releaseWriteA!: () => void;
+    const writeGateA = new Promise<void>((resolve) => (releaseWriteA = resolve));
+    let engine!: OAuthEngine;
+    let callCount = 0;
+    const realSet = store.setOAuthTokens.bind(store);
+    store.setOAuthTokens = async (id, blob, opts) => {
+      callCount += 1;
+      if (callCount === 1) {
+        // A fresh sign-in for the SAME connection starts and completes WHILE
+        // A's write is still gated — this is what supersedes A (startFlow
+        // supersedes any prior in-flight flow for the same providerId).
+        void engine.startFlow(config(), "conn-acme", { allowWeak: false });
+        await writeGateA;
+      }
+      return realSet(id, blob, opts);
+    };
+    engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+    });
+    const outcomeA = engine.startFlow(config(), "conn-acme", { allowWeak: false });
+    expect(await outcomeA).toEqual({ ok: false, reason: "cancelled" });
+    // Give the superseding flow B's own independent HTTP round trip (loopback
+    // callback + token exchange) time to fully land its blob BEFORE A's
+    // gated write is released.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseWriteA();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // A's post-write compensating clear must be skipped (A was superseded,
+    // not deleted/explicitly cancelled) — otherwise it wipes B's just-written
+    // valid blob for the same connectionId (FakeStore's clear removes EVERY
+    // entry matching the connectionId, so an unconditional clear would leave
+    // zero, regardless of which flow wrote it last).
+    expect(store.saved.some((s) => s.connectionId === "conn-acme")).toBe(true);
+  });
+
+  it("does NOT clear its OWN just-written blob when superseded (via providerId) by a flow for a DIFFERENT connection (W11-FIX M6)", async () => {
+    const store = new FakeStore();
+    let releaseWriteA!: () => void;
+    const writeGateA = new Promise<void>((resolve) => (releaseWriteA = resolve));
+    let engine!: OAuthEngine;
+    let callCount = 0;
+    const realSet = store.setOAuthTokens.bind(store);
+    store.setOAuthTokens = async (id, blob, opts) => {
+      callCount += 1;
+      if (callCount === 1) {
+        // A DIFFERENT connection of the SAME provider starts signing in while
+        // A's write is in flight — `inFlight` is keyed by providerId, so this
+        // supersedes A even though it targets a different connectionId (the
+        // cross-connection case codex did not name).
+        void engine.startFlow(config(), "conn-y", { allowWeak: false });
+        await writeGateA;
+      }
+      return realSet(id, blob, opts);
+    };
+    engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+    });
+    const outcomeA = engine.startFlow(config(), "conn-x", { allowWeak: false });
+    expect(await outcomeA).toEqual({ ok: false, reason: "cancelled" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseWriteA();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Both A's own blob (conn-x) and B's blob (conn-y) must survive — nobody
+    // deleted conn-x, so nothing should have compensated it away.
+    expect(store.saved.map((s) => s.connectionId).sort()).toEqual(["conn-x", "conn-y"]);
+  });
+
   it("times out when the browser never returns", async () => {
     const store = new FakeStore();
     const engine = new OAuthEngine({
