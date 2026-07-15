@@ -109,6 +109,17 @@ interface CallbackContext {
   settle: (outcome: OAuthOutcome) => void;
   /** Whether the flow already settled (cancelled/timed-out) — TASK.45 W10 §6.5 skip-persist guard. */
   isSettled: () => boolean;
+  /**
+   * Whether this flow was settled by a SUPERSEDING `startFlow` call for the
+   * same providerId, as opposed to an explicit cancel/delete/timeout (TASK.45
+   * W11-FIX M6). A supersede must never trigger the post-write compensating
+   * clear: connectionId lifecycle ownership passes to the new flow — for a
+   * same-connection supersede, clearing would erase the new flow's own
+   * just-written valid blob; for a cross-connection supersede (`inFlight` is
+   * keyed by providerId, not connectionId), clearing would erase THIS flow's
+   * own successful write even though nobody deleted its connection.
+   */
+  isSuperseded: () => boolean;
 }
 
 export class OAuthEngine {
@@ -119,7 +130,7 @@ export class OAuthEngine {
   private readonly now: () => number;
   private readonly logger: OAuthEngineDeps["logger"];
   /** In-flight flow per provider so `cancel` (and a superseding start) can settle it. */
-  private readonly inFlight = new Map<string, (outcome: OAuthOutcome) => void>();
+  private readonly inFlight = new Map<string, { settle: (outcome: OAuthOutcome) => void; markSuperseded: () => void }>();
 
   constructor(deps: OAuthEngineDeps) {
     this.vault = deps.vault;
@@ -132,7 +143,21 @@ export class OAuthEngine {
 
   /** Aborts an in-flight flow for a provider (idempotent; unknown id is a no-op). */
   cancel(providerId: string): void {
-    this.inFlight.get(providerId)?.({ ok: false, reason: "cancelled" });
+    this.inFlight.get(providerId)?.settle({ ok: false, reason: "cancelled" });
+  }
+
+  /**
+   * Supersedes any in-flight flow for `providerId` from a NEW `startFlow` call
+   * (TASK.45 W11-FIX M6). Settles it with the exact same public `OAuthOutcome`
+   * as `cancel` — the public contract is unchanged — but additionally marks its
+   * context `superseded` so the post-write compensating clear (`handleCallback`)
+   * skips it, since ownership of the connectionId's lifecycle passes to this
+   * new flow rather than to a delete/explicit-cancel/timeout.
+   */
+  private supersede(providerId: string): void {
+    const prior = this.inFlight.get(providerId);
+    prior?.markSuperseded();
+    prior?.settle({ ok: false, reason: "cancelled" });
   }
 
   /**
@@ -146,13 +171,14 @@ export class OAuthEngine {
     connectionId: string,
     opts: { allowWeak: boolean },
   ): Promise<OAuthOutcome> {
-    this.cancel(config.providerId);
+    this.supersede(config.providerId);
     const verifier = randomBytes(32).toString("base64url");
     const challenge = createHash("sha256").update(verifier).digest("base64url");
     const state = randomBytes(32).toString("base64url");
 
     return new Promise<OAuthOutcome>((resolve) => {
       let settled = false;
+      let superseded = false;
       let redirectUri = "";
       let timer: ReturnType<typeof setTimeout>;
 
@@ -166,6 +192,9 @@ export class OAuthEngine {
         server.close();
         resolve(outcome);
       };
+      const markSuperseded = (): void => {
+        superseded = true;
+      };
 
       const server: Server = createServer((req, res) => {
         void this.handleCallback(req, res, {
@@ -177,6 +206,7 @@ export class OAuthEngine {
           opts,
           settle,
           isSettled: () => settled,
+          isSuperseded: () => superseded,
         });
       });
 
@@ -186,7 +216,7 @@ export class OAuthEngine {
       });
 
       timer = setTimeout(() => settle({ ok: false, reason: "timeout" }), this.timeoutMs);
-      this.inFlight.set(config.providerId, settle);
+      this.inFlight.set(config.providerId, { settle, markSuperseded });
 
       // Bind BEFORE the browser (threat model §3.2): the redirect_uri only exists
       // once we own the port.
@@ -275,8 +305,17 @@ export class OAuthEngine {
       // the delete's own clears run after our completed write and remove it. Both
       // clear-vs-clear races are idempotent, and connection ids are uuids (never
       // reused), so this can never erase another flow's legitimate blob.
+      //
+      // W11-FIX M6: a settle caused by a SUPERSEDING startFlow (not a delete/
+      // explicit-cancel/timeout) must skip this compensation — connectionId
+      // lifecycle ownership passed to the new flow. Same-connection: clearing
+      // would erase the new flow's own just-written valid blob. Cross-
+      // connection (inFlight keyed by providerId): clearing would erase THIS
+      // flow's own successful write even though nobody deleted its connection.
       if (ctx.isSettled()) {
-        await this.vault.clearOAuthTokens(ctx.connectionId);
+        if (!ctx.isSuperseded()) {
+          await this.vault.clearOAuthTokens(ctx.connectionId);
+        }
         respondHtml(res, "Sign-in was cancelled. You can close this window.");
         return;
       }
