@@ -59,6 +59,7 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
     connectionSetActive: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
     connectionDelete: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
     connectionCheck: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
+    onProviderHealthChanged: vi.fn().mockReturnValue(() => {}),
     ...overrides,
   };
 }
