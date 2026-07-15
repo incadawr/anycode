@@ -55,6 +55,10 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
     oauthStart: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
     oauthCancel: vi.fn().mockResolvedValue(undefined),
     connectionUpdate: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
+    connectionCreate: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
+    connectionSetActive: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
+    connectionDelete: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
+    connectionCheck: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
     ...overrides,
   };
 }
