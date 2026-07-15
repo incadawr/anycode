@@ -123,7 +123,7 @@ import type {
   ShellCapabilitiesProjection,
 } from "../../shared/protocol.js";
 import { stripReminderBlocks } from "./transcript-sanitize.js";
-import { parseUsageLimitNotice, type UsageLimitNotice } from "./provider-notices.js";
+import { type UsageLimitNotice } from "./provider-notices.js";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
@@ -1706,7 +1706,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // `loop_end` handler above to decide whether to arm the Try-again offer.
         case "error":
           {
-            const quota = parseUsageLimitNotice(event.error);
+            // The usage_limit notice is parsed host-side (sanitizeAgentEvent) and
+            // rides the wire event, because the redacted `error.message` the
+            // renderer now receives no longer carries the parseable z.ai text
+            // (W7b-FIX #2).
+            const quota = event.notice ?? null;
             appendBlock(
               quota
                 ? { kind: "usage_limit", id: `usage-limit:${turnId}:${errorSeq}`, notice: quota }

@@ -609,17 +609,20 @@ describe("desktop store — agent_event transcript accumulation", () => {
     expect(new Set(errorBlocks.map((b) => b.id)).size).toBe(2);
   });
 
-  it("renders a recognized provider quota failure as a UI-only usage-limit block", () => {
+  it("renders a recognized provider quota failure as a UI-only usage-limit block from the wire notice (W7b-FIX #2 migration)", () => {
     const store = createDesktopStore();
     const turnId = "turn-1";
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "glm-5.2", sessionId: "s1" });
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    // The raw z.ai message is now redacted at the host; the numeric notice is
+    // parsed host-side (sanitizeAgentEvent) and rides the wire event directly.
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
       event: {
         type: "error",
-        error: { name: "AI_APICallError", message: "[1308] Usage limit reached. Your limit will reset at 2026-07-12 19:07:09" },
+        error: { name: "ProviderError", message: "quota exhausted" },
+        notice: { kind: "usage_limit", code: 1308, resetAt: Date.UTC(2026, 6, 12, 11, 7, 9) },
       },
     });
 
