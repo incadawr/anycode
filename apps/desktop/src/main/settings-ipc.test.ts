@@ -943,6 +943,44 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
     expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(1);
   });
 
+  it("refuses delete when the pin is RESERVED but not yet registered (W10-FIX F3 early guard, registered ∪ pending)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const clearSpy = vi.spyOn(vault, "clearSecret");
+    // A resume has RESERVED this pin (synchronously, before its tab is registered):
+    // `connectionInUse` unions the reservation set, so the early guard refuses.
+    const reserved = new Set(["conn-1"]);
+    const res = await handleConnectionDelete(
+      makeDeps({ catalogIds: CATALOG_IDS, connectionInUse: (id) => reserved.has(id) }),
+      { id: "conn-1" },
+    );
+    expect(res).toEqual({ ok: false, reason: "connection_in_use" });
+    // Early refusal touches nothing.
+    expect(clearSpy).not.toHaveBeenCalled();
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(1);
+  });
+
+  it("re-checks connectionInUse AFTER the secret-clears and aborts if it flipped (W10-FIX F3 late re-check)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), { key: "provider.z-ai.apiKey", value: SECRET_VALUE });
+    const clearSpy = vi.spyOn(vault, "clearSecret");
+    // Free at the EARLY check; a resume registers the pin during the awaited
+    // clears, so the LATE re-check (2nd call) sees it in use.
+    let calls = 0;
+    const connectionInUse = (id: string): boolean => {
+      calls += 1;
+      return id === "conn-1" && calls >= 2;
+    };
+    const res = await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS, connectionInUse }), { id: "conn-1" });
+    expect(res).toEqual({ ok: false, reason: "connection_in_use" });
+    // Degradation is asymmetric: secrets ARE cleared (keyless, recoverable) but the
+    // connection metadata is NOT removed — the live session is never pulled out.
+    expect(clearSpy).toHaveBeenCalledWith("provider.connection.conn-1.apiKey");
+    expect(clearSpy).toHaveBeenCalledWith("provider.connection.conn-1.oauth");
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toHaveLength(1);
+    expect((await loadSettings(settingsPath)).settings.provider.activeConnectionId).toBe("conn-1");
+  });
+
   it("cancels an in-flight oauth flow for the deleted connection's provider (residual §6.5)", async () => {
     const oauth = new FakeOAuthRunner(vault);
     const deps = makeDeps({
