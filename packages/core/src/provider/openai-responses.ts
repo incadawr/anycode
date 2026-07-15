@@ -48,6 +48,14 @@ export const OPENAI_RESPONSES_PROVIDER_NAME = "openai";
  * fallback, a genuine no-auth config (`config.apiKey === undefined`) keeps the
  * `""` short-circuit AND installs `stripAuthorizationFetch` so the header
  * never reaches the wire; a real key is left untouched.
+ *
+ * That stripping is only safe when the endpoint has no OTHER intentional
+ * Authorization credential. A header-based-auth endpoint (no `apiKey`, but an
+ * explicit `config.headers.Authorization`) must keep it: by the time a
+ * request reaches `fetch`, the SDK-generated empty `Bearer ` and a real header
+ * credential are indistinguishable values, so the decision to install the
+ * stripping wrapper at all is made here, before that merge, keyed off the
+ * PRESENCE of an explicit header rather than its value (TASK.43 W6-FIX #1).
  */
 function stripAuthorizationFetch(
   input: Parameters<typeof fetch>[0],
@@ -58,13 +66,22 @@ function stripAuthorizationFetch(
   return fetch(input, { ...init, headers });
 }
 
+function hasExplicitAuthorizationHeader(headers: Record<string, string> | undefined): boolean {
+  if (headers === undefined) {
+    return false;
+  }
+  return Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
+}
+
 export function createOpenAIResponsesLanguageModel(config: EndpointConfig): LanguageModel {
+  const shouldStripAmbientAuthorization =
+    config.apiKey === undefined && !hasExplicitAuthorizationHeader(config.headers);
   const provider = createOpenAI({
     name: OPENAI_RESPONSES_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
     apiKey: config.apiKey ?? "",
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
-    ...(config.apiKey === undefined ? { fetch: stripAuthorizationFetch } : {}),
+    ...(shouldStripAmbientAuthorization ? { fetch: stripAuthorizationFetch } : {}),
   });
   return provider.responses(config.model);
 }
