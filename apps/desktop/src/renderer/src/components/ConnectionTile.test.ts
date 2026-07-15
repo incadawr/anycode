@@ -55,6 +55,30 @@ describe("connectionHealthStatus (task §3: needs_credential OVERRIDES any stale
       "auth_invalid",
     );
   });
+
+  // §4 (W12-FIX, codex W12 review #4) — reverting the `|| credentialStatus.source
+  // === "none"` clause turns this red: a present-but-undecryptable vault entry
+  // (`set: true`, `source: "none"`) must present the SAME `needs_credential`
+  // status as a genuinely-absent one, never a stale `ready`/`auth_invalid`.
+  it('§4 needs_credential when the vault entry is present but undecryptable (set:true, source:"none")', () => {
+    expect(
+      connectionHealthStatus(
+        conn({ lastHealth: { status: "ready", at: "t" } }),
+        status({ set: true, source: "none", tier: "os_encrypted" }),
+      ),
+    ).toBe("needs_credential");
+  });
+
+  // Paired guard (anti-over-fix): a normally-decryptable vault entry must
+  // still surface its lastHealth, not regress to needs_credential.
+  it("paired guard: a decryptable credential (source: vault) still surfaces lastHealth, not needs_credential", () => {
+    expect(
+      connectionHealthStatus(
+        conn({ lastHealth: { status: "ready", at: "t" } }),
+        status({ set: true, source: "vault" }),
+      ),
+    ).toBe("ready");
+  });
 });
 
 describe("describeConnectionHealth (task §3 table: tone discipline)", () => {

@@ -48,14 +48,17 @@ export const HEALTH_TONE: Record<ProviderHealthStatus, HealthTone> = {
  * The status a tile actually shows: `needs_credential` OVERRIDES any stale
  * `lastHealth` the moment the credential is absent (a cleared/never-set key
  * must never keep showing a prior `ready`/`auth_invalid` reading) — mirrors
- * `computeProviderReady`'s own "credential set" gate. Otherwise the connection's
+ * `computeProviderReady`'s own "credential set" gate. A present-but-
+ * undecryptable vault entry (`set: true`, `source: "none"` — TASK.45 W12-FIX
+ * §4) is equally unusable at runtime and gets the SAME treatment, never a
+ * stale `ready`/`auth_invalid` reading either. Otherwise the connection's
  * advisory `lastHealth.status`, or `unchecked` when it has never been probed.
  */
 export function connectionHealthStatus(
   connection: ProviderConnection,
   credentialStatus: SecretStatus | undefined,
 ): ProviderHealthStatus {
-  if (!credentialStatus?.set) {
+  if (!credentialStatus?.set || credentialStatus.source === "none") {
     return "needs_credential";
   }
   return connection.lastHealth?.status ?? "unchecked";
