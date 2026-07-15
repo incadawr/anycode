@@ -155,7 +155,7 @@ function isNetworkFailure(error: unknown, message: string): boolean {
   );
 }
 
-/** Quota exhaustion rides as a 429 on some providers (z.ai code 1308) — checked BEFORE the generic rate_limited bucket. */
+/** Quota exhaustion rides as a 429 on some providers (z.ai code 1308), or arrives with no status code at all. */
 function isQuotaFailure(error: unknown, message: string): boolean {
   if (QUOTA_PATTERN.test(message)) return true;
   if (APICallError.isInstance(error) && error.data !== undefined) {
@@ -201,7 +201,12 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
     safe: { code, message: SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
   });
 
-  if (isQuotaFailure(error, message)) {
+  // Quota-by-text is gated on status: a status code that already names a more
+  // specific bucket (401/403/5xx) wins over quota-shaped text (M3, TASK.45
+  // W11-FIX). This preserves the two documented quota cases — z.ai's 1308
+  // riding as a 429, and a status-less quota message — while a 401/403/5xx
+  // whose message happens to mention "quota" classifies on its actual status.
+  if ((statusCode === undefined || statusCode === 429) && isQuotaFailure(error, message)) {
     return build("quota", false);
   }
   if (CONNECT_TIMEOUT_PATTERN.test(message)) {

@@ -173,6 +173,22 @@ describe("classifyProviderFailure", () => {
     expect(classifyProviderFailure(error)).toMatchObject({ code: "quota", retryable: false });
   });
 
+  it("classifies a 401 whose message happens to mention quota as auth, not quota (M3: status wins over quota text)", () => {
+    const error = apiCallError({ message: "insufficient quota", statusCode: 401 });
+
+    const result = classifyProviderFailure(error);
+
+    expect(result).toMatchObject({ code: "auth", retryable: false });
+  });
+
+  it("classifies a 500 whose message happens to mention quota as server, not quota (M3: status wins over quota text)", () => {
+    const error = apiCallError({ message: "quota backend down", statusCode: 500 });
+
+    const result = classifyProviderFailure(error);
+
+    expect(result).toMatchObject({ code: "server", retryable: true });
+  });
+
   it("classifies a plain rate-limit 429 (no quota indicator) as rate_limited, retryable", () => {
     const error = apiCallError({ message: "too many requests", statusCode: 429 });
 
