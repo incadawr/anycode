@@ -34,8 +34,16 @@ import { SessionPermissionRules } from "../permissions/rules.js";
 const ANYCODE_DIR_MODE = 0o700;
 /** settings.json is human-editable/diffable — byte-mirror of desktop `SETTINGS_FILE_MODE`. */
 const SETTINGS_FILE_MODE = 0o644;
-/** The only settings.json shape this module reads/writes (desktop `CURRENT_SETTINGS_VERSION`). */
-const SUPPORTED_VERSION = 1;
+/**
+ * The current settings.json version this module CREATES (desktop
+ * `CURRENT_SETTINGS_VERSION`, TASK.45 W9: v2). The append writer is
+ * structure-preserving (it only ever rewrites `permissions.alwaysAllow`), so it
+ * ACCEPTS any already-supported version (1 or 2) and only refuses a
+ * newer-than-CURRENT file — see `SUPPORTED_WRITE_VERSIONS`.
+ */
+const CURRENT_VERSION = 2;
+/** Versions the append writer will touch: v1 (legacy, desktop migrates it) or the current v2. A `> CURRENT` file is refused. */
+const SUPPORTED_WRITE_VERSIONS = [1, 2];
 
 /** `<home>/.anycode/settings.json` — byte-identical path to desktop `defaultSettingsPath`. */
 export function defaultSettingsFilePath(home: string = homedir()): string {
@@ -99,11 +107,11 @@ export type AppendRuleResult =
   | { persisted: true }
   | { persisted: false; reason: "malformed" | "unsupported_version" | "io_error" };
 
-/** Fresh `AnycodeSettings`-shaped default file, mirroring desktop `DEFAULT_SETTINGS` (schema.ts:24-31). */
+/** Fresh `AnycodeSettings`-shaped default file, mirroring desktop `DEFAULT_SETTINGS` (v2). */
 function defaultSettingsFile(rule: PermissionRule): Record<string, unknown> {
   return {
-    version: SUPPORTED_VERSION,
-    provider: {},
+    version: CURRENT_VERSION,
+    provider: { connections: [] },
     tools: {},
     permissions: { alwaysAllow: [rule] },
     ui: { theme: "system" },
@@ -192,7 +200,7 @@ async function appendAlwaysAllowRuleUnserialized(path: string, rule: PermissionR
   if (!isRecord(json)) {
     return { persisted: false, reason: "malformed" };
   }
-  if (json.version !== SUPPORTED_VERSION) {
+  if (typeof json.version !== "number" || !SUPPORTED_WRITE_VERSIONS.includes(json.version)) {
     return { persisted: false, reason: "unsupported_version" };
   }
   // Targeted schema check, NOT a full desktop-zod re-implementation (passthrough

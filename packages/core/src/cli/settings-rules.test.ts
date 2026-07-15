@@ -112,8 +112,8 @@ describe("appendAlwaysAllowRule", () => {
     expect(text.endsWith("\n")).toBe(true);
     const parsed = JSON.parse(text);
     expect(parsed).toEqual({
-      version: 1,
-      provider: {},
+      version: 2,
+      provider: { connections: [] },
       tools: {},
       permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
       ui: { theme: "system" },
@@ -161,10 +161,29 @@ describe("appendAlwaysAllowRule", () => {
     expect(parsed.permissions.alwaysAllow).toEqual([{ toolName: "Read" }]);
   });
 
-  it("refuses a version:2 file with unsupported_version, bytes untouched", async () => {
+  it("appends into a version:2 file (write-gate widened for TASK.45 settings v2), leaving the connections graph untouched", async () => {
     const dir = await freshDir();
     const path = settingsPath(dir);
-    const original = JSON.stringify({ version: 2, permissions: { alwaysAllow: [] } });
+    const original = {
+      version: 2,
+      provider: { activeConnectionId: "conn-z-ai", connections: [{ id: "conn-z-ai", providerId: "z-ai", model: "glm-5.2" }] },
+      permissions: { alwaysAllow: [] },
+    };
+    await writeFile(path, JSON.stringify(original));
+
+    const result = await appendAlwaysAllowRule(path, { toolName: "Read" });
+
+    expect(result).toEqual({ persisted: true });
+    const parsed = JSON.parse(await readFile(path, "utf8"));
+    expect(parsed.version).toBe(2);
+    expect(parsed.provider).toEqual(original.provider); // v2 connections graph preserved byte-for-byte
+    expect(parsed.permissions.alwaysAllow).toEqual([{ toolName: "Read" }]);
+  });
+
+  it("refuses a newer-than-CURRENT (version:3) file with unsupported_version, bytes untouched", async () => {
+    const dir = await freshDir();
+    const path = settingsPath(dir);
+    const original = JSON.stringify({ version: 3, permissions: { alwaysAllow: [] } });
     await writeFile(path, original);
 
     const result = await appendAlwaysAllowRule(path, { toolName: "Read" });
