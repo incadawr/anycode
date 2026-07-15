@@ -828,37 +828,45 @@ async function runMainProfile(mocks) {
 
     // ── scenario 4: switching the default connection never retargets a running session ──
     await runScenario(4, "default switch mid-turn never retargets the running session", async () => {
-      ids.F = await createConnectionViaGrid(ctx, "s4", {
-        name: "Mock Slow F",
-        model: "mock-model-f",
-        baseUrl: mocks.success.url,
-        apiKey: "sk-mock-f",
-      });
-      await selectConnection(ctx, "s4", ids.F);
-      await apiAction(ctx, "s4", "/settings/close", {});
-      mocks.success.state.delayMs = 4_000;
-      const requestsBefore = mocks.success.requests.length;
-      const tab = await newTabReady(ctx, "s4", "s4");
-      const sendResult = await apiOk(ctx, "s4", "POST", `/tabs/${tab.tabId}/prompt`, { text: "w13 dogfood scenario 4 turn" });
-      assert("s4", sendResult.ok === true, `prompt send rejected: ${JSON.stringify(sendResult)}`);
-      await waitUntilTab(ctx, "s4", tab.tabId, { turnStatus: "running" }, 30_000);
+      const mockF = await startMockServer("success");
+      try {
+        ids.F = await createConnectionViaGrid(ctx, "s4", {
+          name: "Mock Slow F",
+          model: "mock-model-f",
+          baseUrl: mockF.url,
+          apiKey: "sk-mock-f",
+        });
+        await selectConnection(ctx, "s4", ids.F);
+        await apiAction(ctx, "s4", "/settings/close", {});
+        mockF.state.delayMs = 4_000;
+        const aRequestsBefore = mocks.success.requests.length;
+        const fRequestsBefore = mockF.requests.length;
+        const tab = await newTabReady(ctx, "s4", "s4");
+        const sendResult = await apiOk(ctx, "s4", "POST", `/tabs/${tab.tabId}/prompt`, { text: "w13 dogfood scenario 4 turn" });
+        assert("s4", sendResult.ok === true, `prompt send rejected: ${JSON.stringify(sendResult)}`);
+        await waitUntilTab(ctx, "s4", tab.tabId, { turnStatus: "running" }, 30_000);
 
-      // switch default WHILE F's turn is in flight.
-      await apiActionRetry(ctx, "s4", "/settings/open", {});
-      await apiAction(ctx, "s4", "/settings/pane", { paneId: "provider" });
-      await selectConnection(ctx, "s4", ids.A);
-      const rowFDuring = await connectionRow(ctx, "s4", ids.F);
-      assert("s4", rowFDuring.selected === false, "expected F to lose the selected marker once A is selected");
-      await apiAction(ctx, "s4", "/settings/close", {});
+        // switch default WHILE F's turn is in flight.
+        await apiActionRetry(ctx, "s4", "/settings/open", {});
+        await apiAction(ctx, "s4", "/settings/pane", { paneId: "provider" });
+        await selectConnection(ctx, "s4", ids.A);
+        const rowFDuring = await connectionRow(ctx, "s4", ids.F);
+        assert("s4", rowFDuring.selected === false, "expected F to lose the selected marker once A is selected");
+        await apiAction(ctx, "s4", "/settings/close", {});
 
-      await waitUntilTab(ctx, "s4", tab.tabId, { turnStatus: "idle" }, 60_000);
-      mocks.success.state.delayMs = 0;
-      assert("s4", mocks.success.requests.length > requestsBefore, "F's own mock-success server never received the request — the running session may have been retargeted");
-      const errorBlock = await lastErrorBlock(ctx, "s4", tab.tabId);
-      assert("s4", errorBlock === null, `expected F's turn to complete successfully on its OWN endpoint, got a terminal error: ${JSON.stringify(errorBlock)}`);
-      const settingsDisk = readJsonDisk("s4", ctx.settingsPath, "settings.json");
-      assert("s4", settingsDisk.provider.activeConnectionId === ids.A, `expected the default to have actually switched to A on disk, got ${settingsDisk.provider.activeConnectionId}`);
-      await closeTab(ctx, "s4", tab.tabId);
+        await waitUntilTab(ctx, "s4", tab.tabId, { turnStatus: "idle" }, 60_000);
+        mockF.state.delayMs = 0;
+        const fGotRequest = mockF.requests.slice(fRequestsBefore).some((r) => r.method === "POST" && r.path === "/v1/messages");
+        assert("s4", fGotRequest, "F's own mock-success server never received the POST /v1/messages request — the running session may have been retargeted");
+        assert("s4", mocks.success.requests.length === aRequestsBefore, `A's mock-success server saw new requests during F's in-flight turn — the running session was retargeted (before=${aRequestsBefore}, after=${mocks.success.requests.length})`);
+        const errorBlock = await lastErrorBlock(ctx, "s4", tab.tabId);
+        assert("s4", errorBlock === null, `expected F's turn to complete successfully on its OWN endpoint, got a terminal error: ${JSON.stringify(errorBlock)}`);
+        const settingsDisk = readJsonDisk("s4", ctx.settingsPath, "settings.json");
+        assert("s4", settingsDisk.provider.activeConnectionId === ids.A, `expected the default to have actually switched to A on disk, got ${settingsDisk.provider.activeConnectionId}`);
+        await closeTab(ctx, "s4", tab.tabId);
+      } finally {
+        await mockF.close();
+      }
     });
 
     // ── scenario 6: resume pinned + missing-connection replacement (+ M5 reservation-release proof) ──
