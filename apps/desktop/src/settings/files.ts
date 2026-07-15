@@ -22,6 +22,30 @@ import { z } from "zod";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { cloneDefaults, parseSettings } from "./schema.js";
 
+/**
+ * Repairs the `activeConnectionId` <-> non-empty `connections` invariant on
+ * load (TASK.45 W12-FIX2 §2, codex W12-FIX review #2): `settingsSchema` only
+ * validates FORM (both fields are independently optional/required-array), so
+ * a non-empty `connections` with a missing/dangling `activeConnectionId`, or
+ * an empty `connections` with a leftover `activeConnectionId`, both parse as
+ * valid and would otherwise live on disk forever. The repair is deterministic
+ * and mirrors the existing delete-path promotion (`handleConnectionDelete`,
+ * W12-FIX §2): non-empty + missing/dangling active -> `connections[0].id`;
+ * empty + active present -> active is dropped. A settings object that already
+ * satisfies the invariant is returned byte-for-byte (no gratuitous promotion
+ * away from an already-valid non-first active connection). In-memory only —
+ * the caller decides whether/when to persist the repair.
+ */
+export function normalizeActiveConnection(settings: AnycodeSettings): AnycodeSettings {
+  const { connections, activeConnectionId } = settings.provider;
+  const first = connections[0];
+  if (first === undefined) {
+    return activeConnectionId === undefined ? settings : { ...settings, provider: { connections } };
+  }
+  const activeExists = activeConnectionId !== undefined && connections.some((c) => c.id === activeConnectionId);
+  return activeExists ? settings : { ...settings, provider: { connections, activeConnectionId: first.id } };
+}
+
 /** ~/.anycode directory permissions (owner-only traversal). */
 const ANYCODE_DIR_MODE = 0o700;
 /** settings.json is human-editable/diffable (design §1.1). */
@@ -168,7 +192,10 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
     const corruptBackupPath = await quarantine(path);
     return { settings: result.settings, readOnly: false, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
   }
-  return { settings: result.settings, readOnly: result.readOnly };
+  // TASK.45 W12-FIX2 §2: repair the active<->non-empty invariant on BOTH
+  // success arms (ok and read_only) in memory — a newer-version file must
+  // read out healed too, without this binary ever writing it back.
+  return { settings: normalizeActiveConnection(result.settings), readOnly: result.readOnly };
 }
 
 /** Atomically persist settings.json (0644). Caller is responsible for the read-only guard. */

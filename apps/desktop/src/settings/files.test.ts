@@ -5,10 +5,11 @@
  * secrets.json v1 format. Every test runs against a fresh scratch dir.
  */
 
-import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ProviderConnection } from "../shared/settings.js";
 import {
   SECRETS_FILE_MODE,
   SECRETS_FILE_VERSION,
@@ -21,7 +22,11 @@ import {
   type SecretsFileV1,
 } from "./files.js";
 import { DEFAULT_SETTINGS, cloneDefaults } from "./schema.js";
-import { providerV2 } from "../shared/provider-v2-fixture.js";
+import { providerV2, providerV2Multi } from "../shared/provider-v2-fixture.js";
+
+function conn(id: string, providerId = "z-ai"): ProviderConnection {
+  return { id, providerId };
+}
 
 let dir: string;
 const settingsPath = () => join(dir, "settings.json");
@@ -84,6 +89,75 @@ describe("loadSettings (fail-soft)", () => {
     const result = await loadSettings(settingsPath());
     expect(result.readOnly).toBe(true);
     expect(await backupsFor("settings.json")).toHaveLength(0);
+  });
+});
+
+// ── TASK.45 W12-FIX2 §2: load-normalize repairs active<->non-empty (codex W12-FIX review #2) ──
+
+describe("loadSettings — normalizeActiveConnection repairs the active<->non-empty invariant", () => {
+  // §2.1 — reverting the normalize-hunk (files.ts) turns this red: schema-level
+  // `activeConnectionId` is independently optional, so an absent active on a
+  // non-empty connections array parses `ok` and stays `undefined` at base.
+  it("§2.1 non-empty connections with no activeConnectionId -> promotes connections[0]", async () => {
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), provider: providerV2Multi(undefined, [conn("A"), conn("B")]) }),
+      "utf8",
+    );
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.activeConnectionId).toBe("A");
+  });
+
+  // §2.2 — same discriminant, dangling id instead of absent: base leaves the
+  // stale "ghost" id in place (schema has no cross-field/existence check).
+  it("§2.2 non-empty connections with a dangling activeConnectionId -> promotes connections[0]", async () => {
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), provider: providerV2Multi("ghost", [conn("A"), conn("B")]) }),
+      "utf8",
+    );
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.activeConnectionId).toBe("A");
+  });
+
+  // §2.3 — empty connections with a leftover active: base's optional-string
+  // schema field protects the value through untouched.
+  it("§2.3 empty connections with a leftover activeConnectionId -> the active id is dropped", async () => {
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), provider: providerV2Multi("ghost", []) }),
+      "utf8",
+    );
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.activeConnectionId).toBeUndefined();
+  });
+
+  // §2.4 — pin against over-fix: an already-valid non-first active connection
+  // must NOT be gratuitously promoted to connections[0].
+  it("§2.4 pin: an already-valid non-first active connection is left untouched", async () => {
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), provider: providerV2Multi("B", [conn("A"), conn("B")]) }),
+      "utf8",
+    );
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.activeConnectionId).toBe("B");
+  });
+
+  // §2.5 — discriminates PLACEMENT: normalize must run on the `read_only` arm
+  // too (readiness must work off a newer-version file), and the heal must stay
+  // in-memory only — the newer file is never rewritten downgraded.
+  it("§2.5 readOnly arm: a newer-version [A,B]-no-active file heals in-memory and is NOT rewritten to disk", async () => {
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), version: 99, provider: providerV2Multi(undefined, [conn("A"), conn("B")]) }),
+      "utf8",
+    );
+    const result = await loadSettings(settingsPath());
+    expect(result.readOnly).toBe(true);
+    expect(result.settings.provider.activeConnectionId).toBe("A");
+    const onDisk = JSON.parse(await readFile(settingsPath(), "utf8"));
+    expect(onDisk.provider.activeConnectionId).toBeUndefined();
   });
 });
 
