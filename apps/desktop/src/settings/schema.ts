@@ -103,7 +103,13 @@ const connectionSchema = z.object({
 /** Strict charset (cut §2.6): never a path — `..`/`/` are excluded by construction. */
 const codexProfileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
 
-/** A `~/`-relative or absolute path — the ONLY shapes an expanded `authLink` may resolve to (amended §A1.1.4). */
+/**
+ * A `~/`-relative or absolute path — the ONLY shapes `authLink` AND
+ * `linkedHome` accept (amended §A1.1.4, extended to `linkedHome` by the C0
+ * review F1 ruling: a relative `linkedHome` would resolve against process
+ * cwd on its way into the child's `CODEX_HOME`). Tilde expansion happens in
+ * main, in ONE place, for both fields.
+ */
 function isTildeOrAbsolutePath(value: string): boolean {
   return value.startsWith("~/") || value.startsWith("/");
 }
@@ -122,7 +128,7 @@ const codexProfileSchema = z
     id: codexProfileIdSchema,
     label: z.string(),
     createdAt: z.string(),
-    linkedHome: z.string().optional(),
+    linkedHome: z.string().refine(isTildeOrAbsolutePath).optional(),
     authLink: z.string().refine(isTildeOrAbsolutePath).optional(),
     lastCheck: z
       .object({
