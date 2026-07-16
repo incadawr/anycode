@@ -115,6 +115,7 @@ import {
   SETTINGS_SET_CHANNEL,
 } from "../shared/settings.js";
 import type {
+  CodexProfileRecord,
   ConnectionCheckRequest,
   ConnectionCreateRequest,
   ConnectionDeleteRequest,
@@ -171,6 +172,20 @@ const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
 const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
 const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
+// TASK.50 (codex-profiles cut §2/§4, amended §A1): the profile control-plane
+// channels — main/codex-ipc.ts holds the byte-identical source of truth, same
+// duplicated-literal convention as the four channels above.
+const CODEX_PROFILE_LIST_CHANNEL = "anycode:codex-profile-list";
+const CODEX_PROFILE_CREATE_CHANNEL = "anycode:codex-profile-create";
+const CODEX_PROFILE_DELETE_CHANNEL = "anycode:codex-profile-delete";
+const CODEX_PROFILE_SET_ACTIVE_CHANNEL = "anycode:codex-profile-set-active";
+const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
+// TASK.53 (codex-profiles cut §7, amended §A4): the binary/manifest control
+// plane — main/codex-install.ts holds the byte-identical source of truth.
+const CODEX_INSTALL_CHANNEL = "anycode:codex-install";
+const CODEX_RISK_ACCEPT_CHANNEL = "anycode:codex-risk-accept";
+const CODEX_SUPPORT_STATUS_CHANNEL = "anycode:codex-support-status";
+const CODEX_MANIFEST_REFRESH_CHANNEL = "anycode:codex-manifest-refresh";
 // TASK.45 W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
 // (main/settings-ipc.ts) persists a real request outcome's advisory health
 // deliberately WITHOUT firing the normal `onMutation` broadcast (health must
@@ -196,6 +211,46 @@ export type CodexPickBinaryResult =
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+
+// TASK.50 (codex-profiles cut §2/§4, amended §A1): duplicated from
+// main/codex-ipc.ts's own `CodexProfilesSnapshot`/`CodexProfileCreateResult`/
+// `CodexProfileGuardResult` — same "shared/** froze read-only after C0"
+// reasoning as the onboarding shapes above. `CodexProfileRecord` itself IS a
+// frozen shared/** type, imported (never edited) above.
+export interface CodexProfilesSnapshot {
+  profiles: Array<{ profile: CodexProfileRecord; report?: CodexDoctorReport }>;
+  activeProfileId: string;
+}
+
+export interface CodexProfileCreateRequest {
+  label: string;
+  authLink?: string;
+  linkedHome?: string;
+}
+
+export type CodexProfileCreateResult =
+  | { ok: true; profile: CodexProfileRecord }
+  | { ok: false; reason: "invalid" | "limit" | "failed"; message?: string };
+
+export type CodexProfileGuardResult = { ok: true } | { ok: false; reason: string };
+
+// TASK.53 (codex-profiles cut §7, amended §A4): duplicated from
+// main/codex-install.ts's own `CodexInstallControllerResult`/`supportStatus`/
+// `refreshManifest` return shapes.
+export type CodexInstallResult =
+  | { ok: true; version: string; binaryPath: string; report: CodexDoctorReport }
+  | { ok: false; error: string };
+
+export interface CodexSupportStatusResult {
+  supportedRange: string;
+  recommended: string;
+  riskAcceptedVersions: string[];
+}
+
+export interface CodexManifestRefreshResult {
+  source: "network" | "cache" | "bundled";
+  supportedRange: string;
+}
 
 // §3.1: forward the main-side payload as-is. The port envelope carries
 // { tabId, workspace }, the host-exited envelope carries { tabId }; preload just
@@ -279,14 +334,42 @@ contextBridge.exposeInMainWorld("anycode", {
   // (custody, cut §2(g)) — every result carries only status/version/account
   // type+plan, never a raw auth value.
   codex: {
-    recheck: (): Promise<CodexOnboardingSnapshot> =>
-      ipcRenderer.invoke(CODEX_RECHECK_CHANNEL) as Promise<CodexOnboardingSnapshot>,
+    // `profileId` (TASK.50, cut §4.2): omitted diagnoses/signs into the
+    // ACTIVE profile — main's own default, unchanged for every pre-existing
+    // caller of these two methods.
+    recheck: (profileId?: string): Promise<CodexOnboardingSnapshot> =>
+      ipcRenderer.invoke(CODEX_RECHECK_CHANNEL, profileId ? { profileId } : undefined) as Promise<CodexOnboardingSnapshot>,
     pickBinary: (): Promise<CodexPickBinaryResult> =>
       ipcRenderer.invoke(CODEX_PICK_BINARY_CHANNEL) as Promise<CodexPickBinaryResult>,
-    loginStart: (): Promise<CodexLoginStartResult> =>
-      ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL) as Promise<CodexLoginStartResult>,
+    loginStart: (profileId?: string): Promise<CodexLoginStartResult> =>
+      ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL, profileId ? { profileId } : undefined) as Promise<CodexLoginStartResult>,
     loginCancel: (): Promise<void> =>
       ipcRenderer.invoke(CODEX_LOGIN_CANCEL_CHANNEL) as Promise<void>,
+    // TASK.50 (cut §2/§4): the profile control-plane — settings/fs mutations
+    // only, no spawns. No credential value ever crosses this bridge in either
+    // direction (custody, cut §4.4) — `listProfiles` carries only the
+    // persisted record (id/label/createdAt/linkedHome/authLink/lastCheck)
+    // plus the in-memory doctor report (status/version/account/rateLimits),
+    // never a token.
+    listProfiles: (): Promise<CodexProfilesSnapshot> =>
+      ipcRenderer.invoke(CODEX_PROFILE_LIST_CHANNEL) as Promise<CodexProfilesSnapshot>,
+    createProfile: (request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_CREATE_CHANNEL, request) as Promise<CodexProfileCreateResult>,
+    deleteProfile: (id: string): Promise<CodexProfileGuardResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_DELETE_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
+    setActiveProfile: (id: string): Promise<CodexProfileGuardResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_SET_ACTIVE_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
+    repairProfileLink: (id: string): Promise<CodexProfileGuardResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_REPAIR_LINK_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
+    // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
+    install: (version?: string): Promise<CodexInstallResult> =>
+      ipcRenderer.invoke(CODEX_INSTALL_CHANNEL, version ? { version } : undefined) as Promise<CodexInstallResult>,
+    acceptRisk: (version: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(CODEX_RISK_ACCEPT_CHANNEL, { version }) as Promise<{ ok: boolean; error?: string }>,
+    supportStatus: (): Promise<CodexSupportStatusResult> =>
+      ipcRenderer.invoke(CODEX_SUPPORT_STATUS_CHANNEL) as Promise<CodexSupportStatusResult>,
+    manifestRefresh: (): Promise<CodexManifestRefreshResult> =>
+      ipcRenderer.invoke(CODEX_MANIFEST_REFRESH_CHANNEL) as Promise<CodexManifestRefreshResult>,
   },
   settings: {
     get: (): Promise<SettingsSnapshot> =>

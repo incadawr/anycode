@@ -2491,3 +2491,33 @@
 .shortcuts-row-trash {
   margin-left: 0.15rem;
 }
+
+/* ── Codex accounts (TASK.50/53, codex-profiles cut §5): per-profile rows reuse .settings-mcp-list/.settings-mcp-row/.settings-mcp-name/.settings-mcp-detail; these three are new. ── */
+
+.codex-profile-row {
+  flex-wrap: wrap;
+  row-gap: 0.3rem;
+}
+
+/* The base .settings-mcp-detail is tuned for a short single-line MCP status;
+   a Codex doctor sentence runs longer and must stay fully readable. */
+.codex-profile-row .settings-mcp-detail {
+  flex: 1 1 100%;
+  margin-left: 0;
+  max-width: none;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.codex-profile-email,
+.codex-profile-quota-line {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-profile-row .settings-field-row {
+  flex-basis: 100%;
+}
