@@ -83,6 +83,7 @@ function fakeUpdatesBridge(overrides: Partial<UpdatesBridge> = {}): UpdatesBridg
     check: vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult),
     download: vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult),
     install: vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult),
+    openReleasesPage: vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult),
     onUpdateStatus: vi.fn().mockReturnValue(() => {}),
     ...overrides,
   };
@@ -542,12 +543,16 @@ describe("settings-store: OAuth sign-in (slice 2.5 §5)", () => {
 
 describe("describeUpdateActionFailure", () => {
   it("has non-empty, distinct text for every reason", () => {
-    const reasons: UpdateActionReason[] = ["not_packaged", "invalid_state"];
+    const reasons: UpdateActionReason[] = ["not_packaged", "invalid_state", "manual_only"];
     const texts = reasons.map(describeUpdateActionFailure);
     for (const text of texts) {
       expect(text.length).toBeGreaterThan(0);
     }
     expect(new Set(texts).size).toBe(reasons.length);
+  });
+
+  it("TASK.47 defect 2: manual_only names GitHub Releases as the alternative", () => {
+    expect(describeUpdateActionFailure("manual_only")).toMatch(/GitHub Releases/);
   });
 });
 
@@ -609,5 +614,26 @@ describe("settings-store: auto-updater (slice 2.6 §6)", () => {
     expect(install).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ ok: true });
     expect(store.getState().notice).toBeNull();
+  });
+
+  it("openReleasesUpdate (TASK.47 defect 2) forwards to the bridge and leaves no notice on success", async () => {
+    const openReleasesPage = vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult);
+    const store = createSettingsStore(fakeBridge(), fakeUpdatesBridge({ openReleasesPage }));
+
+    const result = await store.getState().openReleasesUpdate();
+
+    expect(openReleasesPage).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: true });
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it("openReleasesUpdate sets a notice on refusal (e.g. a dev build)", async () => {
+    const openReleasesPage = vi.fn().mockResolvedValue({ ok: false, reason: "not_packaged" } satisfies UpdateActionResult);
+    const store = createSettingsStore(fakeBridge(), fakeUpdatesBridge({ openReleasesPage }));
+
+    const result = await store.getState().openReleasesUpdate();
+
+    expect(result).toEqual({ ok: false, reason: "not_packaged" });
+    expect(store.getState().notice).toBe(describeUpdateActionFailure("not_packaged"));
   });
 });

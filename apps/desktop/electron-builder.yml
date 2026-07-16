@@ -81,15 +81,32 @@ linux:
       arch:
         - x64
 
-# Publish target for `electron-builder --publish always`, which CI passes on a
-# `v*` tag push (.github/workflows/release.yml). Every matrix job uploads into
-# the SAME release for the tag; the first one creates it, the rest reuse it.
+# Publish target. CI now runs electron-builder with `--publish never` on every
+# platform (a separate `release` job in .github/workflows/release.yml assembles
+# ONE draft release from the built artifacts via `gh`, instead of racing four
+# electron-builder publishers against the same tag) — this block's ONLY live
+# effect today is what it writes into app-update.yml inside the packaged app.
 #
-# releaseType: draft — a tag push never publishes to users on its own. CI fills
-# the draft with all four platform artifacts and its release notes (taken from
-# the tag's CHANGELOG.md section); a human presses Publish.
+# releaseType: release (TASK.47 defect 1, corrected by W14-fix) — `releaseType`
+# is publisher-side metadata electron-builder writes into app-update.yml; the
+# CLIENT (electron-updater@6.8.9, verified against the installed package: zero
+# occurrences of "releaseType" in its source) never reads this field, so it has
+# NO effect on which GitHub feed a running client polls. What actually governs
+# draft-visibility is GitHub itself: the feeds electron-updater polls
+# (/releases.atom, /repos/.../releases/latest) structurally never list a draft
+# release, at ANY value of this field, to an unauthenticated caller — and the
+# human-reviewed draft gate is enforced by a completely separate mechanism, the
+# hardcoded `--draft` flag in `.github/workflows/release.yml`'s `gh` publisher
+# job, which this field cannot touch either way. So flipping this value never
+# was the fix for TASK.47 defect 1's real bug (a stuck `not-available` status)
+# and never bypassed the owner's Publish step. Kept at "release" as config
+# hygiene — it is the value electron-builder ships once a `publish:` block is
+# configured at all — and as a deliberately narrow tripwire: scripts/
+# assert-package.mjs fails the build if a FUTURE change regresses it back to
+# something else, which is a real (if now-understood-to-be-inert-on-clients)
+# drift worth catching in the packaged artifact rather than only in source.
 publish:
   provider: github
   owner: incadawr
   repo: anycode
-  releaseType: draft
+  releaseType: release

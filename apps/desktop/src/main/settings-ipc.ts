@@ -134,6 +134,14 @@ export interface SettingsIpcDeps {
   probeConnection?: (connection: ProviderConnection, credential: string) => Promise<ConnectionProbeOutcome>;
   /** Injectable ISO-timestamp clock for `lastHealth.at` (tests only; defaults to `new Date().toISOString()`). */
   now?: () => string;
+  /**
+   * TASK.49: returns the running app's version for `SettingsSnapshot.appVersion`.
+   * Injected (never `import { app } from "electron"` here) so this module keeps
+   * the same DI discipline as automation/handlers.ts's `AppLike` and stays
+   * unit-testable with a fake. main/index.ts wires `() => app.getVersion()`;
+   * absent in a test deps bag simply omits `appVersion` from the snapshot.
+   */
+  getAppVersion?: () => string;
 }
 
 /** Outcome of an explicit `connection-check` probe (TASK.45 W11). */
@@ -432,6 +440,7 @@ async function snapshotFrom(
     envOverrides: envOverrides(deps.bootEnv),
     readOnly,
     ...(deps.catalog !== undefined ? { catalog: deps.catalog } : {}),
+    ...(deps.getAppVersion !== undefined ? { appVersion: deps.getAppVersion() } : {}),
   };
 }
 

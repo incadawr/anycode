@@ -79,7 +79,7 @@ import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from ".
 import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
 import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
-import { registerUpdater } from "./updater.js";
+import { registerUpdater, type UpdaterController } from "./updater.js";
 import { runWorktreeJanitor } from "./worktree-janitor.js";
 
 /** Replaced by electron-vite: true in `dev`, false in production builds. */
@@ -272,6 +272,8 @@ let manager: TabHostManager | null = null;
 let codexOnboarding: CodexOnboardingController | null = null;
 /** Set once quit begins, to gate the before-quit handler's second pass. */
 let quitting = false;
+/** Auto-updater controller (TASK.47 W15) — held module-level so before-quit can clear its armed schedule timer. Null until boot registers it. */
+let updaterController: UpdaterController | null = null;
 
 
 
@@ -1077,6 +1079,8 @@ void app.whenReady().then(async () => {
     ),
     authKindFor,
     isCustom: isCustomProvider,
+    // TASK.49: dev = apps/desktop/package.json's version, packaged = the bundled version.
+    getAppVersion: () => app.getVersion(),
     oauth: oauthEngine,
     oauthConfigFor: (id) => oauthConfigFromEntry(findCatalogEntry(id)),
     // TASK.45 W10 delete-guard: refuse deleting a connection an open session is
@@ -1200,9 +1204,20 @@ void app.whenReady().then(async () => {
 
   createWindow();
 
-  // Auto-updater (design/slice-2.6-cut.md §6): additive register — gated
+  // Auto-updater (design/slice-2.6-cut.md §6; TASK.47 W15 adds the auto-check
+  // schedule + darwin honest-manual-path): additive register — gated
   // internally on app.isPackaged, so a dev run never touches autoUpdater.
-  registerUpdater({ autoUpdater, isPackaged: app.isPackaged, getWindow: () => win, logger: fileLogger });
+  // `platform`/`openExternal` drive TASK.47 defect 2 (darwin has no
+  // Developer ID yet, so Squirrel.Mac would reject a downloaded update —
+  // `openReleasesPage()` opens the fixed GitHub Releases URL instead).
+  updaterController = registerUpdater({
+    autoUpdater,
+    isPackaged: app.isPackaged,
+    getWindow: () => win,
+    logger: fileLogger,
+    platform: process.platform,
+    openExternal: (url) => shell.openExternal(url),
+  });
 
   // Boot decision tree: explicit initial targets start a tab; a normal GUI launch
   // opens with zero tabs and no folder dialog. The parked resume id waits for the
@@ -1255,6 +1270,9 @@ async function shutdownEverything(): Promise<void> {
   const activeManager = manager;
   const activePersistence = persistence;
   const activeOnboarding = codexOnboarding;
+  // TASK.47 W15: clear the armed auto-check timer, if any — synchronous,
+  // ahead of the awaited teardown below (nothing here depends on it).
+  updaterController?.stop();
   await Promise.allSettled([
     activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
     activeOnboarding?.shutdown() ?? Promise.resolve(),
