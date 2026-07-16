@@ -167,6 +167,31 @@ describe("handleCodexRolloutImport", () => {
     expect(history?.map((i) => i.message.role)).toEqual(["user", "assistant"]);
   });
 
+  it("rejects an empty model as invalid_model, distinct from an unknown profile (F2 review lane FXH: an empty model must not be mistaken for profile_not_found)", async () => {
+    const sessionsDir = await tmp();
+    await seedRollout(sessionsDir, "2026/07/01/rollout-2026-07-01T00-00-00-bbb.jsonl", BASIC_RECORDS);
+    const persistence = new FakePersistence();
+    const deps = makeDeps(persistence, { p1: sessionsDir });
+
+    const result = await handleCodexRolloutImport(deps, {
+      profileId: "p1",
+      fileName: "2026/07/01/rollout-2026-07-01T00-00-00-bbb.jsonl",
+      model: "",
+    });
+
+    expect(result).toEqual({ ok: false, reason: "invalid_model" });
+    expect(persistence.sessions.size).toBe(0);
+  });
+
+  it("still rejects an unknown profileId as profile_not_found even with a valid model", async () => {
+    const persistence = new FakePersistence();
+    const deps = makeDeps(persistence, {});
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "", fileName: "2026/07/01/rollout-x.jsonl", model: "claude-sonnet-5" });
+
+    expect(result).toEqual({ ok: false, reason: "profile_not_found" });
+  });
+
   it("rejects a symlink standing in for a valid-shaped rollout path as not_readable (R4: TOCTOU/symlink escape)", async () => {
     const sessionsDir = await tmp();
     const outsideDir = await tmp("rollout-outside-");
