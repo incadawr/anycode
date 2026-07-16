@@ -148,6 +148,14 @@ export interface ProviderConnection {
 export interface ProviderSettingsV2 {
   activeConnectionId?: string;
   connections: ProviderConnection[];
+  /**
+   * Custom OpenAI-compatible/Anthropic model-provider endpoints for AnyCode's
+   * OWN engine (owner-decision #6, cut §9.2) — additive-optional, dedicated
+   * array independent of `connections` (TASK.45's connection graph). A
+   * malformed entry validates INDEPENDENTLY at the zod boundary (same
+   * per-element `.catch` discipline as `codex.profiles`, cut §2.3).
+   */
+  custom?: CustomProviderRecord[];
 }
 
 /**
@@ -208,7 +216,74 @@ export interface AnycodeSettings {
       /** ISO timestamp; advisory-cache only. */
       at: string;
     };
+    /**
+     * Codex account profiles (codex-profiles cut §2.3, amended §A1.1;
+     * additive-optional, `version` NOT bumped — absent = exactly today's
+     * single-profile behavior, the `system` pseudo-profile). Each element
+     * validates INDEPENDENTLY at the zod boundary (settings/schema.ts) — a
+     * single malformed profile record is dropped without disturbing its
+     * siblings or `binaryPath` (cut §2.3 "zod-гранулярность").
+     */
+    profiles?: CodexProfileRecord[];
+    /** Default profile id for NEW sessions; absent = `system`. */
+    activeProfileId?: string;
+    /** Codex versions the user explicitly accepted running outside the supported range (cut §7.4), per-version — not a blanket opt-out. */
+    riskAcceptedVersions?: string[];
   };
+}
+
+/**
+ * One Codex account profile (codex-profiles cut §2.3, amended §A1.1).
+ * `authLink` and `linkedHome` are MUTUALLY EXCLUSIVE by construction — a
+ * record carrying both is a BAD (broken) record, rejected by the
+ * per-element zod refine (settings/schema.ts), never persisted. `id`
+ * charset is the strict
+ * `[a-z0-9][a-z0-9-]{0,31}` (cut §2.6) — never a filesystem path, `main`
+ * derives the actual `CODEX_HOME` from the id via the registry.
+ */
+export interface CodexProfileRecord {
+  id: string;
+  label: string;
+  /** ISO timestamp. */
+  createdAt: string;
+  /**
+   * Absolute path to an ENTIRE external `CODEX_HOME` this profile points at
+   * (cx-parity, cut §2.2 OG-1(b)) — mutually exclusive with `authLink`. When
+   * present, AnyCode creates nothing inside it; it only reads/spawns there.
+   */
+  linkedHome?: string;
+  /**
+   * Target of the `<our profile home>/auth.json` symlink (amended §A1.1/§A1.2)
+   * — mutually exclusive with `linkedHome`. `v1` UI writes exactly
+   * `"~/.codex/auth.json"`; `~` is expanded by main via `os.homedir()` before
+   * use. Stores INTENT only, never credential content — the lstat-guard
+   * (§A1.2) uses this to detect a swapped-out `auth.json`.
+   */
+  authLink?: string;
+  lastCheck?: {
+    status: "ready" | "not_installed" | "update_required" | "signed_out" | "error";
+    version?: string;
+    at: string;
+  };
+}
+
+/**
+ * One custom model-provider endpoint (cut §9.2). `id` is namespaced
+ * `custom:<slug>` so it never collides with a builtin catalog id (enforced
+ * at the main boundary, `catalogProviderIds() ∪ custom[].id`, same shape as
+ * `isKnownSecretKey`). `models` is the user-CURATED subset that actually
+ * populates the model selector — main fetches the full list, the user picks
+ * which ones to keep.
+ */
+export interface CustomProviderRecord {
+  id: string;
+  name: string;
+  /** `https://` required; `http://` permitted ONLY for localhost/127.0.0.1 (cut §9.2 threat list). */
+  baseUrl: string;
+  kind: "openai-compatible" | "anthropic" | "openai";
+  models: string[];
+  /** ISO timestamp of the last successful model-list fetch. */
+  modelsFetchedAt?: string;
 }
 
 // ── secret vault status (renderer NEVER receives a decrypted value, only status) ──

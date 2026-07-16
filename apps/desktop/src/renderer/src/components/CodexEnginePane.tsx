@@ -78,7 +78,12 @@ export function describeCodexStatus(snapshot: CodexOnboardingSnapshot | null): {
   switch (report.status) {
     case "ready": {
       const account = report.account;
-      const accountText = account ? ` — signed in (${account.type}${account.plan ? ` · ${account.plan}` : ""})` : "";
+      // `plan` only exists on the `chatgpt` variant of the widened
+      // `CodexAccount` union (codex-profiles cut §3.1) — `apiKey`/
+      // `amazonBedrock`/unknown variants carry no plan, so narrow before
+      // reading it rather than assuming every account has one.
+      const plan = account && "plan" in account ? account.plan : undefined;
+      const accountText = account ? ` — signed in (${account.type}${plan ? ` · ${plan}` : ""})` : "";
       return { headline: "Ready", detail: `Codex ${report.version ?? ""}${accountText}`.trim(), tone: "ok" };
     }
     case "signed_out":

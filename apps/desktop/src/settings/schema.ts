@@ -98,6 +98,98 @@ const connectionSchema = z.object({
     .optional(),
 });
 
+// ── codex-profiles (cut §2.3/§2.6, amended §A1.1) ──
+
+/** Strict charset (cut §2.6): never a path — `..`/`/` are excluded by construction. */
+const codexProfileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
+
+/** A `~/`-relative or absolute path — the ONLY shapes an expanded `authLink` may resolve to (amended §A1.1.4). */
+function isTildeOrAbsolutePath(value: string): boolean {
+  return value.startsWith("~/") || value.startsWith("/");
+}
+
+const codexDoctorStatusSchema = z.enum(["ready", "not_installed", "update_required", "signed_out", "error"]);
+
+/**
+ * One `CodexProfileRecord` (amended §A1.1). `authLink` ⊕ `linkedHome` are
+ * enforced MUTUALLY EXCLUSIVE by a per-element `refine` — a record with both
+ * (or a malformed id/path) is a BAD element, dropped whole by
+ * `parseElementsTolerantly` below WITHOUT failing the array or the
+ * containing `codex` block (cut §2.3 zod-granularity, amended §A1.1 rule 3b).
+ */
+const codexProfileSchema = z
+  .object({
+    id: codexProfileIdSchema,
+    label: z.string(),
+    createdAt: z.string(),
+    linkedHome: z.string().optional(),
+    authLink: z.string().refine(isTildeOrAbsolutePath).optional(),
+    lastCheck: z
+      .object({
+        status: codexDoctorStatusSchema,
+        version: z.string().optional(),
+        at: z.string(),
+      })
+      .optional(),
+  })
+  .refine((profile) => !(profile.linkedHome !== undefined && profile.authLink !== undefined), {
+    message: "authLink and linkedHome are mutually exclusive (amended §A1.1 rule 3)",
+  });
+
+/**
+ * Filters an array-shaped raw value down to only the elements that validate
+ * against `schema`, silently dropping the rest — the per-element `.catch`
+ * granularity the cut requires (§2.3/§14.3 point 5): a single bad profile
+ * (or custom-provider) record must never blank its siblings, and must never
+ * cause the CONTAINING object (which also carries `binaryPath`) to fall back
+ * to `undefined`. Non-array input parses to an empty array (same "absent ⇒
+ * safe default" policy as the rest of this advisory-cache field).
+ */
+function parseElementsTolerantly<T>(schema: z.ZodType<T>, raw: unknown): T[] {
+  if (!Array.isArray(raw)) return [];
+  const out: T[] = [];
+  for (const element of raw) {
+    const result = schema.safeParse(element);
+    if (result.success) out.push(result.data);
+  }
+  return out;
+}
+
+const codexProfilesArraySchema = z.preprocess(
+  (raw) => parseElementsTolerantly(codexProfileSchema, raw),
+  z.array(codexProfileSchema),
+);
+
+// ── custom model-provider endpoints (cut §9.2) ──
+
+const customProviderKindSchema = z.enum(["openai-compatible", "anthropic", "openai"]);
+
+/** `https://` always allowed; `http://` allowed ONLY for localhost/127.0.0.1 (cut §9.2 threat list). */
+function isHttpsOrLocalhostUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:") return true;
+    return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+  } catch {
+    return false;
+  }
+}
+
+/** One `CustomProviderRecord` (cut §9.2) — same per-element-catch discipline as `codexProfileSchema`. */
+const customProviderSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  baseUrl: z.string().refine(isHttpsOrLocalhostUrl, { message: "baseUrl must be https:, or http: only for localhost/127.0.0.1" }),
+  kind: customProviderKindSchema,
+  models: z.array(z.string()),
+  modelsFetchedAt: z.string().optional(),
+});
+
+const customProvidersArraySchema = z.preprocess(
+  (raw) => parseElementsTolerantly(customProviderSchema, raw),
+  z.array(customProviderSchema),
+);
+
 export const settingsSchema: z.ZodType<AnycodeSettings> = z
   .object({
     version: z.literal(2),
@@ -110,6 +202,11 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     provider: z.object({
       activeConnectionId: z.string().optional(),
       connections: z.array(connectionSchema),
+      // Custom model-provider endpoints (owner-decision #6, cut §9.2,
+      // additive-optional). Per-element `.catch` granularity, same
+      // discipline as `codex.profiles` below — one malformed custom-provider
+      // record never disturbs its siblings or `connections`.
+      custom: customProvidersArraySchema.optional(),
     }),
     tools: z.object({
       concurrency: z.number().optional(),
@@ -148,15 +245,38 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // permissions, ...) the user actually configured. An invalid `codex`
     // value is dropped to `undefined` (same outcome as it being absent) while
     // every sibling field keeps validating normally.
+    //
+    // codex-profiles cut §2.3 "zod-granularity" fix (this block used to sit
+    // under ONE `.catch(undefined)` for the whole object, so a single bad
+    // `profiles[i]` element would previously have wiped `binaryPath` too):
+    // `profiles`/`custom` (provider.custom above) now validate PER ELEMENT
+    // via `parseElementsTolerantly`, so a malformed profile record is
+    // dropped alone — `binaryPath` and every valid sibling profile survive.
+    // The outer `.catch(undefined)` remains as the fallback for a
+    // genuinely wrong-shaped `codex` value as a whole (e.g. `codex` itself
+    // is a string, not an object).
     codex: z
       .object({
         binaryPath: z.string().optional(),
         lastCheck: z
           .object({
-            status: z.enum(["ready", "not_installed", "update_required", "signed_out", "error"]),
+            status: codexDoctorStatusSchema,
             version: z.string().optional(),
             at: z.string(),
           })
+          .optional(),
+        // Codex account profiles (cut §2.3, amended §A1.1). Per-element
+        // catch: see codexProfilesArraySchema above.
+        profiles: codexProfilesArraySchema.optional(),
+        activeProfileId: z.string().optional(),
+        // Risk-accepted out-of-range versions (cut §7.4) — a plain string
+        // array; a malformed (non-string) entry is dropped via the same
+        // tolerant-array helper rather than failing the whole list.
+        riskAcceptedVersions: z
+          .preprocess(
+            (raw) => (Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : []),
+            z.array(z.string()),
+          )
           .optional(),
       })
       .optional()

@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   CONNECTION_CREATE_CHANNEL,
   CONNECTION_DELETE_CHANNEL,
@@ -302,6 +303,188 @@ describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
     // provider is reset (no v1 carry-over); the OTHER sections still survive.
     expect(result.settings.provider).toEqual({ connections: [] });
     expect(result.settings.permissions.alwaysAllow).toEqual([{ toolName: "Bash", pattern: "git *" }]);
+  });
+});
+
+describe("codex.profiles (codex-profiles cut §2.3, amended §A1.1) — round-trip + zod-granularity", () => {
+  it("reads a file with no profiles/activeProfileId/riskAcceptedVersions, round-tripping byte-identically", () => {
+    const withCodex: AnycodeSettings = {
+      ...cloneDefaults(),
+      codex: { binaryPath: "/opt/homebrew/bin/codex", lastCheck: { status: "ready", at: "2026-07-13T00:00:00.000Z" } },
+    };
+    const before = JSON.stringify(withCodex);
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.codex?.profiles).toBeUndefined();
+    expect(result.settings.codex?.activeProfileId).toBeUndefined();
+    expect(result.settings.codex?.riskAcceptedVersions).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before); // byte-identical round-trip
+  });
+
+  it("validates a file with valid profiles (linkedHome XOR authLink) + activeProfileId + riskAcceptedVersions", () => {
+    const withProfiles: AnycodeSettings = {
+      ...cloneDefaults(),
+      codex: {
+        binaryPath: "/opt/homebrew/bin/codex",
+        activeProfileId: "personal",
+        riskAcceptedVersions: ["0.145.0"],
+        profiles: [
+          { id: "personal", label: "Personal", createdAt: "2026-07-14T00:00:00.000Z", authLink: "~/.codex/auth.json" },
+          { id: "work-cx", label: "Work (cx)", createdAt: "2026-07-14T00:00:00.000Z", linkedHome: "/Users/x/.codex-accounts/work" },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withProfiles)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex?.profiles).toHaveLength(2);
+      expect(parsed.data.codex?.profiles?.[0]).toMatchObject({ id: "personal", authLink: "~/.codex/auth.json" });
+      expect(parsed.data.codex?.profiles?.[1]).toMatchObject({ id: "work-cx", linkedHome: "/Users/x/.codex-accounts/work" });
+      expect(parsed.data.codex?.activeProfileId).toBe("personal");
+      expect(parsed.data.codex?.riskAcceptedVersions).toEqual(["0.145.0"]);
+    }
+  });
+
+  it("zod-granularity: a profile with BOTH authLink and linkedHome (amended §A1.1 rule 3) is dropped alone — binaryPath and the valid sibling profile survive", () => {
+    const withBadProfile = {
+      ...cloneDefaults(),
+      codex: {
+        binaryPath: "/opt/homebrew/bin/codex",
+        profiles: [
+          { id: "broken", label: "Broken", createdAt: "2026-07-14T00:00:00.000Z", authLink: "~/.codex/auth.json", linkedHome: "/tmp/x" },
+          { id: "healthy", label: "Healthy", createdAt: "2026-07-14T00:00:00.000Z", authLink: "~/.codex/auth.json" },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(withBadProfile);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      // the malformed element is gone, the healthy sibling and binaryPath survive
+      expect(parsed.data.codex?.profiles).toHaveLength(1);
+      expect(parsed.data.codex?.profiles?.[0]?.id).toBe("healthy");
+      expect(parsed.data.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
+    }
+  });
+
+  it("zod-granularity: a profile id containing '../' (path-injection attempt) is dropped alone — siblings and binaryPath survive", () => {
+    const withPathInjection = {
+      ...cloneDefaults(),
+      codex: {
+        binaryPath: "/opt/homebrew/bin/codex",
+        profiles: [
+          { id: "../../etc", label: "Evil", createdAt: "2026-07-14T00:00:00.000Z" },
+          { id: "safe-id", label: "Safe", createdAt: "2026-07-14T00:00:00.000Z" },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(withPathInjection);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex?.profiles).toHaveLength(1);
+      expect(parsed.data.codex?.profiles?.[0]?.id).toBe("safe-id");
+      expect(parsed.data.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
+    }
+  });
+
+  it("RED-PROOF: a naive z.array(profileSchema) with NO per-element tolerance fails the WHOLE array on one bad element — our schema does not", () => {
+    // The exact shape codexProfileSchema validates, reconstructed here (it is
+    // module-private in schema.ts) WITHOUT the tolerant preprocess wrapper —
+    // this is the "before the §2.3 fix" behavior the whole-block
+    // `.catch(undefined)` bug class produces one level up.
+    const naiveProfileShape = z
+      .object({
+        id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
+        label: z.string(),
+        createdAt: z.string(),
+        linkedHome: z.string().optional(),
+        authLink: z.string().optional(),
+      })
+      .refine((profile) => !(profile.linkedHome !== undefined && profile.authLink !== undefined));
+
+    const rawArray = [
+      { id: "broken", label: "Broken", createdAt: "2026-07-14T00:00:00.000Z", authLink: "~/.codex/auth.json", linkedHome: "/tmp/x" },
+      { id: "healthy", label: "Healthy", createdAt: "2026-07-14T00:00:00.000Z", authLink: "~/.codex/auth.json" },
+    ];
+
+    // RED under the naive (non-tolerant) shape: one bad element sinks the WHOLE array.
+    const naiveResult = z.array(naiveProfileShape).safeParse(rawArray);
+    expect(naiveResult.success).toBe(false);
+
+    // GREEN under our actual (tolerant) settingsSchema: the bad element alone
+    // is dropped, the healthy sibling AND binaryPath survive.
+    const tolerantResult = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      codex: { binaryPath: "/opt/homebrew/bin/codex", profiles: rawArray },
+    });
+    expect(tolerantResult.success).toBe(true);
+    if (tolerantResult.success) {
+      expect(tolerantResult.data.codex?.profiles).toHaveLength(1);
+      expect(tolerantResult.data.codex?.profiles?.[0]?.id).toBe("healthy");
+      expect(tolerantResult.data.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
+    }
+  });
+});
+
+describe("provider.custom (cut §9.2) — round-trip + zod-granularity", () => {
+  it("reads a file with no provider.custom, round-tripping byte-identically", () => {
+    const base = cloneDefaults();
+    const before = JSON.stringify(base);
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.provider.custom).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before);
+  });
+
+  it("validates a file with a valid custom provider entry", () => {
+    const withCustom: AnycodeSettings = {
+      ...cloneDefaults(),
+      provider: { connections: [], custom: [{ id: "custom:my-glm", name: "My GLM", baseUrl: "https://api.example.com", kind: "openai-compatible", models: ["glm-4"] }] },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withCustom)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.custom).toHaveLength(1);
+      expect(parsed.data.provider.custom?.[0]).toMatchObject({ id: "custom:my-glm", baseUrl: "https://api.example.com" });
+    }
+  });
+
+  it("allows http:// for localhost/127.0.0.1 but rejects it (and drops the entry) for any other host", () => {
+    const mixed = {
+      ...cloneDefaults(),
+      provider: {
+        connections: [],
+        custom: [
+          { id: "custom:local", name: "Local", baseUrl: "http://localhost:8080", kind: "openai-compatible", models: [] },
+          { id: "custom:evil", name: "Evil", baseUrl: "http://evil.example.com", kind: "openai-compatible", models: [] },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(mixed);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.custom).toHaveLength(1);
+      expect(parsed.data.provider.custom?.[0]?.id).toBe("custom:local");
+    }
+  });
+
+  it("zod-granularity: a malformed custom-provider entry is dropped alone — the valid sibling and provider.connections survive", () => {
+    const mixed = {
+      ...cloneDefaults(),
+      provider: {
+        connections: [{ id: "conn-1", providerId: "anthropic" }],
+        custom: [
+          { id: "custom:bad", name: "Bad", baseUrl: "not-a-url", kind: "openai-compatible", models: [] },
+          { id: "custom:good", name: "Good", baseUrl: "https://good.example.com", kind: "openai-compatible", models: [] },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(mixed);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.custom).toHaveLength(1);
+      expect(parsed.data.provider.custom?.[0]?.id).toBe("custom:good");
+      expect(parsed.data.provider.connections).toEqual([{ id: "conn-1", providerId: "anthropic" }]);
+    }
   });
 });
 

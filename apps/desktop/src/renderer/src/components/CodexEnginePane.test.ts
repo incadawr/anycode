@@ -34,7 +34,7 @@ describe("describeCodexStatus", () => {
   });
 
   it("renders Ready gracefully when account is present but plan is empty", () => {
-    const result = describeCodexStatus(snapshotWith({ status: "ready", version: "0.144.3", account: { type: "apiKey", plan: "" }, models: [] }));
+    const result = describeCodexStatus(snapshotWith({ status: "ready", version: "0.144.3", account: { type: "apiKey" }, models: [] }));
     expect(result.detail).toBe("Codex 0.144.3 — signed in (apiKey)");
   });
 
