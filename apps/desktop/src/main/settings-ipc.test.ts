@@ -16,6 +16,7 @@ import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "
 import { activeConnection, activeProviderView } from "../shared/settings.js";
 import { ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
+import { handleCustomProviderCreate, type ProviderIpcDeps } from "./provider-ipc.js";
 import {
   applyConnectionHealthEvent,
   buildSettingsSnapshot,
@@ -1865,6 +1866,104 @@ describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
     expect(setRes.ok).toBe(true);
     releaseFlow();
     expect((await oauthP).ok).toBe(true);
+  });
+});
+
+// ── FX3-L1 G-C: provider.custom[] preservation + the ONE shared settings-file lock ──
+
+describe("FX3-L1 G-C — connection CRUD preserves provider.custom[], both IPC modules share ONE settings-file lock", () => {
+  const CUSTOM_SEED = [
+    { id: "custom:seeded", name: "Seeded", baseUrl: "https://api.example.com", kind: "openai-compatible", models: ["m1"] },
+  ];
+
+  function settingsFixture(provider: Record<string, unknown>): string {
+    return JSON.stringify({
+      version: 2,
+      provider,
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    });
+  }
+
+  // RED-PROOF (G-C#1, create): asserts the PERSISTED file, not the handler's
+  // return — the defect was the rebuilt provider block dropping custom[] at
+  // save time (removing the `...loaded.settings.provider` spread turns this red).
+  it("RED-PROOF (G-C#1): connection-create keeps a populated provider.custom[] on disk", async () => {
+    await writeFile(settingsPath, settingsFixture({ connections: [], custom: CUSTOM_SEED }));
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom).toEqual(CUSTOM_SEED);
+    expect(reloaded.settings.provider.connections).toHaveLength(1);
+  });
+
+  it("RED-PROOF (G-C#1): connection-delete keeps provider.custom[] on disk, and never persists a stale activeConnectionId", async () => {
+    await writeFile(
+      settingsPath,
+      settingsFixture({ connections: [{ id: "conn-1", providerId: "z-ai" }], activeConnectionId: "conn-1", custom: CUSTOM_SEED }),
+    );
+    const res = await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    // Raw bytes (not loadSettings): load-normalize would silently repair a
+    // stale persisted activeConnectionId and hide it from this assert.
+    const onDisk = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      provider: { connections: unknown[]; activeConnectionId?: string; custom?: unknown };
+    };
+    expect(onDisk.provider.custom).toEqual(CUSTOM_SEED);
+    expect(onDisk.provider.connections).toEqual([]);
+    expect(onDisk.provider.activeConnectionId).toBeUndefined();
+  });
+
+  // RED-PROOF (G-C#2, the two-locks lost-update): a fake-vault await-point
+  // holds custom-provider-create INSIDE its critical section while a
+  // connection-create races. Restoring provider-ipc.ts's private lock Map
+  // turns this red twice over: `connSettled` flips true during the hold, and
+  // custom-create's later save (built off its stale base) erases the
+  // connection from the file.
+  it("RED-PROOF (G-C#2): custom-provider-create ‖ connection-create serialize on the ONE lock — the persisted file keeps BOTH", async () => {
+    let releaseVault!: () => void;
+    const vaultGate = new Promise<void>((resolve) => {
+      releaseVault = resolve;
+    });
+    let enteredResolve!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredResolve = resolve;
+    });
+    const realSetSecret = vault.setSecret.bind(vault);
+    vault.setSecret = async (key: SecretKey, value: string) => {
+      enteredResolve();
+      await vaultGate;
+      return realSetSecret(key, value);
+    };
+    const providerDeps: ProviderIpcDeps = { vault, settingsPath, genId: () => "custom:race" };
+    const customP = handleCustomProviderCreate(providerDeps, {
+      name: "Race",
+      baseUrl: "https://api.example.com",
+      kind: "openai-compatible",
+      apiKey: "race-key",
+    });
+    await entered; // custom-create is now inside its critical section, parked at the vault write
+    let connSettled = false;
+    const connP = handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }).then((r) => {
+      connSettled = true;
+      return r;
+    });
+    // Give the racing connection-create every chance to run to completion NOW —
+    // under the ONE shared lock it must park behind custom-create instead.
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(connSettled).toBe(false);
+    releaseVault();
+    const [customRes, connRes] = await Promise.all([customP, connP]);
+    expect(customRes.ok).toBe(true);
+    expect(connRes.ok).toBe(true);
+    // Neither mutation clobbered the other in the persisted file.
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.map((c) => c.id)).toEqual(["custom:race"]);
+    expect(reloaded.settings.provider.connections.map((c) => c.id)).toEqual(["conn-1"]);
   });
 });
 

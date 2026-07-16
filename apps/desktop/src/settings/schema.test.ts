@@ -28,6 +28,7 @@ import {
   DEFAULT_SETTINGS,
   cloneDefaults,
   isHttpsOrLocalhostUrl,
+  isLoopbackUrl,
   mergeSettings,
   parseSettings,
   settingsSchema,
@@ -468,6 +469,28 @@ describe("isHttpsOrLocalhostUrl (cut §9.2, amendment-1 FX2-1 — single source 
   it("RED-PROOF: rejects a URL carrying embedded userinfo, on any allowed scheme", () => {
     expect(isHttpsOrLocalhostUrl("https://user:sekrit-pw@api.example.com")).toBe(false);
     expect(isHttpsOrLocalhostUrl("http://user:pw@localhost:8080")).toBe(false);
+  });
+});
+
+describe("isLoopbackUrl (FX3-L1 G-A — loopback waiver for the origin-rebind custody guard)", () => {
+  it("accepts every loopback host literal, on both schemes (same host set as isHttpsOrLocalhostUrl)", () => {
+    expect(isLoopbackUrl("http://localhost:8080")).toBe(true);
+    expect(isLoopbackUrl("http://127.0.0.1:11434")).toBe(true);
+    expect(isLoopbackUrl("http://[::1]:8080")).toBe(true);
+    expect(isLoopbackUrl("https://localhost:9999")).toBe(true);
+  });
+
+  it("rejects a non-loopback host on any scheme", () => {
+    expect(isLoopbackUrl("https://api.example.com")).toBe(false);
+    expect(isLoopbackUrl("http://10.0.0.5:8080")).toBe(false);
+    // A DNS name that RESOLVES to loopback is still not a loopback LITERAL —
+    // the waiver must never be spoofable via an attacker-controlled record.
+    expect(isLoopbackUrl("http://localhost.attacker.example")).toBe(false);
+  });
+
+  it("rejects a malformed URL (fail-closed, never throws)", () => {
+    expect(isLoopbackUrl("not a url")).toBe(false);
+    expect(isLoopbackUrl("")).toBe(false);
   });
 });
 

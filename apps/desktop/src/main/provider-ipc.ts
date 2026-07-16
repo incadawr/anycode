@@ -15,20 +15,17 @@
  *
  * Mirrors main/settings-ipc.ts's deps-bag / exported-handle* / register*
  * pattern (unit-testable off a fake vault + scratch settings path, no
- * `ipcMain`) but is a DELIBERATELY SEPARATE module: settings-ipc.ts's file
- * zone belongs to a different lane (cut §13.1), so this owns its own
- * settings-file mutation lock (`withProviderSettingsLock`) rather than
- * reaching into that module's private one. A create/update/delete here
- * interleaved with a `connection-*` mutation in the OTHER module is therefore
- * a known residual (not closed by this lane — see the handoff report) until
- * the two locks are unified behind one exported primitive.
+ * `ipcMain`) but is a DELIBERATELY SEPARATE module (settings-ipc.ts's file
+ * zone belongs to a different lane, cut §13.1). Every mutating handler here
+ * AND in settings-ipc.ts serializes through the ONE exported
+ * `withSettingsFileLock` primitive in settings/files.ts (FX3-L1 G-C closed
+ * the former two-private-locks residual), so a create/update/delete here can
+ * never interleave with a `connection-*` mutation in the other module.
  *
- * WIRING (not done by this module): `registerProviderIpc` is never called by
- * main/index.ts yet, the four channel names below have no preload bridge
- * entry, and `main/index.ts`'s `catalogIds: catalogProviderIds()` does not
- * yet union in `customProviderIds(settings)` (host-env.ts) — all three are
- * one-line-ish additions in files outside this lane's zone (cut §13.1); see
- * the handoff report for exact snippets.
+ * WIRING (done outside this module): main/index.ts calls
+ * `registerProviderIpc` with the live deps bag, the four channel names below
+ * are bridged in preload/index.ts, and main's `catalogIds` unions
+ * `customProviderIds(settings)` (host-env.ts) — all wired by FX2-4.
  *
  * THREAT MODEL for the fetch (cut §9.2 — SSRF/key-exfil via a user-supplied
  * origin):
@@ -55,8 +52,8 @@ import { randomUUID } from "node:crypto";
 import { ipcMain } from "electron";
 import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
-import { loadSettings, saveSettings } from "../settings/files.js";
-import { isHttpsOrLocalhostUrl, settingsSchema } from "../settings/schema.js";
+import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
+import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, SecretKey } from "../shared/settings.js";
 import type { SecretSetResult } from "./vault.js";
 
@@ -260,24 +257,12 @@ function defaultNowIso(): string {
   return new Date().toISOString();
 }
 
-/**
- * Per-settings-path mutation lock, SEPARATE from settings-ipc.ts's own
- * `settingsLocks` (private, out of this lane's file zone — see the module
- * doc's WIRING note). Keyed on `settingsPath` so unit tests with distinct
- * scratch paths never serialize against each other.
- */
-const providerSettingsLocks = new Map<string, Promise<unknown>>();
-function withProviderSettingsLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
-  const prev = providerSettingsLocks.get(path) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  providerSettingsLocks.set(
-    path,
-    run.catch(() => undefined),
-  );
-  return run;
-}
-
-export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "weak_storage_needs_consent";
+export type CustomProviderMutationReason =
+  | "invalid"
+  | "read_only"
+  | "not_found"
+  | "needs_api_key"
+  | "weak_storage_needs_consent";
 export type CustomProviderMutationResult =
   | { ok: true; providers: CustomProviderRecord[] }
   | { ok: false; reason: CustomProviderMutationReason };
@@ -318,7 +303,7 @@ export async function handleCustomProviderCreate(deps: ProviderIpcDeps, raw: unk
   if (!isAllowedCustomProviderUrl(req.baseUrl)) {
     return { ok: false, reason: "invalid" };
   }
-  return withProviderSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -363,6 +348,19 @@ const updateSchema = z
  * custom-provider-update: patch a record's metadata/curated model list, and
  * — only when `apiKey` is present and non-empty — rotate its vault key.
  * `not_found` for an unknown id.
+ *
+ * ORIGIN-REBIND CUSTODY GUARD (FX3-L1 G-A): the stored vault key is bound to
+ * the origin it was presented for. A `baseUrl` change to a DIFFERENT origin
+ * without a fresh non-empty `apiKey` in the same request is refused
+ * `needs_api_key` with zero side effects (nothing persisted, vault
+ * untouched) — otherwise a keyless metadata update could silently re-point
+ * the record and the next fetch-models would decrypt the old key and send it
+ * to the new origin (a renderer-side one-shot exfil primitive). This update
+ * handler is the single enforcement point (no read-side pinning in
+ * fetch-models). Waived when BOTH origins are loopback (`isLoopbackUrl` —
+ * e.g. a corrected localhost port; the key never leaves this machine either
+ * way). A same-origin baseUrl change (path/case) needs no key; a cross-origin
+ * change WITH a key succeeds under the existing vault-before-save order.
  */
 export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unknown): Promise<CustomProviderMutationResult> {
   const parsed = updateSchema.safeParse(raw);
@@ -373,7 +371,7 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
   if (req.baseUrl !== undefined && !isAllowedCustomProviderUrl(req.baseUrl)) {
     return { ok: false, reason: "invalid" };
   }
-  return withProviderSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -381,6 +379,15 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
     const existing = (loaded.settings.provider.custom ?? []).find((p) => p.id === req.id);
     if (existing === undefined) {
       return { ok: false, reason: "not_found" };
+    }
+    // Origin-rebind custody guard (see the handler doc). Both URLs are
+    // already policy-validated (request: the isAllowedCustomProviderUrl gate
+    // above; existing: settings/schema.ts on load), so `new URL` cannot throw.
+    if (req.baseUrl !== undefined && (req.apiKey === undefined || req.apiKey === "")) {
+      const originChanged = new URL(req.baseUrl).origin !== new URL(existing.baseUrl).origin;
+      if (originChanged && !(isLoopbackUrl(existing.baseUrl) && isLoopbackUrl(req.baseUrl))) {
+        return { ok: false, reason: "needs_api_key" };
+      }
     }
     const updatedRecord: CustomProviderRecord = {
       ...existing,
@@ -425,7 +432,7 @@ export async function handleCustomProviderDelete(deps: ProviderIpcDeps, raw: unk
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  return withProviderSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -475,7 +482,7 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }
 
-// ── ipcMain wiring (not yet called by main/index.ts — see module doc) ──
+// ── ipcMain wiring (called by main/index.ts — see the module doc's WIRING note) ──
 
 export const CUSTOM_PROVIDER_CREATE_CHANNEL = "anycode:custom-provider-create";
 export const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";

@@ -19,6 +19,7 @@ import {
   loadSettings,
   saveSecrets,
   saveSettings,
+  withSettingsFileLock,
   type SecretsFileV1,
 } from "./files.js";
 import { DEFAULT_SETTINGS, cloneDefaults } from "./schema.js";
@@ -144,6 +145,33 @@ describe("loadSettings — normalizeActiveConnection repairs the active<->non-em
     expect(result.settings.provider.activeConnectionId).toBe("B");
   });
 
+  // FX3-L1 G-C (repair arms): a repair that rebuilt the provider block from
+  // named fields dropped a populated `custom[]` from the in-memory object,
+  // which the NEXT persisted mutation would then write back custom-less.
+  it("§2.6 the dangling-active repair preserves sibling provider fields (custom[])", async () => {
+    const custom = [{ id: "custom:x", name: "X", baseUrl: "https://api.example.com", kind: "openai-compatible", models: ["m"] }];
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), provider: { ...providerV2Multi("ghost", [conn("A")]), custom } }),
+      "utf8",
+    );
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.activeConnectionId).toBe("A");
+    expect(result.settings.provider.custom).toEqual(custom);
+  });
+
+  it("§2.7 the leftover-active drop preserves sibling provider fields (custom[])", async () => {
+    const custom = [{ id: "custom:x", name: "X", baseUrl: "https://api.example.com", kind: "openai-compatible", models: ["m"] }];
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), provider: { ...providerV2Multi("ghost", []), custom } }),
+      "utf8",
+    );
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.activeConnectionId).toBeUndefined();
+    expect(result.settings.provider.custom).toEqual(custom);
+  });
+
   // §2.5 — discriminates PLACEMENT: normalize must run on the `read_only` arm
   // too (readiness must work off a newer-version file), and the heal must stay
   // in-memory only — the newer file is never rewritten downgraded.
@@ -158,6 +186,51 @@ describe("loadSettings — normalizeActiveConnection repairs the active<->non-em
     expect(result.settings.provider.activeConnectionId).toBe("A");
     const onDisk = JSON.parse(await readFile(settingsPath(), "utf8"));
     expect(onDisk.provider.activeConnectionId).toBeUndefined();
+  });
+});
+
+describe("withSettingsFileLock — the ONE per-path settings mutation lock (FX3-L1 G-C)", () => {
+  it("serializes two critical sections on the same path (the second never starts before the first ends)", async () => {
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = withSettingsFileLock(settingsPath(), async () => {
+      events.push("first:start");
+      await gate;
+      events.push("first:end");
+    });
+    const second = withSettingsFileLock(settingsPath(), async () => {
+      events.push("second:start");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["first:start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first:start", "first:end", "second:start"]);
+  });
+
+  it("a rejected section releases the chain, and distinct paths never serialize against each other", async () => {
+    await expect(
+      withSettingsFileLock(settingsPath(), async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(await withSettingsFileLock(settingsPath(), async () => "next-still-runs")).toBe("next-still-runs");
+
+    let releaseParked!: () => void;
+    const parked = withSettingsFileLock(
+      join(dir, "a.json"),
+      () =>
+        new Promise<void>((resolve) => {
+          releaseParked = resolve;
+        }),
+    );
+    // Resolves while a.json's section is still parked — no cross-path coupling.
+    expect(await withSettingsFileLock(join(dir, "b.json"), async () => "independent")).toBe("independent");
+    releaseParked();
+    await parked;
   });
 });
 

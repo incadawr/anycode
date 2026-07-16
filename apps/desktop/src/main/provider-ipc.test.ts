@@ -23,6 +23,7 @@ import {
   handleCustomProviderFetchModels,
   handleCustomProviderUpdate,
   isAllowedCustomProviderUrl,
+  type FetchLike,
   type ProviderIpcDeps,
   type ProviderVaultLike,
 } from "./provider-ipc.js";
@@ -449,6 +450,121 @@ describe("handleCustomProviderUpdate", () => {
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("https://api.example.com");
     expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("orig-key");
+  });
+});
+
+describe("handleCustomProviderUpdate — origin-rebind custody guard (FX3-L1 G-A)", () => {
+  async function seed(baseUrl = "https://api.example.com"): Promise<void> {
+    await handleCustomProviderCreate(makeDeps(), {
+      name: "Original",
+      baseUrl,
+      kind: "openai-compatible",
+      apiKey: "orig-key",
+      models: ["m1"],
+    });
+  }
+
+  it("refuses a cross-origin baseUrl change without an apiKey (needs_api_key) — nothing persisted, vault untouched", async () => {
+    await seed();
+    saveSettingsSpy.count = 0;
+    vault.setSecretCallCount = 0;
+    const res = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "https://attacker.example",
+    });
+    expect(res).toEqual({ ok: false, reason: "needs_api_key" });
+    expect(saveSettingsSpy.count).toBe(0);
+    expect(vault.setSecretCallCount).toBe(0);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("https://api.example.com");
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("orig-key");
+  });
+
+  it("an empty-string apiKey does NOT satisfy the guard (same refusal as absent)", async () => {
+    await seed();
+    const res = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "https://attacker.example",
+      apiKey: "",
+    });
+    expect(res).toEqual({ ok: false, reason: "needs_api_key" });
+  });
+
+  it("a cross-origin re-bind WITH a fresh key succeeds and rotates the vault entry (vault-before-save order unchanged)", async () => {
+    await seed();
+    const res = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "https://new.example.com",
+      apiKey: "rebind-key",
+    });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("https://new.example.com");
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("rebind-key");
+  });
+
+  it("a same-origin baseUrl change (path only) needs no key", async () => {
+    await seed();
+    const res = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "https://api.example.com/v2",
+    });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("https://api.example.com/v2");
+  });
+
+  it("loopback→loopback origin change (corrected local port) needs no key, and fetch-models sends the stored key to the NEW port", async () => {
+    let receivedAuth: string | undefined;
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      receivedAuth = req.headers.authorization;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "m-local" }] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    try {
+      const newOrigin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      await seed("http://localhost:1");
+      const res = await handleCustomProviderUpdate(makeDeps(), { id: "custom:fixed-id", baseUrl: newOrigin });
+      expect(res.ok).toBe(true);
+      const fetched = await handleCustomProviderFetchModels(makeDeps(), { id: "custom:fixed-id" });
+      expect(fetched).toEqual({ ok: true, models: [{ id: "m-local" }] });
+      expect(receivedAuth).toBe("Bearer orig-key");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  // RED-PROOF (G-A, the exfil primitive itself): keyless update to an attacker
+  // origin, then fetch-models by id. Without the origin-rebind guard the
+  // update persists and the recorder receives `Bearer orig-key` ON
+  // https://attacker.example/v1/models — with the guard, the decrypted key
+  // travels ONLY to the origin it was presented for. The recorder is wired
+  // through the REAL fetchCustomProviderModels so the asserted request is the
+  // exact one that would leave the machine.
+  it("RED-PROOF (G-A): after a rejected re-bind, fetch-models sends NO auth-bearing request to the attacker origin", async () => {
+    await seed();
+    const rebind = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "https://attacker.example",
+    });
+    expect(rebind).toEqual({ ok: false, reason: "needs_api_key" });
+    const requests: { url: string; auth: string | undefined }[] = [];
+    const recorder: FetchLike = async (url, init) => {
+      const headers = init.headers as Record<string, string>;
+      requests.push({ url, auth: headers.Authorization ?? headers["x-api-key"] });
+      return new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const deps = makeDeps({ fetchModels: (params) => fetchCustomProviderModels({ ...params, fetchImpl: recorder }) });
+    const res = await handleCustomProviderFetchModels(deps, { id: "custom:fixed-id" });
+    expect(res.ok).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe("https://api.example.com/v1/models");
+    expect(requests[0]?.auth).toBe("Bearer orig-key");
+    expect(requests.filter((r) => r.url.includes("attacker.example"))).toEqual([]);
   });
 });
 
