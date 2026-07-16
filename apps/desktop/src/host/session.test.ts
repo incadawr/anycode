@@ -2046,3 +2046,76 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     }
   });
 });
+
+// ── TASK.56 W2: model image-input verdict on the wire (hello + model_changed) ──
+//
+// Layer discrimination (design slice-task56-vision-cut.md §4.5): every assert
+// below reads RAW wire messages off the harness port, so it goes RED against a
+// rollback of the HOST layer (the `imageInput` spread removed from Session's
+// host_ready / model_changed emits). No renderer code is involved, and the
+// protocol type alone emits nothing — a renderer-side rollback cannot keep
+// these green.
+describe("Session — model image-input verdict on the wire (TASK.56 W2)", () => {
+  it("host_ready carries the live model verdict from the imageInputEnabled seam (both polarities)", async () => {
+    for (const verdict of [true, false]) {
+      const h = createHarness({ steps: [], imageInputEnabled: verdict });
+      try {
+        h.send({ type: "ui_ready" });
+        const ready = await h.waitFor(isHostReady);
+        expect(ready.imageInput).toBe(verdict);
+      } finally {
+        h.close();
+      }
+    }
+  });
+
+  it("omits imageInput entirely when no seam is wired — the legacy host_ready shape stays byte-identical", async () => {
+    const h = createHarness({ steps: [], imageInputEnabled: null });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect("imageInput" in ready).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("model_changed re-reads the verdict for the NEW model: vision -> non-vision flips it, and back", async () => {
+    // Mirrors the production wiring (host/index.ts): imageInputEnabled is a
+    // closure over the CURRENT model, which switchModel advances BEFORE the
+    // model_changed emit — so the push reflects the new model, never the old.
+    const visionModels = new Set(["scripted-model", "glm-5.2"]);
+    let current = "scripted-model";
+    const h = createHarness({
+      steps: [],
+      imageInputEnabled: () => visionModels.has(current),
+      switchModel: (id, selectedEffort) => {
+        current = id;
+        return scriptedSwitchModel(id, selectedEffort);
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.imageInput).toBe(true);
+
+      // vision -> non-vision: the push itself carries the flipped verdict.
+      h.send({ type: "set_model", model: "glm-4.6" });
+      const flipped = await h.waitFor(isModelChanged);
+      expect(flipped.model).toBe("glm-4.6");
+      expect(flipped.imageInput).toBe(false);
+
+      // ...and back: the verdict follows the live model, not a boot constant.
+      h.send({ type: "set_model", model: "glm-5.2" });
+      await h.waitUntil(() => h.received.filter(isModelChanged).length === 2);
+      expect(h.received.filter(isModelChanged).at(-1)?.imageInput).toBe(true);
+
+      // The next handshake re-reads the same live verdict.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length === 2);
+      expect(h.received.filter(isHostReady).at(-1)?.imageInput).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+});
