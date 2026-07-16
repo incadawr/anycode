@@ -580,7 +580,7 @@ describe("describeCustomProvider", () => {
 
 describe("describeCustomProviderMutationError / describeFetchModelsError (custody: text only, never a value)", () => {
   it("covers every CustomProviderMutationReason with distinct, non-empty text", () => {
-    const reasons = ["invalid", "read_only", "not_found", "weak_storage_needs_consent"] as const;
+    const reasons = ["invalid", "read_only", "not_found", "needs_api_key", "weak_storage_needs_consent"] as const;
     const texts = reasons.map((r) => describeCustomProviderMutationError(r));
     expect(new Set(texts).size).toBe(reasons.length);
     for (const t of texts) {

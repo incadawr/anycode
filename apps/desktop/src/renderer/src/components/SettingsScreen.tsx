@@ -320,7 +320,12 @@ export function transportOptions(selectedEntry: CatalogSummaryEntry | undefined)
 // reaches for it with an explicit, narrow cast rather than widening the
 // frozen ambient `Window.anycode` type from this file.
 
-export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "weak_storage_needs_consent";
+export type CustomProviderMutationReason =
+  | "invalid"
+  | "read_only"
+  | "not_found"
+  | "needs_api_key"
+  | "weak_storage_needs_consent";
 export type CustomProviderMutationResult =
   | { ok: true; providers: CustomProviderRecord[] }
   | { ok: false; reason: CustomProviderMutationReason };
@@ -385,6 +390,10 @@ const CUSTOM_PROVIDER_MUTATION_ERROR_TEXT: Record<CustomProviderMutationReason, 
   invalid: "Check the name, base URL, and API key and try again.",
   read_only: "Settings are read-only (a newer version wrote settings.json) — nothing was saved.",
   not_found: "That custom provider no longer exists.",
+  // FX3-L1 G-A origin-rebind guard: main refuses a cross-origin baseUrl
+  // change unless the request re-presents the API key (the stored key is
+  // bound to the origin it was entered for).
+  needs_api_key: "Changing the provider's address requires re-entering its API key — nothing was saved.",
   weak_storage_needs_consent:
     "This machine has no secure keychain for storing the key — accept weak storage under Security to save it here.",
 };
