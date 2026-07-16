@@ -386,6 +386,29 @@ describe("codex.profiles (codex-profiles cut §2.3, amended §A1.1) — round-tr
     }
   });
 
+  it("zod-granularity: a RELATIVE linkedHome ('../other-home') is dropped alone — siblings and binaryPath survive (C0 review F1)", () => {
+    // linkedHome feeds the child's CODEX_HOME env; a relative path would
+    // resolve against process cwd, so only `~/`-relative or absolute shapes
+    // pass (same isTildeOrAbsolutePath guard as authLink, amended §A1.1.4).
+    const withRelativeHome = {
+      ...cloneDefaults(),
+      codex: {
+        binaryPath: "/opt/homebrew/bin/codex",
+        profiles: [
+          { id: "escapee", label: "Evil", createdAt: "2026-07-14T00:00:00.000Z", linkedHome: "../other-home" },
+          { id: "tilde-ok", label: "Tilde", createdAt: "2026-07-14T00:00:00.000Z", linkedHome: "~/homes/x" },
+          { id: "abs-ok", label: "Abs", createdAt: "2026-07-14T00:00:00.000Z", linkedHome: "/abs/x" },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(withRelativeHome);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex?.profiles?.map((p) => p.id)).toEqual(["tilde-ok", "abs-ok"]);
+      expect(parsed.data.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
+    }
+  });
+
   it("RED-PROOF: a naive z.array(profileSchema) with NO per-element tolerance fails the WHOLE array on one bad element — our schema does not", () => {
     // The exact shape codexProfileSchema validates, reconstructed here (it is
     // module-private in schema.ts) WITHOUT the tolerant preprocess wrapper —
