@@ -3560,6 +3560,13 @@ export function createAutomationFacade(
       // (`handleTryAgain` in App.tsx) IS `dispatchTryAgain`, so this still
       // exercises the exact same send/queue/busy decision — just through the
       // real render + event-handler path instead of skipping straight to it.
+      // {ok:true} here is a DELIVERY claim, not an outcome claim (this class
+      // of DOM click-driver's contract throughout the file, distinct from the
+      // facade shortcuts above): a delivered click can still be refused by
+      // `dispatchTryAgain`'s TASK.56 W3-FIX entry gate (`blocked_images`) — that
+      // outcome is read off the state plane (`retryOffer`/`notice`/
+      // `tryAgainButtonState`), not this return (fable-task56-w3fix-codex-ruling.md
+      // finding 1).
       const clicked = tryAgainButtonDom.click(tabId, blockId);
       return clicked ? { ok: true } : { ok: false, reason: "not_present" };
     },
