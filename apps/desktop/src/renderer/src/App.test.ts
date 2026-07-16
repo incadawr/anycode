@@ -250,7 +250,7 @@ describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model 
 
     expect(outcome).toBe("blocked_images");
     expect(sent).toEqual([]);
-    expect(store.getState().retry).not.toBeNull();
+    expect(store.getState().retry).toMatchObject({ text: "look at this", images: [IMAGE] });
     expect(store.getState().notice?.kind).toBe("retry_blocked");
   });
 
@@ -295,7 +295,27 @@ describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model 
     expect(outcome).toBe("blocked_images");
     expect(sent).toEqual([]);
     expect(store.getState().promptQueue).toEqual([]);
-    expect(store.getState().retry).not.toBeNull();
+    expect(store.getState().retry).toMatchObject({ text: "look at this", images: [IMAGE] });
     expect(store.getState().notice?.kind).toBe("retry_blocked");
+  });
+
+  it("T7 — recovery pin: peek semantics (NOT consume) let a blocked click's offer survive intact to be replayed once the live model verdict swings back to vision", () => {
+    const store = createDesktopStore();
+    armRetryViaRealPath(store, "look at this", [IMAGE]);
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    const sent: UiToHostMessage[] = [];
+
+    const first = dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(first).toBe("blocked_images");
+    expect(sent).toEqual([]);
+
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: true });
+    const second = dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(second).toBe("sent");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
+    expect(store.getState().retry).toBeNull();
   });
 });
