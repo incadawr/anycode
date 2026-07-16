@@ -32,6 +32,19 @@ import {
 } from "./codex-binary.js";
 import { runCodexDoctor, type RunCodexDoctorOptions } from "./codex-doctor.js";
 import { runCodexLogin, type CodexLoginOutcome, type RunCodexLoginOptions } from "./codex-login.js";
+import {
+  SYSTEM_CODEX_PROFILE,
+  SYSTEM_PROFILE_ID,
+  assertCodexProfileHome,
+  createCodexProfilesRegistry,
+  type CodexProfileCreateRequest,
+  type CodexProfileCreateResult,
+  type CodexProfileFs,
+  type CodexProfileGuardResult,
+  type CodexProfilesSettingsSlice,
+  type ResolvedCodexProfile,
+} from "./codex-profiles.js";
+import type { CodexProfileRecord } from "../shared/settings.js";
 
 // ── invoke/push channels (duplicated literals — see file header) ──
 
@@ -39,6 +52,14 @@ export const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
 export const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
 export const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 export const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
+// Profile control plane (TASK.50, cut §2/§4) — same duplicated-literal
+// convention as the four above.
+export const CODEX_PROFILE_LIST_CHANNEL = "anycode:codex-profile-list";
+export const CODEX_PROFILE_CREATE_CHANNEL = "anycode:codex-profile-create";
+export const CODEX_PROFILE_DELETE_CHANNEL = "anycode:codex-profile-delete";
+export const CODEX_PROFILE_SET_ACTIVE_CHANNEL = "anycode:codex-profile-set-active";
+/** The explicit "Re-link credential" action (amended §A1.2) — the ONLY path that repairs a wrong auth.json entry. */
+export const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
 /** Push: main -> renderer, fired after every snapshot-changing step (TASK.41 п.5). No payload — listeners re-fetch (`listAvailableEngines`/`codex-recheck`), same shape as `updates.onUpdateStatus`/`window.onWindowState`. */
 export const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
 
@@ -61,6 +82,12 @@ export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
 
+/** One registry row projected for the renderer: the persisted record + the last in-memory doctor report (cut §4.3 — reports are cached in main memory, never on disk). */
+export interface CodexProfilesSnapshot {
+  profiles: Array<{ profile: CodexProfileRecord; report?: CodexDoctorReport }>;
+  activeProfileId: string;
+}
+
 export interface DialogLike {
   showOpenDialog(options: { properties: Array<"openFile">; defaultPath?: string }): Promise<{ canceled: boolean; filePaths: string[] }>;
 }
@@ -70,21 +97,35 @@ export interface CodexIpcDeps {
   bootEnv: NodeJS.ProcessEnv;
   /** Reads the currently-persisted `settings.codex.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
+  /** Reads the persisted `settings.codex` profile slice fresh every call — the registry never caches settings state. */
+  readCodexSettings: () => Promise<CodexProfilesSettingsSlice | undefined>;
   /**
-   * Persists `{binaryPath?, lastCheck}` into `settings.codex` (cut §3.5).
-   * Expected to route through the SAME `settings-set` validation/merge/save
-   * pipeline settings-ipc.ts's `handleSet` already owns (main/index.ts wires
-   * this as a thin closure over it) — one write path, not two. Best-effort
-   * from this module's point of view: a `read_only` refusal must not block
-   * the LIVE snapshot this session already computed from reaching the caller.
+   * Persists a `settings.codex` patch (cut §3.5 + §2.3: `binaryPath`/
+   * `lastCheck` as before, plus the additive `profiles`/`activeProfileId`
+   * registry fields — arrays replace wholesale, per the settings-set merge
+   * contract). Expected to route through the SAME `settings-set`
+   * validation/merge/save pipeline settings-ipc.ts's `handleSet` already owns
+   * (main/index.ts wires this as a thin closure over it) — one write path,
+   * not two. Best-effort from this module's point of view: a `read_only`
+   * refusal must not block the LIVE snapshot this session already computed
+   * from reaching the caller. NEVER carries account material: only
+   * status/version/at cross into a lastCheck (custody §4.4).
    */
   writeCodexSettings: (patch: {
     binaryPath?: string;
-    lastCheck: { status: CodexDoctorReport["status"]; version?: string; at: string };
+    lastCheck?: { status: CodexDoctorReport["status"]; version?: string; at: string };
+    profiles?: CodexProfileRecord[];
+    activeProfileId?: string;
   }) => Promise<SettingsMutationResult>;
+  /** User home the profile tree (`~/.anycode/codex/…`) lives under; tests point this at a tmp dir. */
+  home?: string;
+  /** Filesystem seam of the profile registry/guard; production uses real node:fs. */
+  profileFs?: CodexProfileFs;
+  /** Fired after a profile CRUD mutation (create/delete/set-active/repair) so main can push `ENGINES_CHANGED_CHANNEL`. */
+  onProfilesChanged?: () => void;
   dialog: DialogLike;
   openExternal: (url: string) => Promise<void> | void;
-  /** Fired after every successful recheck/pick/login with the fresh snapshot — main/index.ts updates its own `codexReady` gate and pushes `ENGINES_CHANGED_CHANNEL`. */
+  /** Fired after every successful recheck/pick/login with the fresh snapshot — main/index.ts updates its `codexBinaryPath` and pushes `ENGINES_CHANGED_CHANNEL` (readiness itself is read back via `readyFor`). */
   onSnapshot: (snapshot: CodexOnboardingSnapshot) => void;
   platform?: NodeJS.Platform;
   fs?: CodexBinaryFs;
@@ -96,10 +137,24 @@ export interface CodexIpcDeps {
 }
 
 export interface CodexOnboardingController {
-  recheck(): Promise<CodexOnboardingSnapshot>;
+  /** Diagnoses ONE profile (the active one when `profileId` is absent) against the discovered binary (cut §4.2: readiness = f(binary, profile)). */
+  recheck(profileId?: string): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
-  loginStart(): Promise<CodexLoginStartResult>;
+  /** Runs the native login INTO a profile's home (TASK.50 п.2); an authLink profile refuses `unsupported` (amended §A1). */
+  loginStart(profileId?: string): Promise<CodexLoginStartResult>;
   loginCancel(): void;
+  // ── profile control plane (TASK.50) ──
+  listProfiles(): Promise<CodexProfilesSnapshot>;
+  createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
+  deleteProfile(id: string): Promise<CodexProfileGuardResult>;
+  setActiveProfile(id: string): Promise<CodexProfileGuardResult>;
+  repairProfileLink(id: string): Promise<CodexProfileGuardResult>;
+  /**
+   * The per-profile readiness gate `engineReady("codex")` reads (cut §4.2:
+   * `codexReady` stops being one global boolean). Synchronous, off main's
+   * in-memory report cache; `undefined` asks about the ACTIVE profile.
+   */
+  readyFor(profileId?: string): boolean;
   /**
    * App-lifecycle teardown (W2-review Critical). Every child this controller
    * opened — doctor, login, version preflight — is spawned `detached` (its own
@@ -131,19 +186,13 @@ function shouldPersistPath(source: CodexBinarySource, binaryPath: string | null)
   return binaryPath !== null && source !== "env" && source !== "none";
 }
 
-async function persist(deps: CodexIpcDeps, snapshot: CodexOnboardingSnapshot): Promise<void> {
-  try {
-    await deps.writeCodexSettings({
-      ...(shouldPersistPath(snapshot.source, snapshot.binaryPath) ? { binaryPath: snapshot.binaryPath } : {}),
-      lastCheck: {
-        status: snapshot.report.status,
-        ...(snapshot.report.version !== undefined ? { version: snapshot.report.version } : {}),
-        at: snapshot.checkedAt,
-      },
-    });
-  } catch {
-    // Best-effort persistence — see writeCodexSettings's own doc comment.
-  }
+/** The credential-free lastCheck projection — the ONLY report facts that ever reach settings.json (custody §4.4). */
+function lastCheckOf(snapshot: CodexOnboardingSnapshot): { status: CodexDoctorReport["status"]; version?: string; at: string } {
+  return {
+    status: snapshot.report.status,
+    ...(snapshot.report.version !== undefined ? { version: snapshot.report.version } : {}),
+    at: snapshot.checkedAt,
+  };
 }
 
 /**
@@ -159,6 +208,32 @@ async function persist(deps: CodexIpcDeps, snapshot: CodexOnboardingSnapshot): P
 export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboardingController {
   const runDoctor = deps.runDoctor ?? runCodexDoctor;
   const runLogin = deps.runLogin ?? runCodexLogin;
+  const registry = createCodexProfilesRegistry({
+    readCodex: deps.readCodexSettings,
+    writeCodex: async (patch) => {
+      await deps.writeCodexSettings(patch);
+    },
+    ...(deps.home !== undefined ? { home: deps.home } : {}),
+    ...(deps.profileFs !== undefined ? { fs: deps.profileFs } : {}),
+    ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+  });
+  /**
+   * Per-profile report cache (cut §4.3): main memory only, never disk —
+   * e-mail/plan/quotas live here and in the renderer projection, nowhere
+   * else. Keyed by profile id; `system` is the pseudo-profile's slot.
+   */
+  const reports = new Map<string, CodexDoctorReport>();
+  /** Last-read `activeProfileId` — refreshed on every registry read so the sync `readyFor()` gate can answer for "the active profile". */
+  let cachedActiveProfileId: string = SYSTEM_PROFILE_ID;
+  /** Keeps the runners' pre-spawn home guard on the SAME filesystem seam as the registry — absent, they default to the real fs. */
+  const profileGuard =
+    deps.profileFs !== undefined
+      ? (profile: ResolvedCodexProfile): CodexProfileGuardResult =>
+          assertCodexProfileHome(profile, {
+            fs: deps.profileFs,
+            ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+          })
+      : undefined;
   let inFlight: Promise<CodexOnboardingSnapshot> | null = null;
   let activeLoginAbort: AbortController | null = null;
   /** Aborted once, at quit: every doctor run started by this controller carries this signal. */
@@ -213,8 +288,43 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     });
   }
 
-  /** Runs the doctor against ONE explicit path+source, persists, notifies, and returns the fresh snapshot. */
-  async function checkPath(binaryPath: string | null, source: CodexBinarySource): Promise<CodexOnboardingSnapshot> {
+  /**
+   * Resolves a profile id (undefined = the active one) to spawn-time facts,
+   * refreshing the cached active id along the way. A failing resolution is a
+   * refusal, not a fallback — an unknown/broken profile must never silently
+   * run as `system` and diagnose the WRONG account.
+   */
+  async function resolveProfile(profileId: string | undefined): Promise<{ ok: true; profile: ResolvedCodexProfile } | { ok: false; reason: string }> {
+    const listed = await registry.list();
+    cachedActiveProfileId = listed.activeProfileId;
+    return registry.resolve(profileId);
+  }
+
+  /** Best-effort persistence of one check's outcome — see writeCodexSettings's own doc comment. */
+  async function persist(snapshot: CodexOnboardingSnapshot): Promise<void> {
+    const checkedId = snapshot.report.profileId ?? SYSTEM_PROFILE_ID;
+    try {
+      // The top-level lastCheck slot is "the ACTIVE profile's last check"
+      // (cut §2.3) — a background check of a NON-active profile must not
+      // clobber it. binaryPath is profile-independent and persists as before.
+      const pathToPersist = shouldPersistPath(snapshot.source, snapshot.binaryPath) ? snapshot.binaryPath : undefined;
+      const persistTopLevel = checkedId === cachedActiveProfileId;
+      if (pathToPersist !== undefined || persistTopLevel) {
+        await deps.writeCodexSettings({
+          ...(pathToPersist !== undefined ? { binaryPath: pathToPersist } : {}),
+          ...(persistTopLevel ? { lastCheck: lastCheckOf(snapshot) } : {}),
+        });
+      }
+      if (checkedId !== SYSTEM_PROFILE_ID) {
+        await registry.setLastCheck(checkedId, lastCheckOf(snapshot));
+      }
+    } catch {
+      // Best-effort persistence — the live snapshot still reaches the caller.
+    }
+  }
+
+  /** Runs the doctor against ONE explicit path+source+profile, persists, notifies, and returns the fresh snapshot. */
+  async function checkPath(binaryPath: string | null, source: CodexBinarySource, profile: ResolvedCodexProfile): Promise<CodexOnboardingSnapshot> {
     // The choke point every doctor spawn in this module funnels through, and
     // therefore where the shutdown gate has to be re-read — an entrance check is
     // worth nothing across an `await`. `shutdown()` snapshots `activeRuns` and
@@ -232,16 +342,33 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             // Quit aborts the doctor and awaits its bounded teardown; without
             // this signal the child outlives the app (W2-review Critical).
             signal: lifetime.signal,
+            profile,
+            ...(profileGuard !== undefined ? { profileGuard } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
     const snapshot: CodexOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
-    await persist(deps, snapshot);
+    reports.set(report.profileId ?? SYSTEM_PROFILE_ID, report);
+    await persist(snapshot);
     deps.onSnapshot(snapshot);
     return snapshot;
   }
 
+  /** A resolution refusal projected as an error snapshot — no spawn happened, nothing is persisted or cached. */
+  function resolutionErrorSnapshot(reason: string): CodexOnboardingSnapshot {
+    return {
+      report: { status: "error", error: reason },
+      binaryPath: null,
+      source: "none",
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
   /** Full ladder: settings rung reads fresh (discovery needs it as an input, unlike the env/PATH/common rungs which read directly off `deps.bootEnv`). */
-  async function discoverAndCheck(): Promise<CodexOnboardingSnapshot> {
+  async function discoverAndCheck(profileId: string | undefined): Promise<CodexOnboardingSnapshot> {
+    const resolution = await resolveProfile(profileId);
+    if (!resolution.ok) {
+      return resolutionErrorSnapshot(resolution.reason);
+    }
     const settingsPath = await deps.readBinaryPathSetting();
     const discovery = discoverCodexBinary({
       envOverride: deps.bootEnv[ENV_CODEX_BIN],
@@ -251,12 +378,12 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
     });
-    return checkPath(discovery.path, discovery.source);
+    return checkPath(discovery.path, discovery.source, resolution.profile);
   }
 
   return {
-    recheck: (): Promise<CodexOnboardingSnapshot> =>
-      shuttingDown ? Promise.resolve(shutdownSnapshot()) : runExclusive(discoverAndCheck),
+    recheck: (profileId?: string): Promise<CodexOnboardingSnapshot> =>
+      shuttingDown ? Promise.resolve(shutdownSnapshot()) : runExclusive(() => discoverAndCheck(profileId)),
 
     async pickBinary(): Promise<CodexPickBinaryResult> {
       if (shuttingDown) {
@@ -280,11 +407,17 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         return { ok: false, reason: "invalid" };
       }
       const confirmedPath = resolved.path;
-      const snapshot = await runExclusive(() => checkPath(confirmedPath, "picker"));
+      // A picked binary is diagnosed against the ACTIVE profile; a broken
+      // active-profile record must not block validating the binary itself,
+      // so resolution failure falls back to the system pseudo-profile here
+      // (the binary verdict is profile-independent — cut §4.2 rows 1-3).
+      const resolution = await resolveProfile(undefined);
+      const profile = resolution.ok ? resolution.profile : SYSTEM_CODEX_PROFILE;
+      const snapshot = await runExclusive(() => checkPath(confirmedPath, "picker", profile));
       return { ok: true, snapshot };
     },
 
-    async loginStart(): Promise<CodexLoginStartResult> {
+    async loginStart(profileId?: string): Promise<CodexLoginStartResult> {
       if (shuttingDown || inFlight !== null || activeLoginAbort !== null) {
         return { ok: false, reason: "busy" };
       }
@@ -295,6 +428,17 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       const controller = new AbortController();
       activeLoginAbort = controller;
       try {
+        const resolution = await resolveProfile(profileId);
+        if (!resolution.ok) {
+          return { ok: false, reason: "failed" };
+        }
+        const profile = resolution.profile;
+        // An authLink profile mirrors an external credential — its login flow
+        // does not exist (amended §A1): a broken link is repaired by the
+        // explicit "Re-link credential" action, never by re-login.
+        if (profile.authLink !== undefined) {
+          return { ok: false, reason: "unsupported" };
+        }
         const settingsPath = await deps.readBinaryPathSetting();
         // THE window this gate exists for: a login is not in `activeRuns` until
         // the spawn below registers it, so a `shutdown()` that lands while this
@@ -325,6 +469,11 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             openExternal: deps.openExternal,
             signal: controller.signal,
             env: deps.bootEnv,
+            // The login signs INTO the profile's home (TASK.50 п.2): the
+            // runner overwrites any ambient CODEX_HOME with it, so codex
+            // writes the credential into the profile tree, never ~/.codex.
+            profile,
+            ...(profileGuard !== undefined ? { profileGuard } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           }),
         );
@@ -333,8 +482,9 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         }
         // Re-diagnose via the doctor (never trust the login handshake's own
         // success flag for account/version state) — one source of truth for
-        // "is Codex ready", the same doctor every other path uses.
-        const snapshot = await runExclusive(() => checkPath(binaryPath, discovery.source));
+        // "is Codex ready", the same doctor every other path uses. Same
+        // profile as the login, so the fresh verdict lands in ITS cache slot.
+        const snapshot = await runExclusive(() => checkPath(binaryPath, discovery.source, profile));
         return { ok: true, snapshot };
       } finally {
         activeLoginAbort = null;
@@ -343,6 +493,73 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
     loginCancel(): void {
       activeLoginAbort?.abort();
+    },
+
+    // ── profile control plane (TASK.50) — settings/fs mutations only, no spawns ──
+
+    async listProfiles(): Promise<CodexProfilesSnapshot> {
+      const listed = await registry.list();
+      cachedActiveProfileId = listed.activeProfileId;
+      return {
+        profiles: listed.profiles.map((profile) => {
+          const report = reports.get(profile.id);
+          return { profile, ...(report !== undefined ? { report } : {}) };
+        }),
+        activeProfileId: listed.activeProfileId,
+      };
+    },
+
+    async createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult> {
+      if (shuttingDown) {
+        return { ok: false, reason: "failed", message: "AnyCode is shutting down" };
+      }
+      const created = await registry.create(request);
+      if (created.ok) {
+        deps.onProfilesChanged?.();
+      }
+      return created;
+    },
+
+    async deleteProfile(id: string): Promise<CodexProfileGuardResult> {
+      if (shuttingDown) {
+        return { ok: false, reason: "AnyCode is shutting down" };
+      }
+      const removed = await registry.remove(id);
+      if (removed.ok) {
+        reports.delete(id);
+        if (cachedActiveProfileId === id) {
+          cachedActiveProfileId = SYSTEM_PROFILE_ID;
+        }
+        deps.onProfilesChanged?.();
+      }
+      return removed;
+    },
+
+    async setActiveProfile(id: string): Promise<CodexProfileGuardResult> {
+      if (shuttingDown) {
+        return { ok: false, reason: "AnyCode is shutting down" };
+      }
+      const set = await registry.setActive(id);
+      if (set.ok) {
+        cachedActiveProfileId = id;
+        deps.onProfilesChanged?.();
+      }
+      return set;
+    },
+
+    async repairProfileLink(id: string): Promise<CodexProfileGuardResult> {
+      if (shuttingDown) {
+        return { ok: false, reason: "AnyCode is shutting down" };
+      }
+      const repaired = await registry.repairLink(id);
+      if (repaired.ok) {
+        deps.onProfilesChanged?.();
+      }
+      return repaired;
+    },
+
+    readyFor(profileId?: string): boolean {
+      return reports.get(profileId ?? cachedActiveProfileId)?.status === "ready";
     },
 
     async shutdown(): Promise<void> {
@@ -363,12 +580,40 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
   };
 }
 
-/** Wires the four invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (TASK.41 п.1: discovery must run without the user visiting Settings first). */
+/** Narrow IPC-boundary arg readers — invoke payloads are renderer-supplied and never trusted structurally. */
+function profileIdArg(args: unknown): string | undefined {
+  const profileId = (args as { profileId?: unknown } | undefined)?.profileId;
+  return typeof profileId === "string" ? profileId : undefined;
+}
+
+function idArg(args: unknown): string {
+  const id = (args as { id?: unknown } | undefined)?.id;
+  return typeof id === "string" ? id : "";
+}
+
+/** Wires the invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (TASK.41 п.1: discovery must run without the user visiting Settings first) and read `readyFor()` as the per-profile tab gate. */
 export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController {
   const controller = createCodexOnboardingController(deps);
-  ipcMain.handle(CODEX_RECHECK_CHANNEL, () => controller.recheck());
+  ipcMain.handle(CODEX_RECHECK_CHANNEL, (_event, args?: unknown) => controller.recheck(profileIdArg(args)));
   ipcMain.handle(CODEX_PICK_BINARY_CHANNEL, () => controller.pickBinary());
-  ipcMain.handle(CODEX_LOGIN_START_CHANNEL, () => controller.loginStart());
+  ipcMain.handle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => controller.loginStart(profileIdArg(args)));
   ipcMain.handle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
+  ipcMain.handle(CODEX_PROFILE_LIST_CHANNEL, () => controller.listProfiles());
+  ipcMain.handle(CODEX_PROFILE_CREATE_CHANNEL, (_event, request: unknown) => {
+    const label = (request as { label?: unknown } | undefined)?.label;
+    const authLink = (request as { authLink?: unknown } | undefined)?.authLink;
+    const linkedHome = (request as { linkedHome?: unknown } | undefined)?.linkedHome;
+    if (typeof label !== "string" || label.trim() === "") {
+      return { ok: false, reason: "invalid", message: "a profile label is required" };
+    }
+    return controller.createProfile({
+      label,
+      ...(typeof authLink === "string" ? { authLink } : {}),
+      ...(typeof linkedHome === "string" ? { linkedHome } : {}),
+    });
+  });
+  ipcMain.handle(CODEX_PROFILE_DELETE_CHANNEL, (_event, args: unknown) => controller.deleteProfile(idArg(args)));
+  ipcMain.handle(CODEX_PROFILE_SET_ACTIVE_CHANNEL, (_event, args: unknown) => controller.setActiveProfile(idArg(args)));
+  ipcMain.handle(CODEX_PROFILE_REPAIR_LINK_CHANNEL, (_event, args: unknown) => controller.repairProfileLink(idArg(args)));
   return controller;
 }

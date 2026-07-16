@@ -24,6 +24,12 @@ import type { SpawnOptions, ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { CodexRpcClient, buildDoctorChildEnv } from "./codex-doctor.js";
 import { checkCodexBinaryPathTrust } from "./codex-binary.js";
+import {
+  applyCodexProfileEnv,
+  assertCodexProfileHome,
+  type CodexProfileGuardResult,
+  type ResolvedCodexProfile,
+} from "./codex-profiles.js";
 import { CODEX_DOCTOR_RPC_TIMEOUT_MS } from "../shared/codex-timeouts.js";
 
 /**
@@ -51,6 +57,18 @@ export interface RunCodexLoginOptions {
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
   /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkCodexBinaryPathTrust`). */
   trust?: (binaryPath: string) => string | null;
+  /**
+   * The profile this login signs INTO (TASK.50 п.2): its home OVERWRITES any
+   * ambient CODEX_HOME in the child env, so `codex` writes the credential
+   * into the profile's own tree — never into `~/.codex`. Absent or system:
+   * env inheritance, byte-for-byte the pre-profiles behavior. An authLink
+   * profile is REFUSED outright (amended §A1.2: it mirrors an external
+   * credential; a broken link is repaired by "Re-link credential", never by
+   * re-login).
+   */
+  profile?: ResolvedCodexProfile;
+  /** DI seam for the pre-spawn home guard; production re-asserts the real filesystem (`assertCodexProfileHome`). */
+  profileGuard?: (profile: ResolvedCodexProfile) => CodexProfileGuardResult;
 }
 
 function delay(ms: number): Promise<void> {
@@ -77,9 +95,16 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
   if (options.signal?.aborted === true) {
     return { ok: false, reason: "cancelled" };
   }
+  const profile = options.profile;
+  // An authLink profile has no login flow at all (amended §A1.2): logging in
+  // would make codex replace the symlink with a fresh credential FILE,
+  // silently detaching the profile from the external account it mirrors.
+  if (profile?.authLink !== undefined) {
+    return { ok: false, reason: "failed" };
+  }
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
-  const env = buildDoctorChildEnv(options.env ?? process.env, platform);
+  const env = applyCodexProfileEnv(buildDoctorChildEnv(options.env ?? process.env, platform), profile);
   const timeoutMs = options.timeoutMs ?? CODEX_LOGIN_TIMEOUT_MS;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? CODEX_DOCTOR_RPC_TIMEOUT_MS;
   const client = new CodexRpcClient(spawnImpl);
@@ -110,6 +135,15 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
     const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform));
     if (trust(binaryPath) !== null) {
       return { ok: false, reason: "failed" };
+    }
+    // Home guard for the profile being signed into (cut §2.5 + amended §A2):
+    // re-asserted immediately before the spawn, same discipline as the binary
+    // trust line above. Fail-closed: no spawn, no browser window.
+    if (profile !== undefined) {
+      const profileGuard = options.profileGuard ?? ((target: ResolvedCodexProfile) => assertCodexProfileHome(target, { platform }));
+      if (!profileGuard(profile).ok) {
+        return { ok: false, reason: "failed" };
+      }
     }
     client.spawn(binaryPath, env);
     await client.request(

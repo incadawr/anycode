@@ -77,6 +77,8 @@ import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from
 import { registerTabIpc } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
+import { SYSTEM_PROFILE_ID, resolveCodexProfile } from "./codex-profiles.js";
+import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater, type UpdaterController } from "./updater.js";
@@ -291,14 +293,15 @@ let providerReady = false;
 /**
  * Codex onboarding state (TASK.41, cut §2(g)): `codexBinaryPath` is the
  * discovery ladder's last winning candidate (informational — its mere
- * presence no longer implies readiness); `codexReady` is the doctor-
- * confirmed gate `engineReady("codex")` actually reads (version-compatible
- * AND signed in). Both are updated by codex-ipc's `onSnapshot` callback,
- * fired after every recheck/pick-binary/login-success, so a Codex tab can be
- * created the moment onboarding completes — no app restart.
+ * presence no longer implies readiness), updated by codex-ipc's `onSnapshot`
+ * callback, fired after every recheck/pick-binary/login-success, so a Codex
+ * tab can be created the moment onboarding completes — no app restart.
+ * Readiness itself is PER PROFILE (codex-profiles cut §4.2: a function of
+ * (binary, profile), not one global boolean) — `engineReady("codex")` reads
+ * `codexOnboarding.readyFor(...)` directly off the controller's in-memory
+ * per-profile report cache.
  */
 let codexBinaryPath: string | null = null;
-let codexReady = false;
 /**
  * The host fork env, rebuilt async on every successful mutation and read
 
@@ -957,8 +960,12 @@ void app.whenReady().then(async () => {
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
     // AND signed in, TASK.41 п.2/п.3) — a merely-discovered-but-unchecked or
-    // stale-cached path is never enough to let a tab spawn.
-    engineReady: (engine: EngineId) => (engine === "core" ? providerReady : engine === "codex" && codexReady),
+    // stale-cached path is never enough to let a tab spawn. Readiness is
+    // per PROFILE (codex-profiles cut §4.2): the optional second argument is
+    // the tab draft's profile id once the tab layer threads it (lane C);
+    // absent, the ACTIVE profile answers — today's single-profile behavior.
+    engineReady: (engine: EngineId, codexProfileId?: string) =>
+      engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false),
     engineEnv: (engine: EngineId, generation: number) => ({
       [ENV_ENGINE]: engine,
       [ENV_HOST_GENERATION]: String(generation),
@@ -1119,16 +1126,23 @@ void app.whenReady().then(async () => {
   codexOnboarding = registerCodexIpc({
     bootEnv,
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
+    // The profile registry's settings slice (codex-profiles cut §2.3), read
+    // fresh off the same in-memory settings the onMutation reload maintains.
+    readCodexSettings: async () => settings?.codex,
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     dialog,
     openExternal: (url) => shell.openExternal(url),
     onSnapshot: (snapshot) => {
       codexBinaryPath = snapshot.binaryPath;
-      codexReady = snapshot.report.status === "ready";
       // Per-tab session pushes are gated on ui_ready (durable rule); this is
       // a window-shell-level signal, the same unconditional-send shape as
       // WINDOW_STATE_CHANNEL/UPDATE_STATUS_CHANNEL — the renderer's listener
       // is registered at bundle load, well before this can ever fire.
+      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+    },
+    // Profile CRUD (create/delete/set-active/repair) changes what the Agent
+    // selector / Settings pane should show — same re-fetch push as above.
+    onProfilesChanged: () => {
       win?.webContents.send(ENGINES_CHANGED_CHANNEL);
     },
   });
@@ -1141,6 +1155,30 @@ void app.whenReady().then(async () => {
   void codexOnboarding.recheck().catch((error: unknown) => {
     console.warn("[main] initial Codex check failed", error);
   });
+
+  // Rollout import control plane (TASK.52, cut §8): list/preview/import a
+  // profile's Codex rollouts into OUR history format. Sessions live inside
+  // that profile's CODEX_HOME (§1.3); the system pseudo-profile reads the
+  // ambient home (env override or ~/.codex), matching what a codex spawned
+  // with no injection would write to. Read-only with respect to the rollout
+  // files themselves — the importer never writes into any CODEX_HOME.
+  if (persistence !== null) {
+    registerCodexRolloutIpc({
+      persistence,
+      resolveProfileSessionsDir: async (profileId) => {
+        if (profileId === SYSTEM_PROFILE_ID) {
+          const ambient = process.env.CODEX_HOME;
+          const systemHome = ambient !== undefined && ambient !== "" ? ambient : join(homedir(), ".codex");
+          return join(systemHome, "sessions");
+        }
+        const record = settings?.codex?.profiles?.find((profile) => profile.id === profileId);
+        if (record === undefined) return null;
+        const resolution = resolveCodexProfile(record);
+        if (!resolution.ok || resolution.profile.codexHome === undefined) return null;
+        return join(resolution.profile.codexHome, "sessions");
+      },
+    });
+  }
 
   // MCP config management control plane (design/slice-P7.19-cut.md §3/§4 W2):
   // `home` resolves via `ANYCODE_MCP_IMPORT_HOME` ONLY under the dev/automation
