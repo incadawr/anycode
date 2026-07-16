@@ -3513,7 +3513,16 @@ export function createAutomationFacade(
       // The REAL dispatch: same function the button's own onClick calls
       // (App.tsx), through the SAME `registry.sendToTab` every other facade
       // driver uses — no second path.
-      dispatchTryAgain(store, (msg) => registry.sendToTab(tabId, msg));
+      const outcome = dispatchTryAgain(store, (msg) => registry.sendToTab(tabId, msg));
+      // TASK.56 W3-FIX: dispatchTryAgain's entry gate can refuse an
+      // image-bearing offer the live model verdict no longer accepts,
+      // leaving it armed rather than sending — report that truthfully
+      // instead of a blanket {ok:true} (same facade-honesty precedent as
+      // the not_ready check above: a lying facade could mask a real
+      // regression in a live smoke).
+      if (outcome === "blocked_images") {
+        return { ok: false, reason: "images_unsupported" };
+      }
       return { ok: true };
     },
 

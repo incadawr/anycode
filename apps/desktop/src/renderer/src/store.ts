@@ -278,6 +278,10 @@ export interface PermissionUiRequest {
  * `SESSION_HISTORY_MAX_ITEMS`, so the hydrated transcript only shows the tail.
  * Slice P7.26/R2 adds `rewind_restored`/`rewind_rejected` for the checkpoint
  * timeline's `rewind_result` outcome (design slice-P7.26-R2-ratification.md §1).
+ * TASK.56 W3-FIX adds `retry_blocked`: `dispatchTryAgain` (App.tsx) refuses an
+ * armed offer whose images the live model verdict no longer accepts, leaving
+ * the offer armed instead of consuming it (fable-task56-w3-codex-ruling.md
+ * finding 2 §(c)).
  */
 export type NoticeKind =
   | "turn_rejected"
@@ -293,7 +297,8 @@ export type NoticeKind =
   | "rewind_restored"
   | "rewind_rejected"
   | "engine_notice"
-  | "worktree_notice";
+  | "worktree_notice"
+  | "retry_blocked";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
