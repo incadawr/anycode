@@ -5,7 +5,20 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { CodexRpcClient, buildDoctorChildEnv, runCodexDoctor } from "./codex-doctor.js";
+import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
+import type { CodexSupportManifest } from "../shared/codex-support.js";
 import type { ResolvedCodexProfile } from "./codex-profiles.js";
+
+/** A syntactically valid manifest with one arbitrary supported range — the doctor must follow IT, not any hardcode. */
+function narrowManifest(range: string): CodexSupportManifest {
+  return {
+    schemaVersion: "anycode.codex-support.v1",
+    updatedAt: "2026-07-16T00:00:00Z",
+    supported: [{ range, status: "tested" }],
+    recommended: "0.145.0",
+    minimum: "0.144.0",
+  };
+}
 
 const fixturePath = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mjs", import.meta.url));
 
@@ -112,7 +125,7 @@ describe("runCodexDoctor", () => {
 
   it("reports signed_out when account/read returns a null account and auth IS required (automat row 6)", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--signed-out"]) });
-    expect(report).toEqual({ status: "signed_out", version: "0.144.3", requiresOpenaiAuth: true });
+    expect(report).toEqual({ status: "signed_out", version: "0.144.3", requiresOpenaiAuth: true, supportedRange: ">=0.144.0 <0.145.0" });
   });
 
   it("reports READY when account is null but requiresOpenaiAuth is false (automat row 7 — the api-key/bedrock config.toml setup)", async () => {
@@ -128,7 +141,7 @@ describe("runCodexDoctor", () => {
       trust: TRUSTED,
       spawnImpl: fakeSpawn(["--signed-out", "--no-requires-field"]),
     });
-    expect(report).toEqual({ status: "signed_out", version: "0.144.3" });
+    expect(report).toEqual({ status: "signed_out", version: "0.144.3", supportedRange: ">=0.144.0 <0.145.0" });
   });
 
   it("reports ready for an apiKey account that has no planType (automat row 5 — ANY union variant)", async () => {
@@ -157,13 +170,64 @@ describe("runCodexDoctor", () => {
 
   it("reports update_required for a version outside the supported range, without spawning app-server at all", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--bad-version"]) });
-    expect(report).toEqual({ status: "update_required", version: "0.99.0" });
+    expect(report).toEqual({ status: "update_required", version: "0.99.0", supportedRange: ">=0.144.0 <0.145.0" });
   });
 
   it("reports error for unparseable version output", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--malformed-version"]) });
     expect(report.status).toBe("error");
     expect(report.error).toMatch(/version/i);
+  });
+
+  it("judges the version against the MANIFEST policy, not a hardcoded range (cut §7.1: истина — манифест)", async () => {
+    // The fixture reports 0.144.3; a manifest that excludes it must flip the
+    // verdict without any code change — that is the whole point of TASK.53.
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(),
+      versionPolicy: { manifest: narrowManifest(">=0.145.0 <0.146.0"), riskAcceptedVersions: [] },
+    });
+    expect(report.status).toBe("update_required");
+    expect(report.version).toBe("0.144.3");
+    expect(report.supportedRange).toBe(">=0.145.0 <0.146.0");
+  });
+
+  it("proceeds to a full doctor pass for an out-of-range version the user risk-accepted (§7.4)", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(),
+      versionPolicy: { manifest: narrowManifest(">=0.145.0 <0.146.0"), riskAcceptedVersions: ["0.144.3"] },
+    });
+    expect(report.status).toBe("ready");
+    expect(report.version).toBe("0.144.3");
+    expect(report.supportedRange).toBe(">=0.145.0 <0.146.0");
+  });
+
+  it("still refuses a version below the compiled floor even when risk-accepted AND admitted by the manifest (red-proof: floor holds at the doctor)", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--bad-version"]),
+      versionPolicy: { manifest: narrowManifest(">=0.1.0 <99.0.0"), riskAcceptedVersions: ["0.99.0"] },
+    });
+    expect(report.status).toBe("update_required");
+    expect(report.version).toBe("0.99.0");
+  });
+
+  it("defaults its policy to the module-level active policy — a risk acceptance recorded there is honored with no option plumbing", async () => {
+    try {
+      setActiveCodexVersionPolicy({ manifest: narrowManifest(">=0.145.0 <0.146.0"), riskAcceptedVersions: ["0.144.3"] });
+      const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
+      expect(report.status).toBe("ready");
+      expect(report.supportedRange).toBe(">=0.145.0 <0.146.0");
+    } finally {
+      resetActiveCodexVersionPolicy();
+    }
+  });
+
+  it("stamps supportedRange onto ready reports so the renderer never hardcodes the range string", async () => {
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
+    expect(report.status).toBe("ready");
+    expect(report.supportedRange).toBe(">=0.144.0 <0.145.0");
   });
 
   it("bounds a hung version preflight with its own timeout, never the overall watchdog", async () => {

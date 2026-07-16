@@ -7,6 +7,7 @@ import {
   codexBinaryFileName,
   commonInstallLocations,
   discoverCodexBinary,
+  installedCodexCandidates,
   resolveCodexBinary,
   type CodexBinaryFs,
   type CodexIdentity,
@@ -47,6 +48,7 @@ function ancestorChain(path: string): string[] {
 function fakeFs(
   files: Readonly<Record<string, FakeEntry>>,
   dirs: Readonly<Record<string, FakeEntry>> = {},
+  readdirs: Readonly<Record<string, string[]>> = {},
 ): CodexBinaryFs {
   const dirEntries: Record<string, FakeEntry> = { ...dirs };
   for (const file of Object.keys(files)) {
@@ -66,6 +68,11 @@ function fakeFs(
         return { isFile: () => false, isDirectory: () => true, mode: dir.mode ?? 0o755, uid: dir.uid ?? ME.uid, gid: dir.gid ?? 20 };
       }
       throw new Error("ENOENT");
+    },
+    readdir(path) {
+      const listing = readdirs[path];
+      if (listing === undefined) throw new Error("ENOENT");
+      return listing;
     },
   };
 }
@@ -323,6 +330,46 @@ describe("discoverCodexBinary", () => {
     expect(result).toEqual({ path: "/home/dev/.local/bin/codex", source: "common" });
   });
 
+  it("falls through common to the installed rung (~/.anycode/codex/bin/<v>/vendor/<triple>/bin/codex) — the ladder's last automatic step", () => {
+    const installed = "/home/dev/.anycode/codex/bin/0.144.3/vendor/aarch64-apple-darwin/bin/codex";
+    const fs = fakeFs({ [installed]: {} }, {}, { "/home/dev/.anycode/codex/bin": ["0.144.3"] });
+    const result = discoverCodexBinary({
+      env: { PATH: "/usr/bin", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      arch: "arm64",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: installed, source: "installed" });
+  });
+
+  it("prefers the NEWEST installed version when several are present", () => {
+    const newest = "/home/dev/.anycode/codex/bin/0.145.2/vendor/aarch64-apple-darwin/bin/codex";
+    const older = "/home/dev/.anycode/codex/bin/0.144.3/vendor/aarch64-apple-darwin/bin/codex";
+    const fs = fakeFs({ [newest]: {}, [older]: {} }, {}, { "/home/dev/.anycode/codex/bin": ["0.144.3", "0.145.2"] });
+    const result = discoverCodexBinary({
+      env: { PATH: "", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      arch: "arm64",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: newest, source: "installed" });
+  });
+
+  it("an earlier rung (PATH) still wins over an installed copy — the ladder order is unchanged", () => {
+    const installed = "/home/dev/.anycode/codex/bin/0.144.3/vendor/aarch64-apple-darwin/bin/codex";
+    const fs = fakeFs({ "/usr/local/bin/codex": {}, [installed]: {} }, {}, { "/home/dev/.anycode/codex/bin": ["0.144.3"] });
+    const result = discoverCodexBinary({
+      env: { PATH: "/usr/local/bin", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      arch: "arm64",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: "/usr/local/bin/codex", source: "path" });
+  });
+
   it("returns source none with a diagnostic reason when nothing on the ladder resolves", () => {
     const fs: CodexBinaryFs = {
       realpath: (path) => path,
@@ -334,5 +381,31 @@ describe("discoverCodexBinary", () => {
     expect(result.path).toBeNull();
     expect(result.source).toBe("none");
     expect(result.reason).toBeDefined();
+  });
+});
+
+describe("installedCodexCandidates", () => {
+  it("lists version directories newest-first, ignoring junk names and temp litter", () => {
+    const fs = fakeFs({}, {}, { "/home/dev/.anycode/codex/bin": ["0.144.3", "0.145.2", "junk", ".tmp-0.146.0-abc", ".download-x.tgz"] });
+    expect(installedCodexCandidates({ HOME: "/home/dev" }, "darwin", "arm64", fs)).toEqual([
+      "/home/dev/.anycode/codex/bin/0.145.2/vendor/aarch64-apple-darwin/bin/codex",
+      "/home/dev/.anycode/codex/bin/0.144.3/vendor/aarch64-apple-darwin/bin/codex",
+    ]);
+  });
+
+  it("yields nothing — never throws — with no HOME, no bin dir, an unsupported platform, or an fs seam without readdir", () => {
+    const fs = fakeFs({}, {}, {});
+    expect(installedCodexCandidates({}, "darwin", "arm64", fs)).toEqual([]);
+    expect(installedCodexCandidates({ HOME: "/home/dev" }, "darwin", "arm64", fs)).toEqual([]);
+    expect(installedCodexCandidates({ HOME: "/home/dev" }, "sunos" as NodeJS.Platform, "sparc", fs)).toEqual([]);
+    const noReaddir: CodexBinaryFs = { realpath: (path) => path, stat: () => ({ isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 }) };
+    expect(installedCodexCandidates({ HOME: "/home/dev" }, "darwin", "arm64", noReaddir)).toEqual([]);
+  });
+
+  it("resolves the Windows layout off USERPROFILE with the .exe entrypoint", () => {
+    const fs = fakeFs({}, {}, { "C:\\Users\\dev\\.anycode\\codex\\bin": ["0.144.3"] });
+    expect(installedCodexCandidates({ USERPROFILE: "C:\\Users\\dev" }, "win32", "x64", fs)).toEqual([
+      "C:\\Users\\dev\\.anycode\\codex\\bin\\0.144.3\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+    ]);
   });
 });

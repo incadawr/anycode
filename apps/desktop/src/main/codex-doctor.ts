@@ -34,6 +34,12 @@ import type { CodexAccount, CodexDoctorReport } from "../shared/codex-doctor.js"
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../shared/codex-quota.js";
 import type { EngineModelChoice } from "../shared/protocol.js";
 import {
+  activeCodexVersionPolicy,
+  codexVersionVerdict,
+  manifestSupportedRange,
+  type CodexVersionPolicy,
+} from "./codex-manifest.js";
+import {
   applyCodexProfileEnv,
   assertCodexProfileHome,
   type CodexProfileGuardResult,
@@ -41,14 +47,12 @@ import {
 } from "./codex-profiles.js";
 
 /**
- * Mirrors `SUPPORTED_CODEX_VERSION`/`parseCodexVersion`/`isSupportedCodexVersion`
- * in host/engines/codex/protocol.ts. Duplicated for the same host->main
- * layering reason as the client below — kept in sync by contract (the drift
- * gate, host/engines/codex/contract/contract-drift.test.ts, pins the wire
- * shape both sides read; this is just the tiny parse/range check, not wire).
+ * Version support is judged against the MANIFEST policy (main/codex-manifest.ts,
+ * cut §7.1/TASK.53) — the old hardcoded `SUPPORTED_CODEX_VERSION` mirror is
+ * gone from main. host/engines/codex/protocol.ts keeps its own constant as a
+ * pinned drift-gate fact about the WIRE contract; that is a different thing
+ * from support policy and stays out of this file's business.
  */
-const SUPPORTED_CODEX_VERSION = ">=0.144.0 <0.145.0";
-
 interface ParsedCodexVersion {
   major: number;
   minor: number;
@@ -59,11 +63,6 @@ function parseCodexVersion(output: string): ParsedCodexVersion | null {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output.trim());
   if (!match) return null;
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
-}
-
-/** Range check for `SUPPORTED_CODEX_VERSION` above (0.144.x — see that constant's doc comment). */
-function isSupportedCodexVersion(version: ParsedCodexVersion): boolean {
-  return version.major === 0 && version.minor === 144;
 }
 
 /**
@@ -657,6 +656,14 @@ export interface RunCodexDoctorOptions {
    * Re-run before EVERY spawn, same TOCTOU narrative as the binary trust gate.
    */
   profileGuard?: (profile: ResolvedCodexProfile) => CodexProfileGuardResult;
+  /**
+   * Version-support policy the verdict is judged against (cut §7.1/§7.4).
+   * Defaults to the module-level active policy (bundled manifest + persisted
+   * risk acceptances, kept current by main/index.ts and codex-install.ts) —
+   * the seam that reaches the doctor without widening the frozen codex-ipc
+   * deps surface. Explicit here for tests.
+   */
+  versionPolicy?: CodexVersionPolicy;
 }
 
 /**
@@ -684,6 +691,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
   const maxModelPages = options.maxModelPages ?? CODEX_MODEL_LIST_MAX_PAGES;
 
   const client = new CodexRpcClient(spawnImpl);
+  const versionPolicy = options.versionPolicy ?? activeCodexVersionPolicy();
   const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform));
   /** RE-READ at every gate, never captured: an `AbortSignal` flips under a run in progress — that is its entire purpose, and a narrowed snapshot of it would be a lie. */
   const quitRequested = (): boolean => options.signal?.aborted === true;
@@ -725,7 +733,10 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
       return { status: "error", error: `Unrecognized Codex version output: ${(preflight.version ?? "").trim() || "(empty)"}` };
     }
     const version = `${parsed.major}.${parsed.minor}.${parsed.patch}`;
-    if (!isSupportedCodexVersion(parsed)) {
+    // Manifest verdict (cut §4.2 row 3): outside every supported range AND not
+    // risk-accepted (§7.4) — and ALWAYS when below the compiled floor, which
+    // no manifest and no acceptance can override.
+    if (!codexVersionVerdict(version, versionPolicy).allowed) {
       return { status: "update_required", version };
     }
 
@@ -814,9 +825,15 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
 
   // `profileId` is stamped at the single exit point so EVERY path — ready,
   // signed_out, error, watchdog, abort — names the profile it diagnosed
-  // (shared/codex-doctor.ts: absence means system).
-  const stamp = (report: CodexDoctorReport): CodexDoctorReport =>
-    profileId !== undefined ? { ...report, profileId } : report;
+  // (shared/codex-doctor.ts: absence means system). `supportedRange` rides
+  // along on every report that carries a version — i.e. exactly the reports
+  // whose verdict was judged against the manifest — so the renderer displays
+  // the range from the report, never from a hardcoded string (cut §7.1).
+  const stamp = (report: CodexDoctorReport): CodexDoctorReport => ({
+    ...report,
+    ...(profileId !== undefined ? { profileId } : {}),
+    ...(report.version !== undefined ? { supportedRange: manifestSupportedRange(versionPolicy.manifest) } : {}),
+  });
   try {
     return stamp(await Promise.race([run, aborted]));
   } catch (error) {
@@ -825,6 +842,3 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     await client.close();
   }
 }
-
-/** Constant re-exported so callers (and tests) can format a supported-range message without importing host/**. */
-export { SUPPORTED_CODEX_VERSION };
