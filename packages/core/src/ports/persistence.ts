@@ -71,6 +71,15 @@ export interface SessionMeta {
    * pinning — resume falls back to the current default (documented behaviour).
    */
   connectionId?: string;
+  /**
+   * Codex account profile this session was created under (codex-profiles cut
+   * §3.3, W3-F): resume re-resolves THIS profile's CODEX_HOME, never the
+   * currently-active one. Absent is a legacy session (predates profiles) or a
+   * `system`-pseudo-profile session — resume runs on the ambient CODEX_HOME,
+   * byte-identical to today's ambient-only behaviour. Never set for a core
+   * session (Codex owns its own account).
+   */
+  codexProfileId?: string;
 }
 
 export type SessionMetaPatch = Partial<
@@ -86,6 +95,7 @@ export type SessionMetaPatch = Partial<
     | "continuationPending"
     | "worktreeExitNoticePending"
     | "connectionId"
+    | "codexProfileId"
   >
 > & {
   /** `null` atomically clears the active worktree identity fields. */

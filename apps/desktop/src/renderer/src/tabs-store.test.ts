@@ -348,6 +348,36 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft).toBeNull();
   });
 
+  it("setDraftCodexProfileId sets the draft's Codex profile pick, absent until then (codex-profiles W3-F)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    expect(store.getState().draft?.codexProfileId).toBeUndefined();
+
+    store.getState().setDraftCodexProfileId("work");
+    expect(store.getState().draft).toEqual({
+      workspace: "/ws/a",
+      prompt: "",
+      engine: "core",
+      model: null,
+      mode: "build",
+      codexProfileId: "work",
+    });
+  });
+
+  it("re-opening an existing draft preserves its Codex profile pick (focus, not reset)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftCodexProfileId("personal");
+    store.getState().openDraft(); // re-focus, no workspace arg
+    expect(store.getState().draft?.codexProfileId).toBe("personal");
+  });
+
+  it("setDraftCodexProfileId is a no-op while draft is null", () => {
+    const store = createTabsStore();
+    store.getState().setDraftCodexProfileId("work");
+    expect(store.getState().draft).toBeNull();
+  });
+
   it("discardDraft clears both draft and draftActive", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");

@@ -60,6 +60,19 @@ export type ResumePinResult =
   | { ok: true; connectionId?: string; release?: () => void }
   | { ok: false; connectionId: string };
 
+/**
+ * Resolution of an opaque Codex profile id — the draft's pick on a `new`
+ * request, or a resumed session's persisted `codexProfileId` (codex-profiles
+ * cut §3.3, W3-F) — into the argv facts main/tabs.ts's `createTab` forwards.
+ * `codexProfile` absent on the `ok` branch means the `system` pseudo-profile
+ * (byte-identical ambient CODEX_HOME, main/tabs.ts's own `null` default).
+ * `ok: false` is a fail-closed refusal (deleted/invalid registry id) — the
+ * caller must never silently fall back to spawning on the ambient account.
+ */
+export type ResolveCodexProfileResult =
+  | { ok: true; codexProfile?: { id?: string; home?: string; authLink?: string } }
+  | { ok: false };
+
 export interface TabIpcDeps {
   manager: TabHostManager;
   /**
@@ -84,6 +97,15 @@ export interface TabIpcDeps {
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
    */
   resolveResumePin?(meta: SessionMeta): Promise<ResumePinResult>;
+  /**
+   * Resolves an opaque Codex profile id against main's profile registry
+   * (codex-profiles cut §3.3, W3-F) — called with a `new` request's draft
+   * pick, or a resumed session's persisted `codexProfileId`. Absent = profile
+   * resolution disabled (legacy wiring / unit fixtures); a request/session
+   * carrying a profile id then REFUSES fail-closed (see handleCreate) rather
+   * than silently spawning on the ambient account.
+   */
+  resolveCodexProfile?(profileId: string): Promise<ResolveCodexProfileResult>;
 }
 
 /** exported for tests (tab-ipc.test.ts): the fail-closed request schema. */
@@ -96,6 +118,10 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
     // job (its own live catalog / frozen preset table), never main's.
     engineModel: z.string().min(1).max(128).optional(),
     enginePreset: z.string().min(1).max(128).optional(),
+    // Codex-profiles W3-F: bounds only (a hostile-length string) — main
+    // resolves the id against its own registry (resolveCodexProfile), never
+    // trusts it directly, same discipline as engineModel/enginePreset above.
+    codexProfileId: z.string().min(1).max(128).optional(),
   }),
   z.object({
     kind: z.literal("resume"),
@@ -143,6 +169,22 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     if (!deps.manager.canSpawn(engine)) {
       return { ok: false, reason: "not_ready" };
     }
+    // Codex-profiles W3-F: resolve the draft's profile pick BEFORE prompting
+    // (same "never make the user pick a folder for a refused request"
+    // reasoning as the atCapacity guard below). A profile id with no resolver
+    // wired, or one the registry refuses, is a fail-closed "not_ready" — NEVER
+    // a silent fallback onto the ambient (`system`) account.
+    let codexProfile: { id?: string; home?: string; authLink?: string } | undefined;
+    if (req.codexProfileId !== undefined) {
+      if (deps.resolveCodexProfile === undefined) {
+        return { ok: false, reason: "not_ready" };
+      }
+      const resolved = await deps.resolveCodexProfile(req.codexProfileId);
+      if (!resolved.ok) {
+        return { ok: false, reason: "not_ready" };
+      }
+      codexProfile = resolved.codexProfile;
+    }
     // Guard capacity BEFORE prompting: never make the user pick a folder we
     // cannot open (UI also disables "+" at capacity, this is the backstop).
     if (deps.manager.atCapacity()) {
@@ -180,6 +222,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       ...(req.engineModel !== undefined ? { engineModel: req.engineModel } : {}),
       ...(req.enginePreset !== undefined ? { enginePreset: req.enginePreset } : {}),
       ...(newConnectionId !== undefined ? { connectionId: newConnectionId } : {}),
+      ...(codexProfile !== undefined ? { codexProfile } : {}),
     });
     if (!result.ok) {
       return result;
@@ -209,6 +252,23 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
   if (openInTabId !== undefined) {
     return { ok: false, reason: "already_open", focusTabId: openInTabId };
+  }
+  // Codex-profiles W3-F: resume re-resolves the profile the session was
+  // CREATED under (`meta.codexProfileId`, persisted host metadata — never the
+  // renderer's current `activeProfileId`, which could resume the wrong
+  // account). A profile that vanished from the registry since creation
+  // refuses fail-closed; a legacy/system session (no persisted id) resumes on
+  // the ambient CODEX_HOME, byte-identical to today's behaviour.
+  let resumeCodexProfile: { id?: string; home?: string; authLink?: string } | undefined;
+  if (meta.codexProfileId !== undefined) {
+    if (deps.resolveCodexProfile === undefined) {
+      return { ok: false, reason: "not_ready" };
+    }
+    const resolved = await deps.resolveCodexProfile(meta.codexProfileId);
+    if (!resolved.ok) {
+      return { ok: false, reason: "not_ready" };
+    }
+    resumeCodexProfile = resolved.codexProfile;
   }
   // TASK.45 W10: resume resolves the connection the session was pinned to. A
   // deleted pin refuses `connection_missing` (renderer offers a replacement — no
@@ -259,6 +319,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       resume: true,
       engine,
       ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
+      ...(resumeCodexProfile !== undefined ? { codexProfile: resumeCodexProfile } : {}),
     });
     if (!result.ok) {
       return result;

@@ -142,6 +142,23 @@ describe("createTabRequestSchema — new-tab workspace matrix (§2F.4)", () => {
     ).toBe(false);
   });
 
+  it("accepts an optional codexProfileId draft pick (codex-profiles W3-F); bounds enforced", () => {
+    expect(
+      createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engine: "codex", codexProfileId: "work" })
+        .success,
+    ).toBe(true);
+    // Optional — a Core (or system-default Codex) draft omits it entirely.
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x" }).success).toBe(true);
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", codexProfileId: "" }).success).toBe(false);
+    expect(
+      createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", codexProfileId: "x".repeat(129) }).success,
+    ).toBe(false);
+    // The 128 boundary itself is accepted.
+    expect(
+      createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", codexProfileId: "x".repeat(128) }).success,
+    ).toBe(true);
+  });
+
   it("rejects an empty-string engineModel/enginePreset (min(1)) and a value over 128 chars (max)", () => {
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engineModel: "" }).success).toBe(false);
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", enginePreset: "" }).success).toBe(false);
@@ -540,6 +557,166 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     // forever (until an app restart).
     expect(release).toHaveBeenCalledOnce();
     expect(createTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () => {
+  function resumeMeta(over: Record<string, unknown> = {}) {
+    return {
+      id: "s-resume",
+      workspace: "/project",
+      model: "m",
+      mode: "build" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      engineId: "codex",
+      ...over,
+    };
+  }
+
+  it("new: no codexProfileId in the request ⇒ resolveCodexProfile is never called, no codexProfile key on createTab", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async () => ({ ok: true as const }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex" });
+
+    expect(resolveCodexProfile).not.toHaveBeenCalled();
+    const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("codexProfile" in call).toBe(false);
+  });
+
+  it("new: a codexProfileId with NO resolver wired refuses fail-closed (not_ready), never spawns", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+
+    const res = await handleCreate(deps, {
+      kind: "new",
+      workspace: "/x",
+      engine: "codex",
+      codexProfileId: "work",
+    });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("new: the resolver refusing (deleted/invalid profile) refuses fail-closed (not_ready), never spawns", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async () => ({ ok: false as const }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    const res = await handleCreate(deps, {
+      kind: "new",
+      workspace: "/x",
+      engine: "codex",
+      codexProfileId: "deleted-profile",
+    });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(resolveCodexProfile).toHaveBeenCalledWith("deleted-profile");
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("new: a resolved profile rides verbatim into manager.createTab's codexProfile param", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async () => ({
+      ok: true as const,
+      codexProfile: { id: "work", authLink: "/home/user/.codex/auth.json" },
+    }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex", codexProfileId: "work" });
+
+    expect(createTab).toHaveBeenCalledWith(
+      expect.objectContaining({ codexProfile: { id: "work", authLink: "/home/user/.codex/auth.json" } }),
+    );
+  });
+
+  it("new: the resolver's `system`-pseudo-profile result (ok:true, no codexProfile) omits the key entirely", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async () => ({ ok: true as const }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex", codexProfileId: "system" });
+
+    const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("codexProfile" in call).toBe(false);
+  });
+
+  it("resume: no persisted codexProfileId (legacy/system session) ⇒ resolveCodexProfile is never called", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async () => ({ ok: true as const }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta(),
+      listSessions: async () => [],
+      touchSession: async () => {},
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+
+    expect(resolveCodexProfile).not.toHaveBeenCalled();
+    const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("codexProfile" in call).toBe(false);
+  });
+
+  it("resume: a persisted codexProfileId with NO resolver wired refuses fail-closed (not_ready)", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ codexProfileId: "work" }),
+      listSessions: async () => [],
+      touchSession: async () => {},
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog };
+
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("resume: a persisted codexProfileId whose profile has since vanished refuses fail-closed — NEVER silently resumes on system", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async () => ({ ok: false as const }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ codexProfileId: "deleted-profile" }),
+      listSessions: async () => [],
+      touchSession: async () => {},
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
+
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(resolveCodexProfile).toHaveBeenCalledWith("deleted-profile");
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("resume: re-resolves the SAME profile the session was created under, rides it into createTab (cross-restart chain)", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ codexProfileId: "work" }),
+      listSessions: async () => [],
+      touchSession: async () => {},
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
+
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/project" });
+    expect(resolveCodexProfile).toHaveBeenCalledWith("work");
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ codexProfile: { id: "work" } }));
   });
 });
 
