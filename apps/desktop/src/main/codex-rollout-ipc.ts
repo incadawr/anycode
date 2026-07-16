@@ -82,7 +82,7 @@ export interface CodexRolloutImportRequest {
 
 export type CodexRolloutImportResult =
   | { ok: true; sessionId: string; workspace: string; report: RolloutImportReport }
-  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" };
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
 
 export interface CodexRolloutIpcDeps {
   persistence: Pick<PersistencePort, "createSession" | "appendHistory">;
@@ -255,7 +255,11 @@ export async function handleCodexRolloutImport(deps: CodexRolloutIpcDeps, raw: u
   const profileId = typeof request?.profileId === "string" ? request.profileId : "";
   const fileName = typeof request?.fileName === "string" ? request.fileName : "";
   const model = typeof request?.model === "string" ? request.model : "";
-  if (profileId === "" || model === "") return { ok: false, reason: "profile_not_found" };
+  if (profileId === "") return { ok: false, reason: "profile_not_found" };
+  // Split from profile_not_found (F2 review lane FXH): a custom-provider
+  // connection with no models resolves the picker to "" (resolveDefaultImportModel),
+  // which previously refused with a misleading "that profile no longer exists".
+  if (model === "") return { ok: false, reason: "invalid_model" };
   const imported = await readAndImport(deps, profileId, fileName);
   if (!imported.ok) return imported;
   // §8.1: a brand-new core session, never a link back to the source codex

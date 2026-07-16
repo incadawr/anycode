@@ -32,7 +32,8 @@ import { activeProviderView } from "../../../shared/settings.js";
 import type { CreateTabRequest, CreateTabResult } from "../../../shared/tabs.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { useTabsStore, type TabsState } from "../tabs-store.js";
-import { modelMenuItems } from "./ModelPill.js";
+import { createAsyncEpochGate, issueGuarded } from "./async-epoch-gate.js";
+import { modelMenuItems, providerModelsFor } from "./ModelPill.js";
 import { handleCreateTabResult } from "./SessionPicker.js";
 
 // ── duplicated wire types (see file header) ──
@@ -69,7 +70,7 @@ export interface CodexRolloutImportReportView {
   warnings: string[];
 }
 
-export type RolloutStageFailureReason = "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large";
+export type RolloutStageFailureReason = "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model";
 
 export type CodexRolloutPreviewResult =
   | { ok: true; report: CodexRolloutImportReportView }
@@ -164,6 +165,8 @@ export function describeRolloutStageFailure(reason: RolloutStageFailureReason): 
       return "Could not read that session file.";
     case "too_large":
       return `That session file is too large to import (${MAX_ROLLOUT_FILE_MIB} MiB limit).`;
+    case "invalid_model":
+      return "Pick a model for the new session first.";
     default: {
       const exhaustive: never = reason;
       return exhaustive;
@@ -193,6 +196,20 @@ export function resolveDefaultImportModel(activeModel: string | undefined, catal
     return activeModel;
   }
   return catalogModels?.[0]?.id ?? activeModel ?? "";
+}
+
+/**
+ * Honest Import-button gate (F2, codex-profiles cut lane FXH review):
+ * the pre-existing `previewState.kind !== "loaded" || importing` check never
+ * looked at `model`, so a custom-provider connection whose catalog resolves
+ * to no models at all (`resolveDefaultImportModel` bottoming out at `""`)
+ * left Import clickable on an empty pick — main then refused with a
+ * misleading `profile_not_found` (see the `invalid_model` reason split
+ * below). Mirrors `modelPickDisabled`'s precedent of an extracted,
+ * independently-testable predicate. Exported for unit testing.
+ */
+export function importDisabled(previewKind: RolloutPreviewViewState["kind"], importing: boolean, model: string): boolean {
+  return previewKind !== "loaded" || importing || model === "";
 }
 
 // ── import + open (the resume-path reuse cut §8.8 mandates) ──
@@ -287,6 +304,11 @@ export function CodexRolloutImportDialog({
   settingsStore = useSettingsStore,
 }: CodexRolloutImportDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  // F1 (review lane FXH): epoch-gates the two async chains below so a fast
+  // profile/file switch can never have its state clobbered by a slower,
+  // now-stale reply landing after the newer one already resolved.
+  const listGateRef = useRef(createAsyncEpochGate());
+  const previewGateRef = useRef(createAsyncEpochGate());
   const [profileId, setProfileId] = useState<string | null>(null);
   const [listResult, setListResult] = useState<CodexRolloutListResult | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
@@ -313,6 +335,8 @@ export function CodexRolloutImportDialog({
       setSelectedModel(null);
       setImporting(false);
       setImportError(null);
+      listGateRef.current.invalidate();
+      previewGateRef.current.invalidate();
     }
   }, [open]);
 
@@ -322,7 +346,12 @@ export function CodexRolloutImportDialog({
     setSelectedFileName(null);
     setPreviewResult(null);
     setImportError(null);
-    void bridge.rolloutList(profileId).then(setListResult);
+    // A profile switch retires any in-flight preview too — otherwise a stale
+    // preview reply from the PREVIOUS profile could still land and resurrect
+    // `previewState:"loaded"` while `selectedFileName` is null, enabling
+    // Import on a no-op.
+    previewGateRef.current.invalidate();
+    issueGuarded(listGateRef.current, bridge.rolloutList(profileId), setListResult);
   }, [profileId, bridge]);
 
   function selectRollout(fileName: string): void {
@@ -331,12 +360,12 @@ export function CodexRolloutImportDialog({
     setSelectedModel(null);
     setImportError(null);
     if (profileId !== null) {
-      void bridge.rolloutPreview(profileId, fileName).then(setPreviewResult);
+      issueGuarded(previewGateRef.current, bridge.rolloutPreview(profileId, fileName), setPreviewResult);
     }
   }
 
   const activeProvider = snapshot ? activeProviderView(snapshot.settings) : undefined;
-  const catalogModels = snapshot?.catalog?.find((entry) => entry.id === activeProvider?.id)?.models;
+  const catalogModels = providerModelsFor(activeProvider?.id, snapshot?.catalog, snapshot?.settings.provider.custom);
   const defaultModel = resolveDefaultImportModel(activeProvider?.model, catalogModels);
   const model = selectedModel ?? defaultModel;
   const modelItems = modelMenuItems(model, catalogModels);
@@ -469,7 +498,7 @@ export function CodexRolloutImportDialog({
         <button type="button" className="settings-button" onClick={onClose}>
           Close
         </button>
-        <button type="button" className="settings-button settings-button-primary" disabled={previewState.kind !== "loaded" || importing} onClick={() => void importAndOpen()}>
+        <button type="button" className="settings-button settings-button-primary" disabled={importDisabled(previewState.kind, importing, model)} onClick={() => void importAndOpen()}>
           {importing ? "Importing…" : "Import & open"}
         </button>
       </div>

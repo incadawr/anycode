@@ -5,6 +5,7 @@
  * plain function and covered directly rather than DOM-rendering the popover.
  */
 import { describe, expect, it } from "vitest";
+import type { CatalogSummary, CustomProviderRecord } from "../../../shared/settings.js";
 import {
   buildConnectionUpdate,
   chainWrite,
@@ -12,6 +13,7 @@ import {
   modelMenuItems,
   modelPickDisabled,
   pillLabel,
+  providerModelsFor,
   resolvePid,
   resolvePillTarget,
   shouldPersistOnAck,
@@ -127,6 +129,42 @@ describe("modelMenuItems (design §2.2 model list)", () => {
 
   it("does not duplicate an entry already present in the catalog", () => {
     expect(modelMenuItems("glm-5.2", catalog)).toHaveLength(2);
+  });
+});
+
+describe("providerModelsFor (F2 review lane FXH: custom providers must reach the model pickers too)", () => {
+  const catalog: CatalogSummary = [
+    { id: "z-ai", name: "Z.ai", authKind: "api_key", models: [{ id: "glm-5.2", name: "GLM-5.2" }] },
+  ];
+  const custom: CustomProviderRecord[] = [
+    {
+      id: "custom:my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://example.com",
+      kind: "openai-compatible",
+      models: ["curated-a", "curated-b"],
+    },
+  ];
+
+  it("a builtin catalog hit returns its models byte-for-byte, same as today", () => {
+    expect(providerModelsFor("z-ai", catalog, custom)).toEqual(catalog[0]!.models);
+  });
+
+  it("a custom-provider id with no catalog entry returns its curated model list (red-proof: today's catalog.find(...) yields undefined here)", () => {
+    expect(providerModelsFor("custom:my-endpoint", catalog, custom)).toEqual([{ id: "curated-a" }, { id: "curated-b" }]);
+  });
+
+  it("a providerId matching neither the catalog nor a custom record returns undefined", () => {
+    expect(providerModelsFor("unknown-provider", catalog, custom)).toBeUndefined();
+  });
+
+  it("an undefined providerId (legacy free-text config) returns undefined, unchanged from today", () => {
+    expect(providerModelsFor(undefined, catalog, custom)).toBeUndefined();
+  });
+
+  it("an undefined/empty custom list never throws — just no custom match", () => {
+    expect(providerModelsFor("custom:my-endpoint", catalog, undefined)).toBeUndefined();
+    expect(providerModelsFor("custom:my-endpoint", catalog, [])).toBeUndefined();
   });
 });
 

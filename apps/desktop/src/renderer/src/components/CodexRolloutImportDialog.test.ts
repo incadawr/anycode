@@ -17,6 +17,7 @@ import {
   formatRolloutSize,
   formatRolloutStatsLines,
   formatRolloutTimestamp,
+  importDisabled,
   openImportedSession,
   performImportAndOpen,
   resolveDefaultImportModel,
@@ -172,7 +173,7 @@ describe("describeRolloutListFailure", () => {
 
 describe("describeRolloutStageFailure", () => {
   it("covers every reason with distinct, non-empty text", () => {
-    const reasons: RolloutStageFailureReason[] = ["profile_not_found", "invalid_file_name", "not_readable", "too_large"];
+    const reasons: RolloutStageFailureReason[] = ["profile_not_found", "invalid_file_name", "not_readable", "too_large", "invalid_model"];
     const texts = reasons.map(describeRolloutStageFailure);
     for (const text of texts) expect(text.length).toBeGreaterThan(0);
     expect(new Set(texts).size).toBe(texts.length);
@@ -180,6 +181,10 @@ describe("describeRolloutStageFailure", () => {
 
   it("states the real 32 MiB cap for too_large, not a vague message", () => {
     expect(describeRolloutStageFailure("too_large")).toContain("32 MiB");
+  });
+
+  it("tells the user to pick a model for invalid_model, distinct from the profile_not_found message (F2 review lane FXH)", () => {
+    expect(describeRolloutStageFailure("invalid_model")).toBe("Pick a model for the new session first.");
   });
 });
 
@@ -231,6 +236,29 @@ describe("resolveDefaultImportModel", () => {
 
   it("resolves to an empty string when there is neither an active model nor a catalog", () => {
     expect(resolveDefaultImportModel(undefined, undefined)).toBe("");
+  });
+});
+
+// ── importDisabled (F2 review lane FXH: honest gate — a custom provider's
+// active connection with no model picks an empty "" model, which the old
+// `previewState.kind !== "loaded" || importing` gate left clickable) ──
+
+describe("importDisabled", () => {
+  it("a loaded preview, not importing, with a real picked model -> enabled", () => {
+    expect(importDisabled("loaded", false, "gpt-5")).toBe(false);
+  });
+
+  it("an empty model disables Import even though the preview loaded and nothing is importing (red-proof: the old gate never checked model)", () => {
+    expect(importDisabled("loaded", false, "")).toBe(true);
+  });
+
+  it("a non-loaded preview disables Import regardless of model", () => {
+    expect(importDisabled("loading", false, "gpt-5")).toBe(true);
+    expect(importDisabled("error", false, "gpt-5")).toBe(true);
+  });
+
+  it("an in-flight import disables Import regardless of model", () => {
+    expect(importDisabled("loaded", true, "gpt-5")).toBe(true);
   });
 });
 
