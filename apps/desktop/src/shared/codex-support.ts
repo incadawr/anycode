@@ -50,7 +50,7 @@ export interface CodexSupportManifest {
  */
 export const BUNDLED_CODEX_MANIFEST: CodexSupportManifest = {
   schemaVersion: "anycode.codex-support.v1",
-  updatedAt: "2026-07-14T00:00:00Z",
+  updatedAt: "2026-07-16T20:00:00Z",
   supported: [{ range: ">=0.144.0 <0.145.0", status: "tested", note: "живой смоук 10/10, codex-fixes" }],
   recommended: "0.144.3",
   minimum: CODEX_MIN_FLOOR,

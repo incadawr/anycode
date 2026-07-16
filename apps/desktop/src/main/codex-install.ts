@@ -358,7 +358,17 @@ export async function extractCodexVendorSubtree(
     for (;;) {
       const header = await reader.read(512);
       if (header === null) break; // clean EOF without terminator blocks — tolerated
-      if (header.every((byte) => byte === 0)) break; // end-of-archive marker
+      if (header.every((byte) => byte === 0)) {
+        // A lone zero block is ambiguous: it could be the first half of the
+        // standard two-block terminator, or a corrupt/truncated archive that
+        // silently drops every entry after it (BM2 red-proof). Only a second
+        // zero block or a clean EOF confirms end-of-archive; anything else —
+        // a real entry sitting past what looked like a terminator — is refused
+        // rather than producing a quietly incomplete install.
+        const next = await reader.read(512);
+        if (next === null || next.every((byte) => byte === 0)) break;
+        throw new Error("malformed archive (lone zero block)");
+      }
       if (!tarHeaderChecksumValid(header)) throw new Error("archive header checksum mismatch");
 
       const typeflag = String.fromCharCode(header[156]!);
@@ -451,6 +461,9 @@ export async function extractCodexVendorSubtree(
             bodyRemaining -= usable;
           }
         });
+        // amendment-1 §262 (BM3): every extracted file is durable BEFORE the
+        // staging directory that contains it gets renamed into place.
+        await handle.sync();
       } finally {
         await handle.close();
       }
@@ -566,8 +579,28 @@ export async function installCodexVersion(version: string, options: InstallCodex
     // become executable (cut §7.2 п.6 ordering).
     await chmod(stagedBinary, 0o755);
 
+    // amendment-1 §262 (BM3): fsync the staging directory itself — durable
+    // proof its extracted contents are on disk — before the atomic rename
+    // that makes the install visible under its final name.
+    const stagingHandle = await open(stagingRoot, "r");
+    try {
+      await stagingHandle.sync();
+    } finally {
+      await stagingHandle.close();
+    }
+
     await rename(stagingRoot, installDir);
     await rm(tarballPath, { force: true });
+
+    // fsync the parent directory after rename: the directory-entry rename
+    // itself must be durable, not just the bytes it points at.
+    const parentHandle = await open(binRoot, "r");
+    try {
+      await parentHandle.sync();
+    } finally {
+      await parentHandle.close();
+    }
+
     return { ok: true, version, installDir, binaryPath };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
