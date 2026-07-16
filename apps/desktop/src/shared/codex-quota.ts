@@ -67,14 +67,30 @@ export interface CodexRateLimits {
  *     is left untouched.
  *  4. `observedAt` always advances to the update's timestamp — even when
  *     every other field of the update was null/absent, "last observed" must
- *     reflect the fact that a fresh (if empty) snapshot arrived.
+ *     reflect the fact that a fresh (if empty) snapshot arrived. This applies
+ *     to EVERY bucket a merge touches: `observedAt` is a locally generated
+ *     field that never exists on the wire, so updated AND newly introduced
+ *     `byLimitId` buckets are stamped with the same outer `observedAt` — the
+ *     update side of the signature (`CodexRateLimitsUpdate`) deliberately
+ *     cannot carry one (C0 review F2, Fable ruling).
  *
  * No repeated delivery can ever DECREASE the information the snapshot holds
  * — a durable invariant from `codex-fixes` ERRATA-4/5/6, deliberately tested
  * for redness against an inverted (replace-on-null) implementation, see
  * codex-quota.test.ts.
  */
-export function mergeCodexRateLimits(previous: CodexRateLimits, update: Partial<CodexRateLimits>, observedAt: string): CodexRateLimits {
+/**
+ * Wire-shaped update input for `mergeCodexRateLimits`: everything optional,
+ * and NO `observedAt` anywhere — neither top-level buckets nor the map may
+ * carry one, because that field is minted locally at merge time. Making the
+ * field unrepresentable on the update side is what guarantees a translator
+ * can never ship a stale/fabricated per-bucket timestamp.
+ */
+export interface CodexRateLimitsUpdate extends Omit<Partial<CodexRateLimits>, "byLimitId" | "observedAt"> {
+  byLimitId?: Record<string, Omit<Partial<CodexRateLimits>, "byLimitId" | "observedAt">>;
+}
+
+export function mergeCodexRateLimits(previous: CodexRateLimits, update: CodexRateLimitsUpdate, observedAt: string): CodexRateLimits {
   const merged: CodexRateLimits = {
     primary: update.primary != null ? update.primary : previous.primary,
     secondary: update.secondary != null ? update.secondary : previous.secondary,
@@ -83,17 +99,22 @@ export function mergeCodexRateLimits(previous: CodexRateLimits, update: Partial<
     limitName: update.limitName != null ? update.limitName : previous.limitName,
     observedAt,
   };
-  const byLimitId = mergeByLimitId(previous.byLimitId, update.byLimitId);
+  const byLimitId = mergeByLimitId(previous.byLimitId, update.byLimitId, observedAt);
   if (byLimitId !== undefined) {
     merged.byLimitId = byLimitId;
   }
   return merged;
 }
 
-/** Per-key merge for the `byLimitId` map (rule 3 above) — absent buckets survive untouched. */
+/**
+ * Per-key merge for the `byLimitId` map (rule 3 above) — absent buckets
+ * survive untouched; updated AND new buckets are stamped with the OUTER
+ * `observedAt` (rule 4: the wire never carries one).
+ */
 function mergeByLimitId(
   previous: Record<string, Omit<CodexRateLimits, "byLimitId">> | undefined,
-  update: Record<string, Omit<CodexRateLimits, "byLimitId">> | undefined,
+  update: Record<string, Omit<Partial<CodexRateLimits>, "byLimitId" | "observedAt">> | undefined,
+  observedAt: string,
 ): Record<string, Omit<CodexRateLimits, "byLimitId">> | undefined {
   if (update === undefined) return previous;
   const merged: Record<string, Omit<CodexRateLimits, "byLimitId">> = { ...previous };
@@ -101,8 +122,8 @@ function mergeByLimitId(
     const previousBucket = previous?.[limitId];
     merged[limitId] =
       previousBucket === undefined
-        ? bucketUpdate
-        : (mergeCodexRateLimits(previousBucket, bucketUpdate, bucketUpdate.observedAt) as Omit<CodexRateLimits, "byLimitId">);
+        ? { ...bucketUpdate, observedAt }
+        : (mergeCodexRateLimits(previousBucket, bucketUpdate, observedAt) as Omit<CodexRateLimits, "byLimitId">);
   }
   return merged;
 }

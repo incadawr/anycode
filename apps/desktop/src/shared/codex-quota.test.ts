@@ -76,12 +76,38 @@ describe("mergeCodexRateLimits — sparse-merge invariant", () => {
     };
     const merged = mergeCodexRateLimits(
       withBuckets,
-      { byLimitId: { codex: { primary: { usedPercent: 99 }, secondary: null, planType: null, limitName: null, observedAt: "2026-07-16T14:00:00.000Z" } } },
+      { byLimitId: { codex: { primary: { usedPercent: 99 }, secondary: null, planType: null, limitName: null } } },
       "2026-07-16T14:00:00.000Z",
     );
     expect(merged.byLimitId?.codex?.primary).toEqual({ usedPercent: 99 });
     // sibling bucket untouched
     expect(merged.byLimitId?.other).toEqual(withBuckets.byLimitId?.other);
+  });
+
+  it("byLimitId: an UPDATED bucket is stamped with the outer observedAt (wire buckets carry none)", () => {
+    const withBuckets: CodexRateLimits = { ...BASE, byLimitId: { codex: { ...BASE } } };
+    const merged = mergeCodexRateLimits(withBuckets, { byLimitId: { codex: { primary: { usedPercent: 99 } } } }, "2026-07-16T14:00:00.000Z");
+    // Under the pre-F2 rule (bucketUpdate.observedAt) this is undefined —
+    // the wire bucket has no such field — so this assertion is RED against
+    // that implementation (C0 review F2 red-proof).
+    expect(merged.byLimitId?.codex?.observedAt).toBe("2026-07-16T14:00:00.000Z");
+    // sparse-merge still holds inside the bucket
+    expect(merged.byLimitId?.codex?.credits).toEqual(BASE.credits);
+  });
+
+  it("byLimitId: a NEWLY INTRODUCED bucket is stamped with the outer observedAt", () => {
+    const merged = mergeCodexRateLimits(BASE, { byLimitId: { fresh: { primary: { usedPercent: 1 } } } }, "2026-07-16T14:30:00.000Z");
+    expect(merged.byLimitId?.fresh?.observedAt).toBe("2026-07-16T14:30:00.000Z");
+    expect(merged.byLimitId?.fresh?.primary).toEqual({ usedPercent: 1 });
+  });
+
+  it("byLimitId: a stray observedAt smuggled past the type system LOSES to the outer stamp", () => {
+    const withBuckets: CodexRateLimits = { ...BASE, byLimitId: { codex: { ...BASE } } };
+    // The update type makes observedAt unrepresentable; simulate a
+    // mis-decoded wire object anyway — the merge must still stamp its own.
+    const smuggled = { byLimitId: { codex: { primary: { usedPercent: 7 }, observedAt: "1999-01-01T00:00:00.000Z" } } } as unknown as Parameters<typeof mergeCodexRateLimits>[1];
+    const merged = mergeCodexRateLimits(withBuckets, smuggled, "2026-07-16T15:00:00.000Z");
+    expect(merged.byLimitId?.codex?.observedAt).toBe("2026-07-16T15:00:00.000Z");
   });
 
   it("RED-PROOF: byLimitId — a naive whole-map replace would wipe the sibling bucket", () => {
