@@ -1803,6 +1803,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           set({ notice: { kind: "engine_notice", text: event.message } });
           return;
 
+        // codex-profiles cut §3.4/§5.3/§6: additive AgentEvent variants the
+        // core loop never emits (dormant for every existing core session,
+        // same test-hazard #3 discipline as `engine_notice` above) — the
+        // Codex host translator is the only producer, and it does not exist
+        // yet at this C0 stage. No-op today keeps the transcript/automation
+        // snapshot shape byte-identical while satisfying exhaustiveness;
+        // W3 lane G wires the real reducers (sessionTokens REPLACE, quota
+        // display) on top of this, not in place of it.
+        case "engine_quota":
+        case "engine_session_tokens":
+          return;
+
         // Session consumes this control-plane event before it reaches the UI;
         // keep a defensive no-op for structural completeness on a rogue wire.
         case "workspace_transition":
