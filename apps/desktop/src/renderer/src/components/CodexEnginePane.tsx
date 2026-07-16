@@ -30,6 +30,7 @@ import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../../../shared/codex-quota.js";
 import type { CodexProfileRecord } from "../../../shared/settings.js";
 import { useTabsStore } from "../tabs-store.js";
+import { CodexRolloutImportDialog } from "./CodexRolloutImportDialog.js";
 
 /**
  * Duplicated structurally from main/codex-ipc.ts's own `CodexOnboardingSnapshot`/
@@ -400,6 +401,10 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
   const [newLabel, setNewLabel] = useState("");
   const [signingInId, setSigningInId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // TASK.52 (cut §8.8, lane W3-H): this pane is ONLY the entry point for the
+  // rollout-import wizard — all of its own logic/state lives in
+  // CodexRolloutImportDialog.tsx.
+  const [importOpen, setImportOpen] = useState(false);
 
   // Every row diagnosed SEQUENTIALLY (cut §4.3: "не N параллельных
   // app-server'ов") — `system` first (it always exists), then every
@@ -724,6 +729,12 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
         )}
       </div>
       {atProfileLimit && <p className="settings-page-description">At most {MAX_CODEX_PROFILES} profiles are supported.</p>}
+      <div className="settings-field-row">
+        <button type="button" className="settings-button" onClick={() => setImportOpen(true)}>
+          Import a Codex session…
+        </button>
+      </div>
+      {importOpen && <CodexRolloutImportDialog open={importOpen} onClose={() => setImportOpen(false)} profiles={profiles} />}
     </section>
   );
 }

@@ -2521,3 +2521,51 @@
 .codex-profile-row .settings-field-row {
   flex-basis: 100%;
 }
+
+/* ── Codex rollout-import dialog (TASK.52, cut §8.8): reuses .mcp-form-dialog/.mcp-dialog-* chrome + .settings-mcp-list/.settings-mcp-row rows verbatim; these are the wizard-specific additions only. ── */
+
+.codex-rollout-dialog {
+  width: min(92vw, 34rem);
+}
+
+.codex-rollout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.codex-rollout-row {
+  flex-wrap: wrap;
+  row-gap: 0.2rem;
+  cursor: pointer;
+}
+
+.codex-rollout-row-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.codex-rollout-size {
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-rollout-preview-line {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.codex-rollout-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.codex-rollout-stat-line {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}

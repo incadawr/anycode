@@ -187,6 +187,12 @@ const CODEX_INSTALL_CHANNEL = "anycode:codex-install";
 const CODEX_RISK_ACCEPT_CHANNEL = "anycode:codex-risk-accept";
 const CODEX_SUPPORT_STATUS_CHANNEL = "anycode:codex-support-status";
 const CODEX_MANIFEST_REFRESH_CHANNEL = "anycode:codex-manifest-refresh";
+// TASK.52 (codex-profiles cut §8.8, lane W3-H): the rollout-import control
+// plane — main/codex-rollout-ipc.ts holds the byte-identical source of truth,
+// same duplicated-literal convention as every other channel above.
+const CODEX_ROLLOUT_LIST_CHANNEL = "anycode:codex-rollout-list";
+const CODEX_ROLLOUT_PREVIEW_CHANNEL = "anycode:codex-rollout-preview";
+const CODEX_ROLLOUT_IMPORT_CHANNEL = "anycode:codex-rollout-import";
 // TASK.45 W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
 // (main/settings-ipc.ts) persists a real request outcome's advisory health
 // deliberately WITHOUT firing the normal `onMutation` broadcast (health must
@@ -261,12 +267,63 @@ export interface CodexManifestRefreshResult {
   supportedRange: string;
 }
 
+// TASK.52 (codex-profiles cut §8.8): duplicated from main/codex-rollout-ipc.ts's
+// own `CodexRolloutEntry`/`CodexRolloutListResult`/`CodexRolloutPreviewResult`/
+// `CodexRolloutImportResult` (same "shared/** froze read-only after C0"
+// reasoning as every other Codex shape above). `CodexRolloutImportReportView`
+// is a DELIBERATELY NARROWER duplicate of main's own `RolloutImportReport`
+// (main/codex-rollout.ts): it omits `items` (`HistoryItem[]`, an
+// `@anycode/core` type this sandboxed CJS bundle never imports) — the
+// renderer only ever displays the preview's stats/warnings/meta, never the
+// raw imported history, which reaches its tab the same way any other
+// resumed session's history does (the normal `session_history` wire message,
+// not this preview channel).
+export interface CodexRolloutEntry {
+  fileName: string;
+  sizeBytes: number;
+  mtimeMs: number;
+  cwd?: string;
+  firstUserMessage?: string;
+}
+
+export type CodexRolloutListResult =
+  | { ok: true; rollouts: CodexRolloutEntry[] }
+  | { ok: false; reason: "profile_not_found" | "not_readable" };
+
+export interface CodexRolloutImportStats {
+  messages: number;
+  toolPairs: number;
+  reasoningDropped: number;
+  developerDropped: number;
+  imagesDropped: number;
+  orphansSynthesized: number;
+  collapsedToText: number;
+  malformedLines: number;
+  unknownRecordsSkipped: number;
+  unknownItemsSkipped: number;
+  unknownPartsSkipped: number;
+}
+
+export interface CodexRolloutImportReportView {
+  stats: CodexRolloutImportStats;
+  meta: { cwd?: string; cliVersion?: string; model?: string; startedAt?: string };
+  warnings: string[];
+}
+
+export type CodexRolloutPreviewResult =
+  | { ok: true; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" };
+
+export type CodexRolloutImportResult =
+  | { ok: true; sessionId: string; workspace: string; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" };
+
 // TASK.54 (cut §9.2/§13.1): duplicated from main/provider-ipc.ts's own
 // `CustomProviderMutationResult`/`FetchModelsOutcome`/handle*-request shapes
 // (same "shared/** froze read-only after C0" reasoning as the Codex shapes
 // above). `CustomProviderRecord` itself IS a frozen shared/** type, imported
 // above.
-export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "weak_storage_needs_consent";
+export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "needs_api_key" | "weak_storage_needs_consent";
 export type CustomProviderMutationResult =
   | { ok: true; providers: CustomProviderRecord[] }
   | { ok: false; reason: CustomProviderMutationReason };
@@ -418,6 +475,18 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_SUPPORT_STATUS_CHANNEL) as Promise<CodexSupportStatusResult>,
     manifestRefresh: (): Promise<CodexManifestRefreshResult> =>
       ipcRenderer.invoke(CODEX_MANIFEST_REFRESH_CHANNEL) as Promise<CodexManifestRefreshResult>,
+    // TASK.52 (cut §8.8): the rollout-import control plane — a profile's
+    // sessions dir is resolved main-side from `profileId` alone, never a
+    // renderer-supplied path (`main/codex-rollout-ipc.ts`'s own path custody).
+    // `rolloutImport`'s `model` is the ONE piece of new-session identity the
+    // renderer supplies — the whole point of the feature is continuing an
+    // imported conversation on a different model (cut §8.8).
+    rolloutList: (profileId: string): Promise<CodexRolloutListResult> =>
+      ipcRenderer.invoke(CODEX_ROLLOUT_LIST_CHANNEL, { profileId }) as Promise<CodexRolloutListResult>,
+    rolloutPreview: (profileId: string, fileName: string): Promise<CodexRolloutPreviewResult> =>
+      ipcRenderer.invoke(CODEX_ROLLOUT_PREVIEW_CHANNEL, { profileId, fileName }) as Promise<CodexRolloutPreviewResult>,
+    rolloutImport: (profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult> =>
+      ipcRenderer.invoke(CODEX_ROLLOUT_IMPORT_CHANNEL, { profileId, fileName, model }) as Promise<CodexRolloutImportResult>,
   },
   settings: {
     get: (): Promise<SettingsSnapshot> =>
