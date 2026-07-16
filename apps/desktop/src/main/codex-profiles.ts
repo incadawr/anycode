@@ -207,14 +207,23 @@ function assertAuthLink(homeDir: string, target: string, fs: CodexProfileFs): Co
   let entry: ReturnType<CodexProfileFs["lstat"]>;
   try {
     entry = fs.lstat(linkPath);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      // A non-ENOENT lstat failure (e.g. EACCES) is not the "nothing there
+      // yet" case row 1 covers — treating it as such would silently recreate
+      // a link over a path we can't actually see. Fail-closed instead.
+      return {
+        ok: false,
+        reason: `failed to stat the auth.json link: ${(error as NodeJS.ErrnoException).code ?? "unknown"} ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
     // Row 1 — ENOENT: idempotent re-assert recreates the link. A dangling
     // TARGET is not our concern (codex itself will report signed_out).
     try {
       fs.symlink(target, linkPath);
       return { ok: true };
-    } catch (error) {
-      return { ok: false, reason: `failed to create the auth.json link: ${error instanceof Error ? error.message : String(error)}` };
+    } catch (symlinkError) {
+      return { ok: false, reason: `failed to create the auth.json link: ${symlinkError instanceof Error ? symlinkError.message : String(symlinkError)}` };
     }
   }
   if (entry.isSymbolicLink()) {
@@ -247,19 +256,21 @@ function assertAuthLink(homeDir: string, target: string, fs: CodexProfileFs): Co
   return { ok: false, reason: "auth.json in the profile home is not a file or symlink" };
 }
 
+export interface CodexProfileHomePreflightOptions extends AssertCodexProfileHomeOptions {
+  /** Skips the §A1.2 auth.json assert — for a caller (repairLink) that is about to fix that very link itself. */
+  skipAuthLinkAssert?: boolean;
+}
+
 /**
- * Idempotent pre-spawn re-assert of a profile home (amended §A2): the home
- * exists (recreated if deleted), is mode 0700 (chmod'ed when ours), passes
- * the §2.5 trust policy, and its auth.json link matches the §A1.2 table.
- * Runs before EVERY doctor/login/app-server spawn, same TOCTOU narrative as
- * the binary trust gate. For a linkedHome: nothing is created or repaired —
- * diagnose and refuse only. For system: a no-op by definition.
- *
- * Fail-closed: `{ok:false}` means status `error` and NO spawn.
+ * The reusable home pre-flight shared by `assertCodexProfileHome` and the
+ * explicit repair action (H3): creates a missing own home (mode 0700), then
+ * runs the §2.5 trust policy. Neither `assertCodexProfileHome` callers nor
+ * `repairLink` may touch `auth.json` on a home that fails this — trust is
+ * checked BEFORE any credential-link mutation, not after.
  */
-export function assertCodexProfileHome(
+function preflightCodexProfileHome(
   profile: ResolvedCodexProfile,
-  options: AssertCodexProfileHomeOptions = {},
+  options: CodexProfileHomePreflightOptions = {},
 ): CodexProfileGuardResult {
   if (profile.codexHome === undefined) return { ok: true };
   const fs = options.fs ?? nodeProfileFs;
@@ -284,10 +295,27 @@ export function assertCodexProfileHome(
     return { ok: false, reason: untrusted };
   }
 
-  if (profile.authLink !== undefined) {
+  if (!options.skipAuthLinkAssert && profile.authLink !== undefined) {
     return assertAuthLink(profile.codexHome, profile.authLink, fs);
   }
   return { ok: true };
+}
+
+/**
+ * Idempotent pre-spawn re-assert of a profile home (amended §A2): the home
+ * exists (recreated if deleted), is mode 0700 (chmod'ed when ours), passes
+ * the §2.5 trust policy, and its auth.json link matches the §A1.2 table.
+ * Runs before EVERY doctor/login/app-server spawn, same TOCTOU narrative as
+ * the binary trust gate. For a linkedHome: nothing is created or repaired —
+ * diagnose and refuse only. For system: a no-op by definition.
+ *
+ * Fail-closed: `{ok:false}` means status `error` and NO spawn.
+ */
+export function assertCodexProfileHome(
+  profile: ResolvedCodexProfile,
+  options: AssertCodexProfileHomeOptions = {},
+): CodexProfileGuardResult {
+  return preflightCodexProfileHome(profile, options);
 }
 
 /**
@@ -498,6 +526,15 @@ export function createCodexProfilesRegistry(deps: CodexProfilesRegistryDeps): Co
       const resolution = resolveCodexProfile(record, home);
       if (!resolution.ok) {
         return { ok: false, reason: resolution.reason };
+      }
+      // H3: the same trust gate every spawn re-asserts, run BEFORE the
+      // repair mutates auth.json — a home that fails trust gets no rm/symlink
+      // at all, not even the "explicit user action" one. The §A1.2 assert
+      // itself is skipped here: it would refuse the very state repair exists
+      // to fix.
+      const preflight = preflightCodexProfileHome(resolution.profile, { ...guardOptions, skipAuthLinkAssert: true });
+      if (!preflight.ok) {
+        return preflight;
       }
       return repairCodexAuthLink(resolution.profile, fs);
     },

@@ -1174,7 +1174,15 @@ void app.whenReady().then(async () => {
   });
   setActiveCodexVersionPolicy({ riskAcceptedVersions: settings?.codex?.riskAcceptedVersions ?? [] });
   void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(), "manifest.json") })
-    .then((result) => setActiveCodexVersionPolicy({ manifest: result.manifest }))
+    .then((result) => {
+      // BM4: only an ACTUAL policy change re-spawns the doctor — an
+      // identical manifest (the common case: cache hit, no-op refresh)
+      // leaves whatever readiness the boot-time recheck already established.
+      const changed = setActiveCodexVersionPolicy({ manifest: result.manifest });
+      if (changed) {
+        void codexOnboarding?.recheck().catch(() => {});
+      }
+    })
     .catch(() => {});
 
   // Rollout import control plane (TASK.52, cut §8): list/preview/import a

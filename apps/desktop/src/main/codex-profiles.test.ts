@@ -1,4 +1,17 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -17,6 +30,7 @@ import {
   isValidCodexProfileId,
   repairCodexAuthLink,
   resolveCodexProfile,
+  type CodexProfileFs,
   type ResolvedCodexProfile,
 } from "./codex-profiles.js";
 
@@ -292,6 +306,40 @@ describe("assertCodexProfileHome (idempotent pre-spawn re-assert, amended §A2 +
     expect(assertCodexProfileHome(profile)).toEqual({ ok: true });
     expect(existsSync(join(profile.codexHome as string, "auth.json"))).toBe(false);
   });
+
+  it("L1: a non-ENOENT lstat failure (EACCES) refuses instead of silently recreating the link", () => {
+    const home = freshHome();
+    const target = join(home, "fake-auth-target.json");
+    writeFileSync(target, "{}");
+    const profile = ownProfile(home, "main", target);
+    const homeDir = profile.codexHome as string;
+    mkdirSync(homeDir, { recursive: true, mode: 0o700 });
+    const linkPath = join(homeDir, "auth.json");
+    let symlinkCalled = false;
+    const fs: CodexProfileFs = {
+      lstat: (path) => {
+        if (path === linkPath) {
+          const error = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        return lstatSync(path);
+      },
+      stat: (path) => statSync(path),
+      realpath: (path) => realpathSync(path),
+      chmod: (path, mode) => chmodSync(path, mode),
+      mkdir: (path, options) => mkdirSync(path, options),
+      readlink: (path) => readlinkSync(path),
+      symlink: (target_, path) => {
+        symlinkCalled = true;
+        symlinkSync(target_, path);
+      },
+      rm: (path, options) => rmSync(path, options),
+    };
+    const verdict = assertCodexProfileHome(profile, { fs });
+    expect(verdict.ok).toBe(false);
+    expect(symlinkCalled).toBe(false);
+  });
 });
 
 describe("repairCodexAuthLink (explicit 'Пересоздать связь' — an IPC action, never automatic)", () => {
@@ -485,5 +533,60 @@ describe("createCodexProfilesRegistry (settings-backed, cut §2.3 + §4.3 cap)",
     const profiles = codex().profiles ?? [];
     expect(profiles.find((profile) => profile.id === "a")?.lastCheck?.status).toBe("ready");
     expect(profiles.find((profile) => profile.id === "b")?.lastCheck).toBeUndefined();
+  });
+
+  it("H3: repairLink refuses when the profile home fails the trust guard, WITHOUT touching auth.json", async () => {
+    const home = freshHome();
+    const id = "acc1";
+    const homeDir = codexProfileHome(id, home);
+    const target = join(home, "fake-auth-target.json");
+    const calls: string[] = [];
+    // A minimal fake: the home path lstat's as a SYMLINK, which the §2.5 trust
+    // policy refuses outright for an owned home — nothing past that point
+    // (realpath/stat/readlink/symlink/rm) should ever be reached.
+    const fs: CodexProfileFs = {
+      lstat: (path) => {
+        calls.push(`lstat:${path}`);
+        if (path === homeDir) {
+          return { isDirectory: () => false, isSymbolicLink: () => true, mode: 0o700, uid: 0 };
+        }
+        throw new Error(`unexpected lstat ${path}`);
+      },
+      stat: (path) => {
+        calls.push(`stat:${path}`);
+        throw new Error(`unexpected stat ${path}`);
+      },
+      realpath: (path) => {
+        calls.push(`realpath:${path}`);
+        throw new Error(`unexpected realpath ${path}`);
+      },
+      chmod: (path) => {
+        calls.push(`chmod:${path}`);
+      },
+      mkdir: (path) => {
+        calls.push(`mkdir:${path}`);
+      },
+      readlink: (path) => {
+        calls.push(`readlink:${path}`);
+        throw new Error(`unexpected readlink ${path}`);
+      },
+      symlink: (_target, path) => {
+        calls.push(`symlink:${path}`);
+      },
+      rm: (path) => {
+        calls.push(`rm:${path}`);
+      },
+    };
+    const registry = createCodexProfilesRegistry({
+      readCodex: async () => ({ profiles: [{ id, label: "Acc", createdAt: "2026-07-16T00:00:00.000Z", authLink: target }] }),
+      writeCodex: async () => undefined,
+      home,
+      fs,
+    });
+
+    const result = await registry.repairLink(id);
+    expect(result.ok).toBe(false);
+    expect(calls.some((call) => call.startsWith("rm:"))).toBe(false);
+    expect(calls.some((call) => call.startsWith("symlink:"))).toBe(false);
   });
 });

@@ -543,14 +543,17 @@ function projectQuotaSnapshot(raw: unknown, observedAt: string): Omit<CodexRateL
 
 /**
  * Projects a `GetAccountRateLimitsResponse` into the frozen shared type
- * (`byLimitId` preferred at read time, top level kept as the backward-compat
- * mirror — amended §A3.3). Exported for tests. Returns undefined when the
- * response carries nothing recognizable.
+ * (amended §A3.3, M2b-aligned with the host decoder — quota.ts
+ * `decodeAccountRateLimitsRead`): a SINGLE bucket in `byLimitId` is
+ * canonical and supplies the top-level primary/secondary; the top-level
+ * `rateLimits` mirror is the fallback, used when the map is absent/empty OR
+ * when several buckets exist (no single bucket is canonical then). The full
+ * map is always carried in `byLimitId` regardless. Exported for tests.
+ * Returns undefined when the response carries nothing recognizable.
  */
 export function projectCodexRateLimits(raw: unknown, observedAt: string): CodexRateLimits | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const source = raw as { rateLimits?: unknown; rateLimitsByLimitId?: unknown };
-  const base = projectQuotaSnapshot(source.rateLimits, observedAt);
   let byLimitId: Record<string, Omit<CodexRateLimits, "byLimitId">> | undefined;
   if (typeof source.rateLimitsByLimitId === "object" && source.rateLimitsByLimitId !== null) {
     for (const [limitId, bucket] of Object.entries(source.rateLimitsByLimitId as Record<string, unknown>)) {
@@ -561,6 +564,8 @@ export function projectCodexRateLimits(raw: unknown, observedAt: string): CodexR
       }
     }
   }
+  const bucketIds = byLimitId !== undefined ? Object.keys(byLimitId) : [];
+  const base = bucketIds.length === 1 ? byLimitId![bucketIds[0]!]! : projectQuotaSnapshot(source.rateLimits, observedAt);
   if (base === null && byLimitId === undefined) return undefined;
   return { ...(base ?? { observedAt }), ...(byLimitId !== undefined ? { byLimitId } : {}) };
 }

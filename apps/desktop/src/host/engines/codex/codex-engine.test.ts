@@ -187,6 +187,8 @@ class FakeAppServer implements CodexClient {
   private rejectedInterrupts = 0;
   private acceptedInterrupts = 0;
   account: unknown = { type: "chatgpt" };
+  /** Undefined = the field is absent on the wire, matching most live responses. */
+  requiresOpenaiAuth: boolean | undefined = undefined;
   /**
    * Catalog pages, keyed by cursor ("" = first page). Modelled on the LIVE
    * `model/list` result (fixture w1-p4): `{data:[Model…], nextCursor}`, where each
@@ -304,7 +306,12 @@ class FakeAppServer implements CodexClient {
   }
 
   private answer<T>(method: string, params?: unknown): Promise<T> {
-    if (method === "account/read") return Promise.resolve({ account: this.account } as T);
+    if (method === "account/read") {
+      return Promise.resolve({
+        account: this.account,
+        ...(this.requiresOpenaiAuth !== undefined ? { requiresOpenaiAuth: this.requiresOpenaiAuth } : {}),
+      } as T);
+    }
     if (method === "account/rateLimits/read") {
       if (this.rateLimitsReadFails) return Promise.reject(new Error("app-server request failed: rate limits unavailable"));
       return Promise.resolve(this.rateLimitsResult as T);
@@ -454,6 +461,21 @@ describe("CodexEngine — native session boot", () => {
     server.account = null;
     await expect(createNativeCodexSession(server, "/work")).rejects.toThrow(CODEX_NOT_SIGNED_IN);
     expect(server.calls.map((call) => call.method)).toEqual(["initialize", "account/read"]);
+  });
+
+  it("H4: a null account with requiresOpenaiAuth:false is a READY api-key/bedrock profile (doctor row 7), not signed-out", async () => {
+    const server = new FakeAppServer();
+    server.account = null;
+    server.requiresOpenaiAuth = false;
+    const created = await createNativeCodexSession(server, "/work");
+    expect(created).toMatchObject({ threadId: "fresh-thread" });
+  });
+
+  it("H4: a null account WITHOUT requiresOpenaiAuth still refuses (row 8, fail-closed)", async () => {
+    const server = new FakeAppServer();
+    server.account = null;
+    server.requiresOpenaiAuth = undefined;
+    await expect(createNativeCodexSession(server, "/work")).rejects.toThrow(CODEX_NOT_SIGNED_IN);
   });
 
   it("bounds every boot RPC and surfaces a comprehensible timeout", async () => {
