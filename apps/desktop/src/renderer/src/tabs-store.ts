@@ -75,6 +75,14 @@ export interface SessionDraft {
    * Never read for a Core draft.
    */
   enginePreset?: string;
+  /**
+   * Codex account-profile pick for a new session (codex-profiles cut §3.3,
+   * W3-F) — an opaque id from main's profile registry. Absent until the user
+   * touches the chip (mirrors `enginePreset`'s "unset in this slice"
+   * convention): absent ⇒ the `system` pseudo-profile (today's ambient
+   * CODEX_HOME, unchanged). Never read for a Core draft.
+   */
+  codexProfileId?: string;
 }
 
 export interface TabsState {
@@ -123,6 +131,8 @@ export interface TabsState {
   setDraftMode(mode: PermissionMode): void;
   /** No-op while `draft === null`. Codex-only; a Core draft never calls this. */
   setDraftEnginePreset(presetId: string): void;
+  /** No-op while `draft === null`. Codex-only; a Core draft never calls this. */
+  setDraftCodexProfileId(profileId: string): void;
   /** Discards the draft entirely (Cancel affordance / successful submit). */
   discardDraft(): void;
   setSessionId(tabId: string, sessionId: string): void;
@@ -293,6 +303,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
           model: state.draft?.model ?? null,
           mode: state.draft?.mode ?? "build",
           ...(state.draft?.enginePreset !== undefined ? { enginePreset: state.draft.enginePreset } : {}),
+          ...(state.draft?.codexProfileId !== undefined ? { codexProfileId: state.draft.codexProfileId } : {}),
         },
         draftActive: true,
       }));
@@ -320,6 +331,10 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftEnginePreset(presetId): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, enginePreset: presetId } }));
+    },
+
+    setDraftCodexProfileId(profileId): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, codexProfileId: profileId } }));
     },
 
     discardDraft(): void {

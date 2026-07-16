@@ -76,7 +76,7 @@ import {
 import type { ProviderHealthEvent } from "../shared/provider-health.js";
 import { TabHostManager, createPinReservations } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
-import { registerTabIpc } from "./tab-ipc.js";
+import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
@@ -767,6 +767,40 @@ async function resolveResumePin(meta: {
 }
 
 /**
+ * Resolves an opaque Codex profile id — a new tab's draft pick, or a resumed
+ * session's persisted `codexProfileId` — against the profile registry
+ * (codex-profiles cut §3.3, W3-F) into the argv facts main/tabs.ts forwards.
+ * `system` (never persisted as a real record) is the one deliberate ambient
+ * case: `{ok:true}` with no `codexProfile` at all, byte-identical to today's
+ * behaviour. Any OTHER id absent from the registry refuses `{ok:false}`
+ * fail-closed — a deleted/renamed real profile must never silently fall back
+ * to the ambient account (same custody rule as `resolveResumePin`'s
+ * connection refusal above).
+ */
+async function resolveCodexProfileForTab(profileId: string): Promise<ResolveCodexProfileResult> {
+  if (profileId === SYSTEM_PROFILE_ID) {
+    return { ok: true };
+  }
+  const record = settings?.codex?.profiles?.find((profile) => profile.id === profileId);
+  if (record === undefined) {
+    return { ok: false };
+  }
+  const resolution = resolveCodexProfile(record);
+  if (!resolution.ok || resolution.profile.codexHome === undefined) {
+    return { ok: false };
+  }
+  const { profile } = resolution;
+  return {
+    ok: true,
+    codexProfile: {
+      id: profile.id,
+      ...(profile.linked ? { home: profile.codexHome } : {}),
+      ...(profile.authLink !== undefined ? { authLink: profile.authLink } : {}),
+    },
+  };
+}
+
+/**
  * Launches an explicit initial tab. Resolves the session from a parked resume id
  * or ANYCODE_WORKSPACE; normal GUI launch no longer prompts here. `deliverNow`
  * posts the port immediately (the deferred flow runs after did-finish-load, which
@@ -799,6 +833,10 @@ async function startInitialTab(opts: {
   // W10-FIX F3: released once the tab is registered (or on any early return) so
   // the resume/delete reservation never outlives the window it guards.
   let releasePin: (() => void) | undefined;
+  // Codex-profiles W3-F: the initial (app-launch) resume re-resolves the
+  // session's persisted profile too, same fail-closed rule as the tab-ipc.ts
+  // resume branch — undefined for a legacy/system session (ambient CODEX_HOME).
+  let codexProfileParam: { id?: string; home?: string; authLink?: string } | undefined;
   if (resumed !== null) {
     const pin = await resolveResumePin(resumed);
     if (!pin.ok) {
@@ -806,6 +844,17 @@ async function startInitialTab(opts: {
         `[main] session ${resumed.id} is pinned to a deleted connection (${pin.connectionId}); not auto-resuming — choose a replacement in the session picker`,
       );
       return;
+    }
+    if (resumed.codexProfileId !== undefined) {
+      const resolvedProfile = await resolveCodexProfileForTab(resumed.codexProfileId);
+      if (!resolvedProfile.ok) {
+        console.warn(
+          `[main] session ${resumed.id} is pinned to a missing Codex profile (${resumed.codexProfileId}); not auto-resuming`,
+        );
+        pin.release?.();
+        return;
+      }
+      codexProfileParam = resolvedProfile.codexProfile;
     }
     workspace = resumed.workspace;
     sessionId = resumed.id;
@@ -837,6 +886,7 @@ async function startInitialTab(opts: {
       sessionId,
       resume,
       ...(connectionId !== undefined ? { connectionId } : {}),
+      ...(codexProfileParam !== undefined ? { codexProfile: codexProfileParam } : {}),
     });
     if (!created.ok) {
       console.error(`[main] failed to create initial tab: ${created.reason}`);
@@ -1051,6 +1101,7 @@ void app.whenReady().then(async () => {
     // one re-pins to its stored connection (or refuses `connection_missing`).
     activeConnectionId: () => settings?.provider.activeConnectionId,
     resolveResumePin,
+    resolveCodexProfile: resolveCodexProfileForTab,
     validateWorktreeResume: async (meta) => {
       if (meta.worktree === undefined || meta.projectRoot === undefined) return false;
       try {
