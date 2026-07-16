@@ -121,6 +121,7 @@ import type {
   ConnectionDeleteRequest,
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
+  CustomProviderRecord,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -196,6 +197,14 @@ const CODEX_MANIFEST_REFRESH_CHANNEL = "anycode:codex-manifest-refresh";
 // "duplicated on purpose" precedent as `ENGINES_CHANGED_CHANNEL` above
 // (main/index.ts holds the byte-identical source of truth).
 const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
+// TASK.54 (cut §9.2/§13.1): the custom OpenAI-compatible model-provider CRUD
+// + guarded models-fetch channels — main/provider-ipc.ts holds the
+// byte-identical source of truth, same "duplicated on purpose" convention as
+// every other channel literal in this file.
+const CUSTOM_PROVIDER_CREATE_CHANNEL = "anycode:custom-provider-create";
+const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";
+const CUSTOM_PROVIDER_DELETE_CHANNEL = "anycode:custom-provider-delete";
+const CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL = "anycode:custom-provider-fetch-models";
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
@@ -250,6 +259,45 @@ export interface CodexSupportStatusResult {
 export interface CodexManifestRefreshResult {
   source: "network" | "cache" | "bundled";
   supportedRange: string;
+}
+
+// TASK.54 (cut §9.2/§13.1): duplicated from main/provider-ipc.ts's own
+// `CustomProviderMutationResult`/`FetchModelsOutcome`/handle*-request shapes
+// (same "shared/** froze read-only after C0" reasoning as the Codex shapes
+// above). `CustomProviderRecord` itself IS a frozen shared/** type, imported
+// above.
+export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "weak_storage_needs_consent";
+export type CustomProviderMutationResult =
+  | { ok: true; providers: CustomProviderRecord[] }
+  | { ok: false; reason: CustomProviderMutationReason };
+
+export type FetchModelsFailureReason =
+  | "invalid_request"
+  | "invalid_url"
+  | "redirect_blocked"
+  | "http_error"
+  | "response_too_large"
+  | "timeout"
+  | "network_error"
+  | "invalid_response";
+
+export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
+
+export interface CustomProviderCreateRequest {
+  name: string;
+  baseUrl: string;
+  kind: CustomProviderRecord["kind"];
+  apiKey: string;
+  models?: string[];
+}
+
+export interface CustomProviderUpdateRequest {
+  id: string;
+  name?: string;
+  baseUrl?: string;
+  kind?: CustomProviderRecord["kind"];
+  apiKey?: string;
+  models?: string[];
 }
 
 // §3.1: forward the main-side payload as-is. The port envelope carries
@@ -424,6 +472,25 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.on(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
       return () => ipcRenderer.removeListener(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
     },
+  },
+  // TASK.54 (cut §9.2/§13.1): `customProvider.*` — four thin invoke wrappers
+  // over the custom OpenAI-compatible model-provider CRUD + guarded
+  // `/v1/models` preview fetch (main owns the URL/redirect/body-cap threat
+  // model + vault custody in main/provider-ipc.ts). No credential ever
+  // crosses back — every result carries only the persisted record (never a
+  // key); `create`/`update` are the only two directions a plaintext key ever
+  // travels, main-bound, exactly once per call.
+  customProvider: {
+    create: (req: CustomProviderCreateRequest): Promise<CustomProviderMutationResult> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_CREATE_CHANNEL, req) as Promise<CustomProviderMutationResult>,
+    update: (req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_UPDATE_CHANNEL, req) as Promise<CustomProviderMutationResult>,
+    delete: (req: { id: string }): Promise<CustomProviderMutationResult> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_DELETE_CHANNEL, req) as Promise<CustomProviderMutationResult>,
+    fetchModels: (
+      req: { id: string } | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
+    ): Promise<FetchModelsOutcome> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, req) as Promise<FetchModelsOutcome>,
   },
   // P7.19/F22 W2 (design/slice-P7.19-cut.md §3/§4): `mcpConfig.*` — five more
   // thin invoke wrappers over the MCP config-management channels (main owns
