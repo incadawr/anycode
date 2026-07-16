@@ -435,7 +435,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   // aborts the boot rather than silently running on the ambient account) and
   // derives the CODEX_HOME the child receives. null = the `system`
   // pseudo-profile: no env override, no guard, byte-identical old behaviour.
-  const codexProfile = resolveCodexProfile(parseCodexProfileArgs(process.argv.slice(2)));
+  // The raw args are kept: `profileId` is persisted into the session row at
+  // the create seam below (Q1.3) so a cross-restart resume re-resolves it.
+  const codexProfileArgs = parseCodexProfileArgs(process.argv.slice(2));
+  const codexProfile = resolveCodexProfile(codexProfileArgs);
   if (codexProfile !== null) {
     // First assert runs eagerly so a broken home fails the boot with its own
     // diagnostic; the SAME closure is then re-run by AppServerClient before
@@ -527,6 +530,13 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           mode: created.presetId as PermissionMode,
           engineId: "codex",
           externalSessionRef: created.threadId,
+          // Codex-profiles Q1.3 (cut §3.3, completes W3-F): pin the profile id
+          // this session was created under, so a cross-restart resume
+          // re-resolves THIS profile's CODEX_HOME (main/index.ts's fail-closed
+          // re-resolve reads it back). Absent for the `system` pseudo-profile
+          // and bare --codex-home spawns — the row stays byte-identical to a
+          // pre-profiles build there.
+          ...(codexProfileArgs.profileId !== undefined ? { codexProfileId: codexProfileArgs.profileId } : {}),
         });
         return { ...created, sessionMeta };
       })());

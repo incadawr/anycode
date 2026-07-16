@@ -357,6 +357,145 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT emission rule (TASK.43 W5-
   });
 });
 
+describe("buildHostEnv — custom-provider route (F-G-B, cut §9.2)", () => {
+  /** Vault fake that records EVERY key it is asked for (custody assertions below). */
+  function recordingVault(secrets: Record<string, string>) {
+    const reads: string[] = [];
+    const getSecret = async (key: SecretKey): Promise<string | undefined> => {
+      reads.push(key);
+      return secrets[key];
+    };
+    return { getSecret, reads };
+  }
+
+  /** Settings with ONE active connection at `custom:abc` + its custom record (unless `record: false`). */
+  function customSettings(over: { record?: boolean; kind?: "openai-compatible" | "anthropic" | "openai"; transport?: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; connectionBaseUrl?: string } = {}): AnycodeSettings {
+    const s = settings({
+      provider: {
+        id: "custom:abc",
+        model: "my-model",
+        ...(over.transport !== undefined ? { transport: over.transport } : {}),
+        ...(over.connectionBaseUrl !== undefined ? { baseUrl: over.connectionBaseUrl } : {}),
+      },
+    });
+    if (over.record !== false) {
+      s.provider.custom = [
+        {
+          id: "custom:abc",
+          name: "My endpoint",
+          baseUrl: "https://llm.example.com/v1",
+          kind: over.kind ?? "openai-compatible",
+          models: ["my-model"],
+        },
+      ];
+    }
+    return s;
+  }
+
+  it("RED-PROOF (a): a custom:* connection carries the RECORD's baseUrl and the per-provider vault secret — never the legacy/connection credential", async () => {
+    const vault = recordingVault({ "provider.custom:abc.apiKey": "sk-custom" });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings(),
+      getSecret: vault.getSecret,
+      // A rollback to the legacy branch would take THIS credential (the active
+      // connection's key) and an EMPTY baseUrl — both asserts below go red.
+      resolveActiveCredential: async () => "sk-connection",
+    });
+    expect(env.ANYCODE_BASE_URL).toBe("https://llm.example.com/v1");
+    expect(env.ANYCODE_API_KEY).toBe("sk-custom");
+    expect(env.ANYCODE_MODEL).toBe("my-model");
+    // Custom providers are api_key by construction — never the oauth flag.
+    expect(env.ANYCODE_AUTH_MODE).toBeUndefined();
+    expect(vault.reads).toContain("provider.custom:abc.apiKey");
+  });
+
+  it("the record's baseUrl wins VERBATIM even when the connection carries its own baseUrl", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings({ connectionBaseUrl: "https://connection-level.example.com" }),
+      getSecret: recordingVault({ "provider.custom:abc.apiKey": "sk-custom" }).getSecret,
+    });
+    expect(env.ANYCODE_BASE_URL).toBe("https://llm.example.com/v1");
+  });
+
+  it("ONE shared provider key serves every connection of the provider — the connection-scoped key namespace is never consulted", async () => {
+    const vault = recordingVault({ "provider.custom:abc.apiKey": "sk-custom" });
+    const s = customSettings();
+    // Second connection of the SAME custom provider, made active: still the
+    // one `provider.custom:abc.apiKey` (design §9.2 — key per provider, not
+    // per connection).
+    s.provider.connections.push({ id: "conn-second", providerId: "custom:abc", model: "my-model" });
+    s.provider.activeConnectionId = "conn-second";
+    const env = await buildHostEnv({ bootEnv: {}, settings: s, getSecret: vault.getSecret });
+    expect(env.ANYCODE_API_KEY).toBe("sk-custom");
+    expect(vault.reads).toContain("provider.custom:abc.apiKey");
+    expect(vault.reads.filter((key) => key.startsWith("provider.connection."))).toEqual([]);
+  });
+
+  it("RED-PROOF (b): a DELETED record fails closed — keyless, baseUrl-less, and NEITHER the bare legacy key NOR the connection credential is ever read", async () => {
+    const vault = recordingVault({ "provider.apiKey": "sk-legacy" });
+    let activeCredentialCalls = 0;
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings({ record: false }),
+      getSecret: vault.getSecret,
+      // Restoring the legacy fallback would call this (or the bare
+      // `provider.apiKey` read) and boot the fork on ANOTHER account's
+      // credential — every assert below goes red against that.
+      resolveActiveCredential: async () => {
+        activeCredentialCalls += 1;
+        return "sk-connection";
+      },
+    });
+    expect(env.ANYCODE_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_BASE_URL).toBeUndefined();
+    expect(vault.reads).not.toContain("provider.apiKey");
+    expect(activeCredentialCalls).toBe(0);
+    // The custom route is decided by the id PREFIX, so the deleted-record case
+    // must not have fallen through to resolveSelection/legacy either: the only
+    // vault read permitted at all is the provider's own (absent) key.
+    expect(vault.reads.every((key) => key === "provider.custom:abc.apiKey")).toBe(true);
+  });
+
+  it("kind 'openai-compatible' mirrors the openrouter/vllm-family default: ANYCODE_PROVIDER_TRANSPORT=openai-chat-completions", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: customSettings(), getSecret: noSecret });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-chat-completions");
+  });
+
+  it("kind 'openai' mirrors the builtin openai entry's default: openai-responses", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: customSettings({ kind: "openai" }), getSecret: noSecret });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-responses");
+  });
+
+  it("kind 'anthropic' mirrors the anthropic-family emission rule: the var stays ABSENT", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: customSettings({ kind: "anthropic" }), getSecret: noSecret });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBeUndefined();
+  });
+
+  it("an explicit connection transport still wins over the kind-implied default (same ladder as builtin entries)", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings({ transport: "openai-responses" }),
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-responses");
+  });
+
+  it("the builtin `custom` SENTINEL (bare literal, no colon) keeps the legacy branch untouched", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", baseUrl: "https://legacy-base.example.com" } }),
+      getSecret: noSecret,
+      resolveActiveCredential: async () => "sk-connection",
+    });
+    // The prefix check must not overreach onto the sentinel: connection
+    // baseUrl + connection credential, byte-for-byte the pre-F-G-B path.
+    expect(env.ANYCODE_BASE_URL).toBe("https://legacy-base.example.com");
+    expect(env.ANYCODE_API_KEY).toBe("sk-connection");
+  });
+});
+
 describe("resolveEffectiveTransport — the ONE transport ladder authority (TASK.43 W5-FIX)", () => {
   it("nonblank env wins over settings and default (source env)", () => {
     expect(
