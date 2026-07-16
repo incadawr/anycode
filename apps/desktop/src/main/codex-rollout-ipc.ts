@@ -25,6 +25,7 @@
  */
 
 import { ipcMain } from "electron";
+import { constants as fsConstants } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -99,7 +100,7 @@ function importOptions(deps: CodexRolloutIpcDeps): ImportCodexRolloutOptions {
 async function peekRolloutMeta(path: string): Promise<{ cwd?: string; firstUserMessage?: string }> {
   let head = "";
   try {
-    const handle = await fsp.open(path, "r");
+    const handle = await fsp.open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     try {
       const buffer = Buffer.alloc(HEAD_PEEK_BYTES);
       const { bytesRead } = await handle.read(buffer, 0, HEAD_PEEK_BYTES, 0);
@@ -185,8 +186,8 @@ export async function handleCodexRolloutList(deps: CodexRolloutIpcDeps, raw: unk
   const rollouts: CodexRolloutEntry[] = [];
   for (const fileName of fileNames) {
     const fullPath = join(sessionsDir, fileName);
-    const stat = await fsp.stat(fullPath).catch(() => null);
-    if (stat === null) continue;
+    const stat = await fsp.lstat(fullPath).catch(() => null);
+    if (stat === null || !stat.isFile()) continue;
     const peek = await peekRolloutMeta(fullPath);
     rollouts.push({ fileName, sizeBytes: stat.size, mtimeMs: stat.mtimeMs, ...peek });
   }
@@ -204,12 +205,18 @@ async function readAndImport(
   const sessionsDir = await deps.resolveProfileSessionsDir(profileId);
   if (sessionsDir === null) return { ok: false, reason: "profile_not_found" };
   const fullPath = join(sessionsDir, fileName);
-  const stat = await fsp.stat(fullPath).catch(() => null);
-  if (stat === null) return { ok: false, reason: "not_readable" };
-  if (stat.size > MAX_FILE_BYTES) return { ok: false, reason: "too_large" };
   let content: string;
   try {
-    content = await fsp.readFile(fullPath, "utf-8");
+    // O_NOFOLLOW: open fails (ELOOP) if the final path component is a symlink; fstat-ing
+    // the HANDLE (not the path) closes the swap window between the size check and the read.
+    const handle = await fsp.open(fullPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const stat = await handle.stat();
+      if (stat.size > MAX_FILE_BYTES) return { ok: false, reason: "too_large" };
+      content = await handle.readFile("utf-8");
+    } finally {
+      await handle.close();
+    }
   } catch {
     return { ok: false, reason: "not_readable" };
   }

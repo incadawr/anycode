@@ -129,9 +129,10 @@ class RolloutImporter {
   private assistantSlots: Slot[] = [];
   /** `call_id` -> index into `assistantSlots`, for calls whose result folds back INTO that same slot (collapse). */
   private readonly collapsePending = new Map<string, number>();
-  /** `call_id`s of Bash-mapped tool_call slots awaiting their `tool_result` (independent of `assistantSlots` — survives a flush). */
-  private readonly bashPending = new Set<string>();
-  private toolResults: ToolResultPart[] = [];
+  /** `call_id` -> monotone call-order seq, for Bash-mapped tool_call slots awaiting their `tool_result` (independent of `assistantSlots` — survives a flush). */
+  private readonly bashPending = new Map<string, number>();
+  private toolResults: Array<{ seq: number; part: ToolResultPart }> = [];
+  private callSeq = 0;
 
   constructor(private readonly opts: ImportCodexRolloutOptions) {}
 
@@ -139,8 +140,10 @@ class RolloutImporter {
     return `rollout-${(this.nextId++).toString().padStart(6, "0")}`;
   }
 
+  /** Untrusted-content custody: any name sourced from the rollout file itself is capped before it can inflate a warning string. */
   private noteUnknown(name: string): void {
-    this.warningCounts.set(name, (this.warningCounts.get(name) ?? 0) + 1);
+    const capped = name.length > 64 ? `${name.slice(0, 64)}…` : name;
+    this.warningCounts.set(capped, (this.warningCounts.get(capped) ?? 0) + 1);
   }
 
   private renderSlots(slots: readonly Slot[]): AssistantPart[] {
@@ -183,9 +186,10 @@ class RolloutImporter {
     this.stats.messages++;
   }
 
+  /** §8.6: batched tool results must be emitted in call order, not arrival order — sort by `seq` at flush time. */
   private flushToolResults(): void {
     if (this.toolResults.length === 0) return;
-    const content = this.toolResults;
+    const content = [...this.toolResults].sort((a, b) => a.seq - b.seq).map((entry) => entry.part);
     this.toolResults = [];
     const message: ChatMessage = { role: "tool", content };
     this.items.push({ id: this.freshId(), createdAt: this.lastTimestampMs, message });
@@ -195,8 +199,8 @@ class RolloutImporter {
   /** Hard turn boundary (a new user message, or EOF): anything still pending is genuinely interrupted, not merely mid-batch. */
   private closeOutTurn(): void {
     this.flushAssistant();
-    for (const callId of this.bashPending) {
-      this.toolResults.push({ type: "tool_result", toolCallId: callId, toolName: "Bash", text: ORPHAN_MARKER, status: "cancelled" });
+    for (const [callId, seq] of this.bashPending) {
+      this.toolResults.push({ seq, part: { type: "tool_result", toolCallId: callId, toolName: "Bash", text: ORPHAN_MARKER, status: "cancelled" } });
       this.stats.orphansSynthesized++;
     }
     this.bashPending.clear();
@@ -288,7 +292,7 @@ class RolloutImporter {
         args = {};
       }
       this.assistantSlots.push({ kind: "tool_call", toolCallId: callId, toolName: "Bash", input: { command: asString(args.cmd) } });
-      this.bashPending.add(callId);
+      this.bashPending.set(callId, this.callSeq++);
       return;
     }
     const namespace = asString(payload.namespace);
@@ -309,7 +313,7 @@ class RolloutImporter {
     const name = asString(payload.name);
     if (BASH_MAPPED_CUSTOM_NAMES.has(name)) {
       this.assistantSlots.push({ kind: "tool_call", toolCallId: callId, toolName: "Bash", input: { command: asString(payload.input) } });
-      this.bashPending.add(callId);
+      this.bashPending.set(callId, this.callSeq++);
       return;
     }
     const rawInput = typeof payload.input === "string" ? payload.input : JSON.stringify(payload.input ?? "");
@@ -340,13 +344,17 @@ class RolloutImporter {
     if (callId === "") return; // an orphaned output with no call_id at all — 0 observed, nothing sane to pair it to.
     const outputText = extractOutputText(payload.output);
     if (this.bashPending.has(callId)) {
+      const seq = this.bashPending.get(callId)!;
       this.bashPending.delete(callId);
       this.toolResults.push({
-        type: "tool_result",
-        toolCallId: callId,
-        toolName: "Bash",
-        text: truncate(outputText, this.opts.maxOutputChars),
-        status: "success",
+        seq,
+        part: {
+          type: "tool_result",
+          toolCallId: callId,
+          toolName: "Bash",
+          text: truncate(outputText, this.opts.maxOutputChars),
+          status: "success",
+        },
       });
       this.stats.toolPairs++;
       // §8.6: the FIRST output after a batch of calls flushes the assistant
@@ -385,7 +393,7 @@ class RolloutImporter {
         return;
       }
       this.stats.unknownItemsSkipped++;
-      this.noteUnknown(`message(role=${role || "?"})`);
+      this.noteUnknown("message(unsupported role)");
       return;
     }
     if (type === "reasoning") {
