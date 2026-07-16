@@ -2635,6 +2635,40 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(store.getState().notice?.kind).toBe("turn_rejected");
   });
 
+  // TASK.56 W3(e): the cut requires this exact scenario covered — a queued
+  // prompt carrying images, drained just as the model swings to a
+  // non-vision one, hits the HOST-side backstop (session.ts:1146) and comes
+  // back. P7.14's restore-to-head + pause behavior is asserted UNCHANGED;
+  // the new part is that the image payload survives the round trip intact
+  // (never dropped/mutated by the reject path).
+  it("queued prompt with images, drained then rejected after a mid-flight model switch to non-vision: restores to the head with images intact", () => {
+    const store = readyStore();
+    const image = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().enqueuePrompt({ text: "look at this", images: [image] });
+    store.getState().enqueuePrompt({ text: "next", images: [] });
+
+    const drained = store.getState().takeQueueHead("req-1");
+    expect(drained?.images).toEqual([image]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["next"]);
+
+    // The model switches to a non-vision one WHILE this item is in flight
+    // (host/index.ts re-gates on the NEXT send with the closure's current
+    // model; the renderer just mirrors the push here).
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    expect(store.getState().imageInput).toBe(false);
+
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "req-1", reason: "unsupported_images" });
+
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["look at this", "next"]);
+    expect(store.getState().promptQueue[0]?.images).toEqual([image]);
+    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().queueInFlight).toBeNull();
+    expect(store.getState().notice).toEqual({
+      kind: "turn_rejected",
+      text: "Message rejected: the current model does not accept image attachments.",
+    });
+  });
+
   it("turn_rejected for a non-matching requestId leaves the queue untouched (still just a notice)", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "a", images: [] });

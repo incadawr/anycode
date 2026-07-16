@@ -79,6 +79,32 @@ export function hasSendableDraft(text: string, imageCount: number): boolean {
 }
 
 /**
+ * TASK.56 W3: the current model's live image-input verdict (store's
+ * `imageInput`, off hello/model_changed) reads `false` ONLY when the host
+ * has explicitly resolved the CURRENT model as not accepting images.
+ * `undefined` (no seam/legacy host) and `true` both mean "not blocked" —
+ * the engine-level `supportsImages` gate (button visibility) is untouched by
+ * this, this is model-level and rides ON TOP of it. Exported for unit testing.
+ */
+export function isImageAttachBlockedByModel(imageInput: boolean | undefined): boolean {
+  return imageInput === false;
+}
+
+/**
+ * Attachments already on the draft become send-blocking, not vanishing, the
+ * moment the model swings vision -> non-vision mid-session (cut §3/W3(c)):
+ * the user must switch back or remove them, never lose them silently.
+ * Exported for unit testing.
+ */
+export function isSendBlockedByModelImages(imageInput: boolean | undefined, imageCount: number): boolean {
+  return imageInput === false && imageCount > 0;
+}
+
+export const MODEL_IMAGE_ATTACH_BLOCKED_TEXT = "This model does not accept image attachments.";
+export const MODEL_IMAGE_SEND_BLOCKED_TEXT =
+  "This model does not accept image attachments — switch back to a vision-capable model or remove the attached images to send.";
+
+/**
  * Context-meter percentage for the footer: `round(estimated / budget * 100)`.
  * Returns `null` when there is no reading or the budget is non-positive (guards
  * against NaN/Infinity), so the meter renders nothing rather than a garbage
@@ -670,6 +696,7 @@ export function Composer() {
   const queueInFlight = useTabStore((state) => state.queueInFlight);
   const mode = useTabStore((state) => state.mode);
   const model = useTabStore((state) => state.model);
+  const imageInput = useTabStore((state) => state.imageInput);
   const connection = useTabStore((state) => state.connection);
   const contextUsage = useTabStore((state) => state.contextUsage);
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
@@ -684,6 +711,12 @@ export function Composer() {
   const supportsCorePermissions = engine?.capabilities.supportsCorePermissions ?? true;
   const supportsModelSelection = engine?.capabilities.supportsModelSelection ?? true;
   const supportsImages = engine?.capabilities.supportsImages ?? true;
+  // TASK.56 W3: MODEL-level gate, layered on top of the engine-level one
+  // above — `supportsImages` hides the attach UI entirely for an engine that
+  // never does images; `imageInput` disables it (with an explanation) for a
+  // model on an engine that DOES, when this particular model doesn't.
+  const modelBlocksAttach = isImageAttachBlockedByModel(imageInput);
+  const attachmentsBlockedByModel = isSendBlockedByModelImages(imageInput, attachedImages.length);
   const supportsContextUsage = engine?.capabilities.supportsContextUsage ?? true;
   const supportsContextBreakdown = engine?.capabilities.supportsContextBreakdown ?? true;
   // Shell (AnyCode chrome) capabilities (design TASK.40 §2(f)): independent
@@ -702,7 +735,7 @@ export function Composer() {
   const ready = connection === "ready";
   // Running no longer blocks send (F15 prompt queue): a send while running
   // enqueues instead of dispatching directly (handleSend below).
-  const canSend = ready && hasSendableDraft(text, attachedImages.length);
+  const canSend = ready && hasSendableDraft(text, attachedImages.length) && !attachmentsBlockedByModel;
 
   // Slash-menu derivation (cut §4.3): recomputed every render from the
   // CURRENT text+caret, never carried as a separate `open` boolean.
@@ -878,6 +911,14 @@ export function Composer() {
   async function addImageFiles(files: readonly File[]): Promise<void> {
     const imageFiles = files.filter((file) => file.type.startsWith("image/") || file.name.match(/\.(png|jpe?g|gif|webp)$/i));
     if (imageFiles.length === 0 || !ready || !supportsImages) {
+      return;
+    }
+    // TASK.56 W3(b): a paste/drop while the CURRENT model rejects images is a
+    // visible notice, never a silent no-op — the engine-level early-return
+    // above stays silent (unsupported by this engine at all is unchanged,
+    // pre-existing behavior); this one is new and model-specific.
+    if (modelBlocksAttach) {
+      tabStore.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
       return;
     }
     const slots = COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length;
@@ -1082,9 +1123,11 @@ export function Composer() {
   const hintHidden = !ready || (running ? !hasDraft : hasDraft);
   const sendDisabledReason = !ready
     ? "Waiting for the session to connect"
-    : text.trim().length === 0 && attachedImages.length === 0
-      ? "Type a message to send"
-      : undefined;
+    : attachmentsBlockedByModel
+      ? MODEL_IMAGE_SEND_BLOCKED_TEXT
+      : text.trim().length === 0 && attachedImages.length === 0
+        ? "Type a message to send"
+        : undefined;
 
   return (
     <div
@@ -1109,7 +1152,11 @@ export function Composer() {
             </button>
           ))}
           {attachedImages.map((image) => (
-            <span key={image.id} className="composer-image-pill" title={image.name}>
+            <span
+              key={image.id}
+              className={`composer-image-pill${attachmentsBlockedByModel ? " composer-image-pill-warning" : ""}`}
+              title={attachmentsBlockedByModel ? MODEL_IMAGE_SEND_BLOCKED_TEXT : image.name}
+            >
               <span className="composer-image-pill-name">{image.name}</span>
               <span className="composer-image-pill-size">{formatImageSize(image.sizeBytes)}</span>
               <button
@@ -1228,8 +1275,8 @@ export function Composer() {
                 type="button"
                 className="composer-attach"
                 aria-label="Attach image"
-                title="Attach image"
-                disabled={!ready}
+                title={modelBlocksAttach ? MODEL_IMAGE_ATTACH_BLOCKED_TEXT : "Attach image"}
+                disabled={!ready || modelBlocksAttach}
                 onClick={openImagePicker}
               >
                 <ImageIcon />
@@ -1272,7 +1319,8 @@ export function Composer() {
                   type="button"
                   className="composer-send"
                   aria-label="Queue message"
-                  title="Queue message"
+                  title={attachmentsBlockedByModel ? MODEL_IMAGE_SEND_BLOCKED_TEXT : "Queue message"}
+                  disabled={attachmentsBlockedByModel}
                   onClick={handleSend}
                 >
                   <ArrowUp />

@@ -2778,6 +2778,16 @@ body {
   animation: fade-slide-down var(--dur-1) var(--ease-out);
 }
 
+/* TASK.56 W3(c): the current model rejects images but the draft still has
+   some attached — warn instead of silently dropping them; send stays
+   blocked (composer-send/disabled) until the user switches models or
+   removes the attachment. */
+.composer-image-pill-warning {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
 .composer-image-pill-name {
   min-width: 0;
   overflow: hidden;
