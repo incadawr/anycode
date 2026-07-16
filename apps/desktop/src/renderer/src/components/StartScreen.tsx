@@ -48,7 +48,7 @@ import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-stor
 import { useSettingsStore } from "../settings-store.js";
 import { submitStartDraft, type StartSubmitResult } from "../start-session.js";
 import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, Search, Terminal, Warning } from "./icons.js";
-import { modelDisplayName, modelMenuItems, pillLabel, resolvePid } from "./ModelPill.js";
+import { modelDisplayName, modelMenuItems, pillLabel, providerModelsFor, resolvePid } from "./ModelPill.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
@@ -417,7 +417,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const view = snapshot ? activeProviderView(snapshot.settings) : undefined;
   const providerId = view?.id;
   const pid = resolvePid(providerId);
-  const catalogModels = snapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
+  const catalogModels = providerModelsFor(providerId, snapshot?.catalog, snapshot?.settings.provider.custom);
   const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);
   // The active-session ModelPill includes the persisted effort in its label.

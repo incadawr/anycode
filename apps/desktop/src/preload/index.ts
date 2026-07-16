@@ -312,11 +312,11 @@ export interface CodexRolloutImportReportView {
 
 export type CodexRolloutPreviewResult =
   | { ok: true; report: CodexRolloutImportReportView }
-  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" };
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
 
 export type CodexRolloutImportResult =
   | { ok: true; sessionId: string; workspace: string; report: CodexRolloutImportReportView }
-  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" };
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
 
 // TASK.54 (cut §9.2/§13.1): duplicated from main/provider-ipc.ts's own
 // `CustomProviderMutationResult`/`FetchModelsOutcome`/handle*-request shapes
