@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import { ipcMain } from "electron";
 import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
-import { loadSettings, saveSettings } from "../settings/files.js";
+import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
 import {
   CONNECTION_CHECK_CHANNEL,
@@ -153,24 +153,16 @@ function defaultConnectionId(): string {
 }
 
 /**
- * Per-settings-file mutation lock (§2.2). Every mutating handler's
- * load→modify→save→snapshot critical section runs through this promise-chain so
- * two interleaved `ipcMain.handle` handlers can never both load the same base and
- * clobber each other on save (main is the sole writer). Keyed on `settingsPath`
- * so unit tests with distinct scratch paths never serialize against each other.
- * The interactive OAuth flow stays OUTSIDE the lock — only its metadata section
- * is serialized (a minutes-long browser login must not freeze all settings IPC).
+ * Per-settings-file mutation lock (§2.2): the shared `withSettingsFileLock`
+ * from settings/files.ts — ONE lock per settingsPath across this module AND
+ * main/provider-ipc.ts (FX3-L1 G-C: two private per-module locks over the
+ * same file serialized nothing against each other). Every mutating handler's
+ * load→modify→save→snapshot critical section runs through it so two
+ * interleaved `ipcMain.handle` handlers can never both load the same base and
+ * clobber each other on save (main is the sole writer). The interactive OAuth
+ * flow stays OUTSIDE the lock — only its metadata section is serialized (a
+ * minutes-long browser login must not freeze all settings IPC).
  */
-const settingsLocks = new Map<string, Promise<unknown>>();
-function withSettingsLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
-  const prev = settingsLocks.get(path) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  settingsLocks.set(
-    path,
-    run.catch(() => undefined),
-  );
-  return run;
-}
 
 /**
  * Whether two providerIds share the credential bucket. `custom` ≡ bare-legacy
@@ -477,7 +469,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     return { ok: false, reason: "invalid" };
   }
 
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -544,7 +536,7 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
   if (connMatch === null) {
     return { ok: false, reason: "invalid" }; // legacy-shaped key: no longer a write target
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -602,7 +594,7 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
   if (connMatch === null) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -636,7 +628,7 @@ export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promis
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -705,7 +697,7 @@ export async function handleOAuthStart(deps: SettingsIpcDeps, raw: unknown): Pro
   // (metadata-first, created + activated when the provider has none yet). ONLY
   // this metadata section is serialized — the interactive flow (minutes of
   // browser login) runs OUTSIDE the lock so it never freezes settings IPC.
-  const prep: OAuthStartPrep = await withSettingsLock(deps.settingsPath, async () => {
+  const prep: OAuthStartPrep = await withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { readOnly: true as const };
@@ -874,7 +866,7 @@ export async function applyConnectionHealthEvent(
     at: (deps.now ?? defaultNowIso)(),
     ...(event.kind === "failure" ? { safeCode: event.code } : {}),
   };
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return false;
@@ -947,7 +939,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
   if (!(deps.catalogIds ?? []).includes(req.providerId)) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -964,7 +956,11 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     };
     const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
     const activeConnectionId = shouldActivate ? id : loaded.settings.provider.activeConnectionId;
+    // Spread the loaded provider block (FX3-L1 G-C): rebuilding it from named
+    // fields would silently drop every sibling field (`custom[]`, and anything
+    // a future version adds) from the persisted file on every create.
     const provider: ProviderSettingsV2 = {
+      ...loaded.settings.provider,
       connections: [...loaded.settings.provider.connections, connection],
       ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
     };
@@ -984,7 +980,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     return { ok: false, reason: "invalid" };
   }
   const req = parsed.data;
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -1043,7 +1039,7 @@ export async function handleConnectionSetActive(deps: SettingsIpcDeps, raw: unkn
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -1082,7 +1078,7 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -1132,10 +1128,20 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
         loaded.settings.provider.activeConnectionId === id
           ? remaining[0]?.id
           : loaded.settings.provider.activeConnectionId;
+      // Spread the loaded provider block (FX3-L1 G-C): rebuilding it from
+      // named fields would silently drop `custom[]` (orphaning its vault
+      // secrets) from the persisted file on every delete. When the LAST
+      // connection is removed the stale spread-carried activeConnectionId
+      // must be deleted explicitly — the conditional spread alone cannot
+      // remove a key the base spread already put there.
       const provider: ProviderSettingsV2 = {
+        ...loaded.settings.provider,
         connections: remaining,
         ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
       };
+      if (activeConnectionId === undefined) {
+        delete provider.activeConnectionId;
+      }
       // W11-FIX3: the tombstone's commit signal is the durable save resolving,
       // NOT the composite persistProvider resolving. A post-save throw below
       // (snapshot/emit) must NOT revert the tombstone — the metadata is

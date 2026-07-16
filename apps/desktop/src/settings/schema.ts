@@ -171,6 +171,13 @@ const codexProfilesArraySchema = z.preprocess(
 const customProviderKindSchema = z.enum(["openai-compatible", "anthropic", "openai"]);
 
 /**
+ * The ONE loopback host set (localhost/127.0.0.1/[::1]) both URL predicates
+ * below key off — never two drifting copies (amendment-1 FX2-1 discipline).
+ * Node's `URL.hostname` keeps the brackets on an IPv6 literal, hence `[::1]`.
+ */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
  * `https://` (no embedded userinfo) always allowed; `http://` allowed ONLY
  * for loopback (localhost/127.0.0.1/[::1]), also no embedded userinfo (cut
  * §9.2 threat list, amendment-1 FX2-1: a `user:pass@host` userinfo component
@@ -190,7 +197,26 @@ export function isHttpsOrLocalhostUrl(value: string): boolean {
   }
   if (url.username !== "" || url.password !== "") return false;
   if (url.protocol === "https:") return true;
-  return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
+  return url.protocol === "http:" && LOOPBACK_HOSTNAMES.has(url.hostname);
+}
+
+/**
+ * True when `value` parses as a URL whose host is a loopback literal
+ * (localhost/127.0.0.1/[::1]), any scheme. Shares `LOOPBACK_HOSTNAMES` with
+ * `isHttpsOrLocalhostUrl` so the two predicates can never disagree on what
+ * "loopback" means (FX3-L1 G-A: the origin-rebind custody guard in
+ * main/provider-ipc.ts waives its re-key requirement only for a
+ * loopback→loopback baseUrl change — e.g. a corrected local port — because
+ * the stored key never leaves this machine on either origin).
+ */
+export function isLoopbackUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return LOOPBACK_HOSTNAMES.has(url.hostname);
 }
 
 /** One `CustomProviderRecord` (cut §9.2) — same per-element-catch discipline as `codexProfileSchema`. */
