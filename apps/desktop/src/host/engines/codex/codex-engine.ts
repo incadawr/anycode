@@ -156,7 +156,7 @@ type ThreadResult = {
   sandbox?: unknown;
   reasoningEffort?: unknown;
 };
-type AccountResult = { account?: unknown };
+type AccountResult = { account?: unknown; requiresOpenaiAuth?: unknown };
 type TurnResult = { turn?: { id?: unknown } };
 
 export interface CodexEngineConnectOptions {
@@ -407,7 +407,14 @@ async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number
   }, { timeoutMs });
   client.notify("initialized");
   const account = await client.request<AccountResult>("account/read", {}, { timeoutMs });
-  if (account.account === null || account.account === undefined) throw new Error(CODEX_NOT_SIGNED_IN);
+  const requiresOpenaiAuth = typeof account.requiresOpenaiAuth === "boolean" ? account.requiresOpenaiAuth : undefined;
+  // Doctor row 7 (cut §4.2, main/codex-doctor.ts:778-785), byte-identical
+  // semantics: a null account with requiresOpenaiAuth:false is a READY
+  // api-key/bedrock profile, not signed-out — a null-account check alone
+  // false-negatives that config.toml setup.
+  if ((account.account === null || account.account === undefined) && requiresOpenaiAuth !== false) {
+    throw new Error(CODEX_NOT_SIGNED_IN);
+  }
 }
 
 /**
