@@ -19,6 +19,7 @@ import type {
   WorkspacePickResult,
 } from "../../shared/tabs";
 import type {
+  CodexProfileRecord,
   ConnectionCheckRequest,
   ConnectionCreateRequest,
   ConnectionDeleteRequest,
@@ -102,6 +103,41 @@ export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
 
+// TASK.50 (codex-profiles cut §2/§4, amended §A1): mirrors the SAME
+// duplicated shapes declared in preload/index.ts and main/codex-ipc.ts.
+export interface CodexProfilesSnapshot {
+  profiles: Array<{ profile: CodexProfileRecord; report?: CodexDoctorReport }>;
+  activeProfileId: string;
+}
+
+export interface CodexProfileCreateRequest {
+  label: string;
+  authLink?: string;
+  linkedHome?: string;
+}
+
+export type CodexProfileCreateResult =
+  | { ok: true; profile: CodexProfileRecord }
+  | { ok: false; reason: "invalid" | "limit" | "failed"; message?: string };
+
+export type CodexProfileGuardResult = { ok: true } | { ok: false; reason: string };
+
+// TASK.53 (codex-profiles cut §7, amended §A4): mirrors main/codex-install.ts.
+export type CodexInstallResult =
+  | { ok: true; version: string; binaryPath: string; report: CodexDoctorReport }
+  | { ok: false; error: string };
+
+export interface CodexSupportStatusResult {
+  supportedRange: string;
+  recommended: string;
+  riskAcceptedVersions: string[];
+}
+
+export interface CodexManifestRefreshResult {
+  source: "network" | "cache" | "bundled";
+  supportedRange: string;
+}
+
 declare global {
   interface Window {
     anycode: {
@@ -120,10 +156,25 @@ declare global {
       // either direction — every result carries only status/version/account
       // type+plan (custody).
       codex: {
-        recheck(): Promise<CodexOnboardingSnapshot>;
+        // `profileId` (TASK.50, cut §4.2): omitted diagnoses/signs into the
+        // ACTIVE profile.
+        recheck(profileId?: string): Promise<CodexOnboardingSnapshot>;
         pickBinary(): Promise<CodexPickBinaryResult>;
-        loginStart(): Promise<CodexLoginStartResult>;
+        loginStart(profileId?: string): Promise<CodexLoginStartResult>;
         loginCancel(): Promise<void>;
+        // TASK.50 (cut §2/§4): the profile control-plane — settings/fs
+        // mutations only, no spawns. No credential value ever crosses this
+        // bridge (custody, cut §4.4).
+        listProfiles(): Promise<CodexProfilesSnapshot>;
+        createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
+        deleteProfile(id: string): Promise<CodexProfileGuardResult>;
+        setActiveProfile(id: string): Promise<CodexProfileGuardResult>;
+        repairProfileLink(id: string): Promise<CodexProfileGuardResult>;
+        // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
+        install(version?: string): Promise<CodexInstallResult>;
+        acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;
+        supportStatus(): Promise<CodexSupportStatusResult>;
+        manifestRefresh(): Promise<CodexManifestRefreshResult>;
       };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
