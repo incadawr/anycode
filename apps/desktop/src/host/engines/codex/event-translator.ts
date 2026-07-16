@@ -4,12 +4,24 @@
  * interpret unobserved protocol families.
  */
 
-import type { AgentEvent, FinishReason, ToolCallOutcome, ToolCallStatus } from "@anycode/core";
+import type { AgentEvent, CodexRateLimitsWire, FinishReason, ToolCallOutcome, ToolCallStatus } from "@anycode/core";
 import type { JsonRpcNotification } from "./protocol.js";
 import type { TurnItemIndex } from "./turn-item-index.js";
 
 /** One sub-tool-call a single native item projects to — a `fileChange` with N files projects to N of these. */
 type ToolProjection = { toolCallId: string; toolName: "Bash" | "Write"; input: unknown };
+
+/**
+ * The engine-owned quota tracker's narrow face (quota.ts `CodexQuotaTracker`,
+ * codex-profiles cut §6.3): folds one `account/rateLimits/updated` push into
+ * the session's merged snapshot via the frozen sparse-merge and returns that
+ * MERGED snapshot — or null for an undecodable push. The translator only ever
+ * APPLIES this seam; it never assembles a quota snapshot itself (a from-scratch
+ * snapshot is exactly the "sparse null wipes known data" defect §6.3 forbids).
+ */
+export interface QuotaUpdateSink {
+  applyUpdate(params: unknown): CodexRateLimitsWire | null;
+}
 
 export interface TurnTranslatorOptions {
   threadId: string;
@@ -22,6 +34,8 @@ export interface TurnTranslatorOptions {
    * the modal has to describe what is being approved.
    */
   items?: TurnItemIndex;
+  /** Session-lifetime quota tracker (codex-profiles cut §6); absent -> quota pushes are silently dropped. */
+  quota?: QuotaUpdateSink;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -107,6 +121,10 @@ export class TurnTranslator {
     // `warning` notifications (cut §2(i)) are thread-scoped, not turn-scoped
     // (no `turnId` field on the wire) — they cannot pass `matchingTurn` below.
     if (notification.method === "warning") return this.onWarning(notification.params);
+    // `account/rateLimits/updated` (codex-profiles cut §6.1) is ACCOUNT-scoped:
+    // the wire carries neither threadId nor turnId, so like `warning` it is
+    // handled before `matchingTurn` would discard it as foreign.
+    if (notification.method === "account/rateLimits/updated") return this.onQuotaUpdated(notification.params);
 
     const params = matchingTurn(notification.params, this.options.threadId, this.options.turnId);
     if (params === null) return [];
@@ -243,11 +261,60 @@ export class TurnTranslator {
     const last = record(usage?.last);
     const totalTokens = last?.totalTokens;
     const contextWindow = usage?.modelContextWindow;
+    const events: AgentEvent[] = [];
     if (
-      typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens < 0 ||
-      typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0
-    ) return [];
-    return [{ type: "context_usage", estimatedTokens: totalTokens, budgetTokens: contextWindow, source: "provider" }];
+      typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens >= 0 &&
+      typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
+    ) {
+      events.push({ type: "context_usage", estimatedTokens: totalTokens, budgetTokens: contextWindow, source: "provider" });
+    }
+    const sessionTokens = this.sessionTokens(record(usage?.total));
+    if (sessionTokens !== null) events.push(sessionTokens);
+    return events;
+  }
+
+  /**
+   * `tokenUsage.total` -> `engine_session_tokens` (codex-profiles cut §5.3).
+   * The wire's `total` breakdown is ALREADY cumulative across the thread's
+   * updates, so the event carries it VERBATIM under REPLACE semantics — never
+   * a per-update delta, and never a `finish`-shaped event (the store's finish
+   * path SUMS via accumulateSessionTokens, which would multiply an
+   * already-cumulative number; cut §3.4 froze a separate variant for exactly
+   * this reason).
+   */
+  private sessionTokens(total: Record<string, unknown> | null): AgentEvent | null {
+    if (total === null) return null;
+    const input = total.inputTokens;
+    const output = total.outputTokens;
+    const grandTotal = total.totalTokens;
+    if (
+      typeof input !== "number" || !Number.isFinite(input) || input < 0 ||
+      typeof output !== "number" || !Number.isFinite(output) || output < 0 ||
+      typeof grandTotal !== "number" || !Number.isFinite(grandTotal) || grandTotal < 0
+    ) return null;
+    const cachedInput = total.cachedInputTokens;
+    const reasoningOutput = total.reasoningOutputTokens;
+    return {
+      type: "engine_session_tokens",
+      input,
+      output,
+      total: grandTotal,
+      ...(typeof cachedInput === "number" && Number.isFinite(cachedInput) && cachedInput >= 0 ? { cachedInput } : {}),
+      ...(typeof reasoningOutput === "number" && Number.isFinite(reasoningOutput) && reasoningOutput >= 0 ? { reasoningOutput } : {}),
+    };
+  }
+
+  /**
+   * `account/rateLimits/updated` (codex-profiles cut §6.1/§6.3): the sparse
+   * push is folded into the ENGINE-owned tracker (which applies the frozen
+   * shared/codex-quota.ts merge — null never wipes a known value) and the
+   * MERGED snapshot rides out as `engine_quota`. Core's own loop never emits
+   * this variant (cut §3.4, test-hazard #3). An undecodable push, or a
+   * translator constructed without the tracker seam, emits nothing.
+   */
+  private onQuotaUpdated(params: unknown): AgentEvent[] {
+    const quota = this.options.quota?.applyUpdate(params);
+    return quota == null ? [] : [{ type: "engine_quota", quota }];
   }
 
   /**

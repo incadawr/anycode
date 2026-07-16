@@ -177,6 +177,20 @@ export interface TabHost {
    */
   engineModel: string | null;
   enginePreset: string | null;
+  /**
+   * The resolved Codex account-profile argv (codex-profiles cut §3.3,
+   * TASK.50): READY values from main's profile registry (lane A resolves the
+   * renderer's opaque `codexProfileId`; tabs.ts only forwards). Unlike
+   * `engineModel`/`enginePreset` above this rides argv on EVERY spawn —
+   * respawns included — because `CODEX_HOME` is frozen into the session (cut
+   * §2.6.4) and no session row records it: a respawn without the profile
+   * would resume the native thread against the ambient home, i.e. the wrong
+   * account. Values are forwarded verbatim (argv is an array, no shell); the
+   * HOST is the single fail-closed validation authority (host/engines/codex/
+   * codex-home.ts refuses any malformed value instead of falling back to the
+   * ambient account). null = the `system` pseudo-profile (no argv delta).
+   */
+  codexProfile: { id?: string; home?: string; authLink?: string } | null;
   proc: UtilityProcess | null;
   /** Monotonic generation of this tab's utility-process instance. */
   hostGeneration: number;
@@ -477,6 +491,13 @@ export class TabHostManager {
     /** Draft engine model/preset ids (TASK.39). Opaque here; the host validates them. */
     engineModel?: string;
     enginePreset?: string;
+    /**
+     * Resolved Codex profile argv values (codex-profiles TASK.50) — id plus,
+     * when the registry says so, a linkedHome path (`home`) or an auth-link
+     * target. Already resolved/validated by main's registry; the host
+     * re-validates fail-closed. See TabHost.codexProfile.
+     */
+    codexProfile?: { id?: string; home?: string; authLink?: string };
     /** Pinned provider connection (TASK.45 W10, core only); stamped into the fork env + persisted by the host. */
     connectionId?: string;
   }): CreateTabResult {
@@ -508,6 +529,7 @@ export class TabHostManager {
       engine,
       engineModel: argvId(params.engineModel),
       enginePreset: argvId(params.enginePreset),
+      codexProfile: params.codexProfile ?? null,
       proc: null,
       hostGeneration: 0,
       engineProcess: null,
@@ -538,6 +560,16 @@ export class TabHostManager {
     if (!resume) {
       if (tab.engineModel !== null) args.push("--engine-model", tab.engineModel);
       if (tab.enginePreset !== null) args.push("--engine-preset", tab.enginePreset);
+    }
+    // Codex-profiles TASK.50 (cut §2.6.4): the profile rides EVERY spawn —
+    // resume and respawn included — because CODEX_HOME is frozen into the
+    // session and no session row records it; a respawn without these flags
+    // would resume the thread against the ambient (wrong) account. Values go
+    // out verbatim: the host's codex-home.ts is the fail-closed authority.
+    if (tab.codexProfile !== null) {
+      if (tab.codexProfile.id !== undefined) args.push("--codex-profile", tab.codexProfile.id);
+      if (tab.codexProfile.home !== undefined) args.push("--codex-home", tab.codexProfile.home);
+      if (tab.codexProfile.authLink !== undefined) args.push("--codex-auth-link", tab.codexProfile.authLink);
     }
     // TASK.45 W10-FIX F3 (layer c): resolve the pinned base env BEFORE forking. A
     // `undefined` here means the tab is pinned to a connection whose per-connection
