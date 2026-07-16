@@ -391,6 +391,27 @@ describe("extractCodexVendorSubtree (per-entry sanitization, amended §A4.3)", (
   });
 });
 
+/** BM3 red-proof plumbing: walks a directory tree on disk and returns the
+ * relative (POSIX-joined) path of every regular file found, so the fsync
+ * assertion below is pinned to whatever the extractor ACTUALLY wrote — an
+ * enumerate-good check, not a fixed guess at the fixture's shape. */
+function collectRegularFiles(root: string, rel = ""): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
+    const entryRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
+    if (entry.isDirectory()) files.push(...collectRegularFiles(root, entryRel));
+    else if (entry.isFile()) files.push(entryRel);
+  }
+  return files;
+}
+
+/** Regular (non-directory) file count inside goodArchive()'s vendor/<triple>/
+ * subtree: codex-package.json, bin/codex, codex-path/rg,
+ * codex-resources/zsh/bin/zsh. A floor guarding against a trivially-true
+ * empty-directory walk, not a ceiling — goodArchive() growing more files only
+ * makes this assertion stricter. */
+const GOOD_ARCHIVE_REGULAR_FILE_COUNT = 4;
+
 describe("installCodexVersion (atomic dir-rename + layout cross-check)", () => {
   it("installs into ~/.anycode/codex/bin/<version>/ atomically and reports the vendor binary path", async () => {
     const dir = home();
@@ -493,10 +514,16 @@ describe("installCodexVersion (atomic dir-rename + layout cross-check)", () => {
     const renameIndex = fsyncCallLog.indexOf(renameEntry!);
     const beforeRename = fsyncCallLog.slice(0, renameIndex);
     const afterRename = fsyncCallLog.slice(renameIndex + 1);
+    const installedRoot = renameEntry!.slice("rename:".length).split("->")[1]!;
 
-    // Every extracted regular file (inside the staging root's vendor subtree) was synced before the rename.
-    const fileSyncs = beforeRename.filter((entry) => entry.startsWith(`sync:${stagingRoot}/`));
-    expect(fileSyncs.length).toBeGreaterThan(0);
+    // Every regular file actually extracted (enumerated from disk post-rename,
+    // not assumed from the fixture) was synced before the rename — not merely SOME file.
+    const extractedFiles = collectRegularFiles(installedRoot);
+    expect(extractedFiles.length).toBeGreaterThan(0);
+    expect(extractedFiles.length).toBeGreaterThanOrEqual(GOOD_ARCHIVE_REGULAR_FILE_COUNT);
+    for (const rel of extractedFiles) {
+      expect(beforeRename).toContain(`sync:${stagingRoot}/${rel}`);
+    }
     // The staging directory ITSELF (not a file inside it) was also synced before the rename.
     expect(beforeRename).toContain(`sync:${stagingRoot}`);
     // The destination's parent directory is synced strictly AFTER the rename, never before.
