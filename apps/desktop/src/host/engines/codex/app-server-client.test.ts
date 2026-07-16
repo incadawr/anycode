@@ -222,6 +222,9 @@ describe("AppServerClient", () => {
     const client = makeClient();
     try {
       await client.start();
+      // The response echo below is a NOTIFICATION — post-A3.8 it only
+      // surfaces once the initialize handshake has completed.
+      await client.request("initialize", {});
       client.notify("emit-server-request");
       const response = await nextNotification(client);
       expect(response).toMatchObject({
@@ -237,6 +240,7 @@ describe("AppServerClient", () => {
     const client = makeClient([], { onServerRequest: () => {} });
     try {
       await client.start();
+      await client.request("initialize", {});
       client.notify("emit-server-request");
       await expect(nextNotification(client)).resolves.toMatchObject({
         method: "test/server-response",
@@ -251,6 +255,7 @@ describe("AppServerClient", () => {
     const client = makeClient();
     try {
       await client.start();
+      await client.request("initialize", {});
       client.notify("emit-server-request-string");
       await expect(nextNotification(client)).resolves.toMatchObject({
         method: "test/server-response",
@@ -274,6 +279,7 @@ describe("AppServerClient", () => {
     });
     try {
       await client.start();
+      await client.request("initialize", {});
       client.notify("emit-server-request");
       const pendingResponse = nextNotification(client);
       await Promise.resolve();
@@ -314,6 +320,10 @@ describe("AppServerClient", () => {
     const client = makeClient([`--fixture=${basicFixture}`]);
     try {
       await client.start();
+      // Amendment §A3.8: notifications arriving before the initialize
+      // handshake completes are silently dropped, so the fixture replay is
+      // gated on a completed initialize (the child emits it post-response).
+      await client.request("initialize", {});
       const iterator = client.notifications()[Symbol.asyncIterator]();
       let text = "";
       let completed = false;
@@ -349,11 +359,87 @@ describe("AppServerClient", () => {
     const client = makeClient(["--env"], { sourceEnv: env });
     try {
       await client.start();
+      await client.request("initialize", {});
       const notification = await nextNotification(client);
       const childEnv = notification.params as NodeJS.ProcessEnv;
       expect(childEnv.CODEX_HOME).toBe("/codex");
       expect(childEnv.ANYCODE_API_KEY).toBeUndefined();
       expect(childEnv.UNRELATED_SECRET).toBeUndefined();
+    } finally {
+      await client.close();
+    }
+  });
+
+  // Codex-profiles cut §2.6.2 / hazard §14.6: the ambient CODEX_HOME IS set in
+  // the source env here, and the profile home must OVERRIDE it — a test without
+  // an ambient value would pass on code that merely appends the passthrough.
+  it("a selected profile home OVERRIDES the ambient CODEX_HOME in the child env", async () => {
+    const env = buildCodexChildEnv(
+      { HOME: "/home/test", PATH: "/bin", CODEX_HOME: "/ambient-shell-home" },
+      process.platform,
+      "/home/test/.anycode/codex/profile-personal",
+    );
+    expect(env.CODEX_HOME).toBe("/home/test/.anycode/codex/profile-personal");
+
+    // Without a profile, the ambient passthrough is preserved byte-identically.
+    const ambient = buildCodexChildEnv({ HOME: "/home/test", PATH: "/bin", CODEX_HOME: "/ambient-shell-home" });
+    expect(ambient.CODEX_HOME).toBe("/ambient-shell-home");
+  });
+
+  it("spawns the child with the profile CODEX_HOME even when the shell exported its own", async () => {
+    const client = makeClient(["--env"], {
+      sourceEnv: { HOME: "/home/test", PATH: process.env.PATH, CODEX_HOME: "/ambient-shell-home" },
+      codexHome: "/home/test/.anycode/codex/profile-personal",
+    });
+    try {
+      await client.start();
+      await client.request("initialize", {});
+      const childEnv = (await nextNotification(client)).params as NodeJS.ProcessEnv;
+      expect(childEnv.CODEX_HOME).toBe("/home/test/.anycode/codex/profile-personal");
+    } finally {
+      await client.close();
+    }
+  });
+
+  // Amendment §A1.2/§2.5: the profile-home guard is re-run immediately before
+  // EACH spawn, exactly like the binary trust gate — and a failure blocks the
+  // spawn (fail-closed, no app-server ever runs against a rejected home).
+  it("re-asserts the profile-home guard before each spawn and refuses to spawn on a rejected home", async () => {
+    let calls = 0;
+    const homeTrust = vi.fn(() => {
+      calls += 1;
+      return calls === 1 ? null : "auth.json is no longer the expected symlink";
+    });
+    const spawnSpy = vi.fn((command: string, args: readonly string[], opts: Parameters<typeof spawn>[2]) => spawn(command, args, opts));
+    const client = makeClient([], { homeTrust, spawnImpl: spawnSpy });
+    try {
+      await expect(client.start()).rejects.toThrow(/auth\.json is no longer the expected symlink/);
+      // Guard ran twice (preflight + app-server), but only the FIRST spawn (the
+      // preflight) ever happened — the second, rejected one was refused.
+      expect(homeTrust).toHaveBeenCalledTimes(2);
+      const spawned = spawnSpy.mock.calls.map((call) => call[1]);
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]).toContain("--version");
+    } finally {
+      await client.close();
+    }
+  });
+
+  // Amendment §A3.8: the live 0.144.5 server emits `remoteControl/status/
+  // changed` AROUND initialize. Any notification arriving before the
+  // handshake completes is silently dropped — not queued, not an error, not
+  // a terminalization counter tick.
+  it("silently drops every notification that arrives before the initialize handshake completes", async () => {
+    const client = makeClient(["--pre-init-noise"]);
+    try {
+      await client.start();
+      await client.request("initialize", {});
+      // The child wrote two pre-init notifications BEFORE answering initialize
+      // and one after; only the post-init one may surface.
+      const first = await nextNotification(client);
+      expect(first.method).toBe("test/after-init");
+      // The transport is fully alive afterwards.
+      await expect(client.request("echo", { ok: 1 })).resolves.toEqual({ ok: 1 });
     } finally {
       await client.close();
     }
@@ -400,6 +486,9 @@ describe("AppServerClient", () => {
     const client = makeClient(["--close-stdin"]);
     try {
       await client.start();
+      // The child answers initialize, THEN emits the marker and closes fd 0
+      // (the marker is a notification, so it must be post-init to surface).
+      await client.request("initialize", {});
       const marker = await nextNotification(client);
       expect(marker.method).toBe("test/stdin-closed");
 

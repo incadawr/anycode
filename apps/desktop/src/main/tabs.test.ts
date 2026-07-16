@@ -312,6 +312,96 @@ describe("TabHostManager — per-tab circuit breaker", () => {
 
     expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--session", "sess-J"]);
   });
+
+  // Codex-profiles TASK.50 (cut §2.6.4, §3.3): main resolves the picked
+  // profile against ITS registry (lane A) and hands tabs.ts READY argv values;
+  // tabs.ts only forwards them. Unlike the draft model/preset (whose post-boot
+  // authority is the session row), the profile has NO session-row fallback —
+  // CODEX_HOME is frozen into the session — so it rides EVERY spawn, respawn
+  // included: a respawn without it would resume the thread against the
+  // ambient home, i.e. the wrong account.
+  it("carries the resolved Codex profile argv on EVERY spawn — respawns included, unlike the draft model", async () => {
+    const forkSpy = vi.fn<HostForkFn>();
+    const { hosts } = dyingForkRig();
+    forkSpy.mockImplementation(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("exit", 1));
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({
+      workspace: "/ws",
+      sessionId: "sess-P",
+      resume: false,
+      engine: "codex",
+      engineModel: "gpt-5.6-sol",
+      codexProfile: { id: "main", authLink: "/Users/x/.codex/auth.json" },
+    });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual([
+      "--session",
+      "sess-P",
+      "--engine-model",
+      "gpt-5.6-sol",
+      "--codex-profile",
+      "main",
+      "--codex-auth-link",
+      "/Users/x/.codex/auth.json",
+    ]);
+    // The respawn drops the draft model (session row is its authority) but
+    // KEEPS the profile (nothing else knows which home this session lives in).
+    expect(forkSpy.mock.calls[1]?.[1]).toEqual([
+      "--resume",
+      "sess-P",
+      "--codex-profile",
+      "main",
+      "--codex-auth-link",
+      "/Users/x/.codex/auth.json",
+    ]);
+  });
+
+  it("a linkedHome profile rides argv as --codex-home (already validated by main's registry)", async () => {
+    const { hosts } = liveForkRig();
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({
+      workspace: "/ws",
+      sessionId: "sess-L",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "acc2", home: "/Users/x/.codex-accounts/acc2" },
+    });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual([
+      "--session",
+      "sess-L",
+      "--codex-profile",
+      "acc2",
+      "--codex-home",
+      "/Users/x/.codex-accounts/acc2",
+    ]);
+  });
+
+  it("without a profile the argv stays byte-identical to the pre-profiles build (system pseudo-profile)", async () => {
+    const { hosts } = liveForkRig();
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({ workspace: "/ws", sessionId: "sess-S", resume: false, engine: "codex" });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--session", "sess-S"]);
+  });
 });
 
 describe("TabHostManager — engine identity and process ownership", () => {
