@@ -32,6 +32,31 @@ Numbers refer to the coverage checklist (1 = plain chat, 2 = `exec_command` call
 
 All 11 checklist items are covered; ≥8 fixtures were requested, 9 were produced.
 
+## Amendment (TASK.52, lane D): tier-2 default-skip fixture
+
+AMENDMENT-1 §A5 (post-W0-R3) requires a three-tiered default-skip in the importer: an
+unrecognized top-level record type (tier 1 — covered above by
+`agent-message-inter-agent.jsonl`'s real `inter_agent_communication_metadata` record), an
+unrecognized `response_item.payload.type` (tier 2), and an unrecognized content-part type inside
+`content` (tier 3 — covered above by that same fixture's real `encrypted_content` part). Tier 2
+was NOT found in any of the 721 scanned real files (every `response_item.payload.type` observed
+matches the design doc's enumeration or the two anomalies already covered), so per the task's own
+instruction ("synthetic MINIMAL fixture ... if none is found in the existing corpus") a small
+**synthetic** fixture was added instead of a scrubbed real one:
+
+### `unknown-item-type.jsonl` (synthetic, NOT derived from a real session)
+
+- **Content:** minimal 5-line file — `session_meta` + `turn_context` + a real `user` message +
+  one invented `response_item` whose `payload.type` is `"future_streaming_delta"` (a shape that
+  does not exist in any Codex CLI version seen; chosen to read plausibly as "a future item type"
+  without colliding with any real payload name) + a real `assistant` message.
+- **Purpose:** proves the importer's tier-2 default-skip: the unknown item is skipped whole
+  (`stats.unknownItemsSkipped === 1`), does NOT collapse to text (per §A5, an unknown payload may
+  carry opaque/encrypted content unsafe to print), and does not stop the surrounding `user`/
+  `assistant` messages from importing normally.
+- No scrubbing needed (no real user data, paths, or secrets — everything in the file was written
+  by hand for this fixture).
+
 ## Fixture-by-fixture provenance
 
 ### `basic-chat-developer-reasoning.jsonl`
