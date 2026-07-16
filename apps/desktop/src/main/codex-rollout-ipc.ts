@@ -28,7 +28,7 @@ import { ipcMain } from "electron";
 import { constants as fsConstants } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { PermissionMode, PersistencePort } from "@anycode/core";
 import { importCodexRollout, type ImportCodexRolloutOptions, type RolloutImportReport } from "./codex-rollout.js";
 
@@ -207,11 +207,28 @@ async function readAndImport(
   const fullPath = join(sessionsDir, fileName);
   let content: string;
   try {
+    // BH2: O_NOFOLLOW below only guards the FINAL path component. An
+    // intermediate component (e.g. the YYYY dir) can itself be a symlink
+    // pointing outside sessionsDir, with a perfectly ordinary file sitting at
+    // the far end — that would sail through O_NOFOLLOW untouched. Requiring
+    // the resolved parent directory to land exactly where sessionsDir +
+    // fileName's own directory would (no symlink detour anywhere upstream)
+    // closes that gap.
+    const realSessionsDir = await fsp.realpath(sessionsDir);
+    const realParentDir = await fsp.realpath(dirname(fullPath));
+    if (realParentDir !== join(realSessionsDir, dirname(fileName))) {
+      return { ok: false, reason: "not_readable" };
+    }
     // O_NOFOLLOW: open fails (ELOOP) if the final path component is a symlink; fstat-ing
     // the HANDLE (not the path) closes the swap window between the size check and the read.
-    const handle = await fsp.open(fullPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    // O_NONBLOCK (BM1): a FIFO with no writer would otherwise block this
+    // open() call itself — isFile() below would never even run. Non-blocking
+    // open returns immediately regardless of writer state; it is a no-op for
+    // a regular file's read.
+    const handle = await fsp.open(fullPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (fsConstants.O_NONBLOCK ?? 0));
     try {
       const stat = await handle.stat();
+      if (!stat.isFile()) return { ok: false, reason: "not_readable" };
       if (stat.size > MAX_FILE_BYTES) return { ok: false, reason: "too_large" };
       content = await handle.readFile("utf-8");
     } finally {

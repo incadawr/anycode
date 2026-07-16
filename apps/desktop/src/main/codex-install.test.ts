@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import { BUNDLED_CODEX_MANIFEST } from "../shared/codex-support.js";
 import {
@@ -14,6 +14,34 @@ import {
   resolveCodexArtifact,
 } from "./codex-install.js";
 import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
+
+/** BM3 red-proof plumbing: a call-log of every `open(...).sync()` and `rename`
+ * this whole test file's production code triggers, so ONE test (below) can
+ * assert ordering — every extracted file and the staging directory synced
+ * BEFORE the atomic rename, the destination's parent synced after — without
+ * touching real fsync semantics (the wrapped calls still hit real fs). */
+const { fsyncCallLog } = vi.hoisted(() => ({ fsyncCallLog: [] as string[] }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (...args: any[]) => {
+      const handle = await (actual.open as any)(...args);
+      const path = String(args[0]);
+      const originalSync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        fsyncCallLog.push(`sync:${path}`);
+        await originalSync();
+      };
+      return handle;
+    },
+    rename: async (...args: any[]) => {
+      fsyncCallLog.push(`rename:${String(args[0])}->${String(args[1])}`);
+      return (actual.rename as any)(...args);
+    },
+  };
+});
 
 afterEach(() => resetActiveCodexVersionPolicy());
 
@@ -52,18 +80,33 @@ function tarHeader(name: string, size: number, typeflag: string, mode: number, l
   return buf;
 }
 
+function entryBytes(entry: TarEntrySpec): Buffer[] {
+  const data = entry.data ?? Buffer.alloc(0);
+  const parts = [tarHeader(entry.name, data.length, entry.typeflag ?? "0", entry.mode ?? 0o644, entry.linkname ?? "")];
+  if (data.length > 0) {
+    parts.push(data);
+    const pad = 512 - (data.length % 512);
+    if (pad < 512) parts.push(Buffer.alloc(pad));
+  }
+  return parts;
+}
+
 function buildTgz(entries: TarEntrySpec[]): Buffer {
   const parts: Buffer[] = [];
-  for (const entry of entries) {
-    const data = entry.data ?? Buffer.alloc(0);
-    parts.push(tarHeader(entry.name, data.length, entry.typeflag ?? "0", entry.mode ?? 0o644, entry.linkname ?? ""));
-    if (data.length > 0) {
-      parts.push(data);
-      const pad = 512 - (data.length % 512);
-      if (pad < 512) parts.push(Buffer.alloc(pad));
-    }
-  }
+  for (const entry of entries) parts.push(...entryBytes(entry));
   parts.push(Buffer.alloc(1024)); // end-of-archive: two zero blocks
+  return gzipSync(Buffer.concat(parts));
+}
+
+/** Same shape as `buildTgz`, but with a SINGLE zero block spliced in between
+ * `before` and `after` — the BM2 red-proof shape: a lone terminator-lookalike
+ * that must NOT be mistaken for end-of-archive when a real entry follows it. */
+function buildTgzWithLoneZeroBlock(before: TarEntrySpec[], after: TarEntrySpec[]): Buffer {
+  const parts: Buffer[] = [];
+  for (const entry of before) parts.push(...entryBytes(entry));
+  parts.push(Buffer.alloc(512)); // lone zero block — NOT the real terminator
+  for (const entry of after) parts.push(...entryBytes(entry));
+  parts.push(Buffer.alloc(1024)); // the real end-of-archive terminator
   return gzipSync(Buffer.concat(parts));
 }
 
@@ -323,6 +366,20 @@ describe("extractCodexVendorSubtree (per-entry sanitization, amended §A4.3)", (
     expect((await total.run()).ok).toBe(false);
   });
 
+  it("refuses an archive with a lone zero block followed by another real entry, instead of silently truncating (BM2)", async () => {
+    const archive = buildTgzWithLoneZeroBlock(
+      [{ name: `package/vendor/${TRIPLE}/codex-package.json`, data: Buffer.from(JSON.stringify({ layoutVersion: 1, entrypoint: "bin/codex" })) }],
+      [{ name: `package/vendor/${TRIPLE}/bin/codex`, data: Buffer.from("bin"), mode: 0o755 }],
+    );
+    const { dest, run } = extractTo(archive);
+    const result = await run();
+    expect(result.ok).toBe(false);
+    // On base, this lone zero block reads as end-of-archive: extraction stops
+    // after codex-package.json and reports { ok: true } with bin/codex simply
+    // missing — a silent truncation. The fix must refuse the whole install.
+    expect(existsSync(dest)).toBe(false);
+  });
+
   it("refuses a truncated/corrupt archive rather than keeping a partial tree", async () => {
     const dir = home();
     const tgzPath = join(dir, "corrupt.tgz");
@@ -420,6 +477,31 @@ describe("installCodexVersion (atomic dir-rename + layout cross-check)", () => {
     const result = await installCodexVersion("../escape", { home: dir, ...DARWIN_ARM, fetchImpl });
     expect(result.ok).toBe(false);
     expect(existsSync(join(dir, ".anycode"))).toBe(false);
+  });
+
+  it("fsyncs every extracted file and the staging directory BEFORE the atomic rename, and the destination's parent AFTER (amendment-1 §262, BM3)", async () => {
+    fsyncCallLog.length = 0;
+    const dir = home();
+    const { fetchImpl } = fetchServing(goodArchive());
+    const result = await installCodexVersion(VERSION, { home: dir, ...DARWIN_ARM, fetchImpl });
+    expect(result.ok).toBe(true);
+
+    const binRoot = join(dir, ".anycode", "codex", "bin");
+    const renameEntry = fsyncCallLog.find((entry) => entry.startsWith("rename:"));
+    expect(renameEntry).toBeDefined();
+    const stagingRoot = renameEntry!.slice("rename:".length).split("->")[0]!;
+    const renameIndex = fsyncCallLog.indexOf(renameEntry!);
+    const beforeRename = fsyncCallLog.slice(0, renameIndex);
+    const afterRename = fsyncCallLog.slice(renameIndex + 1);
+
+    // Every extracted regular file (inside the staging root's vendor subtree) was synced before the rename.
+    const fileSyncs = beforeRename.filter((entry) => entry.startsWith(`sync:${stagingRoot}/`));
+    expect(fileSyncs.length).toBeGreaterThan(0);
+    // The staging directory ITSELF (not a file inside it) was also synced before the rename.
+    expect(beforeRename).toContain(`sync:${stagingRoot}`);
+    // The destination's parent directory is synced strictly AFTER the rename, never before.
+    expect(afterRename).toContain(`sync:${binRoot}`);
+    expect(beforeRename).not.toContain(`sync:${binRoot}`);
   });
 });
 

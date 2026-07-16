@@ -4,6 +4,7 @@
  * scratch tmpdirs (no Electron ipcMain) plus an in-memory fake PersistencePort
  * — mirrors profile-ipc.test.ts's own convention for this codebase.
  */
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -218,5 +219,40 @@ describe("handleCodexRolloutImport — write direction", () => {
     const { readFile } = await import("node:fs/promises");
     const after = await readFile(join(sessionsDir, relPath), "utf-8");
     expect(after).toBe(before);
+  });
+});
+
+describe("handleCodexRolloutPreview/Import — intermediate symlink escape (BH2)", () => {
+  it("rejects a rollout whose fileName resolves through a symlinked intermediate directory (e.g. the YYYY dir), even though the final file is an ordinary one", async () => {
+    const sessionsDir = await tmp();
+    const outsideDir = await tmp("rollout-outside-");
+    // A perfectly ordinary file at the far end of the escape — O_NOFOLLOW on
+    // the final path component alone would let this straight through.
+    await mkdir(join(outsideDir, "07", "01"), { recursive: true });
+    await writeFile(join(outsideDir, "07", "01", "rollout-escaped.jsonl"), jsonl(BASIC_RECORDS), "utf-8");
+    // sessionsDir/2026 is a symlink pointing OUTSIDE sessionsDir.
+    await symlink(outsideDir, join(sessionsDir, "2026"));
+    const relPath = "2026/07/01/rollout-escaped.jsonl";
+    const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
+
+    const previewResult = await handleCodexRolloutPreview(deps, { profileId: "p1", fileName: relPath });
+    expect(previewResult).toEqual({ ok: false, reason: "not_readable" });
+
+    const importResult = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: relPath, model: "claude-sonnet-5" });
+    expect(importResult).toEqual({ ok: false, reason: "not_readable" });
+  });
+});
+
+describe("handleCodexRolloutPreview — FIFO refusal without hanging the process (BM1)", () => {
+  it.skipIf(process.platform === "win32")("returns not_readable for a FIFO standing in for a rollout file, within the test's own timeout", async () => {
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-fifo.jsonl";
+    const fifoPath = join(sessionsDir, relPath);
+    await mkdir(join(fifoPath, ".."), { recursive: true });
+    execFileSync("mkfifo", [fifoPath]);
+    const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
+
+    const result = await handleCodexRolloutPreview(deps, { profileId: "p1", fileName: relPath });
+    expect(result).toEqual({ ok: false, reason: "not_readable" });
   });
 });
