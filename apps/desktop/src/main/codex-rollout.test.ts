@@ -340,6 +340,56 @@ describe("importCodexRollout — resource caps", () => {
   });
 });
 
+describe("importCodexRollout — batched tool results in call order, not arrival order (R1)", () => {
+  it("two exec_command calls whose outputs arrive in REVERSE order still flush toolCallId c1 before c2", () => {
+    const lines = [
+      JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "c1", arguments: JSON.stringify({ cmd: "echo one" }) } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:02.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "c2", arguments: JSON.stringify({ cmd: "echo two" }) } }),
+      // outputs arrive out of call order: c2's output lands before c1's
+      JSON.stringify({ timestamp: "2026-01-01T00:00:03.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "c2", output: "two" } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:04.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "one" } }),
+    ];
+    const report = importCodexRollout(lines, DEFAULT_OPTS);
+    const toolItem = report.items.find((item) => item.message.role === "tool");
+    expect(toolItem?.message.role === "tool" && toolItem.message.content[0]?.toolCallId).toBe("c1");
+    expect(toolItem?.message.role === "tool" && toolItem.message.content[1]?.toolCallId).toBe("c2");
+  });
+
+  it("an early call left unpaired (c1) is ordered BEFORE a later call that did get its result (c2): [c1-orphan(cancelled), c2-success]", () => {
+    const lines = [
+      JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "c1", arguments: JSON.stringify({ cmd: "sleep 100" }) } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:02.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "c2", arguments: JSON.stringify({ cmd: "echo two" }) } }),
+      // only c2 gets a result; c1 is interrupted and only resolved at EOF (closeOutTurn)
+      JSON.stringify({ timestamp: "2026-01-01T00:00:03.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "c2", output: "two" } }),
+    ];
+    const report = importCodexRollout(lines, DEFAULT_OPTS);
+    const toolItem = report.items.find((item) => item.message.role === "tool");
+    expect(toolItem?.message.role === "tool" && toolItem.message.content.map((part) => [part.toolCallId, part.status])).toEqual([
+      ["c1", "cancelled"],
+      ["c2", "success"],
+    ]);
+  });
+});
+
+describe("importCodexRollout — custody: an untrusted 'role' value never reaches a warning string (R3)", () => {
+  it("caps and generic-izes an unrecognized message role, never leaking the raw file content into warnings", () => {
+    const garbage = `${"X".repeat(8000)}-secret-marker-should-not-leak`;
+    const lines = [
+      JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "response_item", payload: { type: "message", role: garbage, content: [] } }),
+    ];
+    const report = importCodexRollout(lines, DEFAULT_OPTS);
+    expect(report.stats.unknownItemsSkipped).toBe(1);
+    for (const warning of report.warnings) {
+      expect(warning).not.toContain(garbage);
+      expect(warning).not.toContain("secret-marker-should-not-leak");
+      expect(warning.length).toBeLessThan(120);
+    }
+  });
+});
+
 describe("importCodexRollout — synthetic orphan handling (red-proof: an inverted 'srez, not synthesize' would fail this)", () => {
   it("an unpaired Bash call is closed with a synthetic cancelled tool_result, not silently dropped", () => {
     const lines = [

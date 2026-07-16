@@ -4,7 +4,7 @@
  * scratch tmpdirs (no Electron ipcMain) plus an in-memory fake PersistencePort
  * — mirrors profile-ipc.test.ts's own convention for this codebase.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -166,6 +166,46 @@ describe("handleCodexRolloutImport", () => {
     expect(history?.map((i) => i.message.role)).toEqual(["user", "assistant"]);
   });
 
+  it("rejects a symlink standing in for a valid-shaped rollout path as not_readable (R4: TOCTOU/symlink escape)", async () => {
+    const sessionsDir = await tmp();
+    const outsideDir = await tmp("rollout-outside-");
+    const outsidePath = join(outsideDir, "secret.jsonl");
+    await writeFile(outsidePath, jsonl(BASIC_RECORDS), "utf-8");
+    const relPath = "2026/07/01/rollout-symlink.jsonl";
+    const fullPath = join(sessionsDir, relPath);
+    await mkdir(join(fullPath, ".."), { recursive: true });
+    await symlink(outsidePath, fullPath);
+    const persistence = new FakePersistence();
+    const deps = makeDeps(persistence, { p1: sessionsDir });
+
+    const previewResult = await handleCodexRolloutPreview(deps, { profileId: "p1", fileName: relPath });
+    expect(previewResult).toEqual({ ok: false, reason: "not_readable" });
+
+    const importResult = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: relPath, model: "claude-sonnet-5" });
+    expect(importResult).toEqual({ ok: false, reason: "not_readable" });
+    expect(persistence.sessions.size).toBe(0);
+  });
+});
+
+describe("handleCodexRolloutList — symlink exclusion (R4)", () => {
+  it("never lists a symlinked entry, even when its name matches the rollout shape", async () => {
+    const sessionsDir = await tmp();
+    const outsideDir = await tmp("rollout-outside-");
+    const outsidePath = join(outsideDir, "secret.jsonl");
+    await writeFile(outsidePath, jsonl(BASIC_RECORDS), "utf-8");
+    await seedRollout(sessionsDir, "2026/07/01/rollout-real.jsonl", BASIC_RECORDS);
+    const symlinkPath = join(sessionsDir, "2026/07/01/rollout-symlink.jsonl");
+    await symlink(outsidePath, symlinkPath);
+    const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
+
+    const result = await handleCodexRolloutList(deps, { profileId: "p1" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rollouts.map((r) => r.fileName)).toEqual(["2026/07/01/rollout-real.jsonl"]);
+  });
+});
+
+describe("handleCodexRolloutImport — write direction", () => {
   it("never writes back to the source rollout file (direction is codex -> us only)", async () => {
     const sessionsDir = await tmp();
     const relPath = "2026/07/01/rollout-2026-07-01T00-00-00-aaa.jsonl";
