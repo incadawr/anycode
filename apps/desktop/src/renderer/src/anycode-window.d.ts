@@ -139,10 +139,56 @@ export interface CodexManifestRefreshResult {
   supportedRange: string;
 }
 
+// TASK.52 (codex-profiles cut §8.8): mirrors the SAME duplicated shapes
+// declared in preload/index.ts (that file's own header explains why
+// `CodexRolloutImportReportView` deliberately narrows main's own
+// `RolloutImportReport` — it omits `items`, an `@anycode/core` type this
+// bundle never imports; the renderer only ever needs the preview's
+// stats/warnings/meta).
+export interface CodexRolloutEntry {
+  fileName: string;
+  sizeBytes: number;
+  mtimeMs: number;
+  cwd?: string;
+  firstUserMessage?: string;
+}
+
+export type CodexRolloutListResult =
+  | { ok: true; rollouts: CodexRolloutEntry[] }
+  | { ok: false; reason: "profile_not_found" | "not_readable" };
+
+export interface CodexRolloutImportStats {
+  messages: number;
+  toolPairs: number;
+  reasoningDropped: number;
+  developerDropped: number;
+  imagesDropped: number;
+  orphansSynthesized: number;
+  collapsedToText: number;
+  malformedLines: number;
+  unknownRecordsSkipped: number;
+  unknownItemsSkipped: number;
+  unknownPartsSkipped: number;
+}
+
+export interface CodexRolloutImportReportView {
+  stats: CodexRolloutImportStats;
+  meta: { cwd?: string; cliVersion?: string; model?: string; startedAt?: string };
+  warnings: string[];
+}
+
+export type CodexRolloutPreviewResult =
+  | { ok: true; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" };
+
+export type CodexRolloutImportResult =
+  | { ok: true; sessionId: string; workspace: string; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" };
+
 // TASK.54 (cut §9.2/§13.1): mirrors the SAME duplicated shapes declared in
 // preload/index.ts and main/provider-ipc.ts. `CustomProviderRecord` itself
 // IS a frozen shared/** type, imported above.
-export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "weak_storage_needs_consent";
+export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "needs_api_key" | "weak_storage_needs_consent";
 export type CustomProviderMutationResult =
   | { ok: true; providers: CustomProviderRecord[] }
   | { ok: false; reason: CustomProviderMutationReason };
@@ -213,6 +259,14 @@ declare global {
         acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;
         supportStatus(): Promise<CodexSupportStatusResult>;
         manifestRefresh(): Promise<CodexManifestRefreshResult>;
+        // TASK.52 (cut §8.8): the rollout-import control plane — a profile's
+        // sessions dir is resolved main-side from `profileId` alone, never a
+        // renderer-supplied path. `rolloutImport`'s `model` is the one piece
+        // of new-session identity the renderer supplies (continuing an
+        // imported conversation on a different model is the whole point).
+        rolloutList(profileId: string): Promise<CodexRolloutListResult>;
+        rolloutPreview(profileId: string, fileName: string): Promise<CodexRolloutPreviewResult>;
+        rolloutImport(profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult>;
       };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
