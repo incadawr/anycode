@@ -716,6 +716,78 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
   });
 });
 
+describe("snapshot — custom:* RECORD readiness gate (FX4, Fable iter-7: the auto-tab gate was blind to a custom-provider connection)", () => {
+  /**
+   * A settings.json with ONE active connection at `custom:<record.id>` plus the
+   * record it points at — the FX-G-B shape `buildHostEnv` already routes at
+   * runtime. `snapshotFrom`/`buildSettingsSnapshot` load straight off
+   * `settingsPath`, so — unlike the `handleConnectionCreate`-driven fixtures
+   * above (whose `providerId` gate requires the id in `catalogIds`) — a
+   * `custom:*` providerId never needs to appear in `catalogIds` at all: this
+   * gate is decided entirely off `settings.provider.custom[]`.
+   */
+  function customFixture(
+    connection: { id: string; providerId: string; model?: string; transport?: string },
+    record: { id: string; kind: "openai-compatible" | "anthropic" | "openai" },
+  ): string {
+    return JSON.stringify({
+      version: 2,
+      provider: {
+        connections: [connection],
+        activeConnectionId: connection.id,
+        custom: [{ id: record.id, name: "Custom endpoint", baseUrl: "https://llm.example.com/v1", kind: record.kind, models: [] }],
+      },
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    });
+  }
+
+  it("RED-PROOF (i): an active custom:* anthropic-kind connection is ready off the PROVIDER's own vault key alone — never the connection-scoped key (activeCredential branch)", async () => {
+    await writeFile(
+      settingsPath,
+      customFixture({ id: "conn-1", providerId: "custom:anthro", model: "claude-x" }, { id: "custom:anthro", kind: "anthropic" }),
+    );
+    // ONLY the provider's own key is set — pre-fix, activeCredential read
+    // `provider.connection.conn-1.apiKey` instead, which is never set for a
+    // custom:* connection, so providerReady stayed false forever.
+    vault.store.set("provider.custom:anthro.apiKey", "sk-custom");
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("RED-PROOF (ii): an openai-compatible custom:* connection is ready with NO key at all — the auth-optional waiver reaches a custom RECORD (selectedTransportInfo branch)", async () => {
+    await writeFile(
+      settingsPath,
+      customFixture({ id: "conn-1", providerId: "custom:oc", model: "m" }, { id: "custom:oc", kind: "openai-compatible" }),
+    );
+    // No vault entry at all. Pre-fix, a custom:* id fell through to the
+    // generic no-catalog-entry branch (authOptional always false), demanding a
+    // key that a self-hosted openai-compatible endpoint may never need.
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("RED-PROOF (iii): an anthropic-kind custom:* connection forced onto an unsupported transport is blocked, even though the waiver alone would say ready (supported-transport guard mirror)", async () => {
+    await writeFile(
+      settingsPath,
+      customFixture(
+        { id: "conn-1", providerId: "custom:anthro2", model: "m", transport: "openai-chat-completions" },
+        { id: "custom:anthro2", kind: "anthropic" },
+      ),
+    );
+    vault.store.set("provider.custom:anthro2.apiKey", "sk-custom");
+    // Without a `supportedTransports` guard mirroring the kind (anthropic ⇒
+    // ONLY anthropic-messages), the "resolvedTransport !== anthropic-messages"
+    // auth waiver alone would wrongly report ready on a combination
+    // `buildHostEnv` never actually intended (an anthropic-family provider
+    // forced onto an OpenAI-shaped transport it was never modeled to speak).
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(false);
+  });
+});
+
 describe("handleSet — provider refine-reject (TASK.45 W12: the connection graph is CRUD-only)", () => {
   it("rejects ANY provider key sent through the generic settings-set path", async () => {
     const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai" } });

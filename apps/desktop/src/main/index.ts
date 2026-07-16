@@ -52,7 +52,12 @@ import {
   buildHostEnv,
   computeProviderReady,
   connectionSecretKey,
+  customKindDefaultTransport,
   customProviderIds,
+  customProviderSecretKey,
+  customSupportedTransports,
+  findCustomProviderRecord,
+  isCustomProviderRecordId,
   resolveEffectiveTransport,
   scrubSecretEnv,
   shouldSkipConnectionHealthBinding,
@@ -516,6 +521,14 @@ function authKindFor(id: string): "api_key" | "oauth" | undefined {
 /**
  * The active connection's credential key (TASK.45 v2): its own connection key.
  * `{}` when no connection is active.
+ *
+ * FX4: a `custom:*` providerId routes at the custom provider's OWN shared
+ * vault key (`provider.<custom-id>.apiKey`, host-env.ts's
+ * `customProviderSecretKey`) instead of the connection key — mirroring
+ * `buildHostEnv`'s custom-provider route, which never reads the connection
+ * key for a custom id. Deliberately NO record look-up: a deleted custom
+ * provider still yields its (now-orphaned) secret key, so the vault read
+ * naturally comes back unset and the fail-closed default gate does the rest.
  */
 function activeCredential(current: AnycodeSettings): { credentialKey?: SecretKey } {
   const connection = activeConnection(current);
@@ -523,6 +536,9 @@ function activeCredential(current: AnycodeSettings): { credentialKey?: SecretKey
     return {};
   }
   const providerId = connection.providerId;
+  if (isCustomProviderRecordId(providerId)) {
+    return { credentialKey: customProviderSecretKey(providerId) };
+  }
   const kind = providerId === "" ? undefined : authKindFor(providerId);
   const authKind: "api_key" | "oauth" = kind === "oauth" ? "oauth" : "api_key";
   return { credentialKey: connectionSecretKey(connection.id, authKind) };
@@ -550,6 +566,16 @@ const getAccessTokenFor = (connectionId: string, providerId: string): Promise<st
  * `authOptional` is true either statically (a catalog entry marked
  * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
  * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`).
+ *
+ * FX4: a `custom:*` providerId with a live record resolves its OWN kind-implied
+ * ladder (`customKindDefaultTransport`/`customSupportedTransports`, mirroring
+ * `buildHostEnv`'s custom-provider route) BEFORE `findCatalogEntry` is even
+ * consulted — `findCatalogEntry` only knows builtin ids, so it would otherwise
+ * fall through to the generic no-catalog-entry branch below (no supported-
+ * transport guard, `authOptional` always false, wrongly blocking a keyless
+ * openai-family custom provider). A deleted record (providerId still
+ * `custom:*` but no matching entry in `settings.provider.custom[]`) falls
+ * through unchanged to that same generic fail-closed branch.
  */
 function selectedTransportInfo(current: AnycodeSettings): {
   authOptional: boolean;
@@ -564,6 +590,22 @@ function selectedTransportInfo(current: AnycodeSettings): {
     resolveEffectiveTransport({ bootEnv, settingsTransport: view.transport }).value;
   if (id === undefined || id.trim() === "") {
     return { authOptional: false, resolvedTransport: resolveLegacy() };
+  }
+  const customRecord = isCustomProviderRecordId(id) ? findCustomProviderRecord(current, id) : undefined;
+  if (customRecord !== undefined) {
+    // resolvedTransport is always defined here: customKindDefaultTransport
+    // always supplies a defaultTransport rung, so resolveEffectiveTransport's
+    // ladder never falls through to "unset".
+    const resolvedTransport = resolveEffectiveTransport({
+      bootEnv,
+      settingsTransport: view.transport,
+      defaultTransport: customKindDefaultTransport(customRecord.kind),
+    }).value;
+    return {
+      authOptional: resolvedTransport !== "anthropic-messages",
+      resolvedTransport,
+      supportedTransports: customSupportedTransports(customRecord.kind),
+    };
   }
   const entry = findCatalogEntry(id);
   if (entry === undefined) {

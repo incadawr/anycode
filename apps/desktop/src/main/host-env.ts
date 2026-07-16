@@ -136,16 +136,24 @@ export function isCustomProviderRecordId(providerId: string): boolean {
  * The vault key a custom provider's ONE shared credential lives under —
  * `provider.<custom-id>.apiKey`, one key per PROVIDER covering all of its
  * connections (design §9.2 "key into the existing vault"). Mirrors
- * provider-ipc.ts's `customProviderSecretKey` by contract; kept a local
- * literal so host-env never imports the IPC module (which pulls electron/zod),
- * the same convention as the core env-var mirrors at the top of this file.
+ * provider-ipc.ts's own `customProviderSecretKey` by contract — that module
+ * keeps its own copy rather than importing this one (host-env stays
+ * electron/zod-free of the IPC module), the same convention as the core
+ * env-var mirrors at the top of this file. Exported (FX4) so index.ts's and
+ * settings-ipc.ts's readiness-gate `activeCredential` can route a
+ * `custom:*` providerId at its real vault key instead of the connection key.
  */
-function customProviderSecretKey(id: string): SecretKey {
+export function customProviderSecretKey(id: string): SecretKey {
   return `provider.${id}.apiKey`;
 }
 
-/** The record a `custom:*` providerId points at; undefined = deleted while a connection still references it. */
-function findCustomProviderRecord(settings: AnycodeSettings, id: string): CustomProviderRecord | undefined {
+/**
+ * The record a `custom:*` providerId points at; undefined = deleted while a
+ * connection still references it. Exported (FX4) so the readiness-gate
+ * `selectedTransportInfo` in index.ts/settings-ipc.ts can look up a custom
+ * record's `kind` the same way `buildHostEnv` already does.
+ */
+export function findCustomProviderRecord(settings: AnycodeSettings, id: string): CustomProviderRecord | undefined {
   return (settings.provider.custom ?? []).find((entry) => entry.id === id);
 }
 
@@ -157,9 +165,10 @@ function findCustomProviderRecord(settings: AnycodeSettings, id: string): Custom
  * Fed into the SAME `resolveEffectiveTransport` ladder + emission rule a
  * catalog default rides, so an anthropic-kind default emits NOTHING (byte
  * parity with the builtin anthropic-family entries) while an explicit
- * env/settings transport still wins by construction.
+ * env/settings transport still wins by construction. Exported (FX4) — same
+ * readiness-gate seam as the two exports above.
  */
-function customKindDefaultTransport(kind: CustomProviderRecord["kind"]): string {
+export function customKindDefaultTransport(kind: CustomProviderRecord["kind"]): string {
   switch (kind) {
     case "anthropic":
       return "anthropic-messages";
@@ -167,6 +176,27 @@ function customKindDefaultTransport(kind: CustomProviderRecord["kind"]): string 
       return "openai-responses";
     case "openai-compatible":
       return "openai-chat-completions";
+  }
+}
+
+/**
+ * The transports a custom record's `kind` supports — mirrors the builtin
+ * catalog family of the same kind (anthropic entries only ever support
+ * `anthropic-messages`; the openai/openai-compatible families support both
+ * openai-shaped transports, mirroring the openai/openrouter/vllm catalog
+ * entries). Fed into `computeProviderReady`'s `supportedTransports` guard
+ * (FX4) — without this, a `custom:*` record had NO supported-transport guard
+ * at all in the readiness gate, silently accepting an unsupported transport
+ * combination that `buildHostEnv` would actually run.
+ */
+export function customSupportedTransports(kind: CustomProviderRecord["kind"]): readonly string[] {
+  switch (kind) {
+    case "anthropic":
+      return ["anthropic-messages"];
+    case "openai":
+      return ["openai-responses", "openai-chat-completions"];
+    case "openai-compatible":
+      return ["openai-chat-completions", "openai-responses"];
   }
 }
 
