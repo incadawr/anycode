@@ -126,6 +126,7 @@ function makeDeps(shim: CodexShim, overrides: Partial<CodexIpcDeps> = {}): Codex
     // opens the window these tests drive quit into.
     bootEnv: { PATH: "", HOME: workDir },
     readBinaryPathSetting: async () => shim.path,
+    readCodexSettings: async () => undefined,
     writeCodexSettings: async () => ({ ok: true as const, snapshot: {} as never }),
     dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
     openExternal: vi.fn(),
