@@ -18,11 +18,16 @@
  */
 import { describe, expect, it } from "vitest";
 import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
-import type { CatalogSummary, CatalogSummaryEntry, ProviderConnection, SecretStatus } from "../../../shared/settings.js";
+import type { CatalogSummary, CatalogSummaryEntry, CustomProviderRecord, ProviderConnection, SecretStatus } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
 import type { WireRepoMapStatus } from "../../../shared/protocol.js";
 import {
+  buildCustomProviderCreateRequest,
   buildToolsPatch,
+  customProviderKindLabel,
+  describeCustomProvider,
+  describeCustomProviderMutationError,
+  describeFetchModelsError,
   describeMcpServer,
   describeOAuthStatus,
   describeRepoMapRow,
@@ -39,6 +44,7 @@ import {
   shouldShowAppVersion,
   shouldShowUpdateBanner,
   showsManualUpdateLink,
+  toggleSelectedModel,
   transportOptions,
   updateStatusText,
 } from "./SettingsScreen.js";
@@ -537,5 +543,114 @@ describe("shouldShowAppVersion (TASK.49/W14-fix — About pane version line)", (
   it("does not render when main supplied no getAppVersion (appVersion absent)", () => {
     expect(shouldShowAppVersion({})).toBe(false);
     expect(shouldShowAppVersion({ appVersion: undefined })).toBe(false);
+  });
+});
+
+// ── custom model-provider pure helpers (owner-decision #6, cut §9.2, TASK.54) ──
+
+const CUSTOM_PROVIDER_FIXTURE: CustomProviderRecord = {
+  id: "custom:acme",
+  name: "Acme Local",
+  baseUrl: "https://acme.example.com",
+  kind: "openai-compatible",
+  models: ["m1", "m2"],
+};
+
+describe("customProviderKindLabel", () => {
+  it("labels every kind", () => {
+    expect(customProviderKindLabel("openai-compatible")).toMatch(/Chat Completions/);
+    expect(customProviderKindLabel("openai")).toMatch(/Responses/);
+    expect(customProviderKindLabel("anthropic")).toMatch(/Anthropic/);
+  });
+});
+
+describe("describeCustomProvider", () => {
+  it("pluralizes the model count", () => {
+    expect(describeCustomProvider({ ...CUSTOM_PROVIDER_FIXTURE, models: [] })).toBe(
+      "https://acme.example.com · no models selected",
+    );
+    expect(describeCustomProvider({ ...CUSTOM_PROVIDER_FIXTURE, models: ["m1"] })).toBe(
+      "https://acme.example.com · 1 model",
+    );
+    expect(describeCustomProvider({ ...CUSTOM_PROVIDER_FIXTURE, models: ["m1", "m2"] })).toBe(
+      "https://acme.example.com · 2 models",
+    );
+  });
+});
+
+describe("describeCustomProviderMutationError / describeFetchModelsError (custody: text only, never a value)", () => {
+  it("covers every CustomProviderMutationReason with distinct, non-empty text", () => {
+    const reasons = ["invalid", "read_only", "not_found", "weak_storage_needs_consent"] as const;
+    const texts = reasons.map((r) => describeCustomProviderMutationError(r));
+    expect(new Set(texts).size).toBe(reasons.length);
+    for (const t of texts) {
+      expect(t.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("covers every FetchModelsFailureReason with distinct, non-empty text", () => {
+    const reasons = [
+      "invalid_request",
+      "invalid_url",
+      "redirect_blocked",
+      "http_error",
+      "response_too_large",
+      "timeout",
+      "network_error",
+      "invalid_response",
+    ] as const;
+    const texts = reasons.map((r) => describeFetchModelsError(r));
+    expect(new Set(texts).size).toBe(reasons.length);
+    for (const t of texts) {
+      expect(t.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("toggleSelectedModel", () => {
+  it("adds an unselected id and removes a selected one", () => {
+    expect(toggleSelectedModel([], "m1")).toEqual(["m1"]);
+    expect(toggleSelectedModel(["m1"], "m2")).toEqual(["m1", "m2"]);
+    expect(toggleSelectedModel(["m1", "m2"], "m1")).toEqual(["m2"]);
+  });
+});
+
+describe("buildCustomProviderCreateRequest (client-side gate; main's zod schema is still the final validator)", () => {
+  it("trims and shapes a valid submission", () => {
+    const req = buildCustomProviderCreateRequest({
+      name: "  Acme  ",
+      baseUrl: "  https://acme.example.com  ",
+      kind: "anthropic",
+      apiKey: "  sekrit  ",
+      selectedModels: ["m1", "m2"],
+    });
+    expect(req).toEqual({
+      name: "Acme",
+      baseUrl: "https://acme.example.com",
+      kind: "anthropic",
+      apiKey: "sekrit",
+      models: ["m1", "m2"],
+    });
+  });
+
+  it("returns undefined when name, baseUrl, or apiKey is blank", () => {
+    const base = { name: "N", baseUrl: "https://x", kind: "openai-compatible" as const, apiKey: "k", selectedModels: [] };
+    expect(buildCustomProviderCreateRequest({ ...base, name: "   " })).toBeUndefined();
+    expect(buildCustomProviderCreateRequest({ ...base, baseUrl: "" })).toBeUndefined();
+    expect(buildCustomProviderCreateRequest({ ...base, apiKey: "" })).toBeUndefined();
+  });
+
+  // Custody sanity: the request this builds is exactly what crosses the wire
+  // once — it must never carry more than `apiKey` (no derived/duplicated
+  // secret field, nothing that would give the value a second home).
+  it("carries the key in exactly one field", () => {
+    const req = buildCustomProviderCreateRequest({
+      name: "N",
+      baseUrl: "https://x",
+      kind: "openai-compatible",
+      apiKey: "the-secret",
+      selectedModels: [],
+    });
+    expect(Object.values(req ?? {}).filter((v) => v === "the-secret")).toHaveLength(1);
   });
 });

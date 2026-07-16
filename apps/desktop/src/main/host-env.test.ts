@@ -14,6 +14,7 @@ import {
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
+  customProviderIds,
   envOverrides,
   isKnownSecretKey,
   resolveEffectiveTransport,
@@ -663,5 +664,45 @@ describe("isKnownSecretKey (slice 2.5 §4, generalises SECRET_KEYS)", () => {
     expect(isKnownSecretKey("provider.z-ai.token", catalogIds)).toBe(false);
     expect(isKnownSecretKey("anything.else", catalogIds)).toBe(false);
     expect(isKnownSecretKey("", catalogIds)).toBe(false);
+  });
+});
+
+describe("customProviderIds (owner-decision #6, cut §9.2, TASK.54)", () => {
+  it("returns every id in settings.provider.custom", () => {
+    const withCustom: AnycodeSettings = {
+      ...settings(),
+      provider: {
+        ...settings().provider,
+        custom: [
+          { id: "custom:foo", name: "Foo", baseUrl: "https://foo.example", kind: "openai-compatible", models: [] },
+          { id: "custom:bar", name: "Bar", baseUrl: "https://bar.example", kind: "anthropic", models: ["m1"] },
+        ],
+      },
+    };
+    expect(customProviderIds(withCustom)).toEqual(["custom:foo", "custom:bar"]);
+  });
+
+  it("returns an empty array when settings.provider.custom is absent", () => {
+    expect(customProviderIds(settings())).toEqual([]);
+  });
+
+  // RED-PROOF: this is exactly the seam TASK.54 flags at main/index.ts — a
+  // custom provider's vault key is only recognized once its id is unioned
+  // into `catalogIds`. Reverting to `catalogProviderIds()` alone (no union)
+  // reproduces this red case.
+  it("RED-PROOF: a custom provider's secret key is unknown until its id is unioned into catalogIds", () => {
+    const withCustom: AnycodeSettings = {
+      ...settings(),
+      provider: {
+        ...settings().provider,
+        custom: [{ id: "custom:foo", name: "Foo", baseUrl: "https://foo.example", kind: "openai-compatible", models: [] }],
+      },
+    };
+    const builtinOnly = ["anthropic", "z-ai"];
+    // Without the union (today's `catalogProviderIds()` call site), the key is invisible.
+    expect(isKnownSecretKey("provider.custom:foo.apiKey", builtinOnly)).toBe(false);
+    // With the union `customProviderIds` provides, it resolves correctly.
+    const unioned = [...builtinOnly, ...customProviderIds(withCustom)];
+    expect(isKnownSecretKey("provider.custom:foo.apiKey", unioned)).toBe(true);
   });
 });
