@@ -21,7 +21,7 @@
 export interface CodexQuotaWindow {
   /** Sole required wire field. */
   usedPercent: number;
-  /** epoch seconds (verified W0-R1); absent/null ⇒ label falls back to `limitName`/"Limit" (cut §6.2). */
+  /** Window length in MINUTES (live probe: 10080 = 7 days); absent/null ⇒ label falls back to `limitName`/"Limit" (cut §6.2). */
   windowDurationMins?: number | null;
   /** epoch seconds (verified W0-R1). */
   resetsAt?: number | null;
