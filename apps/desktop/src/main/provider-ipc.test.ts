@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
 import type { CustomProviderRecord, SecretKey } from "../shared/settings.js";
 import {
@@ -28,12 +28,27 @@ import {
 } from "./provider-ipc.js";
 import type { SecretSetResult } from "./vault.js";
 
+/** `saveSettings` call counter (F-C zero-trace red-proofs — asserted by spy, not just by re-reading the file). */
+const saveSettingsSpy = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../settings/files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../settings/files.js")>();
+  return {
+    ...actual,
+    saveSettings: async (...args: Parameters<typeof actual.saveSettings>) => {
+      saveSettingsSpy.count++;
+      return actual.saveSettings(...args);
+    },
+  };
+});
+
 // ── fake vault (mirrors settings-ipc.test.ts's FakeVault, trimmed to this module's surface) ──
 
 class FakeVault implements ProviderVaultLike {
   store = new Map<string, string>();
   weakConsentRequired = false;
+  setSecretCallCount = 0;
   async setSecret(key: SecretKey, value: string): Promise<SecretSetResult> {
+    this.setSecretCallCount++;
     if (this.weakConsentRequired) {
       return { ok: false, reason: "weak_storage_needs_consent" };
     }
@@ -60,6 +75,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "anycode-provider-ipc-"));
   settingsPath = join(dir, "settings.json");
   vault = new FakeVault();
+  saveSettingsSpy.count = 0;
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -103,6 +119,15 @@ describe("isAllowedCustomProviderUrl (cut §9.2 URL policy, enumerate-good)", ()
     expect(isAllowedCustomProviderUrl("ftp://localhost")).toBe(false);
     expect(isAllowedCustomProviderUrl("")).toBe(false);
   });
+
+  // RED-PROOF (F-C, amendment-1 FX2-1): a `protocol`/`hostname` check with no
+  // userinfo guard would accept this — a secret placed in userinfo would then
+  // round-trip into settings.json in plaintext and back out to the renderer.
+  it("RED-PROOF: rejects a URL carrying embedded userinfo, on any allowed scheme", () => {
+    expect(isAllowedCustomProviderUrl("https://user:sekrit-pw@api.example.com")).toBe(false);
+    expect(isAllowedCustomProviderUrl("https://justauser@api.example.com")).toBe(false);
+    expect(isAllowedCustomProviderUrl("http://user:pw@localhost:8080")).toBe(false);
+  });
 });
 
 describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP servers)", () => {
@@ -127,6 +152,22 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
   it("does not even attempt a network call for a disallowed URL", async () => {
     const result = await fetchCustomProviderModels({ baseUrl: "http://evil.example.com" });
     expect(result).toEqual({ ok: false, reason: "invalid_url" });
+  });
+
+  // RED-PROOF (F-C, surface c — fetch-models path): a userinfo-carrying
+  // baseUrl must be refused BEFORE any network attempt, same as an
+  // origin-mismatched URL above.
+  it("RED-PROOF: rejects a userinfo-carrying baseUrl without attempting a network call", async () => {
+    let called = false;
+    const result = await fetchCustomProviderModels({
+      baseUrl: "https://user:sekrit-pw@api.example.com",
+      fetchImpl: async () => {
+        called = true;
+        throw new Error("must not be called — userinfo baseUrl should be rejected before any fetch");
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid_url" });
+    expect(called).toBe(false);
   });
 
   it("fetches and parses a normal models list, sending the key ONLY as an Authorization header", async () => {
@@ -319,6 +360,41 @@ describe("handleCustomProviderCreate", () => {
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.custom ?? []).toEqual([]);
   });
+
+  // RED-PROOF (F-C, surface a — create): a userinfo-carrying baseUrl must be
+  // refused BEFORE either side effect — neither the vault nor settings.json
+  // is ever touched (asserted via the setSecret/saveSettings call-count spies,
+  // not merely by re-reading the reloaded state).
+  it("RED-PROOF: a userinfo baseUrl is refused and leaves ZERO trace (no vault write, no settings.json write)", async () => {
+    const res = await handleCustomProviderCreate(makeDeps(), {
+      name: "Leaky",
+      baseUrl: "https://user:sekrit-pw@api.example.com",
+      kind: "openai-compatible",
+      apiKey: "k",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(vault.setSecretCallCount).toBe(0);
+    expect(saveSettingsSpy.count).toBe(0);
+  });
+
+  // F-D (amendment-1 FX2-1): [::1] is allowed end-to-end now that
+  // provider-ipc.ts's re-check and settings/schema.ts's persisted-shape
+  // validation share the SAME predicate — previously the create path's own
+  // check allowed [::1] but the subsequent `settingsSchema.safeParse` (which
+  // did not) silently downgraded the outcome to a generic `invalid`.
+  it("accepts http://[::1] end-to-end (F-D unified URL policy)", async () => {
+    const res = await handleCustomProviderCreate(makeDeps(), {
+      name: "IPv6 loopback",
+      baseUrl: "http://[::1]:8080",
+      kind: "openai-compatible",
+      apiKey: "k",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("unreachable");
+    expect(res.providers[0]?.baseUrl).toBe("http://[::1]:8080");
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("http://[::1]:8080");
+  });
 });
 
 describe("handleCustomProviderUpdate", () => {
@@ -356,6 +432,23 @@ describe("handleCustomProviderUpdate", () => {
     await seed();
     const res = await handleCustomProviderUpdate(makeDeps(), { id: "custom:fixed-id", baseUrl: "http://evil.example.com" });
     expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  // RED-PROOF (F-C, surface b — update): a userinfo-carrying baseUrl is
+  // refused before the lock is even taken — the existing record (baseUrl AND
+  // stored key) is left completely untouched, and neither side effect fires.
+  it("RED-PROOF: a userinfo baseUrl is refused on update, leaving the existing record and vault key untouched", async () => {
+    await seed();
+    saveSettingsSpy.count = 0; // reset past the seed's own create-time save
+    const res = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "http://user:pw@localhost:8080",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(saveSettingsSpy.count).toBe(0);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("https://api.example.com");
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("orig-key");
   });
 });
 
@@ -421,5 +514,14 @@ describe("handleCustomProviderFetchModels", () => {
   it("returns invalid_request for a malformed payload", async () => {
     const res = await handleCustomProviderFetchModels(makeDeps(), { nonsense: true });
     expect(res).toEqual({ ok: false, reason: "invalid_request" });
+  });
+
+  // RED-PROOF (F-C, surface c — fetch-models IPC handler, not-yet-saved preview path).
+  it("RED-PROOF: rejects a userinfo-carrying baseUrl in the not-yet-saved preview path with invalid_url", async () => {
+    const res = await handleCustomProviderFetchModels(makeDeps(), {
+      baseUrl: "https://user:sekrit-pw@api.example.com",
+      apiKey: "preview-key",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid_url" });
   });
 });

@@ -27,6 +27,7 @@ import {
   CURRENT_SETTINGS_VERSION,
   DEFAULT_SETTINGS,
   cloneDefaults,
+  isHttpsOrLocalhostUrl,
   mergeSettings,
   parseSettings,
   settingsSchema,
@@ -448,6 +449,28 @@ describe("codex.profiles (codex-profiles cut §2.3, amended §A1.1) — round-tr
   });
 });
 
+describe("isHttpsOrLocalhostUrl (cut §9.2, amendment-1 FX2-1 — single source of truth, re-exported by main/provider-ipc.ts)", () => {
+  it("accepts https with no userinfo, for any host", () => {
+    expect(isHttpsOrLocalhostUrl("https://api.example.com")).toBe(true);
+  });
+
+  it("accepts http ONLY for loopback hosts, including [::1]", () => {
+    expect(isHttpsOrLocalhostUrl("http://localhost:8080")).toBe(true);
+    expect(isHttpsOrLocalhostUrl("http://127.0.0.1:11434")).toBe(true);
+    expect(isHttpsOrLocalhostUrl("http://[::1]:8080")).toBe(true);
+  });
+
+  it("rejects http for a non-loopback host", () => {
+    expect(isHttpsOrLocalhostUrl("http://evil.example.com")).toBe(false);
+  });
+
+  // RED-PROOF (F-C): userinfo rejected on every scheme.
+  it("RED-PROOF: rejects a URL carrying embedded userinfo, on any allowed scheme", () => {
+    expect(isHttpsOrLocalhostUrl("https://user:sekrit-pw@api.example.com")).toBe(false);
+    expect(isHttpsOrLocalhostUrl("http://user:pw@localhost:8080")).toBe(false);
+  });
+});
+
 describe("provider.custom (cut §9.2) — round-trip + zod-granularity", () => {
   it("reads a file with no provider.custom, round-tripping byte-identically", () => {
     const base = cloneDefaults();
@@ -507,6 +530,48 @@ describe("provider.custom (cut §9.2) — round-trip + zod-granularity", () => {
       expect(parsed.data.provider.custom).toHaveLength(1);
       expect(parsed.data.provider.custom?.[0]?.id).toBe("custom:good");
       expect(parsed.data.provider.connections).toEqual([{ id: "conn-1", providerId: "anthropic" }]);
+    }
+  });
+
+  // F-C (amendment-1 FX2-1, custody): a userinfo-carrying baseUrl must never
+  // reach settings.json — fail-closed at load, same per-element tolerance as
+  // any other malformed custom-provider entry.
+  it("zod-granularity: a custom-provider baseUrl carrying embedded userinfo is dropped alone (F-C custody) — the valid sibling survives", () => {
+    const mixed = {
+      ...cloneDefaults(),
+      provider: {
+        connections: [],
+        custom: [
+          { id: "custom:leaky", name: "Leaky", baseUrl: "https://user:sekrit-pw@api.example.com", kind: "openai-compatible", models: [] },
+          { id: "custom:good", name: "Good", baseUrl: "https://good.example.com", kind: "openai-compatible", models: [] },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(mixed);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.custom).toHaveLength(1);
+      expect(parsed.data.provider.custom?.[0]?.id).toBe("custom:good");
+    }
+  });
+
+  // F-D (amendment-1 FX2-1): [::1] is accepted at the schema layer, matching
+  // provider-ipc.ts's fetch-models policy — previously only the latter
+  // allowed it, so a saved [::1] endpoint would fail `settingsSchema.safeParse`
+  // on create even though the fetch-models preview for the same URL succeeded.
+  it("allows http://[::1] for a custom provider baseUrl (F-D unification)", () => {
+    const withIpv6: AnycodeSettings = {
+      ...cloneDefaults(),
+      provider: {
+        connections: [],
+        custom: [{ id: "custom:v6", name: "V6", baseUrl: "http://[::1]:8080", kind: "openai-compatible", models: [] }],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withIpv6)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.custom).toHaveLength(1);
+      expect(parsed.data.provider.custom?.[0]?.baseUrl).toBe("http://[::1]:8080");
     }
   });
 });

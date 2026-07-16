@@ -170,22 +170,36 @@ const codexProfilesArraySchema = z.preprocess(
 
 const customProviderKindSchema = z.enum(["openai-compatible", "anthropic", "openai"]);
 
-/** `https://` always allowed; `http://` allowed ONLY for localhost/127.0.0.1 (cut §9.2 threat list). */
-function isHttpsOrLocalhostUrl(value: string): boolean {
+/**
+ * `https://` (no embedded userinfo) always allowed; `http://` allowed ONLY
+ * for loopback (localhost/127.0.0.1/[::1]), also no embedded userinfo (cut
+ * §9.2 threat list, amendment-1 FX2-1: a `user:pass@host` userinfo component
+ * is rejected for every scheme — a secret placed there would otherwise
+ * round-trip into settings.json and back out to the renderer as plain
+ * baseUrl text instead of living only in the vault).
+ *
+ * The single source of truth for this predicate — main/provider-ipc.ts
+ * imports and re-exports it rather than keeping its own copy.
+ */
+export function isHttpsOrLocalhostUrl(value: string): boolean {
+  let url: URL;
   try {
-    const url = new URL(value);
-    if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    url = new URL(value);
   } catch {
     return false;
   }
+  if (url.username !== "" || url.password !== "") return false;
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
 }
 
 /** One `CustomProviderRecord` (cut §9.2) — same per-element-catch discipline as `codexProfileSchema`. */
 const customProviderSchema = z.object({
   id: z.string(),
   name: z.string(),
-  baseUrl: z.string().refine(isHttpsOrLocalhostUrl, { message: "baseUrl must be https:, or http: only for localhost/127.0.0.1" }),
+  baseUrl: z.string().refine(isHttpsOrLocalhostUrl, {
+    message: "baseUrl must be https: or http: scoped to localhost/127.0.0.1/[::1], with no embedded userinfo",
+  }),
   kind: customProviderKindSchema,
   models: z.array(z.string()),
   modelsFetchedAt: z.string().optional(),
