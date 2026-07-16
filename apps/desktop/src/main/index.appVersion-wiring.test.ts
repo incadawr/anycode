@@ -29,8 +29,21 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SETTINGS_GET_CHANNEL } from "../shared/settings.js";
-import type { SettingsSnapshot } from "../shared/settings.js";
+import { CONNECTION_CREATE_CHANNEL, SETTINGS_GET_CHANNEL } from "../shared/settings.js";
+import type { SettingsMutationResult, SettingsSnapshot } from "../shared/settings.js";
+
+// Not statically imported from ./provider-ipc.js: that module chain-imports
+// "electron" too, and a top-level import of it here resolves before this
+// file's own `vi.mock("electron", ...)` factory has finished hoisting,
+// throwing "Cannot access 'FakeBrowserWindow' before initialization" (same
+// reason ./index.js itself is only ever dynamically imported inside each
+// `it` below). Duplicated literal — provider-ipc.ts holds the source of
+// truth — same "duplicated on purpose" convention as every other channel
+// name in preload/index.ts.
+const CUSTOM_PROVIDER_CREATE_CHANNEL = "anycode:custom-provider-create";
+type CustomProviderMutationResult =
+  | { ok: true; providers: Array<{ id: string }> }
+  | { ok: false; reason: string };
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -196,5 +209,52 @@ describe("main/index.ts — getAppVersion production wiring (TASK.49)", () => {
     const snapshot = (await handleSettingsGet({})) as SettingsSnapshot;
 
     expect(snapshot.appVersion).toBe("1.2.3-second-boot");
+  });
+});
+
+describe("main/index.ts — custom-provider IPC production wiring (TASK.54, FX2-4)", () => {
+  it("wires registerProviderIpc so anycode:custom-provider-create is actually reachable", async () => {
+    await import("./index.js");
+
+    const handleCreate = await waitForHandler(CUSTOM_PROVIDER_CREATE_CHANNEL);
+    const result = (await handleCreate({}, {
+      name: "Local vLLM",
+      baseUrl: "https://example.com",
+      kind: "openai-compatible",
+      apiKey: "sk-test-key",
+    })) as CustomProviderMutationResult;
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("recognizes a just-created custom provider id as a valid connection providerId with no restart (catalogIds union is live, not a boot-time snapshot)", async () => {
+    await import("./index.js");
+
+    const handleCreate = await waitForHandler(CUSTOM_PROVIDER_CREATE_CHANNEL);
+    const handleConnectionCreate = await waitForHandler(CONNECTION_CREATE_CHANNEL);
+
+    const created = (await handleCreate({}, {
+      name: "Local vLLM",
+      baseUrl: "https://example.com",
+      kind: "openai-compatible",
+      apiKey: "sk-test-key",
+    })) as CustomProviderMutationResult;
+    if (!created.ok) {
+      throw new Error(`setup failed: custom-provider-create returned ${JSON.stringify(created)}`);
+    }
+    const customId = created.providers[0]?.id;
+    expect(customId).toBeDefined();
+
+    // Pre-fix, `settingsIpcDeps.catalogIds` was a boot-time-only
+    // `catalogProviderIds()` snapshot never unioned with `provider.custom[]`
+    // ids and never refreshed post-boot — `handleConnectionCreate`'s
+    // `catalogIds.includes(req.providerId)` gate would refuse this with
+    // `{ ok: false, reason: "invalid" }` even though the provider above was
+    // just created successfully.
+    const connectionResult = (await handleConnectionCreate({}, {
+      providerId: customId,
+    })) as SettingsMutationResult;
+
+    expect(connectionResult).toMatchObject({ ok: true });
   });
 });

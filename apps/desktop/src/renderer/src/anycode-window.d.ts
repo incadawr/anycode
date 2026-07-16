@@ -25,6 +25,7 @@ import type {
   ConnectionDeleteRequest,
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
+  CustomProviderRecord,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -138,6 +139,43 @@ export interface CodexManifestRefreshResult {
   supportedRange: string;
 }
 
+// TASK.54 (cut §9.2/§13.1): mirrors the SAME duplicated shapes declared in
+// preload/index.ts and main/provider-ipc.ts. `CustomProviderRecord` itself
+// IS a frozen shared/** type, imported above.
+export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "weak_storage_needs_consent";
+export type CustomProviderMutationResult =
+  | { ok: true; providers: CustomProviderRecord[] }
+  | { ok: false; reason: CustomProviderMutationReason };
+
+export type FetchModelsFailureReason =
+  | "invalid_request"
+  | "invalid_url"
+  | "redirect_blocked"
+  | "http_error"
+  | "response_too_large"
+  | "timeout"
+  | "network_error"
+  | "invalid_response";
+
+export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
+
+export interface CustomProviderCreateRequest {
+  name: string;
+  baseUrl: string;
+  kind: CustomProviderRecord["kind"];
+  apiKey: string;
+  models?: string[];
+}
+
+export interface CustomProviderUpdateRequest {
+  id: string;
+  name?: string;
+  baseUrl?: string;
+  kind?: CustomProviderRecord["kind"];
+  apiKey?: string;
+  models?: string[];
+}
+
 declare global {
   interface Window {
     anycode: {
@@ -204,6 +242,20 @@ declare global {
         // request outcome updates a connection's advisory health — no payload,
         // same shape as `onEnginesChanged` above.
         onProviderHealthChanged(callback: () => void): () => void;
+      };
+      // TASK.54 (cut §9.2/§13.1): custom OpenAI-compatible model-provider
+      // CRUD + guarded `/v1/models` preview fetch (main/provider-ipc.ts owns
+      // the URL/redirect/body-cap threat model + vault custody). No
+      // credential ever crosses back — every result carries only the
+      // persisted record (never a key); `create`/`update` are the only two
+      // directions a plaintext key ever travels, main-bound, once per call.
+      customProvider: {
+        create(req: CustomProviderCreateRequest): Promise<CustomProviderMutationResult>;
+        update(req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult>;
+        delete(req: { id: string }): Promise<CustomProviderMutationResult>;
+        fetchModels(
+          req: { id: string } | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
+        ): Promise<FetchModelsOutcome>;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config
       // management invoke-API. `get` returns the joined project/user/compat

@@ -52,6 +52,7 @@ import {
   buildHostEnv,
   computeProviderReady,
   connectionSecretKey,
+  customProviderIds,
   resolveEffectiveTransport,
   scrubSecretEnv,
   shouldSkipConnectionHealthBinding,
@@ -63,6 +64,7 @@ import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
+import { registerProviderIpc } from "./provider-ipc.js";
 import {
   applyConnectionHealthEvent,
   handleSet,
@@ -596,6 +598,18 @@ function currentSettings(): AnycodeSettings {
 }
 
 /**
+ * The allow-list `isKnownSecretKey`/`Vault.statuses` (via settingsIpcDeps)
+ * check a `provider.<id>.{apiKey,oauth}` vault key against: every builtin
+ * catalog id, unioned with every custom-provider id currently in `current`
+ * (TASK.54, host-env.ts's `customProviderIds` seam). Recomputed — not a
+ * boot-time snapshot — so a custom provider created/renamed/deleted after
+ * boot is reflected on its very next settings/provider IPC call.
+ */
+function catalogIdsFor(current: AnycodeSettings): string[] {
+  return [...catalogProviderIds(), ...customProviderIds(current)];
+}
+
+/**
  * A copy of `current` with the active connection overridden to `connectionId`
  * (TASK.45 W10): routes every existing active-connection resolver
  * (resolveProviderSelection / activeCredential / activeProviderView) at the
@@ -1079,7 +1093,9 @@ void app.whenReady().then(async () => {
     settingsPath,
     logger: fileLogger,
     // Slice 2.5: catalog allow-list + projection + oauth wiring (additive).
-    catalogIds: catalogProviderIds(),
+    // TASK.54: unioned with custom-provider ids so their vault keys are
+    // recognized too; kept in sync post-boot by both onMutation hooks below.
+    catalogIds: catalogIdsFor(currentSettings()),
     // Carry `isCustom` (TASK.43 W5-FIX #2/#5): core has no literal field, so it
     // is derived per entry from `isCustomProvider` and folded into the projected
     // summary the renderer consumes for credential-slot + fallback decisions.
@@ -1100,6 +1116,10 @@ void app.whenReady().then(async () => {
       (manager?.pinnedConnectionIds().has(connectionId) ?? false) || pinReservations.has(connectionId),
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
+      // TASK.54: `provider.custom` is schema-reachable through this generic
+      // patch channel too, so re-derive the union defensively here as well
+      // (not just from registerProviderIpc's own onMutation below).
+      settingsIpcDeps.catalogIds = catalogIdsFor(settings);
       await refreshProviderState();
       if (
         providerReady &&
@@ -1113,6 +1133,32 @@ void app.whenReady().then(async () => {
     },
   };
   registerSettingsIpc(settingsIpcDeps);
+
+  // Custom OpenAI-compatible model-provider control plane (TASK.54, cut
+  // §9.2/§13.1): CRUD for `settings.provider.custom[]` + the guarded
+  // `/v1/models` preview fetch, behind its own four invoke channels. Mirrors
+  // settingsIpcDeps.onMutation immediately above — provider-ipc.ts already
+  // hands back the POST-mutation `AnycodeSettings` (not a projected
+  // snapshot), so no re-load from disk is needed here, unlike that hook.
+  registerProviderIpc({
+    vault,
+    settingsPath,
+    logger: fileLogger,
+    onMutation: async (fresh) => {
+      settings = fresh;
+      settingsIpcDeps.catalogIds = catalogIdsFor(fresh);
+      await refreshProviderState();
+      if (
+        providerReady &&
+        manager !== null &&
+        manager.count() === 0 &&
+        !quitting &&
+        (parkedResumeId !== undefined || resolveWorkspaceFromEnv() !== undefined)
+      ) {
+        await startInitialTab({ onNoWorkspace: "stay", deliverNow: true, promptForWorkspace: false });
+      }
+    },
+  });
 
   // Codex onboarding control plane (TASK.41, cut §2(g)): discovery ladder +
   // bounded doctor + native login, behind four invoke channels + one push.
