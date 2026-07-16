@@ -34,6 +34,7 @@ import type {
   AgentEvent,
   BackgroundTaskSnapshot,
   ChatMessage,
+  CodexRateLimitsWire,
   CommandHookDeclaration,
   ImageAttachment,
   ImageMediaType,
@@ -106,12 +107,26 @@ export interface EnginePermissionPreset {
  * exact. `model`/`permissions` (codex-fixes TASK.39, cut §3.1) are additive
  * and optional: absent for core (and for any engine that has not yet wired a
  * model/preset catalog) so this projection's core wire shape is unchanged.
+ *
+ * `account`/`quota` (codex-profiles cut §3.5) are ALSO additive-optional, for
+ * the same reason: absent for core and for any engine that has not wired
+ * account/quota reporting.
  */
 export interface EnginePresentation {
   id: EngineId;
   capabilities: EngineCapabilitiesProjection;
   model?: { current: string; available: EngineModelChoice[] };
   permissions?: { presets: EnginePermissionPreset[]; activePresetId: string };
+  /**
+   * What to show in the account chip (cut §3.5/§4.4 custody): `label` is the
+   * human-editable profile label, NEVER the sole identifier; e-mail (when
+   * present on the underlying `CodexAccount`) is a display-time concern of
+   * the consuming UI, not carried here — this projection intentionally omits
+   * it so the wire shape itself cannot leak it by construction.
+   */
+  account?: { label: string; kind: string; plan?: string };
+  /** Starting quota snapshot (cut §3.5/§6.1); live updates arrive as `engine_quota` AgentEvents. */
+  quota?: CodexRateLimitsWire;
 }
 
 /**

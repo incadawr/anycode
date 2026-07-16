@@ -202,4 +202,54 @@ export type AgentEvent =
    * (cut §7 test-hazard #3); only an external engine's own translator
    * constructs one.
    */
-  | { type: "engine_notice"; level: "warning" | "retry" | "info"; message: string };
+  | { type: "engine_notice"; level: "warning" | "retry" | "info"; message: string }
+  /**
+   * External-engine subscription quota snapshot (codex-profiles cut §3.4/§6):
+   * pushed live during a turn AND as a boot snapshot. Additive — the core
+   * loop NEVER emits this variant (same test-hazard #3 discipline as
+   * `engine_notice` above, restated at codex-profiles cut §3.4); only
+   * Codex's own translator constructs one, from `account/rateLimits/read`
+   * (pull) or `account/rateLimits/updated` (push, sparse-merged before this
+   * event is built — see shared/codex-quota.ts's `mergeCodexRateLimits`).
+   */
+  | { type: "engine_quota"; quota: CodexRateLimitsWire }
+  /**
+   * External-engine cumulative session token usage (codex-profiles cut
+   * §3.4/§5.3). SEMANTICS ARE REPLACE, NOT ACCUMULATE: `thread/tokenUsage/
+   * updated.total` on the Codex wire is ALREADY cumulative, whereas the
+   * store's `accumulateSessionTokens` (store.ts) SUMS every `finish` event it
+   * receives — reusing `finish`'s accumulate path for an already-cumulative
+   * number would double (then triple, then quadruple...) the displayed
+   * total. This is a DELIBERATELY SEPARATE event variant so the store can
+   * dispatch it to a distinct, non-accumulating reducer path instead of
+   * silently reusing `finish`'s. Additive — the core loop NEVER emits this
+   * variant (same test-hazard #3 discipline as `engine_notice`/
+   * `engine_quota` above); only Codex's own translator constructs one.
+   */
+  | {
+      type: "engine_session_tokens";
+      input: number;
+      output: number;
+      total: number;
+      cachedInput?: number;
+      reasoningOutput?: number;
+    };
+
+/**
+ * Wire shape of a Codex quota/rate-limit snapshot, as carried by
+ * `engine_quota` above. Structurally identical to (and kept in sync with)
+ * `apps/desktop/src/shared/codex-quota.ts`'s `CodexRateLimits` — redeclared
+ * here rather than imported so `packages/core` never depends on
+ * `apps/desktop`'s shared layer (the desktop shell depends on core, never
+ * the reverse). `byLimitId` is recursive (self-referential minus itself),
+ * mirroring the wire's multi-bucket view.
+ */
+export interface CodexRateLimitsWire {
+  primary?: { usedPercent: number; windowDurationMins?: number | null; resetsAt?: number | null } | null;
+  secondary?: { usedPercent: number; windowDurationMins?: number | null; resetsAt?: number | null } | null;
+  credits?: { hasCredits: boolean; unlimited: boolean; balance?: string | null } | null;
+  planType?: string | null;
+  limitName?: string | null;
+  byLimitId?: Record<string, Omit<CodexRateLimitsWire, "byLimitId">>;
+  observedAt: string;
+}
