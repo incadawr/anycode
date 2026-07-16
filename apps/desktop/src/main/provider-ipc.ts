@@ -32,7 +32,10 @@
  *
  * THREAT MODEL for the fetch (cut §9.2 — SSRF/key-exfil via a user-supplied
  * origin):
- *  - only `https:`, or `http:` scoped to loopback (localhost/127.0.0.1/[::1]);
+ *  - only `https:`, or `http:` scoped to loopback (localhost/127.0.0.1/[::1]),
+ *    and never a URL carrying embedded userinfo (`user:pass@host` — amendment-1
+ *    FX2-1: a secret placed there would otherwise round-trip into
+ *    settings.json in plaintext and back out to the renderer);
  *  - the request runs with `redirect: "error"` — ANY redirect (same-origin or
  *    cross-origin) aborts the fetch rather than being followed, closing the
  *    exfil vector without needing to inspect an opaque `Location` (Node's
@@ -53,31 +56,15 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings } from "../settings/files.js";
-import { settingsSchema } from "../settings/schema.js";
+import { isHttpsOrLocalhostUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, SecretKey } from "../shared/settings.js";
 import type { SecretSetResult } from "./vault.js";
 
-// ── URL policy (mirrors settings/schema.ts's `isHttpsOrLocalhostUrl`,
-// re-declared here rather than imported: that function is not exported from
-// the frozen schema module, and duplicating this ~10-line, stable predicate
-// is safer than reaching into a frozen file's internals) ──
+// ── URL policy (single source of truth is settings/schema.ts's
+// `isHttpsOrLocalhostUrl`; re-exported under this module's original name so
+// existing call sites here and the test import stay unchanged) ──
 
-/** True when `value` is `https:`, or `http:` scoped to localhost/127.0.0.1/[::1] (cut §9.2 threat list). */
-export function isAllowedCustomProviderUrl(value: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  if (url.protocol === "https:") {
-    return true;
-  }
-  if (url.protocol !== "http:") {
-    return false;
-  }
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-}
+export const isAllowedCustomProviderUrl = isHttpsOrLocalhostUrl;
 
 // ── guarded `/v1/models` fetch ──
 
