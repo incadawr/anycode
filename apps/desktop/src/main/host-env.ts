@@ -104,6 +104,20 @@ export function connectionSecretKey(connectionId: string, authKind: "api_key" | 
 }
 
 /**
+ * Every custom-provider id currently in settings (owner-decision #6, cut
+ * §9.2, TASK.54). A custom provider's vault key (`provider.<id>.apiKey`) is
+ * only ever recognized by `isKnownSecretKey`/`Vault.statuses` when its id is
+ * present in the `catalogIds` array those callers are given — main is
+ * expected to union this with `catalogProviderIds()` (mirrors the existing
+ * `catalogProviderIds() ∪ custom[].id` seam described in TASK.54) before
+ * passing `catalogIds` down, the same way it already includes every builtin
+ * catalog id.
+ */
+export function customProviderIds(settings: AnycodeSettings): string[] {
+  return (settings.provider.custom ?? []).map((entry) => entry.id);
+}
+
+/**
  * Provider-relevant ANYCODE_* env vars whose presence in the boot snapshot
 
  * warning; the secret key is first so it lines up with SECRET_ENV_KEYS.
