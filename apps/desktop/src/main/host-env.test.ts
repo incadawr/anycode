@@ -14,8 +14,13 @@ import {
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
+  customKindDefaultTransport,
   customProviderIds,
+  customProviderSecretKey,
+  customSupportedTransports,
   envOverrides,
+  findCustomProviderRecord,
+  isCustomProviderRecordId,
   isKnownSecretKey,
   resolveEffectiveTransport,
   scrubSecretEnv,
@@ -493,6 +498,39 @@ describe("buildHostEnv — custom-provider route (F-G-B, cut §9.2)", () => {
     // baseUrl + connection credential, byte-for-byte the pre-F-G-B path.
     expect(env.ANYCODE_BASE_URL).toBe("https://legacy-base.example.com");
     expect(env.ANYCODE_API_KEY).toBe("sk-connection");
+  });
+});
+
+describe("custom-provider readiness-gate exports (FX4) — RED against the exports reverting to unexported/private", () => {
+  it("customProviderSecretKey mints the SAME per-provider vault key buildHostEnv reads", () => {
+    expect(customProviderSecretKey("custom:abc")).toBe("provider.custom:abc.apiKey");
+  });
+
+  it("isCustomProviderRecordId distinguishes a `custom:*` record id from the builtin `custom` sentinel and any catalog id", () => {
+    expect(isCustomProviderRecordId("custom:abc")).toBe(true);
+    expect(isCustomProviderRecordId("custom")).toBe(false);
+    expect(isCustomProviderRecordId("anthropic")).toBe(false);
+  });
+
+  it("findCustomProviderRecord finds the record by id and returns undefined once deleted", () => {
+    const withRecord = settings({ provider: { id: "custom:abc", model: "m" } });
+    withRecord.provider.custom = [
+      { id: "custom:abc", name: "My endpoint", baseUrl: "https://llm.example.com/v1", kind: "openai-compatible", models: [] },
+    ];
+    expect(findCustomProviderRecord(withRecord, "custom:abc")?.baseUrl).toBe("https://llm.example.com/v1");
+    expect(findCustomProviderRecord(settings(), "custom:abc")).toBeUndefined();
+  });
+
+  it("customKindDefaultTransport mirrors the builtin catalog family defaults per kind", () => {
+    expect(customKindDefaultTransport("anthropic")).toBe("anthropic-messages");
+    expect(customKindDefaultTransport("openai")).toBe("openai-responses");
+    expect(customKindDefaultTransport("openai-compatible")).toBe("openai-chat-completions");
+  });
+
+  it("customSupportedTransports mirrors the builtin catalog family's supported-transport list per kind", () => {
+    expect(customSupportedTransports("anthropic")).toEqual(["anthropic-messages"]);
+    expect(customSupportedTransports("openai")).toEqual(["openai-responses", "openai-chat-completions"]);
+    expect(customSupportedTransports("openai-compatible")).toEqual(["openai-chat-completions", "openai-responses"]);
   });
 });
 
