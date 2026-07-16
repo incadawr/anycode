@@ -677,11 +677,17 @@ export interface CustomProvidersSectionProps {
  * key long enough to call an arbitrary origin itself) and renders the
  * returned ids as checkboxes — only the CHECKED subset is what `Save` sends
  * on to `customProviderCreate`, becoming the record's curated `models[]`.
- * CUSTODY: the apiKey field is write-only, cleared by `resetForm` the instant
- * a request is sent (success OR refusal) — mirrors `secretFieldReducer`'s
- * "submitted always clears" rule; this component never receives a decrypted
- * key back (`CustomProviderMutationResult`/`FetchModelsOutcome` structurally
- * cannot carry one).
+ * CUSTODY: the apiKey field lives only as long as the form stays open — every
+ * path that CLOSES the form (Cancel, or a successful Save) clears it via
+ * `resetForm`. `doFetchModels` and a Save refusal deliberately do NOT clear
+ * it: the flow is two-step (enter key -> Fetch models -> pick models ->
+ * Save), so the key must survive in state until Save actually succeeds, and
+ * a refusal must leave it in place so the user can retry without retyping
+ * it. This is NOT `secretFieldReducer`'s "submitted always clears" rule —
+ * that convention fits a one-shot drawer field, not this two-step flow.
+ * Either way this component never receives a decrypted key back
+ * (`CustomProviderMutationResult`/`FetchModelsOutcome` structurally cannot
+ * carry one).
  */
 function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: CustomProvidersSectionProps) {
   const [formOpen, setFormOpen] = useState(false);
