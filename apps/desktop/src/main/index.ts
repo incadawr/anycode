@@ -77,8 +77,10 @@ import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from
 import { registerTabIpc } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
-import { SYSTEM_PROFILE_ID, resolveCodexProfile } from "./codex-profiles.js";
+import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
+import { registerCodexInstallIpc } from "./codex-install.js";
+import { refreshCodexManifest, setActiveCodexVersionPolicy } from "./codex-manifest.js";
 import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater, type UpdaterController } from "./updater.js";
@@ -1155,6 +1157,25 @@ void app.whenReady().then(async () => {
   void codexOnboarding.recheck().catch((error: unknown) => {
     console.warn("[main] initial Codex check failed", error);
   });
+
+  // Codex install/version control plane (TASK.53, cut §7): download-with-
+  // integrity + risk acceptance behind IPC; the version policy is seeded from
+  // settings, then advisorily refreshed from the git manifest — fail-closed
+  // on the bundled manifest for ANY refresh failure (404 until the file
+  // lands on master, network down, garbage — none of them can WIDEN the
+  // supported range).
+  registerCodexInstallIpc({
+    readRiskAcceptedVersions: async () => settings?.codex?.riskAcceptedVersions ?? [],
+    writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
+    onChanged: () => {
+      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+      void codexOnboarding?.recheck().catch(() => {});
+    },
+  });
+  setActiveCodexVersionPolicy({ riskAcceptedVersions: settings?.codex?.riskAcceptedVersions ?? [] });
+  void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(), "manifest.json") })
+    .then((result) => setActiveCodexVersionPolicy({ manifest: result.manifest }))
+    .catch(() => {});
 
   // Rollout import control plane (TASK.52, cut §8): list/preview/import a
   // profile's Codex rollouts into OUR history format. Sessions live inside
