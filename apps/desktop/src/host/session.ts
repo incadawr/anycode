@@ -696,6 +696,12 @@ export class Session {
           sessionId: this.sessionId,
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
+          // TASK.56 W2: live image-input verdict for the CURRENT model (the
+          // seam is a closure over the active model, host/index.ts). Rides
+          // beside the `engine` block — a model-level fact, not an engine
+          // capability. Absent seam (legacy hosts/tests) -> field absent, so
+          // the renderer applies no model-level attachment gating.
+          ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
           ...(presentation !== undefined ? { engine: presentation } : {}),
           // Design TASK.40 §2(f)/§3.2: shell is emitted ONLY alongside a
           // present `engine` (never for core), so the core wire stays
@@ -861,6 +867,11 @@ export class Session {
           model: result.model,
           reasoningEffort: result.reasoningEffort,
           ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),
+          // TASK.56 W2: the verdict re-read for the NEW model — switchModel has
+          // already advanced the closure's current model above, so the push
+          // reflects the switched-to model (upfront re-gate on vision -> non-
+          // vision, mirror of the availableEffortLevels re-resolution).
+          ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
         });
         break;
       }
