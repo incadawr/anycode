@@ -206,3 +206,96 @@ describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/
     expect(store.getState().transcript.some((b) => b.kind === "user_text")).toBe(false);
   });
 });
+
+// TASK.56 W3-FIX (fable-task56-w3-codex-ruling.md finding 2): `dispatchTryAgain`
+// was the one W3-gated send site the cut missed — a click on an armed
+// image-bearing offer, after the live model verdict swings to non-vision,
+// used to consume the offer and lose the images with no restore path (the
+// direct-send branch has no `queueInFlight` to key a `turn_rejected` restore
+// off). §(d)'s tests T1-T5 close that gap; T6 (tab-registry.test.ts) PINs
+// finding 1's NOT-A-BUG ruling (the drainer keeps sending, by design).
+describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model image verdict (fable-task56-w3-codex-ruling.md finding 2 §(c))", () => {
+  const IMAGE = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+
+  /**
+   * Arms a real retry offer through the actual production path (not a manual
+   * `setState`): a turn starts, the given text+images are recorded via
+   * `recordSentMessage` — the same call every send site makes — then the
+   * turn ends in a retryable, no-model-output error, which the `loop_end`
+   * reducer reads to arm `state.retry` (store.ts:1582-1594).
+   */
+  function armRetryViaRealPath(store: ReturnType<typeof createDesktopStore>, text: string, images: RetryOffer["images"]): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    store.getState().recordSentMessage(text, images);
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: {
+        type: "error",
+        error: { name: "AI_APICallError", message: "Cannot connect to API: Connect Timeout Error" },
+        retry: { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout" },
+      },
+    });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "error", turns: 1 } });
+  }
+
+  it("T1 — App-dispatch-layer PIN: retry-with-images + imageInput:false ⇒ click does not reach the wire, does not consume the offer, and raises a retry_blocked notice", () => {
+    const store = createDesktopStore();
+    armRetryViaRealPath(store, "look at this", [IMAGE]);
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    const sent: UiToHostMessage[] = [];
+
+    const outcome = dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(outcome).toBe("blocked_images");
+    expect(sent).toEqual([]);
+    expect(store.getState().retry).not.toBeNull();
+    expect(store.getState().notice?.kind).toBe("retry_blocked");
+  });
+
+  it("T2 — default-contract pin: imageInput undefined (legacy host / engine session with no seam) does not gate a retry-with-images offer", () => {
+    const store = createDesktopStore();
+    armRetryViaRealPath(store, "look at this", [IMAGE]);
+    expect(store.getState().imageInput).toBeUndefined();
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
+    expect(store.getState().retry).toBeNull();
+  });
+
+  it("T3 — narrowness pin: a retry WITHOUT images sends normally even when imageInput:false", () => {
+    const store = createDesktopStore();
+    armRetryViaRealPath(store, "no pictures here", []);
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    const sent: UiToHostMessage[] = [];
+
+    dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: "user_message", text: "no pictures here" });
+    expect(store.getState().retry).toBeNull();
+  });
+
+  it("T4 — the entry gate covers the enqueue branch too: busy (queueInFlight) + retry-with-images + imageInput:false does not enqueue and leaves the offer armed", () => {
+    const store = createDesktopStore();
+    armRetryViaRealPath(store, "look at this", [IMAGE]);
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    // Busy precondition (same manual-setState convention the normal
+    // send/queue/busy suite above uses for this exact state) — a
+    // non-gated click would otherwise take the enqueue branch.
+    store.setState({ queueInFlight: { requestId: "in-flight", item: { id: "q1", text: "other", images: [] } } });
+    const sent: UiToHostMessage[] = [];
+
+    const outcome = dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(outcome).toBe("blocked_images");
+    expect(sent).toEqual([]);
+    expect(store.getState().promptQueue).toEqual([]);
+    expect(store.getState().retry).not.toBeNull();
+    expect(store.getState().notice?.kind).toBe("retry_blocked");
+  });
+});

@@ -584,6 +584,42 @@ describe("automation facade — tryAgain (design TASK.33 W8)", () => {
     expect(result).toEqual({ ok: true });
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(1);
   });
+
+  // T5 (fable-task56-w3-codex-ruling.md finding 2 §(d)): facade-layer PIN — a
+  // rollback of the reason mapping below would have this test assert on a
+  // lying {ok:true} (dispatchTryAgain still refuses to send, but the facade
+  // wouldn't say so), the exact "lying facade could mask a real regression"
+  // failure mode the not_ready check above already guards against.
+  it("T5 — an armed offer whose images the live model verdict no longer accepts -> {ok:false, reason:'images_unsupported'}, nothing on the wire, offer stays armed", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const store = registry.getStore(tabId)!;
+    const image = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+
+    // Arm the offer through the real production path (recordSentMessage +
+    // a retryable, no-output loop_end), then push the live model verdict
+    // through the real model_changed wire message — not a manual store set.
+    port.emit({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    store.getState().recordSentMessage("look at this", [image]);
+    port.emit({
+      type: "agent_event",
+      turnId: "t1",
+      event: {
+        type: "error",
+        error: { name: "AI_APICallError", message: "Cannot connect to API: Connect Timeout Error" },
+        retry: { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout" },
+      },
+    });
+    port.emit({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "error", turns: 1 } });
+    expect(store.getState().retry).not.toBeNull();
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+
+    const result = facade.tryAgain(tabId);
+
+    expect(result).toEqual({ ok: false, reason: "images_unsupported" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
+    expect(store.getState().retry).not.toBeNull();
+  });
 });
 
 describe("automation facade — tab-lifecycle passthrough (window.anycode bridge)", () => {
