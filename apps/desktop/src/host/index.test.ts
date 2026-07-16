@@ -51,10 +51,12 @@ import {
   resolveMaxOutputTokens,
   resolveReasoningEffort,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
+  SqlitePersistenceAdapter,
 } from "@anycode/core";
 import type { AgentEvent, PermissionMode, ResolvedTelemetryConfig, ResolvedWebSearchBackend, TelemetryPort } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ShellCapabilitiesProjection } from "../shared/protocol.js";
+import { parseCodexProfileArgs } from "./engines/codex/codex-home.js";
 import { TerminalManager } from "./terminal.js";
 
 describe("host shutdown order (design slice-3.2-cut.md §6/§9-R1, task 3.2.4)", () => {
@@ -1072,5 +1074,90 @@ describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () =>
   it("gitReadOnly and gitUserMutations always move together for Codex — one workspace-level gate, not two independent ones", () => {
     expect(computeCodexShell(true, true).gitReadOnly).toBe(computeCodexShell(true, true).gitUserMutations);
     expect(computeCodexShell(false, false).gitReadOnly).toBe(computeCodexShell(false, false).gitUserMutations);
+  });
+});
+
+/**
+ * Codex-profiles Q1.3 (cut §3.3, completes W3-F): bootCodexSession's
+ * create-session seam persists the spawn's `--codex-profile` id into the
+ * session row, so main's cross-restart resume (main/index.ts
+ * `resolveCodexProfileForTab`) has a `codexProfileId` to re-resolve
+ * fail-closed. index.ts itself is not importable (see file header) — this
+ * mirrors the seam's meta-construction VERBATIM over the REAL
+ * `parseCodexProfileArgs` and the REAL SqlitePersistenceAdapter, and reads the
+ * row back FROM DISK through a second adapter instance, so the parse→persist
+ * →reload chain is exercised for real; only the surrounding boot is mirrored.
+ */
+describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut §3.3)", () => {
+  let dbDir: string;
+
+  beforeEach(async () => {
+    dbDir = await mkdtemp(join(tmpdir(), "anycode-codex-profile-row-"));
+  });
+
+  afterEach(async () => {
+    await rm(dbDir, { recursive: true, force: true });
+  });
+
+  /** Mirrors bootCodexSession's create seam (index.ts:517-537) verbatim: parse argv, then the conditional codexProfileId spread. */
+  async function createCodexSessionRow(
+    persistence: SqlitePersistenceAdapter,
+    argv: readonly string[],
+    created: { model: string; presetId: string; threadId: string },
+    id: string,
+    workspace: string,
+  ) {
+    const codexProfileArgs = parseCodexProfileArgs(argv);
+    return persistence.createSession({
+      id,
+      workspace,
+      model: created.model,
+      mode: created.presetId as PermissionMode,
+      engineId: "codex",
+      externalSessionRef: created.threadId,
+      ...(codexProfileArgs.profileId !== undefined ? { codexProfileId: codexProfileArgs.profileId } : {}),
+    });
+  }
+
+  const CREATED = { model: "gpt-5.2-codex", presetId: "agent-full", threadId: "thread-abc" };
+
+  it("a --codex-profile spawn persists codexProfileId into the ON-DISK session row (the resume re-resolve input)", async () => {
+    const dbPath = join(dbDir, "anycode.sqlite");
+    const writer = new SqlitePersistenceAdapter(dbPath);
+    await createCodexSessionRow(writer, ["--codex-profile", "work"], CREATED, "sess-1", "/tmp/ws");
+    await writer.close();
+
+    // A FRESH adapter over the same file: the pin must have survived to disk,
+    // not just the in-memory meta object — this is exactly what a relaunch reads.
+    const reader = new SqlitePersistenceAdapter(dbPath);
+    const row = await reader.getSession("sess-1");
+    await reader.close();
+    expect(row?.codexProfileId).toBe("work");
+    expect(row?.engineId).toBe("codex");
+    expect(row?.externalSessionRef).toBe("thread-abc");
+  });
+
+  it("a linked-home spawn (main always sends the id alongside --codex-home) pins the id too", async () => {
+    const dbPath = join(dbDir, "anycode.sqlite");
+    const writer = new SqlitePersistenceAdapter(dbPath);
+    await createCodexSessionRow(
+      writer,
+      ["--codex-profile", "alt", "--codex-home", "/Users/someone/external-codex-home"],
+      CREATED,
+      "sess-2",
+      "/tmp/ws",
+    );
+    const row = await writer.getSession("sess-2");
+    await writer.close();
+    expect(row?.codexProfileId).toBe("alt");
+  });
+
+  it("a system-profile spawn (no profile argv) writes NO codexProfileId — the row stays byte-identical to a pre-profiles build", async () => {
+    const dbPath = join(dbDir, "anycode.sqlite");
+    const writer = new SqlitePersistenceAdapter(dbPath);
+    await createCodexSessionRow(writer, [], CREATED, "sess-3", "/tmp/ws");
+    const row = await writer.getSession("sess-3");
+    await writer.close();
+    expect(row?.codexProfileId).toBeUndefined();
   });
 });

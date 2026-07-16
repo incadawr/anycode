@@ -13,7 +13,7 @@
  */
 
 import { ENV_AUTH_MODE } from "../shared/credentials.js";
-import type { AnycodeSettings, SecretEnvKey, SecretKey } from "../shared/settings.js";
+import type { AnycodeSettings, CustomProviderRecord, SecretEnvKey, SecretKey } from "../shared/settings.js";
 import { activeProviderView, SECRET_ENV_KEYS } from "../shared/settings.js";
 
 // ── env var names (mirror core/provider/env.ts by contract; local literals so
@@ -115,6 +115,59 @@ export function connectionSecretKey(connectionId: string, authKind: "api_key" | 
  */
 export function customProviderIds(settings: AnycodeSettings): string[] {
   return (settings.provider.custom ?? []).map((entry) => entry.id);
+}
+
+// ── custom-provider host-env route (F-G-B, cut §9.2) ──
+
+/** Namespace prefix of user-created custom-provider ids (`custom:<slug>`, cut §9.2). */
+const CUSTOM_PROVIDER_PREFIX = "custom:";
+
+/**
+ * True when a providerId names a user-created custom-provider RECORD
+ * (`custom:<slug>`). Deliberately distinct from the builtin catalog `custom`
+ * SENTINEL (the bare literal, no colon), which keeps its pre-existing
+ * legacy-branch behaviour in `buildHostEnv`.
+ */
+export function isCustomProviderRecordId(providerId: string): boolean {
+  return providerId.startsWith(CUSTOM_PROVIDER_PREFIX);
+}
+
+/**
+ * The vault key a custom provider's ONE shared credential lives under —
+ * `provider.<custom-id>.apiKey`, one key per PROVIDER covering all of its
+ * connections (design §9.2 "key into the existing vault"). Mirrors
+ * provider-ipc.ts's `customProviderSecretKey` by contract; kept a local
+ * literal so host-env never imports the IPC module (which pulls electron/zod),
+ * the same convention as the core env-var mirrors at the top of this file.
+ */
+function customProviderSecretKey(id: string): SecretKey {
+  return `provider.${id}.apiKey`;
+}
+
+/** The record a `custom:*` providerId points at; undefined = deleted while a connection still references it. */
+function findCustomProviderRecord(settings: AnycodeSettings, id: string): CustomProviderRecord | undefined {
+  return (settings.provider.custom ?? []).find((entry) => entry.id === id);
+}
+
+/**
+ * The default transport a custom record's `kind` implies, mirroring the
+ * builtin catalog entry of the same kind (anthropic -> the anthropic entry's
+ * "anthropic-messages", openai -> the openai entry's "openai-responses",
+ * openai-compatible -> the openrouter/vllm family's "openai-chat-completions").
+ * Fed into the SAME `resolveEffectiveTransport` ladder + emission rule a
+ * catalog default rides, so an anthropic-kind default emits NOTHING (byte
+ * parity with the builtin anthropic-family entries) while an explicit
+ * env/settings transport still wins by construction.
+ */
+function customKindDefaultTransport(kind: CustomProviderRecord["kind"]): string {
+  switch (kind) {
+    case "anthropic":
+      return "anthropic-messages";
+    case "openai":
+      return "openai-responses";
+    case "openai-compatible":
+      return "openai-chat-completions";
+  }
 }
 
 /**
@@ -313,14 +366,42 @@ export interface HostEnvParams {
 export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.ProcessEnv> {
   const { bootEnv, settings, getSecret, resolveSelection, resolveActiveCredential } = params;
   const env: NodeJS.ProcessEnv = { ...bootEnv };
-  const selection = resolveSelection !== undefined ? await resolveSelection() : undefined;
   // Active-connection legacy-shaped view (TASK.45 v2): model/baseUrl/transport/
   // effort come from the ACTIVE connection, not the removed v1 singleton. Post
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT
   // stays byte-equivalent (DoD #5).
   const view = activeProviderView(settings);
+  // Custom-provider route (F-G-B): a `custom:<slug>` providerId resolves from
+  // `settings.provider.custom[]` — the record's baseUrl verbatim plus the
+  // provider's ONE shared vault key — NEVER from the catalog selection
+  // (findCatalogEntry only knows builtin ids, so it would misroute to the
+  // legacy branch) and NEVER from the legacy/connection-key credential ladder
+  // (a DIFFERENT vault namespace; reading it would run the fork on another
+  // account's credential). Decided up front, before resolveSelection is even
+  // consulted, so the route cannot depend on what the selection path happens
+  // to return for a custom id.
+  const customId = view.id !== undefined && isCustomProviderRecordId(view.id) ? view.id : undefined;
+  const customRecord = customId !== undefined ? findCustomProviderRecord(settings, customId) : undefined;
+  const selection = customId === undefined && resolveSelection !== undefined ? await resolveSelection() : undefined;
 
-  if (selection === undefined) {
+  if (customId !== undefined) {
+    // CUSTOM branch (F-G-B): auth is always api_key — ANYCODE_AUTH_MODE is
+    // never set. A missing record (provider deleted while a connection still
+    // references it) is FAIL-CLOSED: no other credential source is consulted
+    // — neither the bare legacy `provider.apiKey` nor the connection key —
+    // the fork boots keyless/baseUrl-less rather than on a different
+    // account's secret.
+    if (customRecord !== undefined) {
+      if (!envPresent(env, ENV_API_KEY)) {
+        const cred = await getSecret(customProviderSecretKey(customRecord.id));
+        if (cred !== undefined && cred !== "") {
+          env[ENV_API_KEY] = cred;
+        }
+      }
+      fillFromSettings(env, ENV_BASE_URL, customRecord.baseUrl);
+    }
+    fillFromSettings(env, ENV_MODEL, view.model);
+  } else if (selection === undefined) {
     // LEGACY/custom/no-active branch: the credential is the active connection's
     // connection key, resolved by main because host-env is core-free.
     // `provider.apiKey` bare-read is the pre-v2 fixture fallback only.
@@ -350,16 +431,19 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     }
   }
 
-  // Wire transport (TASK.43 W5-FIX, cut Risk #3): ONE ladder authority for BOTH
+  // Wire transport (TASK.43 W5-FIX, cut Risk #3): ONE ladder authority for ALL
   // branches. `defaultTransport` is the selected catalog entry's raw default
-  // (undefined on the legacy/no-catalog path). The emission rule suppresses an
+  // (undefined on the legacy/no-catalog path), or the kind-implied default of
+  // the resolved custom record (F-G-B — a deleted record contributes none, so
+  // only the env/settings rungs remain). The emission rule suppresses an
   // implicit anthropic-family default so the anthropic/GLM/deepseek/moonshot/
   // custom fork env stays byte-identical to pre-W5; an env value already rides
   // in `{...bootEnv}` and `fillFromSettings` never overwrites it.
   const effectiveTransport = resolveEffectiveTransport({
     bootEnv,
     settingsTransport: view.transport,
-    defaultTransport: selection?.defaultTransport,
+    defaultTransport:
+      customRecord !== undefined ? customKindDefaultTransport(customRecord.kind) : selection?.defaultTransport,
   });
   fillFromSettings(env, ENV_PROVIDER_TRANSPORT, transportToEmit(effectiveTransport));
 
