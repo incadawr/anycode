@@ -148,6 +148,42 @@ describe("active version policy (module seam the doctor defaults from)", () => {
     resetActiveCodexVersionPolicy();
     expect(activeCodexVersionPolicy()).toEqual({ manifest: BUNDLED_CODEX_MANIFEST, riskAcceptedVersions: [] });
   });
+
+  it("BM4: reports whether the merged patch actually CHANGED the active policy", () => {
+    const first = setActiveCodexVersionPolicy({ riskAcceptedVersions: ["0.150.0"] });
+    expect(first).toBe(true);
+    const identical = setActiveCodexVersionPolicy({ riskAcceptedVersions: ["0.150.0"] });
+    expect(identical).toBe(false);
+    const widened = setActiveCodexVersionPolicy({
+      manifest: validManifest({ supported: [{ range: ">=0.144.0 <0.150.0", status: "tested" }] }),
+    });
+    expect(widened).toBe(true);
+  });
+
+  it("BM4: only an ACTUAL policy change re-triggers a recheck — a widened manifest updates readiness for a cached version WITHOUT any user action", () => {
+    const narrow = validManifest({ supported: [{ range: ">=0.144.0 <0.146.0", status: "tested" }] });
+    setActiveCodexVersionPolicy({ manifest: narrow });
+    const cachedVersion = "0.148.0";
+    expect(codexVersionVerdict(cachedVersion, activeCodexVersionPolicy()).allowed).toBe(false);
+
+    // The refresh `.then` pattern main/index.ts wires (BM4): recheck fires
+    // ONLY when setActiveCodexVersionPolicy reports an actual change.
+    let recheckCount = 0;
+    function applyRefreshedManifest(manifest: CodexSupportManifest): void {
+      if (setActiveCodexVersionPolicy({ manifest })) recheckCount += 1;
+    }
+
+    // The identical manifest again — no readiness delta, no recheck.
+    applyRefreshedManifest(narrow);
+    expect(recheckCount).toBe(0);
+    expect(codexVersionVerdict(cachedVersion, activeCodexVersionPolicy()).allowed).toBe(false);
+
+    // A widened manifest — the cached binary now falls inside the new range.
+    const widened = validManifest({ supported: [{ range: ">=0.144.0 <0.150.0", status: "tested" }] });
+    applyRefreshedManifest(widened);
+    expect(recheckCount).toBe(1);
+    expect(codexVersionVerdict(cachedVersion, activeCodexVersionPolicy()).allowed).toBe(true);
+  });
 });
 
 describe("refreshCodexManifest (network + ETag cache, cut §7.1)", () => {

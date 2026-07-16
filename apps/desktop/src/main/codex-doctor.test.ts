@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { CodexRpcClient, buildDoctorChildEnv, runCodexDoctor } from "./codex-doctor.js";
+import { CodexRpcClient, buildDoctorChildEnv, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
 import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
 import type { CodexSupportManifest } from "../shared/codex-support.js";
 import type { ResolvedCodexProfile } from "./codex-profiles.js";
@@ -160,6 +160,37 @@ describe("runCodexDoctor", () => {
     expect(report.rateLimits?.byLimitId?.codex?.primary?.usedPercent).toBe(12);
     expect(typeof report.rateLimits?.observedAt).toBe("string");
     expect(JSON.stringify(report.rateLimits)).not.toContain("rateLimitResetCredits");
+  });
+
+  it("M2b: a byLimitId-only response (no top-level rateLimits mirror) still surfaces the single bucket's primary/secondary at the top level (amended §A3.3, byte-identical to the host decoder)", async () => {
+    const projected = projectCodexRateLimits(
+      {
+        rateLimitsByLimitId: {
+          codex: { primary: { usedPercent: 42, windowDurationMins: 10080 }, secondary: null, planType: "plus" },
+        },
+      },
+      "2026-07-16T00:00:00.000Z",
+    );
+    expect(projected?.primary).toEqual({ usedPercent: 42, windowDurationMins: 10080 });
+    expect(projected?.secondary).toBeNull();
+    expect(projected?.planType).toBe("plus");
+    expect(projected?.byLimitId?.codex?.primary?.usedPercent).toBe(42);
+  });
+
+  it("M2b: falls back to the top-level mirror when MORE THAN ONE bucket is present — no single bucket is canonical", async () => {
+    const projected = projectCodexRateLimits(
+      {
+        rateLimits: { primary: { usedPercent: 7 } },
+        rateLimitsByLimitId: {
+          codex: { primary: { usedPercent: 42 } },
+          "second-window": { primary: { usedPercent: 99 } },
+        },
+      },
+      "2026-07-16T00:00:00.000Z",
+    );
+    expect(projected?.primary).toEqual({ usedPercent: 7 });
+    expect(projected?.byLimitId?.codex?.primary?.usedPercent).toBe(42);
+    expect(projected?.byLimitId?.["second-window"]?.primary?.usedPercent).toBe(99);
   });
 
   it("stays ready when account/rateLimits/read fails — quotas are advisory, never a readiness gate", async () => {

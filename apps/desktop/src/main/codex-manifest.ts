@@ -205,8 +205,19 @@ export function activeCodexVersionPolicy(): CodexVersionPolicy {
   return activePolicy;
 }
 
-export function setActiveCodexVersionPolicy(patch: Partial<CodexVersionPolicy>): void {
-  activePolicy = { ...activePolicy, ...patch };
+/**
+ * Merges a patch into the active policy and reports whether it actually
+ * CHANGED anything (BM4): a caller re-spawning the doctor on every settled
+ * refresh — identical or not — judges a stale cached version against the
+ * old policy until the NEXT recheck happens to fire for some unrelated
+ * reason. Comparing the merged result against the current policy lets a
+ * refresh chain re-trigger a recheck exactly when it would change a verdict.
+ */
+export function setActiveCodexVersionPolicy(patch: Partial<CodexVersionPolicy>): boolean {
+  const next: CodexVersionPolicy = { ...activePolicy, ...patch };
+  const changed = JSON.stringify(next) !== JSON.stringify(activePolicy);
+  activePolicy = next;
+  return changed;
 }
 
 /** Test hygiene: restores the compile-time default. */
