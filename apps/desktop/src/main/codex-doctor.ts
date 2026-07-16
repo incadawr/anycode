@@ -30,8 +30,15 @@ import {
   CODEX_TEARDOWN_STDIN_EOF_WAIT_MS,
   CODEX_VERSION_PREFLIGHT_TIMEOUT_MS,
 } from "../shared/codex-timeouts.js";
-import type { CodexDoctorReport } from "../shared/codex-doctor.js";
+import type { CodexAccount, CodexDoctorReport } from "../shared/codex-doctor.js";
+import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../shared/codex-quota.js";
 import type { EngineModelChoice } from "../shared/protocol.js";
+import {
+  applyCodexProfileEnv,
+  assertCodexProfileHome,
+  type CodexProfileGuardResult,
+  type ResolvedCodexProfile,
+} from "./codex-profiles.js";
 
 /**
  * Mirrors `SUPPORTED_CODEX_VERSION`/`parseCodexVersion`/`isSupportedCodexVersion`
@@ -469,13 +476,94 @@ function preflightVersion(
 
 // ── result projection (tolerant of unknown wire fields — never strict-reject) ──
 
-/** CUSTODY: only `type`/`planType` are read — `email` is never touched, logged, or returned (cut §2(g)). */
-function projectAccount(raw: unknown): { type: string; plan: string } | null {
+/**
+ * Projects the wire `Account` union (codex-profiles cut §1.1/§3.1) tolerantly
+ * — an unknown future variant degrades to `{type}` instead of failing the
+ * decoder (still enough for automat row 5: "account !== null ⇒ ready").
+ *
+ * CUSTODY (cut §4.4, OG-4 — the old "email is never returned" invariant was
+ * DELIBERATELY reversed): `email` now crosses into main memory and the
+ * renderer projection. It must still NEVER reach settings.json, telemetry,
+ * a file log, or an error string — those custodians are asserted in
+ * codex-ipc.test.ts / codex-doctor.test.ts.
+ */
+function projectCodexAccount(raw: unknown): CodexAccount | null {
   if (typeof raw !== "object" || raw === null) return null;
   const type = (raw as { type?: unknown }).type;
   if (typeof type !== "string") return null;
-  const planType = (raw as { planType?: unknown }).planType;
-  return { type, plan: typeof planType === "string" ? planType : "" };
+  if (type === "chatgpt") {
+    const email = (raw as { email?: unknown }).email;
+    const planType = (raw as { planType?: unknown }).planType;
+    return { type, email: typeof email === "string" ? email : null, plan: typeof planType === "string" ? planType : "" };
+  }
+  if (type === "amazonBedrock") {
+    const credentialSource = (raw as { credentialSource?: unknown }).credentialSource;
+    return { type, ...(typeof credentialSource === "string" ? { credentialSource } : {}) };
+  }
+  return { type };
+}
+
+// ── rate-limit projection (cut §6.1 pull side; tolerant, advisory-only) ──
+
+function projectQuotaWindow(raw: unknown): CodexQuotaWindow | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const usedPercent = (raw as { usedPercent?: unknown }).usedPercent;
+  if (typeof usedPercent !== "number") return null;
+  const window: CodexQuotaWindow = { usedPercent };
+  const windowDurationMins = (raw as { windowDurationMins?: unknown }).windowDurationMins;
+  if (typeof windowDurationMins === "number" || windowDurationMins === null) window.windowDurationMins = windowDurationMins;
+  const resetsAt = (raw as { resetsAt?: unknown }).resetsAt;
+  if (typeof resetsAt === "number" || resetsAt === null) window.resetsAt = resetsAt;
+  return window;
+}
+
+function projectQuotaCredits(raw: unknown): CodexQuotaCredits | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const hasCredits = (raw as { hasCredits?: unknown }).hasCredits;
+  const unlimited = (raw as { unlimited?: unknown }).unlimited;
+  if (typeof hasCredits !== "boolean" || typeof unlimited !== "boolean") return null;
+  const balance = (raw as { balance?: unknown }).balance;
+  return { hasCredits, unlimited, ...(typeof balance === "string" || balance === null ? { balance } : {}) };
+}
+
+/** One `RateLimitSnapshot` (top level or a byLimitId bucket). Unknown fields — incl. `rateLimitResetCredits` (amended §A3.4) — are silently dropped. */
+function projectQuotaSnapshot(raw: unknown, observedAt: string): Omit<CodexRateLimits, "byLimitId"> | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const source = raw as Record<string, unknown>;
+  const snapshot: Omit<CodexRateLimits, "byLimitId"> = { observedAt };
+  const primary = projectQuotaWindow(source.primary);
+  if (primary !== null || source.primary === null) snapshot.primary = primary;
+  const secondary = projectQuotaWindow(source.secondary);
+  if (secondary !== null || source.secondary === null) snapshot.secondary = secondary;
+  const credits = projectQuotaCredits(source.credits);
+  if (credits !== null || source.credits === null) snapshot.credits = credits;
+  if (typeof source.planType === "string" || source.planType === null) snapshot.planType = source.planType as string | null;
+  if (typeof source.limitName === "string" || source.limitName === null) snapshot.limitName = source.limitName as string | null;
+  return snapshot;
+}
+
+/**
+ * Projects a `GetAccountRateLimitsResponse` into the frozen shared type
+ * (`byLimitId` preferred at read time, top level kept as the backward-compat
+ * mirror — amended §A3.3). Exported for tests. Returns undefined when the
+ * response carries nothing recognizable.
+ */
+export function projectCodexRateLimits(raw: unknown, observedAt: string): CodexRateLimits | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const source = raw as { rateLimits?: unknown; rateLimitsByLimitId?: unknown };
+  const base = projectQuotaSnapshot(source.rateLimits, observedAt);
+  let byLimitId: Record<string, Omit<CodexRateLimits, "byLimitId">> | undefined;
+  if (typeof source.rateLimitsByLimitId === "object" && source.rateLimitsByLimitId !== null) {
+    for (const [limitId, bucket] of Object.entries(source.rateLimitsByLimitId as Record<string, unknown>)) {
+      const projected = projectQuotaSnapshot(bucket, observedAt);
+      if (projected !== null) {
+        byLimitId ??= {};
+        byLimitId[limitId] = projected;
+      }
+    }
+  }
+  if (base === null && byLimitId === undefined) return undefined;
+  return { ...(base ?? { observedAt }), ...(byLimitId !== undefined ? { byLimitId } : {}) };
 }
 
 function projectModel(raw: unknown): EngineModelChoice | null {
@@ -555,6 +643,20 @@ export interface RunCodexDoctorOptions {
   rpcTimeoutMs?: number;
   modelPageTimeoutMs?: number;
   maxModelPages?: number;
+  /**
+   * The profile this doctor pass runs AGAINST (codex-profiles cut §4.2:
+   * readiness is a function of (binary, profile)). Absent or system: the env
+   * is inherited untouched — byte-for-byte the pre-profiles behavior. A
+   * profile with a home OVERWRITES any ambient CODEX_HOME in the child env
+   * (§2.6.2) and stamps `profileId` onto the report.
+   */
+  profile?: ResolvedCodexProfile;
+  /**
+   * DI seam for the pre-spawn home/auth-link guard (§2.5 + amended §A1.2);
+   * production re-asserts the real filesystem (`assertCodexProfileHome`).
+   * Re-run before EVERY spawn, same TOCTOU narrative as the binary trust gate.
+   */
+  profileGuard?: (profile: ResolvedCodexProfile) => CodexProfileGuardResult;
 }
 
 /**
@@ -568,7 +670,13 @@ export interface RunCodexDoctorOptions {
 export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctorOptions = {}): Promise<CodexDoctorReport> {
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
-  const childEnv = buildDoctorChildEnv(options.env ?? process.env, platform);
+  // Profile injection happens AFTER the allowlist: the profile home replaces —
+  // never merely joins — whatever CODEX_HOME the ambient env passed through
+  // (cut §2.6.2). System/no-profile leaves the allowlisted env untouched.
+  const profile = options.profile;
+  const childEnv = applyCodexProfileEnv(buildDoctorChildEnv(options.env ?? process.env, platform), profile);
+  const profileGuard = options.profileGuard ?? ((target: ResolvedCodexProfile) => assertCodexProfileHome(target, { platform }));
+  const profileId = profile !== undefined && profile.codexHome !== undefined ? profile.id : undefined;
   const watchdogMs = options.timeoutMs ?? CODEX_DOCTOR_WATCHDOG_MS;
   const versionTimeoutMs = options.versionTimeoutMs ?? CODEX_VERSION_PREFLIGHT_TIMEOUT_MS;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? CODEX_DOCTOR_RPC_TIMEOUT_MS;
@@ -599,6 +707,15 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     if (untrusted !== null) {
       return { status: "error", error: untrusted };
     }
+    // Home/auth-link guard for the profile the run executes AGAINST (cut §2.5
+    // + amended §A1.2): before the FIRST spawn, exactly like the binary trust
+    // gate above — a refusing home means status error and no child at all.
+    if (profile !== undefined) {
+      const homeGuard = profileGuard(profile);
+      if (!homeGuard.ok) {
+        return { status: "error", error: homeGuard.reason };
+      }
+    }
     const preflight = await preflightVersion(binaryPath, childEnv, spawnImpl, versionTimeoutMs);
     if (preflight.error !== undefined) {
       return { status: "error", error: preflight.error };
@@ -628,6 +745,15 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     if (untrustedAtSpawn !== null) {
       return { status: "error", error: untrustedAtSpawn };
     }
+    // The home guard that covers THIS spawn (same re-read discipline as the
+    // binary trust line above): the one before the preflight is a whole
+    // `--version` round trip stale by now.
+    if (profile !== undefined) {
+      const homeGuardAtSpawn = profileGuard(profile);
+      if (!homeGuardAtSpawn.ok) {
+        return { status: "error", error: homeGuardAtSpawn.reason };
+      }
+    }
     client.spawn(binaryPath, childEnv);
     await client.request(
       "initialize",
@@ -635,13 +761,37 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
       { timeoutMs: rpcTimeoutMs },
     );
     client.notify("initialized");
-    const accountResult = await client.request<{ account?: unknown }>("account/read", {}, { timeoutMs: rpcTimeoutMs });
-    const account = projectAccount(accountResult.account);
-    if (account === null) {
-      return { status: "signed_out", version };
+    // `account/read` REQUIRES `params: {}` on the wire (amended §A3.7 —
+    // schema-mandated, live-verified); the rateLimits read below goes with NO
+    // params key at all. Deliberately not unified.
+    const accountResult = await client.request<{ account?: unknown; requiresOpenaiAuth?: unknown }>("account/read", {}, { timeoutMs: rpcTimeoutMs });
+    const account = projectCodexAccount(accountResult.account);
+    const requiresOpenaiAuth = typeof accountResult.requiresOpenaiAuth === "boolean" ? accountResult.requiresOpenaiAuth : undefined;
+    // Status automat rows 5-8 (cut §4.2): ANY account variant ⇒ ready (row 5);
+    // null + requiresOpenaiAuth:false ⇒ ready (row 7 — the api-key/bedrock
+    // config.toml setup a null-account check used to false-negative); null +
+    // true (row 6) or ABSENT (row 8, fail-closed) ⇒ signed_out.
+    if (account === null && requiresOpenaiAuth !== false) {
+      return { status: "signed_out", version, ...(requiresOpenaiAuth !== undefined ? { requiresOpenaiAuth } : {}) };
     }
     const models = await collectModels(client, { pageTimeoutMs: modelPageTimeoutMs, maxPages: maxModelPages });
-    return { status: "ready", version, account, models };
+    // Quotas are ADVISORY (cut §6.1 pull side): visible in Settings without a
+    // single session, but a failing read never degrades a ready verdict.
+    let rateLimits: CodexRateLimits | undefined;
+    try {
+      const rateLimitsResult = await client.request<unknown>("account/rateLimits/read", undefined, { timeoutMs: rpcTimeoutMs });
+      rateLimits = projectCodexRateLimits(rateLimitsResult, new Date().toISOString());
+    } catch {
+      // Tolerated: an older server without the method, or a transient failure.
+    }
+    return {
+      status: "ready",
+      version,
+      account,
+      models,
+      ...(requiresOpenaiAuth !== undefined ? { requiresOpenaiAuth } : {}),
+      ...(rateLimits !== undefined ? { rateLimits } : {}),
+    };
   };
 
   // The abort (app quit) races the whole run. Whichever side wins, the `finally`
@@ -662,10 +812,15 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
   });
   aborted.catch(() => {});
 
+  // `profileId` is stamped at the single exit point so EVERY path — ready,
+  // signed_out, error, watchdog, abort — names the profile it diagnosed
+  // (shared/codex-doctor.ts: absence means system).
+  const stamp = (report: CodexDoctorReport): CodexDoctorReport =>
+    profileId !== undefined ? { ...report, profileId } : report;
   try {
-    return await Promise.race([run, aborted]);
+    return stamp(await Promise.race([run, aborted]));
   } catch (error) {
-    return { status: "error", error: error instanceof Error ? error.message : String(error) };
+    return stamp({ status: "error", error: error instanceof Error ? error.message : String(error) });
   } finally {
     await client.close();
   }
