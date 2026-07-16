@@ -567,6 +567,16 @@ export interface DesktopState {
   reasoningEffort: ReasoningEffort;
   /** Effort levels the current model supports; undefined ⇒ hide the selector. */
   availableEffortLevels: ReasoningEffort[] | undefined;
+  /**
+   * TASK.56 W3: live image-input verdict for the CURRENT model, carried on
+   * `host_ready`/`model_changed` (W2). `undefined` means the host omitted the
+   * field (no seam wired, or a legacy host) — the renderer then applies NO
+   * model-level attachment gating, exactly today's pre-TASK.56 behavior.
+   * Lives alongside `model`/`reasoningEffort` (NOT in `SessionSlice`) for the
+   * same reason: `host_ready` sets it explicitly, `performReset` must not
+   * clear it out from under an in-flight model pick.
+   */
+  imageInput: boolean | undefined;
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -1826,6 +1836,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       mode: null,
       reasoningEffort: "off",
       availableEffortLevels: undefined,
+      imageInput: undefined,
       ...initialSessionSlice(),
       lastFatal: null,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
@@ -1886,6 +1897,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               model: message.model,
               reasoningEffort: message.reasoningEffort ?? "off",
               availableEffortLevels: message.availableEffortLevels,
+              // TASK.56 W3: live per-model verdict off the same hello (W2
+              // wire). Absent on the message -> undefined here -> no
+              // model-level gating (today's behavior for a legacy host).
+              imageInput: message.imageInput,
             });
             return;
           case "mode_changed":
@@ -1917,6 +1932,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               model: message.model,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,
+              // TASK.56 W3: re-gate upfront on a mid-session model switch —
+              // vision -> non-vision flips this to false in the SAME push
+              // that already updates `model` (W2 re-reads the verdict after
+              // switchModel advances the closure). Absent -> undefined -> no
+              // gating, matching host_ready's fallback above.
+              imageInput: message.imageInput,
             });
             return;
           case "mode_change_rejected":

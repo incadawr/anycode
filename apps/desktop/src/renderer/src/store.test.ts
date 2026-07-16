@@ -291,6 +291,79 @@ describe("desktop store — connection lifecycle", () => {
     expect(store.getState().reasoningEffort).toBe("high");
     expect(store.getState().availableEffortLevels).toEqual(["off", "high", "max"]);
   });
+
+  // TASK.56 W3 (renderer layer): these read `imageInput` straight off the
+  // applied store state, so reverting the store's host_ready/model_changed
+  // handlers (dropping the `imageInput: message.imageInput` assignment added
+  // this wave) turns them red even with the W2 wire field still present on
+  // the message — they discriminate the RENDERER integration, not the wire.
+  it("host_ready carries the model image-input verdict into the store, both polarities", () => {
+    const { scheduler } = createManualScheduler();
+    const trueStore = createDesktopStore(scheduler);
+    trueStore.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: true,
+    });
+    expect(trueStore.getState().imageInput).toBe(true);
+
+    const falseStore = createDesktopStore(scheduler);
+    falseStore.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "glm-5.2",
+      sessionId: "s1",
+      imageInput: false,
+    });
+    expect(falseStore.getState().imageInput).toBe(false);
+  });
+
+  it("host_ready without the imageInput field leaves the store slot undefined (legacy host, no gating — today's behavior)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    expect(store.getState().imageInput).toBeUndefined();
+  });
+
+  it("model_changed re-reads the verdict on a vision -> non-vision switch, and back", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: true,
+    });
+    expect(store.getState().imageInput).toBe(true);
+
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    expect(store.getState().model).toBe("glm-5.2");
+    expect(store.getState().imageInput).toBe(false);
+
+    store.getState().applyHostMessage({ type: "model_changed", model: "claude-sonnet", reasoningEffort: "off", imageInput: true });
+    expect(store.getState().imageInput).toBe(true);
+  });
+
+  it("model_changed without imageInput resets the store slot to undefined (an engine session with no seam wired)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: true,
+    });
+    store.getState().applyHostMessage({ type: "model_changed", model: "other-model", reasoningEffort: "off" });
+    expect(store.getState().imageInput).toBeUndefined();
+  });
 });
 
 describe("desktop store — respawn-hydration reset (task 2.1.6, design F2)", () => {
