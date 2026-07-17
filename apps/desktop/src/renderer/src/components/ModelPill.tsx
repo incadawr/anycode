@@ -36,7 +36,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { ReasoningEffort } from "@anycode/core";
-import type { ConnectionUpdateRequest } from "../../../shared/settings.js";
+import type { CatalogSummary, ConnectionUpdateRequest, CustomProviderRecord } from "../../../shared/settings.js";
 import { activeProviderView } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useSettingsStore } from "../settings-store.js";
@@ -158,6 +158,33 @@ export function pillLabel(
 }
 
 /**
+ * Resolves the model list a provider offers its pickers (F2, codex-profiles
+ * cut lane FXH review): a builtin catalog hit returns its own `models`
+ * byte-for-byte (the pre-existing path, untouched); a `custom:<slug>`
+ * provider with no catalog entry falls back to its own curated `models[]`
+ * (cut §9.2 — the user-picked subset a custom endpoint's fetch surfaced);
+ * anything else (unknown id, or `providerId` itself `undefined` — the legacy
+ * free-text config with no provider selected at all) yields `undefined`,
+ * exactly like today's plain `catalog.find(...)?.models`. Exported for unit
+ * testing.
+ */
+export function providerModelsFor(
+  providerId: string | undefined,
+  catalog: CatalogSummary | undefined,
+  custom: readonly CustomProviderRecord[] | undefined,
+): readonly { id: string; name?: string }[] | undefined {
+  const catalogHit = catalog?.find((entry) => entry.id === providerId)?.models;
+  if (catalogHit !== undefined) {
+    return catalogHit;
+  }
+  const customHit = custom?.find((entry) => entry.id === providerId);
+  if (customHit !== undefined) {
+    return customHit.models.map((id) => ({ id }));
+  }
+  return undefined;
+}
+
+/**
  * The Model page's flat list (design §2.2): the provider's catalog models,
  * plus the currently active model appended if it isn't already among them
  * (a free-text/env-boot model, or an empty catalog for a custom provider —
@@ -274,7 +301,7 @@ export function ModelPill() {
     activeProviderId,
     snapshot?.settings.provider.activeConnectionId,
   );
-  const catalogModels = snapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
+  const catalogModels = providerModelsFor(providerId, snapshot?.catalog, snapshot?.settings.provider.custom);
 
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState<PillPage>("root");

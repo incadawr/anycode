@@ -15,7 +15,7 @@
  */
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
+import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import type { ContextUsage, DesktopState, SessionTokens, TurnState } from "../store.js";
 import type { WireContextBreakdown } from "../../../shared/protocol.js";
@@ -39,7 +39,11 @@ import { transcriptTextWithImages } from "../queue-format.js";
 // viewport-clamp ModelPill's own popover uses to escape `.composer-footer-*`'s
 // `overflow:hidden` (see ModelPill.tsx's import comment) — the ctx-popover
 // below inherits the identical clipping hazard from the same footer ancestor.
-import { clampMenuLeft } from "./Sidebar.js";
+// `formatAge` (compact relative-time, "3m"/"22h"/"4d") is reused verbatim
+// for the quota popover's "resets in <relative>" line (TASK.51, cut §6.2) —
+// same reuse discipline as `clampMenuLeft` above, no second relative-time
+// formatter invented for the same job.
+import { clampMenuLeft, formatAge } from "./Sidebar.js";
 import {
   RUN_ACTION_EVENT,
   SETTINGS_SELECT_PANE_EVENT,
@@ -321,16 +325,23 @@ export function ctxPopoverLoading(open: boolean, breakdown: WireContextBreakdown
   return open && breakdown === null;
 }
 
-export type CtxPopoverBodyState = "skeleton" | "empty" | "rows";
+export type CtxPopoverBodyState = "skeleton" | "empty" | "rows" | "unsupported";
 
 /**
- * What the popover body should render: rows once the breakdown has arrived,
- * a skeleton while it's still in flight, or an "unavailable" message once the
- * loading timeout has elapsed with nothing (P2-a robustness fix -- a lost
+ * What the popover body should render: `"unsupported"` when the engine has
+ * no per-category breakdown at all (codex-profiles cut §5.2, C-bug-1 fix —
+ * Codex reports `supportsContextUsage` but never `supportsContextBreakdown`,
+ * so the honest answer is a message, not a skeleton that spins forever);
+ * otherwise rows once the breakdown has arrived, a skeleton while it's still
+ * in flight, or an "unavailable" message once the loading timeout has
+ * elapsed with nothing (P2-a robustness fix -- a lost
  * `context_breakdown_request` must not spin the skeleton forever). Exported
  * for unit testing.
  */
-export function ctxPopoverBodyState(loading: boolean, timedOut: boolean): CtxPopoverBodyState {
+export function ctxPopoverBodyState(supportsBreakdown: boolean, loading: boolean, timedOut: boolean): CtxPopoverBodyState {
+  if (!supportsBreakdown) {
+    return "unsupported";
+  }
   if (!loading) {
     return "rows";
   }
@@ -359,6 +370,111 @@ export function formatLatestCacheHitLine(tokens: SessionTokens | null): string |
   }
   const percent = Math.round((tokens.latestCacheRead / tokens.latestCacheInput) * 100);
   return `Latest cache hit: ${percent}% (${formatCtxTokenCount(tokens.latestCacheRead)}/${formatCtxTokenCount(tokens.latestCacheInput)} input)`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Codex subscription-quota lines (TASK.51, cut §6): additive to the ctx
+// popover, shown alongside — never instead of — the session-tokens lines
+// above. `CodexRateLimitsWire` (core) already carries the sparse-merged
+// snapshot as-is (host-side merge, `shared/codex-quota.ts`); this module only
+// formats it for display, never merges. Pure formatting/decision helpers
+// below are exported for unit testing, same discipline as the rest of this
+// file.
+// ─────────────────────────────────────────────────────────────────────────
+
+type QuotaWindowWire = NonNullable<CodexRateLimitsWire["primary"]>;
+type QuotaCreditsWire = NonNullable<CodexRateLimitsWire["credits"]>;
+
+/** Exact window-length labels the live wire probe confirmed (amendment §A3.2) — never hardcoded past this table. */
+const QUOTA_WINDOW_LABELS: Readonly<Record<number, string>> = {
+  60: "1h",
+  300: "5h",
+  1440: "Daily",
+  10080: "Weekly",
+  43200: "Monthly",
+};
+
+/**
+ * Derives a window's display label from `windowDurationMins` (cut §6.2) —
+ * NEVER a hardcoded "5h"/"Weekly" pair (the live wire showed exactly ONE
+ * populated window per plan, amendment §A3.2). A duration outside the known
+ * table rounds to hours (<1 day) or days (>=1 day); absent/null falls back to
+ * `limitName`, then the literal "Limit". Exported for unit testing.
+ */
+export function quotaWindowLabel(windowDurationMins: number | null | undefined, limitName: string | null | undefined): string {
+  if (windowDurationMins == null) {
+    return limitName ?? "Limit";
+  }
+  const known = QUOTA_WINDOW_LABELS[windowDurationMins];
+  if (known !== undefined) {
+    return known;
+  }
+  return windowDurationMins < 1440
+    ? `${trimTrailingZero((windowDurationMins / 60).toFixed(1))}h`
+    : `${trimTrailingZero((windowDurationMins / 1440).toFixed(1))}d`;
+}
+
+/**
+ * One quota window's popover line: "<label> · <percent left>% left · resets
+ * in <relative>" (cut §6.2). `resetsAt` is epoch SECONDS on the wire
+ * (amendment §A3.1) — multiplied by 1000 here, the sole conversion point.
+ * `null` for a missing window (nothing rendered — never a fabricated "0%").
+ * Exported for unit testing.
+ */
+export function formatQuotaWindowLine(
+  window: QuotaWindowWire | null | undefined,
+  limitName: string | null | undefined,
+  now: number,
+): string | null {
+  if (!window) {
+    return null;
+  }
+  const label = quotaWindowLabel(window.windowDurationMins, limitName);
+  const percentLeft = Math.min(100, Math.max(0, Math.round(100 - window.usedPercent)));
+  const resetsPart = window.resetsAt != null ? ` · resets in ${formatAge(window.resetsAt * 1000, now)}` : "";
+  return `${label} · ${percentLeft}% left${resetsPart}`;
+}
+
+/**
+ * Credits line: rendered ONLY when `hasCredits` (cut §6.2) — "Unlimited" for
+ * an unlimited plan, else the raw wire `balance` string (never coerced to a
+ * number, amendment §A3.6). `null` hides the line entirely. Exported for unit
+ * testing.
+ */
+export function formatQuotaCreditsLine(credits: QuotaCreditsWire | null | undefined): string | null {
+  if (!credits || !credits.hasCredits) {
+    return null;
+  }
+  if (credits.unlimited) {
+    return "Credits: Unlimited";
+  }
+  return credits.balance != null ? `Credits: ${credits.balance}` : null;
+}
+
+/** The quota popover's rendered lines, or `null` when there is nothing to show (cut §6.2: hidden block, never "0%"). */
+export interface QuotaPopoverView {
+  primaryLine: string | null;
+  secondaryLine: string | null;
+  creditsLine: string | null;
+}
+
+/**
+ * Assembles the quota popover section from a snapshot: hides the whole block
+ * when every line would be empty (no quota reporting yet, or an engine that
+ * doesn't report quotas at all) rather than rendering a hollow "0%" section.
+ * Exported for unit testing.
+ */
+export function buildQuotaPopoverView(quota: CodexRateLimitsWire | null, now: number): QuotaPopoverView | null {
+  if (!quota) {
+    return null;
+  }
+  const primaryLine = formatQuotaWindowLine(quota.primary, quota.limitName, now);
+  const secondaryLine = formatQuotaWindowLine(quota.secondary, quota.limitName, now);
+  const creditsLine = formatQuotaCreditsLine(quota.credits);
+  if (primaryLine === null && secondaryLine === null && creditsLine === null) {
+    return null;
+  }
+  return { primaryLine, secondaryLine, creditsLine };
 }
 
 /** Nominal popover width (px) for the right-edge-anchored viewport clamp — mirrors ModelPill's `MODEL_PILL_POPOVER_WIDTH` (matches `.ctx-popover`'s CSS `width`). */
@@ -406,14 +522,19 @@ function CtxPopover({
   contextUsage,
   contextBreakdown,
   sessionTokens,
+  quota,
   percent,
   tint,
+  supportsContextBreakdown,
 }: {
   contextUsage: ContextUsage | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
+  quota: CodexRateLimitsWire | null;
   percent: number;
   tint: string;
+  /** codex-profiles cut §5.2: Codex has no per-category breakdown — the popover shows an honest message instead of a skeleton (see `ctxPopoverBodyState`'s "unsupported" branch). */
+  supportsContextBreakdown: boolean;
 }) {
   const sendToHost = useTabSend();
   const [open, setOpen] = useState(false);
@@ -442,16 +563,21 @@ function CtxPopover({
   // `context_breakdown_request` exactly once per closed->open transition
   // (deps: `[open]` only — `sendToHost` is `useTabSend`'s stable per-tab
   // callback), never on every re-render while it stays open (the breakdown
-  // is meter-static between turns; no throttle needed, design §2.3).
+  // is meter-static between turns; no throttle needed, design §2.3). Skips
+  // the request entirely when the engine has no breakdown at all
+  // (codex-profiles cut §5.2) — asking would only ever get dropped, and the
+  // popover still needs its anchor to show the session-tokens/quota lines.
   useEffect(() => {
     if (!open) {
       setAnchor(null);
       return;
     }
-    sendToHost({ type: "context_breakdown_request" });
+    if (supportsContextBreakdown) {
+      sendToHost({ type: "context_breakdown_request" });
+    }
     const rect = triggerRef.current?.getBoundingClientRect();
     setAnchor(rect ? ctxPopoverAnchorFromRect(rect, window.innerWidth, window.innerHeight) : null);
-  }, [open, sendToHost]);
+  }, [open, sendToHost, supportsContextBreakdown]);
 
   // Re-clamp on viewport resize while open (P2-b fix): the anchor above is a
   // one-time snapshot from open-time — narrowing the window afterwards (e.g.
@@ -476,15 +602,17 @@ function CtxPopover({
   // and the skeleton would otherwise spin indefinitely with no feedback.
   // Resets the moment the breakdown arrives or the popover closes; the
   // cleanup below also covers unmount (mirrors `clearHoverTimer`'s
-  // discipline).
+  // discipline). Never arms when breakdown isn't supported at all — the
+  // "unsupported" bodyState wins immediately, so a timer here would only
+  // ever fire uselessly.
   useEffect(() => {
-    if (!open || contextBreakdown !== null) {
+    if (!open || !supportsContextBreakdown || contextBreakdown !== null) {
       setTimedOut(false);
       return;
     }
     const timer = window.setTimeout(() => setTimedOut(true), CTX_POPOVER_LOAD_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [open, contextBreakdown]);
+  }, [open, contextBreakdown, supportsContextBreakdown]);
 
   function handleMouseEnter(): void {
     if (open) {
@@ -529,9 +657,10 @@ function CtxPopover({
   const headline = ctxPopoverHeadline(contextUsage, roundedPercent);
   const rows = ctxPopoverRows(contextBreakdown);
   const loading = ctxPopoverLoading(open, contextBreakdown);
-  const bodyState = ctxPopoverBodyState(loading, timedOut);
+  const bodyState = ctxPopoverBodyState(supportsContextBreakdown, loading, timedOut);
   const sessionLine = formatSessionTokensLine(sessionTokens);
   const cacheHitLine = formatLatestCacheHitLine(sessionTokens);
+  const quotaView = buildQuotaPopoverView(quota, Date.now());
   const fillPercent = Math.min(100, Math.max(0, percent));
 
   return (
@@ -581,6 +710,9 @@ function CtxPopover({
           {bodyState === "empty" && (
             <div className="ctx-popover-empty">Breakdown unavailable</div>
           )}
+          {bodyState === "unsupported" && (
+            <div className="ctx-popover-empty">Breakdown is not available for this engine</div>
+          )}
           {bodyState === "rows" && (
             <div className="ctx-popover-rows">
               {rows.map((row) => (
@@ -591,11 +723,18 @@ function CtxPopover({
               ))}
             </div>
           )}
+          {(sessionLine !== null || quotaView !== null) && <div className="ctx-popover-divider" />}
           {sessionLine !== null && (
             <>
-              <div className="ctx-popover-divider" />
               <div className="ctx-popover-session">Session tokens: {sessionLine}</div>
               {cacheHitLine !== null && <div className="ctx-popover-session">{cacheHitLine}</div>}
+            </>
+          )}
+          {quotaView !== null && (
+            <>
+              {quotaView.primaryLine !== null && <div className="ctx-popover-session">{quotaView.primaryLine}</div>}
+              {quotaView.secondaryLine !== null && <div className="ctx-popover-session">{quotaView.secondaryLine}</div>}
+              {quotaView.creditsLine !== null && <div className="ctx-popover-session">{quotaView.creditsLine}</div>}
             </>
           )}
         </div>
@@ -674,6 +813,7 @@ export function Composer() {
   const contextUsage = useTabStore((state) => state.contextUsage);
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
   const sessionTokens = useTabStore((state) => state.sessionTokens);
+  const quota = useTabStore((state) => state.quota);
   const engine = useTabStore((state) => state.engine);
   const pendingEngineChange = useTabStore((state) => state.pendingEngineChange);
   const shell = useTabStore((state) => state.shell);
@@ -1256,13 +1396,15 @@ export function Composer() {
             send/newline hint; always in the DOM even while visually hidden. */}
         <span id="composer-hint" className={`composer-hint${hintHidden ? " composer-hint-hidden" : ""}`}>{hintText}</span>
         <div className="composer-footer-right">
-          {supportsContextUsage && supportsContextBreakdown && ctxPercent !== null && (
+          {supportsContextUsage && ctxPercent !== null && (
             <CtxPopover
               contextUsage={contextUsage}
               contextBreakdown={contextBreakdown}
               sessionTokens={sessionTokens}
+              quota={quota}
               percent={ctxPercent}
               tint={ctxTint}
+              supportsContextBreakdown={supportsContextBreakdown}
             />
           )}
           {running ? (

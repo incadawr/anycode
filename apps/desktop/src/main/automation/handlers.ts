@@ -608,6 +608,77 @@ export function focusState(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("focusState", []);
 }
 
+// --- Codex pane probe/driver (W4-F0, findings S1-1 probe (a)): thin wrappers
+// over the frozen facade contract, same discipline as the settings
+// probe/driver above — the facade owns every guard (pane_not_mounted /
+// button_not_present / button_disabled), this layer only forwards method +
+// args. Global (app-level) commands: no `:tabId` — the Codex pane lives
+// inside the global Settings dialog, same posture as the MCP/Skills pane
+// probe/drivers. ---
+
+export function codexPaneState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexPaneState", []);
+}
+
+export function codexPaneInstall(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexPaneInstall", []);
+}
+
+export function codexPaneRecheckAll(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexPaneRecheckAll", []);
+}
+
+export function codexPaneRefreshManifest(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexPaneRefreshManifest", []);
+}
+
+// --- Codex profile chip probe/driver (W4-F0, findings S1-1 probe (b)): thin
+// wrappers, same discipline as the start-screen probes above — the facade
+// owns every guard (not_present / did_not_open / unknown_option), this layer
+// only forwards method + args. ---
+
+export function codexProfileChipState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexProfileChipState", []);
+}
+
+export function codexProfileChipOpen(deps: HandlerDeps, open: boolean): Promise<unknown> {
+  return deps.callFacade("codexProfileChipOpen", [open]);
+}
+
+export function codexProfileChipPick(deps: HandlerDeps, index: number): Promise<unknown> {
+  return deps.callFacade("codexProfileChipPick", [index]);
+}
+
+// --- Rollout-import dialog probe/driver (W4-F0, findings S1-1 probe (c)):
+// thin wrappers, same discipline as the MCP import probe/driver above — the
+// facade owns every guard (dialog_not_open / unknown_profile /
+// unknown_rollout / unknown_model / import_disabled / import_refused /
+// *_timeout), this layer only forwards method + args. ---
+
+export function codexImportState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexImportState", []);
+}
+
+export function codexImportOpen(deps: HandlerDeps, open: boolean): Promise<unknown> {
+  return deps.callFacade("codexImportOpen", [open]);
+}
+
+export function codexImportSetProfile(deps: HandlerDeps, profileId: string): Promise<unknown> {
+  return deps.callFacade("codexImportSetProfile", [profileId]);
+}
+
+export function codexImportSelectRollout(deps: HandlerDeps, index: number): Promise<unknown> {
+  return deps.callFacade("codexImportSelectRollout", [index]);
+}
+
+export function codexImportSetModel(deps: HandlerDeps, model: string): Promise<unknown> {
+  return deps.callFacade("codexImportSetModel", [model]);
+}
+
+export function codexImportApply(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexImportApply", []);
+}
+
 // --- MCP Servers pane probe/driver (slice-P7.19-cut.md §4 W4): thin wrappers
 // over the frozen facade contract, same discipline as the settings
 // probe/driver above — the facade owns every guard (pane_not_mounted /

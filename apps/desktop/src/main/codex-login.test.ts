@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { runCodexLogin } from "./codex-login.js";
+import type { ResolvedCodexProfile } from "./codex-profiles.js";
 
 const fixturePath = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mjs", import.meta.url));
 
@@ -77,5 +78,62 @@ describe("runCodexLogin", () => {
       timeoutMs: 5_000,
     });
     expect(outcome).toEqual({ ok: false, reason: "failed" });
+  });
+});
+
+describe("runCodexLogin + profiles (TASK.50 п.2 — login INTO a profile home)", () => {
+  const PROFILE: ResolvedCodexProfile = {
+    id: "acc1",
+    codexHome: "/home/dev/.anycode/codex/profile-acc1",
+    linked: false,
+  };
+
+  it("OVERWRITES an ambient CODEX_HOME with the profile home in the child env (hazard §14.6: ambient is set)", async () => {
+    const captured: Array<NodeJS.ProcessEnv | undefined> = [];
+    const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
+      openExternal: async () => {},
+      spawnImpl: (_command, args, options) => {
+        captured.push(options.env as NodeJS.ProcessEnv | undefined);
+        return spawn(process.execPath, [fixturePath, ...args, "--auto-complete-login"], options);
+      },
+      env: { HOME: "/home/dev", PATH: "/usr/bin", CODEX_HOME: "/home/dev/.codex-ambient-hijack" },
+      timeoutMs: 5_000,
+      profile: PROFILE,
+      profileGuard: () => ({ ok: true }),
+    });
+    expect(outcome).toEqual({ ok: true });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.CODEX_HOME).toBe("/home/dev/.anycode/codex/profile-acc1");
+  });
+
+  it("a refusing home guard fails closed WITHOUT spawning or opening a browser", async () => {
+    const spawnSpy = vi.fn(fakeSpawn(["--auto-complete-login"]));
+    const openExternal = vi.fn(async () => {});
+    const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
+      openExternal,
+      spawnImpl: spawnSpy,
+      timeoutMs: 5_000,
+      profile: PROFILE,
+      profileGuard: () => ({ ok: false, reason: "profile home is world-writable" }),
+    });
+    expect(outcome).toEqual({ ok: false, reason: "failed" });
+    expect(spawnSpy).not.toHaveBeenCalled();
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("refuses to log into an authLink profile — its credential mirrors an external file (amended §A1.2: re-link, not re-login)", async () => {
+    const spawnSpy = vi.fn(fakeSpawn(["--auto-complete-login"]));
+    const outcome = await runCodexLogin("/fake/codex", {
+      trust: TRUSTED,
+      openExternal: async () => {},
+      spawnImpl: spawnSpy,
+      timeoutMs: 5_000,
+      profile: { ...PROFILE, authLink: "/home/dev/.codex/auth.json" },
+      profileGuard: () => ({ ok: true }),
+    });
+    expect(outcome).toEqual({ ok: false, reason: "failed" });
+    expect(spawnSpy).not.toHaveBeenCalled();
   });
 });

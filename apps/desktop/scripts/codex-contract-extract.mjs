@@ -63,6 +63,16 @@ const CLIENT_REQUEST_METHODS = [
   { method: "account/login/start", resultRef: "v2/LoginAccountResponse" },
   { method: "account/login/cancel", resultRef: "v2/CancelLoginAccountResponse" },
   { method: "account/logout", resultRef: "v2/LogoutAccountResponse" },
+  // codex-profiles cut §1.1/§8.4, amended §A6: consumed IMMEDIATELY (doctor +
+  // host, cut §6.1) so it is pinned, not just observed as benign. Called
+  // WITHOUT a `params` key on the wire (amended §A3.7) — `resolveMethodParamsRef`
+  // returns `null` for a `{type:"null"}` params schema, exactly like this one.
+  { method: "account/rateLimits/read", resultRef: "v2/GetAccountRateLimitsResponse" },
+  // Not consumed by this track (F19-residual, cut §11) — pinned PROACTIVELY
+  // per amended §A6.1: verified live (W0-R1), named next consumer exists
+  // (F19), and a silent rename would erode that consumer's premise
+  // unnoticed. Also called WITHOUT a `params` key (amended §A3.7).
+  { method: "account/usage/read", resultRef: "v2/GetAccountTokenUsageResponse" },
 ];
 
 /** Both approval families (cut §1.1): command-execution AND file-change. `paramsRef` derived, same rationale as CLIENT_REQUEST_METHODS above. */
@@ -83,6 +93,11 @@ const SERVER_NOTIFICATION_METHODS = [
   { method: "account/login/completed" },
   { method: "account/updated" },
   { method: "account/rateLimits/updated" },
+  // Amended §A6.2/§A3.8: server emits this AROUND initialize (pre-handshake)
+  // — clients drop ANY pre-init notification silently, and this one is also
+  // added to the pre-turn benign list so it never counts toward
+  // PRE_TURN_NOTIFICATION_LIMIT.
+  { method: "remoteControl/status/changed" },
 ];
 
 /** Standalone defs pulled in beyond what the method table's BFS already reaches: the error shape and the turn-status enum (cut §2(h) layer-1: "error/turn-status/notification-families"). */

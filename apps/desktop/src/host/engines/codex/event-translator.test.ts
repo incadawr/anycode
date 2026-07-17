@@ -353,6 +353,115 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
   });
 });
 
+describe("TurnTranslator — engine_session_tokens (cut §5.3, REPLACE semantics)", () => {
+  const usage = (lastTotal: number, cumulative: { inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningOutputTokens: number; totalTokens: number }): JsonRpcNotification => ({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      tokenUsage: { last: { totalTokens: lastTotal }, total: cumulative, modelContextWindow: 353_400 },
+    },
+  });
+
+  it("carries the wire's CUMULATIVE totals verbatim on every update — never per-update deltas, never a `finish` event", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const first = translator.onNotification(usage(100, { inputTokens: 80, cachedInputTokens: 10, outputTokens: 20, reasoningOutputTokens: 5, totalTokens: 100 }));
+    const second = translator.onNotification(usage(150, { inputTokens: 190, cachedInputTokens: 60, outputTokens: 60, reasoningOutputTokens: 15, totalTokens: 250 }));
+
+    expect(first).toContainEqual({
+      type: "engine_session_tokens",
+      input: 80,
+      output: 20,
+      total: 100,
+      cachedInput: 10,
+      reasoningOutput: 5,
+    });
+    // REPLACE red-proof (cut §13.2 C / hazard §14.3): `tokenUsage.total` is
+    // ALREADY cumulative on the wire, so the second event must carry 250 —
+    // a translator rolled back to emit per-update deltas for a summing
+    // consumer would carry 150 here, and this assertion goes red.
+    expect(second).toContainEqual({
+      type: "engine_session_tokens",
+      input: 190,
+      output: 60,
+      total: 250,
+      cachedInput: 60,
+      reasoningOutput: 15,
+    });
+    // The other half of the same rollback: reusing `finish` would route the
+    // cumulative number into the store's accumulateSessionTokens (a SUM) and
+    // double it. No finish-shaped event may ever appear here.
+    expect([...first, ...second].some((event) => event.type === "finish")).toBe(false);
+  });
+
+  it("still emits context_usage alone when the wire carries no usable `total` (old fixture shape)", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({
+      method: "thread/tokenUsage/updated",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, tokenUsage: { last: { totalTokens: 13_495 }, modelContextWindow: 353_400 } },
+    });
+    expect(types(events)).toEqual(["context_usage"]);
+  });
+
+  it("emits engine_session_tokens even when the context fields are unusable (no modelContextWindow)", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        tokenUsage: { last: { totalTokens: 10 }, total: { inputTokens: 8, cachedInputTokens: 0, outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10 } },
+      },
+    });
+    expect(types(events)).toEqual(["engine_session_tokens"]);
+  });
+});
+
+describe("TurnTranslator — engine_quota (cut §6, amendment §A3)", () => {
+  /** The engine-owned tracker seam, recorded: the translator must APPLY it, never build a snapshot itself. */
+  function quotaSink(): { applied: unknown[]; applyUpdate(params: unknown): { primary: { usedPercent: number }; planType: string; observedAt: string } | null } {
+    return {
+      applied: [],
+      applyUpdate(params: unknown) {
+        this.applied.push(params);
+        const rateLimits = (params as { rateLimits?: { primary?: { usedPercent?: number } } } | undefined)?.rateLimits;
+        const usedPercent = rateLimits?.primary?.usedPercent;
+        if (typeof usedPercent !== "number") return null;
+        // The MERGED snapshot: fields the push omitted survive from the seed —
+        // the exact sparse-merge outcome shared/codex-quota.ts red-proofs.
+        return { primary: { usedPercent }, planType: "plus", observedAt: "t2" };
+      },
+    };
+  }
+
+  it("routes the account-scoped push (NO threadId/turnId on the wire) through the tracker and emits the MERGED snapshot", () => {
+    const quota = quotaSink();
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, quota });
+    const events = translator.onNotification({
+      method: "account/rateLimits/updated",
+      params: { rateLimits: { primary: { usedPercent: 41 } } },
+    });
+    // The emitted snapshot is the tracker's merge result — planType came from
+    // the earlier seed, NOT from this push. A translator that built the
+    // snapshot from the push alone could not carry it, and this goes red.
+    expect(events).toEqual([
+      { type: "engine_quota", quota: { primary: { usedPercent: 41 }, planType: "plus", observedAt: "t2" } },
+    ]);
+    expect(quota.applied).toEqual([{ rateLimits: { primary: { usedPercent: 41 } } }]);
+  });
+
+  it("an undecodable push (tracker returns null) emits nothing and never fabricates a snapshot", () => {
+    const quota = quotaSink();
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, quota });
+    expect(translator.onNotification({ method: "account/rateLimits/updated", params: { nonsense: true } })).toEqual([]);
+  });
+
+  it("without a tracker seam the push is silently dropped (no crash, no invented event)", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    expect(translator.onNotification({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 41 } } } })).toEqual([]);
+  });
+});
+
 /**
  * W17 red-first: replays REAL captured live traces (not synthetic fixtures)
  * through the translator and proves the renderer's documented lifecycle

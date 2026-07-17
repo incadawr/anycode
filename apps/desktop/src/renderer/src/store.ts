@@ -94,6 +94,7 @@ import { create } from "zustand";
 import type {
   AssistantPart,
   BackgroundTaskSnapshot,
+  CodexRateLimitsWire,
   CommandHookDeclaration,
   GitBranchInfo,
   GitCommitInfo,
@@ -342,6 +343,31 @@ export function accumulateSessionTokens(prev: SessionTokens | null, usage: Token
     ...(usage.cachedInputTokens !== undefined
       ? { latestCacheRead: usage.cachedInputTokens, latestCacheInput: input }
       : {}),
+  };
+}
+
+/**
+ * Builds `SessionTokens` from an `engine_session_tokens` AgentEvent
+ * (codex-profiles cut §3.4/§5.3, TASK.51). SEMANTICS ARE REPLACE, NOT
+ * ACCUMULATE — deliberately NOT `accumulateSessionTokens`: the event's
+ * `total`/`input`/`output` are already the wire's cumulative session totals
+ * (`thread/tokenUsage/updated.total`), so summing them onto a running base
+ * would double-count every reading after the first. `cachedInput` maps onto
+ * `latestCacheRead` and the event's own `input` becomes the matching
+ * `latestCacheInput` denominator, mirroring `accumulateSessionTokens`'s cache
+ * pairing above. Exported for unit testing.
+ */
+export function sessionTokensFromEngineEvent(event: {
+  input: number;
+  output: number;
+  total: number;
+  cachedInput?: number;
+}): SessionTokens {
+  return {
+    input: event.input,
+    output: event.output,
+    total: event.total,
+    ...(event.cachedInput !== undefined ? { latestCacheRead: event.cachedInput, latestCacheInput: event.input } : {}),
   };
 }
 
@@ -623,6 +649,17 @@ export interface DesktopState {
    */
   sessionTokens: SessionTokens | null;
   /**
+   * Codex subscription-quota snapshot (codex-profiles cut §3.4/§6, TASK.51):
+   * seeded from `host_ready.engine.quota` and REPLACED wholesale by every
+   * `engine_quota` AgentEvent — the sparse merge (null never wipes a known
+   * field) already happened host-side (`shared/codex-quota.ts`'s
+   * `mergeCodexRateLimits`), so the renderer only ever stores the latest
+   * snapshot as-is. Null when the engine has no quota reporting (core, or
+   * before the first snapshot arrives). Part of the session slice so a
+   * respawn/reset clears it. The ctx-popover's sole reader.
+   */
+  quota: CodexRateLimitsWire | null;
+  /**
    * Checkpoint timeline snapshot (slice P7.26/R2): fetched on demand when the
    * timeline panel opens (`checkpoint_list_request`), replaced wholesale on
    * each `checkpoint_list` reply. Part of the session slice so a respawn/reset
@@ -808,6 +845,8 @@ interface SessionSlice {
   envStatus: WireEnvStatus | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
+  /** Codex subscription-quota snapshot (codex-profiles cut §3.4/§6, TASK.51); see `DesktopState.quota`'s own doc comment. */
+  quota: CodexRateLimitsWire | null;
   /** On-demand checkpoint-timeline snapshot (slice P7.26/R2); replaced wholesale on each `checkpoint_list`. */
   checkpoints: WireCheckpointMeta[];
   /** Outcome of the last `rewind_request`, if any this session; null before the first one. */
@@ -840,6 +879,7 @@ function initialSessionSlice(): SessionSlice {
     envStatus: null,
     contextBreakdown: null,
     sessionTokens: null,
+    quota: null,
     checkpoints: [],
     lastRewindResult: null,
     lastSentMessage: null,
@@ -1803,6 +1843,23 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           set({ notice: { kind: "engine_notice", text: event.message } });
           return;
 
+        // codex-profiles cut §3.4/§5.3/§6 (TASK.51 W3 lane G): additive
+        // AgentEvent variants the core loop never emits (dormant for every
+        // existing core session, same test-hazard #3 discipline as
+        // `engine_notice` above) — only the Codex host translator produces
+        // them. `engine_quota` REPLACES the quota snapshot wholesale (the
+        // sparse merge already happened host-side, `shared/codex-quota.ts`);
+        // `engine_session_tokens` REPLACES `sessionTokens` via the dedicated
+        // `sessionTokensFromEngineEvent` reducer, deliberately NOT
+        // `accumulateSessionTokens` (see that function's own doc comment for
+        // why summing an already-cumulative total would double-count).
+        case "engine_quota":
+          set({ quota: event.quota });
+          return;
+        case "engine_session_tokens":
+          set({ sessionTokens: sessionTokensFromEngineEvent(event) });
+          return;
+
         // Session consumes this control-plane event before it reaches the UI;
         // keep a defensive no-op for structural completeness on a rogue wire.
         case "workspace_transition":
@@ -1882,6 +1939,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               workspace: message.workspace,
               mode: message.mode,
               engine: message.engine ?? null,
+              quota: message.engine?.quota ?? null,
               shell: message.shell ?? null,
               model: message.model,
               reasoningEffort: message.reasoningEffort ?? "off",

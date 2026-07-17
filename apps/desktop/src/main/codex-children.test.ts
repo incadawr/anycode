@@ -77,6 +77,7 @@ function makeDeps(binaryPath: string, overrides: Partial<CodexIpcDeps> = {}): Co
   return {
     bootEnv: { ANYCODE_CODEX_BIN: binaryPath, PATH: "", HOME: workDir },
     readBinaryPathSetting: async () => undefined,
+    readCodexSettings: async () => undefined,
     writeCodexSettings: async () => ({ ok: true as const, snapshot: {} as never }),
     dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
     openExternal: vi.fn(),

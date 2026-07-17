@@ -99,6 +99,162 @@ const connectionSchema = z.object({
     .optional(),
 });
 
+// ── codex-profiles (cut §2.3/§2.6, amended §A1.1) ──
+
+/** Strict charset (cut §2.6): never a path — `..`/`/` are excluded by construction. */
+const codexProfileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
+
+/**
+ * A `~/`-relative or absolute path — the ONLY shapes `authLink` AND
+ * `linkedHome` accept (amended §A1.1.4, extended to `linkedHome` by the C0
+ * review F1 ruling: a relative `linkedHome` would resolve against process
+ * cwd on its way into the child's `CODEX_HOME`). Tilde expansion happens in
+ * main, in ONE place, for both fields.
+ */
+function isTildeOrAbsolutePath(value: string): boolean {
+  return value.startsWith("~/") || value.startsWith("/");
+}
+
+const codexDoctorStatusSchema = z.enum(["ready", "not_installed", "update_required", "signed_out", "error"]);
+
+/**
+ * One `CodexProfileRecord` (amended §A1.1). `authLink` ⊕ `linkedHome` are
+ * enforced MUTUALLY EXCLUSIVE by a per-element `refine` — a record with both
+ * (or a malformed id/path) is a BAD element, dropped whole by
+ * `parseElementsTolerantly` below WITHOUT failing the array or the
+ * containing `codex` block (cut §2.3 zod-granularity, amended §A1.1 rule 3b).
+ */
+const codexProfileSchema = z
+  .object({
+    id: codexProfileIdSchema,
+    label: z.string(),
+    createdAt: z.string(),
+    linkedHome: z.string().refine(isTildeOrAbsolutePath).optional(),
+    authLink: z.string().refine(isTildeOrAbsolutePath).optional(),
+    lastCheck: z
+      .object({
+        status: codexDoctorStatusSchema,
+        version: z.string().optional(),
+        at: z.string(),
+      })
+      .optional(),
+  })
+  .refine((profile) => !(profile.linkedHome !== undefined && profile.authLink !== undefined), {
+    message: "authLink and linkedHome are mutually exclusive (amended §A1.1 rule 3)",
+  });
+
+/**
+ * Filters an array-shaped raw value down to only the elements that validate
+ * against `schema`, silently dropping the rest — the per-element `.catch`
+ * granularity the cut requires (§2.3/§14.3 point 5): a single bad profile
+ * (or custom-provider) record must never blank its siblings, and must never
+ * cause the CONTAINING object (which also carries `binaryPath`) to fall back
+ * to `undefined`. Non-array input parses to an empty array (same "absent ⇒
+ * safe default" policy as the rest of this advisory-cache field).
+ */
+function parseElementsTolerantly<T>(schema: z.ZodType<T>, raw: unknown): T[] {
+  if (!Array.isArray(raw)) return [];
+  const out: T[] = [];
+  for (const element of raw) {
+    const result = schema.safeParse(element);
+    if (result.success) out.push(result.data);
+  }
+  return out;
+}
+
+const codexProfilesArraySchema = z.preprocess(
+  (raw) => parseElementsTolerantly(codexProfileSchema, raw),
+  z.array(codexProfileSchema),
+);
+
+// ── custom model-provider endpoints (cut §9.2) ──
+
+const customProviderKindSchema = z.enum(["openai-compatible", "anthropic", "openai"]);
+
+/**
+ * The ONE loopback host set (localhost/127.0.0.1/[::1]) both URL predicates
+ * below key off — never two drifting copies (amendment-1 FX2-1 discipline).
+ * Node's `URL.hostname` keeps the brackets on an IPv6 literal, hence `[::1]`.
+ */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * `https://` (no embedded userinfo) always allowed; `http://` allowed ONLY
+ * for loopback (localhost/127.0.0.1/[::1]), also no embedded userinfo (cut
+ * §9.2 threat list, amendment-1 FX2-1: a `user:pass@host` userinfo component
+ * is rejected for every scheme — a secret placed there would otherwise
+ * round-trip into settings.json and back out to the renderer as plain
+ * baseUrl text instead of living only in the vault).
+ *
+ * The single source of truth for this predicate — main/provider-ipc.ts
+ * imports and re-exports it rather than keeping its own copy.
+ */
+export function isHttpsOrLocalhostUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username !== "" || url.password !== "") return false;
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && LOOPBACK_HOSTNAMES.has(url.hostname);
+}
+
+/**
+ * True when `value` parses as a URL whose host is a loopback literal
+ * (localhost/127.0.0.1/[::1]), any scheme. Shares `LOOPBACK_HOSTNAMES` with
+ * `isHttpsOrLocalhostUrl` so the two predicates can never disagree on what
+ * "loopback" means (FX3-L1 G-A: the origin-rebind custody guard in
+ * main/provider-ipc.ts waives its re-key requirement only for a
+ * loopback→loopback baseUrl change — e.g. a corrected local port — because
+ * the stored key never leaves this machine on either origin).
+ */
+export function isLoopbackUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return LOOPBACK_HOSTNAMES.has(url.hostname);
+}
+
+/**
+ * One `CustomProviderRecord` (cut §9.2) — same per-element-catch discipline as
+ * `codexProfileSchema`.
+ *
+ * W4-R1-M1 (namespace custody): `id` is pinned to the `custom:` vault namespace
+ * — the same prefix main/host-env.ts's `CUSTOM_PROVIDER_PREFIX` /
+ * `isCustomProviderRecordId` and provider-ipc.ts's `customProviderSecretKey`
+ * key off (kept as a literal here so this shared, electron-free module never
+ * imports main). Without it a hand-edited (or corrupt/migrated) record could
+ * carry a foreign id — a `connection.<victim>` connection key or a bare catalog
+ * id like `anthropic` — and a `custom-provider-fetch-models {id}` would then
+ * decrypt that OTHER namespace's vault key and POST it to the record's
+ * attacker-chosen baseUrl (cross-namespace credential exfil). A mis-namespaced
+ * record is dropped whole by `parseElementsTolerantly` (never throws, never
+ * blanks its siblings) so it never reaches the catalog and fetch-models can
+ * never resolve it.
+ */
+const customProviderSchema = z.object({
+  id: z.string().refine((value) => value.startsWith("custom:"), {
+    message: "custom-provider id must live in the custom: vault namespace (W4-R1-M1)",
+  }),
+  name: z.string(),
+  baseUrl: z.string().refine(isHttpsOrLocalhostUrl, {
+    message: "baseUrl must be https: or http: scoped to localhost/127.0.0.1/[::1], with no embedded userinfo",
+  }),
+  kind: customProviderKindSchema,
+  models: z.array(z.string()),
+  modelsFetchedAt: z.string().optional(),
+});
+
+const customProvidersArraySchema = z.preprocess(
+  (raw) => parseElementsTolerantly(customProviderSchema, raw),
+  z.array(customProviderSchema),
+);
+
 export const settingsSchema: z.ZodType<AnycodeSettings> = z
   .object({
     version: z.literal(2),
@@ -111,6 +267,11 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     provider: z.object({
       activeConnectionId: z.string().optional(),
       connections: z.array(connectionSchema),
+      // Custom model-provider endpoints (owner-decision #6, cut §9.2,
+      // additive-optional). Per-element `.catch` granularity, same
+      // discipline as `codex.profiles` below — one malformed custom-provider
+      // record never disturbs its siblings or `connections`.
+      custom: customProvidersArraySchema.optional(),
     }),
     tools: z.object({
       concurrency: z.number().optional(),
@@ -149,15 +310,38 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // permissions, ...) the user actually configured. An invalid `codex`
     // value is dropped to `undefined` (same outcome as it being absent) while
     // every sibling field keeps validating normally.
+    //
+    // codex-profiles cut §2.3 "zod-granularity" fix (this block used to sit
+    // under ONE `.catch(undefined)` for the whole object, so a single bad
+    // `profiles[i]` element would previously have wiped `binaryPath` too):
+    // `profiles`/`custom` (provider.custom above) now validate PER ELEMENT
+    // via `parseElementsTolerantly`, so a malformed profile record is
+    // dropped alone — `binaryPath` and every valid sibling profile survive.
+    // The outer `.catch(undefined)` remains as the fallback for a
+    // genuinely wrong-shaped `codex` value as a whole (e.g. `codex` itself
+    // is a string, not an object).
     codex: z
       .object({
         binaryPath: z.string().optional(),
         lastCheck: z
           .object({
-            status: z.enum(["ready", "not_installed", "update_required", "signed_out", "error"]),
+            status: codexDoctorStatusSchema,
             version: z.string().optional(),
             at: z.string(),
           })
+          .optional(),
+        // Codex account profiles (cut §2.3, amended §A1.1). Per-element
+        // catch: see codexProfilesArraySchema above.
+        profiles: codexProfilesArraySchema.optional(),
+        activeProfileId: z.string().optional(),
+        // Risk-accepted out-of-range versions (cut §7.4) — a plain string
+        // array; a malformed (non-string) entry is dropped via the same
+        // tolerant-array helper rather than failing the whole list.
+        riskAcceptedVersions: z
+          .preprocess(
+            (raw) => (Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : []),
+            z.array(z.string()),
+          )
           .optional(),
       })
       .optional()

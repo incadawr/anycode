@@ -1,6 +1,7 @@
-import { realpathSync, statSync } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, posix, win32 } from "node:path";
 import { checkCodexBinaryTrust, type CodexPathStat } from "../shared/codex-binary-trust.js";
+import { CODEX_TRIPLE_BY_PLATFORM, codexBinaryRelPath, codexPlatformSuffix } from "../shared/codex-support.js";
 
 export interface CodexBinaryResolution {
   path: string | null;
@@ -12,6 +13,8 @@ export interface CodexBinaryFs {
   stat(path: string): { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number };
   /** Symlinks resolved: `execve` reads the TARGET, so the target is what must be trusted. */
   realpath(path: string): string;
+  /** Directory listing for the `installed` rung (TASK.53). Optional: a seam without it simply yields no installed candidates — it never breaks the rest of the ladder. */
+  readdir?(path: string): string[];
 }
 
 const nodeFs: CodexBinaryFs = {
@@ -20,6 +23,9 @@ const nodeFs: CodexBinaryFs = {
   },
   realpath(path) {
     return realpathSync(path);
+  },
+  readdir(path) {
+    return readdirSync(path);
   },
 };
 
@@ -143,8 +149,8 @@ export function resolveCodexBinary(
 // `path.join`, NEVER by shell interpolation (no `which`/`where`, no `shell:
 // true` spawn anywhere in this file or its main/codex-doctor.ts consumer).
 
-/** `picker` is not produced by `discoverCodexBinary` (it never opens a dialog) — main/codex-ipc.ts stamps it on the explicit file-picker rung, the ladder's fifth and final step. */
-export type CodexBinarySource = "env" | "settings" | "path" | "common" | "picker" | "none";
+/** `picker` is not produced by `discoverCodexBinary` (it never opens a dialog) — main/codex-ipc.ts stamps it on the explicit file-picker rung, the ladder's final step. `installed` = a version downloaded by main/codex-install.ts into `~/.anycode/codex/bin/` (TASK.53), the last automatic rung. */
+export type CodexBinarySource = "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
 
 export interface CodexBinaryDiscovery {
   path: string | null;
@@ -194,6 +200,45 @@ export function commonInstallLocations(env: NodeJS.ProcessEnv, platform: NodeJS.
   return dirs.map((dir) => posix.join(dir, fileName));
 }
 
+/**
+ * Candidate binaries installed by our own downloader (cut §7.2 п.8 —
+ * `~/.anycode/codex/bin/<version>/vendor/<triple>/bin/codex`), newest version
+ * first. Version directories are matched strictly (`X.Y.Z`) so temp litter
+ * (`.tmp-*`, `.download-*`) and junk never become candidates. Yields `[]` —
+ * never throws — when HOME is unset, the tree does not exist, the platform
+ * has no artifact, or the fs seam carries no `readdir`.
+ */
+export function installedCodexCandidates(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  arch: string,
+  fs: CodexBinaryFs = nodeFs,
+): string[] {
+  if (fs.readdir === undefined) return [];
+  const home = platform === "win32" ? env.USERPROFILE : env.HOME;
+  if (home === undefined || home.trim() === "") return [];
+  const suffix = codexPlatformSuffix(platform, arch);
+  const triple = suffix !== null ? CODEX_TRIPLE_BY_PLATFORM[suffix] : undefined;
+  if (triple === undefined) return [];
+  const paths = platform === "win32" ? win32 : posix;
+  const binRoot = paths.join(home, ".anycode", "codex", "bin");
+  let entries: string[];
+  try {
+    entries = fs.readdir(binRoot);
+  } catch {
+    return [];
+  }
+  const parse = (name: string): [number, number, number] | null => {
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(name);
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+  };
+  return entries
+    .map((name) => ({ name, version: parse(name) }))
+    .filter((entry): entry is { name: string; version: [number, number, number] } => entry.version !== null)
+    .sort((a, b) => b.version[0] - a.version[0] || b.version[1] - a.version[1] || b.version[2] - a.version[2])
+    .map((entry) => paths.join(binRoot, entry.name, ...codexBinaryRelPath(triple).split("/")));
+}
+
 export interface CodexDiscoveryInputs {
   /** `ANYCODE_CODEX_BIN`, if set — a documented dev/diagnostic override with top ladder priority. */
   envOverride?: string;
@@ -203,6 +248,8 @@ export interface CodexDiscoveryInputs {
   env: NodeJS.ProcessEnv;
   fs?: CodexBinaryFs;
   platform?: NodeJS.Platform;
+  /** CPU arch for the `installed` rung's triple lookup; defaults to `process.arch`. */
+  arch?: string;
   /** Test seam; production reads the live process identity (uid + supplementary groups). */
   identity?: CodexIdentity;
 }
@@ -219,12 +266,14 @@ export interface CodexDiscoveryInputs {
 export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDiscovery {
   const fs = inputs.fs ?? nodeFs;
   const platform = inputs.platform ?? process.platform;
+  const arch = inputs.arch ?? process.arch;
   const identity = inputs.identity ?? currentIdentity();
   const rungs: Array<{ source: CodexBinarySource; candidates: string[] }> = [
     { source: "env", candidates: inputs.envOverride !== undefined && inputs.envOverride.trim() !== "" ? [inputs.envOverride] : [] },
     { source: "settings", candidates: inputs.settingsPath !== undefined && inputs.settingsPath.trim() !== "" ? [inputs.settingsPath] : [] },
     { source: "path", candidates: candidatesFromPath(inputs.env.PATH, platform) },
     { source: "common", candidates: commonInstallLocations(inputs.env, platform) },
+    { source: "installed", candidates: installedCodexCandidates(inputs.env, platform, arch, fs) },
   ];
   let lastReason: string | undefined;
   for (const rung of rungs) {

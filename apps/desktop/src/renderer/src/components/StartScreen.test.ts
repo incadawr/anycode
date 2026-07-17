@@ -8,18 +8,22 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyStarterPreset,
   CODEX_DRAFT_PRESETS,
+  computeCodexProfileChipLabel,
   computeModelChipDisplay,
   computeProjectLabel,
   computeSendDisabledReason,
   DEFAULT_CODEX_DRAFT_PRESET,
+  deriveCodexProfileOptions,
   deriveRecentWorkspaces,
   guardedSubmit,
+  isDraftCodexProfileIdStale,
   isSendKeydown,
   pickFolderForDraft,
   pickModelForDraft,
   resolveCodexDraftModel,
   resolveProviderDefaultModel,
   seedWorkspaceFromRecents,
+  shouldShowCodexProfileChip,
   type FolderPickDeps,
   type ModelPickDeps,
 } from "./StartScreen.js";
@@ -279,6 +283,96 @@ describe("resolveCodexDraftModel (TASK.39 — cross-engine draft.model leakage g
 
   it("returns an empty string when the catalog itself hasn't loaded yet (defensive — caller gates rendering on a non-empty catalog)", () => {
     expect(resolveCodexDraftModel(null, [])).toBe("");
+  });
+});
+
+describe("shouldShowCodexProfileChip (codex-profiles cut §3.3/W3-F)", () => {
+  const profiles = [{ id: "work", label: "Work", disabled: false }];
+
+  it("hidden for a Core draft even with registered profiles", () => {
+    expect(shouldShowCodexProfileChip(false, profiles)).toBe(false);
+  });
+
+  it("hidden for a Codex draft with NO registered profiles (system pseudo-profile alone has nothing to pick)", () => {
+    expect(shouldShowCodexProfileChip(true, [])).toBe(false);
+  });
+
+  it("shown for a Codex draft once at least one profile is registered", () => {
+    expect(shouldShowCodexProfileChip(true, profiles)).toBe(true);
+  });
+});
+
+describe("computeCodexProfileChipLabel (codex-profiles cut §3.3/W3-F)", () => {
+  const profiles = [
+    { id: "work", label: "Work", disabled: false },
+    { id: "personal", label: "Personal", disabled: true },
+  ];
+
+  it("shows 'System' before the user ever touches the chip (draft.codexProfileId undefined)", () => {
+    expect(computeCodexProfileChipLabel(undefined, profiles)).toBe("System");
+  });
+
+  it("shows the picked profile's label", () => {
+    expect(computeCodexProfileChipLabel("work", profiles)).toBe("Work");
+  });
+
+  it("falls back to 'System' for a picked id no longer in the catalog — never claims an account createStartTabRequest would not actually submit", () => {
+    expect(computeCodexProfileChipLabel("removed-profile", profiles)).toBe("System");
+  });
+});
+
+describe("isDraftCodexProfileIdStale (R3-2 facet i: removed-profile desync)", () => {
+  const profiles = [
+    { id: "work", label: "Work", disabled: false },
+    { id: "personal", label: "Personal", disabled: true },
+  ];
+
+  it("never touched (undefined) is not stale", () => {
+    expect(isDraftCodexProfileIdStale(undefined, profiles)).toBe(false);
+  });
+
+  it("a picked id still present in the catalog is not stale", () => {
+    expect(isDraftCodexProfileIdStale("work", profiles)).toBe(false);
+  });
+
+  it("a picked id removed from the catalog IS stale — createStartTabRequest would still submit it while the chip shows 'System'", () => {
+    expect(isDraftCodexProfileIdStale("removed-profile", profiles)).toBe(true);
+  });
+
+  it("a picked id is stale against an empty catalog", () => {
+    expect(isDraftCodexProfileIdStale("work", [])).toBe(true);
+  });
+});
+
+describe("deriveCodexProfileOptions (codex-profiles cut §3.3/W3-F)", () => {
+  it("maps id/label straight through and marks a signed_out LIVE report disabled", () => {
+    expect(
+      deriveCodexProfileOptions([
+        { profile: { id: "work", label: "Work" }, report: { status: "signed_out" } },
+      ]),
+    ).toEqual([{ id: "work", label: "Work", disabled: true }]);
+  });
+
+  it("falls back to the cached lastCheck status when no live report was fetched", () => {
+    expect(
+      deriveCodexProfileOptions([
+        { profile: { id: "work", label: "Work", lastCheck: { status: "signed_out" } } },
+      ]),
+    ).toEqual([{ id: "work", label: "Work", disabled: true }]);
+  });
+
+  it("a ready/ok profile is enabled", () => {
+    expect(
+      deriveCodexProfileOptions([{ profile: { id: "work", label: "Work" }, report: { status: "ready" } }]),
+    ).toEqual([{ id: "work", label: "Work", disabled: false }]);
+  });
+
+  it("a live report overrides a stale cached signed_out (re-signed-in since the last cache write)", () => {
+    expect(
+      deriveCodexProfileOptions([
+        { profile: { id: "work", label: "Work", lastCheck: { status: "signed_out" } }, report: { status: "ready" } },
+      ]),
+    ).toEqual([{ id: "work", label: "Work", disabled: false }]);
   });
 });
 

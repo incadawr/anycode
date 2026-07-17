@@ -72,6 +72,19 @@ import {
   settingsProviderDrawerClearKey,
   settingsProviderDrawerClose,
   focusState,
+  codexPaneState,
+  codexPaneInstall,
+  codexPaneRecheckAll,
+  codexPaneRefreshManifest,
+  codexProfileChipState,
+  codexProfileChipOpen,
+  codexProfileChipPick,
+  codexImportState,
+  codexImportOpen,
+  codexImportSetProfile,
+  codexImportSelectRollout,
+  codexImportSetModel,
+  codexImportApply,
   mcpPaneState,
   mcpToggle,
   mcpImportOpen,
@@ -943,5 +956,85 @@ describe("waitFor poller (§4.3)", () => {
     });
     const result = await waitFor(deps, "tab-a", { connection: "ready" }, 10_000_000);
     expect(result.matched).toBe(false);
+  });
+});
+
+describe("Codex pane / profile chip / rollout-import thin facade commands forward method + args (W4-F0, findings S1-1)", () => {
+  it("codexPaneState -> callFacade('codexPaneState', [])", async () => {
+    const deps = fakeDeps();
+    await codexPaneState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexPaneState", []);
+  });
+
+  it("codexPaneInstall -> callFacade('codexPaneInstall', [])", async () => {
+    const deps = fakeDeps();
+    await codexPaneInstall(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexPaneInstall", []);
+  });
+
+  it("codexPaneRecheckAll -> callFacade('codexPaneRecheckAll', [])", async () => {
+    const deps = fakeDeps();
+    await codexPaneRecheckAll(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexPaneRecheckAll", []);
+  });
+
+  it("codexPaneRefreshManifest -> callFacade('codexPaneRefreshManifest', [])", async () => {
+    const deps = fakeDeps();
+    await codexPaneRefreshManifest(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexPaneRefreshManifest", []);
+  });
+
+  it("codexProfileChipState -> callFacade('codexProfileChipState', [])", async () => {
+    const deps = fakeDeps();
+    await codexProfileChipState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexProfileChipState", []);
+  });
+
+  it("codexProfileChipOpen -> callFacade('codexProfileChipOpen', [open])", async () => {
+    const deps = fakeDeps();
+    await codexProfileChipOpen(deps, true);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexProfileChipOpen", [true]);
+  });
+
+  it("codexProfileChipPick -> callFacade('codexProfileChipPick', [index])", async () => {
+    const deps = fakeDeps();
+    await codexProfileChipPick(deps, 2);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexProfileChipPick", [2]);
+  });
+
+  it("codexImportState -> callFacade('codexImportState', [])", async () => {
+    const deps = fakeDeps();
+    await codexImportState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexImportState", []);
+  });
+
+  it("codexImportOpen -> callFacade('codexImportOpen', [open])", async () => {
+    const deps = fakeDeps();
+    await codexImportOpen(deps, false);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexImportOpen", [false]);
+  });
+
+  it("codexImportSetProfile -> callFacade('codexImportSetProfile', [profileId])", async () => {
+    const deps = fakeDeps();
+    await codexImportSetProfile(deps, "tmp-a");
+    expect(deps.callFacade).toHaveBeenCalledWith("codexImportSetProfile", ["tmp-a"]);
+  });
+
+  it("codexImportSelectRollout -> callFacade('codexImportSelectRollout', [index])", async () => {
+    const deps = fakeDeps();
+    await codexImportSelectRollout(deps, 0);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexImportSelectRollout", [0]);
+  });
+
+  it("codexImportSetModel -> callFacade('codexImportSetModel', [model])", async () => {
+    const deps = fakeDeps();
+    await codexImportSetModel(deps, "glm-5.2");
+    expect(deps.callFacade).toHaveBeenCalledWith("codexImportSetModel", ["glm-5.2"]);
+  });
+
+  it("codexImportApply -> callFacade('codexImportApply', [])", async () => {
+    const deps = fakeDeps();
+    await codexImportApply(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexImportApply", []);
   });
 });

@@ -1,5 +1,6 @@
 export type {
   AgentEvent,
+  CodexRateLimitsWire,
   FinishReason,
   LoopEndReason,
   ModelStreamEvent,

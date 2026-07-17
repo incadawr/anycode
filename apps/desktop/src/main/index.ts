@@ -48,10 +48,17 @@ import { defaultSecretsPath, defaultSettingsPath, loadSettings } from "../settin
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById } from "../shared/settings.js";
 import {
+  applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
   connectionSecretKey,
+  customKindDefaultTransport,
+  customProviderIds,
+  customProviderSecretKey,
+  customSupportedTransports,
+  findCustomProviderRecord,
+  isCustomProviderRecordId,
   resolveEffectiveTransport,
   scrubSecretEnv,
   shouldSkipConnectionHealthBinding,
@@ -63,6 +70,7 @@ import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
+import { registerProviderIpc } from "./provider-ipc.js";
 import {
   applyConnectionHealthEvent,
   handleSet,
@@ -74,9 +82,13 @@ import {
 import type { ProviderHealthEvent } from "../shared/provider-health.js";
 import { TabHostManager, createPinReservations } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
-import { registerTabIpc } from "./tab-ipc.js";
+import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
+import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
+import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
+import { registerCodexInstallIpc } from "./codex-install.js";
+import { refreshCodexManifest, setActiveCodexVersionPolicy } from "./codex-manifest.js";
 import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater, type UpdaterController } from "./updater.js";
@@ -209,6 +221,70 @@ function resolveProfileHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string
   return trimmed;
 }
 
+/**
+ * Dev-only override for the user home the Codex profile tree
+ * (`<home>/.anycode/codex/…`) lives under (codex-profiles W4-F0, findings
+ * S1-2), same "duplicated on purpose" rule as `resolveProfileHome` above
+ * (`ANYCODE_CODEX_PROFILES_HOME`, local to this module). Same double gate:
+ * `ANYCODE_AUTOMATION==="1" && !isPackaged` — a packaged production build
+ * NEVER honors the var (and never throws on it), so every consumer falls
+ * back to the real `os.homedir()` there. Lets a live smoke mint
+ * `plain`/`authLink` profiles in a disposable root instead of writing into
+ * the owner's real `~/.anycode/codex` (W4-S1b/S2/S3/S4).
+ *
+ * Write-plane delta from the read-plane sibling levers above (W4-F0d, Fable
+ * ruling iter-11): gate satisfied + var present + malformed (empty or
+ * relative after trim) THROWS instead of returning null. This base is where
+ * the profile registry / install plane CREATE directories, so a silent
+ * null-fallback would route every write into the owner's real
+ * `~/.anycode/codex` on a mere operator typo (unexpanded `~`, relative path,
+ * empty string) — the forbidden write, masked as a green smoke run. The
+ * message family matches the host-side reader
+ * (`resolveCodexProfilesHomeOverride`, host/engines/codex/codex-home.ts) by
+ * contract — grep parity. Gate-refused and var-absent still resolve to
+ * `null` with no throw: ambient garbage never breaks a normal dev launch or
+ * a packaged build, and an automation run without the lever keeps the
+ * production byte-path.
+ */
+function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string | null {
+  if (env.ANYCODE_AUTOMATION !== "1" || isPackaged) {
+    return null;
+  }
+  const raw = env.ANYCODE_CODEX_PROFILES_HOME;
+  if (raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    throw new Error(
+      "ANYCODE_CODEX_PROFILES_HOME is set but empty under automation; refusing to boot instead of falling back to the real home",
+    );
+  }
+  if (!isAbsolute(trimmed)) {
+    throw new Error(
+      `ANYCODE_CODEX_PROFILES_HOME must be an absolute path under automation, got ${JSON.stringify(trimmed)}; refusing to boot instead of falling back to the real home`,
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * The W4-F0 codex profiles-home lever (findings S1-2), resolved ONCE at
+ * module scope (W4-F0d eager fail-fast, Fable ruling iter-11): a malformed
+ * value under the automation gate throws HERE — a synchronous boot refusal
+ * with a non-zero exit, before a single mkdir of ANY plane (including the
+ * userData override below) and before the whenReady registration ever runs
+ * (a throw inside the whenReady callback would be an unhandled rejection and
+ * a half-alive windowless app instead). This single resolution is the one
+ * truth consumed by BOTH sites: `buildHostEnvFor`'s set-or-DELETE host-fork
+ * scrub and the whenReady codex registration site (profile registry /
+ * install plane / manifest cache / rollout resolver /
+ * `resolveCodexProfileForTab`), so the main-plane resolutions of one record
+ * can never disagree. `undefined` (production / gate-refused / var-absent)
+ * leaves every consumer on its real `homedir()` default.
+ */
+const codexProfilesHome: string | undefined = resolveCodexProfilesHome(process.env, app.isPackaged) ?? undefined;
+
 // Dev-only automation profile isolation (design/slice-P7.H-cut.md §4.2): must
 // run at module top level, BEFORE `app.whenReady()` registration below —
 // Electron decides the userData/localStorage partition at ready time, so a
@@ -291,14 +367,15 @@ let providerReady = false;
 /**
  * Codex onboarding state (TASK.41, cut §2(g)): `codexBinaryPath` is the
  * discovery ladder's last winning candidate (informational — its mere
- * presence no longer implies readiness); `codexReady` is the doctor-
- * confirmed gate `engineReady("codex")` actually reads (version-compatible
- * AND signed in). Both are updated by codex-ipc's `onSnapshot` callback,
- * fired after every recheck/pick-binary/login-success, so a Codex tab can be
- * created the moment onboarding completes — no app restart.
+ * presence no longer implies readiness), updated by codex-ipc's `onSnapshot`
+ * callback, fired after every recheck/pick-binary/login-success, so a Codex
+ * tab can be created the moment onboarding completes — no app restart.
+ * Readiness itself is PER PROFILE (codex-profiles cut §4.2: a function of
+ * (binary, profile), not one global boolean) — `engineReady("codex")` reads
+ * `codexOnboarding.readyFor(...)` directly off the controller's in-memory
+ * per-profile report cache.
  */
 let codexBinaryPath: string | null = null;
-let codexReady = false;
 /**
  * The host fork env, rebuilt async on every successful mutation and read
 
@@ -509,6 +586,14 @@ function authKindFor(id: string): "api_key" | "oauth" | undefined {
 /**
  * The active connection's credential key (TASK.45 v2): its own connection key.
  * `{}` when no connection is active.
+ *
+ * FX4: a `custom:*` providerId routes at the custom provider's OWN shared
+ * vault key (`provider.<custom-id>.apiKey`, host-env.ts's
+ * `customProviderSecretKey`) instead of the connection key — mirroring
+ * `buildHostEnv`'s custom-provider route, which never reads the connection
+ * key for a custom id. Deliberately NO record look-up: a deleted custom
+ * provider still yields its (now-orphaned) secret key, so the vault read
+ * naturally comes back unset and the fail-closed default gate does the rest.
  */
 function activeCredential(current: AnycodeSettings): { credentialKey?: SecretKey } {
   const connection = activeConnection(current);
@@ -516,6 +601,9 @@ function activeCredential(current: AnycodeSettings): { credentialKey?: SecretKey
     return {};
   }
   const providerId = connection.providerId;
+  if (isCustomProviderRecordId(providerId)) {
+    return { credentialKey: customProviderSecretKey(providerId) };
+  }
   const kind = providerId === "" ? undefined : authKindFor(providerId);
   const authKind: "api_key" | "oauth" = kind === "oauth" ? "oauth" : "api_key";
   return { credentialKey: connectionSecretKey(connection.id, authKind) };
@@ -543,6 +631,16 @@ const getAccessTokenFor = (connectionId: string, providerId: string): Promise<st
  * `authOptional` is true either statically (a catalog entry marked
  * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
  * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`).
+ *
+ * FX4: a `custom:*` providerId with a live record resolves its OWN kind-implied
+ * ladder (`customKindDefaultTransport`/`customSupportedTransports`, mirroring
+ * `buildHostEnv`'s custom-provider route) BEFORE `findCatalogEntry` is even
+ * consulted — `findCatalogEntry` only knows builtin ids, so it would otherwise
+ * fall through to the generic no-catalog-entry branch below (no supported-
+ * transport guard, `authOptional` always false, wrongly blocking a keyless
+ * openai-family custom provider). A deleted record (providerId still
+ * `custom:*` but no matching entry in `settings.provider.custom[]`) falls
+ * through unchanged to that same generic fail-closed branch.
  */
 function selectedTransportInfo(current: AnycodeSettings): {
   authOptional: boolean;
@@ -557,6 +655,34 @@ function selectedTransportInfo(current: AnycodeSettings): {
     resolveEffectiveTransport({ bootEnv, settingsTransport: view.transport }).value;
   if (id === undefined || id.trim() === "") {
     return { authOptional: false, resolvedTransport: resolveLegacy() };
+  }
+  const customRecord = isCustomProviderRecordId(id) ? findCustomProviderRecord(current, id) : undefined;
+  if (customRecord !== undefined) {
+    // resolvedTransport is always defined here: customKindDefaultTransport
+    // always supplies a defaultTransport rung, so resolveEffectiveTransport's
+    // ladder never falls through to "unset".
+    const resolvedTransport = resolveEffectiveTransport({
+      bootEnv,
+      settingsTransport: view.transport,
+      defaultTransport: customKindDefaultTransport(customRecord.kind),
+    }).value;
+    return {
+      authOptional: resolvedTransport !== "anthropic-messages",
+      resolvedTransport,
+      supportedTransports: customSupportedTransports(customRecord.kind),
+    };
+  }
+  if (isCustomProviderRecordId(id)) {
+    // W4-R3-1: a `custom:*` id with NO live record (deleted while a connection
+    // still names it — e.g. removed via the generic settings-patch channel,
+    // which skips handleCustomProviderDelete's clear-first, leaving an orphaned
+    // vault key). `buildHostEnv` fail-closes here (neither baseUrl nor key), so
+    // readiness MUST be false even if that orphaned key or ANYCODE_API_KEY is
+    // present. An empty supportedTransports set trips computeProviderReady's
+    // transport guard — but only when resolvedTransport is defined, so pin a
+    // non-empty sentinel when neither env nor the connection selects one (a bare
+    // resolveLegacy() can be undefined, which would SKIP the guard entirely).
+    return { authOptional: false, resolvedTransport: resolveLegacy() ?? "custom-provider-deleted", supportedTransports: [] };
   }
   const entry = findCatalogEntry(id);
   if (entry === undefined) {
@@ -591,6 +717,18 @@ function currentSettings(): AnycodeSettings {
 }
 
 /**
+ * The allow-list `isKnownSecretKey`/`Vault.statuses` (via settingsIpcDeps)
+ * check a `provider.<id>.{apiKey,oauth}` vault key against: every builtin
+ * catalog id, unioned with every custom-provider id currently in `current`
+ * (TASK.54, host-env.ts's `customProviderIds` seam). Recomputed — not a
+ * boot-time snapshot — so a custom provider created/renamed/deleted after
+ * boot is reflected on its very next settings/provider IPC call.
+ */
+function catalogIdsFor(current: AnycodeSettings): string[] {
+  return [...catalogProviderIds(), ...customProviderIds(current)];
+}
+
+/**
  * A copy of `current` with the active connection overridden to `connectionId`
  * (TASK.45 W10): routes every existing active-connection resolver
  * (resolveProviderSelection / activeCredential / activeProviderView) at the
@@ -622,6 +760,14 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     resolveActiveCredential: resolveActiveCredential(current),
   });
   applySubagentsHomeOverride(env, resolveSubagentsHome(bootEnv, app.isPackaged));
+  // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
+  // ambient var can never ride the bootEnv spread into a host fork ungated.
+  // Consumes the module-scope `codexProfilesHome` const (W4-F0d single eager
+  // resolution) — F0b's stateless per-rebuild re-resolve is gone: module
+  // scope initializes before whenReady, so the ordering hazard it defended
+  // against (refreshProviderState racing a whenReady-time assignment) no
+  // longer exists by construction.
+  applyCodexProfilesHomeOverride(env, codexProfilesHome ?? null);
   return env;
 }
 
@@ -748,6 +894,44 @@ async function resolveResumePin(meta: {
 }
 
 /**
+ * Resolves an opaque Codex profile id — a new tab's draft pick, or a resumed
+ * session's persisted `codexProfileId` — against the profile registry
+ * (codex-profiles cut §3.3, W3-F) into the argv facts main/tabs.ts forwards.
+ * `system` (never persisted as a real record) is the one deliberate ambient
+ * case: `{ok:true}` with no `codexProfile` at all, byte-identical to today's
+ * behaviour. Any OTHER id absent from the registry refuses `{ok:false}`
+ * fail-closed — a deleted/renamed real profile must never silently fall back
+ * to the ambient account (same custody rule as `resolveResumePin`'s
+ * connection refusal above).
+ */
+async function resolveCodexProfileForTab(profileId: string): Promise<ResolveCodexProfileResult> {
+  if (profileId === SYSTEM_PROFILE_ID) {
+    return { ok: true };
+  }
+  const record = settings?.codex?.profiles?.find((profile) => profile.id === profileId);
+  if (record === undefined) {
+    return { ok: false };
+  }
+  // Resolved against the SAME home the registry uses (W4-F0 lever,
+  // `codexProfilesHome` — undefined in production): the argv facts this
+  // produces (linked --codex-home, expanded --codex-auth-link) must agree
+  // with what the registry created/asserted for this record.
+  const resolution = resolveCodexProfile(record, codexProfilesHome);
+  if (!resolution.ok || resolution.profile.codexHome === undefined) {
+    return { ok: false };
+  }
+  const { profile } = resolution;
+  return {
+    ok: true,
+    codexProfile: {
+      id: profile.id,
+      ...(profile.linked ? { home: profile.codexHome } : {}),
+      ...(profile.authLink !== undefined ? { authLink: profile.authLink } : {}),
+    },
+  };
+}
+
+/**
  * Launches an explicit initial tab. Resolves the session from a parked resume id
  * or ANYCODE_WORKSPACE; normal GUI launch no longer prompts here. `deliverNow`
  * posts the port immediately (the deferred flow runs after did-finish-load, which
@@ -780,6 +964,10 @@ async function startInitialTab(opts: {
   // W10-FIX F3: released once the tab is registered (or on any early return) so
   // the resume/delete reservation never outlives the window it guards.
   let releasePin: (() => void) | undefined;
+  // Codex-profiles W3-F: the initial (app-launch) resume re-resolves the
+  // session's persisted profile too, same fail-closed rule as the tab-ipc.ts
+  // resume branch — undefined for a legacy/system session (ambient CODEX_HOME).
+  let codexProfileParam: { id?: string; home?: string; authLink?: string } | undefined;
   if (resumed !== null) {
     const pin = await resolveResumePin(resumed);
     if (!pin.ok) {
@@ -787,6 +975,17 @@ async function startInitialTab(opts: {
         `[main] session ${resumed.id} is pinned to a deleted connection (${pin.connectionId}); not auto-resuming — choose a replacement in the session picker`,
       );
       return;
+    }
+    if (resumed.codexProfileId !== undefined) {
+      const resolvedProfile = await resolveCodexProfileForTab(resumed.codexProfileId);
+      if (!resolvedProfile.ok) {
+        console.warn(
+          `[main] session ${resumed.id} is pinned to a missing Codex profile (${resumed.codexProfileId}); not auto-resuming`,
+        );
+        pin.release?.();
+        return;
+      }
+      codexProfileParam = resolvedProfile.codexProfile;
     }
     workspace = resumed.workspace;
     sessionId = resumed.id;
@@ -818,6 +1017,7 @@ async function startInitialTab(opts: {
       sessionId,
       resume,
       ...(connectionId !== undefined ? { connectionId } : {}),
+      ...(codexProfileParam !== undefined ? { codexProfile: codexProfileParam } : {}),
     });
     if (!created.ok) {
       console.error(`[main] failed to create initial tab: ${created.reason}`);
@@ -957,8 +1157,13 @@ void app.whenReady().then(async () => {
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
     // AND signed in, TASK.41 п.2/п.3) — a merely-discovered-but-unchecked or
-    // stale-cached path is never enough to let a tab spawn.
-    engineReady: (engine: EngineId) => (engine === "core" ? providerReady : engine === "codex" && codexReady),
+    // stale-cached path is never enough to let a tab spawn. Readiness is
+    // per PROFILE (codex-profiles cut §4.2): the tab layer threads the profile
+    // the spawn will run under as the optional second argument (S3-1 — the
+    // draft's pick on a new tab, the persisted meta pick on a resume); absent,
+    // the ACTIVE profile answers — today's single-profile behavior.
+    engineReady: (engine: EngineId, codexProfileId?: string) =>
+      engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false),
     engineEnv: (engine: EngineId, generation: number) => ({
       [ENV_ENGINE]: engine,
       [ENV_HOST_GENERATION]: String(generation),
@@ -1020,6 +1225,15 @@ void app.whenReady().then(async () => {
     },
   });
 
+  // S4-1 arm 2 (W4-F1): the rollout-import IPC (registered further below, once
+  // persistence exists) owns the ephemeral import-model map; its consume-once
+  // reader is captured into this holder there and read lazily here, so the resume
+  // path can override the fork model. The holder is filled at boot wiring — long
+  // before any user-driven resume can run — so the lazy indirection never races.
+  let consumeImportModel: ((sessionId: string) => string | undefined) | undefined;
+  // L4·1 peek-then-confirm: the resume path PEEKS the pick (read-only) to stamp
+  // the override, then consumes it (holder above) only after createTab commits.
+  let peekImportModel: ((sessionId: string) => string | undefined) | undefined;
   registerTabIpc({
     manager,
     persistence,
@@ -1027,7 +1241,15 @@ void app.whenReady().then(async () => {
     // TASK.45 W10: a NEW core session pins to the active connection; a RESUMED
     // one re-pins to its stored connection (or refuses `connection_missing`).
     activeConnectionId: () => settings?.provider.activeConnectionId,
+    // S4-1 arm 2: consume-once import-model override for the first resume of an
+    // imported session (see the holder above). Undefined until the rollout IPC
+    // wires it below; harmless (no override) for any resume before then.
+    consumePendingImportModel: (sessionId) => consumeImportModel?.(sessionId),
+    // L4·1: read-only peek of the import pick, burned via consume above only on a
+    // successful createTab (see the holders above; wired below with the rollout IPC).
+    peekPendingImportModel: (sessionId) => peekImportModel?.(sessionId),
     resolveResumePin,
+    resolveCodexProfile: resolveCodexProfileForTab,
     validateWorktreeResume: async (meta) => {
       if (meta.worktree === undefined || meta.projectRoot === undefined) return false;
       try {
@@ -1070,7 +1292,9 @@ void app.whenReady().then(async () => {
     settingsPath,
     logger: fileLogger,
     // Slice 2.5: catalog allow-list + projection + oauth wiring (additive).
-    catalogIds: catalogProviderIds(),
+    // TASK.54: unioned with custom-provider ids so their vault keys are
+    // recognized too; kept in sync post-boot by both onMutation hooks below.
+    catalogIds: catalogIdsFor(currentSettings()),
     // Carry `isCustom` (TASK.43 W5-FIX #2/#5): core has no literal field, so it
     // is derived per entry from `isCustomProvider` and folded into the projected
     // summary the renderer consumes for credential-slot + fallback decisions.
@@ -1091,6 +1315,10 @@ void app.whenReady().then(async () => {
       (manager?.pinnedConnectionIds().has(connectionId) ?? false) || pinReservations.has(connectionId),
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
+      // TASK.54: `provider.custom` is schema-reachable through this generic
+      // patch channel too, so re-derive the union defensively here as well
+      // (not just from registerProviderIpc's own onMutation below).
+      settingsIpcDeps.catalogIds = catalogIdsFor(settings);
       await refreshProviderState();
       if (
         providerReady &&
@@ -1105,6 +1333,32 @@ void app.whenReady().then(async () => {
   };
   registerSettingsIpc(settingsIpcDeps);
 
+  // Custom OpenAI-compatible model-provider control plane (TASK.54, cut
+  // §9.2/§13.1): CRUD for `settings.provider.custom[]` + the guarded
+  // `/v1/models` preview fetch, behind its own four invoke channels. Mirrors
+  // settingsIpcDeps.onMutation immediately above — provider-ipc.ts already
+  // hands back the POST-mutation `AnycodeSettings` (not a projected
+  // snapshot), so no re-load from disk is needed here, unlike that hook.
+  registerProviderIpc({
+    vault,
+    settingsPath,
+    logger: fileLogger,
+    onMutation: async (fresh) => {
+      settings = fresh;
+      settingsIpcDeps.catalogIds = catalogIdsFor(fresh);
+      await refreshProviderState();
+      if (
+        providerReady &&
+        manager !== null &&
+        manager.count() === 0 &&
+        !quitting &&
+        (parkedResumeId !== undefined || resolveWorkspaceFromEnv() !== undefined)
+      ) {
+        await startInitialTab({ onNoWorkspace: "stay", deliverNow: true, promptForWorkspace: false });
+      }
+    },
+  });
+
   // Codex onboarding control plane (TASK.41, cut §2(g)): discovery ladder +
   // bounded doctor + native login, behind four invoke channels + one push.
   // `writeCodexSettings` routes through settings-ipc's own `handleSet` (same
@@ -1116,19 +1370,36 @@ void app.whenReady().then(async () => {
   // before-quit's awaited `shutdown()` below; this is the floor under it.
   installCodexChildExitGuard();
 
+  // W4-F0 (findings S1-2): the codex profiles-root home lever — the
+  // module-scope `codexProfilesHome` const (W4-F0d eager fail-fast) —
+  // threaded into every consumer below (registerCodexIpc /
+  // registerCodexInstallIpc / refreshCodexManifest's cache file / the
+  // rollout-import resolver / resolveCodexProfileForTab's record
+  // resolution). `undefined` — the production case and any gate-refused
+  // override — leaves every consumer on its own real `homedir()` default,
+  // byte-identical to before this lever existed; a malformed value under
+  // automation never reaches here (module-top boot refusal).
   codexOnboarding = registerCodexIpc({
     bootEnv,
+    ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
+    // The profile registry's settings slice (codex-profiles cut §2.3), read
+    // fresh off the same in-memory settings the onMutation reload maintains.
+    readCodexSettings: async () => settings?.codex,
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     dialog,
     openExternal: (url) => shell.openExternal(url),
     onSnapshot: (snapshot) => {
       codexBinaryPath = snapshot.binaryPath;
-      codexReady = snapshot.report.status === "ready";
       // Per-tab session pushes are gated on ui_ready (durable rule); this is
       // a window-shell-level signal, the same unconditional-send shape as
       // WINDOW_STATE_CHANNEL/UPDATE_STATUS_CHANNEL — the renderer's listener
       // is registered at bundle load, well before this can ever fire.
+      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+    },
+    // Profile CRUD (create/delete/set-active/repair) changes what the Agent
+    // selector / Settings pane should show — same re-fetch push as above.
+    onProfilesChanged: () => {
       win?.webContents.send(ENGINES_CHANGED_CHANNEL);
     },
   });
@@ -1141,6 +1412,71 @@ void app.whenReady().then(async () => {
   void codexOnboarding.recheck().catch((error: unknown) => {
     console.warn("[main] initial Codex check failed", error);
   });
+
+  // Codex install/version control plane (TASK.53, cut §7): download-with-
+  // integrity + risk acceptance behind IPC; the version policy is seeded from
+  // settings, then advisorily refreshed from the git manifest — fail-closed
+  // on the bundled manifest for ANY refresh failure (404 until the file
+  // lands on master, network down, garbage — none of them can WIDEN the
+  // supported range).
+  registerCodexInstallIpc({
+    ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
+    readRiskAcceptedVersions: async () => settings?.codex?.riskAcceptedVersions ?? [],
+    writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
+    onChanged: () => {
+      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+      void codexOnboarding?.recheck().catch(() => {});
+    },
+  });
+  setActiveCodexVersionPolicy({ riskAcceptedVersions: settings?.codex?.riskAcceptedVersions ?? [] });
+  // `codexProfilesHome` (W4-F0 lever, undefined in production) rides into the
+  // root derivation — codexProfilesRoot's own homedir() default applies when
+  // the lever is refused/absent.
+  void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(codexProfilesHome), "manifest.json") })
+    .then((result) => {
+      // BM4: only an ACTUAL policy change re-spawns the doctor — an
+      // identical manifest (the common case: cache hit, no-op refresh)
+      // leaves whatever readiness the boot-time recheck already established.
+      const changed = setActiveCodexVersionPolicy({ manifest: result.manifest });
+      if (changed) {
+        void codexOnboarding?.recheck().catch(() => {});
+      }
+    })
+    .catch(() => {});
+
+  // Rollout import control plane (TASK.52, cut §8): list/preview/import a
+  // profile's Codex rollouts into OUR history format. Sessions live inside
+  // that profile's CODEX_HOME (§1.3); the system pseudo-profile reads the
+  // ambient home (env override or ~/.codex), matching what a codex spawned
+  // with no injection would write to. Read-only with respect to the rollout
+  // files themselves — the importer never writes into any CODEX_HOME.
+  if (persistence !== null) {
+    const rolloutIpc = registerCodexRolloutIpc({
+      persistence,
+      // S4-1 arm 1 (W4-F1): pin an imported session to the connection active at
+      // apply time (same source as registerTabIpc's `activeConnectionId` above).
+      activeConnectionId: () => settings?.provider.activeConnectionId,
+      resolveProfileSessionsDir: async (profileId) => {
+        if (profileId === SYSTEM_PROFILE_ID) {
+          const ambient = process.env.CODEX_HOME;
+          const systemHome = ambient !== undefined && ambient !== "" ? ambient : join(homedir(), ".codex");
+          return join(systemHome, "sessions");
+        }
+        const record = settings?.codex?.profiles?.find((profile) => profile.id === profileId);
+        if (record === undefined) return null;
+        // This resolver derives a profile home OUTSIDE the registry, so the
+        // W4-F0 lever must reach it too — else an isolated smoke's import
+        // dialog would list rollouts from the owner's REAL profile tree.
+        const resolution = resolveCodexProfile(record, codexProfilesHome);
+        if (!resolution.ok || resolution.profile.codexHome === undefined) return null;
+        return join(resolution.profile.codexHome, "sessions");
+      },
+    });
+    // S4-1 arm 2: hand the import model plane's consume-once reader to tab-ipc's
+    // resume path (captured in the holder wired above registerTabIpc).
+    consumeImportModel = rolloutIpc.consumePendingImportModel;
+    peekImportModel = rolloutIpc.peekPendingImportModel;
+  }
 
   // MCP config management control plane (design/slice-P7.19-cut.md §3/§4 W2):
   // `home` resolves via `ANYCODE_MCP_IMPORT_HOME` ONLY under the dev/automation
