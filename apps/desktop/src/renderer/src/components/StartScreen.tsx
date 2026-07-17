@@ -57,6 +57,7 @@ import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import { createAsyncEpochGate, issueGuarded } from "./async-epoch-gate.js";
 
 export interface StartScreenProps {
   onToast(kind: ToastKind, text: string): void;
@@ -550,35 +551,50 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // `onProfilesChanged`), so a profile added/removed in Settings while this
   // screen is mounted shows up without a remount. Fail-soft: any error just
   // leaves the chip hidden/stale until the next transition or push.
+  //
+  // codex-review L7-9 facet B (f1-review-ruling-fable-iter17.md): mount fires
+  // one `refresh()` and every `engines-changed` push fires another, with no
+  // ordering guarantee on their replies. An `AsyncEpochGate` scoped to this
+  // effect instance ensures only the LAST-ISSUED request's reply is ever
+  // applied — a slow, stale reply (e.g. one that still lists a
+  // since-deleted profile) can never win over a newer one, regardless of
+  // resolution order, so the R3-2 staleness sanitization below always runs
+  // against the freshest catalog rather than a reply that a later refresh
+  // has already superseded.
   useEffect(() => {
     if (!codexEngineSelected) {
       return;
     }
     let cancelled = false;
+    const gate = createAsyncEpochGate();
     function refresh(): void {
-      window.anycode.codex
-        .listProfiles()
-        .then((snapshot) => {
-          if (!cancelled) {
-            const options = deriveCodexProfileOptions(snapshot.profiles);
-            setCodexProfileOptions(options);
-            // R3-2 facet i: the profile the draft points at may have just
-            // dropped out of this fresh catalog (deleted/renamed while the
-            // draft stayed open) — sanitize immediately so the chip's
-            // "System" fallback and the actual submit payload never diverge.
-            if (isDraftCodexProfileIdStale(useTabsStore.getState().draft?.codexProfileId, options)) {
-              useTabsStore.getState().setDraftCodexProfileId(undefined);
-            }
-          }
-        })
-        .catch((error: unknown) => {
+      issueGuarded(
+        gate,
+        window.anycode.codex.listProfiles().catch((error: unknown) => {
           console.warn("[StartScreen] codex.listProfiles failed", error);
-        });
+          return null;
+        }),
+        (snapshot) => {
+          if (cancelled || snapshot === null) {
+            return;
+          }
+          const options = deriveCodexProfileOptions(snapshot.profiles);
+          setCodexProfileOptions(options);
+          // R3-2 facet i: the profile the draft points at may have just
+          // dropped out of this fresh catalog (deleted/renamed while the
+          // draft stayed open) — sanitize immediately so the chip's
+          // "System" fallback and the actual submit payload never diverge.
+          if (isDraftCodexProfileIdStale(useTabsStore.getState().draft?.codexProfileId, options)) {
+            useTabsStore.getState().setDraftCodexProfileId(undefined);
+          }
+        },
+      );
     }
     refresh();
     const unsubscribe = window.anycode.onEnginesChanged(refresh);
     return () => {
       cancelled = true;
+      gate.invalidate();
       unsubscribe();
     };
   }, [codexEngineSelected]);
