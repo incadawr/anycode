@@ -222,7 +222,7 @@ export interface ErrorRetryMeta {
  * instead of appending a new block.
  */
 export type TranscriptBlock =
-  | { kind: "user_text"; id: string; text: string }
+  | { kind: "user_text"; id: string; text: string; images?: readonly ImageAttachment[] }
   | { kind: "assistant_text"; id: string; text: string }
   | { kind: "reasoning"; id: string; text: string; collapsed: boolean }
   | {
@@ -562,6 +562,7 @@ export interface RetryOffer {
 export interface PendingEngineChange {
   model?: string;
   activePresetId?: string;
+  effort?: string;
 }
 
 export interface DesktopState {
@@ -994,7 +995,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
       if (text !== message.content && text.trim() === "") {
         continue;
       }
-      blocks.push({ kind: "user_text", id: `${item.id}:0`, text });
+      blocks.push({ kind: "user_text", id: `${item.id}:0`, text, ...(message.images?.length ? { images: message.images } : {}) });
       continue;
     }
 
@@ -2229,6 +2230,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   } else {
                     nextPending.model = message.model;
                   }
+                  if (message.effort === undefined) {
+                    delete nextPending.effort;
+                  }
                 }
                 if (message.activePresetId !== undefined) {
                   touched = true;
@@ -2238,10 +2242,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                     nextPending.activePresetId = message.activePresetId;
                   }
                 }
+                if (message.effort !== undefined) {
+                  touched = true;
+                  if (message.effort === state.engine.model?.effort) delete nextPending.effort;
+                  else nextPending.effort = message.effort;
+                }
                 if (!touched) {
                   return {};
                 }
-                const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined;
+                const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined;
                 return { pendingEngineChange: hasPending ? nextPending : null };
               }
               // "applied" or absent — actually active now. Clear whichever
@@ -2252,13 +2261,24 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               const nextPending: PendingEngineChange = { ...state.pendingEngineChange };
               if (message.model !== undefined) delete nextPending.model;
               if (message.activePresetId !== undefined) delete nextPending.activePresetId;
-              const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined;
+              if (message.effort !== undefined) delete nextPending.effort;
+              const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined;
+              const nextEngineModel = state.engine.model === undefined ? undefined : { ...state.engine.model };
+              if (nextEngineModel !== undefined) {
+                if (message.model !== undefined) {
+                  nextEngineModel.current = message.model;
+                  if (message.effort === undefined) {
+                    delete nextEngineModel.effort;
+                  }
+                }
+                if (message.effort !== undefined) {
+                  nextEngineModel.effort = message.effort;
+                }
+              }
               return {
                 engine: {
                   ...state.engine,
-                  ...(message.model !== undefined && state.engine.model
-                    ? { model: { ...state.engine.model, current: message.model } }
-                    : {}),
+                  ...(nextEngineModel !== undefined ? { model: nextEngineModel } : {}),
                   ...(message.activePresetId !== undefined && state.engine.permissions
                     ? { permissions: { ...state.engine.permissions, activePresetId: message.activePresetId } }
                     : {}),

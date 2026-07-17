@@ -63,9 +63,11 @@
  *  - `userMessage`/`agentMessage` text projects verbatim into a user/assistant
  *    `ChatMessage`. A `userMessage` content part that is not `{type:"text"}`
  *    (e.g. an image sent by another client — Codex sessions started by
- *    AnyCode itself never attach images, `supportsImages:false`) is never
+ *    AnyCode itself attach images as data URLs) is never
  *    silently dropped: it degrades to a bracketed placeholder carrying its
- *    type and, when present, its `url`/`path` reference.
+ *    type and, for non-inline URLs, its `url`/`path` reference. Supported
+ *    inline image data URLs are restored as `ChatMessage.images`, so the UI
+ *    can show them without ever rendering their base64 payload as text.
  *  - `commandExecution`/`fileChange` outcomes project into the EXISTING
  *    assistant `tool_call` + `tool` `tool_result` HistoryItem pair (the same
  *    Bash/Write vocabulary `event-translator.ts`'s live `projectTool` uses —
@@ -90,7 +92,7 @@
  *    output from before this slice is not retained.
  */
 
-import type { ChatMessage, HistoryItem, ToolCallStatus } from "@anycode/core";
+import type { ChatMessage, HistoryItem, ImageAttachment, ToolCallStatus } from "@anycode/core";
 
 /**
  * One native turn item, duck-typed and structurally flat (mirrors
@@ -195,17 +197,44 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
+const DATA_IMAGE_URL = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
+
+/** Converts a supported Codex inline image URL back into AnyCode's attachment envelope. */
+function imageFromDataUrl(value: unknown): ImageAttachment | null {
+  if (typeof value !== "string") return null;
+  const match = DATA_IMAGE_URL.exec(value);
+  if (!match) return null;
+  const mediaType = match[1] as ImageAttachment["mediaType"];
+  const data = match[2];
+  return data === undefined ? null : { mediaType, data };
+}
+
 /** A `userMessage` content part's text, or a bracketed placeholder for a non-text part (image/localImage/…) — never silently dropped. */
 function partText(part: Record<string, unknown>): string {
   if (typeof part.text === "string") return part.text;
   const type = typeof part.type === "string" ? part.type : "unknown";
   const reference = typeof part.url === "string" ? part.url : typeof part.path === "string" ? part.path : undefined;
+  // A valid inline image is restored separately in `images`; malformed or
+  // unsupported data URLs still receive an honest compact placeholder.
+  if (reference?.startsWith("data:")) return `[${type} attached]`;
   return `[${type}${reference !== undefined ? `: ${reference}` : ""}]`;
 }
 
-function textOf(item: CodexThreadReadItem): string {
+function userMessageContent(item: CodexThreadReadItem): { text: string; images: ImageAttachment[] } {
   const parts = Array.isArray(item.content) ? item.content : [];
-  return parts.map((part) => partText(record(part) ?? {})).join("");
+  const images: ImageAttachment[] = [];
+  const text = parts
+    .map((part) => {
+      const value = record(part) ?? {};
+      const image = imageFromDataUrl(value.url);
+      if (image !== null) {
+        images.push(image);
+        return "";
+      }
+      return partText(value);
+    })
+    .join("");
+  return { text, images };
 }
 
 function statusFor(itemStatus: string | null | undefined): ToolCallStatus {
@@ -313,8 +342,14 @@ function projectFallback(turnId: string, item: CodexThreadReadItem, createdAt: n
 function projectItem(turnId: string, item: CodexThreadReadItem, createdAt: number): HistoryItem[] {
   switch (item.type) {
     case "userMessage": {
-      const text = textOf(item);
-      return [{ id: `${turnId}:${item.id}`, createdAt, message: { role: "user", content: text } }];
+      const { text, images } = userMessageContent(item);
+      return [
+        {
+          id: `${turnId}:${item.id}`,
+          createdAt,
+          message: { role: "user", content: text, ...(images.length > 0 ? { images } : {}) },
+        },
+      ];
     }
     case "agentMessage": {
       const text = typeof item.text === "string" ? item.text : "";

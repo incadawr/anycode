@@ -136,24 +136,25 @@ function isSuccessfulModelDeliveryEvent(event: AgentEvent): boolean {
  *    no settings-updated notification at all).
  */
 export type EngineSettingsChange =
-  | { ok: true; model: string; activePresetId: string }
+  | { ok: true; model: string; activePresetId: string; effort?: string }
   | { ok: false; reason: string };
 
 export interface EngineSettingsSeam {
   models(): EngineModelChoice[];
   presets(): EnginePermissionPreset[];
   /** The APPLIED settings — what a `turn/start` actually carried. Never a merely-chosen value (see `pendingSnapshot`). */
-  snapshot(): { model: string; activePresetId: string };
+  snapshot(): { model: string; activePresetId: string; effort?: string };
   selectModel(id: string): EngineSettingsChange;
   selectPreset(id: string): EngineSettingsChange;
-  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string }) => void): () => void;
+  selectEffort?(effort: string): EngineSettingsChange;
+  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void;
   /**
    * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
    * `ui_ready` so a renderer reload cannot lose (or mis-fold) the pending badge:
    * the original `state:"pending"` message is a one-shot in the replay ring.
    * Optional — an engine with no two-phase ack simply has nothing pending.
    */
-  pendingSnapshot?(): { model: string; activePresetId: string } | null;
+  pendingSnapshot?(): { model: string; activePresetId: string; effort?: string } | null;
   /**
    * The engine's latest merged subscription-quota snapshot (codex-profiles
    * cut §6.1), read into `EnginePresentation.quota` on every `ui_ready` — a
@@ -196,7 +197,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
       supportsTasks: capabilities.supportsTasks,
       supportsFileSnapshots: capabilities.supportsFileSnapshots,
     },
-    ...(snapshot !== undefined && models.length > 0 ? { model: { current: snapshot.model, available: models } } : {}),
+    ...(snapshot !== undefined && models.length > 0 ? { model: { current: snapshot.model, available: models, ...(snapshot.effort !== undefined ? { effort: snapshot.effort } : {}) } } : {}),
     ...(snapshot !== undefined && presets.length > 0
       ? { permissions: { presets, activePresetId: snapshot.activePresetId } }
       : {}),
@@ -625,6 +626,7 @@ export class Session {
         type: "engine_settings_changed",
         model: applied.model,
         activePresetId: applied.activePresetId,
+        ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
         state: "applied",
         appliesFrom: "next_turn",
       });
@@ -904,6 +906,10 @@ export class Session {
           break;
         }
         this.onEngineSettingsChange(this.engineSettings.selectPreset(message.presetId), { presetId: message.presetId });
+        break;
+      case "set_engine_effort":
+        if (this.engineSettings === undefined || this.busy || this.engineSettings.selectEffort === undefined) break;
+        this.onEngineSettingsChange(this.engineSettings.selectEffort(message.effort), { effort: message.effort });
         break;
       case "git_command":
         // Slice 5.7 / TASK.40 (design §2(f)): user-initiated git command. The
@@ -1430,12 +1436,13 @@ export class Session {
       type: "engine_settings_changed",
       model: pending.model,
       activePresetId: pending.activePresetId,
+      ...(pending.effort !== undefined ? { effort: pending.effort } : {}),
       state: "pending",
       appliesFrom: "next_turn",
     });
   }
 
-  private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string }): void {
+  private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string }): void {
     if (!result.ok) {
       this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
       return;
@@ -1456,6 +1463,7 @@ export class Session {
       type: "engine_settings_changed",
       model: result.model,
       activePresetId: result.activePresetId,
+      ...(result.effort !== undefined ? { effort: result.effort } : {}),
       state: "pending",
       appliesFrom: "next_turn",
     });

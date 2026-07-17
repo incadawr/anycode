@@ -214,6 +214,45 @@ export function hasMainAuthLinkProfile(profiles: readonly CodexProfileRecord[]):
   return profiles.some((profile) => profile.authLink === MAIN_AUTH_LINK_TARGET);
 }
 
+export interface CodexAccountRowPlan {
+  /** False once a saved profile has been confirmed to mirror the same signed-in account — the pseudo-row would otherwise be an exact duplicate. */
+  showSystemRow: boolean;
+  /** The one profile (first match in registry order) annotated as the current environment; `null` when nothing matched. */
+  currentEnvironmentProfileId: string | null;
+}
+
+/**
+ * Collapses the "System (current environment)" pseudo-row into a matching
+ * saved profile's own card when the two report the SAME signed-in account
+ * (TASK.57 — owner: "когда мы даём системному аккаунту профиль, то он должен
+ * иметь это имя и не дублироваться"). Identity is compared off
+ * `describeAccountEmailLine`'s already-custody-cleared email (trimmed,
+ * case-insensitive) since no stable account id exists on the wire. A `null`
+ * email on either side (report still pending, signed out, or a non-chatgpt
+ * account) leaves System showing on its own — the safe default, never a
+ * guessed match. When several profiles happen to share the account, only the
+ * FIRST one in registry order is marked; the rest render as ordinary rows.
+ */
+export function resolveAccountRows(
+  systemReport: CodexDoctorReport | undefined,
+  profiles: readonly CodexProfileRecord[],
+  reportsById: Record<string, CodexDoctorReport | undefined>,
+): CodexAccountRowPlan {
+  const systemEmail = describeAccountEmailLine(systemReport);
+  if (systemEmail === null) {
+    return { showSystemRow: true, currentEnvironmentProfileId: null };
+  }
+  const normalizedSystemEmail = systemEmail.trim().toLowerCase();
+  const match = profiles.find((profile) => {
+    const profileEmail = describeAccountEmailLine(reportsById[profile.id]);
+    return profileEmail !== null && profileEmail.trim().toLowerCase() === normalizedSystemEmail;
+  });
+  if (match === undefined) {
+    return { showSystemRow: true, currentEnvironmentProfileId: null };
+  }
+  return { showSystemRow: false, currentEnvironmentProfileId: match.id };
+}
+
 export function pickBinaryFailureMessage(reason: "cancelled" | "invalid"): string | null {
   return reason === "invalid" ? "That file isn't a valid, executable Codex binary." : null;
 }
@@ -478,11 +517,23 @@ export interface CodexBridge {
 export interface CodexEnginePaneProps {
   /** Injectable for tests / isolation; defaults to the app's real `window.anycode.codex` bridge. */
   bridge?: CodexBridge;
+  /**
+   * Closes the WHOLE Settings dialog (TASK.57) — `SettingsScreen`'s own
+   * `onClose`, forwarded down through this pane to
+   * `CodexRolloutImportDialog`. Fired only once "Import & open" has actually
+   * landed the user on the freshly-imported tab; a failed import/open leaves
+   * the user in Settings with the error visible, so this is never called on
+   * that path. Absent when this pane is mounted somewhere with no owning
+   * dialog to close.
+   */
+  onRequestCloseSettings?: () => void;
 }
 
 interface CodexProfileRowProps {
   label: string;
   profile?: CodexProfileRecord;
+  /** Muted parenthetical shown next to the label (TASK.57) — currently only "current environment", for the profile `resolveAccountRows` matched to the collapsed System row. */
+  annotation?: string;
   report: CodexDoctorReport | undefined;
   checking: boolean;
   signingIn: boolean;
@@ -504,6 +555,7 @@ function CodexProfileRow(props: CodexProfileRowProps) {
   return (
     <li className="settings-mcp-row codex-profile-row">
       <span className="settings-mcp-name">{props.label}</span>
+      {props.annotation && <span className="codex-profile-annotation">({props.annotation})</span>}
       <span className={`settings-secret-status settings-secret-status-${status.tone}`}>{status.headline}</span>
       <div className="settings-mcp-detail">{status.detail}</div>
       {email && <div className="codex-profile-email">{email}</div>}
@@ -553,7 +605,7 @@ function CodexProfileRow(props: CodexProfileRowProps) {
   );
 }
 
-export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePaneProps) {
+export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseSettings }: CodexEnginePaneProps) {
   const [profiles, setProfiles] = useState<CodexProfileRecord[]>([]);
   const [reportsById, setReportsById] = useState<Record<string, CodexDoctorReport | undefined>>({});
   const [checkingIds, setCheckingIds] = useState<ReadonlySet<string>>(new Set());
@@ -792,6 +844,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
   const binaryStatus = describeCodexReportStatus(checkingIds.has(SYSTEM_PROFILE_ID) ? undefined : binaryReport);
   const binaryActions = deriveBinaryActions(binaryReport, support);
   const atProfileLimit = profiles.length >= MAX_CODEX_PROFILES;
+  const accountRows = resolveAccountRows(binaryReport, profiles, reportsById);
 
   return (
     <section className="settings-section">
@@ -849,26 +902,29 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
       </div>
 
       <div className="settings-section-title">Accounts</div>
-      <ul className="settings-mcp-list">
-        <CodexProfileRow
-          label="System (current environment)"
-          report={reportsById[SYSTEM_PROFILE_ID]}
-          checking={checkingIds.has(SYSTEM_PROFILE_ID)}
-          signingIn={signingInId === SYSTEM_PROFILE_ID}
-          confirmingDelete={false}
-          busy={busy}
-          onSignIn={() => void signInProfile(SYSTEM_PROFILE_ID)}
-          onCancelSignIn={() => void bridge.loginCancel()}
-          onRepairLink={() => {}}
-          onConfirmDelete={() => {}}
-          onCancelDelete={() => {}}
-          onDelete={() => {}}
-        />
+      <ul className="settings-mcp-list codex-profile-grid">
+        {accountRows.showSystemRow && (
+          <CodexProfileRow
+            label="System (current environment)"
+            report={reportsById[SYSTEM_PROFILE_ID]}
+            checking={checkingIds.has(SYSTEM_PROFILE_ID)}
+            signingIn={signingInId === SYSTEM_PROFILE_ID}
+            confirmingDelete={false}
+            busy={busy}
+            onSignIn={() => void signInProfile(SYSTEM_PROFILE_ID)}
+            onCancelSignIn={() => void bridge.loginCancel()}
+            onRepairLink={() => {}}
+            onConfirmDelete={() => {}}
+            onCancelDelete={() => {}}
+            onDelete={() => {}}
+          />
+        )}
         {profiles.map((profile) => (
           <CodexProfileRow
             key={profile.id}
             label={profile.label}
             profile={profile}
+            annotation={accountRows.currentEnvironmentProfileId === profile.id ? "current environment" : undefined}
             report={reportsById[profile.id]}
             checking={checkingIds.has(profile.id)}
             signingIn={signingInId === profile.id}
@@ -925,7 +981,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
           Import a Codex session…
         </button>
       </div>
-      {importOpen && <CodexRolloutImportDialog open={importOpen} onClose={() => setImportOpen(false)} profiles={profiles} />}
+      {importOpen && (
+        <CodexRolloutImportDialog open={importOpen} onClose={() => setImportOpen(false)} profiles={profiles} onRequestCloseSettings={onRequestCloseSettings} />
+      )}
     </section>
   );
 }

@@ -156,6 +156,16 @@ export interface CodexOnboardingController {
    */
   readyFor(profileId?: string): boolean;
   /**
+   * TASK.64: has a doctor verdict EVER landed for this profile (absent id = the
+   * active one)? Splits `readyFor`'s fail-closed false into KNOWN-bad (a verdict
+   * exists and is not ready) vs UNKNOWN (the fire-and-forget boot recheck has
+   * not landed yet, or this non-active profile was never diagnosed) — the tab
+   * gate awaits the first snapshot only in the UNKNOWN case instead of falsely
+   * refusing a signed-in account. A failed profile resolution caches nothing,
+   * so a bogus id stays unknown (every click re-resolves cheaply, no spawn).
+   */
+  hasVerdictFor(profileId?: string): boolean;
+  /**
    * App-lifecycle teardown (W2-review Critical). Every child this controller
    * opened — doctor, login, version preflight — is spawned `detached` (its own
    * POSIX process group), so it does NOT die with main: an Electron exit that
@@ -662,6 +672,10 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
     readyFor(profileId?: string): boolean {
       return reports.get(profileId ?? cachedActiveProfileId)?.status === "ready";
+    },
+
+    hasVerdictFor(profileId?: string): boolean {
+      return reports.has(profileId ?? cachedActiveProfileId);
     },
 
     async shutdown(): Promise<void> {

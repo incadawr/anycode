@@ -21,7 +21,7 @@
  * `turn/completed`, which the translator maps to `loop_end:cancelled`.
  */
 
-import type { AgentEvent, CodexRateLimitsWire, HistoryItem, PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { AgentEvent, CodexRateLimitsWire, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort } from "@anycode/core";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
   CODEX_POST_INTERRUPT_SETTLE_MS,
@@ -87,8 +87,10 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   // per model (low…ultra), not core's fixed ReasoningEffort union, so no core
   // effort selector is exposed. The engine still re-asserts the thread's own
   // effective effort on every turn (see turnSettingsOverride).
-  supportsReasoningEffort: false,
-  supportsImages: false,
+  supportsReasoningEffort: true,
+  // The app-server accepts native image items. Per-model admission is still
+  // fail-closed through `imageInputEnabled()` below, based on `model/list`.
+  supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
 };
@@ -97,6 +99,11 @@ const CODEX_BRIDGED_CAPABILITIES: EngineCapabilities = {
   ...CODEX_ENGINE_CAPABILITIES,
   supportsInteractiveApprovals: true,
 };
+
+/** Converts AnyCode's validated raw-base64 attachment into the app-server's native image item. */
+function codexImageInput(attachment: ImageAttachment): { type: "image"; url: string } {
+  return { type: "image", url: `data:${attachment.mediaType};base64,${attachment.data}` };
+}
 
 /** Every bound is frozen in shared/codex-timeouts.ts; overrides exist for tests only. */
 export interface CodexEngineTimeouts {
@@ -187,7 +194,7 @@ export interface CodexSessionSelection {
 
 /** Result of a host-side settings change request. `ok:false` never reaches the wire — it becomes a recoverable UI error. */
 export type CodexSettingsChange =
-  | { ok: true; model: string; activePresetId: string }
+  | { ok: true; model: string; activePresetId: string; effort?: string }
   | { ok: false; reason: string };
 
 /** Everything the engine needs to re-assert the full effective posture on every turn (cut §2(k).1). */
@@ -196,8 +203,14 @@ interface CodexEngineSettings {
   catalog: CodexModelCatalog;
   model: string;
   preset: CodexPermissionPresetDefinition;
-  /** Free-form Codex effort string (NOT core's ReasoningEffort); undefined -> `effort` is omitted from the override. */
+  /**
+   * Free-form Codex effort string for the CURRENT model (NOT core's
+   * ReasoningEffort); undefined -> `effort` is omitted from the override.
+   * The per-model memory lives in `effortsByModel`.
+   */
   effort?: string;
+  /** Remembered effort per model id, restored when switching back. */
+  effortsByModel: Map<string, string>;
   /** Boot-time warnings (unusable draft model, posture drift) — flushed into the first turn's event stream. */
   notices: AgentEvent[];
 }
@@ -283,12 +296,17 @@ function buildSettings(
   // The model is the SERVER-CONFIRMED one from the thread echo, so the effort is
   // resolved against what the thread actually runs, not against what was asked for.
   const effort = catalog.resolveEffort(model, effectiveSettings(result).effort);
+  const effortsByModel = new Map<string, string>();
+  if (effort !== undefined) {
+    effortsByModel.set(model, effort);
+  }
   return {
     workspace,
     catalog,
     model,
     preset,
     ...(effort !== undefined ? { effort } : {}),
+    effortsByModel,
     notices,
   };
 }
@@ -602,7 +620,7 @@ export class CodexEngine implements SessionEngine {
    * so an accepted `turn/start` IS the ack — this holds the snapshot to confirm
    * when that happens (cut §2(k).3).
    */
-  private pendingSettings: { model: string; activePresetId: string } | null = null;
+  private pendingSettings: { model: string; activePresetId: string; effort?: string } | null = null;
   /**
    * DISPLAY TRUTH: the settings a `turn/start` has actually carried — what the
    * UI may legitimately call "active". `this.settings` holds the CHOSEN values
@@ -616,8 +634,8 @@ export class CodexEngine implements SessionEngine {
    * from the PERSISTED posture, which the very first `turn/start` re-asserts, so
    * there is nothing pending about it.
    */
-  private applied: { model: string; activePresetId: string };
-  private readonly appliedListeners = new Set<(snapshot: { model: string; activePresetId: string }) => void>();
+  private applied: { model: string; activePresetId: string; effort?: string };
+  private readonly appliedListeners = new Set<(snapshot: { model: string; activePresetId: string; effort?: string }) => void>();
 
   constructor(
     private readonly client: CodexClient,
@@ -698,13 +716,31 @@ export class CodexEngine implements SessionEngine {
    * one. A pending change is reported through `pendingSnapshot()` and the
    * `state:"pending"` message, never by pretending it is already active.
    */
-  snapshot(): { model: string; activePresetId: string } {
+  snapshot(): { model: string; activePresetId: string; effort?: string } {
     return { ...this.applied };
   }
 
   /** The values the user has CHOSEN: what the next `turn/start` will carry and what persistence records. */
-  private chosen(): { model: string; activePresetId: string } {
-    return { model: this.settings?.model ?? "", activePresetId: this.settings?.preset.id ?? DEFAULT_CODEX_PRESET };
+  private chosen(): { model: string; activePresetId: string; effort?: string } {
+    return { model: this.settings?.model ?? "", activePresetId: this.settings?.preset.id ?? DEFAULT_CODEX_PRESET, ...(this.settings?.effort !== undefined ? { effort: this.settings.effort } : {}) };
+  }
+
+  /** Remembers the current model's effective effort before switching away. */
+  private rememberCurrentModelEffort(): void {
+    const settings = this.settings;
+    if (settings === undefined) return;
+    if (settings.effort === undefined) settings.effortsByModel.delete(settings.model);
+    else settings.effortsByModel.set(settings.model, settings.effort);
+  }
+
+  /** Restores the target model's remembered effort, normalizing it through the catalog. */
+  private resolveEffortForModel(modelId: string): string | undefined {
+    const settings = this.settings;
+    if (settings === undefined) return undefined;
+    const effort = settings.catalog.resolveEffort(modelId, settings.effortsByModel.get(modelId));
+    if (effort === undefined) settings.effortsByModel.delete(modelId);
+    else settings.effortsByModel.set(modelId, effort);
+    return effort;
   }
 
   /**
@@ -714,7 +750,7 @@ export class CodexEngine implements SessionEngine {
    * after it was evicted — or that folds it away because it compares equal to a
    * wrongly-advanced "current" — would otherwise show the change as active.
    */
-  pendingSnapshot(): { model: string; activePresetId: string } | null {
+  pendingSnapshot(): { model: string; activePresetId: string; effort?: string } | null {
     return this.pendingSettings === null ? null : { ...this.pendingSettings };
   }
 
@@ -744,13 +780,32 @@ export class CodexEngine implements SessionEngine {
     if (!settings.catalog.has(id)) {
       return { ok: false, reason: `Codex model "${id}" is not available for this account.` };
     }
+    this.rememberCurrentModelEffort();
     settings.model = id;
-    // The held effort may not exist on the new model; the catalog re-resolves it
-    // (falling back to that model's own default) so the override stays valid.
-    const effort = settings.catalog.resolveEffort(id, settings.effort);
+    // Each model keeps its own remembered effort. Switching restores that
+    // model's last valid choice (or its catalog default).
+    const effort = this.resolveEffortForModel(id);
     if (effort === undefined) delete settings.effort;
     else settings.effort = effort;
     return this.markPending();
+  }
+
+  selectEffort(effort: string): CodexSettingsChange {
+    const settings = this.settings;
+    if (settings === undefined) return { ok: false, reason: "Codex reasoning effort is unavailable for this session." };
+    const model = settings.catalog.get(settings.model);
+    if (model === undefined || !model.efforts.includes(effort)) {
+      return { ok: false, reason: `Codex effort "${effort}" is not available for model "${settings.model}".` };
+    }
+    settings.effortsByModel.set(settings.model, effort);
+    settings.effort = effort;
+    return this.markPending();
+  }
+
+  /** The live model's `inputModalities` verdict; no catalog evidence means no image upload. */
+  imageInputEnabled(): boolean {
+    const settings = this.settings;
+    return settings !== undefined && settings.catalog.supportsImages(settings.model);
   }
 
   /** Membership in the frozen preset table is the ONLY way a posture is expressible — no raw policy/config from the renderer. */
@@ -766,7 +821,7 @@ export class CodexEngine implements SessionEngine {
   }
 
   /** Fires when a `turn/start` has actually carried a pending change (the two-phase "applied" ack). */
-  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string }) => void): () => void {
+  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void {
     this.appliedListeners.add(listener);
     return () => this.appliedListeners.delete(listener);
   }
@@ -780,7 +835,7 @@ export class CodexEngine implements SessionEngine {
   private markPending(): CodexSettingsChange {
     const chosen = this.chosen();
     this.pendingSettings =
-      chosen.model === this.applied.model && chosen.activePresetId === this.applied.activePresetId ? null : chosen;
+      chosen.model === this.applied.model && chosen.activePresetId === this.applied.activePresetId && chosen.effort === this.applied.effort ? null : chosen;
     return { ok: true, ...chosen };
   }
 
@@ -824,11 +879,15 @@ export class CodexEngine implements SessionEngine {
       yield* this.terminalEvents(turn, this.terminalError ?? new Error("Codex engine is closed"));
       return;
     }
-    if (options.attachments?.length) {
-      yield* this.terminalEvents(turn, new Error("Codex engine does not support image attachments"));
+    // Session performs the primary capability check when it accepts the IPC
+    // message. Re-check here at the native wire boundary: a model selection is
+    // mutable between turns, and no attachment may reach app-server without the
+    // current catalog explicitly advertising image input. Bare test engines
+    // have no catalog, so only a real settings-bearing session is gated here.
+    if (options.attachments?.length && this.settings !== undefined && !this.imageInputEnabled()) {
+      yield* this.terminalEvents(turn, new Error("The selected Codex model does not support image attachments"));
       return;
     }
-
     yield { type: "turn_start", turn };
     // Boot-time notices (drift / unusable draft model) have no wire of their own:
     // an AgentEvent only travels inside a turn, so they are flushed here, once.
@@ -857,9 +916,13 @@ export class CodexEngine implements SessionEngine {
     // Captured BEFORE the request is written: this exact set is what the server
     // is about to be told, so it is also exactly what an "applied" ack may claim.
     const applying = this.pendingSettings;
+    const inputItems = [
+      { type: "text" as const, text: input },
+      ...(options.attachments ?? []).map((attachment) => codexImageInput(attachment)),
+    ];
     const request = this.client.request<TurnResult>("turn/start", {
       threadId: this.threadId,
-      input: [{ type: "text", text: input }],
+      input: inputItems,
       ...this.turnSettingsOverride(),
     }, { timeoutMs: this.bounds.turnStartMs });
     let next = iterator.next();

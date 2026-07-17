@@ -84,6 +84,25 @@ describe("CodexModelCatalog", () => {
     expect(seen).toEqual([1_234]);
   });
 
+  it("decodes image input only when the model explicitly advertises it", async () => {
+    const client = pagedClient([
+      {
+        data: [
+          { id: "vision", inputModalities: ["text", "image"] },
+          { id: "text-only", inputModalities: ["text"] },
+          { id: "legacy-without-modalities" },
+        ],
+        nextCursor: null,
+      },
+    ]);
+    const catalog = await CodexModelCatalog.load(client);
+
+    expect(catalog.supportsImages("vision")).toBe(true);
+    expect(catalog.supportsImages("text-only")).toBe(false);
+    expect(catalog.supportsImages("legacy-without-modalities")).toBe(false);
+    expect(catalog.supportsImages("not-in-the-catalog")).toBe(false);
+  });
+
   describe("resolveEffort", () => {
     const catalog = CodexModelCatalog.of([
       { id: "wide", label: "Wide", efforts: ["low", "medium", "high"], defaultEffort: "medium", isDefault: true },

@@ -30,6 +30,7 @@ import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { ConnectionDrawerFields } from "./ConnectionDrawer.js";
+import { customProviderCatalogEntries } from "./SettingsScreen.js";
 import { BrandMark } from "./icons.js";
 import "../settings.css";
 
@@ -87,7 +88,10 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
           <ConnectionDrawerFields
             mode={snapshot.settings.provider.connections.length === 0 ? "add" : "edit"}
             editConnection={snapshot.settings.provider.connections[0]}
-            catalog={snapshot.catalog ?? []}
+            // TASK.58: union the builtin catalog with saved custom records so a
+            // just-created "Custom endpoint…" resolves its own synthesized
+            // entry (models/transports) for the post-create model step.
+            catalog={[...(snapshot.catalog ?? []), ...customProviderCatalogEntries(snapshot.settings.provider.custom ?? [])]}
             connections={snapshot.settings.provider.connections}
             secrets={snapshot.secrets}
             readOnly={snapshot.readOnly}

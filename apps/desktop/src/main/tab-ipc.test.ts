@@ -971,3 +971,166 @@ describe("registered handler — fail-closed on invalid workspace (§6#6)", () =
     expect(createTab).not.toHaveBeenCalled();
   });
 });
+
+
+describe("handleCreate — unknown-readiness hydration (TASK.64)", () => {
+  /**
+   * A manager whose gate answer starts false and flips only if the rig says the
+   * hydrated verdict is ready, paired with the deps-level engineReadyKnown /
+   * hydrateEngineReady closures mirroring main/index.ts's codex wiring: UNKNOWN
+   * before the first doctor snapshot, KNOWN after it (ready or not).
+   */
+  function makeHydrationRig(opts: { readyAfterHydrate: boolean; hydrateThrows?: boolean }) {
+    let verdictKnown = false;
+    let ready = false;
+    const canSpawn = vi.fn(() => ready);
+    const createTab = vi.fn((params: { workspace: string; sessionId: string; resume: boolean }) => ({
+      ok: true,
+      tab: { tabId: "tab-1", workspace: params.workspace },
+    }));
+    const manager = {
+      canSpawn,
+      atCapacity: vi.fn(() => false),
+      createTab,
+      deliverTabPort: vi.fn(),
+      sessionOpenInTab: vi.fn(() => undefined),
+    } as unknown as TabHostManager;
+    const engineReadyKnown = vi.fn(() => verdictKnown);
+    const hydrateEngineReady = vi.fn(async () => {
+      if (opts.hydrateThrows === true) {
+        throw new Error("doctor failed");
+      }
+      verdictKnown = true;
+      ready = opts.readyAfterHydrate;
+    });
+    return { manager, canSpawn, createTab, engineReadyKnown, hydrateEngineReady };
+  }
+
+  const codexMeta = (codexProfileId?: string) => ({
+    id: "s-codex",
+    workspace: "/project",
+    model: "m",
+    mode: "build" as const,
+    createdAt: 1,
+    updatedAt: 1,
+    engineId: "codex",
+    ...(codexProfileId !== undefined ? { codexProfileId } : {}),
+  });
+  const metaPersistence = (meta: ReturnType<typeof codexMeta>): TabIpcDeps["persistence"] => ({
+    getSession: async () => meta,
+    listSessions: async () => [],
+    touchSession: async () => {},
+  });
+
+  it("resume: an UNKNOWN verdict hydrates first — a ready profile opens instead of a false not_ready", async () => {
+    const rig = makeHydrationRig({ readyAfterHydrate: true });
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = {
+      manager: rig.manager,
+      persistence: metaPersistence(codexMeta("work")),
+      dialog,
+      resolveCodexProfile: vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } })),
+      engineReadyKnown: rig.engineReadyKnown,
+      hydrateEngineReady: rig.hydrateEngineReady,
+    };
+
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-codex" });
+
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/project" });
+    // Hydration answered about the profile the session was CREATED under...
+    expect(rig.hydrateEngineReady).toHaveBeenCalledWith("codex", "work");
+    // ...and the re-read gate then let createTab through with that profile.
+    expect(rig.createTab).toHaveBeenCalledWith(
+      expect.objectContaining({ resume: true, engine: "codex", codexProfile: { id: "work" } }),
+    );
+  });
+
+  it("resume: hydration landing a KNOWN not-ready still refuses (genuinely signed out)", async () => {
+    const rig = makeHydrationRig({ readyAfterHydrate: false });
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = {
+      manager: rig.manager,
+      persistence: metaPersistence(codexMeta("work")),
+      dialog,
+      resolveCodexProfile: vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } })),
+      engineReadyKnown: rig.engineReadyKnown,
+      hydrateEngineReady: rig.hydrateEngineReady,
+    };
+
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-codex" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(rig.hydrateEngineReady).toHaveBeenCalledOnce();
+    expect(rig.createTab).not.toHaveBeenCalled();
+  });
+
+  it("a KNOWN not-ready refuses WITHOUT hydrating — no doctor run per click", async () => {
+    const rig = makeHydrationRig({ readyAfterHydrate: true });
+    rig.engineReadyKnown.mockReturnValue(true); // a verdict already landed this run
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = {
+      manager: rig.manager,
+      persistence: metaPersistence(codexMeta("work")),
+      dialog,
+      resolveCodexProfile: vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } })),
+      engineReadyKnown: rig.engineReadyKnown,
+      hydrateEngineReady: rig.hydrateEngineReady,
+    };
+
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-codex" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(rig.hydrateEngineReady).not.toHaveBeenCalled();
+    expect(rig.createTab).not.toHaveBeenCalled();
+  });
+
+  it("new: a codex draft opened before the boot recheck landed hydrates, then creates", async () => {
+    const rig = makeHydrationRig({ readyAfterHydrate: true });
+    const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const deps: TabIpcDeps = {
+      manager: rig.manager,
+      persistence: persistenceStub,
+      dialog,
+      engineReadyKnown: rig.engineReadyKnown,
+      hydrateEngineReady: rig.hydrateEngineReady,
+    };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex" });
+
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/x" });
+    // No draft pick ⇒ hydration answers about the ACTIVE profile.
+    expect(rig.hydrateEngineReady).toHaveBeenCalledWith("codex", undefined);
+    expect(showOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it("a rejecting hydration leaves the gate fail-closed (not_ready, no spawn, no throw)", async () => {
+    const rig = makeHydrationRig({ readyAfterHydrate: false, hydrateThrows: true });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const deps: TabIpcDeps = {
+      manager: rig.manager,
+      persistence: persistenceStub,
+      dialog,
+      engineReadyKnown: rig.engineReadyKnown,
+      hydrateEngineReady: rig.hydrateEngineReady,
+    };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(rig.createTab).not.toHaveBeenCalled();
+  });
+
+  it("legacy wiring (no tri-state deps) keeps the single-sync-check refuse", async () => {
+    const order: string[] = [];
+    const { manager, canSpawn } = makeManager({ canSpawn: false }, order);
+    const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: ["/x"] }, order);
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(order).toEqual(["canSpawn"]);
+    expect(canSpawn).toHaveBeenCalledOnce();
+    expect(showOpenDialog).not.toHaveBeenCalled();
+  });
+});

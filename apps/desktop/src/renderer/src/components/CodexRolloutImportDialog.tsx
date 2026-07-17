@@ -89,6 +89,8 @@ const SYSTEM_PROFILE_LABEL = "System (current environment)";
 const MAX_ROLLOUT_FILE_MIB = 32;
 /** List-row first-user-message preview cap — a rollout's first message can run long; the list view only needs enough to recognize the session. */
 const FIRST_MESSAGE_PREVIEW_CAP = 96;
+/** Row-label cap (TASK.57), mirroring `@anycode/core`'s `SESSION_TITLE_MAX_LENGTH`/`deriveSessionTitle` first-line convention — duplicated as a literal rather than imported since this renderer bundle deliberately never pulls in `@anycode/core` (see file header). */
+const ROLLOUT_ROW_LABEL_MAX_LENGTH = 80;
 
 // ── pure helpers (unit-tested directly — see CodexRolloutImportDialog.test.ts) ──
 
@@ -115,6 +117,24 @@ export function truncateRolloutPreview(text: string | undefined): string | undef
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (collapsed.length <= FIRST_MESSAGE_PREVIEW_CAP) return collapsed;
   return `${collapsed.slice(0, FIRST_MESSAGE_PREVIEW_CAP)}…`;
+}
+
+/**
+ * The list row's PRIMARY, human-readable label (TASK.57 — owner: "в списке
+ * импортируемых сессий нужно показывать название сессии"): the first line of
+ * the rollout's own first user message, trimmed and capped — the exact
+ * "first line, 80 chars" convention `deriveSessionTitle` (`@anycode/core`)
+ * uses for a session's own title, so an imported session's list entry and
+ * its eventual title read as the same kind of name. Falls back to the
+ * formatted timestamp when there is no first-user-message to name it after
+ * (no user turn in the rollout at all, or an empty/whitespace-only peek).
+ */
+export function deriveRolloutRowLabel(entry: { firstUserMessage?: string; mtimeMs: number }): string {
+  const firstLine = (entry.firstUserMessage ?? "").split("\n", 1)[0]?.trim() ?? "";
+  if (firstLine.length > 0) {
+    return firstLine.length > ROLLOUT_ROW_LABEL_MAX_LENGTH ? firstLine.slice(0, ROLLOUT_ROW_LABEL_MAX_LENGTH) : firstLine;
+  }
+  return formatRolloutTimestamp(entry.mtimeMs);
 }
 
 // ── provenance stamps (W4-F0c finding B) ──
@@ -305,17 +325,27 @@ export type PerformImportOutcome = { ok: true; openMessage: string | null } | { 
  * never calls `createTab` at all — there is nothing to resume. Exported for
  * unit testing (the red-proof surface for "sends the picked model" / "opens
  * exactly the returned sessionId, never a blank new tab").
+ *
+ * `onOpened` (TASK.57 — "open means open") fires exactly once, ONLY when the
+ * whole chain lands the user on the new tab (import succeeded AND the resume
+ * carried no failure notice) — never on a refused import, and never on an
+ * import that persisted fine but whose tab failed to open (that case still
+ * has a notice for the user to read, so the caller keeps them in Settings).
  */
 export async function performImportAndOpen(
   bridge: Pick<CodexRolloutBridge, "rolloutImport">,
   tabOpenDeps: RolloutTabOpenDeps,
   params: PerformImportParams,
+  onOpened?: () => void,
 ): Promise<PerformImportOutcome> {
   const result = await bridge.rolloutImport(params.profileId, params.fileName, params.model);
   if (!result.ok) {
     return { ok: false, reason: result.reason };
   }
   const openMessage = await openImportedSession(result.sessionId, tabOpenDeps);
+  if (openMessage === null) {
+    onOpened?.();
+  }
   return { ok: true, openMessage };
 }
 
@@ -332,6 +362,8 @@ export interface CodexRolloutImportDialogProps {
   tabOpenDeps?: RolloutTabOpenDeps;
   /** Injectable for tests / isolation; defaults to the app's singleton settings-store. */
   settingsStore?: SettingsStoreApi;
+  /** Forwarded from `CodexEnginePane` (ultimately `SettingsScreen`'s own dialog close) — fired on a successful "Import & open" so the user lands on the new tab instead of staying in Settings (TASK.57). */
+  onRequestCloseSettings?: () => void;
 }
 
 export function CodexRolloutImportDialog({
@@ -341,6 +373,7 @@ export function CodexRolloutImportDialog({
   bridge = window.anycode.codex,
   tabOpenDeps = defaultTabOpenDeps(),
   settingsStore = useSettingsStore,
+  onRequestCloseSettings,
 }: CodexRolloutImportDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   // F1 (review lane FXH): epoch-gates the two async chains below so a fast
@@ -424,7 +457,7 @@ export function CodexRolloutImportDialog({
     setImporting(true);
     setImportError(null);
     try {
-      const outcome = await performImportAndOpen(bridge, tabOpenDeps, { profileId, fileName: selectedFileName, model });
+      const outcome = await performImportAndOpen(bridge, tabOpenDeps, { profileId, fileName: selectedFileName, model }, onRequestCloseSettings);
       if (!outcome.ok) {
         setImportError(describeRolloutStageFailure(outcome.reason));
         return;
@@ -486,9 +519,10 @@ export function CodexRolloutImportDialog({
                   <li key={entry.fileName} className="settings-mcp-row codex-rollout-row" data-file-name={entry.fileName}>
                     <label className="codex-rollout-row-label">
                       <input type="radio" name="codex-rollout-pick" checked={selectedFileName === entry.fileName} onChange={() => selectRollout(entry.fileName)} />
-                      <span className="settings-mcp-name">{formatRolloutTimestamp(entry.mtimeMs)}</span>
+                      <span className="settings-mcp-name">{deriveRolloutRowLabel(entry)}</span>
                       <span className="codex-rollout-size">{formatRolloutSize(entry.sizeBytes)}</span>
                     </label>
+                    <div className="codex-rollout-timestamp">{formatRolloutTimestamp(entry.mtimeMs)}</div>
                     {entry.cwd && <div className="settings-mcp-detail">{entry.cwd}</div>}
                     {entry.firstUserMessage && <div className="codex-rollout-preview-line">{truncateRolloutPreview(entry.firstUserMessage)}</div>}
                   </li>

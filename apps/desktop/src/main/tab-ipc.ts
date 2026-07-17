@@ -34,7 +34,7 @@ import type {
   WorkspacePickResult,
 } from "../shared/tabs.js";
 import type { TabHostManager } from "./tabs.js";
-import { isEngineId } from "../shared/engines.js";
+import { isEngineId, type EngineId } from "../shared/engines.js";
 
 /** Structural view of dialog.showOpenDialog (injected so main owns the real one). */
 export interface DialogLike {
@@ -124,6 +124,26 @@ export interface TabIpcDeps {
    * never on a refused attempt. Absent = disabled (legacy wiring / unit fixtures).
    */
   consumePendingImportModel?(sessionId: string): string | undefined;
+  /**
+   * TASK.64: is the readiness verdict for this engine/profile KNOWN yet? Splits
+   * `canSpawn`'s fail-closed false into known-bad (refuse) vs unknown (await
+   * `hydrateEngineReady` before the verdict). The boot-time Codex recheck is
+   * fire-and-forget (main/index.ts), so until its first doctor snapshot lands —
+   * and indefinitely for a profile nobody diagnosed yet — the sync gate reads a
+   * false that is really "not known", not "not configured". Absent = every
+   * verdict counts as known (legacy wiring / unit fixtures — byte-identical).
+   */
+  engineReadyKnown?(engine: EngineId, codexProfileId?: string): boolean;
+  /**
+   * TASK.64: awaits the first readiness verdict for an engine/profile whose
+   * answer is still UNKNOWN (codex: runs — or coalesces onto — the doctor
+   * recheck for that profile; core readiness is settled at boot before IPC
+   * registers, so it never reaches here). Called ONLY after `engineReadyKnown`
+   * reported unknown, so a genuinely unconfigured provider/profile never
+   * triggers a doctor run per click. Best-effort: a rejection is swallowed by
+   * the caller and leaves the gate fail-closed.
+   */
+  hydrateEngineReady?(engine: EngineId, codexProfileId?: string): Promise<unknown>;
 }
 
 /** exported for tests (tab-ipc.test.ts): the fail-closed request schema. */
@@ -169,6 +189,30 @@ function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSummary {
 }
 
 /**
+ * TASK.64: the spawn gate's async verdict. `manager.canSpawn` is fail-closed on
+ * UNKNOWN readiness — right after launch (boot recheck still in flight), or for
+ * a Codex profile nobody diagnosed yet, that bounced a session click with a
+ * false "not ready". A refused sync verdict that is merely UNKNOWN first awaits
+ * the first snapshot (`hydrateEngineReady`), then re-reads the sync gate, so a
+ * refusal is returned only for a KNOWN not-ready (genuinely unconfigured
+ * provider / signed-out profile). `createTab`'s own sync guard stays the
+ * authoritative backstop on the far side.
+ */
+async function spawnableWhenKnown(deps: TabIpcDeps, engine: EngineId, codexProfileId?: string): Promise<boolean> {
+  if (deps.manager.canSpawn(engine, codexProfileId)) {
+    return true;
+  }
+  const known = deps.engineReadyKnown?.(engine, codexProfileId) ?? true;
+  if (known || deps.hydrateEngineReady === undefined) {
+    // Known-bad (or legacy wiring with no tri-state): refuse as-is. The verdict
+    // cannot change without a hydration, so the sync gate is not re-read here.
+    return false;
+  }
+  await deps.hydrateEngineReady(engine, codexProfileId).catch(() => {});
+  return deps.manager.canSpawn(engine, codexProfileId);
+}
+
+/**
  * tab-create (§3.2 CreateTabResult) — exported for tests (tab-ipc.test.ts):
  *  - new: capacity-guard -> workspace source (GUI-P1: a preselected
  *    `req.workspace` skips the dialog; otherwise showOpenDialog, cancel ->
@@ -188,7 +232,9 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // a pure cache lookup, unknown ⇒ fail-closed refuse; identity authority stays
     // with resolveCodexProfile below), so a ready non-active pick spawns even when
     // the active account is signed out. Absent id ⇒ the active profile answers.
-    if (!deps.manager.canSpawn(engine, req.codexProfileId)) {
+    // TASK.64: an UNKNOWN verdict (boot recheck in flight / never-diagnosed
+    // profile) awaits the first snapshot instead of falsely refusing.
+    if (!(await spawnableWhenKnown(deps, engine, req.codexProfileId))) {
       return { ok: false, reason: "not_ready" };
     }
     // Codex-profiles W3-F: resolve the draft's profile pick BEFORE prompting
@@ -271,8 +317,9 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // Codex-profiles S3-1: gate on the profile the session was CREATED under
   // (persisted `meta.codexProfileId` — never the renderer's current active pick),
   // consistent with the re-resolve below; a legacy/system session (no id) keeps
-  // the active-profile answer.
-  if (!isEngineId(engine) || !deps.manager.canSpawn(engine, meta.codexProfileId)) {
+  // the active-profile answer. TASK.64: same UNKNOWN-await as the "new" branch —
+  // a resumed profile nobody diagnosed since boot is hydrated, not refused.
+  if (!isEngineId(engine) || !(await spawnableWhenKnown(deps, engine, meta.codexProfileId))) {
     return { ok: false, reason: "not_ready" };
   }
   const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);

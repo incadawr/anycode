@@ -642,7 +642,19 @@ export function MessageList({
               return (
                 <div key={block.id} className={`message message-user${enterClass(block.id)}`}>
                   <div className="message-label">You</div>
-                  <div className="message-text">{block.text}</div>
+                  {block.text.length > 0 && <div className="message-text">{block.text}</div>}
+                  {block.images?.length ? (
+                    <div className="message-images">
+                      {block.images.map((image, index) => (
+                        <img
+                          key={`${image.mediaType}:${index}`}
+                          className="message-image"
+                          src={`data:${image.mediaType};base64,${image.data}`}
+                          alt={`Attached image ${index + 1}`}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               );
             case "assistant_text":

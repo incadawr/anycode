@@ -242,6 +242,35 @@ describe("projectCodexHistory — native-only projection", () => {
     expect(message?.role === "user" ? message.content : null).toContain("https://example.com/x.png");
   });
 
+  it("restores an inline image data URL as an image attachment, never transcript text", () => {
+    const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ".repeat(100);
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 0,
+            items: [
+              {
+                type: "userMessage",
+                id: "um-1",
+                content: [
+                  { type: "text", text: "Please inspect this: " },
+                  { type: "image", url: `data:image/png;base64,${base64}` },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const message = projectCodexHistory(thread, [], { maxItems: 200 })[0]?.message;
+    expect(message).toEqual({ role: "user", content: "Please inspect this: ", images: [{ mediaType: "image/png", data: base64 }] });
+    expect(message?.role === "user" ? message.content : "").not.toContain(base64);
+  });
+
   it("caps to the last maxItems and prepends exactly one truncation marker", () => {
     const items = Array.from({ length: 5 }, (_, i) => ({
       type: "agentMessage" as const,

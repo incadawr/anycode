@@ -1449,9 +1449,9 @@ export interface ProviderPaneDom {
   setDrawerTransport(value: string): boolean;
   setDrawerBaseUrl(value: string): boolean;
   setDrawerApiKey(value: string): boolean;
-  /** Clicks the drawer's own top-level action button ("Create connection"/"Save" pre-creation, "Save changes" post-creation). */
+  /** Clicks the drawer's own top-level action button — "Create connection"/"Save" pre-creation, the single unified "Save" post-creation (TASK.58 folded "Save changes"+"Save key" into one). */
   clickDrawerPrimary(): boolean;
-  /** Clicks the credential section's primary action (API key "Save key" OR OAuth "Sign in" — both are "establish this connection's credential"). */
+  /** TASK.58: clicks the unified post-creation "Save" (metadata + a typed key together) — the old separate "Save key" no longer exists; for a keyed catalog provider the key is now folded into "Create" or this "Save". Returns `false` pre-creation. */
   clickDrawerSaveKey(): boolean;
   /** Clicks the credential section's danger action (API key "Clear key" OR OAuth "Sign out"). */
   clickDrawerClearKey(): boolean;
@@ -3329,14 +3329,29 @@ function realProviderPaneDom(): ProviderPaneDom {
   }
   function primaryTopButton(body: HTMLElement): HTMLButtonElement | null {
     // The one `.settings-field-row` that is a DIRECT child of the form body
-    // (the credential section's own Save-key/Clear-key row is nested inside
-    // `.connection-drawer-credential`, a level deeper, so `:scope >` alone
-    // excludes it) — "Create connection"/"Save" pre-creation carries
-    // `-primary`, "Save changes" post-creation doesn't.
+    // (the credential section's own Clear-key row is nested inside
+    // `.connection-drawer-credential`, and the custom-provider Fetch-models
+    // row inside `.connection-drawer-fetch-models`, both a level deeper, so
+    // `:scope >` excludes them). Pre-creation this is "Create connection"/
+    // "Save"; post-creation it is the single unified "Save" (TASK.58) — both
+    // carry `-primary`.
     return (
       body.querySelector<HTMLButtonElement>(":scope > .settings-field-row .settings-button-primary") ??
       body.querySelector<HTMLButtonElement>(":scope > .settings-field-row .settings-button")
     );
+  }
+  // The credential input — post-creation it lives in `.connection-drawer-credential`
+  // (label text is auth-kind/status-dependent, so looked up structurally);
+  // pre-creation the create form's own key field (TASK.58) carries
+  // `.connection-drawer-create-key`.
+  function credentialInput(body: HTMLElement): HTMLInputElement | null {
+    const sec = credentialSection(body);
+    const inSection = sec?.querySelector<HTMLInputElement>('input[type="password"]');
+    return inSection ?? body.querySelector<HTMLInputElement>(".connection-drawer-create-key");
+  }
+  // The single unified post-creation "Save" (TASK.58) — metadata + a typed key.
+  function unifiedSaveButton(body: HTMLElement): HTMLButtonElement | null {
+    return body.querySelector<HTMLButtonElement>(".connection-drawer-save");
   }
 
   return {
@@ -3423,11 +3438,14 @@ function realProviderPaneDom(): ProviderPaneDom {
       const modelInput = fieldControl(body, "Model") as HTMLInputElement | null;
       const transportSelect = fieldControl(body, "Transport") as HTMLSelectElement | null;
       const baseUrlInput = fieldControl(body, "Base URL") as HTMLInputElement | null;
-      const secretInput = sec?.querySelector<HTMLInputElement>('input[type="password"]') ?? null;
+      const secretInput = credentialInput(body);
       const authKind: "api_key" | "oauth" = sec?.querySelector(".settings-oauth-block") ? "oauth" : "api_key";
       const credentialStatusEl = sec?.querySelector<HTMLElement>('[class*="settings-secret-status"]') ?? null;
       const primary = primaryTopButton(body);
-      const saveKeyBtn = sec?.querySelector<HTMLButtonElement>(".settings-button-primary") ?? null;
+      // TASK.58: the old separate credential "Save key" is gone — the unified
+      // post-creation "Save" now carries the key; report ITS enabled state
+      // here so the `/save-key` route's readiness gate stays truthful.
+      const saveKeyBtn = unifiedSaveButton(body);
       const clearKeyBtn = sec?.querySelector<HTMLButtonElement>(".settings-button-danger") ?? null;
       return {
         embedded,
@@ -3501,8 +3519,10 @@ function realProviderPaneDom(): ProviderPaneDom {
     },
     setDrawerApiKey(value: string): boolean {
       const body = drawerBody();
-      const sec = body && credentialSection(body);
-      const input = sec?.querySelector<HTMLInputElement>('input[type="password"]') ?? null;
+      // TASK.58: the key field is the pre-creation create-key OR the
+      // post-creation credential-section password — `credentialInput` finds
+      // whichever is currently mounted.
+      const input = body && credentialInput(body);
       if (!input || input.disabled) {
         return false;
       }
@@ -3519,9 +3539,16 @@ function realProviderPaneDom(): ProviderPaneDom {
       return true;
     },
     clickDrawerSaveKey(): boolean {
+      // TASK.58: post-creation the unified "Save" persists the typed key (the
+      // old separate credential "Save key" is gone); for oauth it is the
+      // credential section's "Sign in" primary instead.
       const body = drawerBody();
-      const sec = body && credentialSection(body);
-      const btn = sec?.querySelector<HTMLButtonElement>(".settings-button-primary") ?? null;
+      if (!body) {
+        return false;
+      }
+      const sec = credentialSection(body);
+      const oauthSignIn = sec?.querySelector<HTMLButtonElement>(".settings-oauth-block .settings-button-primary") ?? null;
+      const btn = oauthSignIn ?? unifiedSaveButton(body);
       if (!btn || btn.disabled) {
         return false;
       }
@@ -4011,7 +4038,7 @@ function realCodexImportDialogDom(): CodexImportDialogDom {
     rollouts: () =>
       Array.from(listBlock()?.querySelectorAll<HTMLLIElement>(".codex-rollout-row") ?? []).map((li) => ({
         fileName: li.getAttribute("data-file-name"),
-        timestamp: (li.querySelector(".settings-mcp-name")?.textContent ?? "").trim(),
+        timestamp: (li.querySelector(".codex-rollout-timestamp")?.textContent ?? "").trim(),
         size: (li.querySelector(".codex-rollout-size")?.textContent ?? "").trim(),
         cwd: li.querySelector(".settings-mcp-detail")?.textContent?.trim() ?? null,
         preview: li.querySelector(".codex-rollout-preview-line")?.textContent?.trim() ?? null,

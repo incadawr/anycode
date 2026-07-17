@@ -28,6 +28,7 @@ import {
   loginFailureMessage,
   manifestRefreshNotice,
   pickBinaryFailureMessage,
+  resolveAccountRows,
   shouldAutoSignIn,
   type CodexOnboardingSnapshot,
   type CodexSupportStatusResult,
@@ -224,6 +225,58 @@ describe("hasMainAuthLinkProfile", () => {
     expect(hasMainAuthLinkProfile([profile({ linkedHome: "/Users/x/.codex-accounts/personal" })])).toBe(false);
     expect(hasMainAuthLinkProfile([profile({})])).toBe(false);
     expect(hasMainAuthLinkProfile([])).toBe(false);
+  });
+});
+
+// ── resolveAccountRows (TASK.57: dedupe the "System" pseudo-row against a saved profile mirroring the same signed-in account) ──
+
+describe("resolveAccountRows", () => {
+  function readyReport(email: string | null): CodexDoctorReport {
+    return { status: "ready", version: "0.144.3", account: { type: "chatgpt", email, plan: "plus" } };
+  }
+
+  it("hides System and marks the matching profile when both report the SAME email", () => {
+    const profiles = [profile({ id: "main", label: "Main" })];
+    const reportsById = { main: readyReport("owner@example.com") };
+    const result = resolveAccountRows(readyReport("owner@example.com"), profiles, reportsById);
+    expect(result).toEqual({ showSystemRow: false, currentEnvironmentProfileId: "main" });
+  });
+
+  it("matches trimmed + case-insensitively", () => {
+    const profiles = [profile({ id: "main", label: "Main" })];
+    const reportsById = { main: readyReport("  Owner@Example.com  ") };
+    const result = resolveAccountRows(readyReport("owner@example.com"), profiles, reportsById);
+    expect(result).toEqual({ showSystemRow: false, currentEnvironmentProfileId: "main" });
+  });
+
+  it("shows System (no match) when no profile shares its email", () => {
+    const profiles = [profile({ id: "other", label: "Other" })];
+    const reportsById = { other: readyReport("someone-else@example.com") };
+    const result = resolveAccountRows(readyReport("owner@example.com"), profiles, reportsById);
+    expect(result).toEqual({ showSystemRow: true, currentEnvironmentProfileId: null });
+  });
+
+  it("shows System when its own email is null (not signed in / non-chatgpt account)", () => {
+    const profiles = [profile({ id: "main", label: "Main" })];
+    const reportsById = { main: readyReport("owner@example.com") };
+    expect(resolveAccountRows(readyReport(null), profiles, reportsById)).toEqual({ showSystemRow: true, currentEnvironmentProfileId: null });
+    expect(resolveAccountRows(undefined, profiles, reportsById)).toEqual({ showSystemRow: true, currentEnvironmentProfileId: null });
+  });
+
+  it("shows System when the profile's own email is null/missing (report pending or not signed in)", () => {
+    const profiles = [profile({ id: "main", label: "Main" })];
+    expect(resolveAccountRows(readyReport("owner@example.com"), profiles, { main: readyReport(null) })).toEqual({
+      showSystemRow: true,
+      currentEnvironmentProfileId: null,
+    });
+    expect(resolveAccountRows(readyReport("owner@example.com"), profiles, {})).toEqual({ showSystemRow: true, currentEnvironmentProfileId: null });
+  });
+
+  it("marks only the FIRST matching profile (registry order) when several share the account", () => {
+    const profiles = [profile({ id: "a", label: "A" }), profile({ id: "b", label: "B" })];
+    const reportsById = { a: readyReport("owner@example.com"), b: readyReport("owner@example.com") };
+    const result = resolveAccountRows(readyReport("owner@example.com"), profiles, reportsById);
+    expect(result).toEqual({ showSystemRow: false, currentEnvironmentProfileId: "a" });
   });
 });
 

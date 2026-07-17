@@ -344,7 +344,9 @@ export interface CustomProviderCreateRequest {
   name: string;
   baseUrl: string;
   kind: CustomProviderRecord["kind"];
-  apiKey: string;
+  // TASK.58: optional — a keyless local endpoint sets `authOptional: true`.
+  apiKey?: string;
+  authOptional?: boolean;
   models?: string[];
 }
 
@@ -354,6 +356,7 @@ export interface CustomProviderUpdateRequest {
   baseUrl?: string;
   kind?: CustomProviderRecord["kind"];
   apiKey?: string;
+  authOptional?: boolean;
   models?: string[];
 }
 
@@ -557,7 +560,10 @@ contextBridge.exposeInMainWorld("anycode", {
     delete: (req: { id: string }): Promise<CustomProviderMutationResult> =>
       ipcRenderer.invoke(CUSTOM_PROVIDER_DELETE_CHANNEL, req) as Promise<CustomProviderMutationResult>,
     fetchModels: (
-      req: { id: string } | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
+      req:
+        | { id: string }
+        | { connectionId: string }
+        | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
     ): Promise<FetchModelsOutcome> =>
       ipcRenderer.invoke(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, req) as Promise<FetchModelsOutcome>,
   },

@@ -115,7 +115,7 @@ export interface EnginePermissionPreset {
 export interface EnginePresentation {
   id: EngineId;
   capabilities: EngineCapabilitiesProjection;
-  model?: { current: string; available: EngineModelChoice[] };
+  model?: { current: string; available: EngineModelChoice[]; effort?: string };
   permissions?: { presets: EnginePermissionPreset[]; activePresetId: string };
   /**
    * What to show in the account chip (cut §3.5/§4.4 custody): `label` is the
@@ -353,6 +353,7 @@ export type UiToHostMessage =
   // membership check against the engine's own preset table happens at route()
   // time, never a raw config payload from the renderer.
   | { type: "set_engine_preset"; presetId: string }
+  | { type: "set_engine_effort"; effort: string }
   // Slice 5.7 (design slice-5.7-cut.md §2.1): one user-initiated git command.
   // Untrusted -> validated by `gitCommandMessageSchema` below (fail-closed). NO
 
@@ -492,6 +493,7 @@ export type HostToUiMessage =
       type: "engine_settings_changed";
       model?: string;
       activePresetId?: string;
+      effort?: string;
       state?: "pending" | "applied";
       appliesFrom: "next_turn";
     }
@@ -666,6 +668,10 @@ export const setEnginePresetSchema = z
   })
   .strict();
 
+export const setEngineEffortSchema = z
+  .object({ type: z.literal("set_engine_effort"), effort: z.string().min(1).max(32) })
+  .strict();
+
 // ── git (slice 5.7): untrusted UiToHostMessage side; semantics FROZEN incl. caps.
 // DRIFT-LOCK: GIT_DIFF_TARGETS is the single source of truth for the diff.target
 // enum AND is `satisfies readonly GitDiffTarget[]`, so if core renames/removes a
@@ -795,6 +801,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   setReasoningEffortSchema,
   setModelSchema,
   setEnginePresetSchema,
+  setEngineEffortSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   contextBreakdownRequestSchema,

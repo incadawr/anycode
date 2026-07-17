@@ -25,6 +25,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       "z-ai",
       "deepseek",
       "moonshot",
+      "kimi",
       "openai",
       "openrouter",
       "vllm",
@@ -77,6 +78,28 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(findCatalogEntry("z-ai")?.baseUrl).toBe("https://api.z.ai/api/anthropic");
     expect(findCatalogEntry("deepseek")?.baseUrl).toBe("https://api.deepseek.com/anthropic");
     expect(findCatalogEntry("moonshot")?.baseUrl).toBe("https://api.moonshot.ai/anthropic");
+    expect(findCatalogEntry("kimi")?.baseUrl).toBe("https://api.kimi.com/coding");
+  });
+
+  it("declares the Kimi subscription entry (kimi.com sk-kimi-* keys; distinct from the moonshot platform)", () => {
+    const kimi = findCatalogEntry("kimi");
+    expect(kimi).toMatchObject({
+      baseUrl: "https://api.kimi.com/coding",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
+    });
+    expect(kimi?.authOptional).toBeUndefined();
+    expect(kimi?.models.map((model) => model.id)).toEqual([
+      "kimi-for-coding",
+      "kimi-for-coding-highspeed",
+      "k3",
+    ]);
+    // Thinking-only models: no "off" tier; k3 mirrors its native low/high/max set.
+    expect(kimi?.models.find((model) => model.id === "kimi-for-coding")?.effortLevels).toEqual(["low", "medium", "high"]);
+    expect(kimi?.models.find((model) => model.id === "k3")?.effortLevels).toEqual(["low", "high", "max"]);
+    for (const model of kimi?.models ?? []) {
+      expect(model).toMatchObject({ contextWindow: 262_144, reasoning: true, imageInput: true });
+    }
   });
 
   it("custom carries an empty baseUrl and no static model hints", () => {

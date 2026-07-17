@@ -506,6 +506,31 @@ describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
     expect(controller.readyFor(undefined)).toBe(false);
   });
 
+  it("hasVerdictFor() splits never-diagnosed (unknown) from a landed verdict (TASK.64)", async () => {
+    const runDoctor = profileAwareDoctor((id) => (id === "good" ? "ready" : "signed_out"));
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "good" })).ok).toBe(true);
+    expect((await controller.createProfile({ label: "bad" })).ok).toBe(true);
+    // Before ANY diagnosis every slot is unknown — readyFor's fail-closed false
+    // must not be read as "configured but not ready".
+    expect(controller.hasVerdictFor("good")).toBe(false);
+    expect(controller.hasVerdictFor(undefined)).toBe(false);
+
+    await controller.recheck("good");
+    expect(controller.hasVerdictFor("good")).toBe(true);
+    expect(controller.readyFor("good")).toBe(true);
+
+    // A landed NOT-ready verdict is KNOWN too — the gate refuses fast, no re-doctor.
+    await controller.recheck("bad");
+    expect(controller.hasVerdictFor("bad")).toBe(true);
+    expect(controller.readyFor("bad")).toBe(false);
+
+    // A failed profile resolution caches nothing — still unknown.
+    await controller.recheck("no-such");
+    expect(controller.hasVerdictFor("no-such")).toBe(false);
+  });
+
   it("recheck of an UNKNOWN profile is an error snapshot with no doctor spawn", async () => {
     const runDoctor = vi.fn();
     const deps = makeDeps({ runDoctor });

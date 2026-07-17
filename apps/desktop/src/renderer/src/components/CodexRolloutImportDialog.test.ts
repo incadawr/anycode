@@ -14,6 +14,7 @@ import {
   buildRolloutProfileOptions,
   describeRolloutListFailure,
   describeRolloutStageFailure,
+  deriveRolloutRowLabel,
   formatRolloutSize,
   formatRolloutStatsLines,
   formatRolloutTimestamp,
@@ -111,6 +112,35 @@ describe("truncateRolloutPreview", () => {
     const result = truncateRolloutPreview(long);
     expect(result?.endsWith("…")).toBe(true);
     expect(result?.length).toBeLessThan(long.length);
+  });
+});
+
+// ── deriveRolloutRowLabel (TASK.57: the list row's PRIMARY, human-readable name) ──
+
+describe("deriveRolloutRowLabel", () => {
+  const mtimeMs = Date.parse("2026-07-14T09:05:00.000Z");
+
+  it("uses the first line of firstUserMessage, trimmed", () => {
+    expect(deriveRolloutRowLabel({ firstUserMessage: "  fix the flaky test  ", mtimeMs })).toBe("fix the flaky test");
+  });
+
+  it("uses ONLY the first line of a multi-line message", () => {
+    expect(deriveRolloutRowLabel({ firstUserMessage: "fix the flaky test\nhere are the details...", mtimeMs })).toBe("fix the flaky test");
+  });
+
+  it("caps at 80 characters, mirroring deriveSessionTitle's convention", () => {
+    const long = "x".repeat(200);
+    const result = deriveRolloutRowLabel({ firstUserMessage: long, mtimeMs });
+    expect(result.length).toBe(80);
+    expect(result).toBe(long.slice(0, 80));
+  });
+
+  it("falls back to the formatted timestamp when firstUserMessage is absent", () => {
+    expect(deriveRolloutRowLabel({ mtimeMs })).toBe(formatRolloutTimestamp(mtimeMs));
+  });
+
+  it("falls back to the formatted timestamp when firstUserMessage is empty/whitespace-only", () => {
+    expect(deriveRolloutRowLabel({ firstUserMessage: "   ", mtimeMs })).toBe(formatRolloutTimestamp(mtimeMs));
   });
 });
 
@@ -402,5 +432,59 @@ describe("performImportAndOpen", () => {
     expect(addTab).not.toHaveBeenCalled();
     expect(outcome.ok).toBe(true);
     expect(outcome.ok && outcome.openMessage).toBe("Cannot open another tab — the maximum number of tabs is already open.");
+  });
+
+  // ── onOpened (TASK.57 "open means open": fires the Settings-dialog close callback ONLY on a full success) ──
+
+  it("fires onOpened exactly once when the import AND the resume both succeed", async () => {
+    const rolloutImport = vi.fn(
+      async (): Promise<CodexRolloutImportResult> => ({ ok: true, sessionId: "session-1", workspace: "ws", report: { stats: ZERO_STATS, meta: {}, warnings: [] } }),
+    );
+    const { tabsStore } = fakeTabsStore();
+    const createTab = vi.fn(async (): Promise<CreateTabResult> => ({ ok: true, tabId: "tab-1", workspace: "ws" }));
+    const onOpened = vi.fn();
+
+    await performImportAndOpen({ rolloutImport }, { createTab, tabsStore }, { profileId: "p", fileName: "f", model: "m" }, onOpened);
+
+    expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("never fires onOpened when the import itself is refused", async () => {
+    const rolloutImport = vi.fn(async (): Promise<CodexRolloutImportResult> => ({ ok: false, reason: "too_large" }));
+    const { tabsStore } = fakeTabsStore();
+    const createTab = vi.fn(async (): Promise<CreateTabResult> => ({ ok: true, tabId: "should-not-happen", workspace: "x" }));
+    const onOpened = vi.fn();
+
+    await performImportAndOpen({ rolloutImport }, { createTab, tabsStore }, { profileId: "p", fileName: "f", model: "m" }, onOpened);
+
+    expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("never fires onOpened when the import succeeds but the resume/open fails (the user must still see the error, staying in Settings)", async () => {
+    const rolloutImport = vi.fn(
+      async (): Promise<CodexRolloutImportResult> => ({ ok: true, sessionId: "session-1", workspace: "ws", report: { stats: ZERO_STATS, meta: {}, warnings: [] } }),
+    );
+    const { tabsStore } = fakeTabsStore();
+    const createTab = vi.fn(async (): Promise<CreateTabResult> => ({ ok: false, reason: "max_tabs" }));
+    const onOpened = vi.fn();
+
+    await performImportAndOpen({ rolloutImport }, { createTab, tabsStore }, { profileId: "p", fileName: "f", model: "m" }, onOpened);
+
+    expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("an already-open session (focus, not add) still carries a notice — openMessage stays non-null, so onOpened does NOT fire", async () => {
+    const rolloutImport = vi.fn(
+      async (): Promise<CodexRolloutImportResult> => ({ ok: true, sessionId: "session-1", workspace: "ws", report: { stats: ZERO_STATS, meta: {}, warnings: [] } }),
+    );
+    const { tabsStore } = fakeTabsStore();
+    const createTab = vi.fn(async (): Promise<CreateTabResult> => ({ ok: false, reason: "already_open", focusTabId: "tab-existing" }));
+    const onOpened = vi.fn();
+
+    const outcome = await performImportAndOpen({ rolloutImport }, { createTab, tabsStore }, { profileId: "p", fileName: "f", model: "m" }, onOpened);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.ok && outcome.openMessage).not.toBeNull();
+    expect(onOpened).not.toHaveBeenCalled();
   });
 });
