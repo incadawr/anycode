@@ -196,14 +196,26 @@ function lastCheckOf(snapshot: CodexOnboardingSnapshot): { status: CodexDoctorRe
 }
 
 /**
- * Builds the exclusive controller: `recheck`/`pickBinary`/an in-flight
- * `loginStart` all share ONE `inFlight` slot so this module never spawns two
- * doctor/login children concurrently from itself (each already has its own
- * bounded, zero-orphan teardown — this is about not doing needless
- * concurrent work, not a correctness requirement of the child lifecycle).
- * Exported (not just `registerCodexIpc`) so main/codex-ipc.test.ts can drive
- * the handlers directly, off a fake deps bag, the same shape as every other
- * `main/*-ipc.ts` sibling in this codebase.
+ * The coalescence key for a `recheck()` aimed at the ACTIVE profile (no
+ * `profileId`). A reserved token OUTSIDE the profile-id charset (`:` is not a
+ * legal id char) and never equal to `system`, so an active-profile recheck
+ * coalesces ONLY with another active-profile recheck — never with a recheck,
+ * pick, or login keyed by a concrete profile id (the S3-2 misattribution:
+ * `recheck(undefined)` adopting an in-flight `recheck("A")`'s report).
+ */
+const ACTIVE_PROFILE_KEY = "recheck:active";
+
+/**
+ * Builds the exclusive controller: `recheck`/`pickBinary`/`loginStart` funnel
+ * through `runExclusive`, which COALESCES work sharing one profile key and
+ * SERIALIZES work across different keys behind a single tail promise — so the
+ * module never spawns two doctor/login children at once from itself, and never
+ * hands a caller a snapshot diagnosed against a DIFFERENT profile than it asked
+ * for (each child already owns its bounded, zero-orphan teardown; the single-
+ * child rule avoids needless concurrent work, the per-key coalescence is the
+ * S3-2 correctness fix). Exported (not just `registerCodexIpc`) so
+ * main/codex-ipc.test.ts can drive the handlers directly, off a fake deps bag,
+ * the same shape as every other `main/*-ipc.ts` sibling in this codebase.
  */
 export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboardingController {
   const runDoctor = deps.runDoctor ?? runCodexDoctor;
@@ -234,7 +246,20 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           })
       : undefined;
-  let inFlight: Promise<CodexOnboardingSnapshot> | null = null;
+  /**
+   * Per-profile-key coalescence map (S3-2): a key already present shares its
+   * one in-flight/queued run; a NEW key does not — so an argless active-profile
+   * recheck never adopts a concrete profile's report. Entry lives from the
+   * moment a run is queued until it settles.
+   */
+  const inFlightByKey = new Map<string, Promise<CodexOnboardingSnapshot>>();
+  /**
+   * Serialization tail: a different key queues its run BEHIND this promise, so
+   * the module still spawns at most one doctor/login child at a time (the
+   * single-child invariant from runExclusive's header) — different keys run one
+   * after another, never in parallel.
+   */
+  let inFlightTail: Promise<unknown> = Promise.resolve();
   let activeLoginAbort: AbortController | null = null;
   /** Aborted once, at quit: every doctor run started by this controller carries this signal. */
   const lifetime = new AbortController();
@@ -257,14 +282,19 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     return promise;
   }
 
-  function runExclusive(fn: () => Promise<CodexOnboardingSnapshot>): Promise<CodexOnboardingSnapshot> {
-    if (inFlight !== null) {
-      return inFlight;
+  function runExclusive(key: string, fn: () => Promise<CodexOnboardingSnapshot>): Promise<CodexOnboardingSnapshot> {
+    const coalesced = inFlightByKey.get(key);
+    if (coalesced !== undefined) {
+      return coalesced;
     }
-    const promise = fn().finally(() => {
-      inFlight = null;
+    // Different key ⇒ chain behind the tail (one child at a time). `then(fn, fn)`
+    // runs regardless of how the prior run settled, so a rejection never stalls
+    // the queue; the returned promise still reflects THIS run's own outcome.
+    const promise = inFlightTail.then(fn, fn).finally(() => {
+      inFlightByKey.delete(key);
     });
-    inFlight = promise;
+    inFlightByKey.set(key, promise);
+    inFlightTail = promise;
     return track(promise);
   }
 
@@ -383,14 +413,18 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
   return {
     recheck: (profileId?: string): Promise<CodexOnboardingSnapshot> =>
-      shuttingDown ? Promise.resolve(shutdownSnapshot()) : runExclusive(() => discoverAndCheck(profileId)),
+      shuttingDown
+        ? Promise.resolve(shutdownSnapshot())
+        : runExclusive(profileId ?? ACTIVE_PROFILE_KEY, () => discoverAndCheck(profileId)),
 
     async pickBinary(): Promise<CodexPickBinaryResult> {
       if (shuttingDown) {
         return { ok: false, reason: "cancelled" };
       }
-      if (inFlight !== null) {
-        await inFlight; // let a concurrent recheck/login settle before opening a picker on top of it
+      if (inFlightByKey.size > 0) {
+        // Let any concurrent recheck/login (across every profile key) settle
+        // before opening a picker on top of it — its rejection is not ours.
+        await inFlightTail.catch(() => {});
       }
       const picked = await deps.dialog.showOpenDialog({ properties: ["openFile"] });
       // A picker can sit open across the whole quit: re-read the gate on the far
@@ -413,12 +447,12 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       // (the binary verdict is profile-independent — cut §4.2 rows 1-3).
       const resolution = await resolveProfile(undefined);
       const profile = resolution.ok ? resolution.profile : SYSTEM_CODEX_PROFILE;
-      const snapshot = await runExclusive(() => checkPath(confirmedPath, "picker", profile));
+      const snapshot = await runExclusive(profile.id, () => checkPath(confirmedPath, "picker", profile));
       return { ok: true, snapshot };
     },
 
     async loginStart(profileId?: string): Promise<CodexLoginStartResult> {
-      if (shuttingDown || inFlight !== null || activeLoginAbort !== null) {
+      if (shuttingDown || inFlightByKey.size > 0 || activeLoginAbort !== null) {
         return { ok: false, reason: "busy" };
       }
       // The lock is claimed HERE, synchronously, before the function's first
@@ -484,7 +518,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         // success flag for account/version state) — one source of truth for
         // "is Codex ready", the same doctor every other path uses. Same
         // profile as the login, so the fresh verdict lands in ITS cache slot.
-        const snapshot = await runExclusive(() => checkPath(binaryPath, discovery.source, profile));
+        const snapshot = await runExclusive(profile.id, () => checkPath(binaryPath, discovery.source, profile));
         return { ok: true, snapshot };
       } finally {
         activeLoginAbort = null;

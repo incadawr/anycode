@@ -120,6 +120,61 @@ describe("createCodexOnboardingController.recheck", () => {
     const snapshot = await controller.recheck();
     expect(snapshot.report.status).toBe("ready");
   });
+
+  // S3-2 red-proof: `runExclusive` must coalesce ONLY within the same profile
+  // key. A held `recheck("a")` must not swallow a concurrent `recheck(undefined)`
+  // (active = system) — the second call must run its OWN doctor and get its OWN
+  // (system) verdict, sequentially, not adopt profile a's in-flight report.
+  it("serializes a different-profile recheck instead of coalescing it onto the held profile's report (S3-2)", async () => {
+    const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    const invocations: string[] = [];
+    let inFlightNow = 0;
+    let maxConcurrent = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    // Echoes the profile it ran against (codexHome present ⇒ concrete profile;
+    // absent ⇒ the system pseudo-profile). Blocks on a shared gate so the FIRST
+    // run is provably still in flight when the concurrent second call arrives.
+    const runDoctor = vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : undefined;
+      invocations.push(id ?? "system");
+      inFlightNow++;
+      maxConcurrent = Math.max(maxConcurrent, inFlightNow);
+      await gate;
+      inFlightNow--;
+      const status: CodexDoctorReport["status"] = id === undefined ? "signed_out" : "ready";
+      return {
+        status,
+        version: "0.144.3",
+        ...(status === "ready" ? { account: { type: "chatgpt", plan: "plus" }, models: [] } : {}),
+        ...(id !== undefined ? { profileId: id } : {}),
+      };
+    });
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "a" })).ok).toBe(true); // id "a"; active stays system
+
+    const held = controller.recheck("a"); // doctor #1 (profile a), blocks on the gate
+    while (runDoctor.mock.calls.length < 1) await tick();
+    const concurrent = controller.recheck(undefined); // active = system, a DIFFERENT key
+    await tick();
+    await tick();
+    // Serialized behind the held run: the active-profile recheck has NOT spawned
+    // its own doctor yet (one child at a time).
+    expect(runDoctor.mock.calls.length).toBe(1);
+
+    release();
+    const aSnap = await held;
+    const sysSnap = await concurrent;
+
+    expect(aSnap.report.profileId).toBe("a");
+    // The discriminant: the active-profile recheck returns ITS OWN system verdict
+    // (no profileId, signed_out), NOT profile a's — and a second doctor really ran.
+    expect(sysSnap.report.profileId).toBeUndefined();
+    expect(sysSnap.report.status).toBe("signed_out");
+    expect(invocations).toEqual(["a", "system"]);
+    expect(maxConcurrent).toBe(1); // never two doctor children at once
+  });
 });
 
 describe("createCodexOnboardingController.pickBinary", () => {
