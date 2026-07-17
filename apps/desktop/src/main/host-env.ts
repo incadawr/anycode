@@ -324,6 +324,27 @@ export function applySubagentsHomeOverride(env: NodeJS.ProcessEnv, override: str
   }
 }
 
+/**
+ * Injects (or clears) the dev/automation-only `ANYCODE_CODEX_PROFILES_HOME`
+ * override into a host fork's env (codex-profiles W4-F0b, Fable ruling
+ * iter-10). Sibling of `applySubagentsHomeOverride` above — duplicated on
+ * purpose, NOT generalized. The delete branch is the structural guarantee the
+ * host's trust rests on: `buildHostEnv` starts from a spread of the bootEnv
+ * snapshot, so a raw ambient value from the owner's shell would otherwise
+ * ride into the host fork ungated. `override === null` (gate refused / var
+ * absent) deletes it — the byte-for-byte packaged-production path; a non-null
+ * override sets main's already-vetted value so the host-side defense-in-depth
+ * reader (`resolveCodexProfilesHomeOverride`, host/engines/codex/codex-home.ts)
+ * can see it.
+ */
+export function applyCodexProfilesHomeOverride(env: NodeJS.ProcessEnv, override: string | null): void {
+  if (override === null) {
+    delete env.ANYCODE_CODEX_PROFILES_HOME;
+  } else {
+    env.ANYCODE_CODEX_PROFILES_HOME = override;
+  }
+}
+
 
 
 /** Reads a secret value from the vault (decrypt); undefined = unset/undecryptable. */

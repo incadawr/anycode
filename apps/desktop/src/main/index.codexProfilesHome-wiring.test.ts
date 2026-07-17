@@ -46,11 +46,12 @@ const CODEX_ROLLOUT_LIST_CHANNEL = "anycode:codex-rollout-list";
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
-const { ipcHandlers, mockIsPackaged, fakeHomeRef, manifestCalls } = vi.hoisted(() => ({
+const { ipcHandlers, mockIsPackaged, fakeHomeRef, manifestCalls, hostEnvScrubCalls } = vi.hoisted(() => ({
   ipcHandlers: new Map<string, IpcHandler>(),
   mockIsPackaged: { current: false },
   fakeHomeRef: { current: "/tmp/anycode-fake-home-unset" },
   manifestCalls: [] as Array<{ cacheFile?: string; force?: boolean }>,
+  hostEnvScrubCalls: [] as Array<{ override: string | null; varAfter: string | undefined }>,
 }));
 
 /** Minimal fake BrowserWindow (index.appVersion-wiring.test.ts's shape). */
@@ -132,6 +133,25 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...real, homedir: () => fakeHomeRef.current };
 });
 
+// W4-F0b host-lever forward: a TRANSPARENT wrap around the real
+// `applyCodexProfilesHomeOverride` — the production scrub still runs; the
+// wrap only records what `buildHostEnvFor` (main/index.ts) passed it and
+// whether the var survived in the fork env AFTER the scrub. This binds the
+// main-scrub RED-proof to the ACTUAL buildHostEnvFor output, not just to the
+// host-env unit: dropping either the wiring line in buildHostEnvFor (zero
+// calls) or the delete branch in host-env.ts (varAfter carries the ambient
+// value) turns the tests below red.
+vi.mock("./host-env.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./host-env.js")>();
+  return {
+    ...real,
+    applyCodexProfilesHomeOverride: (env: NodeJS.ProcessEnv, override: string | null): void => {
+      real.applyCodexProfilesHomeOverride(env, override);
+      hostEnvScrubCalls.push({ override, varAfter: env.ANYCODE_CODEX_PROFILES_HOME });
+    },
+  };
+});
+
 // The boot-time recheck's doctor spawn is a real subprocess — inert-mocked
 // (discovery itself is fs-only and stays real); the profile registry this
 // file tests never routes through it.
@@ -188,6 +208,7 @@ async function bootAndCreateProfile(): Promise<void> {
 beforeEach(async () => {
   ipcHandlers.clear();
   manifestCalls.length = 0;
+  hostEnvScrubCalls.length = 0;
   mockIsPackaged.current = false;
   vi.resetModules();
   scratch = await mkdtemp(join(tmpdir(), "anycode-codex-home-wiring-"));
@@ -274,5 +295,58 @@ describe("main/index.ts — ANYCODE_CODEX_PROFILES_HOME wiring (W4-F0, S1-2)", (
     expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(true);
     expect(existsSync(join(profilesRoot(leverRoot), "profile-smoke"))).toBe(false);
     expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
+  });
+});
+
+describe("main/index.ts — host fork env forward of the lever (W4-F0b, Fable ruling iter-10)", () => {
+  it("forwards the vetted lever into the host fork env when the double gate is satisfied", async () => {
+    process.env.ANYCODE_AUTOMATION = "1";
+    process.env.ANYCODE_SETTINGS_PATH = join(scratch, "settings.json");
+    process.env.ANYCODE_SECRETS_PATH = join(scratch, "secrets.json");
+
+    await import("./index.js");
+    await waitForHandler(CODEX_PROFILE_CREATE_CHANNEL);
+
+    // refreshProviderState (and with it buildHostEnvFor) is awaited BEFORE the
+    // codex registration site, so by now the scrub ran at least once.
+    expect(hostEnvScrubCalls.length).toBeGreaterThan(0);
+    for (const call of hostEnvScrubCalls) {
+      expect(call.override).toBe(leverRoot);
+      expect(call.varAfter).toBe(leverRoot);
+    }
+  });
+
+  it("RED-proof (main-scrub): an ambient lever with the gate refused is structurally DELETED from the buildHostEnvFor output", async () => {
+    // The ambient var IS in process.env (beforeEach) and therefore in the
+    // bootEnv snapshot buildHostEnv spreads — but automation is off, so the
+    // gate yields null and the delete branch must strip it from the fork env.
+    delete process.env.ANYCODE_AUTOMATION;
+    delete process.env.ANYCODE_SETTINGS_PATH;
+    delete process.env.ANYCODE_SECRETS_PATH;
+
+    await import("./index.js");
+    await waitForHandler(CODEX_PROFILE_CREATE_CHANNEL);
+
+    expect(hostEnvScrubCalls.length).toBeGreaterThan(0);
+    for (const call of hostEnvScrubCalls) {
+      expect(call.override).toBeNull();
+      expect(call.varAfter).toBeUndefined();
+    }
+  });
+
+  it("RED-proof (main-scrub): a PACKAGED build refuses the gate and strips the ambient lever the same way", async () => {
+    mockIsPackaged.current = true;
+    process.env.ANYCODE_AUTOMATION = "1";
+    delete process.env.ANYCODE_SETTINGS_PATH;
+    delete process.env.ANYCODE_SECRETS_PATH;
+
+    await import("./index.js");
+    await waitForHandler(CODEX_PROFILE_CREATE_CHANNEL);
+
+    expect(hostEnvScrubCalls.length).toBeGreaterThan(0);
+    for (const call of hostEnvScrubCalls) {
+      expect(call.override).toBeNull();
+      expect(call.varAfter).toBeUndefined();
+    }
   });
 });
