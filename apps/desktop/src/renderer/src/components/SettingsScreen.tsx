@@ -81,6 +81,14 @@ import type {
   SettingsSnapshot,
 } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
+import type {
+  CustomProviderCreateRequest,
+  CustomProviderMutationReason,
+  CustomProviderMutationResult,
+  CustomProviderUpdateRequest,
+  FetchModelsFailureReason,
+  FetchModelsOutcome,
+} from "../anycode-window.js";
 import type { WireEnvStatus, WireRepoMapStatus } from "../../../shared/protocol.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { applyThemePreference } from "../theme.js";
@@ -314,60 +322,16 @@ export function transportOptions(selectedEntry: CatalogSummaryEntry | undefined)
 // `CustomProviderBridge`'s request/result shapes mirror main/provider-ipc.ts's
 // handle* functions structurally (that module owns the actual CRUD/fetch
 // logic + the URL/redirect/body-cap threat model; this file only renders and
-// never re-implements any of it). The bridge itself is not yet in
-// `window.anycode` (anycode-window.d.ts + preload/index.ts are a DIFFERENT
-// lane's files — see the handoff report) — `customProviderBridge()` below
-// reaches for it with an explicit, narrow cast rather than widening the
-// frozen ambient `Window.anycode` type from this file.
+// never re-implements any of it). The request/result/reason types are
+// imported from the frozen ambient `anycode-window.d.ts` (already the single
+// declared shape of `window.anycode.customProvider` — preload/index.ts mirrors
+// the same shapes by contract, per that file's own header), and
+// `CustomProviderBridge` below is a structural alias of the ambient bridge
+// itself rather than a hand-copied interface — either kind of drift between
+// this file and the ambient type now fails typecheck instead of compiling
+// silently past a stale local copy.
 
-export type CustomProviderMutationReason =
-  | "invalid"
-  | "read_only"
-  | "not_found"
-  | "needs_api_key"
-  | "weak_storage_needs_consent";
-export type CustomProviderMutationResult =
-  | { ok: true; providers: CustomProviderRecord[] }
-  | { ok: false; reason: CustomProviderMutationReason };
-
-export type FetchModelsFailureReason =
-  | "invalid_request"
-  | "invalid_url"
-  | "redirect_blocked"
-  | "http_error"
-  | "response_too_large"
-  | "timeout"
-  | "network_error"
-  | "invalid_response";
-
-export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
-
-export interface CustomProviderCreateRequest {
-  name: string;
-  baseUrl: string;
-  kind: CustomProviderRecord["kind"];
-  apiKey: string;
-  models?: string[];
-}
-
-export interface CustomProviderUpdateRequest {
-  id: string;
-  name?: string;
-  baseUrl?: string;
-  kind?: CustomProviderRecord["kind"];
-  apiKey?: string;
-  models?: string[];
-}
-
-/** The bridge surface this section drives (structural — tests inject a fake, mirrors `SettingsBridge`). */
-export interface CustomProviderBridge {
-  create(req: CustomProviderCreateRequest): Promise<CustomProviderMutationResult>;
-  update(req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult>;
-  delete(req: { id: string }): Promise<CustomProviderMutationResult>;
-  fetchModels(
-    req: { id: string } | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
-  ): Promise<FetchModelsOutcome>;
-}
+export type CustomProviderBridge = Window["anycode"]["customProvider"];
 
 const CUSTOM_PROVIDER_KIND_LABEL: Record<CustomProviderRecord["kind"], string> = {
   "openai-compatible": "OpenAI-compatible (Chat Completions)",
@@ -659,14 +623,12 @@ export function resolveReplaceKeyAction(
 
 /**
  * Reaches for `window.anycode.customProvider` (owner-decision #6, cut §9.2,
- * TASK.54) — not yet part of the frozen ambient `Window.anycode` type
- * (anycode-window.d.ts + preload/index.ts belong to a different lane, see the
- * handoff report), so this is an explicit, narrow, LAZILY-evaluated cast
- * (never touched at module load, same discipline `settings-store.ts`'s
- * `realBridge()` uses) rather than widening that frozen type from here.
+ * TASK.54) — already part of the frozen ambient `Window.anycode` type
+ * (anycode-window.d.ts), so no cast is needed; resolved LAZILY (never touched
+ * at module load), same discipline `settings-store.ts`'s `realBridge()` uses.
  */
 function customProviderBridge(): CustomProviderBridge {
-  return (window as unknown as { anycode: { customProvider: CustomProviderBridge } }).anycode.customProvider;
+  return window.anycode.customProvider;
 }
 
 export interface CustomProvidersSectionProps {
@@ -837,7 +799,15 @@ function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: Cust
               placeholder="https://api.example.com"
               value={baseUrl}
               disabled={busy}
-              onChange={(e) => setBaseUrl(e.target.value)}
+              onChange={(e) => {
+                // A previously fetched model list belongs to the endpoint
+                // that was live when Fetch ran — changing the address
+                // invalidates it, otherwise Save could persist a curated
+                // models[] against a different endpoint's URL.
+                setBaseUrl(e.target.value);
+                setFetchedModels(null);
+                setSelectedModels([]);
+              }}
             />
           </label>
           <label className="settings-field">
@@ -846,7 +816,11 @@ function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: Cust
               className="settings-field-select"
               value={kind}
               disabled={busy}
-              onChange={(e) => setKind(e.target.value as CustomProviderRecord["kind"])}
+              onChange={(e) => {
+                setKind(e.target.value as CustomProviderRecord["kind"]);
+                setFetchedModels(null);
+                setSelectedModels([]);
+              }}
             >
               <option value="openai-compatible">{customProviderKindLabel("openai-compatible")}</option>
               <option value="openai">{customProviderKindLabel("openai")}</option>
