@@ -471,13 +471,26 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
   const fetchModels = deps.fetchModels ?? fetchCustomProviderModels;
   if ("id" in parsed.data) {
     const { id } = parsed.data;
-    const loaded = await loadSettings(deps.settingsPath, deps.logger);
-    const record = (loaded.settings.provider.custom ?? []).find((p) => p.id === id);
-    if (record === undefined) {
+    // W4-R1-L1: resolve the saved record's (baseUrl, key, kind) atomically under
+    // the SAME settings lock every custom-provider mutation holds, so a
+    // concurrent cross-origin key rotation (custom-provider-update: setSecret →
+    // saveSettings) can never interleave and hand this read the NEW key paired
+    // with the OLD baseUrl — which would POST the freshly-rotated key to the
+    // origin the user just migrated away from. The network fetch itself runs
+    // OUTSIDE the lock (the settings lock is never held across a network call).
+    const resolved = await withSettingsFileLock(deps.settingsPath, async () => {
+      const loaded = await loadSettings(deps.settingsPath, deps.logger);
+      const record = (loaded.settings.provider.custom ?? []).find((p) => p.id === id);
+      if (record === undefined) {
+        return undefined;
+      }
+      const apiKey = await deps.vault.getSecretValue(customProviderSecretKey(record.id));
+      return { baseUrl: record.baseUrl, apiKey, kind: record.kind };
+    });
+    if (resolved === undefined) {
       return { ok: false, reason: "invalid_request" };
     }
-    const apiKey = await deps.vault.getSecretValue(customProviderSecretKey(record.id));
-    return fetchModels({ baseUrl: record.baseUrl, apiKey, kind: record.kind });
+    return fetchModels(resolved);
   }
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }

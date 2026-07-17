@@ -25,7 +25,7 @@
  * profile, exactly like index.appVersion-wiring.test.ts (see that file for
  * why main/index.ts can only ever be exercised this way).
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -188,6 +188,7 @@ beforeEach(async () => {
   // Ungated main/index.ts lever straight off ANYCODE_DB_PATH — `:memory:` keeps
   // persistence.listSessions()/the worktree janitor pass instant and inert.
   process.env.ANYCODE_DB_PATH = ":memory:";
+  delete process.env.ANYCODE_API_KEY;
   delete process.env.ANYCODE_USER_DATA_DIR;
   delete process.env.ANYCODE_WORKSPACE;
   delete process.env.ANYCODE_RESUME;
@@ -204,6 +205,7 @@ afterEach(async () => {
   delete process.env.ANYCODE_SETTINGS_PATH;
   delete process.env.ANYCODE_SECRETS_PATH;
   delete process.env.ANYCODE_DB_PATH;
+  delete process.env.ANYCODE_API_KEY;
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -246,6 +248,44 @@ describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
     if (!tabResult.ok) {
       // Only reached on failure — surfaces WHICH refusal reason regressed.
       expect((tabResult as { reason: string }).reason).not.toBe("not_ready");
+    }
+  });
+
+  it("W4-R3-1: a dangling custom:* connection (record deleted, credential orphaned) is fail-closed — tab-create refuses not_ready", async () => {
+    // Pre-seed a settings.json whose ACTIVE connection names a custom:* provider
+    // whose RECORD is gone (deleted via the generic settings-patch channel, which
+    // skips handleCustomProviderDelete's clear-first ordering). ANYCODE_API_KEY
+    // stands in for the orphaned credential the R3-1 finding calls out — it
+    // short-circuits apiKeyReady in the boot snapshot exactly as a leftover vault
+    // key would. NO transport is selected (env + connection both leave it unset),
+    // so before the fix selectedTransportInfo fell through to the generic branch
+    // with supportedTransports=undefined, computeProviderReady SKIPPED its
+    // transport guard, and providerReady was wrongly true — tab-create spawned a
+    // fork buildHostEnv can no longer supply a baseUrl or key for.
+    await writeFile(
+      join(dir, "settings.json"),
+      JSON.stringify({
+        version: 2,
+        provider: {
+          connections: [{ id: "conn-1", providerId: "custom:gone", model: "m" }],
+          activeConnectionId: "conn-1",
+          custom: [],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+    process.env.ANYCODE_API_KEY = "sk-orphan-env";
+
+    await import("./index.js");
+    const handleTabCreate = await waitForHandler(TAB_CREATE_CHANNEL);
+    const tabResult = (await handleTabCreate({}, { kind: "new", workspace: dir })) as CreateTabResult;
+
+    expect(tabResult.ok).toBe(false);
+    if (!tabResult.ok) {
+      expect((tabResult as { reason: string }).reason).toBe("not_ready");
     }
   });
 });

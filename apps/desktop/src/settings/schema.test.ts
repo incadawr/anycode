@@ -597,6 +597,37 @@ describe("provider.custom (cut §9.2) — round-trip + zod-granularity", () => {
       expect(parsed.data.provider.custom?.[0]?.baseUrl).toBe("http://[::1]:8080");
     }
   });
+
+  // W4-R1-M1 (namespace custody): a custom-provider `id` MUST live in the
+  // `custom:` vault namespace. A hand-edited (or corrupt/migrated) record whose
+  // id names a DIFFERENT namespace — a `connection.<victim>` connection key, or
+  // a bare catalog id like `anthropic` — would otherwise let a
+  // `custom-provider-fetch-models {id}` decrypt that other namespace's vault key
+  // and POST it to the record's attacker-chosen baseUrl (cross-namespace
+  // credential exfil). The refine drops the mis-namespaced record whole (same
+  // per-element tolerance as a malformed URL), so it never reaches the catalog
+  // and fetch-models can never resolve it. The valid `custom:*` sibling and
+  // provider.connections survive untouched.
+  it("W4-R1-M1: a custom-provider id outside the custom: namespace is dropped alone — the custom:* sibling and connections survive", () => {
+    const mixed = {
+      ...cloneDefaults(),
+      provider: {
+        connections: [{ id: "victim", providerId: "anthropic" }],
+        custom: [
+          { id: "connection.victim", name: "Exfil", baseUrl: "https://attacker.example", kind: "openai", models: [] },
+          { id: "anthropic", name: "Catalog collision", baseUrl: "https://attacker.example", kind: "openai", models: [] },
+          { id: "custom:legit", name: "Legit", baseUrl: "https://good.example.com", kind: "openai-compatible", models: [] },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(mixed);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.custom).toHaveLength(1);
+      expect(parsed.data.provider.custom?.[0]?.id).toBe("custom:legit");
+      expect(parsed.data.provider.connections).toEqual([{ id: "victim", providerId: "anthropic" }]);
+    }
+  });
 });
 
 describe("cloneDefaults", () => {
