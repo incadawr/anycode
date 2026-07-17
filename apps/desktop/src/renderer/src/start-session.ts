@@ -89,16 +89,20 @@ export async function submitStartDraft(
     return { ok: false, message: "Failed to create the task." };
   }
   let createdTabId: string | null = null;
-  const failure = handleCreateTabResult(result, {
-    onTabCreated: ({ tabId, workspace: tabWorkspace }) => {
-      createdTabId = tabId;
-      deps.tabsStore.getState().addTab({ tabId, workspace: tabWorkspace });
-      deps.tabsStore.getState().setActiveTab(tabId);
+  const failure = handleCreateTabResult(
+    result,
+    {
+      onTabCreated: ({ tabId, workspace: tabWorkspace }) => {
+        createdTabId = tabId;
+        deps.tabsStore.getState().addTab({ tabId, workspace: tabWorkspace });
+        deps.tabsStore.getState().setActiveTab(tabId);
+      },
+      onFocusTab: (tabId) => {
+        deps.tabsStore.getState().setActiveTab(tabId);
+      },
     },
-    onFocusTab: (tabId) => {
-      deps.tabsStore.getState().setActiveTab(tabId);
-    },
-  });
+    { engine },
+  );
 
   if (failure !== null || createdTabId === null) {
     return { ok: false, message: failure ?? "Failed to create the task." };

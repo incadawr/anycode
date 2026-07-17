@@ -131,8 +131,14 @@ export interface TabsState {
   setDraftMode(mode: PermissionMode): void;
   /** No-op while `draft === null`. Codex-only; a Core draft never calls this. */
   setDraftEnginePreset(presetId: string): void;
-  /** No-op while `draft === null`. Codex-only; a Core draft never calls this. */
-  setDraftCodexProfileId(profileId: string): void;
+  /**
+   * No-op while `draft === null`. Codex-only; a Core draft never calls this.
+   * `undefined` clears back to the `system` pseudo-profile (R3-2 facet i: the
+   * options-refresh effect calls this when the picked profile disappeared
+   * from a fresh catalog, mirroring `setDraftModel`'s `null`-clears
+   * convention).
+   */
+  setDraftCodexProfileId(profileId: string | undefined): void;
   /** Discards the draft entirely (Cancel affordance / successful submit). */
   discardDraft(): void;
   setSessionId(tabId: string, sessionId: string): void;

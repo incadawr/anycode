@@ -30,6 +30,31 @@ describe("describeCreateTabFailure", () => {
       expect(describeCreateTabFailure({ ok: false, reason }).length).toBeGreaterThan(0);
     }
   });
+
+  describe("not_ready, engine-parameterized (S1b-1)", () => {
+    const NOT_READY: CreateTabResult = { ok: false, reason: "not_ready" };
+    const CORE_COPY = "Configure a provider (API key + model) before opening a tab.";
+
+    it("omitted engine keeps the historical provider-config copy byte-identical (App.tsx/Sidebar.tsx/CodexRolloutImportDialog.tsx call sites, 0 wire-δ)", () => {
+      expect(describeCreateTabFailure(NOT_READY)).toBe(CORE_COPY);
+    });
+
+    it("engine:'core' keeps the same provider-config copy", () => {
+      expect(describeCreateTabFailure(NOT_READY, "core")).toBe(CORE_COPY);
+    });
+
+    it("engine:'codex' surfaces a sign-in-specific copy instead of the irrelevant provider-config copy", () => {
+      const codexCopy = describeCreateTabFailure(NOT_READY, "codex");
+      expect(codexCopy).not.toBe(CORE_COPY);
+      expect(codexCopy.toLowerCase()).toContain("sign in");
+      expect(codexCopy.toLowerCase()).toContain("codex");
+    });
+
+    it("engine parameterization only affects the not_ready branch — other reasons are unaffected by engine:'codex'", () => {
+      const result: CreateTabResult = { ok: false, reason: "max_tabs" };
+      expect(describeCreateTabFailure(result, "codex")).toBe(describeCreateTabFailure(result));
+    });
+  });
 });
 
 describe("resolveConnectionMissingAction (TASK.45 W10-FIX F1 re-pin affordance)", () => {
@@ -101,5 +126,28 @@ describe("handleCreateTabResult", () => {
     expect(onTabCreated).not.toHaveBeenCalled();
     expect(onFocusTab).not.toHaveBeenCalled();
     expect(notice).toBe(describeCreateTabFailure(result));
+  });
+
+  describe("extra.engine forwarding (S1b-1)", () => {
+    it("extra.engine:'codex' on a not_ready failure surfaces the codex-specific notice", () => {
+      const onTabCreated = vi.fn();
+      const onFocusTab = vi.fn();
+      const result: CreateTabResult = { ok: false, reason: "not_ready" };
+
+      const notice = handleCreateTabResult(result, { onTabCreated, onFocusTab }, { engine: "codex" });
+
+      expect(notice).toBe(describeCreateTabFailure(result, "codex"));
+      expect(notice).not.toBe(describeCreateTabFailure(result));
+    });
+
+    it("no extra.engine (start-session.ts's core submits, and every other pre-existing call site) keeps the historical provider-config notice", () => {
+      const onTabCreated = vi.fn();
+      const onFocusTab = vi.fn();
+      const result: CreateTabResult = { ok: false, reason: "not_ready" };
+
+      const notice = handleCreateTabResult(result, { onTabCreated, onFocusTab });
+
+      expect(notice).toBe(describeCreateTabFailure(result));
+    });
   });
 });
