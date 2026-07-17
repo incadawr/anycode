@@ -108,7 +108,7 @@ missing/bad token → `401`.
 | `POST /tabs/:tabId/permission` | `{behavior:"allow"\|"deny", requestId?}` | `{ok:true}` |
 | `POST /tabs/:tabId/mode` | `{mode}` | `{ok:true}` |
 | `POST /tabs/:tabId/stop` | `{}` | `{ok:true}` |
-| `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"}` — clicks the one-shot Try-again offer (TASK.33 W8) by calling `dispatchTryAgain` directly (a facade shortcut, NOT a DOM click — see the try-again-button probe/driver below for that); `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field |
+| `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"\|"not_ready"\|"images_unsupported"}` — clicks the one-shot Try-again offer (TASK.33 W8) by calling `dispatchTryAgain` directly (a facade shortcut, NOT a DOM click — see the try-again-button probe/driver below for that); `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field. `images_unsupported` (TASK.56 W3-FIX) is the entry gate refusing an image-bearing offer against the live model's `imageInput:false` verdict; the offer stays armed (still visible in `retryOffer`) and the store raises a `retry_blocked` notice |
 | `POST /tabs/:tabId/select` | `{}` | `{ok:true}` |
 | `POST /tabs/:tabId/close` | `{}` | `{ok:true}` |
 | `POST /tabs` | `{kind:"new", workspace}` | `{ok:true, tabId, sessionId, workspace}` (bypasses the native open dialog) |
@@ -550,7 +550,12 @@ is a normal reading, not an error — the block hasn't landed in the transcript
 yet, or carries no such button (no armed offer, or a different block).
 `{ok:false, reason:"not_present"}` from the click route covers both "no
 button there" and "more than one" — a caller wanting the "exactly one"
-guarantee asserts on the GET probe's `count` first.
+guarantee asserts on the GET probe's `count` first. `{ok:true}` from the
+click route means the click was DELIVERED, not that a retry was DISPATCHED
+(fable-task56-w3fix-codex-ruling.md finding 1): a delivered click can still
+be refused by `dispatchTryAgain`'s TASK.56 W3-FIX entry gate, in which case
+the outcome shows up in the store (`retryOffer` stays armed, a
+`retry_blocked` notice), not in this return value.
 
 | Method / path | Body | Returns |
 |---|---|---|

@@ -402,6 +402,16 @@ export type HostToUiMessage =
       sessionId: string;
       reasoningEffort?: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
+      /**
+       * TASK.56 W2: live image-input verdict for the CURRENT model (Session's
+       * `imageInputEnabled` closure over the active model). A MODEL-level fact,
+       * not an engine capability, so it rides beside the `engine` block rather
+       * than inside EngineCapabilitiesProjection (`engine.capabilities.
+       * supportsImages` stays the engine-level verdict). Additive + optional:
+       * absent (older host / no seam wired) means the renderer applies no
+       * model-level attachment gating — exactly the pre-TASK.56 behavior.
+       */
+      imageInput?: boolean;
       /** Present only for a non-core engine; absent retains legacy core wire exactly. */
       engine?: EnginePresentation;
       /** Present only alongside `engine` (never for core, cut §3.2/§2(f)); absent = every shell feature enabled. */
@@ -447,7 +457,17 @@ export type HostToUiMessage =
   // reasoning-capable (the UI then hides the effort segment). Emitted ONLY in
   // response to a `set_model` — no legacy/byte-locked flow sends one, so the
   // automation byte-snapshots stay untouched (design slice-P7.15-cut.md §2.5).
-  | { type: "model_changed"; model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
+  // `imageInput` (TASK.56 W2, additive + optional, precedent
+  // availableEffortLevels): the live image-input verdict re-read for the NEW
+  // model, so the renderer can re-gate attachments upfront on a mid-session
+  // vision -> non-vision switch. Absent (older host) = no model-level gating.
+  | {
+      type: "model_changed";
+      model: string;
+      reasoningEffort: ReasoningEffort;
+      availableEffortLevels?: ReasoningEffort[];
+      imageInput?: boolean;
+    }
   | { type: "mode_change_rejected"; reason: string }
   // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset` or a
   // `set_model` for an engine with native controls — trusted, no zod, precedent
