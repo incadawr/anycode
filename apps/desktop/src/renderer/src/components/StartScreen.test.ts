@@ -16,6 +16,7 @@ import {
   deriveCodexProfileOptions,
   deriveRecentWorkspaces,
   guardedSubmit,
+  isDraftCodexProfileIdStale,
   isSendKeydown,
   pickFolderForDraft,
   pickModelForDraft,
@@ -317,6 +318,29 @@ describe("computeCodexProfileChipLabel (codex-profiles cut §3.3/W3-F)", () => {
 
   it("falls back to 'System' for a picked id no longer in the catalog — never claims an account createStartTabRequest would not actually submit", () => {
     expect(computeCodexProfileChipLabel("removed-profile", profiles)).toBe("System");
+  });
+});
+
+describe("isDraftCodexProfileIdStale (R3-2 facet i: removed-profile desync)", () => {
+  const profiles = [
+    { id: "work", label: "Work", disabled: false },
+    { id: "personal", label: "Personal", disabled: true },
+  ];
+
+  it("never touched (undefined) is not stale", () => {
+    expect(isDraftCodexProfileIdStale(undefined, profiles)).toBe(false);
+  });
+
+  it("a picked id still present in the catalog is not stale", () => {
+    expect(isDraftCodexProfileIdStale("work", profiles)).toBe(false);
+  });
+
+  it("a picked id removed from the catalog IS stale — createStartTabRequest would still submit it while the chip shows 'System'", () => {
+    expect(isDraftCodexProfileIdStale("removed-profile", profiles)).toBe(true);
+  });
+
+  it("a picked id is stale against an empty catalog", () => {
+    expect(isDraftCodexProfileIdStale("work", [])).toBe(true);
   });
 });
 

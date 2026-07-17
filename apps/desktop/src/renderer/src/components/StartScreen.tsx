@@ -327,6 +327,26 @@ export function computeCodexProfileChipLabel(
 }
 
 /**
+ * Whether the draft's account-profile pick has fallen out of sync with a
+ * fresh profile catalog (R3-2 facet i): the profile the draft points at was
+ * deleted/renamed away while the draft stayed open. The chip already falls
+ * back to "System" for this case (`computeCodexProfileChipLabel` above), but
+ * `createStartTabRequest` (start-session.ts) still forwards the stale id
+ * verbatim (it has no catalog to check against) — the profile-catalog
+ * refresh effect below is the only place both the id and a fresh catalog are
+ * in scope at once, so it uses this to sanitize the draft back to `undefined`
+ * (the `system` pseudo-profile) the moment the desync is detected. Never
+ * touched (`undefined`) is not stale — there is nothing to resolve. Exported
+ * for unit testing.
+ */
+export function isDraftCodexProfileIdStale(
+  draftCodexProfileId: string | undefined,
+  profiles: readonly CodexProfileChipOption[],
+): boolean {
+  return draftCodexProfileId !== undefined && !profiles.some((profile) => profile.id === draftCodexProfileId);
+}
+
+/**
  * Projects main's `codex.listProfiles()` snapshot into the chip's option
  * list. `disabled` reads the CACHED `lastCheck`/live `report` status
  * (never triggers a fresh doctor check of its own — this chip is a picker,
@@ -540,7 +560,15 @@ export function StartScreen({ onToast }: StartScreenProps) {
         .listProfiles()
         .then((snapshot) => {
           if (!cancelled) {
-            setCodexProfileOptions(deriveCodexProfileOptions(snapshot.profiles));
+            const options = deriveCodexProfileOptions(snapshot.profiles);
+            setCodexProfileOptions(options);
+            // R3-2 facet i: the profile the draft points at may have just
+            // dropped out of this fresh catalog (deleted/renamed while the
+            // draft stayed open) — sanitize immediately so the chip's
+            // "System" fallback and the actual submit payload never diverge.
+            if (isDraftCodexProfileIdStale(useTabsStore.getState().draft?.codexProfileId, options)) {
+              useTabsStore.getState().setDraftCodexProfileId(undefined);
+            }
           }
         })
         .catch((error: unknown) => {
