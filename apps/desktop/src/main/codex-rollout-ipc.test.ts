@@ -198,6 +198,42 @@ describe("handleCodexRolloutImport", () => {
     expect(persistence.sessions.size).toBe(0);
   });
 
+  // ── title derivation (TASK.57: an imported session otherwise lands with no title at all) ──
+
+  it("derives a title from the imported conversation's first user message", async () => {
+    const sessionsDir = await tmp();
+    await seedRollout(sessionsDir, "2026/07/01/rollout-2026-07-01T00-00-00-title.jsonl", BASIC_RECORDS);
+    const persistence = new FakePersistence();
+    const deps = makeDeps(persistence, { p1: sessionsDir });
+
+    const result = await handleCodexRolloutImport(deps, {
+      profileId: "p1",
+      fileName: "2026/07/01/rollout-2026-07-01T00-00-00-title.jsonl",
+      model: "claude-sonnet-5",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const session = persistence.sessions.get(result.sessionId);
+    expect(session?.title).toBe("hello there");
+  });
+
+  it("leaves the title unset when the rollout carries no user message at all", async () => {
+    const sessionsDir = await tmp();
+    await seedRollout(sessionsDir, "2026/07/01/rollout-no-user.jsonl", [
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp/project-a" } },
+      { timestamp: "2026-07-01T00:00:02.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "hi!" }] } },
+    ]);
+    const persistence = new FakePersistence();
+    const deps = makeDeps(persistence, { p1: sessionsDir });
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: "2026/07/01/rollout-no-user.jsonl", model: "claude-sonnet-5" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const session = persistence.sessions.get(result.sessionId);
+    expect(session).toBeDefined();
+    expect("title" in (session ?? {})).toBe(false);
+  });
+
   it("still rejects an unknown profileId as profile_not_found even with a valid model", async () => {
     const persistence = new FakePersistence();
     const deps = makeDeps(persistence, {});

@@ -1250,6 +1250,22 @@ void app.whenReady().then(async () => {
     peekPendingImportModel: (sessionId) => peekImportModel?.(sessionId),
     resolveResumePin,
     resolveCodexProfile: resolveCodexProfileForTab,
+    // TASK.64: the boot-time Codex recheck is fire-and-forget, so a session
+    // clicked before its first doctor snapshot lands (or pinned to a profile
+    // nobody diagnosed since boot) would read the fail-closed default as "not
+    // configured". The gate splits that UNKNOWN from a KNOWN not-ready and
+    // awaits the first verdict instead of falsely refusing. Core readiness is
+    // settled at boot before IPC registers, so it is always known here.
+    engineReadyKnown: (engine, codexProfileId) =>
+      engine === "core" ? true : engine === "codex" && (codexOnboarding?.hasVerdictFor(codexProfileId) ?? false),
+    hydrateEngineReady: async (engine, codexProfileId) => {
+      if (engine === "codex" && codexOnboarding !== null) {
+        // An argless recheck coalesces onto the in-flight boot run (same
+        // active-profile key); an explicit profile id queues its own doctor
+        // behind it — at most one extra run, only inside the boot window.
+        await codexOnboarding.recheck(codexProfileId);
+      }
+    },
     validateWorktreeResume: async (meta) => {
       if (meta.worktree === undefined || meta.projectRoot === undefined) return false;
       try {
@@ -1343,6 +1359,15 @@ void app.whenReady().then(async () => {
     vault,
     settingsPath,
     logger: fileLogger,
+    // Connection-scoped fetch-models resolution (structural, same discipline
+    // as settingsIpcDeps' catalog injection): only id/baseUrl/defaultTransport
+    // ever cross this seam.
+    catalogEntryById: (id) => {
+      const entry = findCatalogEntry(id);
+      return entry === undefined
+        ? undefined
+        : { id: entry.id, baseUrl: entry.baseUrl, defaultTransport: entry.defaultTransport };
+    },
     onMutation: async (fresh) => {
       settings = fresh;
       settingsIpcDeps.catalogIds = catalogIdsFor(fresh);

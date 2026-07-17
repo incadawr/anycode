@@ -209,7 +209,10 @@ export interface CustomProviderCreateRequest {
   name: string;
   baseUrl: string;
   kind: CustomProviderRecord["kind"];
-  apiKey: string;
+  // TASK.58: optional — a keyless local endpoint sets `authOptional: true`
+  // instead. A non-empty key is authoritative (see main/provider-ipc.ts).
+  apiKey?: string;
+  authOptional?: boolean;
   models?: string[];
 }
 
@@ -219,6 +222,7 @@ export interface CustomProviderUpdateRequest {
   baseUrl?: string;
   kind?: CustomProviderRecord["kind"];
   apiKey?: string;
+  authOptional?: boolean;
   models?: string[];
 }
 
@@ -308,7 +312,10 @@ declare global {
         update(req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult>;
         delete(req: { id: string }): Promise<CustomProviderMutationResult>;
         fetchModels(
-          req: { id: string } | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
+          req:
+            | { id: string }
+            | { connectionId: string }
+            | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
         ): Promise<FetchModelsOutcome>;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config

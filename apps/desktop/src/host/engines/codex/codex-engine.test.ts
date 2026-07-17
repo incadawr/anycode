@@ -204,6 +204,7 @@ class FakeAppServer implements CodexClient {
           description: "Latest frontier agentic coding model.",
           hidden: false,
           isDefault: true,
+          inputModalities: ["text", "image"],
           defaultReasoningEffort: "medium",
           supportedReasoningEfforts: [
             { reasoningEffort: "low", description: "…" },
@@ -221,6 +222,7 @@ class FakeAppServer implements CodexClient {
           displayName: "GPT-5.4-Mini",
           hidden: false,
           isDefault: false,
+          inputModalities: ["text"],
           defaultReasoningEffort: "medium",
           supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "…" }],
         },
@@ -512,6 +514,37 @@ describe("CodexEngine — turn projection", () => {
     expect(engine.historyItems()).toEqual([]);
   });
 
+  it("sends validated attachments as native image data URLs beside the text input", async () => {
+    const server = new FakeAppServer();
+    const engine = new CodexEngine(server, THREAD);
+    const turn = (async () => {
+      for await (const _event of engine.runTurn("describe it", {
+        signal: new AbortController().signal,
+        attachments: [
+          { mediaType: "image/png", data: "UE5H" },
+          { mediaType: "image/webp", data: "V0VCUA==" },
+        ],
+      })) {
+        // Drain the turn exactly as Session does.
+      }
+    })();
+    await tick();
+    server.completeTurn("completed");
+    await turn;
+
+    expect(server.calls[0]).toEqual({
+      method: "turn/start",
+      params: {
+        threadId: THREAD,
+        input: [
+          { type: "text", text: "describe it" },
+          { type: "image", url: "data:image/png;base64,UE5H" },
+          { type: "image", url: "data:image/webp;base64,V0VCUA==" },
+        ],
+      },
+    });
+  });
+
   it("ignores between-turn chatter instead of counting it toward the pre-turn limit", async () => {
     const server = new FakeAppServer();
     server.turnStartMode = "deferred";
@@ -592,6 +625,29 @@ describe("CodexEngine — capabilities (C-bug-1, cut §5.2)", () => {
     // popover render a skeleton it can never fill (cut §5.2.2 keeps it false).
     expect(engine.capabilities.supportsContextBreakdown).toBe(false);
     expect(engine.capabilities.costAccounting).toBe(false);
+  });
+
+  it("advertises image infrastructure but gates it by the selected native model", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.6-sol",
+      origin: "draft",
+    });
+
+    expect(engine.capabilities.supportsImages).toBe(true);
+    expect(engine.imageInputEnabled()).toBe(true);
+    expect(engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true });
+    expect(engine.imageInputEnabled()).toBe(false);
+
+    const events: AgentEvent[] = [];
+    for await (const event of engine.runTurn("look", {
+      signal: new AbortController().signal,
+      attachments: [{ mediaType: "image/png", data: "UE5H" }],
+    })) {
+      events.push(event);
+    }
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(server.calls.filter((call) => call.method === "turn/start")).toHaveLength(0);
   });
 });
 
@@ -1169,7 +1225,7 @@ describe("TASK.39 — model catalog + initial values", () => {
     // DoD-2: the value shown/persisted is the one the SERVER confirmed, not the ask.
     expect(connected.model).toBe("gpt-5.4-mini");
     expect(connected.presetId).toBe("read-only");
-    expect(connected.engine.snapshot()).toEqual({ model: "gpt-5.4-mini", activePresetId: "read-only" });
+    expect(connected.engine.snapshot()).toEqual({ model: "gpt-5.4-mini", activePresetId: "read-only", effort: "medium" });
   });
 
   it("defaults to the `ask` preset and the server's own model when no draft was made", async () => {
@@ -1337,17 +1393,37 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "ask" });
   });
 
-  it("re-resolves the effort when the new model does not advertise the current one", async () => {
+  it("re-resolves the effort for the switched-to model and restores the remembered value when switching back", async () => {
     const server = new FakeAppServer();
     // gpt-5.4-mini advertises ONLY "medium"; the thread's effective effort is "high".
     const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, {
       model: "gpt-5.6-sol",
       origin: "draft",
     });
-    expect(engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true });
+    expect(engine.selectEffort("high")).toMatchObject({ ok: true, effort: "high" });
+    expect(engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true, effort: "medium" });
 
     await runTurn(server, engine);
     expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.4-mini", effort: "medium" });
+
+    expect(engine.selectModel("gpt-5.6-sol")).toMatchObject({ ok: true, effort: "high" });
+    await runTurn(server, engine, "again");
+    expect(server.turnStartParams()[1]).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
+  });
+
+  it("accepts only catalog-advertised Codex effort and carries it on the next turn", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.6-sol",
+      origin: "draft",
+    });
+    expect(engine.selectEffort("high")).toMatchObject({ ok: true, effort: "high" });
+    expect(engine.selectEffort("ultra")).toEqual({
+      ok: false,
+      reason: 'Codex effort "ultra" is not available for model "gpt-5.6-sol".',
+    });
+    await runTurn(server, engine);
+    expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
   });
 
   it("acks a change only once a turn/start has actually carried it", async () => {
@@ -1440,7 +1516,7 @@ describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
       origin: "persisted",
     });
 
-    expect(connected.engine.snapshot()).toEqual({ model: "gpt-resumed", activePresetId: "read-only" });
+    expect(connected.engine.snapshot()).toEqual({ model: "gpt-resumed", activePresetId: "read-only", effort: "high" });
     expect(connected.engine.pendingSnapshot()).toBeNull();
 
     await runTurn(server, connected.engine);
@@ -1686,35 +1762,24 @@ describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
     expect(shadowLog.writes[0]?.item.turnOrdinal).toBe(3);
   });
 
-  it("a rejected/early-returned turn does NOT advance the native ordinal shadow rows anchor to (LOW1)", async () => {
+  it("an image turn advances the native ordinal only after its native turn starts (LOW1)", async () => {
     const server = new FakeAppServer();
     const shadowLog = new RecordingShadowLog();
     const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, shadowLog, 0);
 
-    // Burned turn: rejected by runTurn()'s early-return guard (unsupported
-    // image attachments) BEFORE any turn/start is ever sent — no native turn
-    // exists. `turnNumber` (the UI-facing counter) still advances; that is
-    // fine and unrelated to shadow-row anchoring.
-    const rejectedEvents: AgentEvent[] = [];
-    for await (const event of engine.runTurn("look at this", {
-      signal: new AbortController().signal,
-      attachments: [{ mediaType: "image/png", data: "AA==" }],
-    })) {
-      rejectedEvents.push(event);
-    }
-    expect(rejectedEvents.some((event) => event.type === "error")).toBe(true);
-    expect(server.calls.some((call) => call.method === "turn/start")).toBe(false);
-
-    // The FIRST real turn must still anchor to native ordinal 0
-    // (baseTurnOrdinal) — a burned runTurn() call must never consume an
-    // ordinal slot, or every shadow row on a resumed thread silently drifts
-    // by one after any rejected turn.
-    const turn = drive(engine, "run it", new AbortController().signal);
+    const turn = (async () => {
+      for await (const _event of engine.runTurn("look at this", {
+        signal: new AbortController().signal,
+        attachments: [{ mediaType: "image/png", data: "AA==" }],
+      })) {
+        // Drain the first, native image turn.
+      }
+    })();
     await tick();
     server.stream.push({ method: "item/started", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi" } } });
     server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "exec-1", command: "echo hi", status: "completed", exitCode: 0 } } });
     server.completeTurn("completed");
-    await turn.done;
+    await turn;
 
     expect(shadowLog.writes[0]?.item.turnOrdinal).toBe(0);
   });

@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
 import type { CustomProviderRecord, SecretKey } from "../shared/settings.js";
 import {
+  catalogModelsBaseUrl,
+  connectionApiKeySecretKey,
   customProviderSecretKey,
   fetchCustomProviderModels,
   handleCustomProviderCreate,
@@ -24,6 +26,7 @@ import {
   handleCustomProviderUpdate,
   isAllowedCustomProviderUrl,
   type FetchLike,
+  type FetchModelsParams,
   type ProviderIpcDeps,
   type ProviderVaultLike,
 } from "./provider-ipc.js";
@@ -438,6 +441,67 @@ describe("handleCustomProviderCreate", () => {
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("http://[::1]:8080");
   });
+
+  // ── TASK.58: keyless local endpoints ──
+
+  it("creates a KEYLESS record with authOptional:true and touches the vault ZERO times", async () => {
+    const res = await handleCustomProviderCreate(makeDeps(), {
+      name: "LM Studio",
+      baseUrl: "http://localhost:1234/v1",
+      kind: "openai-compatible",
+      authOptional: true,
+      models: ["m1"],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("unreachable");
+    expect(res.providers[0]).toEqual({
+      id: "custom:fixed-id",
+      name: "LM Studio",
+      baseUrl: "http://localhost:1234/v1",
+      kind: "openai-compatible",
+      models: ["m1"],
+      authOptional: true,
+    });
+    // No key was supplied → the vault is never written.
+    expect(vault.setSecretCallCount).toBe(0);
+    expect(vault.store.size).toBe(0);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.[0]?.authOptional).toBe(true);
+  });
+
+  it("refuses a record that is NEITHER keyed NOR explicitly keyless (invalid, no side effects)", async () => {
+    const res = await handleCustomProviderCreate(makeDeps(), {
+      name: "Neither",
+      baseUrl: "https://api.example.com",
+      kind: "openai-compatible",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(vault.setSecretCallCount).toBe(0);
+    expect(saveSettingsSpy.count).toBe(0);
+    // An empty-string key is the same as absent.
+    const emptyKey = await handleCustomProviderCreate(makeDeps(), {
+      name: "EmptyKey",
+      baseUrl: "https://api.example.com",
+      kind: "openai-compatible",
+      apiKey: "",
+    });
+    expect(emptyKey).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("a non-empty key is authoritative even when authOptional:true is also sent (record stays keyed)", async () => {
+    const res = await handleCustomProviderCreate(makeDeps(), {
+      name: "Ambiguous",
+      baseUrl: "https://api.example.com",
+      kind: "openai-compatible",
+      apiKey: "real-key",
+      authOptional: true,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("unreachable");
+    // Keyed → the keyless flag is NOT persisted, and the key IS stored.
+    expect(res.providers[0]?.authOptional).toBeUndefined();
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("real-key");
+  });
 });
 
 describe("handleCustomProviderUpdate", () => {
@@ -607,6 +671,48 @@ describe("handleCustomProviderUpdate — origin-rebind custody guard (FX3-L1 G-A
     expect(requests[0]?.url).toBe("https://api.example.com/models");
     expect(requests[0]?.auth).toBe("Bearer orig-key");
     expect(requests.filter((r) => r.url.includes("attacker.example"))).toEqual([]);
+  });
+
+  // ── TASK.58: a KEYLESS record has no stored key to leak, so it may rebind
+  // cross-origin without a fresh key — provided it STAYS keyless. ──
+  async function seedKeyless(baseUrl = "https://api.example.com"): Promise<void> {
+    await handleCustomProviderCreate(makeDeps(), {
+      name: "Keyless",
+      baseUrl,
+      kind: "openai-compatible",
+      authOptional: true,
+    });
+  }
+
+  it("a keyless record may change origin without a fresh key (nothing can leak)", async () => {
+    await seedKeyless();
+    const res = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "https://elsewhere.example.com",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("unreachable");
+    expect(res.providers[0]?.baseUrl).toBe("https://elsewhere.example.com");
+    expect(res.providers[0]?.authOptional).toBe(true);
+  });
+
+  it("a keyed record STILL needs a fresh key to change origin (regress — keyless waiver must not weaken the keyed guard)", async () => {
+    await seed();
+    const res = await handleCustomProviderUpdate(makeDeps(), {
+      id: "custom:fixed-id",
+      baseUrl: "https://attacker.example",
+    });
+    expect(res).toEqual({ ok: false, reason: "needs_api_key" });
+  });
+
+  it("a keyed→keyless transition drops the stored key so the 'keyless' record can never boot with a stale key", async () => {
+    await seed();
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("orig-key");
+    const res = await handleCustomProviderUpdate(makeDeps(), { id: "custom:fixed-id", authOptional: true });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("unreachable");
+    expect(res.providers[0]?.authOptional).toBe(true);
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBeUndefined();
   });
 });
 

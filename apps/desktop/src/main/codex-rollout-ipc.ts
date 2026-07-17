@@ -30,7 +30,7 @@ import * as fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { PermissionMode, PersistencePort } from "@anycode/core";
+import { deriveSessionTitle, sanitizeTitleSource, type HistoryItem, type PermissionMode, type PersistencePort } from "@anycode/core";
 import { importCodexRollout, type ImportCodexRolloutOptions, type RolloutImportReport } from "./codex-rollout.js";
 
 export const CODEX_ROLLOUT_LIST_CHANNEL = "anycode:codex-rollout-list";
@@ -271,6 +271,14 @@ export async function handleCodexRolloutPreview(deps: CodexRolloutIpcDeps, raw: 
   return readAndImport(deps, profileId, fileName);
 }
 
+/** First user-authored turn in the CONVERTED history (`report.items`, never the raw rollout text) — the session-title source, mirroring `host/session.ts`'s own `maybeDeriveTitle` which titles off the first real user turn, never an assistant/tool one. `undefined` when the rollout carries no user message at all. */
+function firstImportedUserMessageText(items: readonly HistoryItem[]): string | undefined {
+  for (const item of items) {
+    if (item.message.role === "user") return item.message.content;
+  }
+  return undefined;
+}
+
 export async function handleCodexRolloutImport(deps: CodexRolloutIpcDeps, raw: unknown): Promise<CodexRolloutImportResult> {
   const request = raw as Partial<CodexRolloutImportRequest> | null;
   const profileId = typeof request?.profileId === "string" ? request.profileId : "";
@@ -298,6 +306,14 @@ export async function handleCodexRolloutImport(deps: CodexRolloutIpcDeps, raw: u
   // S4-1 arm 1 (W4-F1): pin the NEW session to the connection active at apply
   // time. `undefined` (no active connection) ⇒ no pin field, byte-as-today.
   const connectionId = deps.activeConnectionId?.();
+  // TASK.57: an imported session otherwise lands with no title at all (this
+  // handler never passed one) — derived the same way a live session's first
+  // turn titles itself (`deriveSessionTitle(sanitizeTitleSource(...))`), off
+  // the imported conversation's own first user message. No user message (or
+  // one that derives to an empty heuristic title) ⇒ leave `title` unset,
+  // byte-as-today.
+  const firstUserText = firstImportedUserMessageText(imported.report.items);
+  const title = firstUserText !== undefined ? deriveSessionTitle(sanitizeTitleSource(firstUserText)) : "";
   const session = await deps.persistence.createSession({
     id: randomUUID(),
     workspace,
@@ -305,6 +321,7 @@ export async function handleCodexRolloutImport(deps: CodexRolloutIpcDeps, raw: u
     mode: request?.mode ?? "build",
     engineId: "core",
     ...(connectionId !== undefined ? { connectionId } : {}),
+    ...(title.length > 0 ? { title } : {}),
   });
   // S4-1 arm 2 (W4-F1): register the picked model so the first resume overrides
   // the fork env's ANYCODE_MODEL. Recorded AFTER a successful createSession so a

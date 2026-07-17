@@ -272,20 +272,28 @@ export interface EngineModelMenuProps {
   pendingModel: string | undefined;
   disabled: boolean;
   onPick(modelId: string): void;
+  effort?: { current: string; pending?: string; onPick(effort: string): void };
 }
 
-/** Active-session model chip for a non-core engine (Composer.tsx). */
-export function EngineModelMenu({ model, pendingModel, disabled, onPick }: EngineModelMenuProps) {
+/**
+ * Unified native-engine model control. It deliberately mirrors ModelPill's
+ * two-level Model/Effort popover instead of growing a second composer chip.
+ * Effort remains a string because Codex models advertise their own vocabulary.
+ */
+export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort }: EngineModelMenuProps) {
   const items = engineModelItems(model.current, model.available);
   const activeLabel = engineModelDisplayName(model.current, model.available);
   const pendingLabel = pendingModel !== undefined ? engineModelDisplayName(pendingModel, model.available) : undefined;
-  const chipLabel = engineChipLabel(activeLabel, pendingLabel);
+  const efforts = effort === undefined ? [] : (model.available.find((item) => item.id === model.current)?.efforts ?? []);
+  const [page, setPage] = useState<"root" | "model" | "effort">("root");
+  const itemCount = page === "root" ? (efforts.length > 0 ? 2 : 1) : page === "model" ? items.length : efforts.length;
+  const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(effort?.current ?? "")) : 0;
 
-  const menu = useEngineMenuState(
-    items.length,
-    items.findIndex((item) => item.id === model.current),
-    disabled,
-  );
+  const menu = useEngineMenuState(itemCount, currentIndex, disabled);
+  const chipLabel = effort === undefined ? engineChipLabel(activeLabel, pendingLabel) : `${activeLabel} · ${effort.current}`;
+  useEffect(() => {
+    if (!menu.open) setPage("root");
+  }, [menu.open]);
 
   function pick(id: string): void {
     if (disabled) {
@@ -297,55 +305,42 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick }: Engin
     menu.close(true);
   }
 
+  function pickEffort(value: string): void {
+    if (!disabled && value !== effort?.current) effort?.onPick(value);
+    menu.close(true);
+  }
+
   return (
     <div className="model-pill" ref={menu.rootRef}>
       <EngineMenuChip
         label={chipLabel}
-        tooltip={pendingLabel === undefined ? activeLabel : `${chipLabel}`}
-        ariaLabel="Codex model"
+        tooltip={chipLabel}
+        ariaLabel="Codex model and effort"
         disabled={disabled}
         open={menu.open}
         chipRef={menu.chipRef}
         onToggle={() => menu.setOpen((o) => !o)}
         onKeyDown={menu.onChipKeyDown}
       />
-      {menu.open && (
+      {menu.open && page === "root" && (
         <div
           className="model-pill-popover"
           role="menu"
-          aria-label="Codex model"
+          aria-label="Codex model and effort"
           onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => {
-            const item = items[index];
-            if (item) pick(item.id);
+            if (index === 0) setPage("model");
+            else if (efforts.length > 0) setPage("effort");
           })}
           style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}
         >
-          {items.map((item, index) => {
-            const current = item.id === model.current;
-            const queued = item.id === pendingModel;
-            return (
-              <button
-                key={item.id}
-                ref={(el) => {
-                  menu.itemRefs.current[index] = el;
-                }}
-                type="button"
-                role="menuitemradio"
-                aria-checked={current}
-                tabIndex={index === menu.focusIndex ? 0 : -1}
-                className={`model-pill-item${current ? " model-pill-item-current" : ""}`}
-                onClick={() => pick(item.id)}
-              >
-                <span className="model-pill-item-check" aria-hidden="true">
-                  {current ? <Check /> : null}
-                </span>
-                <span className="model-pill-item-name">{item.label}</span>
-                {queued && <span className="engine-menu-item-pending">next turn</span>}
-              </button>
-            );
-          })}
+          <button ref={(el) => { menu.itemRefs.current[0] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 0 ? 0 : -1} className="model-pill-row" onClick={() => setPage("model")}><span className="model-pill-row-name">Model</span><span className="model-pill-row-value">{engineChipLabel(activeLabel, pendingLabel)}</span><Chevron className="model-pill-row-chevron" /></button>
+          {efforts.length > 0 && <button ref={(el) => { menu.itemRefs.current[1] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 1 ? 0 : -1} className="model-pill-row" onClick={() => setPage("effort")}><span className="model-pill-row-name">Effort</span><span className="model-pill-row-value">{effort?.current}{effort?.pending !== undefined ? ` → ${effort.pending}` : ""}</span><Chevron className="model-pill-row-chevron" /></button>}
         </div>
       )}
+      {menu.open && page !== "root" && <div className="model-pill-popover" role="menu" aria-label={page === "model" ? "Codex model" : "Codex reasoning effort"} onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => { if (page === "model") { const item = items[index]; if (item) pick(item.id); } else { const value = efforts[index]; if (value) pickEffort(value); } })} style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}>
+        <button type="button" className="model-pill-back" onClick={() => setPage("root")}><Chevron className="model-pill-back-chevron" />{page === "model" ? "Model" : "Effort"}</button>
+        {(page === "model" ? items : efforts.map((value) => ({ id: value, label: value }))).map((item, index) => { const current = page === "model" ? item.id === model.current : item.id === effort?.current; const queued = page === "model" ? item.id === pendingModel : item.id === effort?.pending; return <button key={item.id} ref={(el) => { menu.itemRefs.current[index] = el; }} type="button" role="menuitemradio" aria-checked={current} tabIndex={index === menu.focusIndex ? 0 : -1} className={`model-pill-item${current ? " model-pill-item-current" : ""}`} onClick={() => page === "model" ? pick(item.id) : pickEffort(item.id)}><span className="model-pill-item-check" aria-hidden="true">{current ? <Check /> : null}</span><span className="model-pill-item-name">{item.label}</span>{queued && <span className="engine-menu-item-pending">next turn</span>}</button>; })}
+      </div>}
     </div>
   );
 }

@@ -24,6 +24,7 @@ import type { WireRepoMapStatus } from "../../../shared/protocol.js";
 import {
   buildCustomProviderCreateRequest,
   buildToolsPatch,
+  customProviderCatalogEntries,
   customProviderKindLabel,
   describeCustomProvider,
   describeCustomProviderMutationError,
@@ -35,6 +36,7 @@ import {
   describeTelemetryRow,
   filterSettingsPanes,
   isEnvOverridden,
+  isOwnDialogCancel,
   parseOptionalInt,
   resolveReplaceKeyAction,
   secretFieldReducer,
@@ -652,5 +654,123 @@ describe("buildCustomProviderCreateRequest (client-side gate; main's zod schema 
       selectedModels: [],
     });
     expect(Object.values(req ?? {}).filter((v) => v === "the-secret")).toHaveLength(1);
+  });
+
+  // TASK.58: keyless (the "no API key" checkbox) is accepted, and a keyed
+  // request is authoritative over the flag.
+  it("keyless (noAuth, no key) yields authOptional:true and NO apiKey", () => {
+    const req = buildCustomProviderCreateRequest({
+      name: "LM Studio",
+      baseUrl: "http://localhost:1234/v1",
+      kind: "openai-compatible",
+      apiKey: "",
+      noAuth: true,
+      selectedModels: [],
+    });
+    expect(req).toEqual({
+      name: "LM Studio",
+      baseUrl: "http://localhost:1234/v1",
+      kind: "openai-compatible",
+      models: [],
+      authOptional: true,
+    });
+    expect(req).not.toHaveProperty("apiKey");
+  });
+
+  it("a key is authoritative — a keyed request never also carries authOptional, even with noAuth set", () => {
+    const req = buildCustomProviderCreateRequest({
+      name: "N",
+      baseUrl: "https://x",
+      kind: "openai-compatible",
+      apiKey: "real-key",
+      noAuth: true,
+      selectedModels: [],
+    });
+    expect(req?.apiKey).toBe("real-key");
+    expect(req).not.toHaveProperty("authOptional");
+  });
+
+  it("still refuses a blank key when noAuth is NOT set (neither keyed nor keyless)", () => {
+    expect(
+      buildCustomProviderCreateRequest({
+        name: "N",
+        baseUrl: "https://x",
+        kind: "openai-compatible",
+        apiKey: "",
+        noAuth: false,
+        selectedModels: [],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("name/baseUrl are still required even when keyless", () => {
+    const base = { kind: "openai-compatible" as const, apiKey: "", noAuth: true, selectedModels: [] };
+    expect(buildCustomProviderCreateRequest({ ...base, name: "  ", baseUrl: "https://x" })).toBeUndefined();
+    expect(buildCustomProviderCreateRequest({ ...base, name: "N", baseUrl: "  " })).toBeUndefined();
+  });
+});
+
+describe("customProviderCatalogEntries (TASK.58: saved records become selectable drawer providers)", () => {
+  it("synthesizes one entry per record with kind-implied transports, mirroring the connection into the picker", () => {
+    const entries = customProviderCatalogEntries([
+      { id: "custom:lm", name: "LM Studio", baseUrl: "http://localhost:1234/v1", kind: "openai-compatible", models: ["a", "b"] },
+    ]);
+    expect(entries).toEqual([
+      {
+        id: "custom:lm",
+        name: "LM Studio",
+        authKind: "api_key",
+        models: [{ id: "a" }, { id: "b" }],
+        defaultTransport: "openai-chat-completions",
+        supportedTransports: ["openai-chat-completions", "openai-responses"],
+      },
+    ]);
+  });
+
+  it("an anthropic-kind record restricts to the anthropic transport only", () => {
+    const [entry] = customProviderCatalogEntries([
+      { id: "custom:a", name: "A", baseUrl: "https://a", kind: "anthropic", models: [] },
+    ]);
+    expect(entry?.defaultTransport).toBe("anthropic-messages");
+    expect(entry?.supportedTransports).toEqual(["anthropic-messages"]);
+  });
+
+  it("carries authOptional for a keyless record (so the drawer/tile never nag it for a key), and NEVER the isCustom sentinel flag", () => {
+    const [entry] = customProviderCatalogEntries([
+      { id: "custom:k", name: "K", baseUrl: "http://localhost:1", kind: "openai", models: [], authOptional: true },
+    ]);
+    expect(entry?.authOptional).toBe(true);
+    // A concrete record must not masquerade as the "add a NEW endpoint" sentinel.
+    expect(entry?.isCustom).toBeUndefined();
+    // Its baseUrl is fixed on the record, not an editable connection field.
+    expect(entry?.needsBaseUrl).toBeUndefined();
+  });
+
+  it("a keyed record omits authOptional", () => {
+    const [entry] = customProviderCatalogEntries([
+      { id: "custom:k", name: "K", baseUrl: "https://k", kind: "openai", models: [] },
+    ]);
+    expect(entry?.authOptional).toBeUndefined();
+  });
+});
+
+describe("isOwnDialogCancel (TASK.58 item 4: Escape closes only the popup)", () => {
+  it("true when the cancel originated on the dialog itself (target === currentTarget)", () => {
+    const dialog = {} as EventTarget;
+    expect(isOwnDialogCancel({ target: dialog, currentTarget: dialog })).toBe(true);
+  });
+
+  // The bug this closes: a nested drawer's Escape propagates through the REACT
+  // tree to the ancestor Settings dialog's onCancel with target=the drawer,
+  // currentTarget=Settings — the guard must refuse that, so Settings stays open.
+  it("false when the cancel bubbled up from a nested dialog (target !== currentTarget)", () => {
+    const innerDrawer = {} as EventTarget;
+    const settingsDialog = {} as EventTarget;
+    expect(isOwnDialogCancel({ target: innerDrawer, currentTarget: settingsDialog })).toBe(false);
+  });
+
+  it("false when target is null (no originating node)", () => {
+    const dialog = {} as EventTarget;
+    expect(isOwnDialogCancel({ target: null, currentTarget: dialog })).toBe(false);
   });
 });

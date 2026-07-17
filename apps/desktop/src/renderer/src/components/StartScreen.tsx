@@ -52,7 +52,7 @@ import { modelDisplayName, modelMenuItems, pillLabel, providerModelsFor, resolve
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
-import { activeProviderView } from "../../../shared/settings.js";
+import { activeConnection, activeProviderView } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
@@ -438,7 +438,15 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const view = snapshot ? activeProviderView(snapshot.settings) : undefined;
   const providerId = view?.id;
   const pid = resolvePid(providerId);
-  const catalogModels = providerModelsFor(providerId, snapshot?.catalog, snapshot?.settings.provider.custom);
+  // Live-fetched ids on the active connection take precedence over the catalog
+  // entry's static hints (a new draft always starts on the active connection).
+  const startConnection = snapshot ? activeConnection(snapshot.settings) : undefined;
+  const catalogModels = providerModelsFor(
+    providerId,
+    snapshot?.catalog,
+    snapshot?.settings.provider.custom,
+    startConnection?.models,
+  );
   const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);
   // The active-session ModelPill includes the persisted effort in its label.

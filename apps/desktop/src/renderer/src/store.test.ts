@@ -1869,6 +1869,13 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     ]);
   });
 
+  it("preserves restored user image attachments for transcript rendering", () => {
+    const images = [{ mediaType: "image/png" as const, data: "UE5H" }];
+    expect(projectHistoryToBlocks([{ id: "image", createdAt: 1, message: { role: "user", content: "Look:", images } }])).toEqual([
+      { kind: "user_text", id: "image:0", text: "Look:", images },
+    ]);
+  });
+
   it("pairs multiple tool_call parts of one assistant item against the run of tool-role items that follow it, by toolCallId", () => {
     const items: WireHistoryItem[] = [
       {
@@ -3079,6 +3086,32 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
 
     store.getState().applyHostMessage({ type: "engine_settings_changed", activePresetId: "workspace", state: "applied", appliesFrom: "next_turn" });
     expect(store.getState().engine?.permissions?.activePresetId).toBe("workspace");
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("applies model and effort together without dropping the new model", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      model: "gpt-5.6-mini",
+      effort: "medium",
+      state: "pending",
+      appliesFrom: "next_turn",
+    });
+    expect(store.getState().pendingEngineChange).toEqual({ model: "gpt-5.6-mini", effort: "medium" });
+
+    store.getState().applyHostMessage({
+      type: "engine_settings_changed",
+      model: "gpt-5.6-mini",
+      effort: "medium",
+      state: "applied",
+      appliesFrom: "next_turn",
+    });
+
+    expect(store.getState().engine?.model?.current).toBe("gpt-5.6-mini");
+    expect(store.getState().engine?.model?.effort).toBe("medium");
     expect(store.getState().pendingEngineChange).toBeNull();
   });
 

@@ -81,6 +81,10 @@ const connectionSchema = z.object({
   baseUrl: z.string().optional(),
   reasoningEffort: reasoningEffortSchema.optional(),
   authOptional: z.boolean().optional(),
+  // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —
+  // advisory display data, same round-trip discipline as `lastHealth`.
+  models: z.array(z.string()).optional(),
+  modelsFetchedAt: z.string().optional(),
   lastHealth: z
     .object({
       status: z.enum([
@@ -248,6 +252,8 @@ const customProviderSchema = z.object({
   kind: customProviderKindSchema,
   models: z.array(z.string()),
   modelsFetchedAt: z.string().optional(),
+  // TASK.58: only-truthy-on-disk keyless declaration (see CustomProviderRecord).
+  authOptional: z.boolean().optional(),
 });
 
 const customProvidersArraySchema = z.preprocess(

@@ -84,10 +84,7 @@ import type { UpdateStatus } from "../../../shared/updates.js";
 import type {
   CustomProviderCreateRequest,
   CustomProviderMutationReason,
-  CustomProviderMutationResult,
-  CustomProviderUpdateRequest,
   FetchModelsFailureReason,
-  FetchModelsOutcome,
 } from "../anycode-window.js";
 import type { WireEnvStatus, WireRepoMapStatus } from "../../../shared/protocol.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -96,7 +93,7 @@ import { tabRegistry } from "../tab-registry.js";
 import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
-import { ConnectionTile, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
+import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
 import { McpServersPane } from "./McpServersPane.js";
@@ -394,21 +391,97 @@ export function toggleSelectedModel(selected: readonly string[], id: string): st
  * IPC round-trip (main's zod schema is still the final validator, same
  * "belt and suspenders" relationship `buildToolsPatch` has with its own
  * server-side counterpart).
+ *
+ * TASK.58: a record must be EITHER keyed (a non-empty `apiKey`) OR explicitly
+ * keyless (`noAuth` — a local server with no auth); one with neither is
+ * refused (`undefined`). A non-empty key is AUTHORITATIVE: it always wins over
+ * the flag and is the single field the key crosses on (mirrors main's own
+ * rule), so a keyed request never also carries `authOptional`.
  */
 export function buildCustomProviderCreateRequest(input: {
   name: string;
   baseUrl: string;
   kind: CustomProviderRecord["kind"];
   apiKey: string;
+  /** The "This endpoint doesn't need an API key" checkbox. */
+  noAuth?: boolean;
   selectedModels: readonly string[];
 }): CustomProviderCreateRequest | undefined {
   const name = input.name.trim();
   const baseUrl = input.baseUrl.trim();
   const apiKey = input.apiKey.trim();
-  if (name === "" || baseUrl === "" || apiKey === "") {
+  if (name === "" || baseUrl === "") {
     return undefined;
   }
-  return { name, baseUrl, kind: input.kind, apiKey, models: [...input.selectedModels] };
+  const hasKey = apiKey !== "";
+  if (!hasKey && input.noAuth !== true) {
+    return undefined;
+  }
+  return {
+    name,
+    baseUrl,
+    kind: input.kind,
+    models: [...input.selectedModels],
+    ...(hasKey ? { apiKey } : { authOptional: true }),
+  };
+}
+
+// ── kind → transport mirrors of main/host-env.ts's `customKindDefaultTransport`
+// / `customSupportedTransports` (value-only, no import — the renderer never
+// pulls a main module; kept in sync by contract, same precedent as
+// `connectionSecretKey`). Used to synthesize catalog-summary entries for saved
+// custom records (TASK.58) so they appear in the ConnectionDrawer's provider
+// picker with the right transport constraints. ──
+
+const CUSTOM_KIND_DEFAULT_TRANSPORT: Record<CustomProviderRecord["kind"], ProviderTransportId> = {
+  "openai-compatible": "openai-chat-completions",
+  openai: "openai-responses",
+  anthropic: "anthropic-messages",
+};
+
+const CUSTOM_KIND_SUPPORTED_TRANSPORTS: Record<CustomProviderRecord["kind"], ProviderTransportId[]> = {
+  "openai-compatible": ["openai-chat-completions", "openai-responses"],
+  openai: ["openai-responses", "openai-chat-completions"],
+  anthropic: ["anthropic-messages"],
+};
+
+/**
+ * Synthesizes a `CatalogSummaryEntry` per saved custom-provider record (TASK.58)
+ * so the ConnectionDrawer's provider `<select>` can offer them as first-class
+ * selectable providers alongside the builtin catalog — the ONLY missing link
+ * that kept a `custom:<id>` connection un-creatable from the UI (the host
+ * runtime already routes custom ids everywhere else). Deliberately NOT flagged
+ * `isCustom` (that flag drives the drawer's NEW-endpoint create form, which a
+ * concrete record must never re-trigger) and NOT `needsBaseUrl` (a record's
+ * baseUrl is fixed on the record, not editable through a connection field). A
+ * keyless record carries `authOptional` so the tile/drawer never nag it for a
+ * credential.
+ */
+export function customProviderCatalogEntries(
+  records: readonly CustomProviderRecord[],
+): CatalogSummaryEntry[] {
+  return records.map((record) => ({
+    id: record.id,
+    name: record.name,
+    authKind: "api_key" as const,
+    models: record.models.map((id) => ({ id })),
+    defaultTransport: CUSTOM_KIND_DEFAULT_TRANSPORT[record.kind],
+    supportedTransports: CUSTOM_KIND_SUPPORTED_TRANSPORTS[record.kind],
+    ...(record.authOptional === true ? { authOptional: true } : {}),
+  }));
+}
+
+/**
+ * Whether a native `<dialog>`'s `cancel` (Escape) originated on THAT dialog
+ * itself (TASK.58 item 4). React's synthetic event system propagates the
+ * non-bubbling native `cancel` up the REACT tree, so a nested drawer's Escape
+ * otherwise also fires an ancestor dialog's `onCancel` (closing Settings from
+ * under the drawer). Every dialog's `onCancel` gates its close on this so it
+ * acts only for its OWN cancel. Structural (target/currentTarget only) so it is
+ * directly unit-testable in this package's jsdom-free vitest config.
+ */
+export function isOwnDialogCancel(event: { target: EventTarget | null; currentTarget: EventTarget }): boolean {
+  return event.target === event.currentTarget;
 }
 
 // ── auto-updater pure helpers (slice 2.6 §6) ──
@@ -641,90 +714,25 @@ export interface CustomProvidersSectionProps {
 }
 
 /**
- * Custom OpenAI-compatible model-provider management (owner-decision #6, cut
- * §9.2, TASK.54): a list of saved endpoints (name/baseUrl/model count) each
- * with a Delete action, plus an "Add custom provider" form (name/baseUrl/
- * kind/key) whose "Fetch models" step calls main (the renderer never holds a
- * key long enough to call an arbitrary origin itself) and renders the
- * returned ids as checkboxes — only the CHECKED subset is what `Save` sends
- * on to `customProviderCreate`, becoming the record's curated `models[]`.
- * CUSTODY: the apiKey field lives only as long as the form stays open — every
- * path that CLOSES the form (Cancel, or a successful Save) clears it via
- * `resetForm`. `doFetchModels` and a Save refusal deliberately do NOT clear
- * it: the flow is two-step (enter key -> Fetch models -> pick models ->
- * Save), so the key must survive in state until Save actually succeeds, and
- * a refusal must leave it in place so the user can retry without retyping
- * it. This is NOT `secretFieldReducer`'s "submitted always clears" rule —
- * that convention fits a one-shot drawer field, not this two-step flow.
- * Either way this component never receives a decrypted key back
- * (`CustomProviderMutationResult`/`FetchModelsOutcome` structurally cannot
- * carry one).
+ * Custom model-provider MANAGEMENT list (TASK.58, reducing TASK.54's
+ * add-form-bearing section): a read-only list of saved custom endpoints
+ * (name/kind/baseUrl/model count) each with a Delete action, and nothing else.
+ * Creating a custom endpoint now happens in the shared Add-connection drawer
+ * (item 2): its "Custom endpoint…" provider option collects name/base URL/kind
+ * + key (or the "no API key" checkbox) and mints BOTH the record and a
+ * connection in one flow, and its model step fetches/curates the record's
+ * models — so this section keeps ONLY the delete path (the sole management
+ * action the old section offered for an already-saved record). It renders
+ * nothing at all when there are no custom endpoints (the drawer is where you
+ * add one). CUSTODY unchanged: this component never receives a decrypted key
+ * (there is none to render).
  */
 function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: CustomProvidersSectionProps) {
-  const [formOpen, setFormOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [kind, setKind] = useState<CustomProviderRecord["kind"]>("openai-compatible");
-  const [apiKey, setApiKey] = useState("");
-  const [fetchedModels, setFetchedModels] = useState<{ id: string }[] | null>(null);
-  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function resolvedBridge(): CustomProviderBridge {
     return bridge ?? customProviderBridge();
-  }
-
-  function resetForm(): void {
-    setName("");
-    setBaseUrl("");
-    setKind("openai-compatible");
-    setApiKey("");
-    setFetchedModels(null);
-    setSelectedModels([]);
-    setFormOpen(false);
-  }
-
-  async function doFetchModels(): Promise<void> {
-    setBusy(true);
-    setError(null);
-    try {
-      const trimmedKey = apiKey.trim();
-      const outcome = await resolvedBridge().fetchModels({
-        baseUrl: baseUrl.trim(),
-        kind,
-        ...(trimmedKey !== "" ? { apiKey: trimmedKey } : {}),
-      });
-      if (!outcome.ok) {
-        setError(describeFetchModelsError(outcome.reason));
-        return;
-      }
-      setFetchedModels(outcome.models);
-      setSelectedModels(outcome.models.map((m) => m.id));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function save(): Promise<void> {
-    const req = buildCustomProviderCreateRequest({ name, baseUrl, kind, apiKey, selectedModels });
-    if (req === undefined) {
-      setError("Name, base URL, and API key are all required.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await resolvedBridge().create(req);
-      if (!result.ok) {
-        setError(describeCustomProviderMutationError(result.reason));
-        return;
-      }
-      resetForm();
-      onChanged();
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function remove(id: string): Promise<void> {
@@ -742,136 +750,37 @@ function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: Cust
     }
   }
 
+  if (providers.length === 0) {
+    return null;
+  }
+
   return (
     <section className="settings-section">
       <div className="settings-section-title">Custom providers</div>
-      {providers.length === 0 && (
-        <p className="connection-grid-empty">No custom endpoints yet.</p>
-      )}
-      {providers.length > 0 && (
-        <ul className="connection-grid" role="list" aria-label="Custom providers">
-          {providers.map((p) => (
-            <li role="listitem" key={p.id}>
-              <div className="settings-field-row">
-                <span>
-                  {p.name} — {customProviderKindLabel(p.kind)}
-                </span>
-                <span>{describeCustomProvider(p)}</span>
-                <button
-                  type="button"
-                  className="settings-button settings-button-danger"
-                  disabled={readOnly || busy}
-                  onClick={() => void remove(p.id)}
-                >
-                  Delete
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul className="connection-grid" role="list" aria-label="Custom providers">
+        {providers.map((p) => (
+          <li role="listitem" key={p.id}>
+            <div className="settings-field-row">
+              <span>
+                {p.name} — {customProviderKindLabel(p.kind)}
+              </span>
+              <span>{describeCustomProvider(p)}</span>
+              <button
+                type="button"
+                className="settings-button settings-button-danger"
+                disabled={readOnly || busy}
+                onClick={() => void remove(p.id)}
+              >
+                Delete
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
       {error !== null && (
         <p className="settings-notice" role="alert">
           {error}
         </p>
-      )}
-      {!formOpen ? (
-        <button type="button" className="settings-button" disabled={readOnly} onClick={() => setFormOpen(true)}>
-          + Add custom provider
-        </button>
-      ) : (
-        <>
-          <label className="settings-field">
-            <span className="settings-field-label">Name</span>
-            <input
-              className="settings-field-input"
-              type="text"
-              value={name}
-              disabled={busy}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">Base URL</span>
-            <input
-              className="settings-field-input"
-              type="text"
-              placeholder="https://api.example.com"
-              value={baseUrl}
-              disabled={busy}
-              onChange={(e) => {
-                // A previously fetched model list belongs to the endpoint
-                // that was live when Fetch ran — changing the address
-                // invalidates it, otherwise Save could persist a curated
-                // models[] against a different endpoint's URL.
-                setBaseUrl(e.target.value);
-                setFetchedModels(null);
-                setSelectedModels([]);
-              }}
-            />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">Kind</span>
-            <select
-              className="settings-field-select"
-              value={kind}
-              disabled={busy}
-              onChange={(e) => {
-                setKind(e.target.value as CustomProviderRecord["kind"]);
-                setFetchedModels(null);
-                setSelectedModels([]);
-              }}
-            >
-              <option value="openai-compatible">{customProviderKindLabel("openai-compatible")}</option>
-              <option value="openai">{customProviderKindLabel("openai")}</option>
-              <option value="anthropic">{customProviderKindLabel("anthropic")}</option>
-            </select>
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">API key</span>
-            <input
-              className="settings-field-input"
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              disabled={busy}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </label>
-          <div className="settings-field-row">
-            <button
-              type="button"
-              className="settings-button"
-              disabled={busy || baseUrl.trim() === ""}
-              onClick={() => void doFetchModels()}
-            >
-              Fetch models
-            </button>
-          </div>
-          {fetchedModels !== null && (
-            <fieldset className="settings-field">
-              <legend className="settings-field-label">Models to show in the selector</legend>
-              {fetchedModels.map((m) => (
-                <label key={m.id} className="settings-field-row">
-                  <input
-                    type="checkbox"
-                    checked={selectedModels.includes(m.id)}
-                    onChange={() => setSelectedModels((prev) => toggleSelectedModel(prev, m.id))}
-                  />
-                  {m.id}
-                </label>
-              ))}
-            </fieldset>
-          )}
-          <div className="settings-field-row">
-            <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void save()}>
-              Save
-            </button>
-            <button type="button" className="settings-button" disabled={busy} onClick={resetForm}>
-              Cancel
-            </button>
-          </div>
-        </>
       )}
     </section>
   );
@@ -917,7 +826,14 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   }
 
   const readOnly = snapshot.readOnly;
-  const catalog: CatalogSummary = snapshot.catalog ?? [];
+  const customRecords = snapshot.settings.provider.custom ?? [];
+  // TASK.58: the drawer's provider picker + the tiles read a UNION of the
+  // builtin catalog and one synthesized entry per saved custom record, so a
+  // `custom:<id>` connection resolves a real name/models/transport set (the
+  // builtin-only catalog never carried these). The builtin `custom` sentinel
+  // stays in the union too — that entry (isCustom) is the drawer's "add a NEW
+  // custom endpoint" option.
+  const catalog: CatalogSummary = [...(snapshot.catalog ?? []), ...customProviderCatalogEntries(customRecords)];
   const connections = snapshot.settings.provider.connections;
   const activeConnectionId = snapshot.settings.provider.activeConnectionId;
   const envOverridden = isEnvOverridden(snapshot.envOverrides, API_KEY_ENV_VAR);
@@ -1018,7 +934,11 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
           {connections.map((connection, index) => {
             const catalogEntry = selectProviderEntry(catalog, connection.providerId || undefined);
             const authKind = catalogEntry?.authKind ?? "api_key";
-            const credentialStatus = snapshot.secrets.find((s) => s.key === connectionSecretKey(connection.id, authKind));
+            // TASK.58: a custom:<id> connection's credential lives on the
+            // custom provider's OWN shared key, not a connection-scoped key.
+            const credentialStatus = snapshot.secrets.find(
+              (s) => s.key === connectionCredentialKey(connection.id, connection.providerId, authKind),
+            );
             const displayName = connectionDisplayName(connection, catalogEntry?.name ?? "Custom", connections);
             return (
               <div role="listitem" key={connection.id}>
@@ -1069,7 +989,7 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
       </section>
 
       <CustomProvidersSection
-        providers={snapshot.settings.provider.custom ?? []}
+        providers={customRecords}
         readOnly={readOnly}
         onChanged={() => void store.getState().load()}
       />
@@ -1374,7 +1294,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
 
             {activePane === "provider" && <ProviderSettings store={store} />}
 
-            {activePane === "codex" && <CodexEnginePane />}
+            {activePane === "codex" && <CodexEnginePane onRequestCloseSettings={onClose} />}
 
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 
@@ -1798,6 +1718,13 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
         className="settings-dialog"
         aria-label="Settings"
         onCancel={(event) => {
+          // TASK.58 item 4: React propagates the non-bubbling native `cancel`
+          // up the REACT tree, so a nested ConnectionDrawer's Escape also lands
+          // here — act only when THIS dialog is the cancel's own target, so the
+          // drawer's Escape closes only the drawer, never Settings from under it.
+          if (!isOwnDialogCancel(event)) {
+            return;
+          }
           event.preventDefault();
           onClose();
         }}

@@ -905,6 +905,45 @@
   border-top: 1px solid var(--border);
 }
 
+/* TASK.58: the drawer's new custom-endpoint record fields (create form) and
+   the custom-provider model-fetch step both group several fields, so they need
+   the same column gap the flex body applies to its own direct children. */
+.connection-drawer-custom-fields,
+.connection-drawer-fetch-models {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+/* Click-to-fill model chips under the drawer's Model field (live-fetched
+   list, or static catalog hints before any fetch). */
+.connection-drawer-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.connection-drawer-model-chip {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.connection-drawer-model-chip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.connection-drawer-model-chip-selected {
+  color: var(--accent, var(--text));
+  border-color: var(--accent, var(--text-dim));
+}
+
 .connection-drawer-footer {
   display: flex;
   justify-content: flex-end;
@@ -2512,9 +2551,29 @@
 
 /* ── Codex accounts (TASK.50/53, codex-profiles cut §5): per-profile rows reuse .settings-mcp-list/.settings-mcp-row/.settings-mcp-name/.settings-mcp-detail; these three are new. ── */
 
+/* TASK.57: compact tiles instead of full-width stacked rows — a grid so
+   cards sit side by side when space allows. Compound selector (rather than
+   a bare .codex-profile-grid) so it reliably overrides the shared
+   .settings-mcp-list's flex-column layout regardless of rule order; every
+   OTHER consumer of .settings-mcp-list is untouched. */
+.settings-mcp-list.codex-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.5rem;
+}
+
 .codex-profile-row {
   flex-wrap: wrap;
   row-gap: 0.3rem;
+}
+
+/* Muted "(current environment)" parenthetical (TASK.57) next to a profile's
+   own label, once resolveAccountRows has matched it to the collapsed System
+   row — same secondary tone as the email/quota lines below, but inline
+   rather than its own full-width line. */
+.codex-profile-annotation {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
 }
 
 /* The base .settings-mcp-detail is tuned for a short single-line MCP status;
@@ -2566,6 +2625,15 @@
 }
 
 .codex-rollout-size {
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* TASK.57: the timestamp demoted to a secondary line once the row's PRIMARY
+   label became the human-readable name (deriveRolloutRowLabel). */
+.codex-rollout-timestamp {
+  flex-basis: 100%;
   font-size: var(--fs-2xs);
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;

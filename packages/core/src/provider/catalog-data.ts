@@ -73,7 +73,7 @@ const ENTRIES: CatalogProviderEntry[] = [
   },
   {
     id: "moonshot",
-    name: "Moonshot (Kimi)",
+    name: "Moonshot (Kimi, platform API)",
     baseUrl: "https://api.moonshot.ai/anthropic",
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
@@ -81,6 +81,24 @@ const ENTRIES: CatalogProviderEntry[] = [
     models: [
       { id: "kimi-k2-0711-preview", name: "Kimi K2", contextWindow: 128_000, maxOutputTokens: 32_768 },
       { id: "moonshot-v1-128k", name: "Moonshot v1 128k", contextWindow: 128_000, maxOutputTokens: 32_768 },
+    ],
+  },
+  {
+    // Kimi consumer subscription ("Kimi For Coding", kimi.com): its sk-kimi-*
+    // keys are only valid on api.kimi.com/coding — the moonshot platform entry
+    // above 401s them (verified live 2026-07-17). Models/262k context/thinking
+    // capabilities mirror the endpoint's /v1/models declaration; the K2.7 pair
+    // is thinking-only (no "off"), k3 natively declares low/high/max efforts.
+    id: "kimi",
+    name: "Kimi (kimi.com subscription)",
+    baseUrl: "https://api.kimi.com/coding",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: [
+      { id: "kimi-for-coding", name: "K2.7 Coding", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
+      { id: "kimi-for-coding-highspeed", name: "K2.7 Coding Highspeed", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
+      { id: "k3", name: "K3", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
     ],
   },
   {

@@ -57,6 +57,18 @@
  * and exits 1.
  */
 
+// ⚠ TASK.58 (2026-07-17) — STALE, MUST BE RE-RECORDED LIVE. The custom-endpoint
+// ADD form this script drove via CDP (SettingsScreen.tsx `CustomProvidersSection`
+// — the "+ Add custom provider" button, its Name/Base URL/Kind/API key fields,
+// its own "Fetch models" + Save) NO LONGER EXISTS. Custom endpoints are now
+// created through the shared Add-connection drawer: the Provider `<select>`'s
+// "Custom endpoint…" option reveals Name/Base URL/Kind + an "API key" field
+// (or the "This endpoint doesn't need an API key" checkbox), one "Create"
+// mints BOTH the record and a connection, and "Fetch models" lives in the
+// drawer's post-create model step. Steps 6-8 below (the F-E custody forms) will
+// therefore fail against a current build until re-recorded against the drawer
+// flow. W5-S (hand-edited settings + a real turn) and F2 (composer model
+// picker) are unaffected — they never touched the add form. See TASK.58 report.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

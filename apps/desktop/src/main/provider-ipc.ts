@@ -54,7 +54,7 @@ import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
-import type { AnycodeSettings, CustomProviderRecord, SecretKey } from "../shared/settings.js";
+import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import type { SecretSetResult } from "./vault.js";
 
 // ── URL policy (single source of truth is settings/schema.ts's
@@ -109,6 +109,19 @@ function authHeaders(kind: CustomProviderRecord["kind"] | undefined, apiKey: str
     return { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
   }
   return { Authorization: `Bearer ${apiKey}` };
+}
+
+/**
+ * Base URL a CATALOG entry's models list lives under. Custom records declare
+ * their baseUrl WITH the `/v1` segment (the S5-2 convention above), but
+ * catalog anthropic-family baseUrls are complete prefixes WITHOUT it
+ * (`https://api.kimi.com/coding` serves `/coding/v1/models`, verified live
+ * 2026-07-17), while OpenAI-family catalog baseUrls already end in `/v1`.
+ * Appending `/v1` only when absent lands both families on `<base>/v1/models`.
+ */
+export function catalogModelsBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
 }
 
 /** Runs the guarded models-list GET described in the module doc's threat model. */
@@ -231,6 +244,18 @@ export interface ProviderVaultLike {
   getSecretValue(key: SecretKey): Promise<string | undefined>;
 }
 
+/**
+ * Structural view of the ONE catalog fact the connection-scoped fetch needs
+ * (mirrors settings-ipc.ts's `CatalogEntryShape` discipline — no core
+ * value-import in this lane file; main/index.ts wires it from
+ * `@anycode/core/catalog`'s `findCatalogEntry`).
+ */
+export interface CatalogFetchEntryShape {
+  id: string;
+  baseUrl: string;
+  defaultTransport?: string;
+}
+
 export interface ProviderIpcDeps {
   vault: ProviderVaultLike;
   settingsPath: string;
@@ -241,6 +266,12 @@ export interface ProviderIpcDeps {
   now?: () => string;
   /** The guarded fetch (tests inject a fake; default `fetchCustomProviderModels`). */
   fetchModels?: (params: FetchModelsParams) => Promise<FetchModelsOutcome>;
+  /**
+   * Catalog lookup for the connection-scoped fetch (`{connectionId}` request
+   * shape). Absent = that shape is refused `invalid_request` (fail-closed) —
+   * custom-record CRUD/fetch never needs it.
+   */
+  catalogEntryById?: (id: string) => CatalogFetchEntryShape | undefined;
   /**
    * Fired after every successful mutation with the fresh settings object —
    * main re-derives catalogIds/catalog projection/readiness off it, mirroring
@@ -276,23 +307,34 @@ export function customProviderSecretKey(id: string): SecretKey {
 
 // `.strict()` (custody, mirrors settings-ipc.ts's connection-create schema):
 // an unexpected field on this metadata+credential channel is refused rather
-// than silently ignored.
+// than silently ignored. TASK.58: `apiKey` is OPTIONAL — a keyless local
+// endpoint (LM Studio/ollama) is declared via `authOptional: true` instead.
 const createSchema = z
   .object({
     name: z.string().min(1),
     baseUrl: z.string().min(1),
     kind: kindSchema,
-    apiKey: z.string().min(1),
+    apiKey: z.string().optional(),
+    authOptional: z.boolean().optional(),
     models: z.array(z.string()).optional(),
   })
   .strict();
 
 /**
- * custom-provider-create: mint a new `CustomProviderRecord` + store its key.
- * The key is written to the vault BEFORE settings.json (opposite of
- * connection-delete's secrets-LAST ordering — here the record is worthless
- * without a stored key, so a `weak_storage_needs_consent` refusal must leave
- * ZERO trace, not a keyless record the user has to notice and re-key).
+ * custom-provider-create: mint a new `CustomProviderRecord` + (for a keyed
+ * endpoint) store its key. The key is written to the vault BEFORE settings.json
+ * (opposite of connection-delete's secrets-LAST ordering — a keyed record is
+ * worthless without a stored key, so a `weak_storage_needs_consent` refusal
+ * must leave ZERO trace, not a keyless record the user has to notice and
+ * re-key).
+ *
+ * KEYLESS (TASK.58): a record is EITHER keyed (a non-empty `apiKey`) OR
+ * explicitly keyless (`authOptional: true` with no key) — an endpoint that is
+ * neither is refused `invalid`. A non-empty key is AUTHORITATIVE: if one is
+ * present the record is keyed regardless of the flag (the client disables the
+ * key field when the box is checked, so the two only ever collide via a
+ * malformed direct call). The vault write is skipped entirely for a keyless
+ * record.
  */
 export async function handleCustomProviderCreate(deps: ProviderIpcDeps, raw: unknown): Promise<CustomProviderMutationResult> {
   const parsed = createSchema.safeParse(raw);
@@ -301,6 +343,11 @@ export async function handleCustomProviderCreate(deps: ProviderIpcDeps, raw: unk
   }
   const req = parsed.data;
   if (!isAllowedCustomProviderUrl(req.baseUrl)) {
+    return { ok: false, reason: "invalid" };
+  }
+  const hasKey = req.apiKey !== undefined && req.apiKey !== "";
+  const keyless = !hasKey && req.authOptional === true;
+  if (!hasKey && !keyless) {
     return { ok: false, reason: "invalid" };
   }
   return withSettingsFileLock(deps.settingsPath, async () => {
@@ -315,17 +362,20 @@ export async function handleCustomProviderCreate(deps: ProviderIpcDeps, raw: unk
       baseUrl: req.baseUrl,
       kind: req.kind,
       models: req.models ?? [],
+      ...(keyless ? { authOptional: true } : {}),
     };
     const custom = [...(loaded.settings.provider.custom ?? []), record];
     const merged: AnycodeSettings = { ...loaded.settings, provider: { ...loaded.settings.provider, custom } };
     if (!settingsSchema.safeParse(merged).success) {
       return { ok: false, reason: "invalid" };
     }
-    const secretResult = await deps.vault.setSecret(customProviderSecretKey(id), req.apiKey, {
-      allowWeak: loaded.settings.security.allowWeakSecretStorage,
-    });
-    if (!secretResult.ok) {
-      return { ok: false, reason: secretResult.reason };
+    if (hasKey) {
+      const secretResult = await deps.vault.setSecret(customProviderSecretKey(id), req.apiKey as string, {
+        allowWeak: loaded.settings.security.allowWeakSecretStorage,
+      });
+      if (!secretResult.ok) {
+        return { ok: false, reason: secretResult.reason };
+      }
     }
     await saveSettings(deps.settingsPath, merged);
     await deps.onMutation?.(merged);
@@ -340,6 +390,9 @@ const updateSchema = z
     baseUrl: z.string().optional(),
     kind: kindSchema.optional(),
     apiKey: z.string().optional(),
+    // TASK.58: `true` declares the record keyless, `false` clears the flag —
+    // same only-truthy-on-disk discipline as ConnectionUpdateRequest.
+    authOptional: z.boolean().optional(),
     models: z.array(z.string()).optional(),
   })
   .strict();
@@ -380,12 +433,24 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
     if (existing === undefined) {
       return { ok: false, reason: "not_found" };
     }
+    const hasFreshKey = req.apiKey !== undefined && req.apiKey !== "";
+    const existingKeyless = existing.authOptional === true;
+    // Resulting keyless state: a fresh key always makes the record keyed
+    // (authoritative, mirrors create); otherwise an explicit `authOptional`
+    // flag wins; otherwise the record keeps its current state (a metadata- or
+    // models-only update never silently flips keylessness).
+    const willBeKeyless = hasFreshKey ? false : req.authOptional !== undefined ? req.authOptional : existingKeyless;
     // Origin-rebind custody guard (see the handler doc). Both URLs are
     // already policy-validated (request: the isAllowedCustomProviderUrl gate
     // above; existing: settings/schema.ts on load), so `new URL` cannot throw.
-    if (req.baseUrl !== undefined && (req.apiKey === undefined || req.apiKey === "")) {
+    // TASK.58: a KEYLESS record that STAYS keyless has no stored key to decrypt
+    // and re-POST to a new origin, so it may rebind without a fresh key — the
+    // same "nothing can leak" rationale as the loopback→loopback waiver. Only a
+    // keyed record (or one becoming keyed) still needs the fresh key.
+    if (req.baseUrl !== undefined && !hasFreshKey) {
       const originChanged = new URL(req.baseUrl).origin !== new URL(existing.baseUrl).origin;
-      if (originChanged && !(isLoopbackUrl(existing.baseUrl) && isLoopbackUrl(req.baseUrl))) {
+      const bothLoopback = isLoopbackUrl(existing.baseUrl) && isLoopbackUrl(req.baseUrl);
+      if (originChanged && !bothLoopback && !(existingKeyless && willBeKeyless)) {
         return { ok: false, reason: "needs_api_key" };
       }
     }
@@ -398,18 +463,30 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
         ? { models: req.models, modelsFetchedAt: (deps.now ?? defaultNowIso)() }
         : {}),
     };
+    // Reflect the resulting keyless state — `true` persists, `false` clears the
+    // flag entirely (only-truthy-on-disk).
+    if (willBeKeyless) {
+      updatedRecord.authOptional = true;
+    } else {
+      delete updatedRecord.authOptional;
+    }
     const custom = (loaded.settings.provider.custom ?? []).map((p) => (p.id === req.id ? updatedRecord : p));
     const merged: AnycodeSettings = { ...loaded.settings, provider: { ...loaded.settings.provider, custom } };
     if (!settingsSchema.safeParse(merged).success) {
       return { ok: false, reason: "invalid" };
     }
-    if (req.apiKey !== undefined && req.apiKey !== "") {
-      const secretResult = await deps.vault.setSecret(customProviderSecretKey(req.id), req.apiKey, {
+    if (hasFreshKey) {
+      const secretResult = await deps.vault.setSecret(customProviderSecretKey(req.id), req.apiKey as string, {
         allowWeak: loaded.settings.security.allowWeakSecretStorage,
       });
       if (!secretResult.ok) {
         return { ok: false, reason: secretResult.reason };
       }
+    } else if (willBeKeyless && !existingKeyless) {
+      // Keyed → keyless transition: drop the now-orphaned vault key so a
+      // "keyless" record can never still boot a fork with a stale stored key
+      // (buildHostEnv reads the custom key whenever one is present).
+      await deps.vault.clearSecret(customProviderSecretKey(req.id));
     }
     await saveSettings(deps.settingsPath, merged);
     await deps.onMutation?.(merged);
@@ -452,13 +529,114 @@ export async function handleCustomProviderDelete(deps: ProviderIpcDeps, raw: unk
 
 const fetchModelsSchema = z.union([
   z.object({ id: z.string().min(1) }).strict(),
+  z.object({ connectionId: z.string().min(1) }).strict(),
   z.object({ baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional() }).strict(),
 ]);
 
+/** The vault key one catalog connection's API-key credential lives under (mirrors the renderer's `connectionSecretKey`). */
+export function connectionApiKeySecretKey(connectionId: string): SecretKey {
+  return `provider.connection.${connectionId}.apiKey`;
+}
+
+/**
+ * Connection-scoped models fetch (`{connectionId}`): the SAME guarded GET,
+ * for a CATALOG connection — main resolves everything itself (the renderer
+ * holds neither the entry's baseUrl nor the key). Resolution runs under the
+ * settings lock (same W4-R1-L1 rationale as the `{id}` branch: a concurrent
+ * baseUrl/key mutation must never hand this read a mixed pair); the network
+ * call runs outside it. CUSTODY: the decrypted connection key travels only to
+ * the origin the connection itself already sends every session turn to
+ * (`connection.baseUrl ?? entry.baseUrl`) — no new exfil surface. On success
+ * the fetched ids are persisted onto the connection (`models` +
+ * `modelsFetchedAt`, advisory display data) so pickers survive a restart
+ * without refetching; an empty list is returned but never persisted (the
+ * pickers' static-hints fallback stays intact).
+ */
+async function handleConnectionFetchModels(
+  deps: ProviderIpcDeps,
+  connectionId: string,
+  fetchModels: (params: FetchModelsParams) => Promise<FetchModelsOutcome>,
+): Promise<FetchModelsOutcome> {
+  const entryById = deps.catalogEntryById;
+  if (entryById === undefined) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  const resolved = await withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    const connection = loaded.settings.provider.connections.find((c) => c.id === connectionId);
+    if (connection === undefined) {
+      return undefined;
+    }
+    // Only catalog templates resolve here: a `custom:<slug>` providerId has no
+    // catalog entry (its fetch is the `{id}` branch), and the literal `custom`
+    // sentinel is refused too — its credential is the bare legacy key, not
+    // this connection-scoped one, so resolving it here would pair the wrong
+    // key with a user-typed origin.
+    const entry = entryById(connection.providerId);
+    if (entry === undefined || entry.id === "custom") {
+      return undefined;
+    }
+    const baseUrl = connection.baseUrl?.trim() ? connection.baseUrl.trim() : entry.baseUrl;
+    const transport = connection.transport ?? entry.defaultTransport;
+    const apiKey = await deps.vault.getSecretValue(connectionApiKeySecretKey(connectionId));
+    return {
+      baseUrl,
+      apiKey,
+      kind: (transport === "anthropic-messages" ? "anthropic" : "openai-compatible") as CustomProviderRecord["kind"],
+    };
+  });
+  if (resolved === undefined) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  if (resolved.baseUrl === "") {
+    return { ok: false, reason: "invalid_url" };
+  }
+  const outcome = await fetchModels({
+    baseUrl: catalogModelsBaseUrl(resolved.baseUrl),
+    apiKey: resolved.apiKey,
+    kind: resolved.kind,
+  });
+  if (!outcome.ok || outcome.models.length === 0) {
+    return outcome;
+  }
+  await withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return;
+    }
+    const target = loaded.settings.provider.connections.find((c) => c.id === connectionId);
+    if (target === undefined) {
+      // Deleted mid-fetch: the transient result still reaches the caller, but
+      // nothing is resurrected on disk.
+      return;
+    }
+    const updated: ProviderConnection = {
+      ...target,
+      models: outcome.models.map((m) => m.id),
+      modelsFetchedAt: (deps.now ?? defaultNowIso)(),
+    };
+    const merged: AnycodeSettings = {
+      ...loaded.settings,
+      provider: {
+        ...loaded.settings.provider,
+        connections: loaded.settings.provider.connections.map((c) => (c.id === connectionId ? updated : c)),
+      },
+    };
+    if (!settingsSchema.safeParse(merged).success) {
+      return;
+    }
+    await saveSettings(deps.settingsPath, merged);
+    await deps.onMutation?.(merged);
+  });
+  return outcome;
+}
+
 /**
  * custom-provider-fetch-models: the guarded models-list GET (module doc's
- * threat model), for either an ALREADY-SAVED record (`{id}` — main resolves
- * `baseUrl`/`kind`/the decrypted key itself) or a NOT-YET-SAVED endpoint the
+ * threat model), for an ALREADY-SAVED custom record (`{id}` — main resolves
+ * `baseUrl`/`kind`/the decrypted key itself), a CATALOG connection
+ * (`{connectionId}` — same resolution off the connection + its catalog entry,
+ * see `handleConnectionFetchModels`), or a NOT-YET-SAVED endpoint the
  * user is still previewing (`{baseUrl, apiKey, kind}` — the plaintext key
  * crosses IPC here, exactly once, for this transient preview call; it is
  * never persisted or logged by this handler).
@@ -469,6 +647,9 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
     return { ok: false, reason: "invalid_request" };
   }
   const fetchModels = deps.fetchModels ?? fetchCustomProviderModels;
+  if ("connectionId" in parsed.data) {
+    return handleConnectionFetchModels(deps, parsed.data.connectionId, fetchModels);
+  }
   if ("id" in parsed.data) {
     const { id } = parsed.data;
     // W4-R1-L1: resolve the saved record's (baseUrl, key, kind) atomically under

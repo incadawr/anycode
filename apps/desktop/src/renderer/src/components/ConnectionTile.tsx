@@ -76,6 +76,34 @@ export function connectionSecretKey(connectionId: string, authKind: "api_key" | 
   return authKind === "oauth" ? `provider.connection.${connectionId}.oauth` : `provider.connection.${connectionId}.apiKey`;
 }
 
+/** True when a providerId names a user-created custom-provider RECORD (`custom:<slug>`) — renderer-side mirror of `main/host-env.ts`'s `isCustomProviderRecordId` (value-only, no import). Distinct from the builtin `custom` SENTINEL (the bare literal). */
+export function isCustomRecordProviderId(providerId: string): boolean {
+  return providerId.startsWith("custom:");
+}
+
+/** The vault key a custom provider's ONE shared credential lives under — renderer-side mirror of `main/host-env.ts`'s `customProviderSecretKey` (value-only, no import). One key per PROVIDER, covering every connection that points at it. */
+export function customProviderSecretKey(providerId: string): SecretKey {
+  return `provider.${providerId}.apiKey`;
+}
+
+/**
+ * The vault key that gates a connection's credential in the UI (TASK.58): a
+ * `custom:<slug>` connection routes at the custom provider's OWN shared key
+ * (`provider.<id>.apiKey`, exactly what `main/host-env.ts`'s `activeCredential`
+ * reads for a custom id), every other connection at its own connection-scoped
+ * key. `authKind` only matters for the non-custom (catalog) branch — a custom
+ * provider is always `api_key`.
+ */
+export function connectionCredentialKey(
+  connectionId: string,
+  providerId: string,
+  authKind: "api_key" | "oauth",
+): SecretKey {
+  return isCustomRecordProviderId(providerId)
+    ? customProviderSecretKey(providerId)
+    : connectionSecretKey(connectionId, authKind);
+}
+
 /**
  * Auto-naming (task §"Компактная сетка"): a custom `label` always wins;
  * otherwise the catalog/template name, disambiguated with a trailing ordinal

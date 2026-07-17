@@ -146,6 +146,19 @@ export interface ProviderConnection {
   authOptional?: boolean;
   /** Advisory last-known health (TASK.45 §3); W11 writes it, never a runtime-readiness source. */
   lastHealth?: { status: ProviderHealthStatus; at: string; safeCode?: string };
+  /**
+   * Live-fetched model ids for a CATALOG connection (the guarded
+   * connection-scoped `/v1/models` fetch, main/provider-ipc.ts). Advisory
+   * display data only: pickers show these INSTEAD of the catalog entry's
+   * static hints when present (static hints still decorate matching ids with
+   * display names/capabilities); absent = static hints, exactly the pre-fetch
+   * behavior. Never a runtime-readiness or endpoint-resolution source. A
+   * `custom:<slug>` connection never carries this — its live list lives on
+   * the custom record's own `models[]`.
+   */
+  models?: string[];
+  /** ISO timestamp of the last successful connection-scoped model-list fetch. */
+  modelsFetchedAt?: string;
 }
 
 /**
@@ -293,6 +306,16 @@ export interface CustomProviderRecord {
   models: string[];
   /** ISO timestamp of the last successful model-list fetch. */
   modelsFetchedAt?: string;
+  /**
+   * User declaration that this endpoint authenticates nothing (TASK.58: local
+   * servers — LM Studio/ollama/llama.cpp). Only `true` is persisted (additive,
+   * same only-truthy-on-disk discipline as `ProviderConnection.authOptional`);
+   * a keyed record omits it. Governs whether create/update may skip the vault
+   * key and lets the origin-rebind guard (provider-ipc.ts) waive the
+   * fresh-key requirement for a keyless record that stays keyless (no stored
+   * key can be leaked to a new origin).
+   */
+  authOptional?: boolean;
 }
 
 // ── secret vault status (renderer NEVER receives a decrypted value, only status) ──
