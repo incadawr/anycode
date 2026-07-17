@@ -10,6 +10,9 @@ const scratch = mkdtempSync(join(tmpdir(), "anycode-codex-ipc-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 let homeCounter = 0;
 
+/** One macrotask turn — drains the microtask queue so queued seam work advances. */
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
 /** Rejects every path — no rung of the discovery ladder resolves. */
 const noBinaryFs: CodexBinaryFs = {
   realpath: (path) => path,
@@ -270,6 +273,140 @@ describe("createCodexOnboardingController.loginStart / loginCancel", () => {
     const result = await pending;
     expect(result).toEqual({ ok: false, reason: "cancelled" });
     expect(observedSignal?.aborted).toBe(true);
+  });
+});
+
+describe("serialization seam — login in-flight + key namespace (W4-F1 L10)", () => {
+  /** A doctor that echoes the profile it ran against, tracking call order and peak concurrency. */
+  function makeCountingDoctor(state: { calls: string[]; inFlight: number; maxConcurrent: number }, delayMs = 5) {
+    return vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : "system";
+      state.calls.push(id);
+      state.inFlight++;
+      state.maxConcurrent = Math.max(state.maxConcurrent, state.inFlight);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      state.inFlight--;
+      return { status: "ready", version: "0.144.3", account: { type: "chatgpt", email: null, plan: "plus" }, models: [], profileId: id };
+    });
+  }
+
+  // F1-a red-proof: a login holds a real child (browser open, seconds-minutes).
+  // A recheck of a DIFFERENT profile that lands during it must QUEUE behind the
+  // login seam, not spawn a second doctor child in parallel. Rollback (login
+  // outside inFlightByKey/inFlightTail) ⇒ the doctor starts immediately = RED.
+  it("F1-a: a different-profile recheck does NOT spawn a doctor while a login is in flight — it queues behind the seam", async () => {
+    let resolveLogin!: (outcome: { ok: true }) => void;
+    const runLogin = vi.fn(() => new Promise<{ ok: true }>((resolve) => { resolveLogin = resolve; }));
+    const state = { calls: [] as string[], inFlight: 0, maxConcurrent: 0 };
+    const runDoctor = makeCountingDoctor(state);
+    const deps = makeDeps({ runLogin: runLogin as never, runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "acc" })).ok).toBe(true);
+    expect((await controller.createProfile({ label: "other" })).ok).toBe(true);
+
+    const loginPromise = controller.loginStart("acc");
+    while (runLogin.mock.calls.length === 0) await tick();
+
+    const recheckPromise = controller.recheck("other");
+    await tick();
+    await tick();
+    // The discriminant: with the login child still alive, the different-profile
+    // recheck has NOT spawned a doctor of its own (rollback ⇒ parallel doctor here).
+    expect(runDoctor).not.toHaveBeenCalled();
+
+    resolveLogin({ ok: true });
+    const loginResult = await loginPromise;
+    const recheckSnap = await recheckPromise;
+
+    expect(loginResult.ok).toBe(true);
+    // Login's own post-login doctor ran first (inside the held seam), THEN the
+    // queued recheck — strictly sequential, never two children at once.
+    expect(state.calls).toEqual(["acc", "other"]);
+    expect(state.maxConcurrent).toBe(1);
+    expect(recheckSnap.report.profileId).toBe("other");
+  });
+
+  // F1-b red-proof: a concurrent recheck of the SAME profile, still in flight
+  // when the login finishes, must NOT be what the post-login re-diagnosis
+  // returns. The post-login doctor must be a fresh POST-credential verdict.
+  // Rollback (post-login `runExclusive(profile.id)` coalescing onto the
+  // in-flight pre-credential recheck) ⇒ the stale "signed_out" is handed back
+  // right after a successful sign-in = RED.
+  it("F1-b: the post-login re-diagnosis is a POST-credential verdict, not a coalesced pre-credential recheck of the same profile", async () => {
+    let credentialWritten = false;
+    let resolveLogin!: () => void;
+    const runLogin = vi.fn(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          resolveLogin = () => {
+            credentialWritten = true; // the login writes the credential into the profile home
+            resolve({ ok: true });
+          };
+        }),
+    );
+    let releaseDoctorGate!: () => void;
+    const doctorGate = new Promise<void>((resolve) => { releaseDoctorGate = resolve; });
+    const runDoctor = vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : "system";
+      // Captured AT CALL TIME: a doctor spawned before the credential landed
+      // reads "signed_out"; one spawned after reads "ready".
+      const credAtCall = credentialWritten;
+      if (!credAtCall) {
+        // Hold a pre-credential doctor in flight so it is provably still
+        // coalescible when the login reaches its post-login re-diagnosis.
+        await doctorGate;
+      }
+      const status: CodexDoctorReport["status"] = credAtCall ? "ready" : "signed_out";
+      return {
+        status,
+        version: "0.144.3",
+        ...(status === "ready" ? { account: { type: "chatgpt", email: null, plan: "plus" }, models: [] } : {}),
+        profileId: id,
+      };
+    });
+    const deps = makeDeps({ runLogin: runLogin as never, runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "acc" })).ok).toBe(true);
+
+    const loginPromise = controller.loginStart("acc");
+    while (runLogin.mock.calls.length === 0) await tick();
+
+    // A recheck of the SAME profile arrives while the login child is alive.
+    const recheckPromise = controller.recheck("acc");
+    await tick();
+    await tick();
+
+    resolveLogin(); // credential written; login proceeds to its post-login doctor
+    await tick();
+    releaseDoctorGate(); // unblock any pre-credential doctor left in flight (rollback path)
+
+    const loginResult = await loginPromise;
+    await recheckPromise;
+
+    expect(loginResult.ok).toBe(true);
+    if (loginResult.ok) {
+      // The discriminant: a POST-credential verdict, not the stale pre-credential
+      // recheck's "signed_out" (rollback coalesces onto it here).
+      expect(loginResult.snapshot.report.status).toBe("ready");
+      expect(loginResult.snapshot.report.profileId).toBe("acc");
+    }
+  });
+
+  // F2 red-proof: the reserved active-profile key must be unreachable from a
+  // renderer-supplied id. `recheck()` (active) and `recheck("recheck:active")`
+  // must occupy DISJOINT keys. Rollback (bare `profileId ?? ACTIVE_PROFILE_KEY`)
+  // ⇒ the literal string collides with the reserved key and coalesces = RED.
+  it("F2: recheck() and recheck(\"recheck:active\") occupy disjoint keys — the reserved key is not collidable from a renderer id", async () => {
+    const deps = makeDeps();
+    const controller = createCodexOnboardingController(deps);
+    const [active, bogus] = await Promise.all([controller.recheck(), controller.recheck("recheck:active")]);
+    // Disjoint keys ⇒ two independent runs, not one coalesced promise.
+    expect(active).not.toBe(bogus);
+    // The argless call diagnosed the ACTIVE (system) profile...
+    expect(active.report.profileId).toBeUndefined();
+    // ...while the literal-string id is an UNKNOWN profile (resolution error),
+    // never silently adopted as the active recheck.
+    expect(bogus.report.status).toBe("error");
   });
 });
 
