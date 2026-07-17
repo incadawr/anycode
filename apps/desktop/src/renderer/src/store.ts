@@ -279,6 +279,10 @@ export interface PermissionUiRequest {
  * `SESSION_HISTORY_MAX_ITEMS`, so the hydrated transcript only shows the tail.
  * Slice P7.26/R2 adds `rewind_restored`/`rewind_rejected` for the checkpoint
  * timeline's `rewind_result` outcome (design slice-P7.26-R2-ratification.md §1).
+ * TASK.56 W3-FIX adds `retry_blocked`: `dispatchTryAgain` (App.tsx) refuses an
+ * armed offer whose images the live model verdict no longer accepts, leaving
+ * the offer armed instead of consuming it (fable-task56-w3-codex-ruling.md
+ * finding 2 §(c)).
  */
 export type NoticeKind =
   | "turn_rejected"
@@ -294,7 +298,8 @@ export type NoticeKind =
   | "rewind_restored"
   | "rewind_rejected"
   | "engine_notice"
-  | "worktree_notice";
+  | "worktree_notice"
+  | "retry_blocked";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
@@ -593,6 +598,16 @@ export interface DesktopState {
   reasoningEffort: ReasoningEffort;
   /** Effort levels the current model supports; undefined ⇒ hide the selector. */
   availableEffortLevels: ReasoningEffort[] | undefined;
+  /**
+   * TASK.56 W3: live image-input verdict for the CURRENT model, carried on
+   * `host_ready`/`model_changed` (W2). `undefined` means the host omitted the
+   * field (no seam wired, or a legacy host) — the renderer then applies NO
+   * model-level attachment gating, exactly today's pre-TASK.56 behavior.
+   * Lives alongside `model`/`reasoningEffort` (NOT in `SessionSlice`) for the
+   * same reason: `host_ready` sets it explicitly, `performReset` must not
+   * clear it out from under an in-flight model pick.
+   */
+  imageInput: boolean | undefined;
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -1883,6 +1898,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       mode: null,
       reasoningEffort: "off",
       availableEffortLevels: undefined,
+      imageInput: undefined,
       ...initialSessionSlice(),
       lastFatal: null,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
@@ -1944,6 +1960,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               model: message.model,
               reasoningEffort: message.reasoningEffort ?? "off",
               availableEffortLevels: message.availableEffortLevels,
+              // TASK.56 W3: live per-model verdict off the same hello (W2
+              // wire). Absent on the message -> undefined here -> no
+              // model-level gating (today's behavior for a legacy host).
+              imageInput: message.imageInput,
             });
             return;
           case "mode_changed":
@@ -1975,6 +1995,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               model: message.model,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,
+              // TASK.56 W3: re-gate upfront on a mid-session model switch —
+              // vision -> non-vision flips this to false in the SAME push
+              // that already updates `model` (W2 re-reads the verdict after
+              // switchModel advances the closure). Absent -> undefined -> no
+              // gating, matching host_ready's fallback above.
+              imageInput: message.imageInput,
             });
             return;
           case "mode_change_rejected":

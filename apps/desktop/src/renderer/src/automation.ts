@@ -4222,7 +4222,16 @@ export function createAutomationFacade(
       // The REAL dispatch: same function the button's own onClick calls
       // (App.tsx), through the SAME `registry.sendToTab` every other facade
       // driver uses — no second path.
-      dispatchTryAgain(store, (msg) => registry.sendToTab(tabId, msg));
+      const outcome = dispatchTryAgain(store, (msg) => registry.sendToTab(tabId, msg));
+      // TASK.56 W3-FIX: dispatchTryAgain's entry gate can refuse an
+      // image-bearing offer the live model verdict no longer accepts,
+      // leaving it armed rather than sending — report that truthfully
+      // instead of a blanket {ok:true} (same facade-honesty precedent as
+      // the not_ready check above: a lying facade could mask a real
+      // regression in a live smoke).
+      if (outcome === "blocked_images") {
+        return { ok: false, reason: "images_unsupported" };
+      }
       return { ok: true };
     },
 
@@ -4260,6 +4269,13 @@ export function createAutomationFacade(
       // (`handleTryAgain` in App.tsx) IS `dispatchTryAgain`, so this still
       // exercises the exact same send/queue/busy decision — just through the
       // real render + event-handler path instead of skipping straight to it.
+      // {ok:true} here is a DELIVERY claim, not an outcome claim (this class
+      // of DOM click-driver's contract throughout the file, distinct from the
+      // facade shortcuts above): a delivered click can still be refused by
+      // `dispatchTryAgain`'s TASK.56 W3-FIX entry gate (`blocked_images`) — that
+      // outcome is read off the state plane (`retryOffer`/`notice`/
+      // `tryAgainButtonState`), not this return (fable-task56-w3fix-codex-ruling.md
+      // finding 1).
       const clicked = tryAgainButtonDom.click(tabId, blockId);
       return clicked ? { ok: true } : { ok: false, reason: "not_present" };
     },

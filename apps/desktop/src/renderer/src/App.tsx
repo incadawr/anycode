@@ -139,6 +139,18 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
 }
 
 /**
+ * TASK.56 W3-FIX text for a retry blocked by the live model image verdict —
+ * same semantics as Composer's `MODEL_IMAGE_SEND_BLOCKED_TEXT`, adapted to
+ * the retry offer's own recovery path (switch model or send fresh, since an
+ * armed offer's images can't be individually removed the way a draft's can).
+ */
+export const RETRY_BLOCKED_IMAGES_TEXT =
+  "This model does not accept image attachments — the retry still has images attached. Switch back to a vision-capable model to send it, or send a new message without attachments.";
+
+/** `dispatchTryAgain`'s outcome (TASK.56 W3-FIX): distinguishes a blocked retry from every other exit so automation's `tryAgain` facade can report it truthfully instead of a blanket `{ok:true}`. */
+export type TryAgainOutcome = "sent" | "queued" | "blocked_images" | "not_ready" | "no_offer";
+
+/**
  * TASK.33 W8 Try-again dispatch: consumes the one-shot offer (`consumeRetry`
  * — a no-op on a stale/double click once already consumed) and re-sends its
  * text+images through the EXACT SAME enqueue-vs-direct-send decision as
@@ -161,19 +173,41 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
  * restart" — the standalone fallback Try-again row (`MessageList.tsx`'s
  * `showStandaloneRetry`) is what makes that true at the UI level too, once
  * `host_ready`'s hydration has dropped the anchored button's `loop_end` block.
+ *
+ * TASK.56 W3-FIX (fable-task56-w3-codex-ruling.md finding 2 §(c)): an entry
+ * gate runs BEFORE `consumeRetry`, ahead of the enqueue-vs-direct-send
+ * branch, so it covers both. `dispatchTryAgain` was the one W3-gated send
+ * site the cut missed (Composer blocks upfront, the drainer is a deliberate
+ * host-backstop path per finding 1) — an image-bearing offer clicked after
+ * the live model swings to non-vision was consumed and lost with no way to
+ * restore it (no `queueInFlight` to key a restore off, on the direct-send
+ * branch). The gate PEEKS `state.retry` rather than consuming it: a blocked
+ * click leaves the offer armed, so the button stays live and a later click —
+ * after switching back to a vision model — replays the exact same offer.
  */
-export function dispatchTryAgain(store: DesktopStoreApi, sendToHost: (message: UiToHostMessage) => void): void {
+export function dispatchTryAgain(
+  store: DesktopStoreApi,
+  sendToHost: (message: UiToHostMessage) => void,
+): TryAgainOutcome {
   if (store.getState().connection !== "ready") {
-    return;
-  }
-  const offer = store.getState().consumeRetry();
-  if (offer === null) {
-    return;
+    return "not_ready";
   }
   const state = store.getState();
+  const pending = state.retry;
+  if (pending === null) {
+    return "no_offer";
+  }
+  if (pending.images.length > 0 && state.imageInput === false) {
+    state.setNotice({ kind: "retry_blocked", text: RETRY_BLOCKED_IMAGES_TEXT });
+    return "blocked_images";
+  }
+  const offer = state.consumeRetry();
+  if (offer === null) {
+    return "no_offer";
+  }
   if (shouldEnqueue(state.turn.status, state.queueInFlight)) {
     state.enqueuePrompt({ text: offer.text, images: offer.images });
-    return;
+    return "queued";
   }
   const requestId = crypto.randomUUID();
   state.appendUserText(requestId, transcriptTextWithImages(offer.text, offer.images.length));
@@ -184,6 +218,7 @@ export function dispatchTryAgain(store: DesktopStoreApi, sendToHost: (message: U
     text: offer.text,
     ...(offer.images.length > 0 ? { images: offer.images.map((image) => image.attachment) } : {}),
   });
+  return "sent";
 }
 
 interface ActiveTabBodyProps {

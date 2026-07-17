@@ -227,8 +227,14 @@ export interface HarnessOptions {
     repoMap(): WireEnvStatus["repoMap"];
     flushTelemetry?(): Promise<void>;
   };
-  /** Multimodal send-path capability gate; defaults to enabled for legacy tests. */
-  imageInputEnabled?: boolean;
+  /**
+   * Multimodal send-path capability gate; defaults to enabled for legacy tests.
+   * TASK.56 W2: a function form mirrors the host's live closure over the
+   * current model (re-read per emit); `null` omits the Session seam entirely
+   * (legacy-host shape — no `imageInput` on the wire) while the loop's media
+   * port stays default-enabled.
+   */
+  imageInputEnabled?: boolean | (() => boolean) | null;
   /** 6.DP-2: BackgroundTaskPort for the bg-tasks-parity e2e. When present the
    *  harness mirrors host boot EXACTLY: registers backgroundCapableBashTool
    *  (silentDuplicateWarning, over the default Bash) + bashOutputTool +
@@ -365,7 +371,10 @@ export function createHarness(options: HarnessOptions): Harness {
   const broker = new IpcPermissionBroker(emit, options.brokerTimeoutMs);
   const rules = options.rules ?? new SessionPermissionRules();
   const media: MediaCapabilityPort = {
-    imageInputEnabled: () => options.imageInputEnabled ?? true,
+    imageInputEnabled:
+      typeof options.imageInputEnabled === "function"
+        ? options.imageInputEnabled
+        : () => (typeof options.imageInputEnabled === "boolean" ? options.imageInputEnabled : true),
   };
 
   const config: AgentLoopConfig = {
@@ -434,7 +443,7 @@ export function createHarness(options: HarnessOptions): Harness {
       : {}),
     ...(options.envStatus ? { envStatus: options.envStatus } : {}),
     ...(options.checkpointsSeam ? { checkpoints: options.checkpointsSeam } : {}),
-    imageInputEnabled: media.imageInputEnabled,
+    ...(options.imageInputEnabled !== null ? { imageInputEnabled: media.imageInputEnabled } : {}),
     ...(options.reasoningSupported !== undefined ? { reasoningSupported: options.reasoningSupported } : {}),
     ...(options.availableEffortLevels !== undefined ? { availableEffortLevels: options.availableEffortLevels } : {}),
     ...(options.selectedEffort !== undefined ? { selectedEffort: options.selectedEffort } : {}),

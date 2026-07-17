@@ -292,6 +292,79 @@ describe("desktop store — connection lifecycle", () => {
     expect(store.getState().reasoningEffort).toBe("high");
     expect(store.getState().availableEffortLevels).toEqual(["off", "high", "max"]);
   });
+
+  // TASK.56 W3 (renderer layer): these read `imageInput` straight off the
+  // applied store state, so reverting the store's host_ready/model_changed
+  // handlers (dropping the `imageInput: message.imageInput` assignment added
+  // this wave) turns them red even with the W2 wire field still present on
+  // the message — they discriminate the RENDERER integration, not the wire.
+  it("host_ready carries the model image-input verdict into the store, both polarities", () => {
+    const { scheduler } = createManualScheduler();
+    const trueStore = createDesktopStore(scheduler);
+    trueStore.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: true,
+    });
+    expect(trueStore.getState().imageInput).toBe(true);
+
+    const falseStore = createDesktopStore(scheduler);
+    falseStore.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "glm-5.2",
+      sessionId: "s1",
+      imageInput: false,
+    });
+    expect(falseStore.getState().imageInput).toBe(false);
+  });
+
+  it("host_ready without the imageInput field leaves the store slot undefined (legacy host, no gating — today's behavior)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    expect(store.getState().imageInput).toBeUndefined();
+  });
+
+  it("model_changed re-reads the verdict on a vision -> non-vision switch, and back", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: true,
+    });
+    expect(store.getState().imageInput).toBe(true);
+
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    expect(store.getState().model).toBe("glm-5.2");
+    expect(store.getState().imageInput).toBe(false);
+
+    store.getState().applyHostMessage({ type: "model_changed", model: "claude-sonnet", reasoningEffort: "off", imageInput: true });
+    expect(store.getState().imageInput).toBe(true);
+  });
+
+  it("model_changed without imageInput resets the store slot to undefined (an engine session with no seam wired)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: true,
+    });
+    store.getState().applyHostMessage({ type: "model_changed", model: "other-model", reasoningEffort: "off" });
+    expect(store.getState().imageInput).toBeUndefined();
+  });
 });
 
 describe("desktop store — respawn-hydration reset (task 2.1.6, design F2)", () => {
@@ -2561,6 +2634,40 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(store.getState().queuePaused).toBe(true);
     expect(store.getState().queueInFlight).toBeNull();
     expect(store.getState().notice?.kind).toBe("turn_rejected");
+  });
+
+  // TASK.56 W3(e): the cut requires this exact scenario covered — a queued
+  // prompt carrying images, drained just as the model swings to a
+  // non-vision one, hits the HOST-side backstop (session.ts:1146) and comes
+  // back. P7.14's restore-to-head + pause behavior is asserted UNCHANGED;
+  // the new part is that the image payload survives the round trip intact
+  // (never dropped/mutated by the reject path).
+  it("queued prompt with images, drained then rejected after a mid-flight model switch to non-vision: restores to the head with images intact", () => {
+    const store = readyStore();
+    const image = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().enqueuePrompt({ text: "look at this", images: [image] });
+    store.getState().enqueuePrompt({ text: "next", images: [] });
+
+    const drained = store.getState().takeQueueHead("req-1");
+    expect(drained?.images).toEqual([image]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["next"]);
+
+    // The model switches to a non-vision one WHILE this item is in flight
+    // (host/index.ts re-gates on the NEXT send with the closure's current
+    // model; the renderer just mirrors the push here).
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    expect(store.getState().imageInput).toBe(false);
+
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "req-1", reason: "unsupported_images" });
+
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["look at this", "next"]);
+    expect(store.getState().promptQueue[0]?.images).toEqual([image]);
+    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().queueInFlight).toBeNull();
+    expect(store.getState().notice).toEqual({
+      kind: "turn_rejected",
+      text: "Message rejected: the current model does not accept image attachments.",
+    });
   });
 
   it("turn_rejected for a non-matching requestId leaves the queue untouched (still just a notice)", () => {

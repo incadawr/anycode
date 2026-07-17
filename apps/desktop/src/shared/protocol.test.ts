@@ -43,6 +43,29 @@ describe("set_model protocol (slice P7.15 · F14)", () => {
     } satisfies HostToUiMessage;
     expect(structuredClone(nonReasoning)).toEqual(nonReasoning);
   });
+
+  // TASK.56 W2: `imageInput` is additive + optional on both hello and
+  // model_changed. The two `satisfies` blocks ABOVE (and the host_ready ones
+  // below) are the compile-time proof that pre-TASK.56 message snapshots
+  // WITHOUT the field remain valid; this test covers the field-present shape.
+  it("carries the additive TASK.56 imageInput model verdict as structured-clone-safe data", () => {
+    const changed = {
+      type: "model_changed",
+      model: "glm-4.6",
+      reasoningEffort: "off",
+      imageInput: false,
+    } satisfies HostToUiMessage;
+    const ready = {
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: true,
+    } satisfies HostToUiMessage;
+    expect(structuredClone(changed)).toEqual(changed);
+    expect(structuredClone(ready)).toEqual(ready);
+  });
 });
 
 describe("set_reasoning_effort protocol", () => {

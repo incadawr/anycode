@@ -879,6 +879,36 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(findBlock(store.getState().transcript, "user_text")?.text).toBe("see this\n\n[1 image attached]");
   });
 
+  // T6 (fable-task56-w3-codex-ruling.md finding 1, PIN): the drainer does NOT
+  // pre-gate on `state.imageInput` — this is a spoken decision (cut §3 W3(e)
+  // + smoke-plan §5.2), not an oversight. The single authoritative gate is
+  // the HOST's reject (session.ts:1147), which the restore-to-head test above
+  // ("queued prompt with images, drained then rejected...", store.test.ts
+  // ~2635) already covers end-to-end. This test PINs the drainer's OWN
+  // decision in isolation, so a future "helpful" change adding a drainer-side
+  // gate goes red against this ruling instead of silently changing P7.14
+  // semantics. Reverting to a pre-gated drainer is exactly what should turn
+  // this test red.
+  it("PIN: an image-bearing head still drains onto the wire when imageInput:false — host-side reject stays the sole gate, by design (finding 1 NOT-A-BUG)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+    expect(store.getState().imageInput).toBe(false);
+
+    const attachment = { mediaType: "image/png" as const, data: "BASE64" };
+    store.getState().enqueuePrompt({ text: "look", images: [{ name: "a.png", sizeBytes: 9, attachment }] });
+
+    const sent = userMessages(port);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.images).toEqual([attachment]);
+    expect(store.getState().queueInFlight).not.toBeNull();
+  });
+
   it("disposeTab unsubscribes the drainer — a late enqueue on the retained store cannot dispatch", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);

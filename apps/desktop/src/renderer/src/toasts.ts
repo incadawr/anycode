@@ -57,6 +57,8 @@ export const TOAST_AUTO_HIDE_MS = 5000;
  * (cut §2(k).2) is a drift check firing when the server's effective posture
  * came back weaker than the persisted preset claims, a degraded-but-not-
  * refused state (same tint family as stream_retry/permission_settled).
+ * TASK.56 W3-FIX: retry_blocked is danger — the user's Try-again click was
+ * refused (same tint family as mode_change_rejected/image_attach_rejected).
  */
 const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   turn_rejected: "warning",
@@ -73,6 +75,7 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   rewind_rejected: "danger",
   engine_notice: "warning",
   worktree_notice: "warning",
+  retry_blocked: "danger",
   shell_error: "danger",
 };
 

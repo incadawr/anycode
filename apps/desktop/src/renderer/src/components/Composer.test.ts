@@ -25,6 +25,8 @@ import {
   hasSendableDraft,
   insertDraftText,
   quotaWindowLabel,
+  isImageAttachBlockedByModel,
+  isSendBlockedByModelImages,
   shouldEnqueue,
   sniffComposerImageMediaType,
 } from "./Composer.js";
@@ -363,6 +365,33 @@ describe("buildQuotaPopoverView (cut §6.2 — hidden block, never 0%)", () => {
       0,
     );
     expect(view).toEqual({ primaryLine: "Weekly · 65% left · resets in 5d", secondaryLine: null, creditsLine: null });
+  });
+});
+
+describe("isImageAttachBlockedByModel (TASK.56 W3 — model-level attach gate, layered on the engine-level supportsImages)", () => {
+  it("blocks ONLY on an explicit false verdict for the current model", () => {
+    expect(isImageAttachBlockedByModel(false)).toBe(true);
+  });
+
+  it("does not block on true or on an absent verdict (legacy host / no seam = today's behavior)", () => {
+    expect(isImageAttachBlockedByModel(true)).toBe(false);
+    expect(isImageAttachBlockedByModel(undefined)).toBe(false);
+  });
+});
+
+describe("isSendBlockedByModelImages (TASK.56 W3(c) — attached images on a vision -> non-vision switch block send, never vanish)", () => {
+  it("blocks send only when the model rejects images AND the draft actually has some attached", () => {
+    expect(isSendBlockedByModelImages(false, 1)).toBe(true);
+    expect(isSendBlockedByModelImages(false, 3)).toBe(true);
+  });
+
+  it("does not block a text-only draft even on a false verdict (nothing image-related to block)", () => {
+    expect(isSendBlockedByModelImages(false, 0)).toBe(false);
+  });
+
+  it("does not block when the verdict is true or absent, regardless of attachment count", () => {
+    expect(isSendBlockedByModelImages(true, 2)).toBe(false);
+    expect(isSendBlockedByModelImages(undefined, 2)).toBe(false);
   });
 });
 
