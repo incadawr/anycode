@@ -1,0 +1,3 @@
+{"t_ms":0,"dir":"in","raw":{"type":"control_request","request_id":"<init>","request":{"subtype":"initialize"}}}
+{"t_ms":1,"dir":"in","raw":{"type":"control_request","request_id":"<effort>","request":{"subtype":"apply_flag_settings","settings":{"effortLevel":"high"}}}}
+{"t_ms":2,"dir":"out","raw":{"type":"control_response","response":{"subtype":"success","request_id":"<effort>"}}}
