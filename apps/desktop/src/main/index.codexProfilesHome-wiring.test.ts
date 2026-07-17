@@ -19,6 +19,15 @@
  * tree lands under the (mocked) real homedir instead. Those two tests go red
  * if either half of the gate is dropped from `resolveCodexProfilesHome`.
  *
+ * W4-F0d (Fable ruling iter-11) adds the fail-closed plane: a MALFORMED
+ * lever (empty/whitespace/relative/unexpanded-`~`) under the satisfied gate
+ * REFUSES the boot at module top — the dynamic import rejects, zero
+ * artifacts of any plane exist — instead of silently falling back to the
+ * real homedir (the forbidden owner-`~` write, masked as a green run). The
+ * same malformed values with the gate refused (automation off, or packaged)
+ * stay QUIET: boot proceeds, lever ignored — ambient garbage never breaks a
+ * normal launch.
+ *
  * Boot mechanics mirror index.appVersion-wiring.test.ts (see its header for
  * why index.ts must be dynamically imported under a hoisted electron mock).
  * `node:os.homedir` is mocked to a per-test scratch dir so the REFUSED-lever
@@ -348,5 +357,60 @@ describe("main/index.ts — host fork env forward of the lever (W4-F0b, Fable ru
       expect(call.override).toBeNull();
       expect(call.varAfter).toBeUndefined();
     }
+  });
+});
+
+describe("main/index.ts — malformed lever under automation REFUSES boot (W4-F0d, Fable ruling iter-11)", () => {
+  // The four named malformed shapes from the ruling: empty, whitespace-only,
+  // a relative path, and an unexpanded tilde (the canonical operator typo —
+  // the shell never expanded `~`, so it reaches the process as a relative
+  // path that would otherwise silently resolve against the REAL homedir).
+  const MALFORMED_LEVERS = ["", "   ", "relative/x", "~/lever"];
+
+  for (const malformed of MALFORMED_LEVERS) {
+    it(`RED-proof (fail-closed main): lever ${JSON.stringify(malformed)} with the gate satisfied rejects the boot import — zero artifacts, zero fork envs`, async () => {
+      process.env.ANYCODE_AUTOMATION = "1";
+      process.env.ANYCODE_CODEX_PROFILES_HOME = malformed;
+      process.env.ANYCODE_SETTINGS_PATH = join(scratch, "settings.json");
+      process.env.ANYCODE_SECRETS_PATH = join(scratch, "secrets.json");
+
+      // Module-top eager fail-fast: the throw happens at module evaluation,
+      // BEFORE the whenReady registration — the dynamic import itself
+      // rejects, with the host-reader's message family (grep parity).
+      await expect(import("./index.js")).rejects.toThrow(/refusing to boot/i);
+
+      // No artifact of ANY plane: nothing under the (mocked) real home, no
+      // lever-root materialized, no IPC control plane registered, and not a
+      // single host fork env built (the scrub never ran).
+      expect(existsSync(join(fakeHome, ".anycode"))).toBe(false);
+      expect(existsSync(leverRoot)).toBe(false);
+      expect(ipcHandlers.size).toBe(0);
+      expect(hostEnvScrubCalls.length).toBe(0);
+    });
+  }
+
+  it("quiet gate-refused: a malformed ambient lever with automation OFF boots normally under the (mocked) real home", async () => {
+    delete process.env.ANYCODE_AUTOMATION;
+    process.env.ANYCODE_CODEX_PROFILES_HOME = "relative/x";
+    delete process.env.ANYCODE_SETTINGS_PATH;
+    delete process.env.ANYCODE_SECRETS_PATH;
+
+    await bootAndCreateProfile();
+
+    expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(true);
+    expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
+  });
+
+  it("quiet packaged: a malformed lever with ANYCODE_AUTOMATION=1 in a PACKAGED build is ignored — boot proceeds, the var is never read", async () => {
+    mockIsPackaged.current = true;
+    process.env.ANYCODE_AUTOMATION = "1";
+    process.env.ANYCODE_CODEX_PROFILES_HOME = "   ";
+    delete process.env.ANYCODE_SETTINGS_PATH;
+    delete process.env.ANYCODE_SECRETS_PATH;
+
+    await bootAndCreateProfile();
+
+    expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(true);
+    expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
   });
 });

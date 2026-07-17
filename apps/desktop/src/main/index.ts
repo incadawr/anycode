@@ -225,17 +225,26 @@ function resolveProfileHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string
  * Dev-only override for the user home the Codex profile tree
  * (`<home>/.anycode/codex/…`) lives under (codex-profiles W4-F0, findings
  * S1-2), same "duplicated on purpose" rule as `resolveProfileHome` above
- * (`ANYCODE_CODEX_PROFILES_HOME`, local to this registration site). Same
- * double gate: `ANYCODE_AUTOMATION==="1" && !isPackaged`, plus a non-empty
- * ABSOLUTE path — a packaged production build NEVER honors the var, so every
- * consumer falls back to the real `os.homedir()` there. Resolved ONCE at the
- * codex registration site below and threaded into EVERY consumer that
- * derives the profiles root: `registerCodexIpc` (the profile registry —
- * create/delete/resolve/login homes), `registerCodexInstallIpc` +
- * `refreshCodexManifest`'s cache file (the `bin/` + `manifest.json` tree
- * under the same root), and the rollout-import sessions-dir resolver. Lets a
- * live smoke mint `plain`/`authLink` profiles in a disposable root instead
- * of writing into the owner's real `~/.anycode/codex` (W4-S1b/S2/S3/S4).
+ * (`ANYCODE_CODEX_PROFILES_HOME`, local to this module). Same double gate:
+ * `ANYCODE_AUTOMATION==="1" && !isPackaged` — a packaged production build
+ * NEVER honors the var (and never throws on it), so every consumer falls
+ * back to the real `os.homedir()` there. Lets a live smoke mint
+ * `plain`/`authLink` profiles in a disposable root instead of writing into
+ * the owner's real `~/.anycode/codex` (W4-S1b/S2/S3/S4).
+ *
+ * Write-plane delta from the read-plane sibling levers above (W4-F0d, Fable
+ * ruling iter-11): gate satisfied + var present + malformed (empty or
+ * relative after trim) THROWS instead of returning null. This base is where
+ * the profile registry / install plane CREATE directories, so a silent
+ * null-fallback would route every write into the owner's real
+ * `~/.anycode/codex` on a mere operator typo (unexpanded `~`, relative path,
+ * empty string) — the forbidden write, masked as a green smoke run. The
+ * message family matches the host-side reader
+ * (`resolveCodexProfilesHomeOverride`, host/engines/codex/codex-home.ts) by
+ * contract — grep parity. Gate-refused and var-absent still resolve to
+ * `null` with no throw: ambient garbage never breaks a normal dev launch or
+ * a packaged build, and an automation run without the lever keeps the
+ * production byte-path.
  */
 function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string | null {
   if (env.ANYCODE_AUTOMATION !== "1" || isPackaged) {
@@ -246,11 +255,35 @@ function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): 
     return null;
   }
   const trimmed = raw.trim();
-  if (trimmed === "" || !isAbsolute(trimmed)) {
-    return null;
+  if (trimmed === "") {
+    throw new Error(
+      "ANYCODE_CODEX_PROFILES_HOME is set but empty under automation; refusing to boot instead of falling back to the real home",
+    );
+  }
+  if (!isAbsolute(trimmed)) {
+    throw new Error(
+      `ANYCODE_CODEX_PROFILES_HOME must be an absolute path under automation, got ${JSON.stringify(trimmed)}; refusing to boot instead of falling back to the real home`,
+    );
   }
   return trimmed;
 }
+
+/**
+ * The W4-F0 codex profiles-home lever (findings S1-2), resolved ONCE at
+ * module scope (W4-F0d eager fail-fast, Fable ruling iter-11): a malformed
+ * value under the automation gate throws HERE — a synchronous boot refusal
+ * with a non-zero exit, before a single mkdir of ANY plane (including the
+ * userData override below) and before the whenReady registration ever runs
+ * (a throw inside the whenReady callback would be an unhandled rejection and
+ * a half-alive windowless app instead). This single resolution is the one
+ * truth consumed by BOTH sites: `buildHostEnvFor`'s set-or-DELETE host-fork
+ * scrub and the whenReady codex registration site (profile registry /
+ * install plane / manifest cache / rollout resolver /
+ * `resolveCodexProfileForTab`), so the main-plane resolutions of one record
+ * can never disagree. `undefined` (production / gate-refused / var-absent)
+ * leaves every consumer on its real `homedir()` default.
+ */
+const codexProfilesHome: string | undefined = resolveCodexProfilesHome(process.env, app.isPackaged) ?? undefined;
 
 // Dev-only automation profile isolation (design/slice-P7.H-cut.md §4.2): must
 // run at module top level, BEFORE `app.whenReady()` registration below —
@@ -343,16 +376,6 @@ let providerReady = false;
  * per-profile report cache.
  */
 let codexBinaryPath: string | null = null;
-/**
- * The W4-F0 codex profiles-home lever (findings S1-2), resolved ONCE in the
- * whenReady callback at the codex registration site (see
- * `resolveCodexProfilesHome`) and held module-level so the tab-spawn plane's
- * `resolveCodexProfileForTab` below resolves a profile record against the
- * SAME home as the registry — the two main-plane resolutions of one record
- * must never disagree. `undefined` (production / refused override) leaves
- * every consumer on its real `homedir()` default.
- */
-let codexProfilesHome: string | undefined;
 /**
  * The host fork env, rebuilt async on every successful mutation and read
 
@@ -727,17 +750,12 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   applySubagentsHomeOverride(env, resolveSubagentsHome(bootEnv, app.isPackaged));
   // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
   // ambient var can never ride the bootEnv spread into a host fork ungated.
-  // Deliberately re-resolved stateless per env rebuild (NOT the module-level
-  // `codexProfilesHome`): refreshProviderState runs BEFORE the codex
-  // registration site that assigns it. The resolver is pure over the same
-  // inputs, so both resolutions are identical by construction.
-  // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
-  // ambient var can never ride the bootEnv spread into a host fork ungated.
-  // Deliberately re-resolved stateless per env rebuild (NOT the module-level
-  // `codexProfilesHome`): refreshProviderState runs BEFORE the codex
-  // registration site that assigns it. The resolver is pure over the same
-  // inputs, so both resolutions are identical by construction.
-  applyCodexProfilesHomeOverride(env, resolveCodexProfilesHome(bootEnv, app.isPackaged));
+  // Consumes the module-scope `codexProfilesHome` const (W4-F0d single eager
+  // resolution) — F0b's stateless per-rebuild re-resolve is gone: module
+  // scope initializes before whenReady, so the ordering hazard it defended
+  // against (refreshProviderState racing a whenReady-time assignment) no
+  // longer exists by construction.
+  applyCodexProfilesHomeOverride(env, codexProfilesHome ?? null);
   return env;
 }
 
@@ -1323,15 +1341,15 @@ void app.whenReady().then(async () => {
   // before-quit's awaited `shutdown()` below; this is the floor under it.
   installCodexChildExitGuard();
 
-  // W4-F0 (findings S1-2): the codex profiles-root home lever, resolved ONE
-  // time at this registration site and threaded into every consumer
-  // (registerCodexIpc / registerCodexInstallIpc / refreshCodexManifest's
-  // cache file / the rollout-import resolver / resolveCodexProfileForTab's
-  // record resolution). `undefined` — the production case and any refused
+  // W4-F0 (findings S1-2): the codex profiles-root home lever — the
+  // module-scope `codexProfilesHome` const (W4-F0d eager fail-fast) —
+  // threaded into every consumer below (registerCodexIpc /
+  // registerCodexInstallIpc / refreshCodexManifest's cache file / the
+  // rollout-import resolver / resolveCodexProfileForTab's record
+  // resolution). `undefined` — the production case and any gate-refused
   // override — leaves every consumer on its own real `homedir()` default,
-  // byte-identical to before this lever existed.
-  codexProfilesHome = resolveCodexProfilesHome(process.env, app.isPackaged) ?? undefined;
-
+  // byte-identical to before this lever existed; a malformed value under
+  // automation never reaches here (module-top boot refusal).
   codexOnboarding = registerCodexIpc({
     bootEnv,
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
