@@ -19,6 +19,7 @@
  * own fail-closed validation would reject).
  */
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { GitBranchInfo, GitCommitInfo } from "@anycode/core";
 import {
   createAutomationFacade,
@@ -48,7 +49,7 @@ import {
   type CodexPaneBinaryState,
   type CodexPaneRowState,
   type CodexProfileChipOptionState,
-  type CodexImportRolloutRowState,
+  type CodexImportRolloutRowDomFacts,
 } from "./automation.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
@@ -5590,8 +5591,9 @@ describe("automation facade — codexProfileChipState / open / pick (W4-F0, find
 });
 
 describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", () => {
-  function importRow(overrides: Partial<CodexImportRolloutRowState> = {}): CodexImportRolloutRowState {
+  function importRow(overrides: Partial<CodexImportRolloutRowDomFacts> = {}): CodexImportRolloutRowDomFacts {
     return {
+      fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
       timestamp: "2026-07-17 03:14 UTC",
       size: "12.3 KB",
       cwd: "/ws/proj",
@@ -5601,7 +5603,7 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     };
   }
 
-  /** A fully-controllable fake `CodexImportDialogDom` over a mutable cell, so the drive spies can flip what the read probes report (waitUntil-visible transitions). */
+  /** A fully-controllable fake `CodexImportDialogDom` over a mutable cell, so the drive spies can flip what the read probes report (waitUntil-visible transitions). The default `setProfile`/`clickRolloutAt` also commit the matching provenance stamp (a fast product whose reply has already landed); the identity-settle discriminant tests below replace them with staged scripts that model the stale windows. */
   function fakeImportDom(
     overrides: Partial<{
       open: boolean;
@@ -5609,8 +5611,10 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
       profileOptions: { id: string; label: string }[];
       listEmptyText: string | null;
       listSettled: boolean;
-      rollouts: CodexImportRolloutRowState[];
+      rollouts: CodexImportRolloutRowDomFacts[];
+      rolloutsFor: string | null;
       previewSettled: boolean;
+      previewFor: string | null;
       statsLines: string[];
       notices: string[];
       modelValue: string | null;
@@ -5628,7 +5632,9 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
       listEmptyText: overrides.listEmptyText ?? null,
       listSettled: overrides.listSettled ?? true,
       rollouts: overrides.rollouts ?? [],
+      rolloutsFor: overrides.rolloutsFor ?? null,
       previewSettled: overrides.previewSettled ?? true,
+      previewFor: overrides.previewFor ?? null,
       statsLines: overrides.statsLines ?? [],
       notices: overrides.notices ?? [],
       modelValue: overrides.modelValue ?? null,
@@ -5647,15 +5653,23 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
       setProfile: vi.fn((id: string) => {
         if (!cell.profileOptions.some((o) => o.id === id)) return false;
         cell.profileValue = id;
+        cell.rolloutsFor = id;
         return true;
       }),
       listEmptyText: () => cell.listEmptyText,
       listLoadingVisible: () => cell.listEmptyText === "Loading sessions…",
       listSettled: () => cell.listSettled && cell.listEmptyText !== "Loading sessions…",
+      rolloutsFor: () => cell.rolloutsFor,
       rollouts: () => cell.rollouts,
-      clickRolloutAt: vi.fn((index: number) => index >= 0 && index < cell.rollouts.length),
+      clickRolloutAt: vi.fn((index: number) => {
+        const row = cell.rollouts[index];
+        if (row === undefined) return false;
+        cell.previewFor = row.fileName;
+        return true;
+      }),
       previewLoadingVisible: () => false,
       previewSettled: () => cell.previewSettled,
+      previewFor: () => cell.previewFor,
       statsLines: () => cell.statsLines,
       notices: () => cell.notices,
       modelValue: () => cell.modelValue,
@@ -5720,9 +5734,9 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     );
   }
 
-  it("reads open:false with empty defaults when the dialog is closed (a valid reading, not an error)", () => {
+  it("reads open:false with empty defaults when the dialog is closed (a valid reading, not an error)", async () => {
     const facade = buildImportFacade(fakeImportDom({ open: false }));
-    expect(facade.codexImportState()).toEqual({
+    await expect(facade.codexImportState()).resolves.toEqual({
       paneMounted: true,
       open: false,
       profileId: null,
@@ -5730,7 +5744,9 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
       listLoading: false,
       listEmptyText: null,
       rollouts: [],
+      rolloutsFor: null,
       previewLoading: false,
+      previewFor: null,
       statsLines: [],
       notices: [],
       modelValue: null,
@@ -5740,10 +5756,12 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     });
   });
 
-  it("reads the whole DoD probe (c) shape: profile options, rollout rows, loss stats, notices (import-disabled reason rides here), model select, Import button state", () => {
+  it("reads the whole DoD probe (c) shape: profile options, rollout rows (custody-redacted), provenance stamps, loss stats, notices (import-disabled reason rides here), model select, Import button state", async () => {
     const dom = fakeImportDom({
       profileValue: "tmp-a",
-      rollouts: [importRow({ selected: true }), importRow({ timestamp: "2026-07-16 22:00 UTC", size: "1.0 KB", cwd: null, preview: null })],
+      rollouts: [importRow({ selected: true }), importRow({ fileName: "rollout-2026-07-16T22-00-00-bbbb.jsonl", timestamp: "2026-07-16 22:00 UTC", size: "1.0 KB", cwd: null, preview: null })],
+      rolloutsFor: "tmp-a",
+      previewFor: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
       statsLines: ["3 reasoning dropped", "2 tools collapsed to text"],
       notices: ["Pick a model for the new session first."],
       modelValue: "glm-5.2",
@@ -5751,12 +5769,15 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
       importButton: { label: "Import & open", disabled: true },
     });
     const facade = buildImportFacade(dom);
-    const state = facade.codexImportState();
+    const state = await facade.codexImportState();
     expect(state.open).toBe(true);
     expect(state.profileId).toBe("tmp-a");
     expect(state.profileOptions.map((o) => o.id)).toEqual(["system", "tmp-a"]);
     expect(state.rollouts).toHaveLength(2);
     expect(state.rollouts[0]?.selected).toBe(true);
+    expect(state.rollouts.map((r) => r.fileName)).toEqual(["rollout-2026-07-17T03-14-00-aaaa.jsonl", "rollout-2026-07-16T22-00-00-bbbb.jsonl"]);
+    expect(state.rolloutsFor).toBe("tmp-a");
+    expect(state.previewFor).toBe("rollout-2026-07-17T03-14-00-aaaa.jsonl");
     expect(state.statsLines).toEqual(["3 reasoning dropped", "2 tools collapsed to text"]);
     expect(state.notices).toEqual(["Pick a model for the new session first."]);
     expect(state.modelValue).toBe("glm-5.2");
@@ -5764,9 +5785,44 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     expect(state.importing).toBe(false);
   });
 
-  it("classifies the list-loading placeholder honestly (listLoading true, listEmptyText null while loading)", () => {
+  it("custody (W4-F0c finding A): sentinel session text NEVER crosses — the serialized state carries presence/length/digest only, and the digest equals an independently computed sha256 prefix of the rendered text", async () => {
+    const renderedPreview = "PII_SENTINEL_MSG my api key is sk-0000 do not leak";
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      rollouts: [
+        importRow({ fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl", cwd: "/Users/owner/PII_SENTINEL_CWD", preview: renderedPreview, selected: true }),
+        importRow({ fileName: "rollout-2026-07-16T22-00-00-bbbb.jsonl", cwd: null, preview: null }),
+      ],
+    });
+    const state = await buildImportFacade(dom).codexImportState();
+    // The whole facade state — the exact value the HTTP channel serializes —
+    // must not contain the raw session text anywhere.
+    const wire = JSON.stringify(state);
+    expect(wire).not.toContain("PII_SENTINEL_CWD");
+    expect(wire).not.toContain("PII_SENTINEL_MSG");
+    // Independent local digest (node:crypto, not the facade's own helper).
+    const expectedDigest = createHash("sha256").update(renderedPreview, "utf8").digest("hex").slice(0, 12);
+    expect(state.rollouts[0]).toEqual({
+      fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+      timestamp: "2026-07-17 03:14 UTC",
+      size: "12.3 KB",
+      cwdRendered: true,
+      preview: { rendered: true, length: renderedPreview.length, sha256_12: expectedDigest },
+      selected: true,
+    });
+    expect(state.rollouts[1]).toEqual({
+      fileName: "rollout-2026-07-16T22-00-00-bbbb.jsonl",
+      timestamp: "2026-07-17 03:14 UTC",
+      size: "12.3 KB",
+      cwdRendered: false,
+      preview: { rendered: false, length: 0, sha256_12: null },
+      selected: false,
+    });
+  });
+
+  it("classifies the list-loading placeholder honestly (listLoading true, listEmptyText null while loading)", async () => {
     const dom = fakeImportDom({ listEmptyText: "Loading sessions…" });
-    const state = buildImportFacade(dom).codexImportState();
+    const state = await buildImportFacade(dom).codexImportState();
     expect(state.listLoading).toBe(true);
     expect(state.listEmptyText).toBeNull();
   });
@@ -5798,7 +5854,7 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     await expect(buildImportFacade(fakeImportDom({ open: false })).codexImportOpen(false)).resolves.toEqual({ ok: true });
   });
 
-  it("codexImportSetProfile drives the REAL select and settles once the list leaves loading; unknown_profile / dialog_not_open refuse", async () => {
+  it("codexImportSetProfile drives the REAL select and settles on the list settled AND stamped with this profile; unknown_profile / dialog_not_open refuse", async () => {
     const dom = fakeImportDom();
     await expect(buildImportFacade(dom).codexImportSetProfile("tmp-a")).resolves.toEqual({ ok: true });
     expect(dom.setProfile).toHaveBeenCalledWith("tmp-a");
@@ -5809,11 +5865,143 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     });
   });
 
-  it("codexImportSelectRollout clicks the row's own radio by index and settles on the preview; unknown_rollout refuses", async () => {
+  it("codexImportSelectRollout clicks the row's own radio by index and settles on the preview stamped with that row's fileName; unknown_rollout refuses", async () => {
     const dom = fakeImportDom({ rollouts: [importRow(), importRow()] });
     await expect(buildImportFacade(dom).codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
     expect(dom.clickRolloutAt).toHaveBeenCalledWith(1);
     await expect(buildImportFacade(dom).codexImportSelectRollout(5)).resolves.toEqual({ ok: false, reason: "unknown_rollout" });
+  });
+
+  // ── identity-gated settle discriminants (W4-F0c finding B). Each staged
+  // fake advances its phase script on the settle predicate's own settled()
+  // reads, so a facade that resolves early reads the phase it stopped in —
+  // and the post-settle state assertions catch a wrong-selection "ok".
+  // Verified discriminating: with the identity condition removed from the
+  // settle (listSettled()/previewSettled() alone), all four go red. ──
+
+  it("identity settle (list, stale window): a SETTLED previous-profile list — old rows + old stamp, the passive-effect window after the select commit — does not satisfy codexImportSetProfile", async () => {
+    const dom = fakeImportDom({
+      profileValue: "system",
+      rollouts: [importRow({ fileName: "rollout-old.jsonl" })],
+      rolloutsFor: "system",
+    });
+    // Staged product timeline: polls 1-3 the PREVIOUS profile's settled
+    // rows+stamp; 4-5 loading; 6+ the new profile's stamped reply.
+    dom.setProfile = vi.fn((id: string) => {
+      if (!dom.cell.profileOptions.some((o) => o.id === id)) return false;
+      dom.cell.profileValue = id;
+      return true;
+    });
+    let polls = 0;
+    dom.listSettled = () => {
+      polls += 1;
+      if (polls <= 3) return true;
+      if (polls <= 5) return false;
+      dom.cell.rollouts = [importRow({ fileName: "rollout-new.jsonl" })];
+      dom.cell.rolloutsFor = "tmp-a";
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSetProfile("tmp-a")).resolves.toEqual({ ok: true });
+    // Resolved only once the NEW profile's stamped result was in the DOM —
+    // a timing settle would have returned ok during the stale window.
+    const state = await facade.codexImportState();
+    expect(state.rolloutsFor).toBe("tmp-a");
+    expect(state.rollouts.map((r) => r.fileName)).toEqual(["rollout-new.jsonl"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("identity settle (list, stale reply): a reply to the OLD profile landing settled AFTER the new pick — old stamp — does not satisfy; the poll outlasts it until the new stamped reply", async () => {
+    const dom = fakeImportDom({
+      profileValue: "system",
+      rollouts: [importRow({ fileName: "rollout-old.jsonl" })],
+      rolloutsFor: "system",
+    });
+    dom.setProfile = vi.fn((id: string) => {
+      if (!dom.cell.profileOptions.some((o) => o.id === id)) return false;
+      dom.cell.profileValue = id;
+      return true;
+    });
+    // Staged timeline: polls 1-2 loading (the effect reset ran); 3-5 the OLD
+    // profile's in-flight reply lands SETTLED with its old stamp; 6+ the new
+    // profile's stamped reply. No timing gate can close this race — the
+    // stale reply is a legally settled DOM.
+    let polls = 0;
+    dom.listSettled = () => {
+      polls += 1;
+      if (polls <= 2) return false;
+      if (polls <= 5) return true;
+      dom.cell.rollouts = [importRow({ fileName: "rollout-new.jsonl" })];
+      dom.cell.rolloutsFor = "tmp-a";
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSetProfile("tmp-a")).resolves.toEqual({ ok: true });
+    const state = await facade.codexImportState();
+    expect(state.rolloutsFor).toBe("tmp-a");
+    expect(state.rollouts.map((r) => r.fileName)).toEqual(["rollout-new.jsonl"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("identity settle (preview, stale window): a SETTLED previous-file preview with its old stamp does not satisfy codexImportSelectRollout — settle keys on the fileName captured BEFORE the click", async () => {
+    const dom = fakeImportDom({
+      rollouts: [importRow({ fileName: "rollout-a.jsonl", selected: true }), importRow({ fileName: "rollout-b.jsonl" })],
+      previewFor: "rollout-a.jsonl",
+      statsLines: ["3 reasoning dropped"],
+    });
+    // The post-click re-render empties the rendered rows: a facade that
+    // captured the row identity AFTER the click would read nothing and
+    // refuse — capture must precede the click.
+    dom.clickRolloutAt = vi.fn((index: number) => {
+      const inRange = index >= 0 && index < dom.cell.rollouts.length;
+      dom.cell.rollouts = [];
+      return inRange;
+    });
+    let polls = 0;
+    dom.previewSettled = () => {
+      polls += 1;
+      if (polls <= 3) return true;
+      if (polls <= 5) return false;
+      dom.cell.previewFor = "rollout-b.jsonl";
+      dom.cell.statsLines = ["1 images omitted"];
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
+    const state = await facade.codexImportState();
+    expect(state.previewFor).toBe("rollout-b.jsonl");
+    expect(state.statsLines).toEqual(["1 images omitted"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("identity settle (preview, stale reply): the OLD row's preview landing settled AFTER the new pick — old stamp — does not satisfy; the poll outlasts it", async () => {
+    const dom = fakeImportDom({
+      rollouts: [importRow({ fileName: "rollout-a.jsonl", selected: true }), importRow({ fileName: "rollout-b.jsonl" })],
+      previewFor: null,
+      statsLines: [],
+    });
+    dom.clickRolloutAt = vi.fn((index: number) => index >= 0 && index < dom.cell.rollouts.length);
+    // Staged timeline: polls 1-2 loading; 3-5 the OLD row's reply lands
+    // SETTLED stamped rollout-a; 6+ the clicked row's stamped preview.
+    let polls = 0;
+    dom.previewSettled = () => {
+      polls += 1;
+      if (polls <= 2) return false;
+      if (polls <= 5) {
+        dom.cell.previewFor = "rollout-a.jsonl";
+        dom.cell.statsLines = ["3 reasoning dropped"];
+        return true;
+      }
+      dom.cell.previewFor = "rollout-b.jsonl";
+      dom.cell.statsLines = ["1 images omitted"];
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
+    const state = await facade.codexImportState();
+    expect(state.previewFor).toBe("rollout-b.jsonl");
+    expect(state.statsLines).toEqual(["1 images omitted"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
   });
 
   it("codexImportSetModel drives the REAL model select; unknown_model for a value outside the rendered options (or no select yet)", async () => {
