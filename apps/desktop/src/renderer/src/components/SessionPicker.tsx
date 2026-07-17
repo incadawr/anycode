@@ -108,10 +108,11 @@ export interface CreateTabCallbacks {
  * "New session" path (no title exists yet) omits it.
  *
  * `extra.engine`, when given, is forwarded to `describeCreateTabFailure`
- * (S1b-1) so a `not_ready` refusal on a Codex draft gets the codex-specific
- * copy. Only `start-session.ts`'s `submitStartDraft` passes it (it has
- * `draft.engine` in scope); every other call site omits it and keeps the
- * historical copy.
+ * (S1b-1) so a `not_ready` refusal on a Codex draft/session gets the
+ * codex-specific copy. `start-session.ts`'s `submitStartDraft` passes
+ * `draft.engine`; the sidebar resume path passes the persisted session's
+ * `engineId` (TASK.64). Call sites without an engine in scope (e.g. the
+ * command-palette resume) omit it and keep the historical copy.
  */
 export function handleCreateTabResult(
   result: CreateTabResult,

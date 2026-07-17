@@ -14,9 +14,11 @@ import {
   createTabRequestSchema,
   handleCreate,
   handleWorkspacePick,
+  toSummary,
   type DialogLike,
   type TabIpcDeps,
 } from "./tab-ipc.js";
+import type { SessionMeta } from "@anycode/core";
 import type { TabHostManager } from "./tabs.js";
 
 /** Fake TabHostManager honouring only the surface handleCreate's "new" branch touches. */
@@ -1132,5 +1134,27 @@ describe("handleCreate — unknown-readiness hydration (TASK.64)", () => {
     expect(order).toEqual(["canSpawn"]);
     expect(canSpawn).toHaveBeenCalledOnce();
     expect(showOpenDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe("toSummary — engine projection to the picker (TASK.64)", () => {
+  const managerNoBinding = { sessionOpenInTab: vi.fn(() => undefined) } as unknown as TabHostManager;
+  const baseMeta: SessionMeta = {
+    id: "s1",
+    workspace: "/project",
+    model: "m",
+    mode: "build",
+    createdAt: 1,
+    updatedAt: 2,
+  };
+
+  it("carries a codex session's engineId so the Sidebar can pick the engine-correct not_ready copy", () => {
+    const summary = toSummary({ ...baseMeta, engineId: "codex" }, managerNoBinding);
+    expect(summary.engineId).toBe("codex");
+  });
+
+  it("omits engineId for a legacy/core session (absent stays absent — historical copy)", () => {
+    const summary = toSummary(baseMeta, managerNoBinding);
+    expect("engineId" in summary).toBe(false);
   });
 });
