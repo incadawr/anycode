@@ -14,16 +14,23 @@ import {
   canRepairLink,
   canSignIn,
   codexQuotaLines,
+  deriveBinaryActions,
   deriveCodexQuotaWindowLabel,
   describeAccountEmailLine,
   describeCodexReportStatus,
+  diagnoseProfilesSequentially,
   formatBinarySourceLabel,
   formatCodexQuotaCreditsLine,
   formatCodexQuotaReset,
   formatCodexQuotaWindowLine,
   hasMainAuthLinkProfile,
+  isCodexVersionWithinSupportedRange,
   loginFailureMessage,
+  manifestRefreshNotice,
   pickBinaryFailureMessage,
+  shouldAutoSignIn,
+  type CodexOnboardingSnapshot,
+  type CodexSupportStatusResult,
 } from "./CodexEnginePane.js";
 
 function profile(overrides: Partial<CodexProfileRecord> = {}): CodexProfileRecord {
@@ -104,6 +111,7 @@ describe("formatBinarySourceLabel", () => {
     expect(formatBinarySourceLabel("settings")).toBe("saved path");
     expect(formatBinarySourceLabel("path")).toBe("found on PATH");
     expect(formatBinarySourceLabel("common")).toBe("found in a common install location");
+    expect(formatBinarySourceLabel("installed")).toBe("installed by AnyCode");
     expect(formatBinarySourceLabel("picker")).toBe("chosen manually");
     expect(formatBinarySourceLabel("none")).toBe("not found");
   });
@@ -117,6 +125,15 @@ describe("canSignIn", () => {
     expect(canSignIn({ status: "update_required", version: "0.99.0" })).toBe(false);
     expect(canSignIn({ status: "error" })).toBe(false);
     expect(canSignIn(undefined)).toBe(false);
+  });
+
+  it("D-M: false for a signed_out authLink profile — login UI is never offered for a profile mirroring an external credential (amended §A1.2)", () => {
+    expect(canSignIn({ status: "signed_out", version: "0.144.3" }, profile({ authLink: "~/.codex/auth.json" }))).toBe(false);
+  });
+
+  it("D-M: still true for a signed_out plain profile (no authLink), and for the system pseudo-profile (profile arg absent)", () => {
+    expect(canSignIn({ status: "signed_out", version: "0.144.3" }, profile({}))).toBe(true);
+    expect(canSignIn({ status: "signed_out", version: "0.144.3" }, undefined)).toBe(true);
   });
 });
 
@@ -323,5 +340,157 @@ describe("codexQuotaLines", () => {
   it("both windows absent and no credits -> empty (hidden), not a fabricated zero", () => {
     const rateLimits: CodexRateLimits = { observedAt: now.toISOString() };
     expect(codexQuotaLines(rateLimits, now)).toEqual([]);
+  });
+});
+
+// ── S2-2 (offline manifest-refresh must not degrade silently — fail-closed behavior itself is unchanged, only its observability) ──
+
+describe("manifestRefreshNotice", () => {
+  it("surfaces a cause-neutral notice when the refresh fell back to bundled or cache", () => {
+    expect(manifestRefreshNotice("bundled")).toMatch(/bundled/i);
+    expect(manifestRefreshNotice("cache")).toMatch(/cache/i);
+  });
+
+  it("stays silent (null) on a genuine network refresh — negative control, must not false-positive on the happy path", () => {
+    expect(manifestRefreshNotice("network")).toBeNull();
+  });
+});
+
+// ── R3-3/R3b-9 (cut §4.3: profiles are diagnosed SEQUENTIALLY, "не N параллельных app-server'ов" — pinned at the pure-helper `refreshAll` delegates to) ──
+
+function fakeSnapshot(): CodexOnboardingSnapshot {
+  return { report: { status: "ready", version: "0.144.3", account: null }, binaryPath: "/usr/local/bin/codex", source: "path", checkedAt: "2026-07-17T00:00:00.000Z" };
+}
+
+describe("diagnoseProfilesSequentially", () => {
+  it("never has more than one recheck in flight at a time (a Promise.all-style mutation would spike this above 1)", async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const order: string[] = [];
+    const recheck = async (id: string): Promise<CodexOnboardingSnapshot> => {
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      concurrent -= 1;
+      order.push(id);
+      return fakeSnapshot();
+    };
+    await diagnoseProfilesSequentially(["system", "a", "b"], recheck, { onStart: () => {}, onResult: () => {}, onSettle: () => {} });
+    expect(maxConcurrent).toBe(1);
+    expect(order).toEqual(["system", "a", "b"]);
+  });
+
+  it("calls onStart/onResult/onSettle for every id, in order", async () => {
+    const events: string[] = [];
+    await diagnoseProfilesSequentially(["a", "b"], async (id) => fakeSnapshot(), {
+      onStart: (id) => events.push(`start:${id}`),
+      onResult: (id) => events.push(`result:${id}`),
+      onSettle: (id) => events.push(`settle:${id}`),
+    });
+    expect(events).toEqual(["start:a", "result:a", "settle:a", "start:b", "result:b", "settle:b"]);
+  });
+
+  it("still settles (onSettle fires) when a recheck rejects", async () => {
+    const events: string[] = [];
+    await expect(
+      diagnoseProfilesSequentially(["a"], async () => Promise.reject(new Error("boom")), {
+        onStart: (id) => events.push(`start:${id}`),
+        onResult: (id) => events.push(`result:${id}`),
+        onSettle: (id) => events.push(`settle:${id}`),
+      }),
+    ).rejects.toThrow("boom");
+    expect(events).toEqual(["start:a", "settle:a"]);
+  });
+
+  it("stops issuing NEW recheck calls once isStale reports true, without aborting the in-flight one (R3-3: a superseded overlapping refreshAll must not keep spawning app-server checks)", async () => {
+    const calledIds: string[] = [];
+    let stale = false;
+    const recheck = async (id: string): Promise<CodexOnboardingSnapshot> => {
+      calledIds.push(id);
+      if (id === "a") stale = true; // simulates a newer refreshAll superseding this chain mid-flight
+      return fakeSnapshot();
+    };
+    await diagnoseProfilesSequentially(["a", "b", "c"], recheck, {
+      onStart: () => {},
+      onResult: () => {},
+      onSettle: () => {},
+      isStale: () => stale,
+    });
+    expect(calledIds).toEqual(["a"]);
+  });
+});
+
+// ── R3b-10 (createAndSignIn's auto-login gate, isolated from the bridge/effect plumbing around it) ──
+
+describe("shouldAutoSignIn", () => {
+  it("auto-signs-in a plain profile with no authLink", () => {
+    expect(shouldAutoSignIn({ label: "work" })).toBe(true);
+  });
+
+  it("never auto-signs-in an authLink profile (amended §A1.2: login UI is not offered/triggered for these)", () => {
+    expect(shouldAutoSignIn({ label: "main", authLink: "~/.codex/auth.json" })).toBe(false);
+  });
+});
+
+// ── R3-9/R3b-11 (install/update/use-anyway visibility + the untested-version banner, extracted so the mutation classes the finding names are pinned) ──
+
+describe("isCodexVersionWithinSupportedRange", () => {
+  it("true when the version satisfies a single range", () => {
+    expect(isCodexVersionWithinSupportedRange("0.144.3", ">=0.144.0 <0.145.0")).toBe(true);
+  });
+
+  it("false when the version falls outside every range", () => {
+    expect(isCodexVersionWithinSupportedRange("0.99.0", ">=0.144.0 <0.145.0")).toBe(false);
+  });
+
+  it("true when the version satisfies any of multiple ||-joined ranges (manifestSupportedRange's join format)", () => {
+    expect(isCodexVersionWithinSupportedRange("0.150.0", ">=0.144.0 <0.145.0 || >=0.150.0 <0.151.0")).toBe(true);
+  });
+
+  it("fails closed (false, not a thrown error) on an unparsable version or range", () => {
+    expect(isCodexVersionWithinSupportedRange("not-a-version", ">=0.144.0 <0.145.0")).toBe(false);
+    expect(isCodexVersionWithinSupportedRange("0.144.3", "garbage")).toBe(false);
+  });
+});
+
+describe("deriveBinaryActions", () => {
+  const support: CodexSupportStatusResult = { supportedRange: ">=0.144.0 <0.145.0", recommended: "0.144.3", riskAcceptedVersions: [] };
+
+  it("not_installed -> Install only, never Update/Use-anyway", () => {
+    const actions = deriveBinaryActions({ status: "not_installed" }, support);
+    expect(actions).toMatchObject({ showInstall: true, showUpdate: false, showUseAnyway: false });
+  });
+
+  it("update_required -> Update + Use-anyway, never Install", () => {
+    const actions = deriveBinaryActions({ status: "update_required", version: "0.99.0" }, support);
+    expect(actions).toMatchObject({ showInstall: false, showUpdate: true, showUseAnyway: true });
+  });
+
+  it("ready/signed_out/error -> no install-flow buttons at all", () => {
+    const reports: CodexDoctorReport[] = [{ status: "ready", version: "0.144.3", account: null }, { status: "signed_out", version: "0.144.3" }, { status: "error" }];
+    for (const report of reports) {
+      const actions = deriveBinaryActions(report, support);
+      expect(actions.showInstall).toBe(false);
+      expect(actions.showUpdate).toBe(false);
+      expect(actions.showUseAnyway).toBe(false);
+    }
+  });
+
+  it("hides every button while support status hasn't loaded yet (support === null)", () => {
+    expect(deriveBinaryActions({ status: "not_installed" }, null)).toEqual({ showInstall: false, showUpdate: false, showUseAnyway: false, untestedVersion: null });
+  });
+
+  it("hides the untested banner when the current version was never risk-accepted", () => {
+    expect(deriveBinaryActions({ status: "ready", version: "0.144.3", account: null }, support).untestedVersion).toBeNull();
+  });
+
+  it("shows the untested banner for a risk-accepted version still outside the supported range", () => {
+    const riskySupport: CodexSupportStatusResult = { ...support, riskAcceptedVersions: ["0.146.0"] };
+    expect(deriveBinaryActions({ status: "ready", version: "0.146.0", account: null }, riskySupport).untestedVersion).toBe("0.146.0");
+  });
+
+  it("R3-9: hides the banner once the manifest widens to include a previously risk-accepted version, even though it's still in riskAcceptedVersions", () => {
+    const widenedSupport: CodexSupportStatusResult = { ...support, supportedRange: ">=0.144.0 <0.147.0", riskAcceptedVersions: ["0.146.0"] };
+    expect(deriveBinaryActions({ status: "ready", version: "0.146.0", account: null }, widenedSupport).untestedVersion).toBeNull();
   });
 });

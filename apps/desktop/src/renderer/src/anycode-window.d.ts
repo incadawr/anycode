@@ -92,7 +92,7 @@ import type { CodexDoctorReport } from "../../shared/codex-doctor";
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
   binaryPath: string | null;
-  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
 }
 

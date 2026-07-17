@@ -215,7 +215,7 @@ const CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL = "anycode:custom-provider-fetch-mode
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
   binaryPath: string | null;
-  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
 }
 
