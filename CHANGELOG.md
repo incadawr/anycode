@@ -5,6 +5,42 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.3] — 2026-07-17
+
+### Alpha
+
+Manual verification still focuses on the Z.AI (GLM) path. The provider and
+transport surface below is broad; not every provider/transport combination has
+been validated in live use yet.
+
+### Added
+
+- Multiple named provider connections. Settings now shows a grid of connection
+  tiles with an add/edit drawer: create, edit, activate, and delete
+  connections, each with its own credential, model, transport, and base URL. A
+  first-run Welcome flow sets up the first one.
+- OpenAI-compatible and local endpoints. A connection can use an OpenAI-family
+  transport (chat completions or responses) alongside Anthropic Messages, so
+  OpenAI-compatible and self-hosted servers work. Keyless local servers
+  (LM Studio, ollama, llama.cpp, open proxies) are supported through a
+  "no API key" option that stops the connection from asking for a credential.
+- Per-session connection pinning. A session remembers the connection it runs
+  on — shown in the model pill — so different tabs can use different providers.
+- Connection health. Each connection shows a status you can check, and it
+  repaints from live request outcomes.
+- Observable retry. A transient request failure is classified and surfaced with
+  a one-shot "Try again" instead of failing silently, and provider errors are
+  redacted to a safe message before they reach the screen.
+
+### Fixed
+
+- Deleting the active connection now promotes another one instead of leaving no
+  connection active.
+- Activating a connection that can't run tasks (no credential, no model, or an
+  unsupported transport) now keeps the normal shell with Settings reachable and
+  shows a readiness notice, instead of dropping a configured user into
+  onboarding.
+
 ## [0.0.2] — 2026-07-15
 
 ### Added
