@@ -220,6 +220,37 @@ function resolveProfileHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string
   return trimmed;
 }
 
+/**
+ * Dev-only override for the user home the Codex profile tree
+ * (`<home>/.anycode/codex/…`) lives under (codex-profiles W4-F0, findings
+ * S1-2), same "duplicated on purpose" rule as `resolveProfileHome` above
+ * (`ANYCODE_CODEX_PROFILES_HOME`, local to this registration site). Same
+ * double gate: `ANYCODE_AUTOMATION==="1" && !isPackaged`, plus a non-empty
+ * ABSOLUTE path — a packaged production build NEVER honors the var, so every
+ * consumer falls back to the real `os.homedir()` there. Resolved ONCE at the
+ * codex registration site below and threaded into EVERY consumer that
+ * derives the profiles root: `registerCodexIpc` (the profile registry —
+ * create/delete/resolve/login homes), `registerCodexInstallIpc` +
+ * `refreshCodexManifest`'s cache file (the `bin/` + `manifest.json` tree
+ * under the same root), and the rollout-import sessions-dir resolver. Lets a
+ * live smoke mint `plain`/`authLink` profiles in a disposable root instead
+ * of writing into the owner's real `~/.anycode/codex` (W4-S1b/S2/S3/S4).
+ */
+function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string | null {
+  if (env.ANYCODE_AUTOMATION !== "1" || isPackaged) {
+    return null;
+  }
+  const raw = env.ANYCODE_CODEX_PROFILES_HOME;
+  if (raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "" || !isAbsolute(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
 // Dev-only automation profile isolation (design/slice-P7.H-cut.md §4.2): must
 // run at module top level, BEFORE `app.whenReady()` registration below —
 // Electron decides the userData/localStorage partition at ready time, so a
@@ -311,6 +342,16 @@ let providerReady = false;
  * per-profile report cache.
  */
 let codexBinaryPath: string | null = null;
+/**
+ * The W4-F0 codex profiles-home lever (findings S1-2), resolved ONCE in the
+ * whenReady callback at the codex registration site (see
+ * `resolveCodexProfilesHome`) and held module-level so the tab-spawn plane's
+ * `resolveCodexProfileForTab` below resolves a profile record against the
+ * SAME home as the registry — the two main-plane resolutions of one record
+ * must never disagree. `undefined` (production / refused override) leaves
+ * every consumer on its real `homedir()` default.
+ */
+let codexProfilesHome: string | undefined;
 /**
  * The host fork env, rebuilt async on every successful mutation and read
 
@@ -827,7 +868,11 @@ async function resolveCodexProfileForTab(profileId: string): Promise<ResolveCode
   if (record === undefined) {
     return { ok: false };
   }
-  const resolution = resolveCodexProfile(record);
+  // Resolved against the SAME home the registry uses (W4-F0 lever,
+  // `codexProfilesHome` — undefined in production): the argv facts this
+  // produces (linked --codex-home, expanded --codex-auth-link) must agree
+  // with what the registry created/asserted for this record.
+  const resolution = resolveCodexProfile(record, codexProfilesHome);
   if (!resolution.ok || resolution.profile.codexHome === undefined) {
     return { ok: false };
   }
@@ -1264,8 +1309,18 @@ void app.whenReady().then(async () => {
   // before-quit's awaited `shutdown()` below; this is the floor under it.
   installCodexChildExitGuard();
 
+  // W4-F0 (findings S1-2): the codex profiles-root home lever, resolved ONE
+  // time at this registration site and threaded into every consumer
+  // (registerCodexIpc / registerCodexInstallIpc / refreshCodexManifest's
+  // cache file / the rollout-import resolver / resolveCodexProfileForTab's
+  // record resolution). `undefined` — the production case and any refused
+  // override — leaves every consumer on its own real `homedir()` default,
+  // byte-identical to before this lever existed.
+  codexProfilesHome = resolveCodexProfilesHome(process.env, app.isPackaged) ?? undefined;
+
   codexOnboarding = registerCodexIpc({
     bootEnv,
+    ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
     // The profile registry's settings slice (codex-profiles cut §2.3), read
     // fresh off the same in-memory settings the onMutation reload maintains.
@@ -1304,6 +1359,7 @@ void app.whenReady().then(async () => {
   // lands on master, network down, garbage — none of them can WIDEN the
   // supported range).
   registerCodexInstallIpc({
+    ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readRiskAcceptedVersions: async () => settings?.codex?.riskAcceptedVersions ?? [],
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     onChanged: () => {
@@ -1312,7 +1368,10 @@ void app.whenReady().then(async () => {
     },
   });
   setActiveCodexVersionPolicy({ riskAcceptedVersions: settings?.codex?.riskAcceptedVersions ?? [] });
-  void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(), "manifest.json") })
+  // `codexProfilesHome` (W4-F0 lever, undefined in production) rides into the
+  // root derivation — codexProfilesRoot's own homedir() default applies when
+  // the lever is refused/absent.
+  void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(codexProfilesHome), "manifest.json") })
     .then((result) => {
       // BM4: only an ACTUAL policy change re-spawns the doctor — an
       // identical manifest (the common case: cache hit, no-op refresh)
@@ -1341,7 +1400,10 @@ void app.whenReady().then(async () => {
         }
         const record = settings?.codex?.profiles?.find((profile) => profile.id === profileId);
         if (record === undefined) return null;
-        const resolution = resolveCodexProfile(record);
+        // This resolver derives a profile home OUTSIDE the registry, so the
+        // W4-F0 lever must reach it too — else an isolated smoke's import
+        // dialog would list rollouts from the owner's REAL profile tree.
+        const resolution = resolveCodexProfile(record, codexProfilesHome);
         if (!resolution.ok || resolution.profile.codexHome === undefined) return null;
         return join(resolution.profile.codexHome, "sessions");
       },

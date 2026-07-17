@@ -93,6 +93,19 @@ import {
   settingsProviderDrawerClearKey,
   settingsProviderDrawerClose,
   focusState,
+  codexPaneState,
+  codexPaneInstall,
+  codexPaneRecheckAll,
+  codexPaneRefreshManifest,
+  codexProfileChipState,
+  codexProfileChipOpen,
+  codexProfileChipPick,
+  codexImportState,
+  codexImportOpen,
+  codexImportSetProfile,
+  codexImportSelectRollout,
+  codexImportSetModel,
+  codexImportApply,
   mcpPaneState,
   mcpToggle,
   mcpImportOpen,
@@ -423,6 +436,24 @@ const shortcutsSlotBody = z.object({
 }).strict();
 const shortcutsActionBody = z.object({ action: z.string().min(1).max(64) }).strict();
 
+// ── Codex probe bodies (W4-F0, findings S1-1) ──
+// Probe (b): ONE route, a union body — `{open}` toggles the chip popover,
+// `{pick}` clicks the Nth RENDERED option row (rows carry no stable id in the
+// DOM; index mirrors the component's own `.map()` render order, the same
+// posture as the model-pill pick's clickItemAt). The cap mirrors the profile
+// registry's own MAX_CODEX_PROFILES bound with headroom — never a UX limit.
+const codexProfileChipBody = z.union([
+  z.object({ open: z.boolean() }).strict(),
+  z.object({ pick: z.number().int().nonnegative().max(64) }).strict(),
+]);
+// Probe (c): sub-routes under /settings/codex/import, same family shape as
+// the MCP import routes. `profileId` mirrors codex-profiles' 32-char id cap
+// (with headroom); `index` the rollout list's own MAX_ROLLOUTS_LISTED cap.
+const codexImportOpenBody = z.object({ open: z.boolean() }).strict();
+const codexImportProfileBody = z.object({ profileId: z.string().min(1).max(64) }).strict();
+const codexImportRolloutBody = z.object({ index: z.number().int().nonnegative().max(500) }).strict();
+const codexImportModelBody = z.object({ model: z.string().min(1).max(256) }).strict();
+
 /** A malformed body/route/etc. carried as a typed rejection the request loop maps to a status. */
 class HttpError extends Error {
   constructor(
@@ -659,6 +690,25 @@ async function route(
   if (method === "GET" && pathname === "/settings/provider") {
     return settingsProviderPaneState(deps);
   }
+  // Codex pane probe (W4-F0, findings S1-1 probe (a)): a DEDICATED route —
+  // every prior `/settings*` probe above stays byte-untouched (§4 custody),
+  // same "own probe, no widening" posture as the Provider pane probe.
+  if (method === "GET" && pathname === "/settings/codex") {
+    return codexPaneState(deps);
+  }
+  // Rollout-import dialog probe (W4-F0, findings S1-1 probe (c)): a DEDICATED
+  // route under the codex family — distinct exact path from GET
+  // /settings/codex above, same nesting shape as /settings/mcp's import
+  // sub-routes.
+  if (method === "GET" && pathname === "/settings/codex/import") {
+    return codexImportState(deps);
+  }
+  // Codex profile chip probe (W4-F0, findings S1-1 probe (b)): a DEDICATED
+  // route — GET /start-screen and its StartScreenState shape stay
+  // byte-untouched (hazard §14.1: no snapshot widening).
+  if (method === "GET" && pathname === "/start-screen/codex-profile") {
+    return codexProfileChipState(deps);
+  }
   // Generic focus probe (TASK.45 W12-smoke): a DEDICATED route — no pane
   // above is widened to carry this, `document.activeElement` is shell-level,
   // not owned by any one pane/screen.
@@ -733,6 +783,13 @@ async function route(
     const body = parseBody(rawBody, startScreenProjectMenuBody);
     return startScreenToggleProjectMenu(deps, body.open);
   }
+  // Codex profile chip driver (W4-F0 probe (b)): one route, a union body —
+  // `{open}` mirrors a real click on the chip button, `{pick}` a real click
+  // on the Nth rendered option row (see codexProfileChipBody's doc comment).
+  if (method === "POST" && pathname === "/start-screen/codex-profile") {
+    const body = parseBody(rawBody, codexProfileChipBody);
+    return "open" in body ? codexProfileChipOpen(deps, body.open) : codexProfileChipPick(deps, body.pick);
+  }
   if (method === "POST" && pathname === "/start-screen/submit") {
     parseBody(rawBody, emptyBody);
     return startScreenSubmit(deps);
@@ -798,6 +855,49 @@ async function route(
   if (method === "POST" && pathname === "/settings/provider/drawer/close") {
     parseBody(rawBody, emptyBody);
     return settingsProviderDrawerClose(deps);
+  }
+  // Codex pane routes (W4-F0, findings S1-1 probe (a)): mirror the SAME DOM
+  // paths CodexEnginePane.tsx itself uses — real clicks on the pane's own
+  // "Install …"/"Update to …" primary, "Recheck all", and "Refresh manifest"
+  // buttons, so each runs the exact bridge.install/recheck/manifestRefresh
+  // controller call the button's onClick makes (one product path, cut §7's
+  // install/manifest IPC channels are never re-invoked from here).
+  if (method === "POST" && pathname === "/settings/codex/install") {
+    parseBody(rawBody, emptyBody);
+    return codexPaneInstall(deps);
+  }
+  if (method === "POST" && pathname === "/settings/codex/recheck") {
+    parseBody(rawBody, emptyBody);
+    return codexPaneRecheckAll(deps);
+  }
+  if (method === "POST" && pathname === "/settings/codex/manifest-refresh") {
+    parseBody(rawBody, emptyBody);
+    return codexPaneRefreshManifest(deps);
+  }
+  // Rollout-import dialog routes (W4-F0, findings S1-1 probe (c)): mirror the
+  // SAME DOM paths CodexRolloutImportDialog.tsx itself uses (the pane's
+  // "Import a Codex session…" entry button, the dialog's profile/model
+  // selects, a rollout row's radio, the "Import & open" button), through the
+  // facade's thin wrappers — no second path.
+  if (method === "POST" && pathname === "/settings/codex/import/open") {
+    const body = parseBody(rawBody, codexImportOpenBody);
+    return codexImportOpen(deps, body.open);
+  }
+  if (method === "POST" && pathname === "/settings/codex/import/profile") {
+    const body = parseBody(rawBody, codexImportProfileBody);
+    return codexImportSetProfile(deps, body.profileId);
+  }
+  if (method === "POST" && pathname === "/settings/codex/import/rollout") {
+    const body = parseBody(rawBody, codexImportRolloutBody);
+    return codexImportSelectRollout(deps, body.index);
+  }
+  if (method === "POST" && pathname === "/settings/codex/import/model") {
+    const body = parseBody(rawBody, codexImportModelBody);
+    return codexImportSetModel(deps, body.model);
+  }
+  if (method === "POST" && pathname === "/settings/codex/import/apply") {
+    parseBody(rawBody, emptyBody);
+    return codexImportApply(deps);
   }
   // MCP Servers pane routes (slice-P7.19-cut.md §4 W4): mirror the SAME DOM
   // paths McpServersPane.tsx itself uses (the row's enable switch, the
