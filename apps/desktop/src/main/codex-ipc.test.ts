@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { CodexBinaryFs } from "./codex-binary.js";
-import { createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardingSnapshot } from "./codex-ipc.js";
+import { CODEX_DOCTOR_TTL_MS, createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardingSnapshot } from "./codex-ipc.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "anycode-codex-ipc-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -603,5 +603,103 @@ describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
     await controller.recheck("acc");
     await controller.recheck();
     expect(JSON.stringify(deps.writtenPatches)).not.toContain("sentinel-custody@example.com");
+  });
+});
+
+describe("doctor TTL cache (TASK.65)", () => {
+  /** A ready-verdict doctor whose spawn count makes a TTL reuse provable as "0 extra runs". */
+  function countingReadyDoctor() {
+    return vi.fn(async (): Promise<CodexDoctorReport> => ({
+      status: "ready",
+      version: "0.144.3",
+      account: { type: "chatgpt", plan: "plus" },
+      models: [],
+    }));
+  }
+
+  it("reuses a verdict within the TTL — a second ensureChecked runs the doctor 0 extra times", async () => {
+    let clock = 1_000_000;
+    const runDoctor = countingReadyDoctor();
+    const controller = createCodexOnboardingController(makeDeps({ runDoctor, now: () => clock }));
+    await controller.ensureChecked();
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    clock += CODEX_DOCTOR_TTL_MS - 1; // still inside the freshness window
+    const second = await controller.ensureChecked();
+    expect(runDoctor).toHaveBeenCalledTimes(1); // no re-spawn
+    expect(second.report.status).toBe("ready");
+  });
+
+  it("re-runs the doctor once the TTL has elapsed (strict < ⇒ the boundary is stale)", async () => {
+    let clock = 1_000_000;
+    const runDoctor = countingReadyDoctor();
+    const controller = createCodexOnboardingController(makeDeps({ runDoctor, now: () => clock }));
+    await controller.ensureChecked();
+    clock += CODEX_DOCTOR_TTL_MS; // now() - checkedAt === TTL ⇒ not fresh
+    await controller.ensureChecked();
+    expect(runDoctor).toHaveBeenCalledTimes(2);
+  });
+
+  it("force:true bypasses a fresh cache (the Settings 'Recheck all' action)", async () => {
+    let clock = 1_000_000;
+    const runDoctor = countingReadyDoctor();
+    const controller = createCodexOnboardingController(makeDeps({ runDoctor, now: () => clock }));
+    await controller.ensureChecked();
+    clock += 5_000; // well within the TTL
+    await controller.ensureChecked(undefined, { force: true });
+    expect(runDoctor).toHaveBeenCalledTimes(2);
+  });
+
+  it("recheck() delegates through the TTL — a plain recheck inside the window reuses the cache, force re-runs", async () => {
+    let clock = 1_000_000;
+    const runDoctor = countingReadyDoctor();
+    const controller = createCodexOnboardingController(makeDeps({ runDoctor, now: () => clock }));
+    await controller.recheck();
+    clock += 10_000;
+    await controller.recheck(); // TTL-guarded (no options) ⇒ cache hit
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    await controller.recheck(undefined, { force: true }); // explicit "Recheck all"
+    expect(runDoctor).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces two concurrent ensureChecked calls into ONE doctor run", async () => {
+    const runDoctor = vi.fn(async (): Promise<CodexDoctorReport> => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { status: "ready", version: "0.144.3", account: { type: "chatgpt", plan: "plus" }, models: [] };
+    });
+    const controller = createCodexOnboardingController(makeDeps({ runDoctor }));
+    const [a, b] = await Promise.all([controller.ensureChecked(), controller.ensureChecked()]);
+    expect(a).toBe(b);
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+  });
+
+  it("boot-prime path: ensureChecked warms a NON-active profile's verdict (readyFor/hasVerdictFor flip)", async () => {
+    const runDoctor = vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : undefined;
+      return { status: "signed_out", version: "0.144.3", ...(id !== undefined ? { profileId: id } : {}) };
+    });
+    const controller = createCodexOnboardingController(makeDeps({ runDoctor }));
+    expect((await controller.createProfile({ label: "other" })).ok).toBe(true);
+    // "other" is never made active — the active profile stays `system`, so this
+    // is exactly the non-active profile the boot loop primes.
+    expect(controller.hasVerdictFor("other")).toBe(false); // UNKNOWN before the prime
+    await controller.ensureChecked("other"); // the boot loop's per-id prime
+    expect(controller.hasVerdictFor("other")).toBe(true); // now KNOWN
+    expect(controller.readyFor("other")).toBe(false); // known signed_out, not UNKNOWN
+  });
+
+  it("regression: a landed signed_out verdict is KNOWN (UNKNOWN != signed_out) and is reused within the TTL", async () => {
+    let clock = 1_000_000;
+    const runDoctor = vi.fn(async (): Promise<CodexDoctorReport> => ({ status: "signed_out", version: "0.144.3" }));
+    const controller = createCodexOnboardingController(makeDeps({ runDoctor, now: () => clock }));
+    // Before any doctor pass the two are distinct: fail-closed false AND unknown.
+    expect(controller.readyFor()).toBe(false);
+    expect(controller.hasVerdictFor()).toBe(false);
+    await controller.ensureChecked();
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(controller.hasVerdictFor()).toBe(true); // a signed_out verdict IS a verdict
+    expect(controller.readyFor()).toBe(false);
+    clock += 10_000;
+    await controller.ensureChecked(); // within TTL ⇒ reused, not re-spawned
+    expect(runDoctor).toHaveBeenCalledTimes(1);
   });
 });

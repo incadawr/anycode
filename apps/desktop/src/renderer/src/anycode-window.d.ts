@@ -245,8 +245,9 @@ declare global {
       // type+plan (custody).
       codex: {
         // `profileId` (TASK.50, cut §4.2): omitted diagnoses/signs into the
-        // ACTIVE profile.
-        recheck(profileId?: string): Promise<CodexOnboardingSnapshot>;
+        // ACTIVE profile. `force` (TASK.65): true bypasses main's doctor TTL
+        // cache (explicit "Recheck all"); omitted reuses a fresh cached verdict.
+        recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
         pickBinary(): Promise<CodexPickBinaryResult>;
         loginStart(profileId?: string): Promise<CodexLoginStartResult>;
         loginCancel(): Promise<void>;

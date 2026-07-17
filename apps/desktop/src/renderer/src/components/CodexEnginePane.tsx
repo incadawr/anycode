@@ -500,7 +500,8 @@ export async function diagnoseProfilesSequentially(
 
 /** Subset of `window.anycode.codex` this pane drives, injectable so tests never touch a real `window`. */
 export interface CodexBridge {
-  recheck(profileId?: string): Promise<CodexOnboardingSnapshot>;
+  /** TASK.65: `force` bypasses main's doctor TTL cache (the explicit "Recheck all"); a mount-time refresh omits it so a re-check inside the TTL reuses the cached verdict. */
+  recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
   loginStart(profileId?: string): Promise<CodexLoginStartResult>;
   loginCancel(): Promise<void>;
@@ -642,7 +643,12 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   // Every row diagnosed SEQUENTIALLY (cut §4.3: "не N параллельных
   // app-server'ов") — `system` first (it always exists), then every
   // registered profile in registry order.
-  const refreshAll = useCallback(async (): Promise<void> => {
+  // TASK.65: `force` defaults TRUE so every explicit trigger (the "Recheck all"
+  // button, a post-mutation refresh) still gets a fresh doctor pass exactly as
+  // before the TTL existed; ONLY the mount effect below passes `false`, so a
+  // Settings re-entry inside the TTL reuses main's cached verdict instead of
+  // re-spawning the doctor per profile (the owner's repeat-recheck symptom).
+  const refreshAll = useCallback(async (force = true): Promise<void> => {
     const epoch = ++refreshEpochRef.current;
     const isStale = () => refreshEpochRef.current !== epoch;
     const listed = await bridge.listProfiles();
@@ -656,7 +662,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       return next;
     });
     const ids = [SYSTEM_PROFILE_ID, ...listed.profiles.map((row) => row.profile.id)];
-    await diagnoseProfilesSequentially(ids, (id) => bridge.recheck(id), {
+    await diagnoseProfilesSequentially(ids, (id) => bridge.recheck(id, force), {
       isStale,
       onStart: (id) => {
         if (isStale()) return;
@@ -679,7 +685,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   }, [bridge]);
 
   useEffect(() => {
-    void refreshAll();
+    // TASK.65: mount refresh is TTL-guarded (force=false) — re-opening Settings
+    // inside the doctor TTL window reuses the cached verdict, no re-spawn.
+    void refreshAll(false);
     void bridge.supportStatus().then(setSupport);
   }, [refreshAll, bridge]);
 
@@ -816,7 +824,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       if (!result.ok) {
         setNotice(result.reason);
       } else {
-        const fresh = await bridge.recheck(id);
+        // TASK.65: the re-link just changed the credential, so force past the
+        // TTL for a genuinely fresh verdict rather than a moments-old cache hit.
+        const fresh = await bridge.recheck(id, true);
         setReportsById((prev) => ({ ...prev, [id]: fresh.report }));
       }
     } finally {
