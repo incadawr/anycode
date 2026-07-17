@@ -25,7 +25,7 @@
  * paths simply do not exist in this module — see CodexEnginePane.test.ts's
  * sentinel-leak PoC).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../../../shared/codex-quota.js";
 import type { CodexProfileRecord } from "../../../shared/settings.js";
@@ -44,7 +44,7 @@ import { CodexRolloutImportDialog } from "./CodexRolloutImportDialog.js";
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
   binaryPath: string | null;
-  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
 }
 
@@ -155,6 +155,8 @@ export function formatBinarySourceLabel(source: CodexOnboardingSnapshot["source"
       return "found on PATH";
     case "common":
       return "found in a common install location";
+    case "installed":
+      return "installed by AnyCode";
     case "picker":
       return "chosen manually";
     case "none":
@@ -166,9 +168,17 @@ export function formatBinarySourceLabel(source: CodexOnboardingSnapshot["source"
   }
 }
 
-/** Only a signed-out-but-otherwise-working profile can start a sign-in — every other status must be fixed (or is already fine) first. */
-export function canSignIn(report: CodexDoctorReport | undefined): boolean {
-  return report?.status === "signed_out";
+/**
+ * Only a signed-out-but-otherwise-working profile can start a sign-in — every
+ * other status must be fixed (or is already fine) first. An `authLink`
+ * profile mirrors an external `CODEX_HOME`'s credential rather than owning
+ * one of its own (amended §A1.2: "Login-флоу для authLink-профиля в UI НЕ
+ * предлагается") — the server-side `loginStart` gate already refuses it
+ * (main/codex-ipc.ts), so the button is withheld here too rather than
+ * inviting a click that can only fail.
+ */
+export function canSignIn(report: CodexDoctorReport | undefined, profile?: CodexProfileRecord): boolean {
+  return report?.status === "signed_out" && profile?.authLink === undefined;
 }
 
 /**
@@ -224,6 +234,110 @@ export function loginFailureMessage(reason: "busy" | "unsupported" | "cancelled"
       return exhaustive;
     }
   }
+}
+
+/**
+ * `bridge.manifestRefresh()` is fail-closed by contract (never throws — a
+ * network failure falls back to `cache`/`bundled` rather than widening the
+ * supported range). That fail-closed behavior was already correct; the
+ * defect (S2-2) was purely in observability — a user hitting "Refresh
+ * manifest" behind a dead proxy saw no feedback at all. `null` on a genuine
+ * `network` refresh keeps the happy path silent.
+ */
+export function manifestRefreshNotice(source: CodexManifestRefreshResult["source"]): string | null {
+  if (source === "network") return null;
+  return `Could not reach the manifest server — using the ${source} version.`;
+}
+
+/** authLink profiles mirror an external credential (amended §A1.2) — creating one must never kick off this pane's own interactive browser sign-in. */
+export function shouldAutoSignIn(request: CodexProfileCreateRequest): boolean {
+  return request.authLink === undefined;
+}
+
+interface ParsedCodexSemver {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+function parseCodexSemverForRangeCheck(version: string): ParsedCodexSemver | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (!match) return null;
+  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
+}
+
+function compareCodexSemverForRangeCheck(a: ParsedCodexSemver, b: ParsedCodexSemver): number {
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  return a.patch - b.patch;
+}
+
+/** One space-separated `>= <= > < =` conjunction (main/codex-manifest.ts's grammar, mirrored minimally) — unparsable syntax fails closed (never matches). */
+function versionSatisfiesConjunction(version: ParsedCodexSemver, conjunction: string): boolean {
+  const tokens = conjunction.trim().split(/\s+/).filter((token) => token !== "");
+  if (tokens.length === 0) return false;
+  return tokens.every((token) => {
+    const match = /^(>=|<=|>|<|=)?(\d+\.\d+\.\d+)$/.exec(token);
+    if (!match) return false;
+    const bound = parseCodexSemverForRangeCheck(match[2]!);
+    if (bound === null) return false;
+    const cmp = compareCodexSemverForRangeCheck(version, bound);
+    switch (match[1] ?? "=") {
+      case ">=":
+        return cmp >= 0;
+      case "<=":
+        return cmp <= 0;
+      case ">":
+        return cmp > 0;
+      case "<":
+        return cmp < 0;
+      default:
+        return cmp === 0;
+    }
+  });
+}
+
+/**
+ * A deliberately-minimal, renderer-local mirror of main/codex-manifest.ts's
+ * range grammar (`>= <= > < =` conjunctions, `||`-joined disjunctions, the
+ * exact join `manifestSupportedRange` produces) — main/** stays byte-frozen
+ * (S2-2 mandate) so this is a read-only-reference reimplementation, not an
+ * import, and it exists purely to gate the untested-version banner (R3-9)
+ * against a manifest that has since widened. Fails closed (`false`, i.e.
+ * "still needs the banner") on anything unparsable — it only ever narrows
+ * which risk-accepted versions are treated as no-longer-untested, never
+ * silently drops a real warning.
+ */
+export function isCodexVersionWithinSupportedRange(version: string, supportedRange: string): boolean {
+  const parsed = parseCodexSemverForRangeCheck(version);
+  if (parsed === null) return false;
+  return supportedRange.split("||").some((conjunction) => versionSatisfiesConjunction(parsed, conjunction));
+}
+
+export interface CodexBinaryActions {
+  showInstall: boolean;
+  showUpdate: boolean;
+  showUseAnyway: boolean;
+  untestedVersion: string | null;
+}
+
+/**
+ * Install/update/use-anyway button visibility + the untested-version banner
+ * text, all derived from the same (report, support) pair — extracted so the
+ * mutation classes R3b-11/R3-9 named (swapped not_installed/update_required
+ * conditions, a stale-risk-acceptance false positive once the manifest
+ * widens) are pinned by a direct input->output test, not left to inline JSX
+ * no test exercises.
+ */
+export function deriveBinaryActions(report: CodexDoctorReport | undefined, support: CodexSupportStatusResult | null): CodexBinaryActions {
+  const showInstall = support !== null && report?.status === "not_installed";
+  const showUpdate = support !== null && report?.status === "update_required";
+  const version = report?.version;
+  const untestedVersion =
+    support !== null && version !== undefined && support.riskAcceptedVersions.includes(version) && !isCodexVersionWithinSupportedRange(version, support.supportedRange)
+      ? version
+      : null;
+  return { showInstall, showUpdate, showUseAnyway: showUpdate, untestedVersion };
 }
 
 // ── quota formatting (cut §6.2: labels are ALWAYS derived from `windowDurationMins`, never hardcoded) ──
@@ -292,6 +406,38 @@ export function codexQuotaLines(rateLimits: CodexRateLimits | undefined, now: Da
   return lines;
 }
 
+/**
+ * The cut §4.3 iteration ("не N параллельных app-server'ов") extracted as a
+ * pure async helper: exactly one `recheck` call in flight at a time, `id` by
+ * `id`, in order. `isStale` (checked before each id, not mid-await) lets a
+ * caller abandon a superseded chain — a newer `refreshAll` invocation stops
+ * this one from issuing any FURTHER recheck calls, though the one already
+ * awaited when staleness was detected still completes and reports its
+ * result/settle (its own write, if any, is the caller's responsibility to
+ * gate — this helper only controls which ids get STARTED).
+ */
+export async function diagnoseProfilesSequentially(
+  ids: readonly string[],
+  recheck: (id: string) => Promise<CodexOnboardingSnapshot>,
+  callbacks: {
+    onStart: (id: string) => void;
+    onResult: (id: string, snapshot: CodexOnboardingSnapshot) => void;
+    onSettle: (id: string) => void;
+    isStale?: () => boolean;
+  },
+): Promise<void> {
+  for (const id of ids) {
+    if (callbacks.isStale?.()) return;
+    callbacks.onStart(id);
+    try {
+      const snapshot = await recheck(id);
+      callbacks.onResult(id, snapshot);
+    } finally {
+      callbacks.onSettle(id);
+    }
+  }
+}
+
 // ── component ──
 
 /** Subset of `window.anycode.codex` this pane drives, injectable so tests never touch a real `window`. */
@@ -356,7 +502,7 @@ function CodexProfileRow(props: CodexProfileRowProps) {
             </button>
           </>
         ) : (
-          canSignIn(props.report) && (
+          canSignIn(props.report, props.profile) && (
             <button type="button" className="settings-button settings-button-primary" disabled={props.busy} onClick={props.onSignIn}>
               Sign in
             </button>
@@ -405,12 +551,31 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
   // rollout-import wizard — all of its own logic/state lives in
   // CodexRolloutImportDialog.tsx.
   const [importOpen, setImportOpen] = useState(false);
+  // R3-3/R3b-9 (cut §4.3): a second `refreshAll` invocation overlapping an
+  // in-flight one (double-click "Recheck all", or a click during the
+  // mount-triggered run) must not spawn a second interleaved sequential
+  // chain — that regresses `reportsById` with stale writes and doubles the
+  // per-profile app-server checks. An epoch counter (not `busy`) supersedes
+  // the older chain: every write below is gated on `refreshEpochRef` still
+  // matching the epoch this call started with, and the superseded chain
+  // itself stops issuing further recheck calls (`diagnoseProfilesSequentially`'s
+  // `isStale`) rather than racing the new one to completion. `busy` is left
+  // alone here on purpose — several callers (createAndSignIn in particular)
+  // already wrap their OWN `await refreshAll()` in a `busy` scope that must
+  // stay true until well after refreshAll resolves (e.g. through the
+  // following browser sign-in wait); folding a second `setBusy` into
+  // refreshAll itself would clear that flag early and re-enable the toolbar
+  // mid-flow.
+  const refreshEpochRef = useRef(0);
 
   // Every row diagnosed SEQUENTIALLY (cut §4.3: "не N параллельных
   // app-server'ов") — `system` first (it always exists), then every
   // registered profile in registry order.
   const refreshAll = useCallback(async (): Promise<void> => {
+    const epoch = ++refreshEpochRef.current;
+    const isStale = () => refreshEpochRef.current !== epoch;
     const listed = await bridge.listProfiles();
+    if (isStale()) return;
     setProfiles(listed.profiles.map((row) => row.profile));
     setReportsById((prev) => {
       const next = { ...prev };
@@ -420,20 +585,26 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
       return next;
     });
     const ids = [SYSTEM_PROFILE_ID, ...listed.profiles.map((row) => row.profile.id)];
-    for (const id of ids) {
-      setCheckingIds((prev) => new Set(prev).add(id));
-      try {
-        const snapshot = await bridge.recheck(id);
+    await diagnoseProfilesSequentially(ids, (id) => bridge.recheck(id), {
+      isStale,
+      onStart: (id) => {
+        if (isStale()) return;
+        setCheckingIds((prev) => new Set(prev).add(id));
+      },
+      onResult: (id, snapshot) => {
+        if (isStale()) return;
         setReportsById((prev) => ({ ...prev, [id]: snapshot.report }));
         if (id === SYSTEM_PROFILE_ID) setBinarySnapshot(snapshot);
-      } finally {
+      },
+      onSettle: (id) => {
+        if (isStale()) return;
         setCheckingIds((prev) => {
           const next = new Set(prev);
           next.delete(id);
           return next;
         });
-      }
-    }
+      },
+    });
   }, [bridge]);
 
   useEffect(() => {
@@ -503,6 +674,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
     try {
       const result = await bridge.manifestRefresh();
       setManifestSource(result.source);
+      setNotice(manifestRefreshNotice(result.source));
       setSupport((prev) => (prev !== null ? { ...prev, supportedRange: result.supportedRange } : prev));
       await refreshAll();
     } finally {
@@ -520,7 +692,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
         return;
       }
       await refreshAll();
-      if (request.authLink === undefined) {
+      if (shouldAutoSignIn(request)) {
         setSigningInId(created.profile.id);
         try {
           const login = await bridge.loginStart(created.profile.id);
@@ -599,7 +771,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
 
   const binaryReport = reportsById[SYSTEM_PROFILE_ID];
   const binaryStatus = describeCodexReportStatus(checkingIds.has(SYSTEM_PROFILE_ID) ? undefined : binaryReport);
-  const untestedVersion = binaryReport?.version !== undefined && (support?.riskAcceptedVersions.includes(binaryReport.version) ?? false) ? binaryReport.version : null;
+  const binaryActions = deriveBinaryActions(binaryReport, support);
   const atProfileLimit = profiles.length >= MAX_CODEX_PROFILES;
 
   return (
@@ -620,9 +792,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
           {manifestSource ? ` (${manifestSource})` : ""}. Recommended: <code>{support.recommended}</code>.
         </p>
       )}
-      {untestedVersion && (
+      {binaryActions.untestedVersion && (
         <div className="settings-notice" role="alert">
-          Untested Codex version {untestedVersion} — running outside the supported range on your own risk acceptance.
+          Untested Codex version {binaryActions.untestedVersion} — running outside the supported range on your own risk acceptance.
         </div>
       )}
       {notice && (
@@ -637,20 +809,20 @@ export function CodexEnginePane({ bridge = window.anycode.codex }: CodexEnginePa
         <button type="button" className="settings-button" disabled={busy} onClick={() => void pick()}>
           Choose binary…
         </button>
-        {binaryReport?.status === "not_installed" && support && (
+        {binaryActions.showInstall && support && (
           <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void installBinary(support.recommended)}>
             Install Codex {support.recommended}
           </button>
         )}
-        {binaryReport?.status === "update_required" && support && (
-          <>
-            <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void installBinary(support.recommended)}>
-              Update to {support.recommended}
-            </button>
-            <button type="button" className="settings-button" disabled={busy} onClick={() => void acceptRiskForBinary()}>
-              Use anyway
-            </button>
-          </>
+        {binaryActions.showUpdate && support && (
+          <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void installBinary(support.recommended)}>
+            Update to {support.recommended}
+          </button>
+        )}
+        {binaryActions.showUseAnyway && (
+          <button type="button" className="settings-button" disabled={busy} onClick={() => void acceptRiskForBinary()}>
+            Use anyway
+          </button>
         )}
         <button type="button" className="settings-button" disabled={busy} onClick={() => void refreshManifest()}>
           Refresh manifest
