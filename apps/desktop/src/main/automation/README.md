@@ -1144,6 +1144,16 @@ production code path reading it (the production default is always the real
 `os.homedir()`; RED-proof: `index.codexProfilesHome-wiring.test.ts`). The
 `system` pseudo-profile is deliberately NOT covered — it reads the ambient
 `CODEX_HOME`/`~/.codex`, which a smoke controls via `CODEX_HOME` itself.
+The lever is also forwarded into the HOST plane (W4-F0b): a managed
+profile's live session derives its CODEX_HOME host-side at spawn, so
+`buildHostEnvFor` set-or-DELETEs the vetted value into every host fork env
+(`applyCodexProfilesHomeOverride`, `main/host-env.ts` — the delete branch
+scrubs a raw ambient var that would otherwise ride the bootEnv spread), and
+the host re-gates it defense-in-depth (`resolveCodexProfilesHomeOverride`,
+`host/engines/codex/codex-home.ts`). Because the host CREATES the 0700
+profile home + auth.json symlink there, a malformed value under automation
+REFUSES the boot (throw) instead of silently falling back to the real
+homedir.
 
 ### Generic focus probe (TASK.45 W12-smoke)
 
