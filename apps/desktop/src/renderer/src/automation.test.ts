@@ -19,6 +19,7 @@
  * own fail-closed validation would reject).
  */
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { GitBranchInfo, GitCommitInfo } from "@anycode/core";
 import {
   createAutomationFacade,
@@ -45,6 +46,10 @@ import {
   type ProviderPaneDom,
   type ProviderConnectionRowView,
   type ProviderDrawerDomState,
+  type CodexPaneBinaryState,
+  type CodexPaneRowState,
+  type CodexProfileChipOptionState,
+  type CodexImportRolloutRowDomFacts,
 } from "./automation.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
@@ -5164,5 +5169,986 @@ describe("automation facade — provider connections grid/drawer probe/driver (T
       await expect(facade.settingsProviderDrawerClose()).resolves.toEqual({ ok: true });
       expect(clickDrawerClose).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("automation facade — modelPillState catalog parity (W4-F0, findings S5-1)", () => {
+  const noTranscriptDom: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
+  const noTodoPanelDom: TodoPanelDom = { panel: () => null };
+  const noStartScreenDom: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+
+  function pillDom(): ModelPillDom {
+    return {
+      mounted: () => true,
+      popoverOpen: () => false,
+      currentPage: () => "root",
+      manageDisabled: () => true,
+      clickChip: vi.fn<() => void>(),
+      clickRootRow: vi.fn<(row: "model" | "effort") => void>(),
+      clickItemAt: vi.fn<(index: number) => void>(),
+    };
+  }
+
+  function settingsStoreWith(snapshot: SettingsSnapshot | null): SettingsStoreApi {
+    const store = createSettingsStore();
+    store.setState({ snapshot });
+    return store;
+  }
+
+  it("resolves a custom:* provider's curated models via providerModelsFor — the FXH fallback the pre-fix expression missed", () => {
+    // The live S5 discriminant (W4-findings-S5.md): an active `custom:*`
+    // connection has NO builtin catalog entry — its models come from the
+    // record's own curated list. The pre-fix `catalog.find(id)?.models`
+    // yields undefined here, so modelItems collapsed to [currentModel] and
+    // the probe lied pessimistically against a correct popover. RED against
+    // reverting the pillCatalogModels fix.
+    const snapshot: SettingsSnapshot = {
+      settings: {
+        version: 2,
+        provider: {
+          ...providerV2({ id: "custom:lmstudio" }),
+          custom: [
+            {
+              id: "custom:lmstudio",
+              name: "LM Studio",
+              baseUrl: "http://localhost:1234",
+              kind: "openai-compatible",
+              models: ["google/gemma-4-12b-qat", "openai/gpt-oss-20b"],
+            },
+          ],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+      catalog: [],
+    };
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    tabsStore.getState().setActiveTab(tabId);
+    port.emit({ type: "model_changed", model: "openai/gpt-oss-20b", reasoningEffort: "off", availableEffortLevels: undefined });
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptDom,
+      noTodoPanelDom,
+      noStartScreenDom,
+      pillDom(),
+      settingsStoreWith(snapshot),
+    );
+    const state = facade.modelPillState(tabId);
+    expect(state.ok).toBe(true);
+    if (!state.ok) throw new Error("unreachable");
+    expect(state.modelItems).toEqual([
+      { id: "google/gemma-4-12b-qat", name: "google/gemma-4-12b-qat" },
+      { id: "openai/gpt-oss-20b", name: "openai/gpt-oss-20b" },
+    ]);
+  });
+
+  it("resolves a PINNED tab's catalog from the pin's provider, not the active one — resolvePillTarget parity with ModelPill.tsx", () => {
+    // Second S5-1 axis: a pinned tab's popover renders the PIN's provider
+    // catalog (TASK.45 W10-FIX F2); the pre-fix probe always computed from
+    // the ACTIVE provider, so it could lie optimistically too. RED against
+    // reverting the pillCatalogModels fix.
+    const snapshot: SettingsSnapshot = {
+      settings: {
+        version: 2,
+        provider: {
+          activeConnectionId: "conn-openai",
+          connections: [
+            { id: "conn-openai", providerId: "openai" },
+            { id: "conn-zai", providerId: "z-ai" },
+          ],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+      catalog: [
+        { id: "openai", name: "OpenAI", authKind: "api_key", models: [{ id: "gpt-x", name: "GPT-X" }] },
+        { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [{ id: "glm-5.2", name: "GLM-5.2" }] },
+      ],
+    };
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-pinned", "/ws/p", asPort(port), { connectionId: "conn-zai", providerId: "z-ai" });
+    port.emit(HOST_READY("/ws/p", "sess-p"));
+    tabsStore.getState().setActiveTab("tab-pinned");
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", availableEffortLevels: undefined });
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptDom,
+      noTodoPanelDom,
+      noStartScreenDom,
+      pillDom(),
+      settingsStoreWith(snapshot),
+    );
+    const state = facade.modelPillState("tab-pinned");
+    expect(state.ok).toBe(true);
+    if (!state.ok) throw new Error("unreachable");
+    // The pinned provider's catalog — NOT the active connection's ("gpt-x").
+    expect(state.modelItems).toEqual([{ id: "glm-5.2", name: "GLM-5.2" }]);
+    expect(state.label).toBe("GLM-5.2");
+  });
+});
+
+describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 probe (a))", () => {
+  function binaryState(overrides: Partial<CodexPaneBinaryState> = {}): CodexPaneBinaryState {
+    return {
+      statusHeadline: "Sign in required",
+      statusTone: "warn",
+      statusDetail: "Codex 0.144.5 found but not signed in.",
+      binaryPath: "/usr/local/bin/codex",
+      sourceLabel: "found on PATH",
+      supportedRange: ">=0.140.0 <0.150.0",
+      recommended: "0.144.5",
+      manifestSource: "cache",
+      installButton: null,
+      riskToggleVisible: false,
+      actions: [
+        { label: "Recheck all", disabled: false },
+        { label: "Choose binary…", disabled: false },
+        { label: "Refresh manifest", disabled: false },
+      ],
+      ...overrides,
+    };
+  }
+
+  /** A fully-controllable fake `CodexPaneDom` (pillDom discipline): read probes frozen via overrides; every click is a spy. */
+  function fakeCodexPaneDom(
+    overrides: Partial<{
+      mounted: boolean;
+      binary: CodexPaneBinaryState;
+      rows: CodexPaneRowState[];
+      notices: string[];
+    }> = {},
+  ) {
+    const binary = overrides.binary ?? binaryState();
+    return {
+      mounted: () => overrides.mounted ?? true,
+      binary: () => binary,
+      rows: () => overrides.rows ?? [],
+      notices: () => overrides.notices ?? [],
+      actionButton: (label: string) => {
+        const action = binary.actions.find((a) => a.label === label);
+        return action ? { disabled: action.disabled } : null;
+      },
+      clickAction: vi.fn((label: string) => binary.actions.some((a) => a.label === label)),
+      installButton: () => binary.installButton,
+      clickInstall: vi.fn(() => binary.installButton !== null),
+      clickImportSession: vi.fn(() => true),
+    };
+  }
+
+  function buildFacade(codexPaneDom: ReturnType<typeof fakeCodexPaneDom>) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createSettingsStore(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codexPaneDom,
+    );
+  }
+
+  it("reads mounted:false with empty defaults when the pane isn't mounted (a valid reading, not an error)", () => {
+    const facade = buildFacade(fakeCodexPaneDom({ mounted: false }));
+    expect(facade.codexPaneState()).toEqual({ mounted: false, binary: null, rows: [], notices: [] });
+  });
+
+  it("reads the binary/manifest block AND account rows off the DOM accessor (DoD probe (a) shape)", () => {
+    const rows: CodexPaneRowState[] = [
+      {
+        label: "System (current environment)",
+        statusHeadline: "Ready",
+        statusTone: "ok",
+        statusDetail: "Codex 0.144.5 — signed in (chatgpt · plus)",
+        emailRendered: true,
+        quotaLines: ["5h · 82% left · resets in 3h", "Weekly · 64% left · resets in 2d"],
+        buttons: [{ label: "Delete", disabled: false }],
+        signingIn: false,
+      },
+    ];
+    const binary = binaryState({
+      installButton: { label: "Install Codex 0.144.5", disabled: false },
+      riskToggleVisible: true,
+    });
+    const facade = buildFacade(fakeCodexPaneDom({ binary, rows, notices: ["Untested Codex version 0.151.0 — running outside the supported range on your own risk acceptance."] }));
+    const state = facade.codexPaneState();
+    expect(state.mounted).toBe(true);
+    expect(state.binary).toEqual(binary);
+    expect(state.rows).toEqual(rows);
+    expect(state.notices).toHaveLength(1);
+  });
+
+  it("codexPaneInstall refuses pane_not_mounted / button_not_present / button_disabled, else fires the real click and returns immediately", () => {
+    expect(buildFacade(fakeCodexPaneDom({ mounted: false })).codexPaneInstall()).toEqual({ ok: false, reason: "pane_not_mounted" });
+    expect(buildFacade(fakeCodexPaneDom()).codexPaneInstall()).toEqual({ ok: false, reason: "button_not_present" });
+    expect(
+      buildFacade(fakeCodexPaneDom({ binary: binaryState({ installButton: { label: "Install Codex 0.144.5", disabled: true } }) })).codexPaneInstall(),
+    ).toEqual({ ok: false, reason: "button_disabled" });
+    const dom = fakeCodexPaneDom({ binary: binaryState({ installButton: { label: "Install Codex 0.144.5", disabled: false } }) });
+    expect(buildFacade(dom).codexPaneInstall()).toEqual({ ok: true });
+    expect(dom.clickInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("codexPaneRecheckAll / codexPaneRefreshManifest click their EXACT labelled buttons and refuse while busy-disabled", () => {
+    const dom = fakeCodexPaneDom();
+    const facade = buildFacade(dom);
+    expect(facade.codexPaneRecheckAll()).toEqual({ ok: true });
+    expect(dom.clickAction).toHaveBeenCalledWith("Recheck all");
+    expect(facade.codexPaneRefreshManifest()).toEqual({ ok: true });
+    expect(dom.clickAction).toHaveBeenCalledWith("Refresh manifest");
+
+    const busyDom = fakeCodexPaneDom({
+      binary: binaryState({
+        actions: [
+          { label: "Recheck all", disabled: true },
+          { label: "Refresh manifest", disabled: true },
+        ],
+      }),
+    });
+    const busyFacade = buildFacade(busyDom);
+    expect(busyFacade.codexPaneRecheckAll()).toEqual({ ok: false, reason: "button_disabled" });
+    expect(busyFacade.codexPaneRefreshManifest()).toEqual({ ok: false, reason: "button_disabled" });
+    expect(busyDom.clickAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("automation facade — codexProfileChipState / open / pick (W4-F0, findings S1-1 probe (b))", () => {
+  /** A fully-controllable fake `CodexProfileChipDom` (pillDom discipline): reads frozen via a mutable cell so a click spy can flip them. */
+  function fakeChipDom(
+    overrides: Partial<{
+      mounted: boolean;
+      label: string;
+      menuOpen: boolean;
+      options: CodexProfileChipOptionState[];
+      addAccountLast: boolean;
+    }> = {},
+  ) {
+    const cell = {
+      mounted: overrides.mounted ?? true,
+      label: overrides.label ?? "System",
+      menuOpen: overrides.menuOpen ?? false,
+      options: overrides.options ?? [],
+      addAccountLast: overrides.addAccountLast ?? true,
+    };
+    const dom = {
+      cell,
+      mounted: () => cell.mounted,
+      label: () => cell.label,
+      menuOpen: () => cell.menuOpen,
+      options: () => cell.options,
+      addAccountLast: () => cell.addAccountLast,
+      clickChip: vi.fn(() => {
+        cell.menuOpen = !cell.menuOpen;
+      }),
+      clickOptionAt: vi.fn((index: number) => index >= 0 && index < cell.options.length),
+    };
+    return dom;
+  }
+
+  function buildChipFixture(dom: ReturnType<typeof fakeChipDom>) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createSettingsStore(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      dom,
+    );
+    return { facade, tabsStore };
+  }
+
+  it("reads chipVisible:false with empty defaults when the chip isn't rendered — the read-only-after-start observability (no draft, no chip)", () => {
+    const { facade } = buildChipFixture(fakeChipDom({ mounted: false }));
+    expect(facade.codexProfileChipState()).toEqual({
+      ok: true,
+      chipVisible: false,
+      label: null,
+      menuOpen: false,
+      options: [],
+      addAccountLast: false,
+      draftActive: false,
+      draftCodexProfileId: null,
+    });
+  });
+
+  it("reads label/menuOpen/options{label,disabled}/addAccountLast off the rendered popover, and the draft's raw codexProfileId off the store", () => {
+    const options: CodexProfileChipOptionState[] = [
+      { label: "main", disabled: false, current: false },
+      { label: "acc2", disabled: true, current: false },
+    ];
+    const dom = fakeChipDom({ label: "acc2", menuOpen: true, options, addAccountLast: true });
+    const { facade, tabsStore } = buildChipFixture(dom);
+    tabsStore.getState().openDraft("/ws/x");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setDraftCodexProfileId("acc2");
+    expect(facade.codexProfileChipState()).toEqual({
+      ok: true,
+      chipVisible: true,
+      label: "acc2",
+      menuOpen: true,
+      options,
+      addAccountLast: true,
+      draftActive: true,
+      draftCodexProfileId: "acc2",
+    });
+  });
+
+  it("options are only populated while the popover is open (rows are read off the RENDERED popover, a closed one renders none)", () => {
+    const dom = fakeChipDom({ menuOpen: false, options: [{ label: "main", disabled: false, current: true }] });
+    const { facade } = buildChipFixture(dom);
+    const state = facade.codexProfileChipState();
+    expect(state.menuOpen).toBe(false);
+    expect(state.options).toEqual([]);
+  });
+
+  it("codexProfileChipOpen fires the real chip click and settles on the committed popover state; not_present without a chip", async () => {
+    const dom = fakeChipDom();
+    const { facade } = buildChipFixture(dom);
+    await expect(facade.codexProfileChipOpen(true)).resolves.toEqual({ ok: true });
+    expect(dom.clickChip).toHaveBeenCalledTimes(1);
+    // Already open -> idempotent no-op, no second click.
+    await expect(facade.codexProfileChipOpen(true)).resolves.toEqual({ ok: true });
+    expect(dom.clickChip).toHaveBeenCalledTimes(1);
+    await expect(facade.codexProfileChipOpen(false)).resolves.toEqual({ ok: true });
+
+    const absent = fakeChipDom({ mounted: false });
+    const { facade: absentFacade } = buildChipFixture(absent);
+    await expect(absentFacade.codexProfileChipOpen(true)).resolves.toEqual({ ok: false, reason: "not_present" });
+  });
+
+  it("codexProfileChipPick auto-opens the popover, FIRES the click even on a disabled row (the product's own gate is what a smoke must observe), refuses out-of-range", async () => {
+    const options: CodexProfileChipOptionState[] = [
+      { label: "main", disabled: false, current: false },
+      { label: "acc2", disabled: true, current: false },
+    ];
+    const dom = fakeChipDom({ options });
+    const { facade } = buildChipFixture(dom);
+    await expect(facade.codexProfileChipPick(1)).resolves.toEqual({ ok: true });
+    expect(dom.clickChip).toHaveBeenCalledTimes(1);
+    // The DISABLED row's click was fired, not pre-refused — a real click on a
+    // disabled button no-ops in the browser, which is exactly the product
+    // behavior the S1b gate asserts (draft unchanged, popover still open).
+    expect(dom.clickOptionAt).toHaveBeenCalledWith(1);
+    await expect(facade.codexProfileChipPick(7)).resolves.toEqual({ ok: false, reason: "unknown_option" });
+  });
+});
+
+describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", () => {
+  function importRow(overrides: Partial<CodexImportRolloutRowDomFacts> = {}): CodexImportRolloutRowDomFacts {
+    return {
+      fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+      timestamp: "2026-07-17 03:14 UTC",
+      size: "12.3 KB",
+      cwd: "/ws/proj",
+      preview: "fix the flaky test…",
+      selected: false,
+      ...overrides,
+    };
+  }
+
+  /** A fully-controllable fake `CodexImportDialogDom` over a mutable cell, so the drive spies can flip what the read probes report (waitUntil-visible transitions). The default `setProfile`/`clickRolloutAt` also commit the matching provenance stamp (a fast product whose reply has already landed); the identity-settle discriminant tests below replace them with staged scripts that model the stale windows. */
+  function fakeImportDom(
+    overrides: Partial<{
+      open: boolean;
+      profileValue: string;
+      profileOptions: { id: string; label: string }[];
+      listEmptyText: string | null;
+      listSettled: boolean;
+      rollouts: CodexImportRolloutRowDomFacts[];
+      rolloutsFor: string | null;
+      previewSettled: boolean;
+      previewFor: string | null;
+      statsLines: string[];
+      notices: string[];
+      modelValue: string | null;
+      modelOptions: { id: string; name: string }[];
+      importButton: { label: string; disabled: boolean } | null;
+    }> = {},
+  ) {
+    const cell = {
+      open: overrides.open ?? true,
+      profileValue: overrides.profileValue ?? "",
+      profileOptions: overrides.profileOptions ?? [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listEmptyText: overrides.listEmptyText ?? null,
+      listSettled: overrides.listSettled ?? true,
+      rollouts: overrides.rollouts ?? [],
+      rolloutsFor: overrides.rolloutsFor ?? null,
+      previewSettled: overrides.previewSettled ?? true,
+      previewFor: overrides.previewFor ?? null,
+      statsLines: overrides.statsLines ?? [],
+      notices: overrides.notices ?? [],
+      modelValue: overrides.modelValue ?? null,
+      modelOptions: overrides.modelOptions ?? [],
+      importButton: overrides.importButton !== undefined ? overrides.importButton : { label: "Import & open", disabled: false },
+    };
+    const dom = {
+      cell,
+      open: () => cell.open,
+      clickClose: vi.fn(() => {
+        cell.open = false;
+        return true;
+      }),
+      profileValue: () => cell.profileValue,
+      profileOptions: () => cell.profileOptions,
+      setProfile: vi.fn((id: string) => {
+        if (!cell.profileOptions.some((o) => o.id === id)) return false;
+        cell.profileValue = id;
+        cell.rolloutsFor = id;
+        return true;
+      }),
+      listEmptyText: () => cell.listEmptyText,
+      listLoadingVisible: () => cell.listEmptyText === "Loading sessions…",
+      listSettled: () => cell.listSettled && cell.listEmptyText !== "Loading sessions…",
+      rolloutsFor: () => cell.rolloutsFor,
+      rollouts: () => cell.rollouts,
+      clickRolloutAt: vi.fn((index: number) => {
+        const row = cell.rollouts[index];
+        if (row === undefined) return false;
+        cell.previewFor = row.fileName;
+        return true;
+      }),
+      previewLoadingVisible: () => false,
+      previewSettled: () => cell.previewSettled,
+      previewFor: () => cell.previewFor,
+      statsLines: () => cell.statsLines,
+      notices: () => cell.notices,
+      modelValue: () => cell.modelValue,
+      modelOptions: () => cell.modelOptions,
+      setModel: vi.fn((id: string) => {
+        if (!cell.modelOptions.some((o) => o.id === id)) return false;
+        cell.modelValue = id;
+        return true;
+      }),
+      importButton: () => cell.importButton,
+      clickImport: vi.fn(() => cell.importButton !== null && !cell.importButton.disabled),
+    };
+    return dom;
+  }
+
+  function fakePaneForImport(mounted = true, clickResult = true) {
+    return {
+      mounted: () => mounted,
+      binary: () => {
+        throw new Error("unused");
+      },
+      rows: () => [],
+      notices: () => [],
+      actionButton: () => null,
+      clickAction: () => false,
+      installButton: () => null,
+      clickInstall: () => false,
+      clickImportSession: vi.fn(() => clickResult),
+    };
+  }
+
+  function buildImportFacade(importDom: ReturnType<typeof fakeImportDom>, paneDom = fakePaneForImport()) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createSettingsStore(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      paneDom,
+      undefined,
+      importDom,
+    );
+  }
+
+  it("reads open:false with empty defaults when the dialog is closed (a valid reading, not an error)", async () => {
+    const facade = buildImportFacade(fakeImportDom({ open: false }));
+    await expect(facade.codexImportState()).resolves.toEqual({
+      paneMounted: true,
+      open: false,
+      profileId: null,
+      profileOptions: [],
+      listLoading: false,
+      listEmptyText: null,
+      rollouts: [],
+      rolloutsFor: null,
+      previewLoading: false,
+      previewFor: null,
+      statsLines: [],
+      notices: [],
+      modelValue: null,
+      modelOptions: [],
+      importDisabled: true,
+      importing: false,
+    });
+  });
+
+  it("reads the whole DoD probe (c) shape: profile options, rollout rows (custody-redacted), provenance stamps, loss stats, notices (import-disabled reason rides here), model select, Import button state", async () => {
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      rollouts: [importRow({ selected: true }), importRow({ fileName: "rollout-2026-07-16T22-00-00-bbbb.jsonl", timestamp: "2026-07-16 22:00 UTC", size: "1.0 KB", cwd: null, preview: null })],
+      rolloutsFor: "tmp-a",
+      previewFor: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+      statsLines: ["3 reasoning dropped", "2 tools collapsed to text"],
+      notices: ["Pick a model for the new session first."],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importButton: { label: "Import & open", disabled: true },
+    });
+    const facade = buildImportFacade(dom);
+    const state = await facade.codexImportState();
+    expect(state.open).toBe(true);
+    expect(state.profileId).toBe("tmp-a");
+    expect(state.profileOptions.map((o) => o.id)).toEqual(["system", "tmp-a"]);
+    expect(state.rollouts).toHaveLength(2);
+    expect(state.rollouts[0]?.selected).toBe(true);
+    expect(state.rollouts.map((r) => r.fileName)).toEqual(["rollout-2026-07-17T03-14-00-aaaa.jsonl", "rollout-2026-07-16T22-00-00-bbbb.jsonl"]);
+    expect(state.rolloutsFor).toBe("tmp-a");
+    expect(state.previewFor).toBe("rollout-2026-07-17T03-14-00-aaaa.jsonl");
+    expect(state.statsLines).toEqual(["3 reasoning dropped", "2 tools collapsed to text"]);
+    expect(state.notices).toEqual(["Pick a model for the new session first."]);
+    expect(state.modelValue).toBe("glm-5.2");
+    expect(state.importDisabled).toBe(true);
+    expect(state.importing).toBe(false);
+  });
+
+  it("custody (W4-F0c finding A): sentinel session text NEVER crosses — the serialized state carries presence/length/digest only, and the digest equals an independently computed sha256 prefix of the rendered text", async () => {
+    const renderedPreview = "PII_SENTINEL_MSG my api key is sk-0000 do not leak";
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      rollouts: [
+        importRow({ fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl", cwd: "/Users/owner/PII_SENTINEL_CWD", preview: renderedPreview, selected: true }),
+        importRow({ fileName: "rollout-2026-07-16T22-00-00-bbbb.jsonl", cwd: null, preview: null }),
+      ],
+    });
+    const state = await buildImportFacade(dom).codexImportState();
+    // The whole facade state — the exact value the HTTP channel serializes —
+    // must not contain the raw session text anywhere.
+    const wire = JSON.stringify(state);
+    expect(wire).not.toContain("PII_SENTINEL_CWD");
+    expect(wire).not.toContain("PII_SENTINEL_MSG");
+    // Independent local digest (node:crypto, not the facade's own helper).
+    const expectedDigest = createHash("sha256").update(renderedPreview, "utf8").digest("hex").slice(0, 12);
+    expect(state.rollouts[0]).toEqual({
+      fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+      timestamp: "2026-07-17 03:14 UTC",
+      size: "12.3 KB",
+      cwdRendered: true,
+      preview: { rendered: true, length: renderedPreview.length, sha256_12: expectedDigest },
+      selected: true,
+    });
+    expect(state.rollouts[1]).toEqual({
+      fileName: "rollout-2026-07-16T22-00-00-bbbb.jsonl",
+      timestamp: "2026-07-17 03:14 UTC",
+      size: "12.3 KB",
+      cwdRendered: false,
+      preview: { rendered: false, length: 0, sha256_12: null },
+      selected: false,
+    });
+  });
+
+  it("atomic snapshot (W4-F0e finding H1): every DOM fact is captured synchronously before the digest await — a React commit landing mid-read cannot tear the payload (rows of one profile stamped with another)", async () => {
+    const renderedPreview = "pre-mutation preview text";
+    const preRow = importRow({ fileName: "2026/07/17/rollout-pre.jsonl", cwd: "/ws/pre", preview: renderedPreview, selected: true });
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      profileOptions: [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listEmptyText: null,
+      rollouts: [preRow],
+      rolloutsFor: "tmp-a",
+      previewFor: "2026/07/17/rollout-pre.jsonl",
+      statsLines: ["3 reasoning dropped"],
+      notices: ["pre notice"],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importButton: { label: "Import & open", disabled: false },
+    });
+    const facade = buildImportFacade(dom);
+    // The async read runs synchronously up to its first await — the snapshot
+    // exists by the time the promise is handed back.
+    const pending = facade.codexImportState();
+    // Synchronous mutation of EVERY cell field models a React commit landing
+    // during the digest await (the exact H1 tear: rows of profile A with
+    // profile B's stamp). The payload must equal the PRE-mutation values on
+    // ALL fields — moving any single field's DOM read past the await turns
+    // exactly that field's assert red.
+    dom.cell.open = false;
+    dom.cell.profileValue = "system";
+    dom.cell.profileOptions = [{ id: "system", label: "System (current environment)" }];
+    dom.cell.listEmptyText = "Loading sessions…";
+    dom.cell.listSettled = false;
+    dom.cell.rollouts = [importRow({ fileName: "2026/07/16/rollout-post.jsonl", cwd: null, preview: null, selected: false })];
+    // The already-materialized row object is ALSO mutated in place — this
+    // discriminates the read MOMENT of every row field (redactRolloutRow
+    // captures all six at entry, inside the same synchronous block).
+    preRow.fileName = "2026/07/16/rollout-post.jsonl";
+    preRow.timestamp = "post";
+    preRow.size = "post";
+    preRow.cwd = null;
+    preRow.preview = "post-mutation preview text";
+    preRow.selected = false;
+    dom.cell.rolloutsFor = "system";
+    dom.cell.previewSettled = false;
+    dom.cell.previewFor = "2026/07/16/rollout-post.jsonl";
+    dom.cell.statsLines = ["1 images omitted"];
+    dom.cell.notices = ["post notice"];
+    dom.cell.modelValue = "gpt-x";
+    dom.cell.modelOptions = [{ id: "gpt-x", name: "GPT X" }];
+    dom.cell.importButton = { label: "Importing…", disabled: true };
+    const state = await pending;
+    const expectedDigest = createHash("sha256").update(renderedPreview, "utf8").digest("hex").slice(0, 12);
+    expect(state).toEqual({
+      paneMounted: true,
+      open: true,
+      profileId: "tmp-a",
+      profileOptions: [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listLoading: false,
+      listEmptyText: null,
+      rollouts: [
+        {
+          fileName: "2026/07/17/rollout-pre.jsonl",
+          timestamp: "2026-07-17 03:14 UTC",
+          size: "12.3 KB",
+          cwdRendered: true,
+          preview: { rendered: true, length: renderedPreview.length, sha256_12: expectedDigest },
+          selected: true,
+        },
+      ],
+      rolloutsFor: "tmp-a",
+      previewLoading: false,
+      previewFor: "2026/07/17/rollout-pre.jsonl",
+      statsLines: ["3 reasoning dropped"],
+      notices: ["pre notice"],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importDisabled: false,
+      importing: false,
+    });
+  });
+
+  it("classifies the list-loading placeholder honestly (listLoading true, listEmptyText null while loading)", async () => {
+    const dom = fakeImportDom({ listEmptyText: "Loading sessions…" });
+    const state = await buildImportFacade(dom).codexImportState();
+    expect(state.listLoading).toBe(true);
+    expect(state.listEmptyText).toBeNull();
+  });
+
+  it("codexImportOpen(true) clicks the pane's own entry button and settles on the dialog mounting; pane_not_mounted / button_not_present refusals", async () => {
+    const dom = fakeImportDom({ open: false });
+    const pane = fakePaneForImport();
+    pane.clickImportSession = vi.fn(() => {
+      dom.cell.open = true;
+      return true;
+    });
+    await expect(buildImportFacade(dom, pane).codexImportOpen(true)).resolves.toEqual({ ok: true });
+    expect(pane.clickImportSession).toHaveBeenCalledTimes(1);
+
+    await expect(buildImportFacade(fakeImportDom({ open: false }), fakePaneForImport(false)).codexImportOpen(true)).resolves.toEqual({
+      ok: false,
+      reason: "pane_not_mounted",
+    });
+    await expect(buildImportFacade(fakeImportDom({ open: false }), fakePaneForImport(true, false)).codexImportOpen(true)).resolves.toEqual({
+      ok: false,
+      reason: "button_not_present",
+    });
+  });
+
+  it("codexImportOpen(false) clicks the dialog's own Close button; already-closed is an idempotent ok", async () => {
+    const dom = fakeImportDom();
+    await expect(buildImportFacade(dom).codexImportOpen(false)).resolves.toEqual({ ok: true });
+    expect(dom.clickClose).toHaveBeenCalledTimes(1);
+    await expect(buildImportFacade(fakeImportDom({ open: false })).codexImportOpen(false)).resolves.toEqual({ ok: true });
+  });
+
+  it("codexImportSetProfile drives the REAL select and settles on the list settled AND stamped with this profile; unknown_profile / dialog_not_open refuse", async () => {
+    const dom = fakeImportDom();
+    await expect(buildImportFacade(dom).codexImportSetProfile("tmp-a")).resolves.toEqual({ ok: true });
+    expect(dom.setProfile).toHaveBeenCalledWith("tmp-a");
+    await expect(buildImportFacade(dom).codexImportSetProfile("nope")).resolves.toEqual({ ok: false, reason: "unknown_profile" });
+    await expect(buildImportFacade(fakeImportDom({ open: false })).codexImportSetProfile("tmp-a")).resolves.toEqual({
+      ok: false,
+      reason: "dialog_not_open",
+    });
+  });
+
+  it("codexImportSelectRollout clicks the row's own radio by index and settles on the preview stamped with that row's fileName; unknown_rollout refuses", async () => {
+    // The rendered list is stamped with the profile the select names — the
+    // W4-F0e list_stale guard is not what this test discriminates.
+    const dom = fakeImportDom({ profileValue: "tmp-a", rollouts: [importRow(), importRow()], rolloutsFor: "tmp-a" });
+    await expect(buildImportFacade(dom).codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
+    expect(dom.clickRolloutAt).toHaveBeenCalledWith(1);
+    await expect(buildImportFacade(dom).codexImportSelectRollout(5)).resolves.toEqual({ ok: false, reason: "unknown_rollout" });
+  });
+
+  // ── identity-gated settle discriminants (W4-F0c finding B). Each staged
+  // fake advances its phase script on the settle predicate's own settled()
+  // reads, so a facade that resolves early reads the phase it stopped in —
+  // and the post-settle state assertions catch a wrong-selection "ok".
+  // Verified discriminating: with the identity condition removed from the
+  // settle (listSettled()/previewSettled() alone), all four go red. ──
+
+  it("identity settle (list, stale window): a SETTLED previous-profile list — old rows + old stamp, the passive-effect window after the select commit — does not satisfy codexImportSetProfile", async () => {
+    const dom = fakeImportDom({
+      profileValue: "system",
+      rollouts: [importRow({ fileName: "rollout-old.jsonl" })],
+      rolloutsFor: "system",
+    });
+    // Staged product timeline: polls 1-3 the PREVIOUS profile's settled
+    // rows+stamp; 4-5 loading; 6+ the new profile's stamped reply.
+    dom.setProfile = vi.fn((id: string) => {
+      if (!dom.cell.profileOptions.some((o) => o.id === id)) return false;
+      dom.cell.profileValue = id;
+      return true;
+    });
+    let polls = 0;
+    dom.listSettled = () => {
+      polls += 1;
+      if (polls <= 3) return true;
+      if (polls <= 5) return false;
+      dom.cell.rollouts = [importRow({ fileName: "rollout-new.jsonl" })];
+      dom.cell.rolloutsFor = "tmp-a";
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSetProfile("tmp-a")).resolves.toEqual({ ok: true });
+    // Resolved only once the NEW profile's stamped result was in the DOM —
+    // a timing settle would have returned ok during the stale window.
+    const state = await facade.codexImportState();
+    expect(state.rolloutsFor).toBe("tmp-a");
+    expect(state.rollouts.map((r) => r.fileName)).toEqual(["rollout-new.jsonl"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("identity settle (list, stale reply): a reply to the OLD profile landing settled AFTER the new pick — old stamp — does not satisfy; the poll outlasts it until the new stamped reply", async () => {
+    const dom = fakeImportDom({
+      profileValue: "system",
+      rollouts: [importRow({ fileName: "rollout-old.jsonl" })],
+      rolloutsFor: "system",
+    });
+    dom.setProfile = vi.fn((id: string) => {
+      if (!dom.cell.profileOptions.some((o) => o.id === id)) return false;
+      dom.cell.profileValue = id;
+      return true;
+    });
+    // Staged timeline: polls 1-2 loading (the effect reset ran); 3-5 the OLD
+    // profile's in-flight reply lands SETTLED with its old stamp; 6+ the new
+    // profile's stamped reply. No timing gate can close this race — the
+    // stale reply is a legally settled DOM.
+    let polls = 0;
+    dom.listSettled = () => {
+      polls += 1;
+      if (polls <= 2) return false;
+      if (polls <= 5) return true;
+      dom.cell.rollouts = [importRow({ fileName: "rollout-new.jsonl" })];
+      dom.cell.rolloutsFor = "tmp-a";
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSetProfile("tmp-a")).resolves.toEqual({ ok: true });
+    const state = await facade.codexImportState();
+    expect(state.rolloutsFor).toBe("tmp-a");
+    expect(state.rollouts.map((r) => r.fileName)).toEqual(["rollout-new.jsonl"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("identity settle (preview, stale window): a SETTLED previous-file preview with its old stamp does not satisfy codexImportSelectRollout — settle keys on the fileName captured BEFORE the click", async () => {
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      rollouts: [importRow({ fileName: "rollout-a.jsonl", selected: true }), importRow({ fileName: "rollout-b.jsonl" })],
+      rolloutsFor: "tmp-a",
+      previewFor: "rollout-a.jsonl",
+      statsLines: ["3 reasoning dropped"],
+    });
+    // The post-click re-render empties the rendered rows: a facade that
+    // captured the row identity AFTER the click would read nothing and
+    // refuse — capture must precede the click.
+    dom.clickRolloutAt = vi.fn((index: number) => {
+      const inRange = index >= 0 && index < dom.cell.rollouts.length;
+      dom.cell.rollouts = [];
+      return inRange;
+    });
+    let polls = 0;
+    dom.previewSettled = () => {
+      polls += 1;
+      if (polls <= 3) return true;
+      if (polls <= 5) return false;
+      dom.cell.previewFor = "rollout-b.jsonl";
+      dom.cell.statsLines = ["1 images omitted"];
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
+    const state = await facade.codexImportState();
+    expect(state.previewFor).toBe("rollout-b.jsonl");
+    expect(state.statsLines).toEqual(["1 images omitted"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("identity settle (preview, stale reply): the OLD row's preview landing settled AFTER the new pick — old stamp — does not satisfy; the poll outlasts it", async () => {
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      rollouts: [importRow({ fileName: "rollout-a.jsonl", selected: true }), importRow({ fileName: "rollout-b.jsonl" })],
+      rolloutsFor: "tmp-a",
+      previewFor: null,
+      statsLines: [],
+    });
+    dom.clickRolloutAt = vi.fn((index: number) => index >= 0 && index < dom.cell.rollouts.length);
+    // Staged timeline: polls 1-2 loading; 3-5 the OLD row's reply lands
+    // SETTLED stamped rollout-a; 6+ the clicked row's stamped preview.
+    let polls = 0;
+    dom.previewSettled = () => {
+      polls += 1;
+      if (polls <= 2) return false;
+      if (polls <= 5) {
+        dom.cell.previewFor = "rollout-a.jsonl";
+        dom.cell.statsLines = ["3 reasoning dropped"];
+        return true;
+      }
+      dom.cell.previewFor = "rollout-b.jsonl";
+      dom.cell.statsLines = ["1 images omitted"];
+      return true;
+    };
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
+    const state = await facade.codexImportState();
+    expect(state.previewFor).toBe("rollout-b.jsonl");
+    expect(state.statsLines).toEqual(["1 images omitted"]);
+    expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("list-staleness guard (W4-F0e finding H3): a stale window where the OLD and NEW profile carry the SAME relative fileName — selectRollout refuses list_stale BEFORE any click, the old settled preview does not satisfy; after the identity settle the same call succeeds", async () => {
+    // fileName is relative to a profile's sessions dir, so a cross-profile
+    // name collision is legal. Without the guard, the fileName captured off
+    // the OLD profile's rows equals the OLD settled preview's stamp, and the
+    // identity settle is satisfied INSTANTLY — a wrong-profile ok.
+    const sharedFileName = "2026/07/17/rollout-shared.jsonl";
+    const dom = fakeImportDom({
+      // The select already names the NEW profile, but the rendered list is
+      // still the OLD profile's settled reply (the passive-effect window),
+      // with a settled preview for the SAME relative fileName.
+      profileValue: "tmp-a",
+      rollouts: [importRow({ fileName: sharedFileName })],
+      rolloutsFor: "system",
+      previewFor: sharedFileName,
+    });
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSelectRollout(0)).resolves.toEqual({ ok: false, reason: "list_stale" });
+    expect(dom.clickRolloutAt).not.toHaveBeenCalled();
+    // The NEW profile's stamped reply lands (identity settle completed) —
+    // legally rendering the same relative fileName — and the same call is ok.
+    dom.cell.rolloutsFor = "tmp-a";
+    await expect(facade.codexImportSelectRollout(0)).resolves.toEqual({ ok: true });
+    expect(dom.clickRolloutAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("list-staleness guard: a loading list (no data-rollouts-for stamp yet) refuses list_stale — fail-closed and distinct from unknown_rollout", async () => {
+    const dom = fakeImportDom({ profileValue: "tmp-a", rollouts: [importRow()], rolloutsFor: null });
+    await expect(buildImportFacade(dom).codexImportSelectRollout(0)).resolves.toEqual({ ok: false, reason: "list_stale" });
+    expect(dom.clickRolloutAt).not.toHaveBeenCalled();
+  });
+
+  it("codexImportSetModel drives the REAL model select; unknown_model for a value outside the rendered options (or no select yet)", async () => {
+    const dom = fakeImportDom({ modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }] });
+    await expect(buildImportFacade(dom).codexImportSetModel("glm-5.2")).resolves.toEqual({ ok: true });
+    expect(dom.setModel).toHaveBeenCalledWith("glm-5.2");
+    await expect(buildImportFacade(dom).codexImportSetModel("gpt-x")).resolves.toEqual({ ok: false, reason: "unknown_model" });
+  });
+
+  it("codexImportApply: success = the dialog closes; a fresh refusal notice = import_refused; a disabled button = import_disabled (no click fired)", async () => {
+    const successDom = fakeImportDom();
+    successDom.clickImport = vi.fn(() => {
+      successDom.cell.open = false;
+      return true;
+    });
+    await expect(buildImportFacade(successDom).codexImportApply()).resolves.toEqual({ ok: true });
+
+    const refusedDom = fakeImportDom();
+    refusedDom.clickImport = vi.fn(() => {
+      refusedDom.cell.notices = ["That session file is too large to import (32 MiB limit)."];
+      return true;
+    });
+    await expect(buildImportFacade(refusedDom).codexImportApply()).resolves.toEqual({ ok: false, reason: "import_refused" });
+
+    const disabledDom = fakeImportDom({ importButton: { label: "Import & open", disabled: true } });
+    await expect(buildImportFacade(disabledDom).codexImportApply()).resolves.toEqual({ ok: false, reason: "import_disabled" });
   });
 });

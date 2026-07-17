@@ -16,6 +16,7 @@ import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/cre
 import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
+import type { EngineId } from "../shared/engines.js";
 import {
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
@@ -312,6 +313,165 @@ describe("TabHostManager — per-tab circuit breaker", () => {
 
     expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--session", "sess-J"]);
   });
+
+  // Codex-profiles TASK.50 (cut §2.6.4, §3.3): main resolves the picked
+  // profile against ITS registry (lane A) and hands tabs.ts READY argv values;
+  // tabs.ts only forwards them. Unlike the draft model/preset (whose post-boot
+  // authority is the session row), the profile has NO session-row fallback —
+  // CODEX_HOME is frozen into the session — so it rides EVERY spawn, respawn
+  // included: a respawn without it would resume the thread against the
+  // ambient home, i.e. the wrong account.
+  it("carries the resolved Codex profile argv on EVERY spawn — respawns included, unlike the draft model", async () => {
+    const forkSpy = vi.fn<HostForkFn>();
+    const { hosts } = dyingForkRig();
+    forkSpy.mockImplementation(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("exit", 1));
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({
+      workspace: "/ws",
+      sessionId: "sess-P",
+      resume: false,
+      engine: "codex",
+      engineModel: "gpt-5.6-sol",
+      codexProfile: { id: "main", authLink: "/Users/x/.codex/auth.json" },
+    });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual([
+      "--session",
+      "sess-P",
+      "--engine-model",
+      "gpt-5.6-sol",
+      "--codex-profile",
+      "main",
+      "--codex-auth-link",
+      "/Users/x/.codex/auth.json",
+    ]);
+    // The respawn drops the draft model (session row is its authority) but
+    // KEEPS the profile (nothing else knows which home this session lives in).
+    expect(forkSpy.mock.calls[1]?.[1]).toEqual([
+      "--resume",
+      "sess-P",
+      "--codex-profile",
+      "main",
+      "--codex-auth-link",
+      "/Users/x/.codex/auth.json",
+    ]);
+  });
+
+  it("a linkedHome profile rides argv as --codex-home (already validated by main's registry)", async () => {
+    const { hosts } = liveForkRig();
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({
+      workspace: "/ws",
+      sessionId: "sess-L",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "acc2", home: "/Users/x/.codex-accounts/acc2" },
+    });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual([
+      "--session",
+      "sess-L",
+      "--codex-profile",
+      "acc2",
+      "--codex-home",
+      "/Users/x/.codex-accounts/acc2",
+    ]);
+  });
+
+  it("without a profile the argv stays byte-identical to the pre-profiles build (system pseudo-profile)", async () => {
+    const { hosts } = liveForkRig();
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const manager = codexManager(forkSpy);
+    manager.createTab({ workspace: "/ws", sessionId: "sess-S", resume: false, engine: "codex" });
+    await flush();
+
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--session", "sess-S"]);
+  });
+});
+
+describe("TabHostManager — readiness gate keys on the PICKED Codex profile (S3-1)", () => {
+  // The authoritative createTab guard must ask the readiness oracle about the
+  // profile the spawn will actually run under, not the active one. Injected
+  // oracle: only "ready-x" is ready; the ambient/active answer (undefined) is
+  // NOT — so a rollback that keys the gate on the active profile flips these RED.
+  function gatedManager(
+    engineReady: (engine: EngineId, codexProfileId?: string) => boolean,
+    fork: HostForkFn,
+  ) {
+    return new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      engineReady,
+      logger: silentLogger,
+      limits: {},
+    });
+  }
+
+  it('a ready PICK spawns and the gate saw ("codex", pickedId) — not the active undefined', () => {
+    const { fork, hosts } = liveForkRig();
+    const engineReady = vi.fn((_engine: EngineId, codexProfileId?: string) => codexProfileId === "ready-x");
+    const manager = gatedManager(engineReady, fork);
+
+    const created = manager.createTab({
+      workspace: "/ws",
+      sessionId: "s-ready-pick",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "ready-x" },
+    });
+
+    expect(created).toMatchObject({ ok: true });
+    expect(hosts).toHaveLength(1);
+    expect(engineReady).toHaveBeenCalledWith("codex", "ready-x");
+  });
+
+  it("negative holds: a PICK the gate reports NOT ready refuses not_ready and never forks", () => {
+    const forkSpy = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const engineReady = vi.fn((_engine: EngineId, codexProfileId?: string) => codexProfileId === "ready-x");
+    const manager = gatedManager(engineReady, forkSpy);
+
+    const created = manager.createTab({
+      workspace: "/ws",
+      sessionId: "s-not-ready-pick",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "not-ready-y" },
+    });
+
+    expect(created).toEqual({ ok: false, reason: "not_ready" });
+    expect(engineReady).toHaveBeenCalledWith("codex", "not-ready-y");
+    expect(forkSpy).not.toHaveBeenCalled();
+  });
+
+  it("an absent pick preserves the active-profile answer (no symmetry): canSpawn defaults the id to undefined", () => {
+    const { fork } = liveForkRig();
+    const engineReady = vi.fn((_engine: EngineId, codexProfileId?: string) => codexProfileId === undefined);
+    const manager = gatedManager(engineReady, fork);
+
+    expect(manager.canSpawn("codex")).toBe(true);
+    const lastCall = engineReady.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe("codex");
+    expect(lastCall?.[1]).toBeUndefined();
+  });
 });
 
 describe("TabHostManager — engine identity and process ownership", () => {
@@ -567,6 +727,57 @@ describe("TabHostManager — credential channel (slice 2.5 §3.3)", () => {
     await flush();
     expect(resolve).not.toHaveBeenCalled();
     expect(hosts[0]!.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("TabHostManager — imported-session model override (codex-profiles S4-1 arm 2, W4-F1)", () => {
+  it("stamps ANYCODE_MODEL from the tab's modelOverride over the base env's model, and keeps it across respawn", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      // Base env carries the ACTIVE connection's model; the picked override must win.
+      env: () => ({ PATH: "/base", ANYCODE_MODEL: "base-m" }),
+      logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, modelOverride: "pick-x" });
+    expect(created.ok).toBe(true);
+    // Respawn (sub-healthy exit still respawns below the per-tab cap): the override
+    // lives on the tab object, so the picked model rides every fork.
+    hosts[0]!.emit("exit", 1);
+    expect(envs).toEqual([
+      { PATH: "/base", ANYCODE_MODEL: "pick-x" },
+      { PATH: "/base", ANYCODE_MODEL: "pick-x" },
+    ]);
+  });
+
+  it("omits any ANYCODE_MODEL override for a tab with no modelOverride (base env's model untouched)", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({ PATH: "/base", ANYCODE_MODEL: "base-m" }),
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true });
+    // No override ⇒ the base env's model passes through verbatim (byte-as-today).
+    expect(envs[0]).toEqual({ PATH: "/base", ANYCODE_MODEL: "base-m" });
   });
 });
 

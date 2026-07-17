@@ -2800,3 +2800,302 @@ describe("Subagents pane routes (design/slice-P7.21-cut.md §4 W4)", () => {
     });
   });
 });
+
+describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-1)", () => {
+  const CODEX_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
+    { path: "/settings/codex/install", body: {} },
+    { path: "/settings/codex/recheck", body: {} },
+    { path: "/settings/codex/manifest-refresh", body: {} },
+    { path: "/start-screen/codex-profile", body: { open: true } },
+    { path: "/settings/codex/import/open", body: { open: true } },
+    { path: "/settings/codex/import/profile", body: { profileId: "tmp-a" } },
+    { path: "/settings/codex/import/rollout", body: { index: 0 } },
+    { path: "/settings/codex/import/model", body: { model: "glm-5.2" } },
+    { path: "/settings/codex/import/apply", body: {} },
+  ];
+
+  it("401s the three GET routes without a token", async () => {
+    const h = await boot();
+    for (const path of ["/settings/codex", "/settings/codex/import", "/start-screen/codex-profile"]) {
+      const res = await fetch(url(h, path));
+      expect(res.status, `${path} should 401 without a token`).toBe(401);
+    }
+  });
+
+  it("401s every POST route without a token", async () => {
+    const h = await boot();
+    for (const route of CODEX_POST_ROUTES) {
+      const res = await fetch(url(h, route.path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(route.body),
+      });
+      expect(res.status, `${route.path} should 401 without a token`).toBe(401);
+    }
+  });
+
+  it("GET /settings/codex -> codexPaneState (dedicated route, distinct from GET /settings and GET /settings/codex/import)", async () => {
+    const facadeResult = { mounted: true, binary: null, rows: [], notices: [] };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/codex"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"codexPaneState"');
+    expect(calls[0]).toContain("[]");
+  });
+
+  it("GET /settings/codex/import -> codexImportState", async () => {
+    const facadeResult = { paneMounted: false, open: false };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/codex/import"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"codexImportState"');
+  });
+
+  it("GET /settings/codex/import forwards the facade's custody-redacted shape VERBATIM — no main-side transform, widening, or re-derivation (W4-F0c finding A: one shape truth, enforced in the facade)", async () => {
+    // The full probe (c) state exactly as the renderer facade resolves it:
+    // rollout rows carry fileName/cwdRendered/preview{rendered,length,
+    // sha256_12} (never raw cwd/first-message text), plus the finding B
+    // provenance stamps rolloutsFor/previewFor.
+    const facadeResult = {
+      paneMounted: true,
+      open: true,
+      profileId: "tmp-a",
+      profileOptions: [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listLoading: false,
+      listEmptyText: null,
+      rollouts: [
+        {
+          fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+          timestamp: "2026-07-17 03:14 UTC",
+          size: "12.3 KB",
+          cwdRendered: true,
+          preview: { rendered: true, length: 42, sha256_12: "0123456789ab" },
+          selected: true,
+        },
+      ],
+      rolloutsFor: "tmp-a",
+      previewLoading: false,
+      previewFor: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+      statsLines: ["3 reasoning dropped"],
+      notices: [],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importDisabled: false,
+      importing: false,
+    };
+    const { window } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/codex/import"), { headers: auth() });
+    expect(res.status).toBe(200);
+    // Deep-equal against the seam value: the route adds nothing, drops
+    // nothing, and reshapes nothing — together with the facade-level
+    // sentinel red-proof (automation.test.ts), this pins "no raw session
+    // text in the HTTP response" end to end.
+    expect(await res.json()).toEqual(facadeResult);
+  });
+
+  it("GET /start-screen/codex-profile -> codexProfileChipState (GET /start-screen stays byte-untouched)", async () => {
+    const facadeResult = { ok: true, chipVisible: false };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/codex-profile"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"codexProfileChipState"');
+  });
+
+  describe("zod fail-closed on the codex bodies — callFacade never reached", () => {
+    it("POST /start-screen/codex-profile — empty object (neither open nor pick) -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/start-screen/codex-profile"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /start-screen/codex-profile — BOTH open and pick -> 400 (strict union, no ambiguous drive)", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/start-screen/codex-profile"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ open: true, pick: 1 }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /start-screen/codex-profile — negative / non-integer pick -> 400", async () => {
+      for (const pick of [-1, 1.5]) {
+        const { window, calls } = fakeWindowCapture();
+        const h = await boot({ getWindow: () => window });
+        const res = await fetch(url(h, "/start-screen/codex-profile"), { method: "POST", headers: auth(), body: JSON.stringify({ pick }) });
+        expect(res.status, `pick=${pick} should 400`).toBe(400);
+        expect(calls).toHaveLength(0);
+      }
+    });
+
+    it("POST /settings/codex/import/profile — empty profileId -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/profile"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ profileId: "" }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/codex/import/rollout — negative index -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/rollout"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ index: -2 }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/codex/import/model — missing model -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/model"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("junk JSON on every codex POST route -> 400, facade never invoked", async () => {
+      for (const route of CODEX_POST_ROUTES) {
+        const { window, calls } = fakeWindowCapture();
+        const h = await boot({ getWindow: () => window });
+        const res = await fetch(url(h, route.path), { method: "POST", headers: auth(), body: "{not json" });
+        expect(res.status, `${route.path} should 400 on junk JSON`).toBe(400);
+        expect(calls).toHaveLength(0);
+      }
+    });
+  });
+
+  describe("happy path — each route forwards to its facade method and returns the facade result", () => {
+    it("POST /settings/codex/install -> codexPaneInstall()", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/install"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(calls[0]).toContain('"codexPaneInstall"');
+    });
+
+    it("POST /settings/codex/recheck -> codexPaneRecheckAll()", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/recheck"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexPaneRecheckAll"');
+    });
+
+    it("POST /settings/codex/manifest-refresh -> codexPaneRefreshManifest()", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/manifest-refresh"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexPaneRefreshManifest"');
+    });
+
+    it("POST /start-screen/codex-profile {open} -> codexProfileChipOpen([open])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/start-screen/codex-profile"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ open: true }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexProfileChipOpen"');
+      expect(calls[0]).toContain("[true]");
+    });
+
+    it("POST /start-screen/codex-profile {pick} -> codexProfileChipPick([index])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/start-screen/codex-profile"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ pick: 2 }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexProfileChipPick"');
+      expect(calls[0]).toContain("[2]");
+    });
+
+    it("POST /settings/codex/import/open -> codexImportOpen([open])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/open"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ open: false }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexImportOpen"');
+      expect(calls[0]).toContain("[false]");
+    });
+
+    it("POST /settings/codex/import/profile -> codexImportSetProfile([profileId])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/profile"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ profileId: "tmp-a" }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexImportSetProfile"');
+      expect(calls[0]).toContain('["tmp-a"]');
+    });
+
+    it("POST /settings/codex/import/rollout -> codexImportSelectRollout([index])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/rollout"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ index: 1 }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexImportSelectRollout"');
+      expect(calls[0]).toContain("[1]");
+    });
+
+    it("POST /settings/codex/import/model -> codexImportSetModel([model])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/model"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ model: "glm-5.2" }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexImportSetModel"');
+      expect(calls[0]).toContain('["glm-5.2"]');
+    });
+
+    it("POST /settings/codex/import/apply -> codexImportApply()", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: false, reason: "import_refused" });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/import/apply"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: false, reason: "import_refused" });
+      expect(calls[0]).toContain('"codexImportApply"');
+    });
+  });
+});

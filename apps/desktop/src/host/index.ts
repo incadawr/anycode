@@ -279,6 +279,12 @@ import { CoreEngine } from "./engines/core-engine.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
 import { resumeCodexEngine, startCodexEngine } from "./engines/codex/codex-engine.js";
+import {
+  assertCodexProfileHome,
+  parseCodexProfileArgs,
+  resolveCodexProfile,
+  resolveCodexProfilesHomeOverride,
+} from "./engines/codex/codex-home.js";
 import { parseCodexEngineArgs } from "./engines/codex/draft-args.js";
 import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
 import { SqliteCodexShadowLog } from "./engines/codex/shadow-log.js";
@@ -429,6 +435,30 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   // Shadow command log (cut §2(e), TASK.42): the HOST is the sole writer,
   // from the live `item/*` stream inside CodexEngine — never the renderer.
   const shadowLog = new SqliteCodexShadowLog(persistence);
+  // Codex-profiles TASK.50 (cut §2.6): main resolves the picked profile to
+  // ready argv; the host re-validates it (fail-closed — malformed profile argv
+  // aborts the boot rather than silently running on the ambient account) and
+  // derives the CODEX_HOME the child receives. null = the `system`
+  // pseudo-profile: no env override, no guard, byte-identical old behaviour.
+  // The raw args are kept: `profileId` is persisted into the session row at
+  // the create seam below (Q1.3) so a cross-restart resume re-resolves it.
+  const codexProfileArgs = parseCodexProfileArgs(process.argv.slice(2));
+  // W4-F0b (Fable ruling iter-10): the dev/automation-only profiles-home
+  // lever, vetted by main and forwarded into this fork's env (set-or-DELETE
+  // scrub in buildHostEnvFor), re-gated here defense-in-depth. Resolved
+  // BEFORE the profile so a malformed value refuses the boot without a
+  // single mkdir — a silent fallback to the real homedir would be exactly
+  // the write the lever exists to prevent. null (production: main deleted
+  // the var) keeps the real-homedir default byte-identical to pre-F0b.
+  const codexProfilesHomeOverride = resolveCodexProfilesHomeOverride(process.env);
+  const codexProfile = resolveCodexProfile(codexProfileArgs, codexProfilesHomeOverride ?? undefined);
+  if (codexProfile !== null) {
+    // First assert runs eagerly so a broken home fails the boot with its own
+    // diagnostic; the SAME closure is then re-run by AppServerClient before
+    // every individual spawn (amendment §A1.2 TOCTOU discipline).
+    const rejected = assertCodexProfileHome(codexProfile);
+    if (rejected !== null) throw new Error(`Codex profile home rejected: ${rejected}`);
+  }
   const options = {
     bootstrap,
     broker,
@@ -438,6 +468,18 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     sourceEnv: process.env,
     shadowLog,
     ...(processOwnership !== undefined ? { processOwnership } : {}),
+    ...(codexProfile !== null
+      ? {
+          codexHome: codexProfile.home,
+          homeTrust: () => {
+            try {
+              return assertCodexProfileHome(codexProfile);
+            } catch (error) {
+              return describeError(error);
+            }
+          },
+        }
+      : {}),
   };
 
   // TASK.39: the draft (pre-session) model/preset choice arrives as argv from
@@ -501,6 +543,13 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           mode: created.presetId as PermissionMode,
           engineId: "codex",
           externalSessionRef: created.threadId,
+          // Codex-profiles Q1.3 (cut §3.3, completes W3-F): pin the profile id
+          // this session was created under, so a cross-restart resume
+          // re-resolves THIS profile's CODEX_HOME (main/index.ts's fail-closed
+          // re-resolve reads it back). Absent for the `system` pseudo-profile
+          // and bare --codex-home spawns — the row stays byte-identical to a
+          // pre-profiles build there.
+          ...(codexProfileArgs.profileId !== undefined ? { codexProfileId: codexProfileArgs.profileId } : {}),
         });
         return { ...created, sessionMeta };
       })());

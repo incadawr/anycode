@@ -25,7 +25,7 @@ import {
 } from "../shared/credentials.js";
 import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
-import { ENV_CONNECTION_ID } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import {
   ENGINE_PROCESS_REGISTRATION_TYPE,
@@ -165,6 +165,17 @@ export interface TabHost {
    * the host runs on the current default and no ANYCODE_CONNECTION_ID is stamped.
    */
   connectionId?: string;
+  /**
+   * A per-fork ANYCODE_MODEL override (codex-profiles S4-1 arm 2, W4-F1). Set
+   * ONLY on the first resume of a rollout-imported session, from the model the
+   * user picked in the import dialog: the base fork env's ANYCODE_MODEL is the
+   * ACTIVE connection's model (core resume takes the live model from the env, not
+   * the session row — global by-design behaviour), so without this stamp the
+   * imported tab would boot on the wrong model. Lives on the tab object, so it
+   * rides every respawn. Absent = no override (every non-import spawn), stamping
+   * nothing — byte-identical to today.
+   */
+  modelOverride?: string;
   /** Engine choice is main-owned and retained across every host respawn. */
   engine: EngineId;
   /**
@@ -177,6 +188,20 @@ export interface TabHost {
    */
   engineModel: string | null;
   enginePreset: string | null;
+  /**
+   * The resolved Codex account-profile argv (codex-profiles cut §3.3,
+   * TASK.50): READY values from main's profile registry (lane A resolves the
+   * renderer's opaque `codexProfileId`; tabs.ts only forwards). Unlike
+   * `engineModel`/`enginePreset` above this rides argv on EVERY spawn —
+   * respawns included — because `CODEX_HOME` is frozen into the session (cut
+   * §2.6.4) and no session row records it: a respawn without the profile
+   * would resume the native thread against the ambient home, i.e. the wrong
+   * account. Values are forwarded verbatim (argv is an array, no shell); the
+   * HOST is the single fail-closed validation authority (host/engines/codex/
+   * codex-home.ts refuses any malformed value instead of falling back to the
+   * ambient account). null = the `system` pseudo-profile (no argv delta).
+   */
+  codexProfile: { id?: string; home?: string; authLink?: string } | null;
   proc: UtilityProcess | null;
   /** Monotonic generation of this tab's utility-process instance. */
   hostGeneration: number;
@@ -311,8 +336,15 @@ export interface TabHostManagerDeps {
    * ready (preserves the pre-2.2 behaviour).
    */
   providerReady?: () => boolean;
-  /** Availability of a reviewed non-core engine; defaults fail-closed. */
-  engineReady?: (engine: EngineId) => boolean;
+  /**
+   * Availability of a reviewed non-core engine; defaults fail-closed. Codex
+   * readiness is per PROFILE (codex-profiles cut §4.2, TASK.50): the optional
+   * `codexProfileId` is the profile the spawn will actually run under — the
+   * draft's pick on a new tab, the persisted meta pick on a resume — so the gate
+   * answers about THAT account, not merely the active one. Absent id = the
+   * active profile answers (today's single-profile behaviour; no symmetry).
+   */
+  engineReady?: (engine: EngineId, codexProfileId?: string) => boolean;
   /** Fresh, engine-specific host-env overlay. It must contain no credentials. */
   engineEnv?: (engine: EngineId, generation: number) => NodeJS.ProcessEnv;
   /**
@@ -384,7 +416,7 @@ export class TabHostManager {
   private readonly limits: BreakerLimits;
   private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
-  private readonly isEngineReady: (engine: EngineId) => boolean;
+  private readonly isEngineReady: (engine: EngineId, codexProfileId?: string) => boolean;
   private readonly now: () => number;
   private readonly genId: () => string;
   private readonly logger: TabLogger;
@@ -433,8 +465,8 @@ export class TabHostManager {
    * the tab-ipc create path can refuse `not_ready` BEFORE prompting for a
    * workspace; createTab enforces it authoritatively regardless.
    */
-  canSpawn(engine: EngineId = "core"): boolean {
-    return this.isEngineReady(engine);
+  canSpawn(engine: EngineId = "core", codexProfileId?: string): boolean {
+    return this.isEngineReady(engine, codexProfileId);
   }
 
   getTab(tabId: string): TabHost | undefined {
@@ -477,13 +509,25 @@ export class TabHostManager {
     /** Draft engine model/preset ids (TASK.39). Opaque here; the host validates them. */
     engineModel?: string;
     enginePreset?: string;
+    /**
+     * Resolved Codex profile argv values (codex-profiles TASK.50) — id plus,
+     * when the registry says so, a linkedHome path (`home`) or an auth-link
+     * target. Already resolved/validated by main's registry; the host
+     * re-validates fail-closed. See TabHost.codexProfile.
+     */
+    codexProfile?: { id?: string; home?: string; authLink?: string };
     /** Pinned provider connection (TASK.45 W10, core only); stamped into the fork env + persisted by the host. */
     connectionId?: string;
+    /** Per-fork ANYCODE_MODEL override (S4-1 arm 2): the imported-session model pick; see TabHost.modelOverride. */
+    modelOverride?: string;
   }): CreateTabResult {
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
     const engine = params.engine ?? "core";
-    if (!this.canSpawn(engine)) {
+    // Gate on the profile this spawn will actually run under (codex-profiles
+    // S3-1), not merely the active one — a ready non-active pick must be able to
+    // spawn even while the active account is signed out.
+    if (!this.canSpawn(engine, params.codexProfile?.id)) {
       return { ok: false, reason: "not_ready" };
     }
     const existing = this.bindings.get(params.sessionId);
@@ -505,9 +549,11 @@ export class TabHostManager {
       ...(worktree !== undefined ? { worktree } : {}),
       sessionId: params.sessionId,
       ...(params.connectionId !== undefined ? { connectionId: params.connectionId } : {}),
+      ...(params.modelOverride !== undefined ? { modelOverride: params.modelOverride } : {}),
       engine,
       engineModel: argvId(params.engineModel),
       enginePreset: argvId(params.enginePreset),
+      codexProfile: params.codexProfile ?? null,
       proc: null,
       hostGeneration: 0,
       engineProcess: null,
@@ -539,6 +585,16 @@ export class TabHostManager {
       if (tab.engineModel !== null) args.push("--engine-model", tab.engineModel);
       if (tab.enginePreset !== null) args.push("--engine-preset", tab.enginePreset);
     }
+    // Codex-profiles TASK.50 (cut §2.6.4): the profile rides EVERY spawn —
+    // resume and respawn included — because CODEX_HOME is frozen into the
+    // session and no session row records it; a respawn without these flags
+    // would resume the thread against the ambient (wrong) account. Values go
+    // out verbatim: the host's codex-home.ts is the fail-closed authority.
+    if (tab.codexProfile !== null) {
+      if (tab.codexProfile.id !== undefined) args.push("--codex-profile", tab.codexProfile.id);
+      if (tab.codexProfile.home !== undefined) args.push("--codex-home", tab.codexProfile.home);
+      if (tab.codexProfile.authLink !== undefined) args.push("--codex-auth-link", tab.codexProfile.authLink);
+    }
     // TASK.45 W10-FIX F3 (layer c): resolve the pinned base env BEFORE forking. A
     // `undefined` here means the tab is pinned to a connection whose per-connection
     // env is no longer available (deleted mid-resume). Refuse to fork rather than
@@ -568,6 +624,11 @@ export class TabHostManager {
         // base env — a legacy/unpinned tab must not inherit another tab's pin).
         ...baseEnv,
         ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
+        // S4-1 arm 2 (W4-F1): an imported session's picked model, stamped over
+        // the base env's ANYCODE_MODEL (the active connection's model). Per-fork
+        // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
+        // tab). Absent for every non-import spawn ⇒ nothing stamped.
+        ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
         ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}),
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
       },

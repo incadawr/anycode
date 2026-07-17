@@ -16,6 +16,7 @@ import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "
 import { activeConnection, activeProviderView } from "../shared/settings.js";
 import { ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
+import { handleCustomProviderCreate, type ProviderIpcDeps } from "./provider-ipc.js";
 import {
   applyConnectionHealthEvent,
   buildSettingsSnapshot,
@@ -712,6 +713,110 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
       }),
     );
     expect(snap.providerReady).toBe(true);
+  });
+});
+
+describe("snapshot — custom:* RECORD readiness gate (FX4, Fable iter-7: the auto-tab gate was blind to a custom-provider connection)", () => {
+  /**
+   * A settings.json with ONE active connection at `custom:<record.id>` plus the
+   * record it points at — the FX-G-B shape `buildHostEnv` already routes at
+   * runtime. `snapshotFrom`/`buildSettingsSnapshot` load straight off
+   * `settingsPath`, so — unlike the `handleConnectionCreate`-driven fixtures
+   * above (whose `providerId` gate requires the id in `catalogIds`) — a
+   * `custom:*` providerId never needs to appear in `catalogIds` at all: this
+   * gate is decided entirely off `settings.provider.custom[]`.
+   */
+  function customFixture(
+    connection: { id: string; providerId: string; model?: string; transport?: string },
+    record: { id: string; kind: "openai-compatible" | "anthropic" | "openai" },
+  ): string {
+    return JSON.stringify({
+      version: 2,
+      provider: {
+        connections: [connection],
+        activeConnectionId: connection.id,
+        custom: [{ id: record.id, name: "Custom endpoint", baseUrl: "https://llm.example.com/v1", kind: record.kind, models: [] }],
+      },
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    });
+  }
+
+  it("RED-PROOF (i): an active custom:* anthropic-kind connection is ready off the PROVIDER's own vault key alone — never the connection-scoped key (activeCredential branch)", async () => {
+    await writeFile(
+      settingsPath,
+      customFixture({ id: "conn-1", providerId: "custom:anthro", model: "claude-x" }, { id: "custom:anthro", kind: "anthropic" }),
+    );
+    // ONLY the provider's own key is set — pre-fix, activeCredential read
+    // `provider.connection.conn-1.apiKey` instead, which is never set for a
+    // custom:* connection, so providerReady stayed false forever.
+    vault.store.set("provider.custom:anthro.apiKey", "sk-custom");
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("RED-PROOF (ii): an openai-compatible custom:* connection is ready with NO key at all — the auth-optional waiver reaches a custom RECORD (selectedTransportInfo branch)", async () => {
+    await writeFile(
+      settingsPath,
+      customFixture({ id: "conn-1", providerId: "custom:oc", model: "m" }, { id: "custom:oc", kind: "openai-compatible" }),
+    );
+    // No vault entry at all. Pre-fix, a custom:* id fell through to the
+    // generic no-catalog-entry branch (authOptional always false), demanding a
+    // key that a self-hosted openai-compatible endpoint may never need.
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("RED-PROOF (iii): an anthropic-kind custom:* connection forced onto an unsupported transport is blocked, even though the waiver alone would say ready (supported-transport guard mirror)", async () => {
+    await writeFile(
+      settingsPath,
+      customFixture(
+        { id: "conn-1", providerId: "custom:anthro2", model: "m", transport: "openai-chat-completions" },
+        { id: "custom:anthro2", kind: "anthropic" },
+      ),
+    );
+    vault.store.set("provider.custom:anthro2.apiKey", "sk-custom");
+    // Without a `supportedTransports` guard mirroring the kind (anthropic ⇒
+    // ONLY anthropic-messages), the "resolvedTransport !== anthropic-messages"
+    // auth waiver alone would wrongly report ready on a combination
+    // `buildHostEnv` never actually intended (an anthropic-family provider
+    // forced onto an OpenAI-shaped transport it was never modeled to speak).
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(false);
+  });
+
+  // W4-R3-1 (deleted custom:* record fail-closed): a connection still names a
+  // `custom:*` provider whose RECORD is gone (deleted via the generic
+  // settings-patch channel, which skips handleCustomProviderDelete's clear-first
+  // ordering, so the vault key is orphaned). `buildHostEnv` fail-closes for a
+  // deleted record — neither baseUrl nor key — so the readiness gate MUST NOT
+  // report ready. Discriminating case: NO transport is selected (env + the
+  // connection both leave it unset), so a bare `resolveLegacy()` resolvedTransport
+  // is `undefined` and computeProviderReady's transport guard would be SKIPPED —
+  // an empty `supportedTransports` alone does not close the gate. The fix pins a
+  // defined resolvedTransport so the empty support set trips the guard regardless.
+  it("RED-PROOF (iv): a deleted custom:* record with an orphaned vault key + model but NO transport is fail-closed — providerReady false", async () => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: {
+          connections: [{ id: "conn-1", providerId: "custom:gone", model: "m" }],
+          activeConnectionId: "conn-1",
+          custom: [], // the record the connection points at was deleted
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+    // The now-orphaned per-provider key survives the record's deletion.
+    vault.store.set("provider.custom:gone.apiKey", "sk-orphan");
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(false);
   });
 });
 
@@ -1902,6 +2007,104 @@ describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
     expect(setRes.ok).toBe(true);
     releaseFlow();
     expect((await oauthP).ok).toBe(true);
+  });
+});
+
+// ── FX3-L1 G-C: provider.custom[] preservation + the ONE shared settings-file lock ──
+
+describe("FX3-L1 G-C — connection CRUD preserves provider.custom[], both IPC modules share ONE settings-file lock", () => {
+  const CUSTOM_SEED = [
+    { id: "custom:seeded", name: "Seeded", baseUrl: "https://api.example.com", kind: "openai-compatible", models: ["m1"] },
+  ];
+
+  function settingsFixture(provider: Record<string, unknown>): string {
+    return JSON.stringify({
+      version: 2,
+      provider,
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    });
+  }
+
+  // RED-PROOF (G-C#1, create): asserts the PERSISTED file, not the handler's
+  // return — the defect was the rebuilt provider block dropping custom[] at
+  // save time (removing the `...loaded.settings.provider` spread turns this red).
+  it("RED-PROOF (G-C#1): connection-create keeps a populated provider.custom[] on disk", async () => {
+    await writeFile(settingsPath, settingsFixture({ connections: [], custom: CUSTOM_SEED }));
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom).toEqual(CUSTOM_SEED);
+    expect(reloaded.settings.provider.connections).toHaveLength(1);
+  });
+
+  it("RED-PROOF (G-C#1): connection-delete keeps provider.custom[] on disk, and never persists a stale activeConnectionId", async () => {
+    await writeFile(
+      settingsPath,
+      settingsFixture({ connections: [{ id: "conn-1", providerId: "z-ai" }], activeConnectionId: "conn-1", custom: CUSTOM_SEED }),
+    );
+    const res = await handleConnectionDelete(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1" });
+    expect(res.ok).toBe(true);
+    // Raw bytes (not loadSettings): load-normalize would silently repair a
+    // stale persisted activeConnectionId and hide it from this assert.
+    const onDisk = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      provider: { connections: unknown[]; activeConnectionId?: string; custom?: unknown };
+    };
+    expect(onDisk.provider.custom).toEqual(CUSTOM_SEED);
+    expect(onDisk.provider.connections).toEqual([]);
+    expect(onDisk.provider.activeConnectionId).toBeUndefined();
+  });
+
+  // RED-PROOF (G-C#2, the two-locks lost-update): a fake-vault await-point
+  // holds custom-provider-create INSIDE its critical section while a
+  // connection-create races. Restoring provider-ipc.ts's private lock Map
+  // turns this red twice over: `connSettled` flips true during the hold, and
+  // custom-create's later save (built off its stale base) erases the
+  // connection from the file.
+  it("RED-PROOF (G-C#2): custom-provider-create ‖ connection-create serialize on the ONE lock — the persisted file keeps BOTH", async () => {
+    let releaseVault!: () => void;
+    const vaultGate = new Promise<void>((resolve) => {
+      releaseVault = resolve;
+    });
+    let enteredResolve!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredResolve = resolve;
+    });
+    const realSetSecret = vault.setSecret.bind(vault);
+    vault.setSecret = async (key: SecretKey, value: string) => {
+      enteredResolve();
+      await vaultGate;
+      return realSetSecret(key, value);
+    };
+    const providerDeps: ProviderIpcDeps = { vault, settingsPath, genId: () => "custom:race" };
+    const customP = handleCustomProviderCreate(providerDeps, {
+      name: "Race",
+      baseUrl: "https://api.example.com",
+      kind: "openai-compatible",
+      apiKey: "race-key",
+    });
+    await entered; // custom-create is now inside its critical section, parked at the vault write
+    let connSettled = false;
+    const connP = handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }).then((r) => {
+      connSettled = true;
+      return r;
+    });
+    // Give the racing connection-create every chance to run to completion NOW —
+    // under the ONE shared lock it must park behind custom-create instead.
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(connSettled).toBe(false);
+    releaseVault();
+    const [customRes, connRes] = await Promise.all([customP, connP]);
+    expect(customRes.ok).toBe(true);
+    expect(connRes.ok).toBe(true);
+    // Neither mutation clobbered the other in the persisted file.
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.custom?.map((c) => c.id)).toEqual(["custom:race"]);
+    expect(reloaded.settings.provider.connections.map((c) => c.id)).toEqual(["conn-1"]);
   });
 });
 

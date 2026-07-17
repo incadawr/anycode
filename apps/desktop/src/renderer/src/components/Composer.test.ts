@@ -4,10 +4,12 @@
  * the round/guard logic behind the footer meter and is covered directly.
  */
 import { describe, expect, it } from "vitest";
+import type { CodexRateLimitsWire } from "@anycode/core";
 import type { ContextUsage, SessionTokens } from "../store.js";
 import type { WireContextBreakdown } from "../../../shared/protocol.js";
 import {
   CTX_RING_CIRCUMFERENCE,
+  buildQuotaPopoverView,
   contextMeterPercent,
   ctxPopoverAnchorFromRect,
   ctxPopoverBodyState,
@@ -16,10 +18,13 @@ import {
   ctxPopoverRows,
   ctxRingDashOffset,
   formatCtxTokenCount,
+  formatQuotaCreditsLine,
+  formatQuotaWindowLine,
   formatSessionTokensLine,
   formatLatestCacheHitLine,
   hasSendableDraft,
   insertDraftText,
+  quotaWindowLabel,
   shouldEnqueue,
   sniffComposerImageMediaType,
 } from "./Composer.js";
@@ -196,11 +201,11 @@ describe("ctxPopoverLoading (slice P7.17 · F12 W3)", () => {
 
 describe("ctxPopoverBodyState (P7.17 W3-FIX P2-a — indefinite-loading-skeleton fix)", () => {
   it("renders the skeleton while loading and the timeout hasn't fired yet", () => {
-    expect(ctxPopoverBodyState(true, false)).toBe("skeleton");
+    expect(ctxPopoverBodyState(true, true, false)).toBe("skeleton");
   });
 
   it("renders the unavailable-empty state once the loading timeout has elapsed (a lost request)", () => {
-    expect(ctxPopoverBodyState(true, true)).toBe("empty");
+    expect(ctxPopoverBodyState(true, true, true)).toBe("empty");
   });
 
   it("renders rows once loading is false, even if a stale timed-out flag hasn't reset yet", () => {
@@ -208,8 +213,19 @@ describe("ctxPopoverBodyState (P7.17 W3-FIX P2-a — indefinite-loading-skeleton
     // value is irrelevant at that point — rows must win either way (the
     // component resets `timedOut` on the same transition, but this function
     // must not rely on that ordering).
-    expect(ctxPopoverBodyState(false, true)).toBe("rows");
-    expect(ctxPopoverBodyState(false, false)).toBe("rows");
+    expect(ctxPopoverBodyState(true, false, true)).toBe("rows");
+    expect(ctxPopoverBodyState(true, false, false)).toBe("rows");
+  });
+});
+
+describe("ctxPopoverBodyState — unsupported breakdown (codex-profiles cut §5.2, C-bug-1)", () => {
+  it("renders 'unsupported' the instant supportsBreakdown is false, regardless of loading/timedOut", () => {
+    // Codex reports supportsContextUsage but never supportsContextBreakdown —
+    // this is what stops the popover body from spinning a skeleton forever
+    // for an engine that will NEVER answer a context_breakdown_request.
+    expect(ctxPopoverBodyState(false, true, false)).toBe("unsupported");
+    expect(ctxPopoverBodyState(false, true, true)).toBe("unsupported");
+    expect(ctxPopoverBodyState(false, false, false)).toBe("unsupported");
   });
 });
 
@@ -260,6 +276,93 @@ describe("formatLatestCacheHitLine", () => {
     expect(formatLatestCacheHitLine({ input: 100, output: 5, total: 105 })).toBe(
       "Latest cache hit: not reported by provider",
     );
+  });
+});
+
+describe("quotaWindowLabel (TASK.51, cut §6.2 — label derived from windowDurationMins, never hardcoded)", () => {
+  it("uses the cut's exact table for the five confirmed durations", () => {
+    expect(quotaWindowLabel(60, null)).toBe("1h");
+    expect(quotaWindowLabel(300, null)).toBe("5h");
+    expect(quotaWindowLabel(1440, null)).toBe("Daily");
+    expect(quotaWindowLabel(10_080, null)).toBe("Weekly");
+    expect(quotaWindowLabel(43_200, null)).toBe("Monthly");
+  });
+
+  it("RED-PROOF: derives a nonstandard duration instead of falling back to a hardcoded 5h/Weekly pair", () => {
+    // amendment §A3.2: the live plan reports exactly ONE window (10080/Weekly)
+    // — a hardcoded "5h"/"Weekly" pair (the old C-bug-1 shape) would pass every
+    // assertion above by coincidence. This 90-minute fixture is NOT in the
+    // table, so only genuine derivation from windowDurationMins survives it —
+    // a hardcoded implementation returns "5h" or "Weekly" here and fails.
+    expect(quotaWindowLabel(90, null)).toBe("1.5h");
+    // A multi-day, non-tabulated duration exercises the day-rounding branch.
+    expect(quotaWindowLabel(2880, null)).toBe("2d");
+  });
+
+  it("falls back to limitName, then the literal Limit, when windowDurationMins is absent", () => {
+    expect(quotaWindowLabel(null, "Custom limit")).toBe("Custom limit");
+    expect(quotaWindowLabel(undefined, null)).toBe("Limit");
+  });
+});
+
+describe("formatQuotaWindowLine (TASK.51, cut §6.2)", () => {
+  it("formats <label> · <percent left>% left · resets in <relative>", () => {
+    // resetsAt is epoch SECONDS on the wire (amendment §A3.1); now=0 here and
+    // resetsAt=432000s (5 days) exercises the single ×1000 conversion point.
+    expect(formatQuotaWindowLine({ usedPercent: 35, windowDurationMins: 10_080, resetsAt: 432_000 }, null, 0)).toBe(
+      "Weekly · 65% left · resets in 5d",
+    );
+  });
+
+  it("omits the resets clause when resetsAt is absent", () => {
+    expect(formatQuotaWindowLine({ usedPercent: 20, windowDurationMins: 1440 }, null, 0)).toBe("Daily · 80% left");
+  });
+
+  it("returns null for a missing window (never a fabricated 0%)", () => {
+    expect(formatQuotaWindowLine(null, null, 0)).toBeNull();
+    expect(formatQuotaWindowLine(undefined, null, 0)).toBeNull();
+  });
+});
+
+describe("formatQuotaCreditsLine (cut §6.2 — rendered ONLY when hasCredits)", () => {
+  it("hides the line entirely when hasCredits is false or credits are absent", () => {
+    expect(formatQuotaCreditsLine(null)).toBeNull();
+    expect(formatQuotaCreditsLine({ hasCredits: false, unlimited: false })).toBeNull();
+  });
+
+  it("shows Unlimited for an unlimited plan, ignoring balance", () => {
+    expect(formatQuotaCreditsLine({ hasCredits: true, unlimited: true, balance: "0" })).toBe("Credits: Unlimited");
+  });
+
+  it("shows the raw wire balance string (never coerced to a number)", () => {
+    expect(formatQuotaCreditsLine({ hasCredits: true, unlimited: false, balance: "12.50" })).toBe("Credits: 12.50");
+  });
+});
+
+function quota(overrides: Partial<CodexRateLimitsWire> = {}): CodexRateLimitsWire {
+  return { observedAt: "2026-07-16T00:00:00.000Z", ...overrides };
+}
+
+describe("buildQuotaPopoverView (cut §6.2 — hidden block, never 0%)", () => {
+  it("returns null when there is no quota snapshot at all", () => {
+    expect(buildQuotaPopoverView(null, 0)).toBeNull();
+  });
+
+  it("returns null when the snapshot carries no window and no credits (block stays hidden, not 0%)", () => {
+    expect(buildQuotaPopoverView(quota({ credits: { hasCredits: false, unlimited: false } }), 0)).toBeNull();
+  });
+
+  it("renders the live single-window shape (amendment §A3.2: primary only, secondary present-but-null)", () => {
+    const view = buildQuotaPopoverView(
+      quota({
+        primary: { usedPercent: 35, windowDurationMins: 10_080, resetsAt: 432_000 },
+        secondary: null,
+        credits: { hasCredits: false, unlimited: false, balance: "0" },
+        planType: "plus",
+      }),
+      0,
+    );
+    expect(view).toEqual({ primaryLine: "Weekly · 65% left · resets in 5d", secondaryLine: null, creditsLine: null });
   });
 });
 

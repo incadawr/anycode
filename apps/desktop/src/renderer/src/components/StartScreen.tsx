@@ -48,7 +48,7 @@ import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-stor
 import { useSettingsStore } from "../settings-store.js";
 import { submitStartDraft, type StartSubmitResult } from "../start-session.js";
 import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, Search, Terminal, Warning } from "./icons.js";
-import { modelDisplayName, modelMenuItems, pillLabel, resolvePid } from "./ModelPill.js";
+import { modelDisplayName, modelMenuItems, pillLabel, providerModelsFor, resolvePid } from "./ModelPill.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
@@ -56,6 +56,8 @@ import { activeProviderView } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
+import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import { createAsyncEpochGate, issueGuarded } from "./async-epoch-gate.js";
 
 export interface StartScreenProps {
   onToast(kind: ToastKind, text: string): void;
@@ -288,6 +290,82 @@ export function resolveCodexDraftModel(draftModel: string | null, available: rea
   return available[0]?.id ?? "";
 }
 
+/** One selectable row in the Codex account-profile chip's dropdown. */
+export interface CodexProfileChipOption {
+  id: string;
+  label: string;
+  /** signed_out (cached, never a live doctor check) — visible but unpickable, `CodexEnginePane.tsx`'s `canSignIn` gate mirrored. */
+  disabled: boolean;
+}
+
+/**
+ * codex-profiles cut §3.3/W3-F: the chip sits next to the Agent selector, but
+ * only once there is something real to pick between — the `system` pseudo-
+ * profile alone (no registered accounts) has no choice to offer, so the chip
+ * stays hidden and every draft implicitly runs on the ambient CODEX_HOME
+ * (unchanged from pre-profiles behaviour). Exported for unit testing.
+ */
+export function shouldShowCodexProfileChip(isCodexDraft: boolean, profiles: readonly CodexProfileChipOption[]): boolean {
+  return isCodexDraft && profiles.length > 0;
+}
+
+/**
+ * The chip's displayed label: the draft's explicit pick once made, else
+ * "System" — the same label for BOTH "never touched the chip" and "picked a
+ * profile since removed from the list", so the chip never claims an account
+ * that `createStartTabRequest` (start-session.ts) would not actually submit
+ * (an absent `codexProfileId` resolves to the `system` pseudo-profile,
+ * shared/tabs.ts's own documented default). Exported for unit testing.
+ */
+export function computeCodexProfileChipLabel(
+  draftCodexProfileId: string | undefined,
+  profiles: readonly CodexProfileChipOption[],
+): string {
+  if (draftCodexProfileId === undefined) {
+    return "System";
+  }
+  return profiles.find((profile) => profile.id === draftCodexProfileId)?.label ?? "System";
+}
+
+/**
+ * Whether the draft's account-profile pick has fallen out of sync with a
+ * fresh profile catalog (R3-2 facet i): the profile the draft points at was
+ * deleted/renamed away while the draft stayed open. The chip already falls
+ * back to "System" for this case (`computeCodexProfileChipLabel` above), but
+ * `createStartTabRequest` (start-session.ts) still forwards the stale id
+ * verbatim (it has no catalog to check against) — the profile-catalog
+ * refresh effect below is the only place both the id and a fresh catalog are
+ * in scope at once, so it uses this to sanitize the draft back to `undefined`
+ * (the `system` pseudo-profile) the moment the desync is detected. Never
+ * touched (`undefined`) is not stale — there is nothing to resolve. Exported
+ * for unit testing.
+ */
+export function isDraftCodexProfileIdStale(
+  draftCodexProfileId: string | undefined,
+  profiles: readonly CodexProfileChipOption[],
+): boolean {
+  return draftCodexProfileId !== undefined && !profiles.some((profile) => profile.id === draftCodexProfileId);
+}
+
+/**
+ * Projects main's `codex.listProfiles()` snapshot into the chip's option
+ * list. `disabled` reads the CACHED `lastCheck`/live `report` status
+ * (never triggers a fresh doctor check of its own — this chip is a picker,
+ * not a diagnostic surface). Exported for unit testing.
+ */
+export function deriveCodexProfileOptions(
+  profiles: readonly {
+    profile: { id: string; label: string; lastCheck?: { status: string } };
+    report?: { status: string };
+  }[],
+): CodexProfileChipOption[] {
+  return profiles.map(({ profile, report }) => ({
+    id: profile.id,
+    label: profile.label,
+    disabled: (report?.status ?? profile.lastCheck?.status) === "signed_out",
+  }));
+}
+
 /**
  * slice-start-composer-cut §5: preselect the last-used workspace once per
  * draft. Returns `recents[0]` ONLY when there IS a draft with no workspace
@@ -325,6 +403,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // access to this component's state, so a local-only pick would never
   // reach `createStartTabRequest`.
   const [codexModels, setCodexModels] = useState<readonly EngineModelChoice[]>([]);
+  // codex-profiles cut §3.3/W3-F: the account-profile chip's own catalog,
+  // fetched the same "once per codex-selected transition, live-refreshed via
+  // engines-changed" way as `codexModels` above.
+  const [codexProfileOptions, setCodexProfileOptions] = useState<readonly CodexProfileChipOption[]>([]);
+  const [codexProfileMenuOpen, setCodexProfileMenuOpen] = useState(false);
+  const codexProfileRootRef = useRef<HTMLDivElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const submitGuardRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -354,7 +438,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const view = snapshot ? activeProviderView(snapshot.settings) : undefined;
   const providerId = view?.id;
   const pid = resolvePid(providerId);
-  const catalogModels = snapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
+  const catalogModels = providerModelsFor(providerId, snapshot?.catalog, snapshot?.settings.provider.custom);
   const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);
   // The active-session ModelPill includes the persisted effort in its label.
@@ -375,6 +459,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // W3 join: displays the draft's own pick once made; falls back to the same
   // default the picker starts on before the user ever touches it.
   const codexDraftPreset = draft?.enginePreset ?? DEFAULT_CODEX_DRAFT_PRESET;
+  // codex-profiles cut §3.3/W3-F: same "plain derived value ahead of the
+  // draft===null early return" discipline as the other Codex draft values above.
+  const showCodexProfileChip = shouldShowCodexProfileChip(codexEngineSelected, codexProfileOptions);
+  const codexProfileChipLabel = computeCodexProfileChipLabel(draft?.codexProfileId, codexProfileOptions);
 
   useEffect(() => {
     let cancelled = false;
@@ -456,6 +544,61 @@ export function StartScreen({ onToast }: StartScreenProps) {
     };
   }, [codexEngineSelected]);
 
+  // codex-profiles cut §3.3/W3-F: the account-profile chip's own catalog —
+  // fetched once per codex-selected transition (same discipline as the model
+  // catalog above), plus a live re-fetch on the SAME `engines-changed` push a
+  // profile create/delete/repair already fires (main/codex-ipc.ts's
+  // `onProfilesChanged`), so a profile added/removed in Settings while this
+  // screen is mounted shows up without a remount. Fail-soft: any error just
+  // leaves the chip hidden/stale until the next transition or push.
+  //
+  // codex-review L7-9 facet B (f1-review-ruling-fable-iter17.md): mount fires
+  // one `refresh()` and every `engines-changed` push fires another, with no
+  // ordering guarantee on their replies. An `AsyncEpochGate` scoped to this
+  // effect instance ensures only the LAST-ISSUED request's reply is ever
+  // applied — a slow, stale reply (e.g. one that still lists a
+  // since-deleted profile) can never win over a newer one, regardless of
+  // resolution order, so the R3-2 staleness sanitization below always runs
+  // against the freshest catalog rather than a reply that a later refresh
+  // has already superseded.
+  useEffect(() => {
+    if (!codexEngineSelected) {
+      return;
+    }
+    let cancelled = false;
+    const gate = createAsyncEpochGate();
+    function refresh(): void {
+      issueGuarded(
+        gate,
+        window.anycode.codex.listProfiles().catch((error: unknown) => {
+          console.warn("[StartScreen] codex.listProfiles failed", error);
+          return null;
+        }),
+        (snapshot) => {
+          if (cancelled || snapshot === null) {
+            return;
+          }
+          const options = deriveCodexProfileOptions(snapshot.profiles);
+          setCodexProfileOptions(options);
+          // R3-2 facet i: the profile the draft points at may have just
+          // dropped out of this fresh catalog (deleted/renamed while the
+          // draft stayed open) — sanitize immediately so the chip's
+          // "System" fallback and the actual submit payload never diverge.
+          if (isDraftCodexProfileIdStale(useTabsStore.getState().draft?.codexProfileId, options)) {
+            useTabsStore.getState().setDraftCodexProfileId(undefined);
+          }
+        },
+      );
+    }
+    refresh();
+    const unsubscribe = window.anycode.onEnginesChanged(refresh);
+    return () => {
+      cancelled = true;
+      gate.invalidate();
+      unsubscribe();
+    };
+  }, [codexEngineSelected]);
+
   // slice-start-composer-cut §5: preselect the last-used workspace once per
   // draft (StartScreen unmounts on discardDraft, so this ref resets per
   // draft). Only fires while `draft.workspace === null` — an explicit pick
@@ -515,6 +658,20 @@ export function StartScreen({ onToast }: StartScreenProps) {
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [modelMenuOpen]);
+
+  // Outside mousedown closes the Codex account-profile popover — same pattern.
+  useEffect(() => {
+    if (!codexProfileMenuOpen) {
+      return;
+    }
+    function onMouseDown(event: MouseEvent): void {
+      if (codexProfileRootRef.current && !codexProfileRootRef.current.contains(event.target as Node)) {
+        setCodexProfileMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [codexProfileMenuOpen]);
 
   // Seed the project popover's roving focus at the current workspace (if it's
   // among the recents) whenever it opens, mirroring ModelPill's own seeding.
@@ -694,6 +851,26 @@ export function StartScreen({ onToast }: StartScreenProps) {
     }
   }
 
+  function selectCodexProfile(profileId: string): void {
+    useTabsStore.getState().setDraftCodexProfileId(profileId);
+    setCodexProfileMenuOpen(false);
+  }
+
+  /**
+   * "Add account…" (codex-profiles cut §3.3/W3-F): reuses the existing
+   * decoupled navigation seam (slash-menu.ts's `RUN_ACTION_EVENT`/
+   * `SETTINGS_SELECT_PANE_EVENT`) rather than a new prop — `SettingsDialog`
+   * (App.tsx) is unconditionally mounted for the app's whole lifetime and
+   * already listens for exactly this "settings.open" + pane-select pair
+   * (SettingsScreen.tsx), so no App.tsx wiring is needed for this screen to
+   * open Settings on the Codex pane.
+   */
+  function openCodexAccountSettings(): void {
+    setCodexProfileMenuOpen(false);
+    window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
+    window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "codex" }));
+  }
+
   return (
     <div className="start-screen">
       <div className="start-env-row">
@@ -790,6 +967,53 @@ export function StartScreen({ onToast }: StartScreenProps) {
             </button>
           )}
         </div>
+        {/* codex-profiles cut §3.3/W3-F: the account-profile chip sits next to
+            (not inside) the Agent selector — visible only for a Codex draft
+            with at least one registered profile (the `system` pseudo-profile
+            alone has nothing to pick between). */}
+        {showCodexProfileChip && (
+          <div className="model-pill start-codex-profile" ref={codexProfileRootRef}>
+            <button
+              type="button"
+              className="model-pill-chip"
+              aria-haspopup="menu"
+              aria-expanded={codexProfileMenuOpen}
+              title={codexProfileChipLabel}
+              onClick={() => setCodexProfileMenuOpen((open) => !open)}
+            >
+              <span className="model-pill-label">{codexProfileChipLabel}</span>
+              <Chevron className="model-pill-chevron" />
+            </button>
+
+            {codexProfileMenuOpen && (
+              <div className="model-pill-popover" role="menu" aria-label="Codex account">
+                {codexProfileOptions.map((profile) => {
+                  const current = profile.id === draft.codexProfileId;
+                  return (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={current}
+                      disabled={profile.disabled}
+                      className={`model-pill-item${current ? " model-pill-item-current" : ""}`}
+                      onClick={() => selectCodexProfile(profile.id)}
+                    >
+                      <span className="model-pill-item-check" aria-hidden="true">
+                        {current ? <Check /> : null}
+                      </span>
+                      <span className="model-pill-item-name">{profile.label}</span>
+                    </button>
+                  );
+                })}
+                <div className="model-pill-divider" />
+                <button type="button" className="model-pill-row" onClick={openCodexAccountSettings}>
+                  <span className="model-pill-row-name">Add account…</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="start-intro">

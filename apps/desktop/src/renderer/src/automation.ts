@@ -49,6 +49,8 @@ import {
   modelMenuItems,
   modelPickDisabled as computeModelPickDisabled,
   pillLabel,
+  providerModelsFor,
+  resolvePillTarget,
 } from "./components/ModelPill.js";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
@@ -1523,6 +1525,272 @@ export interface FocusState {
   disabled: boolean;
 }
 
+/**
+ * One profile row of `codexPaneState()` (W4-F0, findings S1-1 probe (a)):
+ * every field is a live read of the row's OWN rendered nodes
+ * (`CodexEnginePane.tsx`'s `CodexProfileRow`), byte-parity with what a user
+ * sees — `statusHeadline`/`statusTone` come off the `.settings-secret-status`
+ * span and its `-<tone>` class suffix, `quotaLines` are the rendered
+ * `.codex-profile-quota-line` strings (already derived from live
+ * `windowDurationMins` by `codexQuotaLines`), `buttons` are the row's action
+ * buttons with their rendered labels/disabled state. CUSTODY (cut §4.4): the
+ * account e-mail is deliberately NOT carried — only `emailRendered` (presence)
+ * crosses this channel, so a smoke run's HTTP log can never capture the
+ * owner's address.
+ */
+export interface CodexPaneRowState {
+  label: string;
+  statusHeadline: string;
+  statusTone: string;
+  statusDetail: string;
+  emailRendered: boolean;
+  quotaLines: string[];
+  buttons: { label: string; disabled: boolean }[];
+  signingIn: boolean;
+}
+
+/**
+ * The binary/manifest block of `codexPaneState()` (W4-F0, DoD probe (a)):
+ * `binaryPath`/`sourceLabel` are parsed off the pane's own `<code>{path}</code>
+ * ({source})` description line; `supportedRange`/`recommended`/`manifestSource`
+ * off the "Supported range: … Recommended: …" line (each `null` while the
+ * corresponding line isn't rendered). `installButton` is the ONE
+ * `.settings-button-primary` of the binary action row (the "Install Codex X" /
+ * "Update to X" button — `null` when the binary is already usable and no such
+ * button renders); `riskToggleVisible` mirrors the "Use anyway" button's
+ * presence (rendered only for `update_required`, cut §7.4).
+ */
+export interface CodexPaneBinaryState {
+  statusHeadline: string;
+  statusTone: string;
+  statusDetail: string;
+  binaryPath: string | null;
+  sourceLabel: string | null;
+  supportedRange: string | null;
+  recommended: string | null;
+  manifestSource: string | null;
+  installButton: { label: string; disabled: boolean } | null;
+  riskToggleVisible: boolean;
+  actions: { label: string; disabled: boolean }[];
+}
+
+/**
+ * `codexPaneState()`'s shape (W4-F0, findings S1-1 probe (a)): a live DOM
+ * read of the Settings Codex pane (`CodexEnginePane.tsx`), same "no mirrored
+ * state" discipline as the MCP/Skills pane probes above. An unmounted pane
+ * (Settings closed, or a different pane selected) reads as
+ * `mounted: false` with the other fields at their empty defaults, not an
+ * error. `notices` carries every rendered `.settings-notice` alert text of
+ * the pane (install failures, refusals, the untested-version warning) so an
+ * offline-degradation smoke (W4-S2) can assert the honest failure copy.
+ */
+export interface CodexPaneState {
+  mounted: boolean;
+  binary: CodexPaneBinaryState | null;
+  rows: CodexPaneRowState[];
+  notices: string[];
+}
+
+/**
+ * DOM accessor DI for the Codex pane probe/driver (W4-F0), same
+ * injectable-for-tests discipline as `McpPaneDom`/`SkillsPaneDom`. The click
+ * methods fire REAL `.click()` calls on the pane's own buttons — the exact
+ * nodes a user's click hits, so `codexPaneInstall`/`codexPaneRecheckAll`/
+ * `codexPaneRefreshManifest` run the SAME controller calls
+ * (`bridge.install`/`recheck`/`manifestRefresh`) the buttons' own onClick
+ * handlers make (one product path, never a re-implementation).
+ */
+export interface CodexPaneDom {
+  mounted(): boolean;
+  binary(): CodexPaneBinaryState;
+  rows(): CodexPaneRowState[];
+  notices(): string[];
+  /** Binary action-row button lookup by EXACT rendered label; `null` = not rendered. */
+  actionButton(label: string): { disabled: boolean } | null;
+  /** A real `.click()` on the binary action-row button with EXACTLY this label; `false` when absent. */
+  clickAction(label: string): boolean;
+  /** The binary action row's one `.settings-button-primary` (Install/Update), or `null`. */
+  installButton(): { label: string; disabled: boolean } | null;
+  clickInstall(): boolean;
+  /** A real `.click()` on the accounts block's "Import a Codex session…" button; `false` when absent. */
+  clickImportSession(): boolean;
+}
+
+/** One selectable row of the codex account-profile chip's rendered popover (W4-F0 probe (b)) — read off the REAL `.model-pill-item` button (label text, `disabled` attribute, `aria-checked`). */
+export interface CodexProfileChipOptionState {
+  label: string;
+  disabled: boolean;
+  current: boolean;
+}
+
+/**
+ * `codexProfileChipState()`'s shape (W4-F0, findings S1-1 probe (b)): a live
+ * DOM read of the StartScreen's codex account-profile chip
+ * (`StartScreen.tsx`, cut §3.3/W3-F) plus the tabs-store draft's raw
+ * `codexProfileId` (same draft-scoped read discipline as
+ * `startScreenState().model`). `chipVisible: false` (empty defaults) is a
+ * normal reading — a core draft, no registered profiles, or NO draft at all
+ * (the started-session case: the chip unmounts with the start screen, which
+ * is exactly the read-only-after-start observability the S1b gate asserts —
+ * `draftActive:false`, `chipVisible:false`, and the pick driver refusing).
+ * `options` populate only while the popover is open (CtxPopoverState
+ * precedent) — they are read off the RENDERED rows, never re-derived from the
+ * profile registry. `addAccountLast` is true iff the popover's LAST button is
+ * the "Add account…" row (the F-S dropdown-order gate, cut §3.3).
+ */
+export interface CodexProfileChipState {
+  ok: true;
+  chipVisible: boolean;
+  label: string | null;
+  menuOpen: boolean;
+  options: CodexProfileChipOptionState[];
+  addAccountLast: boolean;
+  draftActive: boolean;
+  draftCodexProfileId: string | null;
+}
+
+/**
+ * DOM accessor DI for the codex profile chip probe/driver (W4-F0), same
+ * injectable-for-tests discipline as `ModelPillDom` (whose CSS vocabulary the
+ * chip reuses — `.start-codex-profile` wraps a `.model-pill-chip` +
+ * `.model-pill-popover`). `clickOptionAt` fires a real `.click()` on the Nth
+ * rendered option row — a no-op on a `disabled` row, exactly like a real user
+ * click, so a live smoke can prove the product's own signed_out gate rather
+ * than a facade guard standing in front of it.
+ */
+export interface CodexProfileChipDom {
+  mounted(): boolean;
+  label(): string;
+  menuOpen(): boolean;
+  options(): CodexProfileChipOptionState[];
+  addAccountLast(): boolean;
+  clickChip(): void;
+  /** Real `.click()` on the Nth `.model-pill-item` row; `false` when out of range. */
+  clickOptionAt(index: number): boolean;
+}
+
+/**
+ * Raw rendered facts of one `.codex-rollout-row` as the DOM accessor reads
+ * them — renderer-internal ONLY. `cwd`/`preview` are the row's raw
+ * session-content text (owner-authored, richer than an e-mail); they exist
+ * solely as the redaction input for `CodexImportRolloutRowState` below and
+ * NEVER appear on `CodexImportState`/the HTTP channel (W4-F0c finding A
+ * custody norm: session-content plane never crosses the channel raw —
+ * loopback+Bearer+dev-only does not exempt it, the channel is deliberately
+ * logged by smokes). `fileName` is the row's `data-file-name` (finding B).
+ */
+export interface CodexImportRolloutRowDomFacts {
+  fileName: string | null;
+  timestamp: string;
+  size: string;
+  cwd: string | null;
+  preview: string | null;
+  selected: boolean;
+}
+
+/**
+ * One rollout row of `codexImportState()` (W4-F0c finding A shape redaction)
+ * — the session-content fields cross the channel REDACTED: `cwdRendered` is
+ * presence-only (probe (a) `emailRendered` precedent), `preview` rides as
+ * the rendered text's length plus the first 12 hex chars of its SHA-256 —
+ * 48 bits is collision-safe for measurement discrimination (S4 asserts the
+ * digest of a rollout it planted itself) and useless for content recovery
+ * from an opportunistically-read log. `timestamp`/`size` stay raw (the
+ * component's own deterministic `formatRolloutTimestamp`/`formatRolloutSize`
+ * output — product-generated, not user text); `fileName` is the row's
+ * machine-generated identity (`data-file-name`, finding B — rows no longer
+ * need index-only addressing).
+ */
+export interface CodexImportRolloutRowState {
+  fileName: string;
+  timestamp: string;
+  size: string;
+  cwdRendered: boolean;
+  preview: { rendered: boolean; length: number; sha256_12: string | null };
+  selected: boolean;
+}
+
+/**
+ * `codexImportState()`'s shape (W4-F0, findings S1-1 probe (c)): a live DOM
+ * read of the "Import a Codex session" dialog
+ * (`CodexRolloutImportDialog.tsx`, cut §8.8). A closed dialog reads as
+ * `open: false` with empty defaults, not an error. `listLoading`/
+ * `previewLoading` are classified off the component's own rendered
+ * placeholder literals ("Loading sessions…"/"Loading preview…") — byte-parity
+ * with the on-screen strings, no store-side counterpart exists. `notices`
+ * carries every `.settings-notice` alert inside the dialog (list errors,
+ * preview-stage failures, warnings, the import-refusal reason — including
+ * `invalid_model`'s "Pick a model for the new session first."), so a smoke
+ * asserts the exact honest copy a user reads. `importDisabled` mirrors the
+ * Import button's own rendered `disabled` (the `importDisabled()` predicate's
+ * committed result, never re-derived here). `rollouts` rows are custody-
+ * redacted (see `CodexImportRolloutRowState`); `rolloutsFor`/`previewFor`
+ * surface the dialog's own provenance stamps (`data-rollouts-for`/
+ * `data-preview-for`, W4-F0c finding B) — WHOSE reply the rendered list/
+ * preview belongs to, `null` while loading (no committed result).
+ */
+export interface CodexImportState {
+  paneMounted: boolean;
+  open: boolean;
+  profileId: string | null;
+  profileOptions: { id: string; label: string }[];
+  listLoading: boolean;
+  listEmptyText: string | null;
+  rollouts: CodexImportRolloutRowState[];
+  rolloutsFor: string | null;
+  previewLoading: boolean;
+  previewFor: string | null;
+  statsLines: string[];
+  notices: string[];
+  modelValue: string | null;
+  modelOptions: { id: string; name: string }[];
+  importDisabled: boolean;
+  importing: boolean;
+}
+
+/**
+ * DOM accessor DI for the rollout-import dialog probe/driver (W4-F0), same
+ * injectable-for-tests discipline as `CodexPaneDom` above. `setProfile`/
+ * `setModel` drive the dialog's REAL `<select>`s via the same
+ * `setNativeSelectValue` discipline as the provider drawer's selects;
+ * `clickRolloutAt` fires a real `.click()` on a row's own radio input (the
+ * exact node `selectRollout` listens on). `listLoadingVisible`/`listSettled`
+ * and their preview twins classify the component's own rendered placeholder/
+ * loaded/error branches; `rolloutsFor`/`previewFor` read the dialog's
+ * provenance stamps (W4-F0c finding B), so the drivers settle on IDENTITY
+ * (the stamp names the awaited profile/file), not on timing — a settled DOM
+ * still showing the PREVIOUS selection's reply can never satisfy the wait.
+ */
+export interface CodexImportDialogDom {
+  open(): boolean;
+  clickClose(): boolean;
+  profileValue(): string;
+  profileOptions(): { id: string; label: string }[];
+  setProfile(id: string): boolean;
+  /** Text of the list's `.settings-mcp-empty` placeholder (loading/empty), `null` when rows/error/no list render. */
+  listEmptyText(): string | null;
+  listLoadingVisible(): boolean;
+  /** True once the list block shows a real outcome: rows, the empty text, or an error notice — anything but absent/loading. */
+  listSettled(): boolean;
+  /** The list block's `data-rollouts-for` stamp — whose reply the rendered rows answer; `null` while loading (no committed result). */
+  rolloutsFor(): string | null;
+  rollouts(): CodexImportRolloutRowDomFacts[];
+  clickRolloutAt(index: number): boolean;
+  previewLoadingVisible(): boolean;
+  /** True once the preview block shows a real outcome: the loaded stats section or an error notice. */
+  previewSettled(): boolean;
+  /** The preview block's `data-preview-for` stamp — whose file the rendered preview answers; `null` while loading. */
+  previewFor(): string | null;
+  statsLines(): string[];
+  notices(): string[];
+  modelValue(): string | null;
+  modelOptions(): { id: string; name: string }[];
+  setModel(id: string): boolean;
+  importButton(): { label: string; disabled: boolean } | null;
+  /** A real `.click()` on the "Import & open" button; `false` when absent or disabled. */
+  clickImport(): boolean;
+}
+
 /* */
 export interface AnycodeBridge {
   createTab(request: CreateTabRequest): Promise<CreateTabResult>;
@@ -1772,6 +2040,52 @@ export interface AutomationFacade {
   // ── generic focus probe (TASK.45 W12-smoke): see FocusState's doc comment
   // above — no pane owns this, it reads `document.activeElement` directly. ──
   focusState(): FocusState;
+  // ── Codex pane probe/driver (W4-F0, findings S1-1 probe (a)) — a DEDICATED
+  // probe, every prior probe above stays byte-untouched. `codexPaneState`
+  // reads the whole pane (binary/manifest block + per-profile account rows)
+  // off the rendered DOM; the three drivers fire REAL clicks on the pane's
+  // own buttons — the "Install …"/"Update to …" primary, "Recheck all", and
+  // "Refresh manifest" — so each runs the exact `bridge.install`/`recheck`/
+  // `manifestRefresh` controller call the button's own onClick makes (one
+  // product path). All three are fire-and-return (no built-in settle wait,
+  // `shortcutsPressChord` posture): install/recheck are long-running
+  // downloads/sequential doctor passes — the caller polls `codexPaneState`
+  // for the status/actions to change. ──
+  codexPaneState(): CodexPaneState;
+  codexPaneInstall(): FacadeResult;
+  codexPaneRecheckAll(): FacadeResult;
+  codexPaneRefreshManifest(): FacadeResult;
+  // ── Codex profile chip probe/driver (W4-F0, findings S1-1 probe (b)) —
+  // `codexProfileChipOpen` drives a real click on the chip button;
+  // `codexProfileChipPick` clicks the Nth RENDERED option row (rows carry no
+  // stable id in the DOM, and clicking by index mirrors the component's own
+  // `.map()` render order — `modelPillPick`'s clickItemAt discipline). A
+  // disabled row's click is deliberately FIRED (it no-ops, browser
+  // semantics), not pre-refused — the S1b gate proves the PRODUCT's
+  // signed_out lockout by observing the draft unchanged afterward. ──
+  codexProfileChipState(): CodexProfileChipState;
+  codexProfileChipOpen(open: boolean): Promise<FacadeResult>;
+  codexProfileChipPick(index: number): Promise<FacadeResult>;
+  // ── Rollout-import dialog probe/driver (W4-F0, findings S1-1 probe (c)) —
+  // open the dialog via the pane's own "Import a Codex session…" button, pick
+  // a profile / a rollout row / a model through the dialog's REAL controls,
+  // and trigger the import via the real "Import & open" button. The
+  // profile-select and rollout-pick drivers settle on IDENTITY (W4-F0c
+  // finding B): settled outcome AND the dialog's own provenance stamp
+  // (`data-rollouts-for`/`data-preview-for`) naming the awaited profile/file
+  // — never on timing, which a stale-but-settled previous reply satisfies.
+  // `codexImportApply` settles on either the dialog closing (success) or a
+  // fresh refusal notice appearing (`import_refused` — the caller reads the
+  // honest copy via `codexImportState().notices`). The state read is async
+  // (W4-F0c finding A): preview digests hash via `crypto.subtle` — the
+  // executeJavaScript seam awaits thenables, so the wire shape is the
+  // resolved object either way. ──
+  codexImportState(): Promise<CodexImportState>;
+  codexImportOpen(open: boolean): Promise<FacadeResult>;
+  codexImportSetProfile(profileId: string): Promise<FacadeResult>;
+  codexImportSelectRollout(index: number): Promise<FacadeResult>;
+  codexImportSetModel(model: string): Promise<FacadeResult>;
+  codexImportApply(): Promise<FacadeResult>;
 }
 
 /** The real `window.anycode` bridge, resolved lazily (only read when a caller omits the `bridge` DI parameter — never at module load, so this file stays importable from a plain Node test context with no `window`). */
@@ -3381,6 +3695,379 @@ const START_SCREEN_COMMIT_DEADLINE_MS = 500;
 /** Deadline for the provider connections grid/drawer's post-click settle polls (TASK.45 W12) — generous enough for a real connection-CRUD/secret-vault IPC round-trip (main writes settings.json / the OS keychain), same rationale as `MCP_PANE_COMMIT_DEADLINE_MS`. */
 const PROVIDER_PANE_COMMIT_DEADLINE_MS = 2_000;
 
+/** Deadline for `codexProfileChipOpen`/`Pick`'s post-click commit polls (W4-F0 probe (b)) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
+const CODEX_CHIP_COMMIT_DEADLINE_MS = 500;
+
+/** Deadline for `codexImportOpen`'s dialog open/close commit polls (W4-F0 probe (c)) — local React `useState` + `<dialog>` showModal, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
+const CODEX_IMPORT_COMMIT_DEADLINE_MS = 500;
+
+/** Deadline for `codexImportSetProfile`/`SelectRollout`'s settle polls (W4-F0 probe (c)) — a real main-process fs scan / bounded rollout-head parse round-tripped over IPC, same rationale as `MCP_PANE_SCAN_DEADLINE_MS`. The settle predicate is identity-gated (W4-F0c finding B): it requires the dialog's own provenance stamp to name the awaited profile/file, so no loading-appear pre-wait exists — a settled DOM still showing the previous selection's reply simply keeps polling. */
+const CODEX_IMPORT_LIST_DEADLINE_MS = 10_000;
+
+/** Deadline for `codexImportApply`'s post-click settle poll (W4-F0 probe (c)) — a real import (≤32 MiB rollout parse + session persist) plus the resume-path tab open, same rationale as `MCP_PANE_APPLY_DEADLINE_MS`. */
+const CODEX_IMPORT_APPLY_DEADLINE_MS = 10_000;
+
+/** Reads a button's rendered label + disabled state (shared by the codex pane/import DOM accessors below). */
+function buttonFacts(button: HTMLButtonElement): { label: string; disabled: boolean } {
+  return { label: (button.textContent ?? "").trim(), disabled: button.disabled };
+}
+
+/**
+ * First 12 hex chars of SHA-256 over the exact rendered text (W4-F0c finding
+ * A): 48 bits — collision-safe for measurement discrimination, useless for
+ * recovering the content from an opportunistically-read smoke log. Computed
+ * HERE in the facade (the custody enforcement point — one shape truth for
+ * facade and wire, no main-side transform); `crypto.subtle` is why
+ * `codexImportState()` is async.
+ */
+async function sha256Prefix12(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 12);
+}
+
+/**
+ * Custody redaction for one rollout row (W4-F0c finding A): raw session text
+ * (`cwd`, `preview`) is reduced to presence/length/digest before it can reach
+ * `CodexImportState` — the only shape the HTTP channel ever serializes.
+ */
+async function redactRolloutRow(row: CodexImportRolloutRowDomFacts): Promise<CodexImportRolloutRowState> {
+  // Every row field is read HERE, synchronously at entry (W4-F0e finding H1):
+  // Promise.all's map runs this far before codexImportState's await, so the
+  // whole row belongs to the same atomic snapshot — no field is read after
+  // the digest suspension (the literal-order form this replaces read
+  // `selected` post-await).
+  const { fileName, timestamp, size, cwd, preview, selected } = row;
+  return {
+    fileName: fileName ?? "",
+    timestamp,
+    size,
+    cwdRendered: cwd !== null,
+    preview:
+      preview === null
+        ? { rendered: false, length: 0, sha256_12: null }
+        : { rendered: true, length: preview.length, sha256_12: await sha256Prefix12(preview) },
+    selected,
+  };
+}
+
+/**
+ * The real Codex-pane DOM accessor (W4-F0 probe (a)): queries live at call
+ * time, same laziness discipline as `realMcpPaneDom` (safe to evaluate as a
+ * default parameter outside a browser; tests always pass an explicit
+ * `codexPaneDom` and never reach this). The pane carries no dedicated root
+ * class of its own — it mounts as `CodexEnginePane`'s `.settings-section`
+ * inside SettingsScreen's `#settings-pane-codex` container (the id only ever
+ * exists on the ACTIVE pane), so `mounted()` is an unambiguous reading. The
+ * binary block's facts are parsed off the pane's own rendered description
+ * lines (path `<code>` + "(source)" suffix; "Supported range: … Recommended:
+ * …") — byte-parity with the on-screen copy, the only render-side source
+ * these facts have.
+ */
+function realCodexPaneDom(): CodexPaneDom {
+  function pane(): HTMLElement | null {
+    return document.querySelector<HTMLElement>("#settings-pane-codex .settings-section");
+  }
+  /** The binary action row: the one `.settings-field-row` holding the always-rendered "Recheck all" button. */
+  function actionRow(): HTMLElement | null {
+    const root = pane();
+    if (!root) {
+      return null;
+    }
+    for (const row of Array.from(root.querySelectorAll<HTMLElement>(":scope > .settings-field-row"))) {
+      const labels = Array.from(row.querySelectorAll<HTMLButtonElement>("button")).map((b) => (b.textContent ?? "").trim());
+      if (labels.includes("Recheck all")) {
+        return row;
+      }
+    }
+    return null;
+  }
+  function actionButtons(): HTMLButtonElement[] {
+    return Array.from(actionRow()?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+  }
+  function findAction(label: string): HTMLButtonElement | null {
+    return actionButtons().find((b) => (b.textContent ?? "").trim() === label) ?? null;
+  }
+  function installButtonEl(): HTMLButtonElement | null {
+    return actionRow()?.querySelector<HTMLButtonElement>(".settings-button-primary") ?? null;
+  }
+  function parseRow(li: HTMLLIElement): CodexPaneRowState {
+    const status = li.querySelector<HTMLElement>(".settings-secret-status");
+    const toneMatch = /\bsettings-secret-status-([a-z]+)\b/.exec(status?.className ?? "");
+    return {
+      label: (li.querySelector(".settings-mcp-name")?.textContent ?? "").trim(),
+      statusHeadline: (status?.textContent ?? "").trim(),
+      statusTone: toneMatch ? toneMatch[1]! : "",
+      statusDetail: (li.querySelector(".settings-mcp-detail")?.textContent ?? "").trim(),
+      // Presence only — the rendered address itself never crosses the
+      // automation channel (custody §4.4: no e-mail in logs/telemetry/disk).
+      emailRendered: li.querySelector(".codex-profile-email") !== null,
+      quotaLines: Array.from(li.querySelectorAll(".codex-profile-quota-line")).map((line) => (line.textContent ?? "").trim()),
+      buttons: Array.from(li.querySelectorAll<HTMLButtonElement>(".settings-field-row button")).map(buttonFacts),
+      signingIn: li.querySelector(".settings-oauth-pending") !== null,
+    };
+  }
+  return {
+    mounted: () => pane() !== null,
+    binary: () => {
+      const root = pane();
+      const status = root?.querySelector<HTMLElement>(":scope > .settings-field-row .settings-secret-status") ?? null;
+      const toneMatch = /\bsettings-secret-status-([a-z]+)\b/.exec(status?.className ?? "");
+      const descriptions = Array.from(root?.querySelectorAll<HTMLElement>(":scope > .settings-page-description") ?? []);
+      // The path line is the one description whose FIRST element child is the
+      // `<code>{binaryPath}</code>` followed by the "(source label)" suffix.
+      const pathLine = descriptions.find((p) => p.firstElementChild?.tagName === "CODE" && /\(([^)]*)\)\s*$/.test(p.textContent ?? ""));
+      const pathSuffix = /\(([^)]*)\)\s*$/.exec(pathLine?.textContent ?? "");
+      const supportLine = descriptions.find((p) => (p.textContent ?? "").startsWith("Supported range:"));
+      const supportCodes = Array.from(supportLine?.querySelectorAll("code") ?? []).map((code) => (code.textContent ?? "").trim());
+      const manifestSourceMatch = /\((network|cache|bundled)\)/.exec(supportLine?.textContent ?? "");
+      const install = installButtonEl();
+      return {
+        statusHeadline: (status?.textContent ?? "").trim(),
+        statusTone: toneMatch ? toneMatch[1]! : "",
+        // The FIRST description line is the status detail (rendered
+        // unconditionally, straight after the status row).
+        statusDetail: (descriptions[0]?.textContent ?? "").trim(),
+        binaryPath: pathLine ? ((pathLine.querySelector("code")?.textContent ?? "").trim() || null) : null,
+        sourceLabel: pathSuffix ? pathSuffix[1]! : null,
+        supportedRange: supportCodes[0] ?? null,
+        recommended: supportCodes[1] ?? null,
+        manifestSource: manifestSourceMatch ? manifestSourceMatch[1]! : null,
+        installButton: install ? buttonFacts(install) : null,
+        riskToggleVisible: findAction("Use anyway") !== null,
+        actions: actionButtons().map(buttonFacts),
+      };
+    },
+    rows: () => Array.from(pane()?.querySelectorAll<HTMLLIElement>(".codex-profile-row") ?? []).map(parseRow),
+    notices: () => Array.from(pane()?.querySelectorAll(":scope > .settings-notice") ?? []).map((el) => (el.textContent ?? "").trim()),
+    actionButton: (label) => {
+      const button = findAction(label);
+      return button ? { disabled: button.disabled } : null;
+    },
+    clickAction: (label) => {
+      const button = findAction(label);
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+    installButton: () => {
+      const button = installButtonEl();
+      return button ? buttonFacts(button) : null;
+    },
+    clickInstall: () => {
+      const button = installButtonEl();
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+    clickImportSession: () => {
+      const root = pane();
+      const button = Array.from(root?.querySelectorAll<HTMLButtonElement>(":scope > .settings-field-row > button") ?? []).find(
+        (b) => (b.textContent ?? "").trim() === "Import a Codex session…",
+      );
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real codex profile chip DOM accessor (W4-F0 probe (b)): queries live at
+ * call time, same laziness discipline as `realModelPillDom` (whose CSS
+ * vocabulary the chip reuses under its own `.start-codex-profile` root —
+ * StartScreen.tsx only ever renders it while a codex draft with registered
+ * profiles is showing, so `mounted()` is an unambiguous reading).
+ */
+function realCodexProfileChipDom(): CodexProfileChipDom {
+  function root(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(".start-codex-profile");
+  }
+  function popover(): HTMLElement | null {
+    return root()?.querySelector<HTMLElement>(".model-pill-popover") ?? null;
+  }
+  function optionButtons(): HTMLButtonElement[] {
+    return Array.from(popover()?.querySelectorAll<HTMLButtonElement>(".model-pill-item") ?? []);
+  }
+  return {
+    mounted: () => root() !== null,
+    label: () => (root()?.querySelector(".model-pill-label")?.textContent ?? "").trim(),
+    menuOpen: () => popover() !== null,
+    options: () =>
+      optionButtons().map((button) => ({
+        label: (button.querySelector(".model-pill-item-name")?.textContent ?? "").trim(),
+        disabled: button.disabled,
+        current: button.getAttribute("aria-checked") === "true",
+      })),
+    addAccountLast: () => {
+      const buttons = Array.from(popover()?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+      const last = buttons[buttons.length - 1];
+      return last !== undefined && last.classList.contains("model-pill-row") && (last.textContent ?? "").trim() === "Add account…";
+    },
+    clickChip: () => {
+      root()?.querySelector<HTMLButtonElement>(".model-pill-chip")?.click();
+    },
+    clickOptionAt: (index) => {
+      const button = optionButtons()[index];
+      if (button === undefined) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+  };
+}
+
+/** The rollout-import dialog's list-loading placeholder literal — byte-parity with `CodexRolloutImportDialog.tsx`'s own render. */
+const CODEX_IMPORT_LIST_LOADING_TEXT = "Loading sessions…";
+/** The rollout-import dialog's preview-loading placeholder literal — byte-parity with `CodexRolloutImportDialog.tsx`'s own render. */
+const CODEX_IMPORT_PREVIEW_LOADING_TEXT = "Loading preview…";
+
+/**
+ * The real rollout-import dialog DOM accessor (W4-F0 probe (c)): queries live
+ * at call time, same laziness discipline as `realCodexPaneDom` above.
+ * `.codex-rollout-dialog` only ever mounts while the pane's import entry
+ * point opened it, so `open()` is an unambiguous reading. The profile select
+ * is the dialog body's FIRST `.settings-field-row select` (the model select
+ * only ever renders inside `.codex-rollout-preview`, so the two cannot be
+ * confused structurally).
+ */
+function realCodexImportDialogDom(): CodexImportDialogDom {
+  function dialog(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(".codex-rollout-dialog");
+  }
+  function profileSelect(): HTMLSelectElement | null {
+    return dialog()?.querySelector<HTMLSelectElement>(".mcp-dialog-body > .settings-field-row select") ?? null;
+  }
+  function listBlock(): HTMLElement | null {
+    return dialog()?.querySelector<HTMLElement>(".codex-rollout-list") ?? null;
+  }
+  function previewBlock(): HTMLElement | null {
+    return dialog()?.querySelector<HTMLElement>(".codex-rollout-preview") ?? null;
+  }
+  function modelSelect(): HTMLSelectElement | null {
+    return previewBlock()?.querySelector<HTMLSelectElement>("select") ?? null;
+  }
+  function importButtonEl(): HTMLButtonElement | null {
+    return dialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .settings-button-primary") ?? null;
+  }
+  function rolloutRadios(): HTMLInputElement[] {
+    return Array.from(listBlock()?.querySelectorAll<HTMLInputElement>('.codex-rollout-row input[type="radio"]') ?? []);
+  }
+  function listEmpty(): string | null {
+    const text = listBlock()?.querySelector(".settings-mcp-empty")?.textContent ?? null;
+    return text === null ? null : text.trim();
+  }
+  function previewEmpty(): string | null {
+    const text = previewBlock()?.querySelector(".settings-mcp-empty")?.textContent ?? null;
+    return text === null ? null : text.trim();
+  }
+  return {
+    open: () => dialog() !== null,
+    clickClose: () => {
+      const button = Array.from(dialog()?.querySelectorAll<HTMLButtonElement>(".mcp-dialog-actions button") ?? []).find(
+        (b) => (b.textContent ?? "").trim() === "Close",
+      );
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+    profileValue: () => profileSelect()?.value ?? "",
+    profileOptions: () =>
+      Array.from(profileSelect()?.querySelectorAll("option") ?? [])
+        .filter((option) => !option.disabled)
+        .map((option) => ({ id: option.value, label: (option.textContent ?? "").trim() })),
+    setProfile: (id) => {
+      const select = profileSelect();
+      if (!select || !Array.from(select.options).some((option) => option.value === id)) {
+        return false;
+      }
+      setNativeSelectValue(select, id);
+      return true;
+    },
+    listEmptyText: listEmpty,
+    listLoadingVisible: () => listEmpty() === CODEX_IMPORT_LIST_LOADING_TEXT,
+    listSettled: () => {
+      const block = listBlock();
+      if (!block) {
+        return false;
+      }
+      const empty = listEmpty();
+      if (empty === CODEX_IMPORT_LIST_LOADING_TEXT) {
+        return false;
+      }
+      return empty !== null || block.querySelector(".codex-rollout-row") !== null || block.querySelector(".settings-notice") !== null;
+    },
+    rolloutsFor: () => listBlock()?.getAttribute("data-rollouts-for") ?? null,
+    rollouts: () =>
+      Array.from(listBlock()?.querySelectorAll<HTMLLIElement>(".codex-rollout-row") ?? []).map((li) => ({
+        fileName: li.getAttribute("data-file-name"),
+        timestamp: (li.querySelector(".settings-mcp-name")?.textContent ?? "").trim(),
+        size: (li.querySelector(".codex-rollout-size")?.textContent ?? "").trim(),
+        cwd: li.querySelector(".settings-mcp-detail")?.textContent?.trim() ?? null,
+        preview: li.querySelector(".codex-rollout-preview-line")?.textContent?.trim() ?? null,
+        selected: li.querySelector<HTMLInputElement>('input[type="radio"]')?.checked ?? false,
+      })),
+    clickRolloutAt: (index) => {
+      const radio = rolloutRadios()[index];
+      if (radio === undefined) {
+        return false;
+      }
+      radio.click();
+      return true;
+    },
+    previewLoadingVisible: () => previewEmpty() === CODEX_IMPORT_PREVIEW_LOADING_TEXT,
+    previewSettled: () => {
+      const block = previewBlock();
+      if (!block) {
+        return false;
+      }
+      if (previewEmpty() === CODEX_IMPORT_PREVIEW_LOADING_TEXT) {
+        return false;
+      }
+      return block.querySelector(".settings-section-title") !== null || block.querySelector(".settings-notice") !== null;
+    },
+    previewFor: () => previewBlock()?.getAttribute("data-preview-for") ?? null,
+    statsLines: () => Array.from(previewBlock()?.querySelectorAll(".codex-rollout-stat-line") ?? []).map((el) => (el.textContent ?? "").trim()),
+    notices: () => Array.from(dialog()?.querySelectorAll(".settings-notice") ?? []).map((el) => (el.textContent ?? "").trim()),
+    modelValue: () => modelSelect()?.value ?? null,
+    modelOptions: () =>
+      Array.from(modelSelect()?.querySelectorAll("option") ?? []).map((option) => ({
+        id: option.value,
+        name: (option.textContent ?? "").trim(),
+      })),
+    setModel: (id) => {
+      const select = modelSelect();
+      if (!select || !Array.from(select.options).some((option) => option.value === id)) {
+        return false;
+      }
+      setNativeSelectValue(select, id);
+      return true;
+    },
+    importButton: () => {
+      const button = importButtonEl();
+      return button ? buttonFacts(button) : null;
+    },
+    clickImport: () => {
+      const button = importButtonEl();
+      if (!button || button.disabled) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+  };
+}
+
 /**
  * Builds an `AutomationFacade` over the given registry/tabs-store/bridge.
  * `createAutomationFacade()` with no arguments (what `installAutomation`
@@ -3412,7 +4099,29 @@ export function createAutomationFacade(
   transcriptBlockDom: TranscriptBlockDom = realTranscriptBlockDom(),
   tryAgainButtonDom: TryAgainButtonDom = realTryAgainButtonDom(),
   providerPaneDom: ProviderPaneDom = realProviderPaneDom(),
+  codexPaneDom: CodexPaneDom = realCodexPaneDom(),
+  codexProfileChipDom: CodexProfileChipDom = realCodexProfileChipDom(),
+  codexImportDom: CodexImportDialogDom = realCodexImportDialogDom(),
 ): AutomationFacade {
+  /**
+   * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
+   * does post-FXH (S5-1 fix, W4-findings-S5.md): the tab's PINNED connection
+   * wins over the active one (`resolvePillTarget`, TASK.45 W10-FIX F2), and a
+   * `custom:*` provider with no builtin catalog entry falls back to its own
+   * curated `models[]` (`providerModelsFor`, FXH F2). The pre-FXH expression
+   * this replaces (`catalog.find(activeId)?.models`) ignored both axes, so the
+   * probe could disagree with the on-screen popover in either direction — the
+   * "cannot disagree with the on-screen label" doc promise only holds while
+   * this stays byte-parity with `ModelPill.tsx`'s own render inputs.
+   */
+  function pillCatalogModels(
+    pinnedConnection: { connectionId: string; providerId: string } | null,
+  ): readonly { id: string; name?: string }[] | undefined {
+    const settingsSnapshot = settingsStore.getState().snapshot;
+    const activeProviderId = settingsSnapshot ? activeProviderView(settingsSnapshot.settings).id : undefined;
+    const { providerId } = resolvePillTarget(pinnedConnection, activeProviderId, settingsSnapshot?.settings.provider.activeConnectionId);
+    return providerModelsFor(providerId, settingsSnapshot?.catalog, settingsSnapshot?.settings.provider.custom);
+  }
   return {
     snapshot(transcriptTail?: number): SnapshotJson {
       const { tabs, activeTabId, hiddenWorkspaces } = tabsStore.getState();
@@ -4087,9 +4796,9 @@ export function createAutomationFacade(
         };
       }
       const state = store.getState();
-      const settingsSnapshot = settingsStore.getState().snapshot;
-      const providerId = settingsSnapshot ? activeProviderView(settingsSnapshot.settings).id : undefined;
-      const catalogModels = settingsSnapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
+      // S5-1 fix (W4-findings-S5.md): the SAME pinned-aware, custom-aware
+      // catalog resolution ModelPill.tsx renders with — see pillCatalogModels.
+      const catalogModels = pillCatalogModels(state.pinnedConnection);
       const model = state.model;
       const menuOpen = modelPillDom.popoverOpen();
       return {
@@ -4155,9 +4864,10 @@ export function createAutomationFacade(
         // the only reason navigating to "effort" can fail structurally.
         return { ok: false, reason: pick.kind === "effort" ? "effort_row_hidden" : "navigation_failed" };
       }
-      const settingsSnapshot = settingsStore.getState().snapshot;
-      const providerId = settingsSnapshot ? activeProviderView(settingsSnapshot.settings).id : undefined;
-      const catalogModels = settingsSnapshot?.catalog?.find((entry) => entry.id === providerId)?.models;
+      // S5-1 fix (W4-findings-S5.md): the index below must be computed over
+      // the SAME item list the popover actually renders — the pinned-aware,
+      // custom-aware catalog — or a pick could click the wrong row.
+      const catalogModels = pillCatalogModels(state.pinnedConnection);
       const values: readonly string[] =
         pick.kind === "model" ? modelMenuItems(state.model ?? "", catalogModels).map((item) => item.id) : (state.availableEffortLevels ?? []);
       const index = values.indexOf(pick.value);
@@ -5443,6 +6153,318 @@ export function createAutomationFacade(
         className: el.className || null,
         disabled,
       };
+    },
+
+    codexPaneState(): CodexPaneState {
+      if (!codexPaneDom.mounted()) {
+        // A valid reading, not an error (McpPaneState precedent): the
+        // Settings dialog is closed, or a different pane is currently active.
+        return { mounted: false, binary: null, rows: [], notices: [] };
+      }
+      return {
+        mounted: true,
+        binary: codexPaneDom.binary(),
+        rows: codexPaneDom.rows(),
+        notices: codexPaneDom.notices(),
+      };
+    },
+
+    codexPaneInstall(): FacadeResult {
+      if (!codexPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const button = codexPaneDom.installButton();
+      if (button === null) {
+        // No Install/Update primary rendered — the binary is already usable
+        // (or no manifest facts arrived yet); an honest structural refusal,
+        // never a blind click somewhere else.
+        return { ok: false, reason: "button_not_present" };
+      }
+      if (button.disabled) {
+        return { ok: false, reason: "button_disabled" };
+      }
+      // Fire-and-return (shortcutsPressChord posture): a real install is a
+      // long download + doctor pass — the caller polls codexPaneState.
+      codexPaneDom.clickInstall();
+      return { ok: true };
+    },
+
+    codexPaneRecheckAll(): FacadeResult {
+      if (!codexPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const button = codexPaneDom.actionButton("Recheck all");
+      if (button === null) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      if (button.disabled) {
+        return { ok: false, reason: "button_disabled" };
+      }
+      // Fire-and-return: refreshAll diagnoses every profile SEQUENTIALLY
+      // (cut §4.3) — the caller polls the rows' "Checking…" state instead.
+      codexPaneDom.clickAction("Recheck all");
+      return { ok: true };
+    },
+
+    codexPaneRefreshManifest(): FacadeResult {
+      if (!codexPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const button = codexPaneDom.actionButton("Refresh manifest");
+      if (button === null) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      if (button.disabled) {
+        return { ok: false, reason: "button_disabled" };
+      }
+      codexPaneDom.clickAction("Refresh manifest");
+      return { ok: true };
+    },
+
+    codexProfileChipState(): CodexProfileChipState {
+      const { draft, draftActive } = tabsStore.getState();
+      const mounted = codexProfileChipDom.mounted();
+      const menuOpen = mounted && codexProfileChipDom.menuOpen();
+      return {
+        ok: true,
+        chipVisible: mounted,
+        label: mounted ? codexProfileChipDom.label() : null,
+        menuOpen,
+        // Only populated while the popover is open (CtxPopoverState
+        // precedent): the rows are read off the RENDERED popover, and a
+        // closed popover renders none.
+        options: menuOpen ? codexProfileChipDom.options() : [],
+        addAccountLast: menuOpen ? codexProfileChipDom.addAccountLast() : false,
+        draftActive,
+        draftCodexProfileId: draft?.codexProfileId ?? null,
+      };
+    },
+
+    async codexProfileChipOpen(open: boolean): Promise<FacadeResult> {
+      if (!codexProfileChipDom.mounted()) {
+        return { ok: false, reason: "not_present" };
+      }
+      if (codexProfileChipDom.menuOpen() === open) {
+        return { ok: true };
+      }
+      // A real click on the chip button (StartScreen.tsx's own toggle) — the
+      // popover's open state is local component useState, no store action
+      // exists (same posture as modelPillPick's clickChip).
+      codexProfileChipDom.clickChip();
+      const committed = await waitUntil(() => codexProfileChipDom.menuOpen() === open, CODEX_CHIP_COMMIT_DEADLINE_MS);
+      return committed ? { ok: true } : { ok: false, reason: open ? "did_not_open" : "did_not_close" };
+    },
+
+    async codexProfileChipPick(index: number): Promise<FacadeResult> {
+      if (!codexProfileChipDom.mounted()) {
+        return { ok: false, reason: "not_present" };
+      }
+      if (!codexProfileChipDom.menuOpen()) {
+        codexProfileChipDom.clickChip();
+        if (!(await waitUntil(() => codexProfileChipDom.menuOpen(), CODEX_CHIP_COMMIT_DEADLINE_MS))) {
+          return { ok: false, reason: "did_not_open" };
+        }
+      }
+      // A disabled row's click is FIRED, not pre-refused: the click no-ops
+      // (browser semantics for a disabled button), so the caller observes the
+      // PRODUCT's own signed_out lockout — draft unchanged, popover still
+      // open — instead of this facade's guard standing in for it.
+      if (!codexProfileChipDom.clickOptionAt(index)) {
+        return { ok: false, reason: "unknown_option" };
+      }
+      return { ok: true };
+    },
+
+    async codexImportState(): Promise<CodexImportState> {
+      const paneMounted = codexPaneDom.mounted();
+      if (!codexImportDom.open()) {
+        // A valid reading, not an error (McpPaneState precedent): the dialog
+        // simply isn't open.
+        return {
+          paneMounted,
+          open: false,
+          profileId: null,
+          profileOptions: [],
+          listLoading: false,
+          listEmptyText: null,
+          rollouts: [],
+          rolloutsFor: null,
+          previewLoading: false,
+          previewFor: null,
+          statsLines: [],
+          notices: [],
+          modelValue: null,
+          modelOptions: [],
+          importDisabled: true,
+          importing: false,
+        };
+      }
+      // Atomic synchronous DOM snapshot (W4-F0e finding H1): EVERY DOM fact —
+      // the raw row facts, both provenance stamps, all scalars — is captured
+      // in one uninterruptible synchronous block BEFORE the first await, so a
+      // React commit landing during the digest await can never tear the
+      // payload (rows of profile A stamped with profile B). The digest runs
+      // afterwards over this snapshot (row facts are materialized at read
+      // time and never re-read), and the payload is assembled from the
+      // snapshot ONLY — zero DOM reads after the first await.
+      const listLoading = codexImportDom.listLoadingVisible();
+      const listText = codexImportDom.listEmptyText();
+      const importButton = codexImportDom.importButton();
+      const profileValue = codexImportDom.profileValue();
+      const profileOptions = codexImportDom.profileOptions();
+      const rows = codexImportDom.rollouts();
+      const rolloutsFor = codexImportDom.rolloutsFor();
+      const previewLoading = codexImportDom.previewLoadingVisible();
+      const previewFor = codexImportDom.previewFor();
+      const statsLines = codexImportDom.statsLines();
+      const notices = codexImportDom.notices();
+      const modelValue = codexImportDom.modelValue();
+      const modelOptions = codexImportDom.modelOptions();
+      // Custody redaction (W4-F0c finding A): the raw DOM facts never reach
+      // this shape — cwd/preview cross as presence/length/digest only.
+      const rollouts = await Promise.all(rows.map((row) => redactRolloutRow(row)));
+      return {
+        paneMounted,
+        open: true,
+        // "" is the disabled "Choose a profile…" placeholder — reported as
+        // null, never as a pickable id.
+        profileId: profileValue === "" ? null : profileValue,
+        profileOptions,
+        listLoading,
+        listEmptyText: listLoading ? null : listText,
+        rollouts,
+        rolloutsFor,
+        previewLoading,
+        previewFor,
+        statsLines,
+        notices,
+        modelValue,
+        modelOptions,
+        // Byte-parity with the rendered button's own `disabled` — the
+        // committed result of the component's importDisabled() predicate.
+        importDisabled: importButton?.disabled ?? true,
+        importing: importButton?.label === "Importing…",
+      };
+    },
+
+    async codexImportOpen(open: boolean): Promise<FacadeResult> {
+      if (open) {
+        if (codexImportDom.open()) {
+          return { ok: true };
+        }
+        if (!codexPaneDom.mounted()) {
+          return { ok: false, reason: "pane_not_mounted" };
+        }
+        // The pane's own "Import a Codex session…" button (CodexEnginePane
+        // .tsx) — the dialog's only product entry point.
+        if (!codexPaneDom.clickImportSession()) {
+          return { ok: false, reason: "button_not_present" };
+        }
+        const opened = await waitUntil(() => codexImportDom.open(), CODEX_IMPORT_COMMIT_DEADLINE_MS);
+        return opened ? { ok: true } : { ok: false, reason: "did_not_open" };
+      }
+      if (!codexImportDom.open()) {
+        return { ok: true };
+      }
+      if (!codexImportDom.clickClose()) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      const closed = await waitUntil(() => !codexImportDom.open(), CODEX_IMPORT_COMMIT_DEADLINE_MS);
+      return closed ? { ok: true } : { ok: false, reason: "did_not_close" };
+    },
+
+    async codexImportSetProfile(profileId: string): Promise<FacadeResult> {
+      if (!codexImportDom.open()) {
+        return { ok: false, reason: "dialog_not_open" };
+      }
+      if (!codexImportDom.setProfile(profileId)) {
+        return { ok: false, reason: "unknown_profile" };
+      }
+      // Identity-gated settle (W4-F0c finding B): the list must be settled
+      // AND its provenance stamp must name THIS profile. Identity is strictly
+      // stronger than the timing guard it replaces — the previous profile's
+      // still-rendered rows (the passive-effect window) and a late-landing
+      // reply to the OLD profile are both settled DOM, but both carry the OLD
+      // stamp, so neither can satisfy this poll.
+      const settled = await waitUntil(
+        () => codexImportDom.listSettled() && codexImportDom.rolloutsFor() === profileId,
+        CODEX_IMPORT_LIST_DEADLINE_MS,
+      );
+      return settled ? { ok: true } : { ok: false, reason: "list_timeout" };
+    },
+
+    async codexImportSelectRollout(index: number): Promise<FacadeResult> {
+      if (!codexImportDom.open()) {
+        return { ok: false, reason: "dialog_not_open" };
+      }
+      // List-staleness guard (W4-F0e finding H3): the rendered rows must be
+      // stamped with the profile the select CURRENTLY names before any row
+      // is captured or clicked. `fileName` is RELATIVE to a profile's
+      // sessions dir, so two profiles can legally render the SAME fileName —
+      // in the stale window after a profile switch the OLD profile's settled
+      // preview (same name) would otherwise satisfy the identity settle
+      // below. A loading list (no stamp) or a foreign stamp refuses
+      // fail-closed, with a reason distinct from unknown_rollout.
+      const currentProfile = codexImportDom.profileValue();
+      const rowsStampedFor = codexImportDom.rolloutsFor();
+      if (rowsStampedFor === null || rowsStampedFor !== (currentProfile === "" ? null : currentProfile)) {
+        return { ok: false, reason: "list_stale" };
+      }
+      // The clicked row's identity is captured BEFORE the click (W4-F0c
+      // finding B): rows carry their machine-generated `data-file-name`, and
+      // the settle below waits for the preview stamped with EXACTLY this
+      // file — not for "some preview settled", which a stale reply to the
+      // previously-selected row satisfies.
+      const fileName = codexImportDom.rollouts()[index]?.fileName ?? null;
+      // A real click on the row's own radio input — the exact node
+      // selectRollout's onChange listens on (same clickItemAt discipline as
+      // modelPillPick). A missing row OR a row without its identity stamp
+      // refuses fail-closed.
+      if (fileName === null || !codexImportDom.clickRolloutAt(index)) {
+        return { ok: false, reason: "unknown_rollout" };
+      }
+      const settled = await waitUntil(
+        () => codexImportDom.previewSettled() && codexImportDom.previewFor() === fileName,
+        CODEX_IMPORT_LIST_DEADLINE_MS,
+      );
+      return settled ? { ok: true } : { ok: false, reason: "preview_timeout" };
+    },
+
+    async codexImportSetModel(model: string): Promise<FacadeResult> {
+      if (!codexImportDom.open()) {
+        return { ok: false, reason: "dialog_not_open" };
+      }
+      if (!codexImportDom.setModel(model)) {
+        // Absent select (preview not loaded) or a value outside the rendered
+        // options — one refusal for both, the GET's modelOptions disambiguates.
+        return { ok: false, reason: "unknown_model" };
+      }
+      const committed = await waitUntil(() => codexImportDom.modelValue() === model, CODEX_IMPORT_COMMIT_DEADLINE_MS);
+      return committed ? { ok: true } : { ok: false, reason: "did_not_set" };
+    },
+
+    async codexImportApply(): Promise<FacadeResult> {
+      if (!codexImportDom.open()) {
+        return { ok: false, reason: "dialog_not_open" };
+      }
+      const before = codexImportDom.notices().join("|");
+      // A real click on "Import & open" — a disabled button (importDisabled's
+      // committed render) refuses here rather than firing a no-op.
+      if (!codexImportDom.clickImport()) {
+        return { ok: false, reason: "import_disabled" };
+      }
+      // Success closes the dialog (onClose after the resume-path tab opens);
+      // a refusal keeps it open and renders a fresh notice — settle on
+      // whichever lands first, and report the refusal honestly (the caller
+      // reads the rendered copy via codexImportState().notices).
+      const settled = await waitUntil(
+        () => !codexImportDom.open() || codexImportDom.notices().join("|") !== before,
+        CODEX_IMPORT_APPLY_DEADLINE_MS,
+      );
+      if (!settled) {
+        return { ok: false, reason: "import_timeout" };
+      }
+      return !codexImportDom.open() ? { ok: true } : { ok: false, reason: "import_refused" };
     },
   };
 }

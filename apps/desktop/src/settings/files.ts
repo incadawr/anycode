@@ -39,11 +39,20 @@ import { cloneDefaults, parseSettings } from "./schema.js";
 export function normalizeActiveConnection(settings: AnycodeSettings): AnycodeSettings {
   const { connections, activeConnectionId } = settings.provider;
   const first = connections[0];
+  // Both repair arms spread the EXISTING provider block (FX3-L1 G-C): a
+  // rebuilt-from-fields block would silently drop every sibling provider
+  // field (`custom[]`, and anything a future version adds) from a repaired
+  // object that later gets persisted by a mutation.
   if (first === undefined) {
-    return activeConnectionId === undefined ? settings : { ...settings, provider: { connections } };
+    if (activeConnectionId === undefined) {
+      return settings;
+    }
+    const provider = { ...settings.provider };
+    delete provider.activeConnectionId;
+    return { ...settings, provider };
   }
   const activeExists = activeConnectionId !== undefined && connections.some((c) => c.id === activeConnectionId);
-  return activeExists ? settings : { ...settings, provider: { connections, activeConnectionId: first.id } };
+  return activeExists ? settings : { ...settings, provider: { ...settings.provider, activeConnectionId: first.id } };
 }
 
 /** ~/.anycode directory permissions (owner-only traversal). */
@@ -125,6 +134,30 @@ export interface LoadSecretsResult {
   file: SecretsFileV1;
   /** set when the on-disk secrets file was corrupt and was quarantined here. */
   corruptBackupPath?: string;
+}
+
+// ── settings-file mutation lock ──
+
+/**
+ * Per-settings-path mutation lock shared by EVERY settings.json mutator —
+ * main/settings-ipc.ts and main/provider-ipc.ts both route their whole
+ * load→modify→save critical sections through this ONE promise chain (FX3-L1
+ * G-C: each module previously held its own private per-path lock over the
+ * same file, so a `connection-*` mutation interleaved with a
+ * `custom-provider-*` mutation could load the same base and clobber each
+ * other on save). files.ts owns the primitive because it owns the file:
+ * whoever calls load/saveSettings serializes here. Keyed on `path` so unit
+ * tests with distinct scratch paths never serialize against each other.
+ */
+const settingsFileLocks = new Map<string, Promise<unknown>>();
+export function withSettingsFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const prev = settingsFileLocks.get(path) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  settingsFileLocks.set(
+    path,
+    run.catch(() => undefined),
+  );
+  return run;
 }
 
 // ── atomic write primitives ──

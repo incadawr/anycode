@@ -32,6 +32,7 @@ import type {
 } from "../../shared/protocol.js";
 import type {
   BackgroundTaskSnapshot,
+  CodexRateLimitsWire,
   CommandHookDeclaration,
   GitBranchInfo,
   GitCommitInfo,
@@ -3106,6 +3107,127 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
     expect(store.getState().notice).toEqual({
       kind: "engine_notice",
       text: "Effective sandbox is weaker than the selected preset.",
+    });
+  });
+});
+
+describe("desktop store — engine_quota / engine_session_tokens (TASK.51, cut §3.4/§5.3/§6, C-bug-1)", () => {
+  const CODEX_CAPABILITIES = {
+    supportsCorePermissions: false,
+    supportsRewind: false,
+    supportsWorkflow: false,
+    supportsGitMutations: false,
+    supportsContextUsage: true,
+    supportsContextBreakdown: false,
+    supportsInteractiveApprovals: true,
+    costAccounting: false,
+    supportsModelSelection: true,
+    supportsReasoningEffort: false,
+    supportsImages: false,
+    supportsTasks: false,
+    supportsFileSnapshots: false,
+  } as const;
+
+  function codexHostReadyWithQuota(quota: CodexRateLimitsWire | undefined): HostToUiMessage {
+    return {
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "gpt-5.6-terra",
+      sessionId: "codex-session",
+      engine: {
+        id: "codex",
+        capabilities: CODEX_CAPABILITIES,
+        ...(quota !== undefined ? { quota } : {}),
+      },
+    };
+  }
+
+  it("seeds `quota` from host_ready's engine.quota", () => {
+    const store = createDesktopStore();
+    const bootQuota = {
+      primary: { usedPercent: 35, windowDurationMins: 10_080, resetsAt: 1_784_791_993 },
+      secondary: null,
+      credits: { hasCredits: false, unlimited: false, balance: "0" },
+      planType: "plus",
+      observedAt: "2026-07-16T00:00:00.000Z",
+    };
+    store.getState().applyHostMessage(codexHostReadyWithQuota(bootQuota));
+    expect(store.getState().quota).toEqual(bootQuota);
+  });
+
+  it("`quota` stays null when host_ready carries no engine.quota (core, or an engine with no boot snapshot yet)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReadyWithQuota(undefined));
+    expect(store.getState().quota).toBeNull();
+  });
+
+  it("engine_quota REPLACES the whole quota snapshot — a field present in the FIRST push but absent from the SECOND must NOT survive (host already sparse-merged; the renderer must not re-merge)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReadyWithQuota(undefined));
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+
+    const first = {
+      primary: { usedPercent: 10, windowDurationMins: 10_080 },
+      planType: "plus",
+      credits: { hasCredits: true, unlimited: false, balance: "42" },
+      observedAt: "2026-07-16T00:00:00.000Z",
+    };
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "engine_quota", quota: first } });
+    expect(store.getState().quota).toEqual(first);
+
+    // Second push omits `planType`/`credits` — if the reducer merged instead
+    // of replacing, they would leak forward from `first`.
+    const second = {
+      primary: { usedPercent: 41, windowDurationMins: 10_080 },
+      observedAt: "2026-07-16T00:05:00.000Z",
+    };
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "engine_quota", quota: second } });
+    expect(store.getState().quota).toEqual(second);
+  });
+
+  it("RED-PROOF: engine_session_tokens REPLACES sessionTokens — a reducer that summed (accumulateSessionTokens) instead of replacing would fail this", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReadyWithQuota(undefined));
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "engine_session_tokens", input: 100, output: 20, total: 120 },
+    });
+    expect(store.getState().sessionTokens).toEqual({ input: 100, output: 20, total: 120 });
+
+    // `thread/tokenUsage/updated.total` is already cumulative on the Codex
+    // wire (cut §5.3) — this second reading must REPLACE, not add onto, the
+    // first. Summing (the accumulateSessionTokens path `finish` uses) would
+    // produce {input:250, output:50, total:300}; the correct REPLACE result
+    // is exactly the second event's own numbers.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "engine_session_tokens", input: 150, output: 30, total: 180 },
+    });
+    expect(store.getState().sessionTokens).toEqual({ input: 150, output: 30, total: 180 });
+  });
+
+  it("maps engine_session_tokens' cachedInput onto latestCacheRead/latestCacheInput", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReadyWithQuota(undefined));
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "engine_session_tokens", input: 12_000, output: 1_495, total: 13_495, cachedInput: 9_000, reasoningOutput: 300 },
+    });
+
+    expect(store.getState().sessionTokens).toEqual({
+      input: 12_000,
+      output: 1_495,
+      total: 13_495,
+      latestCacheRead: 9_000,
+      latestCacheInput: 12_000,
     });
   });
 });

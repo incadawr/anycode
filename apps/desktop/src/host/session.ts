@@ -42,6 +42,7 @@ import type {
   BackgroundTaskNotice,
   BackgroundTaskSnapshot,
   CheckpointMeta,
+  CodexRateLimitsWire,
   CommandHookDeclaration,
   FileSystemPort,
   HistoryItem,
@@ -153,6 +154,14 @@ export interface EngineSettingsSeam {
    * Optional — an engine with no two-phase ack simply has nothing pending.
    */
   pendingSnapshot?(): { model: string; activePresetId: string } | null;
+  /**
+   * The engine's latest merged subscription-quota snapshot (codex-profiles
+   * cut §6.1), read into `EnginePresentation.quota` on every `ui_ready` — a
+   * renderer reload gets the freshest snapshot without any bind-time push.
+   * Optional/null — an engine without quota reporting keeps the projection
+   * byte-identical (the field is simply absent).
+   */
+  quotaSnapshot?(): CodexRateLimitsWire | null;
 }
 
 /** Only external engines carry this additive wire projection; core stays byte-identical. */
@@ -166,6 +175,10 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
   const models = settings?.models() ?? [];
   const presets = settings?.presets() ?? [];
   const snapshot = settings?.snapshot();
+  // Codex-profiles cut §3.5/§6.1: the starting quota snapshot (additive; live
+  // updates ride `engine_quota` AgentEvents inside turns). Rebuilt on every
+  // ui_ready, so a reconnecting renderer sees everything merged so far.
+  const quota = settings?.quotaSnapshot?.() ?? null;
   return {
     id: engine.id,
     capabilities: {
@@ -187,6 +200,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
     ...(snapshot !== undefined && presets.length > 0
       ? { permissions: { presets, activePresetId: snapshot.activePresetId } }
       : {}),
+    ...(quota !== null ? { quota } : {}),
   };
 }
 

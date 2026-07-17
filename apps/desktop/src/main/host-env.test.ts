@@ -11,10 +11,17 @@ import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
+  applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
+  customKindDefaultTransport,
+  customProviderIds,
+  customProviderSecretKey,
+  customSupportedTransports,
   envOverrides,
+  findCustomProviderRecord,
+  isCustomProviderRecordId,
   isKnownSecretKey,
   resolveEffectiveTransport,
   scrubSecretEnv,
@@ -356,6 +363,194 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT emission rule (TASK.43 W5-
   });
 });
 
+describe("buildHostEnv — custom-provider route (F-G-B, cut §9.2)", () => {
+  /** Vault fake that records EVERY key it is asked for (custody assertions below). */
+  function recordingVault(secrets: Record<string, string>) {
+    const reads: string[] = [];
+    const getSecret = async (key: SecretKey): Promise<string | undefined> => {
+      reads.push(key);
+      return secrets[key];
+    };
+    return { getSecret, reads };
+  }
+
+  /** Settings with ONE active connection at `custom:abc` + its custom record (unless `record: false`). */
+  function customSettings(over: { record?: boolean; kind?: "openai-compatible" | "anthropic" | "openai"; transport?: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; connectionBaseUrl?: string } = {}): AnycodeSettings {
+    const s = settings({
+      provider: {
+        id: "custom:abc",
+        model: "my-model",
+        ...(over.transport !== undefined ? { transport: over.transport } : {}),
+        ...(over.connectionBaseUrl !== undefined ? { baseUrl: over.connectionBaseUrl } : {}),
+      },
+    });
+    if (over.record !== false) {
+      s.provider.custom = [
+        {
+          id: "custom:abc",
+          name: "My endpoint",
+          baseUrl: "https://llm.example.com/v1",
+          kind: over.kind ?? "openai-compatible",
+          models: ["my-model"],
+        },
+      ];
+    }
+    return s;
+  }
+
+  it("RED-PROOF (a): a custom:* connection carries the RECORD's baseUrl and the per-provider vault secret — never the legacy/connection credential", async () => {
+    const vault = recordingVault({ "provider.custom:abc.apiKey": "sk-custom" });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings(),
+      getSecret: vault.getSecret,
+      // A rollback to the legacy branch would take THIS credential (the active
+      // connection's key) and an EMPTY baseUrl — both asserts below go red.
+      resolveActiveCredential: async () => "sk-connection",
+    });
+    expect(env.ANYCODE_BASE_URL).toBe("https://llm.example.com/v1");
+    expect(env.ANYCODE_API_KEY).toBe("sk-custom");
+    expect(env.ANYCODE_MODEL).toBe("my-model");
+    // Custom providers are api_key by construction — never the oauth flag.
+    expect(env.ANYCODE_AUTH_MODE).toBeUndefined();
+    expect(vault.reads).toContain("provider.custom:abc.apiKey");
+  });
+
+  it("the record's baseUrl wins VERBATIM even when the connection carries its own baseUrl", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings({ connectionBaseUrl: "https://connection-level.example.com" }),
+      getSecret: recordingVault({ "provider.custom:abc.apiKey": "sk-custom" }).getSecret,
+    });
+    expect(env.ANYCODE_BASE_URL).toBe("https://llm.example.com/v1");
+  });
+
+  it("ONE shared provider key serves every connection of the provider — the connection-scoped key namespace is never consulted", async () => {
+    const vault = recordingVault({ "provider.custom:abc.apiKey": "sk-custom" });
+    const s = customSettings();
+    // Second connection of the SAME custom provider, made active: still the
+    // one `provider.custom:abc.apiKey` (design §9.2 — key per provider, not
+    // per connection).
+    s.provider.connections.push({ id: "conn-second", providerId: "custom:abc", model: "my-model" });
+    s.provider.activeConnectionId = "conn-second";
+    const env = await buildHostEnv({ bootEnv: {}, settings: s, getSecret: vault.getSecret });
+    expect(env.ANYCODE_API_KEY).toBe("sk-custom");
+    expect(vault.reads).toContain("provider.custom:abc.apiKey");
+    expect(vault.reads.filter((key) => key.startsWith("provider.connection."))).toEqual([]);
+  });
+
+  it("RED-PROOF (b): a DELETED record fails closed — keyless, baseUrl-less, and NEITHER the bare legacy key NOR the connection credential is ever read", async () => {
+    const vault = recordingVault({ "provider.apiKey": "sk-legacy" });
+    let activeCredentialCalls = 0;
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings({ record: false }),
+      getSecret: vault.getSecret,
+      // Restoring the legacy fallback would call this (or the bare
+      // `provider.apiKey` read) and boot the fork on ANOTHER account's
+      // credential — every assert below goes red against that.
+      resolveActiveCredential: async () => {
+        activeCredentialCalls += 1;
+        return "sk-connection";
+      },
+    });
+    expect(env.ANYCODE_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_BASE_URL).toBeUndefined();
+    expect(vault.reads).not.toContain("provider.apiKey");
+    expect(activeCredentialCalls).toBe(0);
+    // The custom route is decided by the id PREFIX, so the deleted-record case
+    // must not have fallen through to resolveSelection/legacy either: the only
+    // vault read permitted at all is the provider's own (absent) key.
+    expect(vault.reads.every((key) => key === "provider.custom:abc.apiKey")).toBe(true);
+  });
+
+  it("kind 'openai-compatible' mirrors the openrouter/vllm-family default: ANYCODE_PROVIDER_TRANSPORT=openai-chat-completions", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: customSettings(), getSecret: noSecret });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-chat-completions");
+  });
+
+  it("kind 'openai' mirrors the builtin openai entry's default: openai-responses", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: customSettings({ kind: "openai" }), getSecret: noSecret });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-responses");
+  });
+
+  it("kind 'anthropic' mirrors the anthropic-family emission rule: the var stays ABSENT", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: customSettings({ kind: "anthropic" }), getSecret: noSecret });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBeUndefined();
+  });
+
+  it("an explicit connection transport still wins over the kind-implied default (same ladder as builtin entries)", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: customSettings({ transport: "openai-responses" }),
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-responses");
+  });
+
+  it("the builtin `custom` SENTINEL (bare literal, no colon) keeps the legacy branch untouched", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", baseUrl: "https://legacy-base.example.com" } }),
+      getSecret: noSecret,
+      resolveActiveCredential: async () => "sk-connection",
+    });
+    // The prefix check must not overreach onto the sentinel: connection
+    // baseUrl + connection credential, byte-for-byte the pre-F-G-B path.
+    expect(env.ANYCODE_BASE_URL).toBe("https://legacy-base.example.com");
+    expect(env.ANYCODE_API_KEY).toBe("sk-connection");
+  });
+});
+
+describe("custom-provider readiness-gate exports (FX4) — RED against the exports reverting to unexported/private", () => {
+  it("customProviderSecretKey mints the SAME per-provider vault key buildHostEnv reads", () => {
+    expect(customProviderSecretKey("custom:abc")).toBe("provider.custom:abc.apiKey");
+  });
+
+  // W4-R1-M1 belt (defense-in-depth, second layer behind the schema `custom:`
+  // refine): a custom-provider vault key must derive ONLY from the `custom:`
+  // namespace. A cross-namespace id — a `connection.<victim>` connection key or
+  // a bare catalog id — is refused fail-closed, so it can never mint
+  // `provider.connection.<victim>.apiKey` / `provider.anthropic.apiKey` and
+  // read a foreign namespace's secret. (The renderer-reachable fetch-models
+  // exfil path is already closed one layer up by the schema drop; this belt
+  // guards the readiness-gate callers in index.ts / settings-ipc.ts.)
+  it("W4-R1-M1: customProviderSecretKey refuses a cross-namespace id (throws) — a foreign vault key can never be derived", () => {
+    expect(() => customProviderSecretKey("connection.victim")).toThrow();
+    expect(() => customProviderSecretKey("anthropic")).toThrow();
+    expect(() => customProviderSecretKey("provider.apiKey")).toThrow();
+    // The legitimate custom:* namespace still mints exactly as before.
+    expect(customProviderSecretKey("custom:abc")).toBe("provider.custom:abc.apiKey");
+  });
+
+  it("isCustomProviderRecordId distinguishes a `custom:*` record id from the builtin `custom` sentinel and any catalog id", () => {
+    expect(isCustomProviderRecordId("custom:abc")).toBe(true);
+    expect(isCustomProviderRecordId("custom")).toBe(false);
+    expect(isCustomProviderRecordId("anthropic")).toBe(false);
+  });
+
+  it("findCustomProviderRecord finds the record by id and returns undefined once deleted", () => {
+    const withRecord = settings({ provider: { id: "custom:abc", model: "m" } });
+    withRecord.provider.custom = [
+      { id: "custom:abc", name: "My endpoint", baseUrl: "https://llm.example.com/v1", kind: "openai-compatible", models: [] },
+    ];
+    expect(findCustomProviderRecord(withRecord, "custom:abc")?.baseUrl).toBe("https://llm.example.com/v1");
+    expect(findCustomProviderRecord(settings(), "custom:abc")).toBeUndefined();
+  });
+
+  it("customKindDefaultTransport mirrors the builtin catalog family defaults per kind", () => {
+    expect(customKindDefaultTransport("anthropic")).toBe("anthropic-messages");
+    expect(customKindDefaultTransport("openai")).toBe("openai-responses");
+    expect(customKindDefaultTransport("openai-compatible")).toBe("openai-chat-completions");
+  });
+
+  it("customSupportedTransports mirrors the builtin catalog family's supported-transport list per kind", () => {
+    expect(customSupportedTransports("anthropic")).toEqual(["anthropic-messages"]);
+    expect(customSupportedTransports("openai")).toEqual(["openai-responses", "openai-chat-completions"]);
+    expect(customSupportedTransports("openai-compatible")).toEqual(["openai-chat-completions", "openai-responses"]);
+  });
+});
+
 describe("resolveEffectiveTransport — the ONE transport ladder authority (TASK.43 W5-FIX)", () => {
   it("nonblank env wins over settings and default (source env)", () => {
     expect(
@@ -630,6 +825,36 @@ describe("applySubagentsHomeOverride (dispatch-parity fix, design/slice-P7.21-cu
   });
 });
 
+describe("applyCodexProfilesHomeOverride (codex-profiles W4-F0b, Fable ruling iter-10)", () => {
+  it("sets ANYCODE_CODEX_PROFILES_HOME when given a non-null (main-vetted) override", () => {
+    const env: NodeJS.ProcessEnv = {};
+    applyCodexProfilesHomeOverride(env, "/tmp/anycode-lever-root");
+    expect(env.ANYCODE_CODEX_PROFILES_HOME).toBe("/tmp/anycode-lever-root");
+  });
+
+  it("RED-proof (main-scrub): deletes ANYCODE_CODEX_PROFILES_HOME on a null override, even when the env already carried it", () => {
+    const env: NodeJS.ProcessEnv = { ANYCODE_CODEX_PROFILES_HOME: "/tmp/stale-ambient-value" };
+    applyCodexProfilesHomeOverride(env, null);
+    expect(env.ANYCODE_CODEX_PROFILES_HOME).toBeUndefined();
+  });
+
+  it("composes with buildHostEnv: the bootEnv-spread hazard is REAL, and the gated-null scrub removes it", async () => {
+    const hostEnv = await buildHostEnv({
+      bootEnv: { ANYCODE_API_KEY: "sk-live", ANYCODE_CODEX_PROFILES_HOME: "/tmp/ambient-from-owner-shell" },
+      settings: settings(),
+      getSecret: noSecret,
+    });
+    // Without the scrub, the raw ambient var rides the bootEnv spread straight
+    // into the host fork — this assertion documents the hazard the delete
+    // branch exists to close.
+    expect(hostEnv.ANYCODE_CODEX_PROFILES_HOME).toBe("/tmp/ambient-from-owner-shell");
+    // Gate refused (no automation / packaged) ⇒ structural delete.
+    applyCodexProfilesHomeOverride(hostEnv, null);
+    expect(hostEnv.ANYCODE_CODEX_PROFILES_HOME).toBeUndefined();
+    expect(hostEnv.ANYCODE_API_KEY).toBe("sk-live");
+  });
+});
+
 describe("secretEnvFor (slice 2.5 §4, replaces SECRET_KEY_ENV)", () => {
   it("maps the legacy key to ANYCODE_API_KEY, byte-for-byte 2.2", () => {
     expect(secretEnvFor("provider.apiKey")).toBe("ANYCODE_API_KEY");
@@ -663,5 +888,45 @@ describe("isKnownSecretKey (slice 2.5 §4, generalises SECRET_KEYS)", () => {
     expect(isKnownSecretKey("provider.z-ai.token", catalogIds)).toBe(false);
     expect(isKnownSecretKey("anything.else", catalogIds)).toBe(false);
     expect(isKnownSecretKey("", catalogIds)).toBe(false);
+  });
+});
+
+describe("customProviderIds (owner-decision #6, cut §9.2, TASK.54)", () => {
+  it("returns every id in settings.provider.custom", () => {
+    const withCustom: AnycodeSettings = {
+      ...settings(),
+      provider: {
+        ...settings().provider,
+        custom: [
+          { id: "custom:foo", name: "Foo", baseUrl: "https://foo.example", kind: "openai-compatible", models: [] },
+          { id: "custom:bar", name: "Bar", baseUrl: "https://bar.example", kind: "anthropic", models: ["m1"] },
+        ],
+      },
+    };
+    expect(customProviderIds(withCustom)).toEqual(["custom:foo", "custom:bar"]);
+  });
+
+  it("returns an empty array when settings.provider.custom is absent", () => {
+    expect(customProviderIds(settings())).toEqual([]);
+  });
+
+  // RED-PROOF: this is exactly the seam TASK.54 flags at main/index.ts — a
+  // custom provider's vault key is only recognized once its id is unioned
+  // into `catalogIds`. Reverting to `catalogProviderIds()` alone (no union)
+  // reproduces this red case.
+  it("RED-PROOF: a custom provider's secret key is unknown until its id is unioned into catalogIds", () => {
+    const withCustom: AnycodeSettings = {
+      ...settings(),
+      provider: {
+        ...settings().provider,
+        custom: [{ id: "custom:foo", name: "Foo", baseUrl: "https://foo.example", kind: "openai-compatible", models: [] }],
+      },
+    };
+    const builtinOnly = ["anthropic", "z-ai"];
+    // Without the union (today's `catalogProviderIds()` call site), the key is invisible.
+    expect(isKnownSecretKey("provider.custom:foo.apiKey", builtinOnly)).toBe(false);
+    // With the union `customProviderIds` provides, it resolves correctly.
+    const unioned = [...builtinOnly, ...customProviderIds(withCustom)];
+    expect(isKnownSecretKey("provider.custom:foo.apiKey", unioned)).toBe(true);
   });
 });

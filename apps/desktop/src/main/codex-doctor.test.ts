@@ -4,7 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { CodexRpcClient, buildDoctorChildEnv, runCodexDoctor } from "./codex-doctor.js";
+import { CodexRpcClient, buildDoctorChildEnv, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
+import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
+import type { CodexSupportManifest } from "../shared/codex-support.js";
+import type { ResolvedCodexProfile } from "./codex-profiles.js";
+
+/** A syntactically valid manifest with one arbitrary supported range — the doctor must follow IT, not any hardcode. */
+function narrowManifest(range: string): CodexSupportManifest {
+  return {
+    schemaVersion: "anycode.codex-support.v1",
+    updatedAt: "2026-07-16T00:00:00Z",
+    supported: [{ range, status: "tested" }],
+    recommended: "0.145.0",
+    minimum: "0.144.0",
+  };
+}
 
 const fixturePath = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mjs", import.meta.url));
 
@@ -89,34 +103,162 @@ describe("runCodexDoctor", () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
     expect(report.status).toBe("ready");
     expect(report.version).toBe("0.144.3");
-    expect(report.account).toEqual({ type: "chatgpt", plan: "plus" });
+    expect(report.account).toEqual({ type: "chatgpt", email: "sentinel-custody@example.com", plan: "plus" });
+    expect(report.requiresOpenaiAuth).toBe(true);
     expect(report.models).toEqual([
       { id: "gpt-fake-1", label: "Fake One", efforts: ["low", "high"] },
       { id: "gpt-fake-2", label: "Fake Two" },
     ]);
   });
 
-  it("never carries the account email — only type/plan cross the doctor boundary (custody)", async () => {
+  it("carries the account email ONLY under account.email — never in any other report field (custody §4.4, OG-4 reversal)", async () => {
+    // The old "email never crosses the doctor boundary" invariant was
+    // DELIBERATELY reversed by codex-profiles cut §4.4: the email now flows
+    // to main memory + the renderer projection. What remains forbidden is the
+    // email leaking into anything persisted or diagnostic — settings.json
+    // custody is asserted in codex-ipc.test.ts; here: no other report field.
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
-    expect(report.account).toBeDefined();
-    expect(Object.keys(report.account ?? {})).toEqual(["type", "plan"]);
-    expect(JSON.stringify(report)).not.toContain("@example.com");
+    expect(report.account).toEqual({ type: "chatgpt", email: "sentinel-custody@example.com", plan: "plus" });
+    const { account: _account, ...rest } = report;
+    expect(JSON.stringify(rest)).not.toContain("sentinel-custody@example.com");
   });
 
-  it("reports signed_out when account/read returns a null account", async () => {
+  it("reports signed_out when account/read returns a null account and auth IS required (automat row 6)", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--signed-out"]) });
-    expect(report).toEqual({ status: "signed_out", version: "0.144.3" });
+    expect(report).toEqual({ status: "signed_out", version: "0.144.3", requiresOpenaiAuth: true, supportedRange: ">=0.144.0 <0.145.0" });
+  });
+
+  it("reports READY when account is null but requiresOpenaiAuth is false (automat row 7 — the api-key/bedrock config.toml setup)", async () => {
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--no-auth-required"]) });
+    expect(report.status).toBe("ready");
+    expect(report.account).toBeNull();
+    expect(report.requiresOpenaiAuth).toBe(false);
+    expect(report.models?.length).toBeGreaterThan(0);
+  });
+
+  it("reports signed_out (fail-closed) when account is null and requiresOpenaiAuth is ABSENT from the wire (automat row 8)", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--signed-out", "--no-requires-field"]),
+    });
+    expect(report).toEqual({ status: "signed_out", version: "0.144.3", supportedRange: ">=0.144.0 <0.145.0" });
+  });
+
+  it("reports ready for an apiKey account that has no planType (automat row 5 — ANY union variant)", async () => {
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--api-key-account"]) });
+    expect(report.status).toBe("ready");
+    expect(report.account).toEqual({ type: "apiKey" });
+  });
+
+  it("projects the live-shaped rate-limit snapshot (windows verbatim, byLimitId kept, reset-credit blob dropped)", async () => {
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
+    expect(report.rateLimits).toBeDefined();
+    expect(report.rateLimits?.primary).toEqual({ usedPercent: 12, windowDurationMins: 10080, resetsAt: 1784791993 });
+    expect(report.rateLimits?.secondary).toBeNull();
+    expect(report.rateLimits?.planType).toBe("plus");
+    expect(report.rateLimits?.credits).toEqual({ hasCredits: false, unlimited: false, balance: "0" });
+    expect(report.rateLimits?.byLimitId?.codex?.primary?.usedPercent).toBe(12);
+    expect(typeof report.rateLimits?.observedAt).toBe("string");
+    expect(JSON.stringify(report.rateLimits)).not.toContain("rateLimitResetCredits");
+  });
+
+  it("M2b: a byLimitId-only response (no top-level rateLimits mirror) still surfaces the single bucket's primary/secondary at the top level (amended §A3.3, byte-identical to the host decoder)", async () => {
+    const projected = projectCodexRateLimits(
+      {
+        rateLimitsByLimitId: {
+          codex: { primary: { usedPercent: 42, windowDurationMins: 10080 }, secondary: null, planType: "plus" },
+        },
+      },
+      "2026-07-16T00:00:00.000Z",
+    );
+    expect(projected?.primary).toEqual({ usedPercent: 42, windowDurationMins: 10080 });
+    expect(projected?.secondary).toBeNull();
+    expect(projected?.planType).toBe("plus");
+    expect(projected?.byLimitId?.codex?.primary?.usedPercent).toBe(42);
+  });
+
+  it("M2b: falls back to the top-level mirror when MORE THAN ONE bucket is present — no single bucket is canonical", async () => {
+    const projected = projectCodexRateLimits(
+      {
+        rateLimits: { primary: { usedPercent: 7 } },
+        rateLimitsByLimitId: {
+          codex: { primary: { usedPercent: 42 } },
+          "second-window": { primary: { usedPercent: 99 } },
+        },
+      },
+      "2026-07-16T00:00:00.000Z",
+    );
+    expect(projected?.primary).toEqual({ usedPercent: 7 });
+    expect(projected?.byLimitId?.codex?.primary?.usedPercent).toBe(42);
+    expect(projected?.byLimitId?.["second-window"]?.primary?.usedPercent).toBe(99);
+  });
+
+  it("stays ready when account/rateLimits/read fails — quotas are advisory, never a readiness gate", async () => {
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--no-rate-limits"]) });
+    expect(report.status).toBe("ready");
+    expect(report.rateLimits).toBeUndefined();
   });
 
   it("reports update_required for a version outside the supported range, without spawning app-server at all", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--bad-version"]) });
-    expect(report).toEqual({ status: "update_required", version: "0.99.0" });
+    expect(report).toEqual({ status: "update_required", version: "0.99.0", supportedRange: ">=0.144.0 <0.145.0" });
   });
 
   it("reports error for unparseable version output", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--malformed-version"]) });
     expect(report.status).toBe("error");
     expect(report.error).toMatch(/version/i);
+  });
+
+  it("judges the version against the MANIFEST policy, not a hardcoded range (cut §7.1: истина — манифест)", async () => {
+    // The fixture reports 0.144.3; a manifest that excludes it must flip the
+    // verdict without any code change — that is the whole point of TASK.53.
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(),
+      versionPolicy: { manifest: narrowManifest(">=0.145.0 <0.146.0"), riskAcceptedVersions: [] },
+    });
+    expect(report.status).toBe("update_required");
+    expect(report.version).toBe("0.144.3");
+    expect(report.supportedRange).toBe(">=0.145.0 <0.146.0");
+  });
+
+  it("proceeds to a full doctor pass for an out-of-range version the user risk-accepted (§7.4)", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(),
+      versionPolicy: { manifest: narrowManifest(">=0.145.0 <0.146.0"), riskAcceptedVersions: ["0.144.3"] },
+    });
+    expect(report.status).toBe("ready");
+    expect(report.version).toBe("0.144.3");
+    expect(report.supportedRange).toBe(">=0.145.0 <0.146.0");
+  });
+
+  it("still refuses a version below the compiled floor even when risk-accepted AND admitted by the manifest (red-proof: floor holds at the doctor)", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--bad-version"]),
+      versionPolicy: { manifest: narrowManifest(">=0.1.0 <99.0.0"), riskAcceptedVersions: ["0.99.0"] },
+    });
+    expect(report.status).toBe("update_required");
+    expect(report.version).toBe("0.99.0");
+  });
+
+  it("defaults its policy to the module-level active policy — a risk acceptance recorded there is honored with no option plumbing", async () => {
+    try {
+      setActiveCodexVersionPolicy({ manifest: narrowManifest(">=0.145.0 <0.146.0"), riskAcceptedVersions: ["0.144.3"] });
+      const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
+      expect(report.status).toBe("ready");
+      expect(report.supportedRange).toBe(">=0.145.0 <0.146.0");
+    } finally {
+      resetActiveCodexVersionPolicy();
+    }
+  });
+
+  it("stamps supportedRange onto ready reports so the renderer never hardcodes the range string", async () => {
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
+    expect(report.status).toBe("ready");
+    expect(report.supportedRange).toBe(">=0.144.0 <0.145.0");
   });
 
   it("bounds a hung version preflight with its own timeout, never the overall watchdog", async () => {
@@ -183,6 +325,88 @@ describe("runCodexDoctor", () => {
     // termination signal it doesn't wait to confirm.
     expect(await waitUntilDead(grandchildPid)).toBe(true);
   }, 15_000);
+});
+
+describe("runCodexDoctor + profiles (cut §2.6/§4 — the CODEX_HOME injection gate)", () => {
+  const PROFILE: ResolvedCodexProfile = {
+    id: "acc1",
+    codexHome: "/home/dev/.anycode/codex/profile-acc1",
+    linked: false,
+  };
+  const GUARD_OK = (): { ok: true } => ({ ok: true });
+
+  /** Records every spawned child's env so the test can assert what ACTUALLY reached the child, per spawn (preflight AND app-server). */
+  function envCapturingSpawn(captured: Array<NodeJS.ProcessEnv | undefined>) {
+    return (_command: string, args: readonly string[], options: SpawnOptions): ChildProcess => {
+      captured.push(options.env as NodeJS.ProcessEnv | undefined);
+      return spawn(process.execPath, [fixturePath, ...args], options);
+    };
+  }
+
+  it("OVERWRITES an ambient CODEX_HOME with the profile home in EVERY spawned child's env (hazard §14.6: ambient is set)", async () => {
+    const captured: Array<NodeJS.ProcessEnv | undefined> = [];
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: envCapturingSpawn(captured),
+      // The hazard-§14.6 shape: WITHOUT an ambient value in the source env this
+      // test would pass on a passthrough implementation too.
+      env: { HOME: "/home/dev", PATH: "/usr/bin", CODEX_HOME: "/home/dev/.codex-ambient-hijack" },
+      profile: PROFILE,
+      profileGuard: GUARD_OK,
+    });
+    expect(report.status).toBe("ready");
+    // Both children — the --version preflight and the app-server — got the profile home.
+    expect(captured).toHaveLength(2);
+    for (const env of captured) {
+      expect(env?.CODEX_HOME).toBe("/home/dev/.anycode/codex/profile-acc1");
+    }
+  });
+
+  it("leaves CODEX_HOME inherited (byte-identical passthrough) for the system pseudo-profile and for no profile at all", async () => {
+    for (const profile of [undefined, { id: "system", linked: false } as ResolvedCodexProfile]) {
+      const captured: Array<NodeJS.ProcessEnv | undefined> = [];
+      const report = await runCodexDoctor("/fake/codex", {
+        trust: TRUSTED,
+        spawnImpl: envCapturingSpawn(captured),
+        env: { HOME: "/home/dev", PATH: "/usr/bin", CODEX_HOME: "/home/dev/.codex-custom" },
+        ...(profile !== undefined ? { profile } : {}),
+      });
+      expect(report.status).toBe("ready");
+      for (const env of captured) {
+        expect(env?.CODEX_HOME).toBe("/home/dev/.codex-custom");
+      }
+    }
+  });
+
+  it("stamps profileId onto the report for a profile run, and leaves it absent for system", async () => {
+    const withProfile = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(),
+      profile: PROFILE,
+      profileGuard: GUARD_OK,
+    });
+    expect(withProfile.profileId).toBe("acc1");
+
+    const systemRun = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
+    expect(systemRun.profileId).toBeUndefined();
+  });
+
+  it("a refusing home guard yields status error WITHOUT spawning anything (fail-closed, cut §2.5)", async () => {
+    const spawnSpy: Array<string> = [];
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: (_command, args, options) => {
+        spawnSpy.push(args.join(" "));
+        return spawn(process.execPath, [fixturePath, ...args], options);
+      },
+      profile: PROFILE,
+      profileGuard: () => ({ ok: false, reason: "profile home is world-writable" }),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toMatch(/world-writable/);
+    expect(report.profileId).toBe("acc1");
+    expect(spawnSpy).toEqual([]);
+  });
 });
 
 describe("CodexRpcClient", () => {

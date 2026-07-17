@@ -115,11 +115,13 @@ import {
   SETTINGS_SET_CHANNEL,
 } from "../shared/settings.js";
 import type {
+  CodexProfileRecord,
   ConnectionCheckRequest,
   ConnectionCreateRequest,
   ConnectionDeleteRequest,
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
+  CustomProviderRecord,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -171,6 +173,26 @@ const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
 const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
 const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
+// TASK.50 (codex-profiles cut §2/§4, amended §A1): the profile control-plane
+// channels — main/codex-ipc.ts holds the byte-identical source of truth, same
+// duplicated-literal convention as the four channels above.
+const CODEX_PROFILE_LIST_CHANNEL = "anycode:codex-profile-list";
+const CODEX_PROFILE_CREATE_CHANNEL = "anycode:codex-profile-create";
+const CODEX_PROFILE_DELETE_CHANNEL = "anycode:codex-profile-delete";
+const CODEX_PROFILE_SET_ACTIVE_CHANNEL = "anycode:codex-profile-set-active";
+const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
+// TASK.53 (codex-profiles cut §7, amended §A4): the binary/manifest control
+// plane — main/codex-install.ts holds the byte-identical source of truth.
+const CODEX_INSTALL_CHANNEL = "anycode:codex-install";
+const CODEX_RISK_ACCEPT_CHANNEL = "anycode:codex-risk-accept";
+const CODEX_SUPPORT_STATUS_CHANNEL = "anycode:codex-support-status";
+const CODEX_MANIFEST_REFRESH_CHANNEL = "anycode:codex-manifest-refresh";
+// TASK.52 (codex-profiles cut §8.8, lane W3-H): the rollout-import control
+// plane — main/codex-rollout-ipc.ts holds the byte-identical source of truth,
+// same duplicated-literal convention as every other channel above.
+const CODEX_ROLLOUT_LIST_CHANNEL = "anycode:codex-rollout-list";
+const CODEX_ROLLOUT_PREVIEW_CHANNEL = "anycode:codex-rollout-preview";
+const CODEX_ROLLOUT_IMPORT_CHANNEL = "anycode:codex-rollout-import";
 // TASK.45 W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
 // (main/settings-ipc.ts) persists a real request outcome's advisory health
 // deliberately WITHOUT firing the normal `onMutation` broadcast (health must
@@ -181,11 +203,19 @@ const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
 // "duplicated on purpose" precedent as `ENGINES_CHANGED_CHANNEL` above
 // (main/index.ts holds the byte-identical source of truth).
 const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
+// TASK.54 (cut §9.2/§13.1): the custom OpenAI-compatible model-provider CRUD
+// + guarded models-fetch channels — main/provider-ipc.ts holds the
+// byte-identical source of truth, same "duplicated on purpose" convention as
+// every other channel literal in this file.
+const CUSTOM_PROVIDER_CREATE_CHANNEL = "anycode:custom-provider-create";
+const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";
+const CUSTOM_PROVIDER_DELETE_CHANNEL = "anycode:custom-provider-delete";
+const CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL = "anycode:custom-provider-fetch-models";
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
   binaryPath: string | null;
-  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
 }
 
@@ -196,6 +226,136 @@ export type CodexPickBinaryResult =
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+
+// TASK.50 (codex-profiles cut §2/§4, amended §A1): duplicated from
+// main/codex-ipc.ts's own `CodexProfilesSnapshot`/`CodexProfileCreateResult`/
+// `CodexProfileGuardResult` — same "shared/** froze read-only after C0"
+// reasoning as the onboarding shapes above. `CodexProfileRecord` itself IS a
+// frozen shared/** type, imported (never edited) above.
+export interface CodexProfilesSnapshot {
+  profiles: Array<{ profile: CodexProfileRecord; report?: CodexDoctorReport }>;
+  activeProfileId: string;
+}
+
+export interface CodexProfileCreateRequest {
+  label: string;
+  authLink?: string;
+  linkedHome?: string;
+}
+
+export type CodexProfileCreateResult =
+  | { ok: true; profile: CodexProfileRecord }
+  | { ok: false; reason: "invalid" | "limit" | "failed"; message?: string };
+
+export type CodexProfileGuardResult = { ok: true } | { ok: false; reason: string };
+
+// TASK.53 (codex-profiles cut §7, amended §A4): duplicated from
+// main/codex-install.ts's own `CodexInstallControllerResult`/`supportStatus`/
+// `refreshManifest` return shapes.
+export type CodexInstallResult =
+  | { ok: true; version: string; binaryPath: string; report: CodexDoctorReport }
+  | { ok: false; error: string };
+
+export interface CodexSupportStatusResult {
+  supportedRange: string;
+  recommended: string;
+  riskAcceptedVersions: string[];
+}
+
+export interface CodexManifestRefreshResult {
+  source: "network" | "cache" | "bundled";
+  supportedRange: string;
+}
+
+// TASK.52 (codex-profiles cut §8.8): duplicated from main/codex-rollout-ipc.ts's
+// own `CodexRolloutEntry`/`CodexRolloutListResult`/`CodexRolloutPreviewResult`/
+// `CodexRolloutImportResult` (same "shared/** froze read-only after C0"
+// reasoning as every other Codex shape above). `CodexRolloutImportReportView`
+// is a DELIBERATELY NARROWER duplicate of main's own `RolloutImportReport`
+// (main/codex-rollout.ts): it omits `items` (`HistoryItem[]`, an
+// `@anycode/core` type this sandboxed CJS bundle never imports) — the
+// renderer only ever displays the preview's stats/warnings/meta, never the
+// raw imported history, which reaches its tab the same way any other
+// resumed session's history does (the normal `session_history` wire message,
+// not this preview channel).
+export interface CodexRolloutEntry {
+  fileName: string;
+  sizeBytes: number;
+  mtimeMs: number;
+  cwd?: string;
+  firstUserMessage?: string;
+}
+
+export type CodexRolloutListResult =
+  | { ok: true; rollouts: CodexRolloutEntry[] }
+  | { ok: false; reason: "profile_not_found" | "not_readable" };
+
+export interface CodexRolloutImportStats {
+  messages: number;
+  toolPairs: number;
+  reasoningDropped: number;
+  developerDropped: number;
+  imagesDropped: number;
+  orphansSynthesized: number;
+  collapsedToText: number;
+  malformedLines: number;
+  unknownRecordsSkipped: number;
+  unknownItemsSkipped: number;
+  unknownPartsSkipped: number;
+}
+
+export interface CodexRolloutImportReportView {
+  stats: CodexRolloutImportStats;
+  meta: { cwd?: string; cliVersion?: string; model?: string; startedAt?: string };
+  warnings: string[];
+}
+
+export type CodexRolloutPreviewResult =
+  | { ok: true; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
+
+export type CodexRolloutImportResult =
+  | { ok: true; sessionId: string; workspace: string; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
+
+// TASK.54 (cut §9.2/§13.1): duplicated from main/provider-ipc.ts's own
+// `CustomProviderMutationResult`/`FetchModelsOutcome`/handle*-request shapes
+// (same "shared/** froze read-only after C0" reasoning as the Codex shapes
+// above). `CustomProviderRecord` itself IS a frozen shared/** type, imported
+// above.
+export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "needs_api_key" | "weak_storage_needs_consent";
+export type CustomProviderMutationResult =
+  | { ok: true; providers: CustomProviderRecord[] }
+  | { ok: false; reason: CustomProviderMutationReason };
+
+export type FetchModelsFailureReason =
+  | "invalid_request"
+  | "invalid_url"
+  | "redirect_blocked"
+  | "http_error"
+  | "response_too_large"
+  | "timeout"
+  | "network_error"
+  | "invalid_response";
+
+export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
+
+export interface CustomProviderCreateRequest {
+  name: string;
+  baseUrl: string;
+  kind: CustomProviderRecord["kind"];
+  apiKey: string;
+  models?: string[];
+}
+
+export interface CustomProviderUpdateRequest {
+  id: string;
+  name?: string;
+  baseUrl?: string;
+  kind?: CustomProviderRecord["kind"];
+  apiKey?: string;
+  models?: string[];
+}
 
 // §3.1: forward the main-side payload as-is. The port envelope carries
 // { tabId, workspace }, the host-exited envelope carries { tabId }; preload just
@@ -279,14 +439,54 @@ contextBridge.exposeInMainWorld("anycode", {
   // (custody, cut §2(g)) — every result carries only status/version/account
   // type+plan, never a raw auth value.
   codex: {
-    recheck: (): Promise<CodexOnboardingSnapshot> =>
-      ipcRenderer.invoke(CODEX_RECHECK_CHANNEL) as Promise<CodexOnboardingSnapshot>,
+    // `profileId` (TASK.50, cut §4.2): omitted diagnoses/signs into the
+    // ACTIVE profile — main's own default, unchanged for every pre-existing
+    // caller of these two methods.
+    recheck: (profileId?: string): Promise<CodexOnboardingSnapshot> =>
+      ipcRenderer.invoke(CODEX_RECHECK_CHANNEL, profileId ? { profileId } : undefined) as Promise<CodexOnboardingSnapshot>,
     pickBinary: (): Promise<CodexPickBinaryResult> =>
       ipcRenderer.invoke(CODEX_PICK_BINARY_CHANNEL) as Promise<CodexPickBinaryResult>,
-    loginStart: (): Promise<CodexLoginStartResult> =>
-      ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL) as Promise<CodexLoginStartResult>,
+    loginStart: (profileId?: string): Promise<CodexLoginStartResult> =>
+      ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL, profileId ? { profileId } : undefined) as Promise<CodexLoginStartResult>,
     loginCancel: (): Promise<void> =>
       ipcRenderer.invoke(CODEX_LOGIN_CANCEL_CHANNEL) as Promise<void>,
+    // TASK.50 (cut §2/§4): the profile control-plane — settings/fs mutations
+    // only, no spawns. No credential value ever crosses this bridge in either
+    // direction (custody, cut §4.4) — `listProfiles` carries only the
+    // persisted record (id/label/createdAt/linkedHome/authLink/lastCheck)
+    // plus the in-memory doctor report (status/version/account/rateLimits),
+    // never a token.
+    listProfiles: (): Promise<CodexProfilesSnapshot> =>
+      ipcRenderer.invoke(CODEX_PROFILE_LIST_CHANNEL) as Promise<CodexProfilesSnapshot>,
+    createProfile: (request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_CREATE_CHANNEL, request) as Promise<CodexProfileCreateResult>,
+    deleteProfile: (id: string): Promise<CodexProfileGuardResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_DELETE_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
+    setActiveProfile: (id: string): Promise<CodexProfileGuardResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_SET_ACTIVE_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
+    repairProfileLink: (id: string): Promise<CodexProfileGuardResult> =>
+      ipcRenderer.invoke(CODEX_PROFILE_REPAIR_LINK_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
+    // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
+    install: (version?: string): Promise<CodexInstallResult> =>
+      ipcRenderer.invoke(CODEX_INSTALL_CHANNEL, version ? { version } : undefined) as Promise<CodexInstallResult>,
+    acceptRisk: (version: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(CODEX_RISK_ACCEPT_CHANNEL, { version }) as Promise<{ ok: boolean; error?: string }>,
+    supportStatus: (): Promise<CodexSupportStatusResult> =>
+      ipcRenderer.invoke(CODEX_SUPPORT_STATUS_CHANNEL) as Promise<CodexSupportStatusResult>,
+    manifestRefresh: (): Promise<CodexManifestRefreshResult> =>
+      ipcRenderer.invoke(CODEX_MANIFEST_REFRESH_CHANNEL) as Promise<CodexManifestRefreshResult>,
+    // TASK.52 (cut §8.8): the rollout-import control plane — a profile's
+    // sessions dir is resolved main-side from `profileId` alone, never a
+    // renderer-supplied path (`main/codex-rollout-ipc.ts`'s own path custody).
+    // `rolloutImport`'s `model` is the ONE piece of new-session identity the
+    // renderer supplies — the whole point of the feature is continuing an
+    // imported conversation on a different model (cut §8.8).
+    rolloutList: (profileId: string): Promise<CodexRolloutListResult> =>
+      ipcRenderer.invoke(CODEX_ROLLOUT_LIST_CHANNEL, { profileId }) as Promise<CodexRolloutListResult>,
+    rolloutPreview: (profileId: string, fileName: string): Promise<CodexRolloutPreviewResult> =>
+      ipcRenderer.invoke(CODEX_ROLLOUT_PREVIEW_CHANNEL, { profileId, fileName }) as Promise<CodexRolloutPreviewResult>,
+    rolloutImport: (profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult> =>
+      ipcRenderer.invoke(CODEX_ROLLOUT_IMPORT_CHANNEL, { profileId, fileName, model }) as Promise<CodexRolloutImportResult>,
   },
   settings: {
     get: (): Promise<SettingsSnapshot> =>
@@ -341,6 +541,25 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.on(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
       return () => ipcRenderer.removeListener(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
     },
+  },
+  // TASK.54 (cut §9.2/§13.1): `customProvider.*` — four thin invoke wrappers
+  // over the custom OpenAI-compatible model-provider CRUD + guarded
+  // `/v1/models` preview fetch (main owns the URL/redirect/body-cap threat
+  // model + vault custody in main/provider-ipc.ts). No credential ever
+  // crosses back — every result carries only the persisted record (never a
+  // key); `create`/`update` are the only two directions a plaintext key ever
+  // travels, main-bound, exactly once per call.
+  customProvider: {
+    create: (req: CustomProviderCreateRequest): Promise<CustomProviderMutationResult> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_CREATE_CHANNEL, req) as Promise<CustomProviderMutationResult>,
+    update: (req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_UPDATE_CHANNEL, req) as Promise<CustomProviderMutationResult>,
+    delete: (req: { id: string }): Promise<CustomProviderMutationResult> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_DELETE_CHANNEL, req) as Promise<CustomProviderMutationResult>,
+    fetchModels: (
+      req: { id: string } | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
+    ): Promise<FetchModelsOutcome> =>
+      ipcRenderer.invoke(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, req) as Promise<FetchModelsOutcome>,
   },
   // P7.19/F22 W2 (design/slice-P7.19-cut.md §3/§4): `mcpConfig.*` — five more
   // thin invoke wrappers over the MCP config-management channels (main owns

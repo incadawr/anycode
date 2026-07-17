@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import { ipcMain } from "electron";
 import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
-import { loadSettings, saveSettings } from "../settings/files.js";
+import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
 import {
   CONNECTION_CHECK_CHANNEL,
@@ -61,7 +61,12 @@ import type {
 import {
   computeProviderReady,
   connectionSecretKey,
+  customKindDefaultTransport,
+  customProviderSecretKey,
+  customSupportedTransports,
   envOverrides,
+  findCustomProviderRecord,
+  isCustomProviderRecordId,
   isKnownSecretKey,
   resolveEffectiveTransport,
 } from "./host-env.js";
@@ -153,24 +158,16 @@ function defaultConnectionId(): string {
 }
 
 /**
- * Per-settings-file mutation lock (§2.2). Every mutating handler's
- * load→modify→save→snapshot critical section runs through this promise-chain so
- * two interleaved `ipcMain.handle` handlers can never both load the same base and
- * clobber each other on save (main is the sole writer). Keyed on `settingsPath`
- * so unit tests with distinct scratch paths never serialize against each other.
- * The interactive OAuth flow stays OUTSIDE the lock — only its metadata section
- * is serialized (a minutes-long browser login must not freeze all settings IPC).
+ * Per-settings-file mutation lock (§2.2): the shared `withSettingsFileLock`
+ * from settings/files.ts — ONE lock per settingsPath across this module AND
+ * main/provider-ipc.ts (FX3-L1 G-C: two private per-module locks over the
+ * same file serialized nothing against each other). Every mutating handler's
+ * load→modify→save→snapshot critical section runs through it so two
+ * interleaved `ipcMain.handle` handlers can never both load the same base and
+ * clobber each other on save (main is the sole writer). The interactive OAuth
+ * flow stays OUTSIDE the lock — only its metadata section is serialized (a
+ * minutes-long browser login must not freeze all settings IPC).
  */
-const settingsLocks = new Map<string, Promise<unknown>>();
-function withSettingsLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
-  const prev = settingsLocks.get(path) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  settingsLocks.set(
-    path,
-    run.catch(() => undefined),
-  );
-  return run;
-}
 
 /**
  * Whether two providerIds share the credential bucket. `custom` ≡ bare-legacy
@@ -338,6 +335,14 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
  * its own connection key (`provider.connection.<id>.{apiKey,oauth}`).
  * `undefined` when there is no active connection — `computeProviderReady` then
  * uses its legacy `provider.apiKey` default (unset on a fresh install).
+ *
+ * FX4: a `custom:*` providerId routes at the custom provider's OWN shared
+ * vault key (`provider.<custom-id>.apiKey`) instead of the connection key —
+ * mirrors index.ts's `activeCredential` and `buildHostEnv`'s custom-provider
+ * route, neither of which ever reads the connection key for a custom id.
+ * Deliberately NO record look-up: a deleted custom provider still yields its
+ * (now-orphaned) secret key, so the vault read naturally comes back unset and
+ * the fail-closed default gate does the rest.
  */
 function activeCredential(deps: SettingsIpcDeps, settings: AnycodeSettings): SecretKey | undefined {
   const connection = activeConnection(settings);
@@ -345,6 +350,9 @@ function activeCredential(deps: SettingsIpcDeps, settings: AnycodeSettings): Sec
     return undefined;
   }
   const providerId = connection.providerId;
+  if (isCustomProviderRecordId(providerId)) {
+    return customProviderSecretKey(providerId);
+  }
   // custom/bare-legacy and every catalog entry are api_key today; an oauth
   // provider (dormant in v1 catalog) uses the connection's oauth key.
   const kind = providerId === "" ? "api_key" : deps.authKindFor?.(providerId) ?? "api_key";
@@ -360,6 +368,16 @@ function activeCredential(deps: SettingsIpcDeps, settings: AnycodeSettings): Sec
  * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
  * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`: a key is
  * only ever mandatory on `anthropic-messages`).
+ *
+ * FX4: a `custom:*` providerId with a live record resolves its OWN kind-implied
+ * ladder (`customKindDefaultTransport`/`customSupportedTransports`, mirroring
+ * index.ts's `selectedTransportInfo` and `buildHostEnv`'s custom-provider
+ * route) BEFORE `deps.catalog` is even consulted — that projection only ever
+ * holds builtin entries, so it would otherwise fall through to the generic
+ * no-catalog-entry branch below (no supported-transport guard, `authOptional`
+ * always false, wrongly blocking a keyless openai-family custom provider). A
+ * deleted record falls through unchanged to that same generic fail-closed
+ * branch.
  */
 function selectedTransportInfo(
   deps: SettingsIpcDeps,
@@ -373,6 +391,34 @@ function selectedTransportInfo(
     resolveEffectiveTransport({ bootEnv: deps.bootEnv, settingsTransport: view.transport }).value;
   if (id === undefined || id.trim() === "") {
     return { authOptional: false, resolvedTransport: resolveLegacy() };
+  }
+  const customRecord = isCustomProviderRecordId(id) ? findCustomProviderRecord(settings, id) : undefined;
+  if (customRecord !== undefined) {
+    // resolvedTransport is always defined here: customKindDefaultTransport
+    // always supplies a defaultTransport rung, so resolveEffectiveTransport's
+    // ladder never falls through to "unset".
+    const resolvedTransport = resolveEffectiveTransport({
+      bootEnv: deps.bootEnv,
+      settingsTransport: view.transport,
+      defaultTransport: customKindDefaultTransport(customRecord.kind),
+    }).value;
+    return {
+      authOptional: resolvedTransport !== "anthropic-messages",
+      resolvedTransport,
+      supportedTransports: customSupportedTransports(customRecord.kind),
+    };
+  }
+  if (isCustomProviderRecordId(id)) {
+    // W4-R3-1: a `custom:*` id with NO live record (deleted while a connection
+    // still names it — e.g. removed via the generic settings-patch channel,
+    // which skips handleCustomProviderDelete's clear-first, leaving an orphaned
+    // vault key). `buildHostEnv` fail-closes here (neither baseUrl nor key), so
+    // readiness MUST be false even if that orphaned key or ANYCODE_API_KEY is
+    // present. An empty supportedTransports set trips computeProviderReady's
+    // transport guard — but only when resolvedTransport is defined, so pin a
+    // non-empty sentinel when neither env nor the connection selects one (a bare
+    // resolveLegacy() can be undefined, which would SKIP the guard entirely).
+    return { authOptional: false, resolvedTransport: resolveLegacy() ?? "custom-provider-deleted", supportedTransports: [] };
   }
   const entry: CatalogSummaryEntry | undefined = deps.catalog?.find((e) => e.id === id);
   if (entry === undefined) {
@@ -480,7 +526,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     return { ok: false, reason: "invalid" };
   }
 
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -547,7 +593,7 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
   if (connMatch === null) {
     return { ok: false, reason: "invalid" }; // legacy-shaped key: no longer a write target
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -605,7 +651,7 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
   if (connMatch === null) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -639,7 +685,7 @@ export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promis
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -708,7 +754,7 @@ export async function handleOAuthStart(deps: SettingsIpcDeps, raw: unknown): Pro
   // (metadata-first, created + activated when the provider has none yet). ONLY
   // this metadata section is serialized — the interactive flow (minutes of
   // browser login) runs OUTSIDE the lock so it never freezes settings IPC.
-  const prep: OAuthStartPrep = await withSettingsLock(deps.settingsPath, async () => {
+  const prep: OAuthStartPrep = await withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { readOnly: true as const };
@@ -877,7 +923,7 @@ export async function applyConnectionHealthEvent(
     at: (deps.now ?? defaultNowIso)(),
     ...(event.kind === "failure" ? { safeCode: event.code } : {}),
   };
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return false;
@@ -950,7 +996,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
   if (!(deps.catalogIds ?? []).includes(req.providerId)) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -968,7 +1014,11 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     };
     const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
     const activeConnectionId = shouldActivate ? id : loaded.settings.provider.activeConnectionId;
+    // Spread the loaded provider block (FX3-L1 G-C): rebuilding it from named
+    // fields would silently drop every sibling field (`custom[]`, and anything
+    // a future version adds) from the persisted file on every create.
     const provider: ProviderSettingsV2 = {
+      ...loaded.settings.provider,
       connections: [...loaded.settings.provider.connections, connection],
       ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
     };
@@ -988,7 +1038,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     return { ok: false, reason: "invalid" };
   }
   const req = parsed.data;
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -1056,7 +1106,7 @@ export async function handleConnectionSetActive(deps: SettingsIpcDeps, raw: unkn
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -1095,7 +1145,7 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  return withSettingsLock(deps.settingsPath, async () => {
+  return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
@@ -1145,10 +1195,20 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
         loaded.settings.provider.activeConnectionId === id
           ? remaining[0]?.id
           : loaded.settings.provider.activeConnectionId;
+      // Spread the loaded provider block (FX3-L1 G-C): rebuilding it from
+      // named fields would silently drop `custom[]` (orphaning its vault
+      // secrets) from the persisted file on every delete. When the LAST
+      // connection is removed the stale spread-carried activeConnectionId
+      // must be deleted explicitly — the conditional spread alone cannot
+      // remove a key the base spread already put there.
       const provider: ProviderSettingsV2 = {
+        ...loaded.settings.provider,
         connections: remaining,
         ...(activeConnectionId !== undefined ? { activeConnectionId } : {}),
       };
+      if (activeConnectionId === undefined) {
+        delete provider.activeConnectionId;
+      }
       // W11-FIX3: the tombstone's commit signal is the durable save resolving,
       // NOT the composite persistProvider resolving. A post-save throw below
       // (snapshot/emit) must NOT revert the tombstone — the metadata is

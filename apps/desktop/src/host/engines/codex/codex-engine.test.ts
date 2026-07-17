@@ -187,6 +187,8 @@ class FakeAppServer implements CodexClient {
   private rejectedInterrupts = 0;
   private acceptedInterrupts = 0;
   account: unknown = { type: "chatgpt" };
+  /** Undefined = the field is absent on the wire, matching most live responses. */
+  requiresOpenaiAuth: boolean | undefined = undefined;
   /**
    * Catalog pages, keyed by cursor ("" = first page). Modelled on the LIVE
    * `model/list` result (fixture w1-p4): `{data:[Model…], nextCursor}`, where each
@@ -228,6 +230,24 @@ class FakeAppServer implements CodexClient {
   };
   /** `model/list` failure mode: the boot must survive it (empty catalog, no model override). */
   modelListFails = false;
+  /**
+   * `account/rateLimits/read` result (codex-profiles cut §6.1 boot pull). The
+   * default mirrors the LIVE W0-R1 probe shape: one populated window,
+   * `secondary` present-but-null, single-bucket `byLimitId` duplicate.
+   */
+  rateLimitsResult: unknown = {
+    rateLimits: {
+      limitId: "codex",
+      limitName: null,
+      primary: { usedPercent: 35, windowDurationMins: 10_080, resetsAt: 1_784_791_993 },
+      secondary: null,
+      credits: { hasCredits: false, unlimited: false, balance: "0" },
+      planType: "plus",
+      rateLimitReachedType: null,
+    },
+  };
+  /** Quota pull failure mode: the boot must survive it (no quota block, session usable). */
+  rateLimitsReadFails = false;
   /** The effective-settings echo appended to thread/start and thread/resume responses. */
   threadEcho: Record<string, unknown> = {
     approvalPolicy: "on-request",
@@ -286,7 +306,16 @@ class FakeAppServer implements CodexClient {
   }
 
   private answer<T>(method: string, params?: unknown): Promise<T> {
-    if (method === "account/read") return Promise.resolve({ account: this.account } as T);
+    if (method === "account/read") {
+      return Promise.resolve({
+        account: this.account,
+        ...(this.requiresOpenaiAuth !== undefined ? { requiresOpenaiAuth: this.requiresOpenaiAuth } : {}),
+      } as T);
+    }
+    if (method === "account/rateLimits/read") {
+      if (this.rateLimitsReadFails) return Promise.reject(new Error("app-server request failed: rate limits unavailable"));
+      return Promise.resolve(this.rateLimitsResult as T);
+    }
     if (method === "model/list") return this.answerModelList<T>(params);
     if (method === "thread/start") {
       // THE GREEN-BY-MOCK GUARD (live fact L7, fixture w1-p6): the real
@@ -399,7 +428,19 @@ describe("CodexEngine — native session boot", () => {
     expect(created).toMatchObject({ threadId: "fresh-thread", model: "gpt-native" });
     // TASK.39: the catalog is read BEFORE thread/start, so the first model id the
     // host could ever put on the wire is already validatable by then (L7).
-    expect(server.calls.map((call) => call.method)).toEqual(["initialize", "account/read", "model/list", "thread/start"]);
+    // Codex-profiles cut §6.1: the quota pull runs AFTER the thread exists.
+    expect(server.calls.map((call) => call.method)).toEqual([
+      "initialize",
+      "account/read",
+      "model/list",
+      "thread/start",
+      "account/rateLimits/read",
+    ]);
+    // Params discipline (amendment §A3.7, schema-mandated, live-verified):
+    // `account/read` REQUIRES `params: {}`; `account/rateLimits/read` is called
+    // WITHOUT a params key at all. Never "unified".
+    expect(server.calls.find((call) => call.method === "account/read")?.params).toEqual({});
+    expect(server.calls.find((call) => call.method === "account/rateLimits/read")?.params).toBeUndefined();
 
     server.calls.length = 0;
     const resumed = await resumeNativeCodexSession(server, "/work", "persisted-thread");
@@ -410,6 +451,7 @@ describe("CodexEngine — native session boot", () => {
       "model/list",
       "thread/resume",
       "thread/read",
+      "account/rateLimits/read",
     ]);
     expect(server.calls.find((call) => call.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
   });
@@ -419,6 +461,21 @@ describe("CodexEngine — native session boot", () => {
     server.account = null;
     await expect(createNativeCodexSession(server, "/work")).rejects.toThrow(CODEX_NOT_SIGNED_IN);
     expect(server.calls.map((call) => call.method)).toEqual(["initialize", "account/read"]);
+  });
+
+  it("H4: a null account with requiresOpenaiAuth:false is a READY api-key/bedrock profile (doctor row 7), not signed-out", async () => {
+    const server = new FakeAppServer();
+    server.account = null;
+    server.requiresOpenaiAuth = false;
+    const created = await createNativeCodexSession(server, "/work");
+    expect(created).toMatchObject({ threadId: "fresh-thread" });
+  });
+
+  it("H4: a null account WITHOUT requiresOpenaiAuth still refuses (row 8, fail-closed)", async () => {
+    const server = new FakeAppServer();
+    server.account = null;
+    server.requiresOpenaiAuth = undefined;
+    await expect(createNativeCodexSession(server, "/work")).rejects.toThrow(CODEX_NOT_SIGNED_IN);
   });
 
   it("bounds every boot RPC and surfaces a comprehensible timeout", async () => {
@@ -476,6 +533,165 @@ describe("CodexEngine — turn projection", () => {
 
     expect(turn.events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
     expect(turn.events.some((event) => event.type === "error")).toBe(false);
+  });
+
+  /**
+   * Codex-profiles cut §6.4 red-proof: quota pushes (`account/rateLimits/
+   * updated`, account-scoped — NO threadId on the wire) and `remoteControl/
+   * status/changed` (amendment §A3.8 benign list) must be dropped BEFORE the
+   * PRE_TURN_NOTIFICATION_LIMIT counter. Rolled back to a shape that buffers/
+   * counts threadless notifications, 300 pushes exceed the 256 limit and this
+   * turn terminates with "exceeded the pre-turn notification limit" — the
+   * no-error assertions below go red.
+   */
+  it("never counts quota pushes or remoteControl chatter toward the pre-turn limit (cut §6.4)", async () => {
+    const server = new FakeAppServer();
+    server.turnStartMode = "deferred";
+    const engine = new CodexEngine(server, THREAD);
+    const turn = drive(engine, "hi", new AbortController().signal);
+    // Phase A has no active turn yet (turn/start is deferred), so this waits
+    // on the raw parked flag rather than waitForParkedIterator.
+    const parked = async (): Promise<void> => {
+      for (let i = 0; i < 500; i += 1) {
+        if (server.stream.parked) return;
+        await tick(1);
+      }
+      throw new Error("the phase-A consumer never re-parked");
+    };
+    await parked();
+
+    // Every push waits until the phase-A consumer has actually PROCESSED it
+    // (the iterator re-parked). Without this, pushes outpace the loop, queue
+    // past phase A into phase B, and the >LIMIT count never traverses the
+    // filter under test — the red-proof would be blunt.
+    for (let i = 0; i < 300; i += 1) {
+      server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: i % 100 } } } });
+      await parked();
+      server.stream.push({ method: "remoteControl/status/changed", params: { status: "disabled" } });
+      await parked();
+    }
+    server.releaseTurnStart();
+    await tick();
+    server.completeTurn("completed");
+    await turn.done;
+
+    expect(turn.events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+    expect(turn.events.some((event) => event.type === "error")).toBe(false);
+  });
+});
+
+describe("CodexEngine — capabilities (C-bug-1, cut §5.2)", () => {
+  it("advertises provider-fed context usage but NOT a per-category breakdown", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    // The engine's translator genuinely reports provider usage from
+    // thread/tokenUsage/updated — the false flag was the whole defect: data
+    // flowed and the renderer gate killed it.
+    expect(engine.capabilities.supportsContextUsage).toBe(true);
+    // Codex has no per-category breakdown; advertising one would make the
+    // popover render a skeleton it can never fill (cut §5.2.2 keeps it false).
+    expect(engine.capabilities.supportsContextBreakdown).toBe(false);
+    expect(engine.capabilities.costAccounting).toBe(false);
+  });
+});
+
+describe("CodexEngine — subscription quota (TASK.51, cut §6)", () => {
+  it("seeds the session quota from the boot pull and exposes it for EnginePresentation.quota", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(engine.quotaSnapshot()).toMatchObject({
+      primary: { usedPercent: 35, windowDurationMins: 10_080, resetsAt: 1_784_791_993 },
+      credits: { hasCredits: false, unlimited: false, balance: "0" },
+      planType: "plus",
+      observedAt: expect.any(String),
+    });
+  });
+
+  it("boots WITHOUT quota when the pull fails — quota is additive, never boot-fatal", async () => {
+    const server = new FakeAppServer();
+    server.rateLimitsReadFails = true;
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(engine.quotaSnapshot()).toBeNull();
+  });
+
+  it("resume pulls the quota too (cut §5.4: quotas are available immediately, the ctx meter is not)", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await resumeNativeCodexSession(server, "/work", "persisted-thread");
+    expect(engine.quotaSnapshot()).toMatchObject({ planType: "plus" });
+  });
+
+  it("a live sparse push during a turn emits engine_quota with the MERGED snapshot and advances quotaSnapshot()", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work");
+    const engine = connected.engine;
+    const turn = drive(engine, "hi", new AbortController().signal);
+    await tick();
+
+    // The push carries ONLY a fresher primary; planType/credits are omitted —
+    // the sparse merge must keep them from the boot pull (cut §6.3). A
+    // translator building the snapshot from the push alone loses them: red.
+    server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 41, windowDurationMins: 10_080 } } } });
+    await tick();
+    // completeTurn() addresses the bare-test THREAD constant; this engine
+    // booted the fake's "fresh-thread", so the terminal line is pushed directly.
+    server.stream.push({ method: "turn/completed", params: { threadId: connected.threadId, turn: { id: server.turnId, status: "completed" } } });
+    await turn.done;
+
+    const quotaEvents = turn.events.filter((event) => event.type === "engine_quota");
+    expect(quotaEvents).toHaveLength(1);
+    expect(quotaEvents[0]).toMatchObject({
+      type: "engine_quota",
+      quota: {
+        primary: { usedPercent: 41 },
+        planType: "plus",
+        credits: { hasCredits: false, unlimited: false, balance: "0" },
+      },
+    });
+    expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 41 }, planType: "plus" });
+  });
+
+  it("a quota push BETWEEN turns advances quotaSnapshot() — not frozen until the next in-turn push (R2-M1)", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    // Boot pull seeded primary=35%. NO turn is active, so the per-turn
+    // TurnTranslator — today's only tracker writer — does not exist; and the
+    // push is account-scoped (no threadId), so it never survives the per-turn
+    // queue's this-thread filter either. It must STILL advance the session
+    // tracker off the transport tap, or the ui_ready snapshot stays stale until
+    // a push happens to land mid-turn (cut §6.1 "advanced by every live push").
+    expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 35 }, planType: "plus" });
+
+    server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 77, windowDurationMins: 10_080 } } } });
+    await tick();
+
+    // Sparse merge keeps planType from the boot pull; primary advanced to the push.
+    expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 77 }, planType: "plus" });
+  });
+
+  it("quota pushes AFTER a turn completes still advance the tracker; the last of several wins (R2-M1)", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work");
+    const engine = connected.engine;
+
+    // Run one full turn so the engine returns to the between-turns state — and,
+    // critically, so the Phase-B loop leaves a waiter armed on the notification
+    // queue (codex-engine.ts re-arms `next` BEFORE delivering each event). That
+    // orphaned waiter swallows the FIRST post-turn notification bytes-and-all.
+    const turn = drive(engine, "hi", new AbortController().signal);
+    await tick();
+    server.stream.push({ method: "turn/completed", params: { threadId: connected.threadId, turn: { id: server.turnId, status: "completed" } } });
+    await turn.done;
+
+    // Two pushes arrive back-to-back with no turn active: the first is eaten by
+    // the orphaned waiter, the second merely buffers unread — yet the tracker
+    // must reflect the LAST, because the transport tap sees BOTH regardless of
+    // the queue. On today's code it stays frozen on the boot value: RED.
+    server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 60, windowDurationMins: 10_080 } } } });
+    await tick();
+    server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 88, windowDurationMins: 10_080 } } } });
+    await tick();
+
+    expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 88 }, planType: "plus" });
   });
 });
 

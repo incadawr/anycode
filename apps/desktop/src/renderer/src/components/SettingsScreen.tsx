@@ -70,6 +70,7 @@ import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
+  CustomProviderRecord,
   ProviderConnection,
   ProviderTransportId,
   SecretKey,
@@ -80,6 +81,14 @@ import type {
   SettingsSnapshot,
 } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
+import type {
+  CustomProviderCreateRequest,
+  CustomProviderMutationReason,
+  CustomProviderMutationResult,
+  CustomProviderUpdateRequest,
+  FetchModelsFailureReason,
+  FetchModelsOutcome,
+} from "../anycode-window.js";
 import type { WireEnvStatus, WireRepoMapStatus } from "../../../shared/protocol.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { applyThemePreference } from "../theme.js";
@@ -308,6 +317,100 @@ export function transportOptions(selectedEntry: CatalogSummaryEntry | undefined)
   return selectedEntry?.supportedTransports ?? ALL_TRANSPORTS;
 }
 
+// ── custom model-provider pure helpers (owner-decision #6, cut §9.2, TASK.54) ──
+//
+// `CustomProviderBridge`'s request/result shapes mirror main/provider-ipc.ts's
+// handle* functions structurally (that module owns the actual CRUD/fetch
+// logic + the URL/redirect/body-cap threat model; this file only renders and
+// never re-implements any of it). The request/result/reason types are
+// imported from the frozen ambient `anycode-window.d.ts` (already the single
+// declared shape of `window.anycode.customProvider` — preload/index.ts mirrors
+// the same shapes by contract, per that file's own header), and
+// `CustomProviderBridge` below is a structural alias of the ambient bridge
+// itself rather than a hand-copied interface — either kind of drift between
+// this file and the ambient type now fails typecheck instead of compiling
+// silently past a stale local copy.
+
+export type CustomProviderBridge = Window["anycode"]["customProvider"];
+
+const CUSTOM_PROVIDER_KIND_LABEL: Record<CustomProviderRecord["kind"], string> = {
+  "openai-compatible": "OpenAI-compatible (Chat Completions)",
+  openai: "OpenAI (Responses)",
+  anthropic: "Anthropic Messages",
+};
+
+export function customProviderKindLabel(kind: CustomProviderRecord["kind"]): string {
+  return CUSTOM_PROVIDER_KIND_LABEL[kind];
+}
+
+/** List-row summary line for one saved custom provider — never renders a key (there is none to render, custody by construction). */
+export function describeCustomProvider(record: CustomProviderRecord): string {
+  const count = record.models.length;
+  const modelsText = count === 0 ? "no models selected" : count === 1 ? "1 model" : `${count} models`;
+  return `${record.baseUrl} · ${modelsText}`;
+}
+
+const CUSTOM_PROVIDER_MUTATION_ERROR_TEXT: Record<CustomProviderMutationReason, string> = {
+  invalid: "Check the name, base URL, and API key and try again.",
+  read_only: "Settings are read-only (a newer version wrote settings.json) — nothing was saved.",
+  not_found: "That custom provider no longer exists.",
+  // FX3-L1 G-A origin-rebind guard: main refuses a cross-origin baseUrl
+  // change unless the request re-presents the API key (the stored key is
+  // bound to the origin it was entered for).
+  needs_api_key: "Changing the provider's address requires re-entering its API key — nothing was saved.",
+  weak_storage_needs_consent:
+    "This machine has no secure keychain for storing the key — accept weak storage under Security to save it here.",
+};
+
+/** User-facing text for a refused custom-provider mutation. */
+export function describeCustomProviderMutationError(reason: CustomProviderMutationReason): string {
+  return CUSTOM_PROVIDER_MUTATION_ERROR_TEXT[reason];
+}
+
+const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
+  invalid_request: "That request was invalid.",
+  invalid_url: "Only https:// URLs (or http:// on localhost) are allowed.",
+  redirect_blocked: "That endpoint redirected to a different address — refused for safety.",
+  http_error: "The endpoint returned an error response.",
+  response_too_large: "The endpoint's response was too large.",
+  timeout: "The endpoint did not respond in time.",
+  network_error: "Could not reach that endpoint.",
+  invalid_response: "The endpoint's response wasn't a recognizable models list.",
+};
+
+/** User-facing text for a failed `/v1/models` fetch. */
+export function describeFetchModelsError(reason: FetchModelsFailureReason): string {
+  return FETCH_MODELS_ERROR_TEXT[reason];
+}
+
+/** Toggles `id` in a checkbox-list selection, preserving the existing order. */
+export function toggleSelectedModel(selected: readonly string[], id: string): string[] {
+  return selected.includes(id) ? selected.filter((m) => m !== id) : [...selected, id];
+}
+
+/**
+ * Shapes the create-request payload from the form's local state, or
+ * `undefined` when a required field is blank — a client-side gate before the
+ * IPC round-trip (main's zod schema is still the final validator, same
+ * "belt and suspenders" relationship `buildToolsPatch` has with its own
+ * server-side counterpart).
+ */
+export function buildCustomProviderCreateRequest(input: {
+  name: string;
+  baseUrl: string;
+  kind: CustomProviderRecord["kind"];
+  apiKey: string;
+  selectedModels: readonly string[];
+}): CustomProviderCreateRequest | undefined {
+  const name = input.name.trim();
+  const baseUrl = input.baseUrl.trim();
+  const apiKey = input.apiKey.trim();
+  if (name === "" || baseUrl === "" || apiKey === "") {
+    return undefined;
+  }
+  return { name, baseUrl, kind: input.kind, apiKey, models: [...input.selectedModels] };
+}
+
 // ── auto-updater pure helpers (slice 2.6 §6) ──
 
 /** Human-readable status line for the Updates section / global banner — renders only what `UpdateStatus` already carries (version/percent/message), never anything else. */
@@ -518,6 +621,262 @@ export function resolveReplaceKeyAction(
   return { kind: "oauthStart", providerId: connection.providerId, connectionId: connection.id };
 }
 
+/**
+ * Reaches for `window.anycode.customProvider` (owner-decision #6, cut §9.2,
+ * TASK.54) — already part of the frozen ambient `Window.anycode` type
+ * (anycode-window.d.ts), so no cast is needed; resolved LAZILY (never touched
+ * at module load), same discipline `settings-store.ts`'s `realBridge()` uses.
+ */
+function customProviderBridge(): CustomProviderBridge {
+  return window.anycode.customProvider;
+}
+
+export interface CustomProvidersSectionProps {
+  providers: readonly CustomProviderRecord[];
+  readOnly: boolean;
+  /** Called after any successful mutation so the caller can reload the snapshot (`store.getState().load()`). */
+  onChanged: () => void;
+  /** Injectable for tests / isolation; defaults to the real `window.anycode.customProvider`. */
+  bridge?: CustomProviderBridge;
+}
+
+/**
+ * Custom OpenAI-compatible model-provider management (owner-decision #6, cut
+ * §9.2, TASK.54): a list of saved endpoints (name/baseUrl/model count) each
+ * with a Delete action, plus an "Add custom provider" form (name/baseUrl/
+ * kind/key) whose "Fetch models" step calls main (the renderer never holds a
+ * key long enough to call an arbitrary origin itself) and renders the
+ * returned ids as checkboxes — only the CHECKED subset is what `Save` sends
+ * on to `customProviderCreate`, becoming the record's curated `models[]`.
+ * CUSTODY: the apiKey field lives only as long as the form stays open — every
+ * path that CLOSES the form (Cancel, or a successful Save) clears it via
+ * `resetForm`. `doFetchModels` and a Save refusal deliberately do NOT clear
+ * it: the flow is two-step (enter key -> Fetch models -> pick models ->
+ * Save), so the key must survive in state until Save actually succeeds, and
+ * a refusal must leave it in place so the user can retry without retyping
+ * it. This is NOT `secretFieldReducer`'s "submitted always clears" rule —
+ * that convention fits a one-shot drawer field, not this two-step flow.
+ * Either way this component never receives a decrypted key back
+ * (`CustomProviderMutationResult`/`FetchModelsOutcome` structurally cannot
+ * carry one).
+ */
+function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: CustomProvidersSectionProps) {
+  const [formOpen, setFormOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [kind, setKind] = useState<CustomProviderRecord["kind"]>("openai-compatible");
+  const [apiKey, setApiKey] = useState("");
+  const [fetchedModels, setFetchedModels] = useState<{ id: string }[] | null>(null);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function resolvedBridge(): CustomProviderBridge {
+    return bridge ?? customProviderBridge();
+  }
+
+  function resetForm(): void {
+    setName("");
+    setBaseUrl("");
+    setKind("openai-compatible");
+    setApiKey("");
+    setFetchedModels(null);
+    setSelectedModels([]);
+    setFormOpen(false);
+  }
+
+  async function doFetchModels(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const trimmedKey = apiKey.trim();
+      const outcome = await resolvedBridge().fetchModels({
+        baseUrl: baseUrl.trim(),
+        kind,
+        ...(trimmedKey !== "" ? { apiKey: trimmedKey } : {}),
+      });
+      if (!outcome.ok) {
+        setError(describeFetchModelsError(outcome.reason));
+        return;
+      }
+      setFetchedModels(outcome.models);
+      setSelectedModels(outcome.models.map((m) => m.id));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function save(): Promise<void> {
+    const req = buildCustomProviderCreateRequest({ name, baseUrl, kind, apiKey, selectedModels });
+    if (req === undefined) {
+      setError("Name, base URL, and API key are all required.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await resolvedBridge().create(req);
+      if (!result.ok) {
+        setError(describeCustomProviderMutationError(result.reason));
+        return;
+      }
+      resetForm();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await resolvedBridge().delete({ id });
+      if (!result.ok) {
+        setError(describeCustomProviderMutationError(result.reason));
+        return;
+      }
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-title">Custom providers</div>
+      {providers.length === 0 && (
+        <p className="connection-grid-empty">No custom endpoints yet.</p>
+      )}
+      {providers.length > 0 && (
+        <ul className="connection-grid" role="list" aria-label="Custom providers">
+          {providers.map((p) => (
+            <li role="listitem" key={p.id}>
+              <div className="settings-field-row">
+                <span>
+                  {p.name} — {customProviderKindLabel(p.kind)}
+                </span>
+                <span>{describeCustomProvider(p)}</span>
+                <button
+                  type="button"
+                  className="settings-button settings-button-danger"
+                  disabled={readOnly || busy}
+                  onClick={() => void remove(p.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error !== null && (
+        <p className="settings-notice" role="alert">
+          {error}
+        </p>
+      )}
+      {!formOpen ? (
+        <button type="button" className="settings-button" disabled={readOnly} onClick={() => setFormOpen(true)}>
+          + Add custom provider
+        </button>
+      ) : (
+        <>
+          <label className="settings-field">
+            <span className="settings-field-label">Name</span>
+            <input
+              className="settings-field-input"
+              type="text"
+              value={name}
+              disabled={busy}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <label className="settings-field">
+            <span className="settings-field-label">Base URL</span>
+            <input
+              className="settings-field-input"
+              type="text"
+              placeholder="https://api.example.com"
+              value={baseUrl}
+              disabled={busy}
+              onChange={(e) => {
+                // A previously fetched model list belongs to the endpoint
+                // that was live when Fetch ran — changing the address
+                // invalidates it, otherwise Save could persist a curated
+                // models[] against a different endpoint's URL.
+                setBaseUrl(e.target.value);
+                setFetchedModels(null);
+                setSelectedModels([]);
+              }}
+            />
+          </label>
+          <label className="settings-field">
+            <span className="settings-field-label">Kind</span>
+            <select
+              className="settings-field-select"
+              value={kind}
+              disabled={busy}
+              onChange={(e) => {
+                setKind(e.target.value as CustomProviderRecord["kind"]);
+                setFetchedModels(null);
+                setSelectedModels([]);
+              }}
+            >
+              <option value="openai-compatible">{customProviderKindLabel("openai-compatible")}</option>
+              <option value="openai">{customProviderKindLabel("openai")}</option>
+              <option value="anthropic">{customProviderKindLabel("anthropic")}</option>
+            </select>
+          </label>
+          <label className="settings-field">
+            <span className="settings-field-label">API key</span>
+            <input
+              className="settings-field-input"
+              type="password"
+              autoComplete="off"
+              value={apiKey}
+              disabled={busy}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+          </label>
+          <div className="settings-field-row">
+            <button
+              type="button"
+              className="settings-button"
+              disabled={busy || baseUrl.trim() === ""}
+              onClick={() => void doFetchModels()}
+            >
+              Fetch models
+            </button>
+          </div>
+          {fetchedModels !== null && (
+            <fieldset className="settings-field">
+              <legend className="settings-field-label">Models to show in the selector</legend>
+              {fetchedModels.map((m) => (
+                <label key={m.id} className="settings-field-row">
+                  <input
+                    type="checkbox"
+                    checked={selectedModels.includes(m.id)}
+                    onChange={() => setSelectedModels((prev) => toggleSelectedModel(prev, m.id))}
+                  />
+                  {m.id}
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <div className="settings-field-row">
+            <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void save()}>
+              Save
+            </button>
+            <button type="button" className="settings-button" disabled={busy} onClick={resetForm}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export interface ProviderSettingsProps {
   /** Injectable for tests / isolation; defaults to the app's singleton settings-store. */
   store?: SettingsStoreApi;
@@ -708,6 +1067,12 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
           <p className="connection-grid-empty">No connections yet — add one to start a session.</p>
         )}
       </section>
+
+      <CustomProvidersSection
+        providers={snapshot.settings.provider.custom ?? []}
+        readOnly={readOnly}
+        onChanged={() => void store.getState().load()}
+      />
 
       <ConnectionDrawer
         open={drawerOpen}

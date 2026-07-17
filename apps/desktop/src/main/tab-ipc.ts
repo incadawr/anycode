@@ -60,6 +60,19 @@ export type ResumePinResult =
   | { ok: true; connectionId?: string; release?: () => void }
   | { ok: false; connectionId: string };
 
+/**
+ * Resolution of an opaque Codex profile id — the draft's pick on a `new`
+ * request, or a resumed session's persisted `codexProfileId` (codex-profiles
+ * cut §3.3, W3-F) — into the argv facts main/tabs.ts's `createTab` forwards.
+ * `codexProfile` absent on the `ok` branch means the `system` pseudo-profile
+ * (byte-identical ambient CODEX_HOME, main/tabs.ts's own `null` default).
+ * `ok: false` is a fail-closed refusal (deleted/invalid registry id) — the
+ * caller must never silently fall back to spawning on the ambient account.
+ */
+export type ResolveCodexProfileResult =
+  | { ok: true; codexProfile?: { id?: string; home?: string; authLink?: string } }
+  | { ok: false };
+
 export interface TabIpcDeps {
   manager: TabHostManager;
   /**
@@ -84,6 +97,33 @@ export interface TabIpcDeps {
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
    */
   resolveResumePin?(meta: SessionMeta): Promise<ResumePinResult>;
+  /**
+   * Resolves an opaque Codex profile id against main's profile registry
+   * (codex-profiles cut §3.3, W3-F) — called with a `new` request's draft
+   * pick, or a resumed session's persisted `codexProfileId`. Absent = profile
+   * resolution disabled (legacy wiring / unit fixtures); a request/session
+   * carrying a profile id then REFUSES fail-closed (see handleCreate) rather
+   * than silently spawning on the ambient account.
+   */
+  resolveCodexProfile?(profileId: string): Promise<ResolveCodexProfileResult>;
+  /**
+   * Reads WITHOUT deleting the model a rollout import pinned for a session (S4-1
+   * arm 2, W4-F1; L4·1 peek-then-confirm). The FIRST resume of an imported session
+   * PEEKS this to stamp it over the fork env's ANYCODE_MODEL so the tab boots on the
+   * user's picked model, not the active connection's default (§8.8). The pick is
+   * burned via `consumePendingImportModel` ONLY after createTab succeeds, so a
+   * refused/aborted resume leaves it intact for a later retry. Absent = disabled
+   * (legacy wiring / unit fixtures); a `new` request never consults it, and a
+   * non-imported resume finds no entry — both byte-identical to pre-S4-1.
+   */
+  peekPendingImportModel?(sessionId: string): string | undefined;
+  /**
+   * Consumes (reads-and-deletes) the pick previously surfaced by
+   * `peekPendingImportModel`, called ONLY after a successful createTab on the
+   * resume path (L4·1 peek-then-confirm) so consume-once triggers on the commit,
+   * never on a refused attempt. Absent = disabled (legacy wiring / unit fixtures).
+   */
+  consumePendingImportModel?(sessionId: string): string | undefined;
 }
 
 /** exported for tests (tab-ipc.test.ts): the fail-closed request schema. */
@@ -96,6 +136,10 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
     // job (its own live catalog / frozen preset table), never main's.
     engineModel: z.string().min(1).max(128).optional(),
     enginePreset: z.string().min(1).max(128).optional(),
+    // Codex-profiles W3-F: bounds only (a hostile-length string) — main
+    // resolves the id against its own registry (resolveCodexProfile), never
+    // trusts it directly, same discipline as engineModel/enginePreset above.
+    codexProfileId: z.string().min(1).max(128).optional(),
   }),
   z.object({
     kind: z.literal("resume"),
@@ -140,8 +184,28 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // notice.
   if (req.kind === "new") {
     const engine = req.engine ?? "core";
-    if (!deps.manager.canSpawn(engine)) {
+    // Codex-profiles S3-1: gate on the draft's PICKED profile (raw renderer id —
+    // a pure cache lookup, unknown ⇒ fail-closed refuse; identity authority stays
+    // with resolveCodexProfile below), so a ready non-active pick spawns even when
+    // the active account is signed out. Absent id ⇒ the active profile answers.
+    if (!deps.manager.canSpawn(engine, req.codexProfileId)) {
       return { ok: false, reason: "not_ready" };
+    }
+    // Codex-profiles W3-F: resolve the draft's profile pick BEFORE prompting
+    // (same "never make the user pick a folder for a refused request"
+    // reasoning as the atCapacity guard below). A profile id with no resolver
+    // wired, or one the registry refuses, is a fail-closed "not_ready" — NEVER
+    // a silent fallback onto the ambient (`system`) account.
+    let codexProfile: { id?: string; home?: string; authLink?: string } | undefined;
+    if (req.codexProfileId !== undefined) {
+      if (deps.resolveCodexProfile === undefined) {
+        return { ok: false, reason: "not_ready" };
+      }
+      const resolved = await deps.resolveCodexProfile(req.codexProfileId);
+      if (!resolved.ok) {
+        return { ok: false, reason: "not_ready" };
+      }
+      codexProfile = resolved.codexProfile;
     }
     // Guard capacity BEFORE prompting: never make the user pick a folder we
     // cannot open (UI also disables "+" at capacity, this is the backstop).
@@ -180,6 +244,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       ...(req.engineModel !== undefined ? { engineModel: req.engineModel } : {}),
       ...(req.enginePreset !== undefined ? { enginePreset: req.enginePreset } : {}),
       ...(newConnectionId !== undefined ? { connectionId: newConnectionId } : {}),
+      ...(codexProfile !== undefined ? { codexProfile } : {}),
     });
     if (!result.ok) {
       return result;
@@ -203,12 +268,33 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // A resumed engine is persisted host metadata, never renderer input. Old
   // rows have no identity and remain the historical core engine.
   const engine = meta.engineId ?? "core";
-  if (!isEngineId(engine) || !deps.manager.canSpawn(engine)) {
+  // Codex-profiles S3-1: gate on the profile the session was CREATED under
+  // (persisted `meta.codexProfileId` — never the renderer's current active pick),
+  // consistent with the re-resolve below; a legacy/system session (no id) keeps
+  // the active-profile answer.
+  if (!isEngineId(engine) || !deps.manager.canSpawn(engine, meta.codexProfileId)) {
     return { ok: false, reason: "not_ready" };
   }
   const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
   if (openInTabId !== undefined) {
     return { ok: false, reason: "already_open", focusTabId: openInTabId };
+  }
+  // Codex-profiles W3-F: resume re-resolves the profile the session was
+  // CREATED under (`meta.codexProfileId`, persisted host metadata — never the
+  // renderer's current `activeProfileId`, which could resume the wrong
+  // account). A profile that vanished from the registry since creation
+  // refuses fail-closed; a legacy/system session (no persisted id) resumes on
+  // the ambient CODEX_HOME, byte-identical to today's behaviour.
+  let resumeCodexProfile: { id?: string; home?: string; authLink?: string } | undefined;
+  if (meta.codexProfileId !== undefined) {
+    if (deps.resolveCodexProfile === undefined) {
+      return { ok: false, reason: "not_ready" };
+    }
+    const resolved = await deps.resolveCodexProfile(meta.codexProfileId);
+    if (!resolved.ok) {
+      return { ok: false, reason: "not_ready" };
+    }
+    resumeCodexProfile = resolved.codexProfile;
   }
   // TASK.45 W10: resume resolves the connection the session was pinned to. A
   // deleted pin refuses `connection_missing` (renderer offers a replacement — no
@@ -251,6 +337,16 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       pinnedConnectionId = pin.connectionId;
     }
+    // S4-1 arm 2 (W4-F1): the FIRST resume of an imported session carries the
+    // user's picked model as a per-fork ANYCODE_MODEL override (consume-once).
+    // Consulted only here (the resume path); a `new` request never reads it, and
+    // a non-imported resume finds no entry — both unchanged. L4·1 (F1 review):
+    // PEEK the pick (read without delete), then CONSUME it only after createTab
+    // SUCCEEDS (below) — so a refusal (max_tabs / not_ready / already_open, or a
+    // throw) never spends the pick and a later resume of the reopened session
+    // still boots on the chosen model. No await sits between peek and consume
+    // (createTab is synchronous), so the consume window cannot race.
+    const importModelOverride = deps.peekPendingImportModel?.(req.sessionId);
     const result = deps.manager.createTab({
       workspace: meta.workspace,
       ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
@@ -259,10 +355,16 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       resume: true,
       engine,
       ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
+      ...(resumeCodexProfile !== undefined ? { codexProfile: resumeCodexProfile } : {}),
+      ...(importModelOverride !== undefined ? { modelOverride: importModelOverride } : {}),
     });
     if (!result.ok) {
       return result;
     }
+    // L4·1: createTab committed the tab ⇒ the pick has now been applied; burn it
+    // so a second resume of the same session boots on the persisted model. A
+    // no-op for a non-imported resume (empty map).
+    deps.consumePendingImportModel?.(req.sessionId);
     deps.manager.deliverTabPort(result.tab);
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   } finally {

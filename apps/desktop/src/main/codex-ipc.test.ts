@@ -1,7 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { CodexBinaryFs } from "./codex-binary.js";
 import { createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardingSnapshot } from "./codex-ipc.js";
+
+const scratch = mkdtempSync(join(tmpdir(), "anycode-codex-ipc-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+let homeCounter = 0;
+
+/** One macrotask turn — drains the microtask queue so queued seam work advances. */
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** Rejects every path — no rung of the discovery ladder resolves. */
 const noBinaryFs: CodexBinaryFs = {
@@ -14,14 +24,24 @@ const noBinaryFs: CodexBinaryFs = {
 /** uid/gids the fake fs below is owned by; pinned so the suite does not depend on the real uid of whoever runs it. */
 const ME = { uid: 501, gids: [20] };
 
-function makeDeps(overrides: Partial<CodexIpcDeps> = {}): CodexIpcDeps & { writtenPatches: unknown[]; snapshots: CodexOnboardingSnapshot[] } {
+function makeDeps(
+  overrides: Partial<CodexIpcDeps> = {},
+): CodexIpcDeps & { writtenPatches: unknown[]; snapshots: CodexOnboardingSnapshot[]; home: string } {
   const writtenPatches: unknown[] = [];
   const snapshots: CodexOnboardingSnapshot[] = [];
+  // The in-memory settings.codex block the registry round-trips through — the
+  // same read-what-you-wrote shape settings-ipc's handleSet provides in prod.
+  let codexBlock: Record<string, unknown> = {};
+  const home = join(scratch, `home-${homeCounter++}`);
+  mkdirSync(home, { recursive: true });
   return {
     bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev" },
     readBinaryPathSetting: async () => undefined,
+    readCodexSettings: async () => codexBlock as never,
+    home,
     writeCodexSettings: async (patch) => {
       writtenPatches.push(patch);
+      codexBlock = { ...codexBlock, ...(patch as object) };
       return { ok: true, snapshot: {} as never };
     },
     dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
@@ -103,6 +123,61 @@ describe("createCodexOnboardingController.recheck", () => {
     const snapshot = await controller.recheck();
     expect(snapshot.report.status).toBe("ready");
   });
+
+  // S3-2 red-proof: `runExclusive` must coalesce ONLY within the same profile
+  // key. A held `recheck("a")` must not swallow a concurrent `recheck(undefined)`
+  // (active = system) — the second call must run its OWN doctor and get its OWN
+  // (system) verdict, sequentially, not adopt profile a's in-flight report.
+  it("serializes a different-profile recheck instead of coalescing it onto the held profile's report (S3-2)", async () => {
+    const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    const invocations: string[] = [];
+    let inFlightNow = 0;
+    let maxConcurrent = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    // Echoes the profile it ran against (codexHome present ⇒ concrete profile;
+    // absent ⇒ the system pseudo-profile). Blocks on a shared gate so the FIRST
+    // run is provably still in flight when the concurrent second call arrives.
+    const runDoctor = vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : undefined;
+      invocations.push(id ?? "system");
+      inFlightNow++;
+      maxConcurrent = Math.max(maxConcurrent, inFlightNow);
+      await gate;
+      inFlightNow--;
+      const status: CodexDoctorReport["status"] = id === undefined ? "signed_out" : "ready";
+      return {
+        status,
+        version: "0.144.3",
+        ...(status === "ready" ? { account: { type: "chatgpt", plan: "plus" }, models: [] } : {}),
+        ...(id !== undefined ? { profileId: id } : {}),
+      };
+    });
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "a" })).ok).toBe(true); // id "a"; active stays system
+
+    const held = controller.recheck("a"); // doctor #1 (profile a), blocks on the gate
+    while (runDoctor.mock.calls.length < 1) await tick();
+    const concurrent = controller.recheck(undefined); // active = system, a DIFFERENT key
+    await tick();
+    await tick();
+    // Serialized behind the held run: the active-profile recheck has NOT spawned
+    // its own doctor yet (one child at a time).
+    expect(runDoctor.mock.calls.length).toBe(1);
+
+    release();
+    const aSnap = await held;
+    const sysSnap = await concurrent;
+
+    expect(aSnap.report.profileId).toBe("a");
+    // The discriminant: the active-profile recheck returns ITS OWN system verdict
+    // (no profileId, signed_out), NOT profile a's — and a second doctor really ran.
+    expect(sysSnap.report.profileId).toBeUndefined();
+    expect(sysSnap.report.status).toBe("signed_out");
+    expect(invocations).toEqual(["a", "system"]);
+    expect(maxConcurrent).toBe(1); // never two doctor children at once
+  });
 });
 
 describe("createCodexOnboardingController.pickBinary", () => {
@@ -174,6 +249,11 @@ describe("createCodexOnboardingController.loginStart / loginCancel", () => {
     const first = controller.loginStart();
     const second = await controller.loginStart();
     expect(second).toEqual({ ok: false, reason: "busy" });
+    // The first call claims the lock synchronously but only reaches runLogin
+    // after its pre-spawn awaits (profile resolution, settings read) settle.
+    while (runLogin.mock.calls.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
     resolveLogin({ ok: true });
     await first;
   });
@@ -196,6 +276,140 @@ describe("createCodexOnboardingController.loginStart / loginCancel", () => {
   });
 });
 
+describe("serialization seam — login in-flight + key namespace (W4-F1 L10)", () => {
+  /** A doctor that echoes the profile it ran against, tracking call order and peak concurrency. */
+  function makeCountingDoctor(state: { calls: string[]; inFlight: number; maxConcurrent: number }, delayMs = 5) {
+    return vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : "system";
+      state.calls.push(id);
+      state.inFlight++;
+      state.maxConcurrent = Math.max(state.maxConcurrent, state.inFlight);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      state.inFlight--;
+      return { status: "ready", version: "0.144.3", account: { type: "chatgpt", email: null, plan: "plus" }, models: [], profileId: id };
+    });
+  }
+
+  // F1-a red-proof: a login holds a real child (browser open, seconds-minutes).
+  // A recheck of a DIFFERENT profile that lands during it must QUEUE behind the
+  // login seam, not spawn a second doctor child in parallel. Rollback (login
+  // outside inFlightByKey/inFlightTail) ⇒ the doctor starts immediately = RED.
+  it("F1-a: a different-profile recheck does NOT spawn a doctor while a login is in flight — it queues behind the seam", async () => {
+    let resolveLogin!: (outcome: { ok: true }) => void;
+    const runLogin = vi.fn(() => new Promise<{ ok: true }>((resolve) => { resolveLogin = resolve; }));
+    const state = { calls: [] as string[], inFlight: 0, maxConcurrent: 0 };
+    const runDoctor = makeCountingDoctor(state);
+    const deps = makeDeps({ runLogin: runLogin as never, runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "acc" })).ok).toBe(true);
+    expect((await controller.createProfile({ label: "other" })).ok).toBe(true);
+
+    const loginPromise = controller.loginStart("acc");
+    while (runLogin.mock.calls.length === 0) await tick();
+
+    const recheckPromise = controller.recheck("other");
+    await tick();
+    await tick();
+    // The discriminant: with the login child still alive, the different-profile
+    // recheck has NOT spawned a doctor of its own (rollback ⇒ parallel doctor here).
+    expect(runDoctor).not.toHaveBeenCalled();
+
+    resolveLogin({ ok: true });
+    const loginResult = await loginPromise;
+    const recheckSnap = await recheckPromise;
+
+    expect(loginResult.ok).toBe(true);
+    // Login's own post-login doctor ran first (inside the held seam), THEN the
+    // queued recheck — strictly sequential, never two children at once.
+    expect(state.calls).toEqual(["acc", "other"]);
+    expect(state.maxConcurrent).toBe(1);
+    expect(recheckSnap.report.profileId).toBe("other");
+  });
+
+  // F1-b red-proof: a concurrent recheck of the SAME profile, still in flight
+  // when the login finishes, must NOT be what the post-login re-diagnosis
+  // returns. The post-login doctor must be a fresh POST-credential verdict.
+  // Rollback (post-login `runExclusive(profile.id)` coalescing onto the
+  // in-flight pre-credential recheck) ⇒ the stale "signed_out" is handed back
+  // right after a successful sign-in = RED.
+  it("F1-b: the post-login re-diagnosis is a POST-credential verdict, not a coalesced pre-credential recheck of the same profile", async () => {
+    let credentialWritten = false;
+    let resolveLogin!: () => void;
+    const runLogin = vi.fn(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          resolveLogin = () => {
+            credentialWritten = true; // the login writes the credential into the profile home
+            resolve({ ok: true });
+          };
+        }),
+    );
+    let releaseDoctorGate!: () => void;
+    const doctorGate = new Promise<void>((resolve) => { releaseDoctorGate = resolve; });
+    const runDoctor = vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : "system";
+      // Captured AT CALL TIME: a doctor spawned before the credential landed
+      // reads "signed_out"; one spawned after reads "ready".
+      const credAtCall = credentialWritten;
+      if (!credAtCall) {
+        // Hold a pre-credential doctor in flight so it is provably still
+        // coalescible when the login reaches its post-login re-diagnosis.
+        await doctorGate;
+      }
+      const status: CodexDoctorReport["status"] = credAtCall ? "ready" : "signed_out";
+      return {
+        status,
+        version: "0.144.3",
+        ...(status === "ready" ? { account: { type: "chatgpt", email: null, plan: "plus" }, models: [] } : {}),
+        profileId: id,
+      };
+    });
+    const deps = makeDeps({ runLogin: runLogin as never, runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "acc" })).ok).toBe(true);
+
+    const loginPromise = controller.loginStart("acc");
+    while (runLogin.mock.calls.length === 0) await tick();
+
+    // A recheck of the SAME profile arrives while the login child is alive.
+    const recheckPromise = controller.recheck("acc");
+    await tick();
+    await tick();
+
+    resolveLogin(); // credential written; login proceeds to its post-login doctor
+    await tick();
+    releaseDoctorGate(); // unblock any pre-credential doctor left in flight (rollback path)
+
+    const loginResult = await loginPromise;
+    await recheckPromise;
+
+    expect(loginResult.ok).toBe(true);
+    if (loginResult.ok) {
+      // The discriminant: a POST-credential verdict, not the stale pre-credential
+      // recheck's "signed_out" (rollback coalesces onto it here).
+      expect(loginResult.snapshot.report.status).toBe("ready");
+      expect(loginResult.snapshot.report.profileId).toBe("acc");
+    }
+  });
+
+  // F2 red-proof: the reserved active-profile key must be unreachable from a
+  // renderer-supplied id. `recheck()` (active) and `recheck("recheck:active")`
+  // must occupy DISJOINT keys. Rollback (bare `profileId ?? ACTIVE_PROFILE_KEY`)
+  // ⇒ the literal string collides with the reserved key and coalesces = RED.
+  it("F2: recheck() and recheck(\"recheck:active\") occupy disjoint keys — the reserved key is not collidable from a renderer id", async () => {
+    const deps = makeDeps();
+    const controller = createCodexOnboardingController(deps);
+    const [active, bogus] = await Promise.all([controller.recheck(), controller.recheck("recheck:active")]);
+    // Disjoint keys ⇒ two independent runs, not one coalesced promise.
+    expect(active).not.toBe(bogus);
+    // The argless call diagnosed the ACTIVE (system) profile...
+    expect(active.report.profileId).toBeUndefined();
+    // ...while the literal-string id is an UNKNOWN profile (resolution error),
+    // never silently adopted as the active recheck.
+    expect(bogus.report.status).toBe("error");
+  });
+});
+
 describe("custody", () => {
   it("the persisted lastCheck patch never carries an account/token field", async () => {
     const report: CodexDoctorReport = { status: "ready", version: "0.144.3", account: { type: "chatgpt", plan: "plus" }, models: [] };
@@ -204,5 +418,165 @@ describe("custody", () => {
     await controller.recheck();
     const [patch] = deps.writtenPatches as Array<{ lastCheck: Record<string, unknown> }>;
     expect(Object.keys(patch!.lastCheck)).toEqual(["status", "version", "at"]);
+  });
+});
+
+describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
+  /** A doctor fake that answers per-profile, echoing the profile it was run against — the shape the real runner produces. */
+  function profileAwareDoctor(statusFor: (profileId: string) => CodexDoctorReport["status"] = () => "ready") {
+    return vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
+      const id = options?.profile?.codexHome !== undefined ? options.profile.id : undefined;
+      const status = statusFor(id ?? "system");
+      return {
+        status,
+        version: "0.144.3",
+        ...(status === "ready" ? { account: { type: "chatgpt", email: "sentinel-custody@example.com", plan: "plus" }, models: [] } : {}),
+        ...(id !== undefined ? { profileId: id } : {}),
+      };
+    });
+  }
+
+  it("lists an empty registry as system-active", async () => {
+    const controller = createCodexOnboardingController(makeDeps());
+    expect(await controller.listProfiles()).toEqual({ profiles: [], activeProfileId: "system" });
+  });
+
+  it("creates a profile (persisted record + real 0700 home) and lists it back", async () => {
+    const deps = makeDeps();
+    const controller = createCodexOnboardingController(deps);
+    const created = await controller.createProfile({ label: "Personal" });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.profile.id).toBe("personal");
+    const listed = await controller.listProfiles();
+    expect(listed.profiles).toHaveLength(1);
+    expect(listed.profiles[0]?.profile.label).toBe("Personal");
+  });
+
+  it("recheck(profileId) hands the RESOLVED profile to the doctor and persists the per-profile lastCheck — never the top-level one", async () => {
+    const runDoctor = profileAwareDoctor();
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const created = await controller.createProfile({ label: "acc" });
+    expect(created.ok).toBe(true);
+
+    const snapshot = await controller.recheck("acc");
+    expect(snapshot.report.status).toBe("ready");
+    expect(snapshot.report.profileId).toBe("acc");
+    expect(runDoctor).toHaveBeenCalledWith(
+      "/usr/local/bin/codex",
+      expect.objectContaining({
+        profile: expect.objectContaining({ id: "acc", codexHome: join(deps.home, ".anycode", "codex", "profile-acc") }),
+      }),
+    );
+    // Per-profile lastCheck landed in the record...
+    const listed = await controller.listProfiles();
+    expect(listed.profiles[0]?.profile.lastCheck?.status).toBe("ready");
+    // ...while the TOP-LEVEL lastCheck (the ACTIVE profile's slot, cut §2.3)
+    // was NOT written for a non-active profile's check.
+    const topLevel = (deps.writtenPatches as Array<Record<string, unknown>>).filter((patch) => "lastCheck" in patch);
+    expect(topLevel).toEqual([]);
+  });
+
+  it("recheck() with no argument checks the ACTIVE profile and writes the top-level lastCheck", async () => {
+    const runDoctor = profileAwareDoctor();
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const created = await controller.createProfile({ label: "acc" });
+    expect(created.ok).toBe(true);
+    expect(await controller.setActiveProfile("acc")).toEqual({ ok: true });
+
+    const snapshot = await controller.recheck();
+    expect(snapshot.report.profileId).toBe("acc");
+    const topLevel = (deps.writtenPatches as Array<Record<string, unknown>>).filter((patch) => "lastCheck" in patch);
+    expect(topLevel).toHaveLength(1);
+  });
+
+  it("readyFor() answers per profile, not per binary (cut §4.2: readiness = f(binary, profile))", async () => {
+    const runDoctor = profileAwareDoctor((id) => (id === "good" ? "ready" : "signed_out"));
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "good" })).ok).toBe(true);
+    expect((await controller.createProfile({ label: "bad" })).ok).toBe(true);
+    await controller.recheck("good");
+    await controller.recheck("bad");
+    expect(controller.readyFor("good")).toBe(true);
+    expect(controller.readyFor("bad")).toBe(false);
+    // The default (active = system) has not been checked ready in this test.
+    expect(controller.readyFor(undefined)).toBe(false);
+  });
+
+  it("recheck of an UNKNOWN profile is an error snapshot with no doctor spawn", async () => {
+    const runDoctor = vi.fn();
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck("no-such");
+    expect(snapshot.report.status).toBe("error");
+    expect(runDoctor).not.toHaveBeenCalled();
+  });
+
+  it("loginStart into an authLink profile is refused as unsupported, without running the login flow (amended §A1)", async () => {
+    const runLogin = vi.fn(async () => ({ ok: true as const }));
+    const deps = makeDeps({ runLogin });
+    const controller = createCodexOnboardingController(deps);
+    const target = join(deps.home, "fake-auth-target.json");
+    writeFileSync(target, "{}");
+    const created = await controller.createProfile({ label: "main", authLink: target });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const result = await controller.loginStart(created.profile.id);
+    expect(result).toEqual({ ok: false, reason: "unsupported" });
+    expect(runLogin).not.toHaveBeenCalled();
+  });
+
+  it("loginStart(profileId) passes the resolved profile into the login runner and re-diagnoses against it", async () => {
+    const runLogin = vi.fn(async (_path: string, opts: { profile?: { id: string } }) => {
+      expect(opts.profile?.id).toBe("acc");
+      return { ok: true as const };
+    });
+    const runDoctor = profileAwareDoctor();
+    const deps = makeDeps({ runLogin, runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "acc" })).ok).toBe(true);
+
+    const result = await controller.loginStart("acc");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.snapshot.report.profileId).toBe("acc");
+    }
+    expect(runLogin).toHaveBeenCalledOnce();
+  });
+
+  it("deleteProfile drops the record AND the profile's cached readiness", async () => {
+    const runDoctor = profileAwareDoctor();
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "gone" })).ok).toBe(true);
+    await controller.recheck("gone");
+    expect(controller.readyFor("gone")).toBe(true);
+
+    expect(await controller.deleteProfile("gone")).toEqual({ ok: true });
+    expect(controller.readyFor("gone")).toBe(false);
+    expect((await controller.listProfiles()).profiles).toEqual([]);
+  });
+
+  it("repairProfileLink refuses an unknown id and a profile without an authLink", async () => {
+    const deps = makeDeps();
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.repairProfileLink("no-such")).ok).toBe(false);
+    expect((await controller.createProfile({ label: "plain" })).ok).toBe(true);
+    expect((await controller.repairProfileLink("plain")).ok).toBe(false);
+  });
+
+  it("custody §4.4: the sentinel e-mail from the doctor report never reaches ANY persisted settings patch", async () => {
+    const runDoctor = profileAwareDoctor();
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "acc" })).ok).toBe(true);
+    await controller.setActiveProfile("acc");
+    await controller.recheck("acc");
+    await controller.recheck();
+    expect(JSON.stringify(deps.writtenPatches)).not.toContain("sentinel-custody@example.com");
   });
 });

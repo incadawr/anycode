@@ -996,6 +996,225 @@ curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/save-key -d '{}'
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/provider/drawer/close -d '{}'
 ```
 
+### Codex pane probe/driver (codex-profiles W4-F0, findings S1-1 probe (a))
+
+Mirrors `CodexEnginePane.tsx` (the Settings "Codex" page: the binary/manifest
+block plus the per-profile Accounts list, codex-profiles cut §2/§4/§7) — a DOM
+probe/driver, same "no mirrored state" discipline as the MCP/Skills pane
+probes above. `GET /settings/codex` is a DEDICATED route: every prior
+`/settings*` probe stays byte-untouched (§4 custody). An unmounted pane
+(Settings closed, or a different pane selected) reads as `mounted:false`
+(binary `null`, empty rows/notices), not an error. `binary` carries the
+DoD-probe facts: status headline/tone/detail, the `<code>` binary path + its
+"(source)" label, the supported range / recommended version / manifest source
+parsed off the pane's own description lines, the Install/Update primary
+button's rendered label+disabled state (`installButton`, `null` when the
+binary is already usable), `riskToggleVisible` (the "Use anyway" button,
+`update_required` only), and every binary action button with its disabled
+state. Each `rows[]` entry is one Accounts row: label, status
+headline/tone/detail, rendered quota lines (already derived from live
+`windowDurationMins`), the row's action buttons, and `signingIn`. CUSTODY
+(cut §4.4): the account e-mail is NEVER carried — only `emailRendered`
+(presence), so a smoke run's HTTP log cannot capture the owner's address.
+`notices` carries the pane's `.settings-notice` alerts (install failures, the
+untested-version warning) — the assert surface for S2's offline degradation.
+
+The three POST drivers fire REAL clicks on the pane's own buttons — the
+"Install …"/"Update to …" primary, "Recheck all", "Refresh manifest" — so
+each runs the exact `bridge.install`/`recheck`/`manifestRefresh` controller
+call the button's own onClick makes (one product path; the TASK.53 IPC
+channels are never re-invoked from the channel). All three are
+fire-and-return (no built-in settle wait, `shortcutsPressChord` posture):
+install downloads a real artifact and recheck runs sequential doctor passes —
+the caller polls `GET /settings/codex` for the status/actions to change.
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /settings/codex` | — | `{mounted, binary:{statusHeadline, statusTone, statusDetail, binaryPath, sourceLabel, supportedRange, recommended, manifestSource, installButton:{label,disabled}\|null, riskToggleVisible, actions:[{label,disabled}]}\|null, rows:[{label, statusHeadline, statusTone, statusDetail, emailRendered, quotaLines, buttons:[{label,disabled}], signingIn}], notices:[string]}` |
+| `POST /settings/codex/install` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"button_not_present"\|"button_disabled"}` |
+| `POST /settings/codex/recheck` | `{}` | same result shape |
+| `POST /settings/codex/manifest-refresh` | `{}` | same result shape |
+
+```bash
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/pane -d '{"paneId":"codex"}'
+curl "${A[@]}" "$B/settings/codex"
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/install -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/recheck -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/manifest-refresh -d '{}'
+```
+
+### Codex profile chip probe/driver (codex-profiles W4-F0, findings S1-1 probe (b))
+
+Mirrors the StartScreen's codex account-profile chip (`StartScreen.tsx`, cut
+§3.3/W3-F: the chip next to the Agent selector, rendered only for a codex
+draft with registered profiles) — a DOM probe/driver reusing the model-pill
+CSS vocabulary under `.start-codex-profile`. `GET /start-screen/codex-profile`
+is a DEDICATED route: `GET /start-screen` and its `StartScreenState` shape
+stay byte-untouched. `chipVisible:false` (empty defaults) is a normal
+reading — a core draft, no registered profiles, or NO draft at all; combined
+with `draftActive:false` that last case IS the read-only-after-start
+observability (once a session starts the start screen unmounts, the chip with
+it, and the pick driver refuses `not_present`). `options` are read off the
+RENDERED popover rows — `{label, disabled, current}` per row, populated only
+while `menuOpen` — and `addAccountLast` asserts the popover's LAST button is
+the "Add account…" row (the F-S dropdown-order gate). `draftCodexProfileId`
+is the tabs-store draft's raw pick (`null` = System default), the assert
+target after a pick.
+
+`POST /start-screen/codex-profile` takes a union body: `{open}` fires a real
+click on the chip button; `{pick}` clicks the Nth RENDERED option row
+(auto-opening the popover first) — rows carry no stable id in the DOM, so
+index into the render order is the row's address, `modelPillPick`'s
+clickItemAt discipline. A DISABLED row's pick is deliberately FIRED, not
+pre-refused: the click no-ops (browser semantics), so a live smoke proves the
+PRODUCT's signed_out lockout by observing `draftCodexProfileId` unchanged and
+the popover still open — not this channel's guard standing in front of it.
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /start-screen/codex-profile` | — | `{ok:true, chipVisible, label, menuOpen, options:[{label,disabled,current}], addAccountLast, draftActive, draftCodexProfileId}` |
+| `POST /start-screen/codex-profile` | `{open:boolean}` \| `{pick:number}` | `{ok:true}` \| `{ok:false, reason:"not_present"\|"did_not_open"\|"did_not_close"\|"unknown_option"}` |
+
+```bash
+curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/engine -d '{"engineId":"codex"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/codex-profile -d '{"open":true}'
+curl "${A[@]}" "$B/start-screen/codex-profile"
+curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/codex-profile -d '{"pick":0}'
+```
+
+### Rollout-import dialog probe/driver (codex-profiles W4-F0, findings S1-1 probe (c))
+
+Mirrors the "Import a Codex session" dialog (`CodexRolloutImportDialog.tsx`,
+cut §8.8: Settings → Codex → pick a profile → pick a rollout → honest loss
+report → pick a model → Import & open) — a DOM probe/driver, same "no
+mirrored state" discipline as the MCP import dialog above. A closed dialog
+reads as `open:false` with empty defaults, not an error. `rollouts[]` are the
+rendered rows, **custody-redacted** (see the custody norm below):
+`timestamp`/`size` are the component's own deterministic UTC/size labels
+(product-generated, legal raw); `fileName` is the row's machine-generated
+identity (the row's own `data-file-name`) — the rollout's path RELATIVE to
+the profile's `sessions/` directory, `YYYY/MM/DD/rollout-<safe>.jsonl`
+(matched by the main process against an ANCHORED pattern, so `..`/absolute
+paths never round-trip — custody-relevant: the identity can only name a file
+inside the selected profile's own sessions tree; it is not PII); the
+session's cwd crosses as `cwdRendered: boolean` only, and the
+first-user-message preview line crosses as
+`preview: {rendered, length, sha256_12}` — the length of the EXACT rendered
+(post-truncate) text plus the first 12 hex chars of its SHA-256, computed in
+the renderer facade (the state read is async for this; the
+`executeJavaScript` seam awaits it). A smoke that planted the rollout itself
+recomputes the digest locally and compares — the channel never needs the
+text. `statsLines` are the honest-loss lines ("N reasoning dropped", … — or
+the "Nothing was lost…" line); `notices` carries every `.settings-notice` in
+the dialog (list errors, preview-stage failures, importer warnings — the
+importer's own tested leak-guard keeps raw file content out of those — and
+the import-refusal reason, including `invalid_model`'s "Pick a model for the
+new session first."); `importDisabled`/`importing` mirror the Import
+button's own rendered state.
+
+**Custody norm (W4-F0c finding A).** The automation channel distinguishes two
+planes. *Config plane* — profile labels, product literals, counters,
+model ids, timestamps/sizes — may cross raw: that is what the channel
+measures. *Session-content plane* — anything AUTHORED BY THE OWNER inside a
+rollout (the first user message, the session's cwd) — NEVER crosses raw,
+regardless of the channel being loopback + Bearer + dev-only: smoke runs
+deliberately log channel traffic (curl output, CI logs), and probe (a)
+already set the bar unconditionally with `emailRendered: boolean`. A first
+user message is strictly richer than an e-mail (keys, passwords, paths).
+Enforcement lives in the renderer facade — one shape truth for facade and
+wire, no main-side transform. Honest residual: a low-entropy first message
+("hi") is brute-forceable from its 48-bit digest prefix — accepted, the
+exposure class is far below raw text.
+
+**Provenance / identity-gated settles (W4-F0c finding B).** The dialog signs
+in the DOM whose reply it renders: `.codex-rollout-list` carries
+`data-rollouts-for=<profileId>` and `.codex-rollout-preview` carries
+`data-preview-for=<fileName>` — the stamp is attached to the RESULT in the
+same guarded callback that resolves it, so a stale reply keeps its own (old)
+stamp, and while loading there is no stamp at all. The GET surfaces both as
+`rolloutsFor`/`previewFor` (`null` while loading). The `import/profile` and
+`import/rollout` drivers settle on IDENTITY, not timing: profile switch =
+"list settled AND `rolloutsFor` === the requested profile"; rollout pick
+captures the clicked row's `data-file-name` BEFORE the click and waits for
+"preview settled AND `previewFor` === that fileName". A settled DOM still
+showing the previous selection's reply (the passive-effect window, or an
+in-flight old reply landing late) can never satisfy either wait — the
+timing-based loading-appear pre-wait this replaces could be fooled by both.
+
+**Profile dimension of `previewFor` (W4-F0e).** `fileName` is relative to a
+profile's `sessions/` dir, so two profiles can legally render the SAME
+fileName — `previewFor` alone does not say WHOSE file the preview answers.
+That dimension is pinned by construction: (i) switching profiles
+synchronously resets the preview result and invalidates the preview gate, so
+a post-switch `previewFor` can only have been stamped by a request issued
+under the NEW profile; (ii) `import/rollout` refuses `list_stale` — before
+capturing or clicking anything — whenever the rendered list is still loading
+(no `data-rollouts-for` stamp) or is stamped with a different profile than
+the select currently names. Every preview request the driver can cause is
+therefore (current profile, clicked fileName), and a same-name settled
+preview left over from the previous profile can never satisfy the settle.
+
+The drivers ride the dialog's REAL controls: `import/open {open:true}` clicks
+the pane's own "Import a Codex session…" button (so the pane must be mounted
+first — `POST /settings/pane {"paneId":"codex"}`), `{open:false}` the
+dialog's Close button; `import/profile` drives the profile `<select>` via the
+native-setter discipline and settles identity-gated on the real `rolloutList`
+round-trip as above; `import/rollout` clicks a row's own radio by index and
+settles identity-gated on the real `rolloutPreview` round-trip; `import/model`
+drives the preview's model `<select>` (only rendered once a preview loaded);
+`import/apply` clicks "Import & open" and settles on either the dialog
+closing (success — the imported session opened via the EXISTing resume path)
+or a fresh refusal notice appearing (`import_refused` — read the copy via
+the GET).
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /settings/codex/import` | — | `{paneMounted, open, profileId, profileOptions:[{id,label}], listLoading, listEmptyText, rollouts:[{fileName, timestamp, size, cwdRendered, preview:{rendered,length,sha256_12}, selected}], rolloutsFor, previewLoading, previewFor, statsLines, notices, modelValue, modelOptions:[{id,name}], importDisabled, importing}` |
+| `POST /settings/codex/import/open` | `{open:boolean}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"button_not_present"\|"did_not_open"\|"did_not_close"}` |
+| `POST /settings/codex/import/profile` | `{profileId}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"unknown_profile"\|"list_timeout"}` |
+| `POST /settings/codex/import/rollout` | `{index}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"list_stale"\|"unknown_rollout"\|"preview_timeout"}` |
+| `POST /settings/codex/import/model` | `{model}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"unknown_model"\|"did_not_set"}` |
+| `POST /settings/codex/import/apply` | `{}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"import_disabled"\|"import_refused"\|"import_timeout"}` |
+
+```bash
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/pane -d '{"paneId":"codex"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/import/open -d '{"open":true}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/import/profile -d '{"profileId":"tmp-a"}'
+curl "${A[@]}" "$B/settings/codex/import"
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/import/rollout -d '{"index":0}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/import/model -d '{"model":"glm-5.2"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/import/apply -d '{}'
+```
+
+`ANYCODE_CODEX_PROFILES_HOME=<absolute dir>` is a **dev/test-only** override
+for the user home the Codex profiles root (`<home>/.anycode/codex/…`) derives
+from (`main/index.ts`'s `resolveCodexProfilesHome` wiring, same
+double-gate/ethic as `ANYCODE_SUBAGENTS_HOME` above) — resolved ONCE at
+module top (W4-F0d eager fail-fast) and threaded into the profile registry
+(`registerCodexIpc`), the binary install/manifest plane
+(`registerCodexInstallIpc` + the boot `refreshCodexManifest` cache file), and
+the rollout-import sessions resolver, so a smoke run can mint
+`plain`/`authLink` profiles, run in-app installs, and list/import rollouts
+against a disposable root instead of the real `~/.anycode/codex`, with zero
+production code path reading it (the production default is always the real
+`os.homedir()`; RED-proof: `index.codexProfilesHome-wiring.test.ts`). The
+`system` pseudo-profile is deliberately NOT covered — it reads the ambient
+`CODEX_HOME`/`~/.codex`, which a smoke controls via `CODEX_HOME` itself.
+The lever is also forwarded into the HOST plane (W4-F0b): a managed
+profile's live session derives its CODEX_HOME host-side at spawn, so
+`buildHostEnvFor` set-or-DELETEs the vetted value into every host fork env
+(`applyCodexProfilesHomeOverride`, `main/host-env.ts` — the delete branch
+scrubs a raw ambient var that would otherwise ride the bootEnv spread), and
+the host re-gates it defense-in-depth (`resolveCodexProfilesHomeOverride`,
+`host/engines/codex/codex-home.ts`). Fail-closed write-plane contract
+(W4-F0d): var ABSENT under automation = the real home, the production
+byte-path; var present but MALFORMED (empty, or relative after trim —
+including an unexpanded `~`) under `ANYCODE_AUTOMATION=1` in a dev build =
+the app REFUSES to boot at module top (synchronous throw, non-zero exit,
+before a single mkdir of any plane) instead of silently falling back to the
+owner's real `~/.anycode/codex` behind a green-looking smoke run; a PACKAGED
+build never reads the var at all — it neither honors nor throws on it.
+
 ### Generic focus probe (TASK.45 W12-smoke)
 
 A DEDICATED, shell-level route — no pane above is widened to carry this.

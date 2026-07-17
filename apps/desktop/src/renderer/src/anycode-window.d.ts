@@ -19,11 +19,13 @@ import type {
   WorkspacePickResult,
 } from "../../shared/tabs";
 import type {
+  CodexProfileRecord,
   ConnectionCheckRequest,
   ConnectionCreateRequest,
   ConnectionDeleteRequest,
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
+  CustomProviderRecord,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -90,7 +92,7 @@ import type { CodexDoctorReport } from "../../shared/codex-doctor";
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
   binaryPath: string | null;
-  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
 }
 
@@ -101,6 +103,124 @@ export type CodexPickBinaryResult =
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+
+// TASK.50 (codex-profiles cut §2/§4, amended §A1): mirrors the SAME
+// duplicated shapes declared in preload/index.ts and main/codex-ipc.ts.
+export interface CodexProfilesSnapshot {
+  profiles: Array<{ profile: CodexProfileRecord; report?: CodexDoctorReport }>;
+  activeProfileId: string;
+}
+
+export interface CodexProfileCreateRequest {
+  label: string;
+  authLink?: string;
+  linkedHome?: string;
+}
+
+export type CodexProfileCreateResult =
+  | { ok: true; profile: CodexProfileRecord }
+  | { ok: false; reason: "invalid" | "limit" | "failed"; message?: string };
+
+export type CodexProfileGuardResult = { ok: true } | { ok: false; reason: string };
+
+// TASK.53 (codex-profiles cut §7, amended §A4): mirrors main/codex-install.ts.
+export type CodexInstallResult =
+  | { ok: true; version: string; binaryPath: string; report: CodexDoctorReport }
+  | { ok: false; error: string };
+
+export interface CodexSupportStatusResult {
+  supportedRange: string;
+  recommended: string;
+  riskAcceptedVersions: string[];
+}
+
+export interface CodexManifestRefreshResult {
+  source: "network" | "cache" | "bundled";
+  supportedRange: string;
+}
+
+// TASK.52 (codex-profiles cut §8.8): mirrors the SAME duplicated shapes
+// declared in preload/index.ts (that file's own header explains why
+// `CodexRolloutImportReportView` deliberately narrows main's own
+// `RolloutImportReport` — it omits `items`, an `@anycode/core` type this
+// bundle never imports; the renderer only ever needs the preview's
+// stats/warnings/meta).
+export interface CodexRolloutEntry {
+  fileName: string;
+  sizeBytes: number;
+  mtimeMs: number;
+  cwd?: string;
+  firstUserMessage?: string;
+}
+
+export type CodexRolloutListResult =
+  | { ok: true; rollouts: CodexRolloutEntry[] }
+  | { ok: false; reason: "profile_not_found" | "not_readable" };
+
+export interface CodexRolloutImportStats {
+  messages: number;
+  toolPairs: number;
+  reasoningDropped: number;
+  developerDropped: number;
+  imagesDropped: number;
+  orphansSynthesized: number;
+  collapsedToText: number;
+  malformedLines: number;
+  unknownRecordsSkipped: number;
+  unknownItemsSkipped: number;
+  unknownPartsSkipped: number;
+}
+
+export interface CodexRolloutImportReportView {
+  stats: CodexRolloutImportStats;
+  meta: { cwd?: string; cliVersion?: string; model?: string; startedAt?: string };
+  warnings: string[];
+}
+
+export type CodexRolloutPreviewResult =
+  | { ok: true; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
+
+export type CodexRolloutImportResult =
+  | { ok: true; sessionId: string; workspace: string; report: CodexRolloutImportReportView }
+  | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
+
+// TASK.54 (cut §9.2/§13.1): mirrors the SAME duplicated shapes declared in
+// preload/index.ts and main/provider-ipc.ts. `CustomProviderRecord` itself
+// IS a frozen shared/** type, imported above.
+export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "needs_api_key" | "weak_storage_needs_consent";
+export type CustomProviderMutationResult =
+  | { ok: true; providers: CustomProviderRecord[] }
+  | { ok: false; reason: CustomProviderMutationReason };
+
+export type FetchModelsFailureReason =
+  | "invalid_request"
+  | "invalid_url"
+  | "redirect_blocked"
+  | "http_error"
+  | "response_too_large"
+  | "timeout"
+  | "network_error"
+  | "invalid_response";
+
+export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
+
+export interface CustomProviderCreateRequest {
+  name: string;
+  baseUrl: string;
+  kind: CustomProviderRecord["kind"];
+  apiKey: string;
+  models?: string[];
+}
+
+export interface CustomProviderUpdateRequest {
+  id: string;
+  name?: string;
+  baseUrl?: string;
+  kind?: CustomProviderRecord["kind"];
+  apiKey?: string;
+  models?: string[];
+}
 
 declare global {
   interface Window {
@@ -120,10 +240,33 @@ declare global {
       // either direction — every result carries only status/version/account
       // type+plan (custody).
       codex: {
-        recheck(): Promise<CodexOnboardingSnapshot>;
+        // `profileId` (TASK.50, cut §4.2): omitted diagnoses/signs into the
+        // ACTIVE profile.
+        recheck(profileId?: string): Promise<CodexOnboardingSnapshot>;
         pickBinary(): Promise<CodexPickBinaryResult>;
-        loginStart(): Promise<CodexLoginStartResult>;
+        loginStart(profileId?: string): Promise<CodexLoginStartResult>;
         loginCancel(): Promise<void>;
+        // TASK.50 (cut §2/§4): the profile control-plane — settings/fs
+        // mutations only, no spawns. No credential value ever crosses this
+        // bridge (custody, cut §4.4).
+        listProfiles(): Promise<CodexProfilesSnapshot>;
+        createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
+        deleteProfile(id: string): Promise<CodexProfileGuardResult>;
+        setActiveProfile(id: string): Promise<CodexProfileGuardResult>;
+        repairProfileLink(id: string): Promise<CodexProfileGuardResult>;
+        // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
+        install(version?: string): Promise<CodexInstallResult>;
+        acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;
+        supportStatus(): Promise<CodexSupportStatusResult>;
+        manifestRefresh(): Promise<CodexManifestRefreshResult>;
+        // TASK.52 (cut §8.8): the rollout-import control plane — a profile's
+        // sessions dir is resolved main-side from `profileId` alone, never a
+        // renderer-supplied path. `rolloutImport`'s `model` is the one piece
+        // of new-session identity the renderer supplies (continuing an
+        // imported conversation on a different model is the whole point).
+        rolloutList(profileId: string): Promise<CodexRolloutListResult>;
+        rolloutPreview(profileId: string, fileName: string): Promise<CodexRolloutPreviewResult>;
+        rolloutImport(profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult>;
       };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
@@ -153,6 +296,20 @@ declare global {
         // request outcome updates a connection's advisory health — no payload,
         // same shape as `onEnginesChanged` above.
         onProviderHealthChanged(callback: () => void): () => void;
+      };
+      // TASK.54 (cut §9.2/§13.1): custom OpenAI-compatible model-provider
+      // CRUD + guarded `/v1/models` preview fetch (main/provider-ipc.ts owns
+      // the URL/redirect/body-cap threat model + vault custody). No
+      // credential ever crosses back — every result carries only the
+      // persisted record (never a key); `create`/`update` are the only two
+      // directions a plaintext key ever travels, main-bound, once per call.
+      customProvider: {
+        create(req: CustomProviderCreateRequest): Promise<CustomProviderMutationResult>;
+        update(req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult>;
+        delete(req: { id: string }): Promise<CustomProviderMutationResult>;
+        fetchModels(
+          req: { id: string } | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
+        ): Promise<FetchModelsOutcome>;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config
       // management invoke-API. `get` returns the joined project/user/compat
