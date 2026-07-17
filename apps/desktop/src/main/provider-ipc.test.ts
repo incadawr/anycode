@@ -1,7 +1,7 @@
 /**
  * Unit tests for the custom-provider IPC handlers (owner-decision #6, cut
  * §9.2, TASK.54) — CRUD off a FAKE vault + scratch settings path (no
- * Electron `ipcMain`), and the guarded `/v1/models` fetch against REAL local
+ * Electron `ipcMain`), and the guarded models-list fetch against REAL local
  * `node:http` servers (not a mocked `fetch`) so the redirect/body-cap/timeout
  * behavior is exercised for real, not asserted against a stub that could be
  * gamed.
@@ -192,7 +192,10 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(called).toBe(false);
   });
 
-  it("fetches and parses a normal models list, sending the key ONLY as an Authorization header", async () => {
+  // S5-2: baseUrl carries the endpoint's own `/v1` (the session-wire
+  // convention `normalizeExplicitBaseUrl` in packages/core/src/provider/endpoint.ts
+  // expects), so the fetch must land on `/v1/models`, not `/v1/v1/models`.
+  it("RED-PROOF (S5-2): fetches against a baseUrl that already includes /v1, landing on /v1/models (not /v1/v1/models), sending the key ONLY as an Authorization header", async () => {
     let receivedAuth: string | undefined;
     let receivedPath: string | undefined;
     const { origin } = await listen((req, res) => {
@@ -201,10 +204,28 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ data: [{ id: "model-a" }, { id: "model-b" }] }));
     });
-    const result = await fetchCustomProviderModels({ baseUrl: origin, apiKey: "sekrit-key" });
+    const result = await fetchCustomProviderModels({ baseUrl: `${origin}/v1`, apiKey: "sekrit-key" });
     expect(result).toEqual({ ok: true, models: [{ id: "model-a" }, { id: "model-b" }] });
     expect(receivedAuth).toBe("Bearer sekrit-key");
     expect(receivedPath).toBe("/v1/models");
+  });
+
+  // S5-2 negative control: a baseUrl WITHOUT `/v1` now hits `/models`, not
+  // `/v1/models` — an intentional contract change (not a regression) that
+  // brings this fetch in line with the session wire's convention that a
+  // baseUrl without `/v1` is a base the session wire would POST to at
+  // `{baseUrl}/chat/completions` (i.e. the endpoint genuinely has no `/v1`
+  // segment, so the models listing shouldn't invent one either).
+  it("RED-PROOF (S5-2): a baseUrl WITHOUT /v1 now hits /models, not /v1/models", async () => {
+    let receivedPath: string | undefined;
+    const { origin } = await listen((req, res) => {
+      receivedPath = req.url;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "m" }] }));
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: true, models: [{ id: "m" }] });
+    expect(receivedPath).toBe("/models");
   });
 
   it("sends an anthropic-kind key as x-api-key, not Authorization", async () => {
@@ -222,7 +243,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(receivedAuth).toBeUndefined();
   });
 
-  it("strips a trailing slash on baseUrl before appending /v1/models", async () => {
+  it("strips a trailing slash on baseUrl before appending /models", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ data: [{ id: "m" }] }));
@@ -559,7 +580,7 @@ describe("handleCustomProviderUpdate — origin-rebind custody guard (FX3-L1 G-A
   // RED-PROOF (G-A, the exfil primitive itself): keyless update to an attacker
   // origin, then fetch-models by id. Without the origin-rebind guard the
   // update persists and the recorder receives `Bearer orig-key` ON
-  // https://attacker.example/v1/models — with the guard, the decrypted key
+  // https://attacker.example/models — with the guard, the decrypted key
   // travels ONLY to the origin it was presented for. The recorder is wired
   // through the REAL fetchCustomProviderModels so the asserted request is the
   // exact one that would leave the machine.
@@ -583,7 +604,7 @@ describe("handleCustomProviderUpdate — origin-rebind custody guard (FX3-L1 G-A
     const res = await handleCustomProviderFetchModels(deps, { id: "custom:fixed-id" });
     expect(res.ok).toBe(true);
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.url).toBe("https://api.example.com/v1/models");
+    expect(requests[0]?.url).toBe("https://api.example.com/models");
     expect(requests[0]?.auth).toBe("Bearer orig-key");
     expect(requests.filter((r) => r.url.includes("attacker.example"))).toEqual([]);
   });
