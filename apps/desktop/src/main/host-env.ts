@@ -144,6 +144,19 @@ export function isCustomProviderRecordId(providerId: string): boolean {
  * `custom:*` providerId at its real vault key instead of the connection key.
  */
 export function customProviderSecretKey(id: string): SecretKey {
+  // W4-R1-M1 belt (defense-in-depth): a custom-provider vault key derives ONLY
+  // from the `custom:` namespace. The renderer-reachable exfil path is closed
+  // one layer up (settings/schema.ts drops any custom record whose id is not
+  // `custom:*`); this fail-closed refusal is the second layer for the
+  // readiness-gate callers in index.ts / settings-ipc.ts, so a cross-namespace
+  // id can never mint `provider.connection.<victim>.apiKey` /
+  // `provider.<catalog-id>.apiKey` and read a foreign namespace's secret. Every
+  // legitimate caller already gates on `isCustomProviderRecordId`, so this never
+  // trips in normal flow. (provider-ipc.ts keeps its own byte-mirror copy — its
+  // fetch-models path is guarded by the schema drop, not this belt.)
+  if (!isCustomProviderRecordId(id)) {
+    throw new Error(`customProviderSecretKey refuses a non-custom:* namespace id (${id}) — cross-namespace vault access is fail-closed (W4-R1-M1)`);
+  }
   return `provider.${id}.apiKey`;
 }
 

@@ -219,9 +219,27 @@ export function isLoopbackUrl(value: string): boolean {
   return LOOPBACK_HOSTNAMES.has(url.hostname);
 }
 
-/** One `CustomProviderRecord` (cut §9.2) — same per-element-catch discipline as `codexProfileSchema`. */
+/**
+ * One `CustomProviderRecord` (cut §9.2) — same per-element-catch discipline as
+ * `codexProfileSchema`.
+ *
+ * W4-R1-M1 (namespace custody): `id` is pinned to the `custom:` vault namespace
+ * — the same prefix main/host-env.ts's `CUSTOM_PROVIDER_PREFIX` /
+ * `isCustomProviderRecordId` and provider-ipc.ts's `customProviderSecretKey`
+ * key off (kept as a literal here so this shared, electron-free module never
+ * imports main). Without it a hand-edited (or corrupt/migrated) record could
+ * carry a foreign id — a `connection.<victim>` connection key or a bare catalog
+ * id like `anthropic` — and a `custom-provider-fetch-models {id}` would then
+ * decrypt that OTHER namespace's vault key and POST it to the record's
+ * attacker-chosen baseUrl (cross-namespace credential exfil). A mis-namespaced
+ * record is dropped whole by `parseElementsTolerantly` (never throws, never
+ * blanks its siblings) so it never reaches the catalog and fetch-models can
+ * never resolve it.
+ */
 const customProviderSchema = z.object({
-  id: z.string(),
+  id: z.string().refine((value) => value.startsWith("custom:"), {
+    message: "custom-provider id must live in the custom: vault namespace (W4-R1-M1)",
+  }),
   name: z.string(),
   baseUrl: z.string().refine(isHttpsOrLocalhostUrl, {
     message: "baseUrl must be https: or http: scoped to localhost/127.0.0.1/[::1], with no embedded userinfo",

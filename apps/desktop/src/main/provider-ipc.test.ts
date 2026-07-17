@@ -31,10 +31,31 @@ import type { SecretSetResult } from "./vault.js";
 
 /** `saveSettings` call counter (F-C zero-trace red-proofs — asserted by spy, not just by re-reading the file). */
 const saveSettingsSpy = vi.hoisted(() => ({ count: 0 }));
+/**
+ * W4-R1-L1 probe: tracks whether `loadSettings` runs INSIDE a
+ * `withSettingsFileLock` critical section. `depth` inc/decrements around each
+ * lock callback; `loadUnderLock` records the depth at the most-recent
+ * `loadSettings`. A test resets `loadUnderLock` right before the call it cares
+ * about, so the module-global is unambiguous.
+ */
+const lockProbe = vi.hoisted(() => ({ depth: 0, loadUnderLock: undefined as boolean | undefined }));
 vi.mock("../settings/files.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../settings/files.js")>();
   return {
     ...actual,
+    withSettingsFileLock: (<T>(path: string, fn: () => Promise<T>): Promise<T> =>
+      actual.withSettingsFileLock(path, async () => {
+        lockProbe.depth++;
+        try {
+          return await fn();
+        } finally {
+          lockProbe.depth--;
+        }
+      })) as typeof actual.withSettingsFileLock,
+    loadSettings: async (...args: Parameters<typeof actual.loadSettings>) => {
+      lockProbe.loadUnderLock = lockProbe.depth > 0;
+      return actual.loadSettings(...args);
+    },
     saveSettings: async (...args: Parameters<typeof actual.saveSettings>) => {
       saveSettingsSpy.count++;
       return actual.saveSettings(...args);
@@ -620,6 +641,30 @@ describe("handleCustomProviderFetchModels", () => {
     await handleCustomProviderCreate(makeDeps(), { name: "X", baseUrl: origin, kind: "openai-compatible", apiKey: "saved-key" });
     const res = await handleCustomProviderFetchModels(makeDeps(), { id: "custom:fixed-id" });
     expect(res).toEqual({ ok: true, models: [{ id: "m2" }] });
+  });
+
+  // W4-R1-L1: the saved-record {id} branch used to loadSettings + read the vault
+  // key OUTSIDE any lock, so a concurrent custom-provider-update rotating a
+  // record cross-origin (setSecret NEW key → saveSettings NEW baseUrl, both under
+  // the mutation lock) could interleave and hand this read the OLD baseUrl paired
+  // with the NEW key — POSTing the freshly-rotated key to the origin the user just
+  // migrated away from. Serializing the (baseUrl, key) resolution under the SAME
+  // lock closes the window; the network fetch itself stays outside it.
+  it("W4-R1-L1: resolves a saved record's baseUrl + key UNDER the settings lock (serialized against a concurrent cross-origin key rotation)", async () => {
+    const server = createServer((_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "m3" }] }));
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await handleCustomProviderCreate(makeDeps(), { name: "X", baseUrl: origin, kind: "openai-compatible", apiKey: "saved-key" });
+
+    lockProbe.loadUnderLock = undefined;
+    const res = await handleCustomProviderFetchModels(makeDeps(), { id: "custom:fixed-id" });
+    expect(res).toEqual({ ok: true, models: [{ id: "m3" }] });
+    // The record resolution (loadSettings + vault read) ran inside the lock.
+    expect(lockProbe.loadUnderLock).toBe(true);
   });
 
   it("returns invalid_request for an unknown id", async () => {

@@ -507,6 +507,22 @@ describe("custom-provider readiness-gate exports (FX4) — RED against the expor
     expect(customProviderSecretKey("custom:abc")).toBe("provider.custom:abc.apiKey");
   });
 
+  // W4-R1-M1 belt (defense-in-depth, second layer behind the schema `custom:`
+  // refine): a custom-provider vault key must derive ONLY from the `custom:`
+  // namespace. A cross-namespace id — a `connection.<victim>` connection key or
+  // a bare catalog id — is refused fail-closed, so it can never mint
+  // `provider.connection.<victim>.apiKey` / `provider.anthropic.apiKey` and
+  // read a foreign namespace's secret. (The renderer-reachable fetch-models
+  // exfil path is already closed one layer up by the schema drop; this belt
+  // guards the readiness-gate callers in index.ts / settings-ipc.ts.)
+  it("W4-R1-M1: customProviderSecretKey refuses a cross-namespace id (throws) — a foreign vault key can never be derived", () => {
+    expect(() => customProviderSecretKey("connection.victim")).toThrow();
+    expect(() => customProviderSecretKey("anthropic")).toThrow();
+    expect(() => customProviderSecretKey("provider.apiKey")).toThrow();
+    // The legitimate custom:* namespace still mints exactly as before.
+    expect(customProviderSecretKey("custom:abc")).toBe("provider.custom:abc.apiKey");
+  });
+
   it("isCustomProviderRecordId distinguishes a `custom:*` record id from the builtin `custom` sentinel and any catalog id", () => {
     expect(isCustomProviderRecordId("custom:abc")).toBe(true);
     expect(isCustomProviderRecordId("custom")).toBe(false);
