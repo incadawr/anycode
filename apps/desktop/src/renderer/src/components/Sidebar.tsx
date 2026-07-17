@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { SessionSummary } from "../../../shared/tabs.js";
+import { isEngineId } from "../../../shared/engines.js";
 import type { TabInfo } from "../tabs-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import { useSettingsStore } from "../settings-store.js";
@@ -455,7 +456,15 @@ export function Sidebar({
           // W10-FIX F1: explicit re-pin target (only ever set by the notice button).
           ...(replacementConnectionId !== undefined ? { replacementConnectionId } : {}),
         });
-        const message = handleCreateTabResult(result, { onTabCreated, onFocusTab }, { title: session.title });
+        // TASK.64: forward the session's engine so a `not_ready` refusal on a
+        // Codex session surfaces the sign-in copy, not the core provider copy.
+        // Unknown/legacy engine ids fall through to undefined (historical copy).
+        const engine = isEngineId(session.engineId) ? session.engineId : undefined;
+        const message = handleCreateTabResult(
+          result,
+          { onTabCreated, onFocusTab },
+          { title: session.title, ...(engine !== undefined ? { engine } : {}) },
+        );
         setNotice(message);
         // W10-FIX F1: arm the re-pin button ONLY for connection_missing AND when a
         // current connection exists to re-pin onto; null on every other outcome.

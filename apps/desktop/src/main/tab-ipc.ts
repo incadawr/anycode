@@ -172,7 +172,8 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
 
 const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
 
-function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSummary {
+/** exported for tests (tab-ipc.test.ts): the persistence->picker projection. */
+export function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSummary {
   const openInTabId = manager.sessionOpenInTab(meta.id);
   return {
     id: meta.id,
@@ -185,6 +186,9 @@ function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSummary {
     updatedAt: meta.updatedAt,
     ...(meta.title !== undefined ? { title: meta.title } : {}),
     ...(openInTabId !== undefined ? { openInTabId } : {}),
+    // TASK.64: carry the session's engine to the renderer so a resume `not_ready`
+    // toast can read the engine-correct copy (Sidebar -> handleCreateTabResult).
+    ...(meta.engineId !== undefined ? { engineId: meta.engineId } : {}),
   };
 }
 

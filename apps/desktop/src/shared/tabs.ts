@@ -149,4 +149,13 @@ export interface SessionSummary {
   updatedAt: number;
   title?: string;
   openInTabId?: string; // session already bound to a live tab (main's annotation)
+  /**
+   * The engine the session was created under (projected from persistence
+   * SessionMeta.engineId; opaque host identity, absent = a historical core
+   * session). TASK.64: the Sidebar forwards this to `handleCreateTabResult` so a
+   * `not_ready` resume failure on a Codex session reads the sign-in-specific copy
+   * ("Sign in to Codex…") instead of the irrelevant "Configure a provider…"
+   * core copy. Display-only — main is the authoritative spawn gate.
+   */
+  engineId?: string;
 }
