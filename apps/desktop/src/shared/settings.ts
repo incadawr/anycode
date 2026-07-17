@@ -135,6 +135,15 @@ export interface ProviderConnection {
   transport?: ProviderTransportId;
   baseUrl?: string;
   reasoningEffort?: ReasoningEffort;
+  /**
+   * User declaration that this endpoint authenticates nothing (dogfood 16.07:
+   * local servers — LM Studio/ollama/llama.cpp). UI-level truth for the
+   * drawer's "no API key" checkbox and the tile's health derivation (a keyless
+   * connection must not nag "Needs credential"). Runtime keylessness itself is
+   * transport-governed (core accepts a missing key only on OpenAI-family
+   * transports), so this flag never overrides `computeProviderReady`.
+   */
+  authOptional?: boolean;
   /** Advisory last-known health (TASK.45 §3); W11 writes it, never a runtime-readiness source. */
   lastHealth?: { status: ProviderHealthStatus; at: string; safeCode?: string };
 }
@@ -402,6 +411,8 @@ export interface ConnectionCreateRequest {
   transport?: ProviderTransportId;
   baseUrl?: string;
   reasoningEffort?: ReasoningEffort;
+  /** "No API key" declaration (see `ProviderConnection.authOptional`); only `true` is persisted. */
+  authOptional?: boolean;
   /** Make the new connection active (default for new sessions). */
   setActive?: boolean;
 }
@@ -420,6 +431,12 @@ export interface ConnectionUpdateRequest {
   transport?: ProviderTransportId | "";
   baseUrl?: string;
   reasoningEffort?: ReasoningEffort;
+  /**
+   * "No API key" declaration: absent = keep the current value, `true` = set,
+   * `false` = clear (the handler removes the key from disk rather than
+   * persisting `false` — same only-truthy-on-disk discipline as `transport`).
+   */
+  authOptional?: boolean;
 }
 
 export interface ConnectionSetActiveRequest {

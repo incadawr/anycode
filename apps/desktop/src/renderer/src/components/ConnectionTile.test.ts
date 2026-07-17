@@ -79,6 +79,21 @@ describe("connectionHealthStatus (task §3: needs_credential OVERRIDES any stale
       ),
     ).toBe("ready");
   });
+
+  // Keyless declarations (dogfood 16.07): a connection that expects NO
+  // credential (catalog authOptional — vLLM — or its own "no API key" flag)
+  // must not nag needs_credential forever over an absent key. Reverting the
+  // `keyless` bypass turns these red.
+  it("keyless: absent credential is a non-event — lastHealth (or unchecked) surfaces instead of needs_credential", () => {
+    expect(connectionHealthStatus(conn(), undefined, true)).toBe("unchecked");
+    expect(connectionHealthStatus(conn({ lastHealth: { status: "ready", at: "t" } }), status({ set: false }), true)).toBe(
+      "ready",
+    );
+  });
+
+  it("keyless defaults to false — the credential gate stays fail-closed for ordinary connections (regress)", () => {
+    expect(connectionHealthStatus(conn(), undefined)).toBe("needs_credential");
+  });
 });
 
 describe("describeConnectionHealth (task §3 table: tone discipline)", () => {

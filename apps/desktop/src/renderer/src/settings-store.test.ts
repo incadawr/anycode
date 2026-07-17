@@ -17,6 +17,7 @@ import type {
 } from "../../shared/settings.js";
 import type { UpdateActionReason, UpdateActionResult, UpdateStatus } from "../../shared/updates.js";
 import {
+  activationReadinessNotice,
   createSettingsStore,
   describeMutationFailure,
   describeOAuthFailure,
@@ -259,6 +260,42 @@ describe("settings-store: connection CRUD (TASK.45 W12)", () => {
 
     expect(bridge.connectionSetActive).toHaveBeenCalledWith({ id: "conn-2" });
     expect(store.getState().snapshot).toEqual(nowActive);
+  });
+
+  // Dogfood 16.07: activating a keyless custom connection used to succeed
+  // with zero feedback while providerReady silently flipped false. Reverting
+  // connectionSetActive to a bare `commitSnapshot(result.snapshot)` turns
+  // this red.
+  it("connectionSetActive that leaves the provider NOT ready sets the readiness warning notice", async () => {
+    const notReady = baseSnapshot({
+      providerReady: false,
+      settings: {
+        ...baseSettings(),
+        provider: { activeConnectionId: "conn-local", connections: [{ id: "conn-local", providerId: "custom" }] },
+      },
+    });
+    const bridge = fakeBridge({ connectionSetActive: vi.fn().mockResolvedValue({ ok: true, snapshot: notReady }) });
+    const store = createSettingsStore(bridge);
+
+    await store.getState().connectionSetActive({ id: "conn-local" });
+
+    expect(store.getState().snapshot).toEqual(notReady);
+    expect(store.getState().notice).toBe(activationReadinessNotice({ ok: true, snapshot: notReady }));
+    expect(store.getState().notice).not.toBeNull();
+  });
+
+  it("connectionSetActive that leaves the provider ready sets no notice", async () => {
+    const ready = baseSnapshot({ providerReady: true });
+    const bridge = fakeBridge({ connectionSetActive: vi.fn().mockResolvedValue({ ok: true, snapshot: ready }) });
+    const store = createSettingsStore(bridge);
+
+    await store.getState().connectionSetActive({ id: "conn-1" });
+
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it("activationReadinessNotice is undefined on a refusal — the failure path keeps its own describeMutationFailure text", () => {
+    expect(activationReadinessNotice({ ok: false, reason: "not_found" })).toBeUndefined();
   });
 
   it("connectionDelete refused with connection_in_use sets the notice and leaves snapshot untouched", async () => {

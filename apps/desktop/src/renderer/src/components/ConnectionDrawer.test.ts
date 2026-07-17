@@ -6,8 +6,14 @@
  * behavior is proven live by `provider-connections-ui-smoke.mjs` instead.
  */
 import { describe, expect, it } from "vitest";
-import type { ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
-import { buildConnectionUpdatePayload, resolveCreatedConnectionId, resolveDrawerOAuthStartArgs } from "./ConnectionDrawer.js";
+import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
+import {
+  buildConnectionUpdatePayload,
+  providerSelectDisplayValue,
+  resolveCreatedConnectionId,
+  resolveDrawerOAuthStartArgs,
+  transportAfterNoAuthToggle,
+} from "./ConnectionDrawer.js";
 
 function conn(id: string, providerId = "z-ai"): ProviderConnection {
   return { id, providerId };
@@ -86,8 +92,9 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "",
       baseUrl: "",
       showBaseUrl: false,
+      authOptional: false,
     });
-    expect(payload).toEqual({ id: "conn-1", label: "Prod", model: "glm-4.6", transport: "", baseUrl: "" });
+    expect(payload).toEqual({ id: "conn-1", label: "Prod", model: "glm-4.6", transport: "", baseUrl: "", authOptional: false });
   });
 
   it("sends the explicit transport value when one is selected (regress)", () => {
@@ -98,6 +105,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "openai-responses",
       baseUrl: "",
       showBaseUrl: false,
+      authOptional: false,
     });
     expect(payload.transport).toBe("openai-responses");
   });
@@ -110,6 +118,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "",
       baseUrl: "https://x",
       showBaseUrl: true,
+      authOptional: false,
     });
     expect(shown.baseUrl).toBe("https://x");
     const hidden = buildConnectionUpdatePayload({
@@ -119,7 +128,65 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "",
       baseUrl: "https://x",
       showBaseUrl: false,
+      authOptional: false,
     });
     expect(hidden.baseUrl).toBe("");
+  });
+
+  // authOptional mirrors transport's unconditional-send discipline: unchecking
+  // the "no API key" box must CLEAR a persisted flag, so `false` is sent, not
+  // omitted. Reverting to a `...(authOptional ? {...} : {})` spread turns the
+  // second assertion red.
+  it("sends authOptional unconditionally — true to set, false to clear", () => {
+    const base = { connectionId: "conn-1", label: "", model: "", transport: "" as const, baseUrl: "", showBaseUrl: false };
+    expect(buildConnectionUpdatePayload({ ...base, authOptional: true }).authOptional).toBe(true);
+    expect(buildConnectionUpdatePayload({ ...base, authOptional: false }).authOptional).toBe(false);
+  });
+});
+
+describe("transportAfterNoAuthToggle (dogfood 16.07: keyless checkbox must escape the anthropic default)", () => {
+  // The trap this closes: custom's default transport is anthropic-messages,
+  // where core is fail-closed on a missing key — a keyless connection left on
+  // "(provider default)" stays not-ready forever with no visible reason.
+  it("checking the box with '(provider default)' selected auto-picks openai-chat-completions", () => {
+    expect(transportAfterNoAuthToggle(true, "")).toBe("openai-chat-completions");
+  });
+
+  it("never overrides an explicit transport choice, either family", () => {
+    expect(transportAfterNoAuthToggle(true, "openai-responses")).toBe("openai-responses");
+    expect(transportAfterNoAuthToggle(true, "anthropic-messages")).toBe("anthropic-messages");
+  });
+
+  it("unchecking leaves the transport untouched", () => {
+    expect(transportAfterNoAuthToggle(false, "")).toBe("");
+    expect(transportAfterNoAuthToggle(false, "openai-chat-completions")).toBe("openai-chat-completions");
+  });
+});
+
+describe("providerSelectDisplayValue (dogfood 16.07: add-mode must show the placeholder, not a phantom custom)", () => {
+  const CATALOG: CatalogSummaryEntry[] = [
+    { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
+    { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },
+  ];
+
+  // The bug: add mode (`templateLocked: false`, nothing picked) rendered the
+  // catalog's `custom` sentinel as selected while `providerId` stayed `""` —
+  // the form looked complete but Create was silently disabled. Reverting the
+  // fix (unconditional `|| custom.id` fallback) turns this red.
+  it("add mode with no selection displays the empty placeholder value", () => {
+    expect(providerSelectDisplayValue("", false, CATALOG)).toBe("");
+  });
+
+  it("a real selection passes through in both modes", () => {
+    expect(providerSelectDisplayValue("z-ai", false, CATALOG)).toBe("z-ai");
+    expect(providerSelectDisplayValue("z-ai", true, CATALOG)).toBe("z-ai");
+  });
+
+  it("edit mode keeps the cosmetic custom fallback for a bare pre-W12 connection", () => {
+    expect(providerSelectDisplayValue("", true, CATALOG)).toBe("custom");
+  });
+
+  it("edit-mode fallback fails soft to empty when the catalog carries no custom sentinel", () => {
+    expect(providerSelectDisplayValue("", true, [CATALOG[0]!])).toBe("");
   });
 });

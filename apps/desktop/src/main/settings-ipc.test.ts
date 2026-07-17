@@ -975,6 +975,43 @@ describe("connection CRUD write-path end-to-end (W12, DoD item 4 replacement —
   });
 });
 
+describe("connection authOptional — the drawer's 'no API key' declaration (dogfood 16.07)", () => {
+  it("create persists authOptional:true; an omitted flag never lands on disk", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "m", authOptional: true });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "m2" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.authOptional).toBe(true);
+    expect("authOptional" in (loaded.settings.provider.connections[1] ?? {})).toBe(false);
+  });
+
+  // Only-truthy-on-disk: `false` must REMOVE the key (mirrors the transport
+  // `""`-clear branch) — reverting the update handler's explicit delete branch
+  // to a plain spread leaves a literal `false` on disk and turns this red.
+  it("update sets the flag and clears it again without persisting a literal false", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" });
+
+    const set = await handleConnectionUpdate(deps, { id: "conn-1", authOptional: true });
+    expect(set.ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.authOptional).toBe(true);
+
+    const cleared = await handleConnectionUpdate(deps, { id: "conn-1", authOptional: false });
+    expect(cleared.ok).toBe(true);
+    const after = (await loadSettings(settingsPath)).settings.provider.connections[0] ?? {};
+    expect("authOptional" in after).toBe(false);
+  });
+
+  it("toggling authOptional alone leaves lastHealth untouched — it is not an endpoint-identity edit", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" });
+    const before = (await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth;
+    await handleConnectionUpdate(deps, { id: "conn-1", authOptional: true });
+    const after = (await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth;
+    expect(after).toEqual(before);
+  });
+});
+
 // ── TASK.45 W12-FIX2 §1: connection-create returns the authoritative minted id ──
 
 describe("handleConnectionCreate — createdConnectionId (W12-FIX2 §1, codex W12-FIX review #1)", () => {

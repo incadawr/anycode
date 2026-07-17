@@ -80,6 +80,7 @@ const connectionSchema = z.object({
   transport: transportSchema.optional(),
   baseUrl: z.string().optional(),
   reasoningEffort: reasoningEffortSchema.optional(),
+  authOptional: z.boolean().optional(),
   lastHealth: z
     .object({
       status: z.enum([

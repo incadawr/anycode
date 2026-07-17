@@ -122,6 +122,21 @@ describe("settingsSchema (v2)", () => {
     };
     expect(settingsSchema.safeParse(settings).success).toBe(true);
   });
+
+  it("accepts a connection's authOptional flag and preserves it through parse (dogfood 16.07 'no API key' declaration)", () => {
+    const settings = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [{ id: "c1", providerId: "custom", baseUrl: "http://localhost:1234/v1", authOptional: true }],
+      },
+    };
+    const parsed = settingsSchema.safeParse(settings);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.authOptional).toBe(true);
+    }
+  });
 });
 
 describe("v1 reset (settingsMigrations[1])", () => {

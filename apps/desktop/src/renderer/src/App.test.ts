@@ -37,6 +37,20 @@ function snapshot(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   };
 }
 
+function withConnections(count: number, overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
+  const base = snapshot(overrides);
+  return {
+    ...base,
+    settings: {
+      ...base.settings,
+      provider: {
+        activeConnectionId: `conn-${count - 1}`,
+        connections: Array.from({ length: count }, (_, i) => ({ id: `conn-${i}`, providerId: "z-ai" })),
+      },
+    },
+  };
+}
+
 describe("shouldShowWelcome (ruling §2)", () => {
   it("shows Welcome once the snapshot has loaded, the provider isn't ready, and no tab is open", () => {
     expect(shouldShowWelcome(snapshot({ providerReady: false }), 0)).toBe(true);
@@ -61,6 +75,20 @@ describe("shouldShowWelcome (ruling §2)", () => {
   it("does not show Welcome once any tab is open, even if not ready — Welcome yields to the tab UI by tab count, not by providerReady flipping back", () => {
     expect(shouldShowWelcome(snapshot({ providerReady: false }), 1)).toBe(false);
     expect(shouldShowWelcome(snapshot({ providerReady: true }), 2)).toBe(false);
+  });
+
+  // Dogfood 16.07 lockout: a user with several configured connections
+  // activated a keyless custom connection (providerReady -> false, no tabs
+  // open) and was dumped into first-run onboarding with no path back — the
+  // Welcome form binds `connections[0]`, not the failing active connection.
+  // Reverting the gate to ignore connection count turns this red.
+  it("does not show Welcome for a configured user (≥2 connections), even when the active one isn't ready — the shell keeps Settings reachable", () => {
+    expect(shouldShowWelcome(withConnections(2, { providerReady: false }), 0)).toBe(false);
+    expect(shouldShowWelcome(withConnections(4, { providerReady: false }), 0)).toBe(false);
+  });
+
+  it("still shows Welcome mid-setup — exactly one connection, not ready yet (metadata saved, credential pending): its form edits that same connection", () => {
+    expect(shouldShowWelcome(withConnections(1, { providerReady: false }), 0)).toBe(true);
   });
 });
 

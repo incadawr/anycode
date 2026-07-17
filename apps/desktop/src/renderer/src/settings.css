@@ -408,6 +408,24 @@
   align-items: center;
 }
 
+.settings-field-checkbox {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.settings-field-checkbox input {
+  accent-color: var(--accent);
+}
+
+.settings-field-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
 .settings-field-input,
 .settings-field-select {
   background: var(--bg-inset);
