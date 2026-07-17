@@ -1092,8 +1092,12 @@ reads as `open:false` with empty defaults, not an error. `rollouts[]` are the
 rendered rows, **custody-redacted** (see the custody norm below):
 `timestamp`/`size` are the component's own deterministic UTC/size labels
 (product-generated, legal raw); `fileName` is the row's machine-generated
-identity (the row's own `data-file-name` — `rollout-<ISO>-<uuid>.jsonl`, not
-PII); the session's cwd crosses as `cwdRendered: boolean` only, and the
+identity (the row's own `data-file-name`) — the rollout's path RELATIVE to
+the profile's `sessions/` directory, `YYYY/MM/DD/rollout-<safe>.jsonl`
+(matched by the main process against an ANCHORED pattern, so `..`/absolute
+paths never round-trip — custody-relevant: the identity can only name a file
+inside the selected profile's own sessions tree; it is not PII); the
+session's cwd crosses as `cwdRendered: boolean` only, and the
 first-user-message preview line crosses as
 `preview: {rendered, length, sha256_12}` — the length of the EXACT rendered
 (post-truncate) text plus the first 12 hex chars of its SHA-256, computed in
@@ -1137,6 +1141,19 @@ showing the previous selection's reply (the passive-effect window, or an
 in-flight old reply landing late) can never satisfy either wait — the
 timing-based loading-appear pre-wait this replaces could be fooled by both.
 
+**Profile dimension of `previewFor` (W4-F0e).** `fileName` is relative to a
+profile's `sessions/` dir, so two profiles can legally render the SAME
+fileName — `previewFor` alone does not say WHOSE file the preview answers.
+That dimension is pinned by construction: (i) switching profiles
+synchronously resets the preview result and invalidates the preview gate, so
+a post-switch `previewFor` can only have been stamped by a request issued
+under the NEW profile; (ii) `import/rollout` refuses `list_stale` — before
+capturing or clicking anything — whenever the rendered list is still loading
+(no `data-rollouts-for` stamp) or is stamped with a different profile than
+the select currently names. Every preview request the driver can cause is
+therefore (current profile, clicked fileName), and a same-name settled
+preview left over from the previous profile can never satisfy the settle.
+
 The drivers ride the dialog's REAL controls: `import/open {open:true}` clicks
 the pane's own "Import a Codex session…" button (so the pane must be mounted
 first — `POST /settings/pane {"paneId":"codex"}`), `{open:false}` the
@@ -1155,7 +1172,7 @@ the GET).
 | `GET /settings/codex/import` | — | `{paneMounted, open, profileId, profileOptions:[{id,label}], listLoading, listEmptyText, rollouts:[{fileName, timestamp, size, cwdRendered, preview:{rendered,length,sha256_12}, selected}], rolloutsFor, previewLoading, previewFor, statsLines, notices, modelValue, modelOptions:[{id,name}], importDisabled, importing}` |
 | `POST /settings/codex/import/open` | `{open:boolean}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"button_not_present"\|"did_not_open"\|"did_not_close"}` |
 | `POST /settings/codex/import/profile` | `{profileId}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"unknown_profile"\|"list_timeout"}` |
-| `POST /settings/codex/import/rollout` | `{index}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"unknown_rollout"\|"preview_timeout"}` |
+| `POST /settings/codex/import/rollout` | `{index}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"list_stale"\|"unknown_rollout"\|"preview_timeout"}` |
 | `POST /settings/codex/import/model` | `{model}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"unknown_model"\|"did_not_set"}` |
 | `POST /settings/codex/import/apply` | `{}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"import_disabled"\|"import_refused"\|"import_timeout"}` |
 
