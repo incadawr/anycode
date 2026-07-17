@@ -649,6 +649,50 @@ describe("CodexEngine — subscription quota (TASK.51, cut §6)", () => {
     });
     expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 41 }, planType: "plus" });
   });
+
+  it("a quota push BETWEEN turns advances quotaSnapshot() — not frozen until the next in-turn push (R2-M1)", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    // Boot pull seeded primary=35%. NO turn is active, so the per-turn
+    // TurnTranslator — today's only tracker writer — does not exist; and the
+    // push is account-scoped (no threadId), so it never survives the per-turn
+    // queue's this-thread filter either. It must STILL advance the session
+    // tracker off the transport tap, or the ui_ready snapshot stays stale until
+    // a push happens to land mid-turn (cut §6.1 "advanced by every live push").
+    expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 35 }, planType: "plus" });
+
+    server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 77, windowDurationMins: 10_080 } } } });
+    await tick();
+
+    // Sparse merge keeps planType from the boot pull; primary advanced to the push.
+    expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 77 }, planType: "plus" });
+  });
+
+  it("quota pushes AFTER a turn completes still advance the tracker; the last of several wins (R2-M1)", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work");
+    const engine = connected.engine;
+
+    // Run one full turn so the engine returns to the between-turns state — and,
+    // critically, so the Phase-B loop leaves a waiter armed on the notification
+    // queue (codex-engine.ts re-arms `next` BEFORE delivering each event). That
+    // orphaned waiter swallows the FIRST post-turn notification bytes-and-all.
+    const turn = drive(engine, "hi", new AbortController().signal);
+    await tick();
+    server.stream.push({ method: "turn/completed", params: { threadId: connected.threadId, turn: { id: server.turnId, status: "completed" } } });
+    await turn.done;
+
+    // Two pushes arrive back-to-back with no turn active: the first is eaten by
+    // the orphaned waiter, the second merely buffers unread — yet the tracker
+    // must reflect the LAST, because the transport tap sees BOTH regardless of
+    // the queue. On today's code it stays frozen on the boot value: RED.
+    server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 60, windowDurationMins: 10_080 } } } });
+    await tick();
+    server.stream.push({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 88, windowDurationMins: 10_080 } } } });
+    await tick();
+
+    expect(engine.quotaSnapshot()).toMatchObject({ primary: { usedPercent: 88 }, planType: "plus" });
+  });
 });
 
 describe("CodexEngine — Stop (TASK.38 blocker)", () => {

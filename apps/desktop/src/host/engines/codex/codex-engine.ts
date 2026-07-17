@@ -633,8 +633,10 @@ export class CodexEngine implements SessionEngine {
     private readonly bootHistoryItems: readonly HistoryItem[] = [],
     /**
      * Session-lifetime quota state (codex-profiles cut §6): seeded by the boot
-     * pull, advanced by every live `account/rateLimits/updated` through the
-     * per-turn translator. Undefined only for bare test-constructed engines.
+     * pull, advanced by every live `account/rateLimits/updated` off the
+     * transport-wide notification tap (`observeNotification`) — so it moves
+     * BETWEEN turns too, not only while a turn's translator is emitting.
+     * Undefined only for bare test-constructed engines.
      */
     private readonly quota?: CodexQuotaTracker,
   ) {
@@ -644,7 +646,7 @@ export class CodexEngine implements SessionEngine {
     this.bounds = timeouts(overrides);
     this.settings = settings;
     this.applied = this.chosen();
-    this.unobserve = this.client.observeNotifications?.((notification) => this.indexItem(notification)) ?? (() => {});
+    this.unobserve = this.client.observeNotifications?.((notification) => this.observeNotification(notification)) ?? (() => {});
   }
 
   get activeTurnDetails(): ActiveCodexTurn | null {
@@ -1133,6 +1135,29 @@ export class CodexEngine implements SessionEngine {
 
   private addressesThisThread(notification: JsonRpcNotification): boolean {
     return record(notification.params)?.threadId === this.threadId;
+  }
+
+  /**
+   * The transport-wide notification tap (CodexClient.observeNotifications):
+   * runs synchronously for EVERY server notification at dispatch time, in wire
+   * order, independent of the per-turn NotificationQueue. Two state machines
+   * ride it because both must advance regardless of whether a turn is currently
+   * draining that queue: the approval-correlation index, and the session quota
+   * tracker.
+   */
+  private observeNotification(notification: JsonRpcNotification): void {
+    this.indexItem(notification);
+    // `account/rateLimits/updated` (codex-profiles cut §6.1) is ACCOUNT-scoped:
+    // it carries no threadId, so the per-turn queue's this-thread filter drops
+    // it — and between turns there is no turn iterator draining the queue at
+    // all, nor a TurnTranslator (the only in-turn writer). Advancing the
+    // session tracker from the tap makes the snapshot move on every live push
+    // regardless of turn phase (cut §6.1 "advanced by every live push"); the
+    // per-turn translator stays a pure `engine_quota` emitter for the in-turn
+    // UI event, re-folding the same push idempotently (frozen sparse merge).
+    if (notification.method === "account/rateLimits/updated") {
+      this.quota?.applyUpdate(notification.params);
+    }
   }
 
   /** Transport-ordered writer of the approval-correlation index (see CodexClient). */
