@@ -206,6 +206,16 @@ function lastCheckOf(snapshot: CodexOnboardingSnapshot): { status: CodexDoctorRe
 const ACTIVE_PROFILE_KEY = "recheck:active";
 
 /**
+ * The coalescence key a login-in-progress occupies in `inFlightByKey` (F1). A
+ * reserved token that neither a concrete-profile key (`id:<profileId>`) nor the
+ * active-profile key (`recheck:active`) can ever equal, so NOTHING coalesces
+ * onto a login — a concurrent recheck/pick sees a different key and QUEUES
+ * behind the login gate (via `inFlightTail`) instead of spawning a second
+ * doctor child alongside the live login child.
+ */
+const LOGIN_KEY = "login:active";
+
+/**
  * Builds the exclusive controller: `recheck`/`pickBinary`/`loginStart` funnel
  * through `runExclusive`, which COALESCES work sharing one profile key and
  * SERIALIZES work across different keys behind a single tail promise — so the
@@ -296,6 +306,40 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     inFlightByKey.set(key, promise);
     inFlightTail = promise;
     return track(promise);
+  }
+
+  /**
+   * Enters a login into the same serialization seam recheck/pickBinary funnel
+   * through (F1). A login body is not a single `fn`: it spans several awaits and
+   * its OWN inline post-login doctor spawn, so instead of runExclusive it holds
+   * a gate under LOGIN_KEY and advances `inFlightTail` up front — the caller
+   * invokes this before its first `await`. While the gate is unresolved, every
+   * other-key run chains behind it (one child at a time) and pickBinary's
+   * `inFlightByKey.size` check waits it out. The returned release settles the
+   * gate and frees the slot; the caller MUST call it in a `finally`. The gate's
+   * resolved VALUE is inert — LOGIN_KEY never coalesces and every awaiter reads
+   * settlement only, never the value.
+   */
+  function enterLoginSeam(): () => void {
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const held: Promise<CodexOnboardingSnapshot> = inFlightTail.then(
+      () => gate.then(shutdownSnapshot),
+      () => gate.then(shutdownSnapshot),
+    );
+    inFlightByKey.set(LOGIN_KEY, held);
+    inFlightTail = held;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      inFlightByKey.delete(LOGIN_KEY);
+      releaseGate();
+    };
   }
 
   /** No child, no spawn: quit is in progress and the ladder is closed for business. */
@@ -415,7 +459,13 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     recheck: (profileId?: string): Promise<CodexOnboardingSnapshot> =>
       shuttingDown
         ? Promise.resolve(shutdownSnapshot())
-        : runExclusive(profileId ?? ACTIVE_PROFILE_KEY, () => discoverAndCheck(profileId)),
+        : // Namespace the concrete-profile key (F2): a renderer-supplied
+          // `profileId` lives in `id:<profileId>`, never bare, so it cannot
+          // collide with the reserved ACTIVE_PROFILE_KEY string even if a
+          // caller passes the literal "recheck:active". (A bogus id still
+          // fails resolution downstream — this only keeps the key domains
+          // disjoint, it does NOT drop an invalid id to the active recheck.)
+          runExclusive(profileId !== undefined ? `id:${profileId}` : ACTIVE_PROFILE_KEY, () => discoverAndCheck(profileId)),
 
     async pickBinary(): Promise<CodexPickBinaryResult> {
       if (shuttingDown) {
@@ -447,7 +497,9 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       // (the binary verdict is profile-independent — cut §4.2 rows 1-3).
       const resolution = await resolveProfile(undefined);
       const profile = resolution.ok ? resolution.profile : SYSTEM_CODEX_PROFILE;
-      const snapshot = await runExclusive(profile.id, () => checkPath(confirmedPath, "picker", profile));
+      // Same `id:<id>` namespace as recheck (F2) so a pick and a recheck of the
+      // same profile still share one key (coalesce), never split across domains.
+      const snapshot = await runExclusive(`id:${profile.id}`, () => checkPath(confirmedPath, "picker", profile));
       return { ok: true, snapshot };
     },
 
@@ -461,6 +513,17 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       // through while the first is still awaiting `readBinaryPathSetting()`.
       const controller = new AbortController();
       activeLoginAbort = controller;
+      // Enter the SAME serialization seam recheck/pickBinary funnel through, up
+      // front, before the first `await` (F1). Without it the login child ran
+      // OUTSIDE inFlightByKey/inFlightTail: a concurrent recheck/pick spawned a
+      // doctor child in PARALLEL with the live login (breaking runExclusive's
+      // one-child invariant, and letting a mid-login doctor read a half-written
+      // profile home whose wrong verdict then persists), and the post-login
+      // re-diagnosis below could COALESCE onto an in-flight PRE-credential
+      // recheck of this same profile and hand the caller a stale "not ready"
+      // right after a successful sign-in. Holding the seam makes every other-key
+      // run QUEUE behind login instead. Released in the `finally`.
+      const releaseSeam = enterLoginSeam();
       try {
         const resolution = await resolveProfile(profileId);
         if (!resolution.ok) {
@@ -516,11 +579,16 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         }
         // Re-diagnose via the doctor (never trust the login handshake's own
         // success flag for account/version state) — one source of truth for
-        // "is Codex ready", the same doctor every other path uses. Same
+        // "is Codex ready", the same doctor every other path uses. Runs INLINE
+        // (not via runExclusive) INSIDE the still-held login seam: a fresh
+        // POST-credential verdict that cannot coalesce onto a queued
+        // pre-credential recheck of this profile (F1). `track` keeps it in
+        // activeRuns so shutdown awaits its bounded teardown as before. Same
         // profile as the login, so the fresh verdict lands in ITS cache slot.
-        const snapshot = await runExclusive(profile.id, () => checkPath(binaryPath, discovery.source, profile));
+        const snapshot = await track(checkPath(binaryPath, discovery.source, profile));
         return { ok: true, snapshot };
       } finally {
+        releaseSeam();
         activeLoginAbort = null;
       }
     },
