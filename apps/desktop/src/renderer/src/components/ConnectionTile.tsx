@@ -57,8 +57,10 @@ export const HEALTH_TONE: Record<ProviderHealthStatus, HealthTone> = {
 export function connectionHealthStatus(
   connection: ProviderConnection,
   credentialStatus: SecretStatus | undefined,
+  /** True when no credential is expected at all (catalog `authOptional` — vLLM — or the connection's own "no API key" declaration): an absent key is then a non-event, never a `needs_credential` nag. */
+  keyless = false,
 ): ProviderHealthStatus {
-  if (!credentialStatus?.set || credentialStatus.source === "none") {
+  if (!keyless && (!credentialStatus?.set || credentialStatus.source === "none")) {
     return "needs_credential";
   }
   return connection.lastHealth?.status ?? "unchecked";
@@ -138,7 +140,11 @@ export function ConnectionTile({
   const firstMenuItemRef = useRef<HTMLButtonElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
 
-  const healthStatus = connectionHealthStatus(connection, credentialStatus);
+  const healthStatus = connectionHealthStatus(
+    connection,
+    credentialStatus,
+    catalogEntry?.authOptional === true || connection.authOptional === true,
+  );
   const described = describeConnectionHealth(healthStatus);
   const providerName = catalogEntry?.name ?? "Custom";
   const authKind = catalogEntry?.authKind ?? "api_key";

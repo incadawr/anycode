@@ -2,7 +2,7 @@
  * Welcome screen (slice 2.2, ruling reviews/slice-2.2-forks-ruling.md §2 —
 
  * -> quit` boot path): rendered by App.tsx precisely when the app is
- * unconfigured (`!providerReady && tabs.length === 0`, `shouldShowWelcome`
+ * unconfigured (`!providerReady && tabs.length === 0 && connections.length <= 1`, `shouldShowWelcome`
  * in ../App.tsx). There is nothing else on screen in that state — main
  * opened the window with zero hosts.
  *

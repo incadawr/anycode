@@ -271,6 +271,7 @@ const connectionCreateSchema = z
     transport: transportEnum.optional(),
     baseUrl: z.string().optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
+    authOptional: z.boolean().optional(),
     setActive: z.boolean().optional(),
   })
   .strict();
@@ -285,6 +286,8 @@ const connectionUpdateSchema = z
     transport: z.union([transportEnum, z.literal("")]).optional(),
     baseUrl: z.string().optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
+    // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
+    authOptional: z.boolean().optional(),
   })
   .strict();
 const connectionIdSchema = z.object({ id: z.string().min(1) }).strict();
@@ -961,6 +964,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.transport !== undefined ? { transport: req.transport } : {}),
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+      ...(req.authOptional === true ? { authOptional: true } : {}),
     };
     const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
     const activeConnectionId = shouldActivate ? id : loaded.settings.provider.activeConnectionId;
@@ -1025,6 +1029,15 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         delete updatedConnection.transport;
       } else {
         updatedConnection.transport = normalizedTransport;
+      }
+    }
+    // Only-truthy-on-disk (mirrors transport's clear branch): `false` deletes
+    // the key rather than persisting a literal `false`.
+    if (req.authOptional !== undefined) {
+      if (req.authOptional) {
+        updatedConnection.authOptional = true;
+      } else {
+        delete updatedConnection.authOptional;
       }
     }
     const provider: ProviderSettingsV2 = {

@@ -205,6 +205,22 @@ export function describeMutationFailure(reason: SettingsMutationReason): string 
   }
 }
 
+/**
+ * Post-activation readiness warning (dogfood 16.07): switching the active
+ * connection to one that can't run tasks (no credential, no model, or an
+ * unsupported transport — main's `computeProviderReady` gates on the ACTIVE
+ * connection) used to succeed silently; with zero tabs open that silence
+ * turned into an unexplained bounce out of the shell. Returns the notice to
+ * show for a successful activation that left the provider not ready, or
+ * undefined when there is nothing to warn about.
+ */
+export function activationReadinessNotice(result: SettingsMutationResult): string | undefined {
+  if (!result.ok || result.snapshot.providerReady) {
+    return undefined;
+  }
+  return "Activated, but this connection isn't ready to run tasks — check its API key, model, and transport.";
+}
+
 /** Human-readable text for an `oauth-start` refusal (design §5) — every reason gets a distinct, non-empty notice, mirroring `describeMutationFailure`. */
 export function describeOAuthFailure(reason: OAuthStartReason): string {
   switch (reason) {
@@ -372,7 +388,8 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
       async connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult> {
         const result = await api().connectionSetActive(req);
         if (result.ok) {
-          commitSnapshot(result.snapshot);
+          const warning = activationReadinessNotice(result);
+          commitSnapshot(result.snapshot, warning !== undefined ? { notice: warning } : undefined);
         } else {
           set({ notice: describeMutationFailure(result.reason) });
         }

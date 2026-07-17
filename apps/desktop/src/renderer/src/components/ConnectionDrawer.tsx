@@ -101,6 +101,7 @@ export function buildConnectionUpdatePayload(params: {
   transport: ProviderTransportId | "";
   baseUrl: string;
   showBaseUrl: boolean;
+  authOptional: boolean;
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -108,7 +109,47 @@ export function buildConnectionUpdatePayload(params: {
     model: params.model.trim(),
     transport: params.transport,
     baseUrl: params.showBaseUrl ? params.baseUrl.trim() : "",
+    // Sent unconditionally, same rationale as `transport`: `false` must CLEAR
+    // a previously-persisted flag, not leave it untouched.
+    authOptional: params.authOptional,
   };
+}
+
+/**
+ * Transport after toggling the "no API key" checkbox (dogfood 16.07). Checking
+ * it while the transport is still "(provider default)" auto-selects
+ * `openai-chat-completions`: the custom template's default transport is
+ * anthropic-messages, where core is deliberately fail-closed on a missing key
+ * — leaving the default in place would keep the connection not-ready and
+ * reproduce the exact trap the checkbox exists to prevent. An explicit
+ * transport choice (either family) is never overridden, and unchecking never
+ * touches the transport. Exported for direct testing (no jsdom).
+ */
+export function transportAfterNoAuthToggle(
+  checked: boolean,
+  transport: ProviderTransportId | "",
+): ProviderTransportId | "" {
+  return checked && transport === "" ? "openai-chat-completions" : transport;
+}
+
+/**
+ * Value the provider `<select>` displays. Add mode surfaces the REAL (possibly
+ * empty) selection so the "Choose a provider…" placeholder shows until the user
+ * actually picks a template — a cosmetic `custom` fallback here reads as
+ * "already chosen" while `providerId` is still `""`, leaving Create silently
+ * disabled (dogfood 16.07). The fallback is edit-mode-only (`templateLocked`):
+ * a bare pre-W12 connection (`providerId === ""`) displays the catalog's own
+ * `custom` sentinel rather than an unmatched blank value, and that select is
+ * disabled anyway. Exported for direct testing (no jsdom).
+ */
+export function providerSelectDisplayValue(effectiveProviderId: string, templateLocked: boolean, catalog: readonly CatalogSummaryEntry[]): string {
+  if (effectiveProviderId !== "") {
+    return effectiveProviderId;
+  }
+  if (!templateLocked) {
+    return "";
+  }
+  return catalog.find((entry) => entry.isCustom)?.id ?? "";
 }
 
 export interface ConnectionDrawerFieldsProps {
@@ -152,6 +193,7 @@ export function ConnectionDrawerFields({
   const [model, setModel] = useState(editConnection?.model ?? "");
   const [baseUrl, setBaseUrl] = useState(editConnection?.baseUrl ?? "");
   const [transport, setTransport] = useState<ProviderTransportId | "">(editConnection?.transport ?? "");
+  const [noAuth, setNoAuth] = useState(editConnection?.authOptional === true);
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   const [creating, setCreating] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
@@ -176,12 +218,7 @@ export function ConnectionDrawerFields({
   const credentialKey = createdConnectionId !== null ? connectionSecretKey(createdConnectionId, authKind) : undefined;
   const credentialStatus = credentialKey !== undefined ? secrets.find((s) => s.key === credentialKey) : undefined;
   const templateLocked = createdConnectionId !== null; // provider identity is fixed once the connection exists
-  // Display-only fallback for a bare/custom connection (`providerId === ""`,
-  // e.g. one created before W12): show the catalog's own `custom` sentinel
-  // selected rather than an unmatched blank value (mirrors the pre-W12
-  // `displayedProviderId` convention) — cosmetic only, the select is disabled
-  // once `templateLocked`.
-  const selectDisplayValue = effectiveProviderId || catalog.find((entry) => entry.isCustom)?.id || "";
+  const selectDisplayValue = providerSelectDisplayValue(effectiveProviderId, templateLocked, catalog);
 
   async function createConnection(): Promise<void> {
     if (readOnly || providerId === "") {
@@ -195,6 +232,7 @@ export function ConnectionDrawerFields({
         ...(model.trim() ? { model: model.trim() } : {}),
         ...(transport ? { transport } : {}),
         ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+        ...(noAuth ? { authOptional: true } : {}),
       });
       const createdId = resolveCreatedConnectionId(result);
       if (createdId !== undefined) {
@@ -212,7 +250,15 @@ export function ConnectionDrawerFields({
     setSavingMeta(true);
     try {
       await store.getState().connectionUpdate(
-        buildConnectionUpdatePayload({ connectionId: createdConnectionId, label, model, transport, baseUrl, showBaseUrl }),
+        buildConnectionUpdatePayload({
+          connectionId: createdConnectionId,
+          label,
+          model,
+          transport,
+          baseUrl,
+          showBaseUrl,
+          authOptional: noAuth,
+        }),
       );
     } finally {
       setSavingMeta(false);
@@ -327,6 +373,27 @@ export function ConnectionDrawerFields({
         </label>
       )}
 
+      {selectedEntry?.isCustom === true && (
+        <label className="settings-field-checkbox">
+          <input
+            type="checkbox"
+            checked={noAuth}
+            disabled={readOnly}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setNoAuth(checked);
+              setTransport(transportAfterNoAuthToggle(checked, transport));
+            }}
+          />
+          <span>This endpoint doesn't need an API key (local server, open proxy)</span>
+        </label>
+      )}
+      {noAuth && transport === "anthropic-messages" && (
+        <div className="settings-field-hint" role="note">
+          The Anthropic Messages transport always requires an API key — pick an OpenAI-family transport to run keyless.
+        </div>
+      )}
+
       {createdConnectionId === null ? (
         <div className="settings-field-row">
           <button
@@ -352,7 +419,13 @@ export function ConnectionDrawerFields({
           </div>
 
           <section className="settings-section connection-drawer-credential">
-            <div className="settings-section-title">{authKind === "oauth" ? "Sign-in" : "API key"}</div>
+            <div className="settings-section-title">
+              {authKind === "oauth"
+                ? "Sign-in"
+                : noAuth || selectedEntry?.authOptional === true
+                  ? "API key (optional)"
+                  : "API key"}
+            </div>
             {authKind === "oauth" ? (
               <OAuthCredentialBlock
                 entry={selectedEntry as CatalogSummaryEntry}

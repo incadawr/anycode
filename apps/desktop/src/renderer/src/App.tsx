@@ -80,11 +80,19 @@ function readReviewWidth(): number {
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
  * FIRST settings snapshot has actually loaded (`snapshot !== null` — avoids
  * flashing Welcome during the brief unknown-readiness window right after
- * mount), no engine is ready, AND no tab is open yet. Once any tab
- * exists, Welcome yields to the tab UI even if `providerReady` later flips back
- * to false (e.g. the user clears the secret while a tab is open); that case is
- * handled by `createTab`'s `not_ready` guard/notice instead (shared/tabs.ts),
- * not by hiding an already-open tab.
+ * mount), no engine is ready, no tab is open yet, AND at most one connection
+ * exists. Once any tab exists, Welcome yields to the tab UI even if
+ * `providerReady` later flips back to false (e.g. the user clears the secret
+ * while a tab is open); that case is handled by `createTab`'s `not_ready`
+ * guard/notice instead (shared/tabs.ts), not by hiding an already-open tab.
+ *
+ * The connection-count bound (dogfood 16.07): Welcome is first-run/mid-setup
+ * UI — its embedded form edits the SINGLE existing connection (or creates the
+ * first one), so it can only represent states with ≤ 1 connection. A
+ * configured user who activates a not-ready connection (e.g. a keyless custom
+ * endpoint) keeps the normal shell, where Settings stays reachable — the old
+ * gate dropped them into onboarding with no way to switch back (a lockout:
+ * the form was bound to `connections[0]`, not the failing active connection).
  */
 export function shouldShowWelcome(
   snapshot: SettingsSnapshot | null,
@@ -94,7 +102,10 @@ export function shouldShowWelcome(
   // `null` is deliberately non-blocking while main's narrow availability
   // snapshot is in flight: never flash a provider-only Welcome over a usable
   // subscription engine.
-  return snapshot !== null && !snapshot.providerReady && hasExternalEngine === false && tabCount === 0;
+  if (snapshot === null || snapshot.providerReady || hasExternalEngine !== false || tabCount !== 0) {
+    return false;
+  }
+  return snapshot.settings.provider.connections.length <= 1;
 }
 
 export type MainPaneView = "start" | "active" | "empty";
