@@ -11,6 +11,7 @@ import {
   buildConnectionUpdatePayload,
   providerSelectDisplayValue,
   resolveCreatedConnectionId,
+  resolveCreatedCustomProviderId,
   resolveDrawerOAuthStartArgs,
   transportAfterNoAuthToggle,
 } from "./ConnectionDrawer.js";
@@ -60,6 +61,25 @@ describe("resolveCreatedConnectionId ( W12-FIX2 §1: authoritative created-id, c
 
   it("undefined on a refusal", () => {
     expect(resolveCreatedConnectionId({ ok: false, reason: "invalid" })).toBeUndefined();
+  });
+});
+
+describe("resolveCreatedCustomProviderId (: the record customProvider.create just minted)", () => {
+  it("resolves the single id present after that was not present before", () => {
+    const before = ["custom:a", "custom:b"];
+    const after = [{ id: "custom:a" }, { id: "custom:b" }, { id: "custom:c" }];
+    expect(resolveCreatedCustomProviderId(before, after)).toBe("custom:c");
+  });
+
+  it("resolves the new id even when it is not last in the returned list", () => {
+    expect(resolveCreatedCustomProviderId(["custom:b"], [{ id: "custom:new" }, { id: "custom:b" }])).toBe("custom:new");
+  });
+
+  // Fail-closed: a concurrent add in another window could surface TWO unseen
+  // ids — refuse to guess rather than point the connection at the wrong record.
+  it("undefined when zero or more than one id is new (fail-closed, no guessing)", () => {
+    expect(resolveCreatedCustomProviderId(["custom:a"], [{ id: "custom:a" }])).toBeUndefined();
+    expect(resolveCreatedCustomProviderId([], [{ id: "custom:a" }, { id: "custom:b" }])).toBeUndefined();
   });
 });
 

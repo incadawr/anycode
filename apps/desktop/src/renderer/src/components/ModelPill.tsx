@@ -37,7 +37,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { ReasoningEffort } from "@anycode/core";
 import type { CatalogSummary, ConnectionUpdateRequest, CustomProviderRecord } from "../../../shared/settings.js";
-import { activeProviderView } from "../../../shared/settings.js";
+import { activeProviderView, connectionById } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useSettingsStore } from "../settings-store.js";
 import type { DesktopState, TurnState } from "../store.js";
@@ -165,15 +165,27 @@ export function pillLabel(
  * (cut §9.2 — the user-picked subset a custom endpoint's fetch surfaced);
  * anything else (unknown id, or `providerId` itself `undefined` — the legacy
  * free-text config with no provider selected at all) yields `undefined`,
- * exactly like today's plain `catalog.find(...)?.models`. Exported for unit
- * testing.
+ * exactly like today's plain `catalog.find(...)?.models`.
+ *
+ * `connectionModels` — the target connection's LIVE-fetched ids
+ * (`ProviderConnection.models`, the connection-scoped guarded fetch) — takes
+ * precedence when non-empty: the live list decides WHAT is shown, the static
+ * catalog hints only decorate matching ids with display names. Absent/empty
+ * keeps every pre-fetch behavior byte-identical. Exported for unit testing.
  */
 export function providerModelsFor(
   providerId: string | undefined,
   catalog: CatalogSummary | undefined,
   custom: readonly CustomProviderRecord[] | undefined,
+  connectionModels?: readonly string[],
 ): readonly { id: string; name?: string }[] | undefined {
   const catalogHit = catalog?.find((entry) => entry.id === providerId)?.models;
+  if (connectionModels !== undefined && connectionModels.length > 0) {
+    return connectionModels.map((id) => {
+      const hint = catalogHit?.find((m) => m.id === id);
+      return hint?.name !== undefined ? { id, name: hint.name } : { id };
+    });
+  }
   if (catalogHit !== undefined) {
     return catalogHit;
   }
@@ -301,7 +313,18 @@ export function ModelPill() {
     activeProviderId,
     snapshot?.settings.provider.activeConnectionId,
   );
-  const catalogModels = providerModelsFor(providerId, snapshot?.catalog, snapshot?.settings.provider.custom);
+  // Live-fetched ids on the TARGET connection (same pinned-else-active target
+  // as the write path above) take precedence over static catalog hints.
+  const targetConnection =
+    snapshot && writeTargetConnectionId !== undefined
+      ? connectionById(snapshot.settings, writeTargetConnectionId)
+      : undefined;
+  const catalogModels = providerModelsFor(
+    providerId,
+    snapshot?.catalog,
+    snapshot?.settings.provider.custom,
+    targetConnection?.models,
+  );
 
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState<PillPage>("root");

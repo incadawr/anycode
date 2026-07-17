@@ -41,6 +41,8 @@ export interface CodexCatalogClient {
 export interface CodexModelEntry {
   id: string;
   label: string;
+  /** True only when this exact model advertises native image items in `model/list`. */
+  supportsImages?: boolean;
   /** `supportedReasoningEfforts[].reasoningEffort` — a free-form non-empty string in this protocol, NOT core's ReasoningEffort union. */
   efforts: string[];
   defaultEffort?: string;
@@ -86,6 +88,7 @@ function decodeModel(value: unknown): CodexModelEntry | null {
   return {
     id,
     label: text(model.displayName) ?? id,
+    supportsImages: Array.isArray(model.inputModalities) && model.inputModalities.includes("image"),
     efforts,
     ...(defaultEffort !== undefined ? { defaultEffort } : {}),
     isDefault: model.isDefault === true,
@@ -176,6 +179,11 @@ export class CodexModelCatalog {
     return this.byId.get(id);
   }
 
+  /** A missing/unreadable catalog is deliberately not evidence that images are safe to send. */
+  supportsImages(id: string): boolean {
+    return this.byId.get(id)?.supportsImages === true;
+  }
+
   /** The wire projection consumed by `EnginePresentation.model.available`. */
   choices(): EngineModelChoice[] {
     return this.entries.map((entry) => ({
@@ -188,16 +196,12 @@ export class CodexModelCatalog {
   /**
    * Resolves the effort to send alongside `model` on a `turn/start` override.
    *
-   * `preferred` is the effort the SERVER itself reported as effective for this
-   * thread (the `thread/start`/`thread/resume` echo). Re-asserting the server's
-   * own value is a no-op by construction and — crucially — does not silently
-   * downgrade a user whose ~/.codex config chose a higher effort than the
-   * model's catalog default (the live echo showed `reasoningEffort:"high"` for a
-   * model whose `defaultReasoningEffort` is "medium"). It is only replaced when
-   * the NEW model does not advertise it, in which case that model's own default
-   * is the sole defensible choice. Unknown model / no evidence -> undefined, and
-   * the caller omits `effort` from the override entirely (the server keeps
-   * whatever is already effective).
+   * `preferred` is the caller's remembered effort for THIS model (the boot
+   * thread echo at startup, or the model-specific choice restored later). When
+   * the model still advertises it, keep it; otherwise fall back to that model's
+   * own default. Unknown model / no evidence -> undefined, and the caller omits
+   * `effort` from the override entirely (the server keeps whatever is already
+   * effective).
    */
   resolveEffort(modelId: string, preferred?: string): string | undefined {
     const entry = this.byId.get(modelId);

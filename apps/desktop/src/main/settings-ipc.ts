@@ -1059,6 +1059,13 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       (req.model !== undefined && req.model !== existing.model) ||
       (req.transport !== undefined && normalizedTransport !== existing.transport) ||
       (req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl);
+    // A baseUrl change re-points the connection at a DIFFERENT endpoint, so a
+    // live-fetched model list from the old one must not linger (same staleness
+    // rationale as the lastHealth reset, scoped to baseUrl only — a model/
+    // transport edit doesn't change which endpoint serves `/models`).
+    // Normalized comparison: `""` and absent both mean "catalog default".
+    const baseUrlChanged =
+      req.baseUrl !== undefined && req.baseUrl.trim() !== (existing.baseUrl ?? "").trim();
     const updatedConnection: ProviderConnection = {
       ...existing,
       ...(req.label !== undefined ? { label: req.label } : {}),
@@ -1089,6 +1096,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       } else {
         delete updatedConnection.authOptional;
       }
+    }
+    if (baseUrlChanged) {
+      delete updatedConnection.models;
+      delete updatedConnection.modelsFetchedAt;
     }
     const provider: ProviderSettingsV2 = {
       ...loaded.settings.provider,

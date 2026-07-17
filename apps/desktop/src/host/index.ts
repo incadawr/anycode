@@ -605,7 +605,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     bootHistory: booted.engine.historyItems(),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
     rules: new SessionPermissionRules(),
-    imageInputEnabled: () => false,
+    // `model/list` is the native Codex capability authority. The closure reads
+    // the engine's chosen model live, so switching to a text-only model closes
+    // the Composer gate before a turn can be sent.
+    imageInputEnabled: () => connected.engine.imageInputEnabled(),
     git: gitBridge,
     shell,
     persistence: {

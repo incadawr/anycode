@@ -147,6 +147,8 @@ export const COMPOSER_INSERT_EVENT = "anycode:composer-insert";
 
 export const COMPOSER_IMAGE_MAX_BYTES = 3_750_000;
 export const COMPOSER_IMAGE_MAX_PER_MESSAGE = 8;
+/** Largest edge used when an oversized image is normalized before attaching. */
+export const COMPOSER_IMAGE_MAX_EDGE = 2_048;
 
 interface DraftImage {
   id: number;
@@ -194,6 +196,55 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 function formatImageSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function canvasBlob(canvas: HTMLCanvasElement, type: ImageMediaType, quality?: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob === null) reject(new Error("Could not resize image."));
+      else resolve(blob);
+    }, type, quality);
+  });
+}
+
+/**
+ * Normalizes an oversized still image for the immutable IPC limit. JPEG/WebP
+ * additionally lower quality in steps; PNG is resized without changing its
+ * format. GIF is deliberately excluded: canvas would silently discard frames.
+ */
+async function resizeComposerImage(file: File, mediaType: ImageMediaType): Promise<Uint8Array> {
+  if (mediaType === "image/gif") {
+    throw new Error(`${file.name || "image"} is an animated GIF and cannot be resized automatically.`);
+  }
+  const bitmap = await createImageBitmap(file);
+  try {
+    let width = bitmap.width;
+    let height = bitmap.height;
+    const largestEdge = Math.max(width, height);
+    if (largestEdge > COMPOSER_IMAGE_MAX_EDGE) {
+      const scale = COMPOSER_IMAGE_MAX_EDGE / largestEdge;
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    }
+
+    for (let pass = 0; pass < 6; pass += 1) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (context === null) throw new Error("Could not resize image.");
+      context.drawImage(bitmap, 0, 0, width, height);
+      const quality = mediaType === "image/png" ? undefined : Math.max(0.5, 0.88 - pass * 0.08);
+      const blob = await canvasBlob(canvas, mediaType, quality);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (bytes.length <= COMPOSER_IMAGE_MAX_BYTES) return bytes;
+      width = Math.max(1, Math.round(width * 0.8));
+      height = Math.max(1, Math.round(height * 0.8));
+    }
+  } finally {
+    bitmap.close();
+  }
+  throw new Error(`${file.name || "image"} could not be reduced below the ${formatImageSize(COMPOSER_IMAGE_MAX_BYTES)} limit.`);
 }
 
 /**
@@ -1024,13 +1075,22 @@ export function Composer() {
   }
 
   async function readDraftImage(file: File): Promise<{ ok: true; image: DraftImage } | { ok: false; reason: string }> {
-    if (file.size > COMPOSER_IMAGE_MAX_BYTES) {
-      return { ok: false, reason: `${file.name || "image"} is over the ${formatImageSize(COMPOSER_IMAGE_MAX_BYTES)} limit.` };
-    }
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
     const mediaType = sniffComposerImageMediaType(bytes);
     if (mediaType === null) {
       return { ok: false, reason: `${file.name || "image"} is not a supported image.` };
+    }
+    if (bytes.length > COMPOSER_IMAGE_MAX_BYTES) {
+      try {
+        bytes = await resizeComposerImage(file, mediaType);
+      } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      }
+      // Encoder output is untrusted input too: fail closed if Chromium ever
+      // produced a different format than requested.
+      if (sniffComposerImageMediaType(bytes) !== mediaType || bytes.length > COMPOSER_IMAGE_MAX_BYTES) {
+        return { ok: false, reason: `${file.name || "image"} could not be resized safely.` };
+      }
     }
     const sourcePath = file.name.length > 0 ? file.name : undefined;
     return {
@@ -1165,6 +1225,10 @@ export function Composer() {
       return;
     }
     sendToHost({ type: "set_engine_preset", presetId });
+  }
+
+  function handleEngineEffortPick(effort: string): void {
+    if (!engineControlDisabled(turn.status, queueInFlight, ready)) sendToHost({ type: "set_engine_effort", effort });
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
@@ -1428,12 +1492,7 @@ export function Composer() {
               catalog — ModelPill (settings-store-backed) is core-only. */}
           {supportsModelSelection &&
             (engine?.model ? (
-              <EngineModelMenu
-                model={engine.model}
-                pendingModel={pendingEngineChange?.model}
-                disabled={engineControlDisabled(turn.status, queueInFlight, ready)}
-                onPick={handleEngineModelPick}
-              />
+              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(engine.model.effort !== undefined ? { effort: { current: engine.model.effort, pending: pendingEngineChange?.effort, onPick: handleEngineEffortPick } } : {})} />
             ) : (
               <ModelPill />
             ))}
