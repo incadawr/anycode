@@ -106,6 +106,16 @@ export interface TabIpcDeps {
    * than silently spawning on the ambient account.
    */
   resolveCodexProfile?(profileId: string): Promise<ResolveCodexProfileResult>;
+  /**
+   * Consumes (reads-and-deletes) the model a rollout import pinned for a session
+   * (S4-1 arm 2, W4-F1). The FIRST resume of an imported session stamps this over
+   * the fork env's ANYCODE_MODEL so the tab boots on the user's picked model, not
+   * the active connection's default (§8.8). consume-once: a second resume of the
+   * same session sees nothing. Absent = disabled (legacy wiring / unit fixtures);
+   * a `new` request never consults it, and a non-imported resume finds no entry —
+   * both byte-identical to pre-S4-1.
+   */
+  consumePendingImportModel?(sessionId: string): string | undefined;
 }
 
 /** exported for tests (tab-ipc.test.ts): the fail-closed request schema. */
@@ -319,6 +329,13 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       pinnedConnectionId = pin.connectionId;
     }
+    // S4-1 arm 2 (W4-F1): the FIRST resume of an imported session carries the
+    // user's picked model as a per-fork ANYCODE_MODEL override (consume-once).
+    // Consulted only here (the resume path); a `new` request never reads it, and
+    // a non-imported resume finds no entry — both unchanged. Consumed right
+    // before createTab so an earlier refusal (session_not_found / already_open /
+    // connection_missing) never spends the pick.
+    const importModelOverride = deps.consumePendingImportModel?.(req.sessionId);
     const result = deps.manager.createTab({
       workspace: meta.workspace,
       ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
@@ -328,6 +345,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       engine,
       ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
       ...(resumeCodexProfile !== undefined ? { codexProfile: resumeCodexProfile } : {}),
+      ...(importModelOverride !== undefined ? { modelOverride: importModelOverride } : {}),
     });
     if (!result.ok) {
       return result;
