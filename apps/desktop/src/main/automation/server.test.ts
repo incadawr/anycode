@@ -2855,6 +2855,52 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
     expect(calls[0]).toContain('"codexImportState"');
   });
 
+  it("GET /settings/codex/import forwards the facade's custody-redacted shape VERBATIM — no main-side transform, widening, or re-derivation (W4-F0c finding A: one shape truth, enforced in the facade)", async () => {
+    // The full probe (c) state exactly as the renderer facade resolves it:
+    // rollout rows carry fileName/cwdRendered/preview{rendered,length,
+    // sha256_12} (never raw cwd/first-message text), plus the finding B
+    // provenance stamps rolloutsFor/previewFor.
+    const facadeResult = {
+      paneMounted: true,
+      open: true,
+      profileId: "tmp-a",
+      profileOptions: [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listLoading: false,
+      listEmptyText: null,
+      rollouts: [
+        {
+          fileName: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+          timestamp: "2026-07-17 03:14 UTC",
+          size: "12.3 KB",
+          cwdRendered: true,
+          preview: { rendered: true, length: 42, sha256_12: "0123456789ab" },
+          selected: true,
+        },
+      ],
+      rolloutsFor: "tmp-a",
+      previewLoading: false,
+      previewFor: "rollout-2026-07-17T03-14-00-aaaa.jsonl",
+      statsLines: ["3 reasoning dropped"],
+      notices: [],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importDisabled: false,
+      importing: false,
+    };
+    const { window } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/codex/import"), { headers: auth() });
+    expect(res.status).toBe(200);
+    // Deep-equal against the seam value: the route adds nothing, drops
+    // nothing, and reshapes nothing — together with the facade-level
+    // sentinel red-proof (automation.test.ts), this pins "no raw session
+    // text in the HTTP response" end to end.
+    expect(await res.json()).toEqual(facadeResult);
+  });
+
   it("GET /start-screen/codex-profile -> codexProfileChipState (GET /start-screen stays byte-untouched)", async () => {
     const facadeResult = { ok: true, chipVisible: false };
     const { window, calls } = fakeWindowCapture(facadeResult);

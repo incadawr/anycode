@@ -1669,12 +1669,44 @@ export interface CodexProfileChipDom {
   clickOptionAt(index: number): boolean;
 }
 
-/** One rollout row of `codexImportState()` (W4-F0 probe (c)) — the rendered facts of a `.codex-rollout-row` (timestamp/size labels are the component's own deterministic `formatRolloutTimestamp`/`formatRolloutSize` output; the underlying `fileName` never reaches the DOM, so rows are addressed by index). */
-export interface CodexImportRolloutRowState {
+/**
+ * Raw rendered facts of one `.codex-rollout-row` as the DOM accessor reads
+ * them — renderer-internal ONLY. `cwd`/`preview` are the row's raw
+ * session-content text (owner-authored, richer than an e-mail); they exist
+ * solely as the redaction input for `CodexImportRolloutRowState` below and
+ * NEVER appear on `CodexImportState`/the HTTP channel (W4-F0c finding A
+ * custody norm: session-content plane never crosses the channel raw —
+ * loopback+Bearer+dev-only does not exempt it, the channel is deliberately
+ * logged by smokes). `fileName` is the row's `data-file-name` (finding B).
+ */
+export interface CodexImportRolloutRowDomFacts {
+  fileName: string | null;
   timestamp: string;
   size: string;
   cwd: string | null;
   preview: string | null;
+  selected: boolean;
+}
+
+/**
+ * One rollout row of `codexImportState()` (W4-F0c finding A shape redaction)
+ * — the session-content fields cross the channel REDACTED: `cwdRendered` is
+ * presence-only (probe (a) `emailRendered` precedent), `preview` rides as
+ * the rendered text's length plus the first 12 hex chars of its SHA-256 —
+ * 48 bits is collision-safe for measurement discrimination (S4 asserts the
+ * digest of a rollout it planted itself) and useless for content recovery
+ * from an opportunistically-read log. `timestamp`/`size` stay raw (the
+ * component's own deterministic `formatRolloutTimestamp`/`formatRolloutSize`
+ * output — product-generated, not user text); `fileName` is the row's
+ * machine-generated identity (`data-file-name`, finding B — rows no longer
+ * need index-only addressing).
+ */
+export interface CodexImportRolloutRowState {
+  fileName: string;
+  timestamp: string;
+  size: string;
+  cwdRendered: boolean;
+  preview: { rendered: boolean; length: number; sha256_12: string | null };
   selected: boolean;
 }
 
@@ -1691,7 +1723,11 @@ export interface CodexImportRolloutRowState {
  * `invalid_model`'s "Pick a model for the new session first."), so a smoke
  * asserts the exact honest copy a user reads. `importDisabled` mirrors the
  * Import button's own rendered `disabled` (the `importDisabled()` predicate's
- * committed result, never re-derived here).
+ * committed result, never re-derived here). `rollouts` rows are custody-
+ * redacted (see `CodexImportRolloutRowState`); `rolloutsFor`/`previewFor`
+ * surface the dialog's own provenance stamps (`data-rollouts-for`/
+ * `data-preview-for`, W4-F0c finding B) — WHOSE reply the rendered list/
+ * preview belongs to, `null` while loading (no committed result).
  */
 export interface CodexImportState {
   paneMounted: boolean;
@@ -1701,7 +1737,9 @@ export interface CodexImportState {
   listLoading: boolean;
   listEmptyText: string | null;
   rollouts: CodexImportRolloutRowState[];
+  rolloutsFor: string | null;
   previewLoading: boolean;
+  previewFor: string | null;
   statsLines: string[];
   notices: string[];
   modelValue: string | null;
@@ -1718,8 +1756,10 @@ export interface CodexImportState {
  * `clickRolloutAt` fires a real `.click()` on a row's own radio input (the
  * exact node `selectRollout` listens on). `listLoadingVisible`/`listSettled`
  * and their preview twins classify the component's own rendered placeholder/
- * loaded/error branches so the drivers can wait out the real
- * `rolloutList`/`rolloutPreview` IPC round-trips.
+ * loaded/error branches; `rolloutsFor`/`previewFor` read the dialog's
+ * provenance stamps (W4-F0c finding B), so the drivers settle on IDENTITY
+ * (the stamp names the awaited profile/file), not on timing — a settled DOM
+ * still showing the PREVIOUS selection's reply can never satisfy the wait.
  */
 export interface CodexImportDialogDom {
   open(): boolean;
@@ -1732,11 +1772,15 @@ export interface CodexImportDialogDom {
   listLoadingVisible(): boolean;
   /** True once the list block shows a real outcome: rows, the empty text, or an error notice — anything but absent/loading. */
   listSettled(): boolean;
-  rollouts(): CodexImportRolloutRowState[];
+  /** The list block's `data-rollouts-for` stamp — whose reply the rendered rows answer; `null` while loading (no committed result). */
+  rolloutsFor(): string | null;
+  rollouts(): CodexImportRolloutRowDomFacts[];
   clickRolloutAt(index: number): boolean;
   previewLoadingVisible(): boolean;
   /** True once the preview block shows a real outcome: the loaded stats section or an error notice. */
   previewSettled(): boolean;
+  /** The preview block's `data-preview-for` stamp — whose file the rendered preview answers; `null` while loading. */
+  previewFor(): string | null;
   statsLines(): string[];
   notices(): string[];
   modelValue(): string | null;
@@ -2026,13 +2070,17 @@ export interface AutomationFacade {
   // open the dialog via the pane's own "Import a Codex session…" button, pick
   // a profile / a rollout row / a model through the dialog's REAL controls,
   // and trigger the import via the real "Import & open" button. The
-  // profile-select and rollout-pick drivers wait out the real
-  // `rolloutList`/`rolloutPreview` IPC round-trips (loading placeholder →
-  // settled outcome) before returning; `codexImportApply` settles on either
-  // the dialog closing (success) or a fresh refusal notice appearing
-  // (`import_refused` — the caller reads the honest copy via
-  // `codexImportState().notices`). ──
-  codexImportState(): CodexImportState;
+  // profile-select and rollout-pick drivers settle on IDENTITY (W4-F0c
+  // finding B): settled outcome AND the dialog's own provenance stamp
+  // (`data-rollouts-for`/`data-preview-for`) naming the awaited profile/file
+  // — never on timing, which a stale-but-settled previous reply satisfies.
+  // `codexImportApply` settles on either the dialog closing (success) or a
+  // fresh refusal notice appearing (`import_refused` — the caller reads the
+  // honest copy via `codexImportState().notices`). The state read is async
+  // (W4-F0c finding A): preview digests hash via `crypto.subtle` — the
+  // executeJavaScript seam awaits thenables, so the wire shape is the
+  // resolved object either way. ──
+  codexImportState(): Promise<CodexImportState>;
   codexImportOpen(open: boolean): Promise<FacadeResult>;
   codexImportSetProfile(profileId: string): Promise<FacadeResult>;
   codexImportSelectRollout(index: number): Promise<FacadeResult>;
@@ -3653,19 +3701,7 @@ const CODEX_CHIP_COMMIT_DEADLINE_MS = 500;
 /** Deadline for `codexImportOpen`'s dialog open/close commit polls (W4-F0 probe (c)) — local React `useState` + `<dialog>` showModal, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const CODEX_IMPORT_COMMIT_DEADLINE_MS = 500;
 
-/**
- * Best-effort wait for the list/preview LOADING placeholder to appear after a
- * profile switch (W4-F0 probe (c)): the `[profileId]` effect that resets the
- * list to loading runs as a PASSIVE effect (post-commit, next tick), so an
- * immediate "settled?" poll after the select commit could read the PREVIOUS
- * profile's still-rendered rows as the outcome. Waiting for loading first
- * closes that stale-read window; a round-trip so fast the placeholder never
- * survives a poll simply burns this deadline and then reads the (already
- * correct) settled state.
- */
-const CODEX_IMPORT_LOADING_APPEAR_DEADLINE_MS = 300;
-
-/** Deadline for `codexImportSetProfile`/`SelectRollout`'s settle polls (W4-F0 probe (c)) — a real main-process fs scan / bounded rollout-head parse round-tripped over IPC, same rationale as `MCP_PANE_SCAN_DEADLINE_MS`. */
+/** Deadline for `codexImportSetProfile`/`SelectRollout`'s settle polls (W4-F0 probe (c)) — a real main-process fs scan / bounded rollout-head parse round-tripped over IPC, same rationale as `MCP_PANE_SCAN_DEADLINE_MS`. The settle predicate is identity-gated (W4-F0c finding B): it requires the dialog's own provenance stamp to name the awaited profile/file, so no loading-appear pre-wait exists — a settled DOM still showing the previous selection's reply simply keeps polling. */
 const CODEX_IMPORT_LIST_DEADLINE_MS = 10_000;
 
 /** Deadline for `codexImportApply`'s post-click settle poll (W4-F0 probe (c)) — a real import (≤32 MiB rollout parse + session persist) plus the resume-path tab open, same rationale as `MCP_PANE_APPLY_DEADLINE_MS`. */
@@ -3674,6 +3710,40 @@ const CODEX_IMPORT_APPLY_DEADLINE_MS = 10_000;
 /** Reads a button's rendered label + disabled state (shared by the codex pane/import DOM accessors below). */
 function buttonFacts(button: HTMLButtonElement): { label: string; disabled: boolean } {
   return { label: (button.textContent ?? "").trim(), disabled: button.disabled };
+}
+
+/**
+ * First 12 hex chars of SHA-256 over the exact rendered text (W4-F0c finding
+ * A): 48 bits — collision-safe for measurement discrimination, useless for
+ * recovering the content from an opportunistically-read smoke log. Computed
+ * HERE in the facade (the custody enforcement point — one shape truth for
+ * facade and wire, no main-side transform); `crypto.subtle` is why
+ * `codexImportState()` is async.
+ */
+async function sha256Prefix12(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 12);
+}
+
+/**
+ * Custody redaction for one rollout row (W4-F0c finding A): raw session text
+ * (`cwd`, `preview`) is reduced to presence/length/digest before it can reach
+ * `CodexImportState` — the only shape the HTTP channel ever serializes.
+ */
+async function redactRolloutRow(row: CodexImportRolloutRowDomFacts): Promise<CodexImportRolloutRowState> {
+  return {
+    fileName: row.fileName ?? "",
+    timestamp: row.timestamp,
+    size: row.size,
+    cwdRendered: row.cwd !== null,
+    preview:
+      row.preview === null
+        ? { rendered: false, length: 0, sha256_12: null }
+        : { rendered: true, length: row.preview.length, sha256_12: await sha256Prefix12(row.preview) },
+    selected: row.selected,
+  };
 }
 
 /**
@@ -3931,8 +4001,10 @@ function realCodexImportDialogDom(): CodexImportDialogDom {
       }
       return empty !== null || block.querySelector(".codex-rollout-row") !== null || block.querySelector(".settings-notice") !== null;
     },
+    rolloutsFor: () => listBlock()?.getAttribute("data-rollouts-for") ?? null,
     rollouts: () =>
       Array.from(listBlock()?.querySelectorAll<HTMLLIElement>(".codex-rollout-row") ?? []).map((li) => ({
+        fileName: li.getAttribute("data-file-name"),
         timestamp: (li.querySelector(".settings-mcp-name")?.textContent ?? "").trim(),
         size: (li.querySelector(".codex-rollout-size")?.textContent ?? "").trim(),
         cwd: li.querySelector(".settings-mcp-detail")?.textContent?.trim() ?? null,
@@ -3958,6 +4030,7 @@ function realCodexImportDialogDom(): CodexImportDialogDom {
       }
       return block.querySelector(".settings-section-title") !== null || block.querySelector(".settings-notice") !== null;
     },
+    previewFor: () => previewBlock()?.getAttribute("data-preview-for") ?? null,
     statsLines: () => Array.from(previewBlock()?.querySelectorAll(".codex-rollout-stat-line") ?? []).map((el) => (el.textContent ?? "").trim()),
     notices: () => Array.from(dialog()?.querySelectorAll(".settings-notice") ?? []).map((el) => (el.textContent ?? "").trim()),
     modelValue: () => modelSelect()?.value ?? null,
@@ -6196,7 +6269,7 @@ export function createAutomationFacade(
       return { ok: true };
     },
 
-    codexImportState(): CodexImportState {
+    async codexImportState(): Promise<CodexImportState> {
       const paneMounted = codexPaneDom.mounted();
       if (!codexImportDom.open()) {
         // A valid reading, not an error (McpPaneState precedent): the dialog
@@ -6209,7 +6282,9 @@ export function createAutomationFacade(
           listLoading: false,
           listEmptyText: null,
           rollouts: [],
+          rolloutsFor: null,
           previewLoading: false,
+          previewFor: null,
           statsLines: [],
           notices: [],
           modelValue: null,
@@ -6231,8 +6306,12 @@ export function createAutomationFacade(
         profileOptions: codexImportDom.profileOptions(),
         listLoading,
         listEmptyText: listLoading ? null : listText,
-        rollouts: codexImportDom.rollouts(),
+        // Custody redaction (W4-F0c finding A): the raw DOM facts never reach
+        // this shape — cwd/preview cross as presence/length/digest only.
+        rollouts: await Promise.all(codexImportDom.rollouts().map((row) => redactRolloutRow(row))),
+        rolloutsFor: codexImportDom.rolloutsFor(),
         previewLoading: codexImportDom.previewLoadingVisible(),
+        previewFor: codexImportDom.previewFor(),
         statsLines: codexImportDom.statsLines(),
         notices: codexImportDom.notices(),
         modelValue: codexImportDom.modelValue(),
@@ -6277,13 +6356,16 @@ export function createAutomationFacade(
       if (!codexImportDom.setProfile(profileId)) {
         return { ok: false, reason: "unknown_profile" };
       }
-      // The select's commit lands with the change event, but the list reset
-      // to "Loading sessions…" is a PASSIVE effect (post-commit) — wait for
-      // the loading placeholder first (best-effort, bounded) so the settle
-      // poll below can never read the PREVIOUS profile's still-rendered rows
-      // as this profile's outcome. See CODEX_IMPORT_LOADING_APPEAR_DEADLINE_MS.
-      await waitUntil(() => codexImportDom.listLoadingVisible(), CODEX_IMPORT_LOADING_APPEAR_DEADLINE_MS);
-      const settled = await waitUntil(() => codexImportDom.listSettled(), CODEX_IMPORT_LIST_DEADLINE_MS);
+      // Identity-gated settle (W4-F0c finding B): the list must be settled
+      // AND its provenance stamp must name THIS profile. Identity is strictly
+      // stronger than the timing guard it replaces — the previous profile's
+      // still-rendered rows (the passive-effect window) and a late-landing
+      // reply to the OLD profile are both settled DOM, but both carry the OLD
+      // stamp, so neither can satisfy this poll.
+      const settled = await waitUntil(
+        () => codexImportDom.listSettled() && codexImportDom.rolloutsFor() === profileId,
+        CODEX_IMPORT_LIST_DEADLINE_MS,
+      );
       return settled ? { ok: true } : { ok: false, reason: "list_timeout" };
     },
 
@@ -6291,17 +6373,23 @@ export function createAutomationFacade(
       if (!codexImportDom.open()) {
         return { ok: false, reason: "dialog_not_open" };
       }
+      // The clicked row's identity is captured BEFORE the click (W4-F0c
+      // finding B): rows carry their machine-generated `data-file-name`, and
+      // the settle below waits for the preview stamped with EXACTLY this
+      // file — not for "some preview settled", which a stale reply to the
+      // previously-selected row satisfies.
+      const fileName = codexImportDom.rollouts()[index]?.fileName ?? null;
       // A real click on the row's own radio input — the exact node
-      // selectRollout's onChange listens on (rows carry no fileName in the
-      // DOM, so index into the rendered order is the row's address; same
-      // clickItemAt discipline as modelPillPick).
-      if (!codexImportDom.clickRolloutAt(index)) {
+      // selectRollout's onChange listens on (same clickItemAt discipline as
+      // modelPillPick). A missing row OR a row without its identity stamp
+      // refuses fail-closed.
+      if (fileName === null || !codexImportDom.clickRolloutAt(index)) {
         return { ok: false, reason: "unknown_rollout" };
       }
-      // Same stale-read guard as codexImportSetProfile: preview reset is
-      // synchronous in the click handler, but bound the race anyway.
-      await waitUntil(() => codexImportDom.previewLoadingVisible(), CODEX_IMPORT_LOADING_APPEAR_DEADLINE_MS);
-      const settled = await waitUntil(() => codexImportDom.previewSettled(), CODEX_IMPORT_LIST_DEADLINE_MS);
+      const settled = await waitUntil(
+        () => codexImportDom.previewSettled() && codexImportDom.previewFor() === fileName,
+        CODEX_IMPORT_LIST_DEADLINE_MS,
+      );
       return settled ? { ok: true } : { ok: false, reason: "preview_timeout" };
     },
 

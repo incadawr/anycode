@@ -1089,31 +1089,70 @@ cut §8.8: Settings → Codex → pick a profile → pick a rollout → honest l
 report → pick a model → Import & open) — a DOM probe/driver, same "no
 mirrored state" discipline as the MCP import dialog above. A closed dialog
 reads as `open:false` with empty defaults, not an error. `rollouts[]` are the
-rendered rows (`timestamp`/`size` are the component's own deterministic UTC/
-size labels; the underlying `fileName` never reaches the DOM, so rows are
-addressed by index); `statsLines` are the honest-loss lines ("N reasoning
-dropped", … — or the "Nothing was lost…" line); `notices` carries every
-`.settings-notice` in the dialog (list errors, preview-stage failures,
-warnings, and the import-refusal reason — including `invalid_model`'s "Pick a
-model for the new session first."); `importDisabled`/`importing` mirror the
-Import button's own rendered state.
+rendered rows, **custody-redacted** (see the custody norm below):
+`timestamp`/`size` are the component's own deterministic UTC/size labels
+(product-generated, legal raw); `fileName` is the row's machine-generated
+identity (the row's own `data-file-name` — `rollout-<ISO>-<uuid>.jsonl`, not
+PII); the session's cwd crosses as `cwdRendered: boolean` only, and the
+first-user-message preview line crosses as
+`preview: {rendered, length, sha256_12}` — the length of the EXACT rendered
+(post-truncate) text plus the first 12 hex chars of its SHA-256, computed in
+the renderer facade (the state read is async for this; the
+`executeJavaScript` seam awaits it). A smoke that planted the rollout itself
+recomputes the digest locally and compares — the channel never needs the
+text. `statsLines` are the honest-loss lines ("N reasoning dropped", … — or
+the "Nothing was lost…" line); `notices` carries every `.settings-notice` in
+the dialog (list errors, preview-stage failures, importer warnings — the
+importer's own tested leak-guard keeps raw file content out of those — and
+the import-refusal reason, including `invalid_model`'s "Pick a model for the
+new session first."); `importDisabled`/`importing` mirror the Import
+button's own rendered state.
+
+**Custody norm (W4-F0c finding A).** The automation channel distinguishes two
+planes. *Config plane* — profile labels, product literals, counters,
+model ids, timestamps/sizes — may cross raw: that is what the channel
+measures. *Session-content plane* — anything AUTHORED BY THE OWNER inside a
+rollout (the first user message, the session's cwd) — NEVER crosses raw,
+regardless of the channel being loopback + Bearer + dev-only: smoke runs
+deliberately log channel traffic (curl output, CI logs), and probe (a)
+already set the bar unconditionally with `emailRendered: boolean`. A first
+user message is strictly richer than an e-mail (keys, passwords, paths).
+Enforcement lives in the renderer facade — one shape truth for facade and
+wire, no main-side transform. Honest residual: a low-entropy first message
+("hi") is brute-forceable from its 48-bit digest prefix — accepted, the
+exposure class is far below raw text.
+
+**Provenance / identity-gated settles (W4-F0c finding B).** The dialog signs
+in the DOM whose reply it renders: `.codex-rollout-list` carries
+`data-rollouts-for=<profileId>` and `.codex-rollout-preview` carries
+`data-preview-for=<fileName>` — the stamp is attached to the RESULT in the
+same guarded callback that resolves it, so a stale reply keeps its own (old)
+stamp, and while loading there is no stamp at all. The GET surfaces both as
+`rolloutsFor`/`previewFor` (`null` while loading). The `import/profile` and
+`import/rollout` drivers settle on IDENTITY, not timing: profile switch =
+"list settled AND `rolloutsFor` === the requested profile"; rollout pick
+captures the clicked row's `data-file-name` BEFORE the click and waits for
+"preview settled AND `previewFor` === that fileName". A settled DOM still
+showing the previous selection's reply (the passive-effect window, or an
+in-flight old reply landing late) can never satisfy either wait — the
+timing-based loading-appear pre-wait this replaces could be fooled by both.
 
 The drivers ride the dialog's REAL controls: `import/open {open:true}` clicks
 the pane's own "Import a Codex session…" button (so the pane must be mounted
 first — `POST /settings/pane {"paneId":"codex"}`), `{open:false}` the
 dialog's Close button; `import/profile` drives the profile `<select>` via the
-native-setter discipline and waits out the real `rolloutList` IPC round-trip
-(loading placeholder → settled rows/empty/error) before returning;
-`import/rollout` clicks a row's own radio by index and waits for the real
-`rolloutPreview` round-trip the same way; `import/model` drives the preview's
-model `<select>` (only rendered once a preview loaded); `import/apply` clicks
-"Import & open" and settles on either the dialog closing (success — the
-imported session opened via the EXISTing resume path) or a fresh refusal
-notice appearing (`import_refused` — read the copy via the GET).
+native-setter discipline and settles identity-gated on the real `rolloutList`
+round-trip as above; `import/rollout` clicks a row's own radio by index and
+settles identity-gated on the real `rolloutPreview` round-trip; `import/model`
+drives the preview's model `<select>` (only rendered once a preview loaded);
+`import/apply` clicks "Import & open" and settles on either the dialog
+closing (success — the imported session opened via the EXISTing resume path)
+or a fresh refusal notice appearing (`import_refused` — read the copy via
+the GET).
 
 | Method / path | Body | Returns |
 |---|---|---|
-| `GET /settings/codex/import` | — | `{paneMounted, open, profileId, profileOptions:[{id,label}], listLoading, listEmptyText, rollouts:[{timestamp,size,cwd,preview,selected}], previewLoading, statsLines, notices, modelValue, modelOptions:[{id,name}], importDisabled, importing}` |
+| `GET /settings/codex/import` | — | `{paneMounted, open, profileId, profileOptions:[{id,label}], listLoading, listEmptyText, rollouts:[{fileName, timestamp, size, cwdRendered, preview:{rendered,length,sha256_12}, selected}], rolloutsFor, previewLoading, previewFor, statsLines, notices, modelValue, modelOptions:[{id,name}], importDisabled, importing}` |
 | `POST /settings/codex/import/open` | `{open:boolean}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"button_not_present"\|"did_not_open"\|"did_not_close"}` |
 | `POST /settings/codex/import/profile` | `{profileId}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"unknown_profile"\|"list_timeout"}` |
 | `POST /settings/codex/import/rollout` | `{index}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"unknown_rollout"\|"preview_timeout"}` |

@@ -21,7 +21,9 @@ import {
   openImportedSession,
   performImportAndOpen,
   resolveDefaultImportModel,
+  rolloutListProvenance,
   rolloutListViewState,
+  rolloutPreviewProvenance,
   rolloutPreviewViewState,
   truncateRolloutPreview,
   type CodexRolloutImportResult,
@@ -259,6 +261,45 @@ describe("importDisabled", () => {
 
   it("an in-flight import disables Import regardless of model", () => {
     expect(importDisabled("loaded", true, "gpt-5")).toBe(true);
+  });
+});
+
+// ── provenance stamps (W4-F0c finding B): the DOM signs WHOSE reply it
+// renders. The stamp derives from the RESULT's own provenance — never from
+// the current selection — so the stale-window/stale-reply states an
+// automation probe can observe are honestly labelled with their origin. ──
+
+describe("rolloutListProvenance", () => {
+  it("stamps from the RESULT's provenance, not the current select: state {profileId:'B', listResult.forProfileId:'A'} renders data-rollouts-for='A'", () => {
+    // The exact transient the passive-effect window / a stale reply creates:
+    // the select already committed B while the state still holds A's reply.
+    // The honest stamp signs the CONTENT's origin (A); a from-select
+    // derivation would dishonestly sign it as B.
+    const staleListResult: { forProfileId: string; result: CodexRolloutListResult } = {
+      forProfileId: "A",
+      result: { ok: true, rollouts: [{ fileName: "2026/07/01/rollout-a.jsonl", sizeBytes: 100, mtimeMs: 1 }] },
+    };
+    expect(rolloutListProvenance({ profileId: "B", listResult: staleListResult })).toBe("A");
+  });
+
+  it("no stamp while loading (null result) — the attribute is absent, never pre-stamped with the pending profile", () => {
+    expect(rolloutListProvenance({ profileId: "B", listResult: null })).toBeUndefined();
+  });
+});
+
+describe("rolloutPreviewProvenance", () => {
+  const report = { stats: ZERO_STATS, meta: {}, warnings: [] };
+
+  it("stamps from the RESULT's provenance, not the current selection: state {selectedFileName:'b.jsonl', previewResult.forFileName:'a.jsonl'} renders data-preview-for='a.jsonl'", () => {
+    const stalePreviewResult: { forFileName: string; result: CodexRolloutPreviewResult } = {
+      forFileName: "a.jsonl",
+      result: { ok: true, report },
+    };
+    expect(rolloutPreviewProvenance({ selectedFileName: "b.jsonl", previewResult: stalePreviewResult })).toBe("a.jsonl");
+  });
+
+  it("no stamp while loading (null result) — the attribute is absent, never pre-stamped with the pending file", () => {
+    expect(rolloutPreviewProvenance({ selectedFileName: "b.jsonl", previewResult: null })).toBeUndefined();
   });
 });
 
