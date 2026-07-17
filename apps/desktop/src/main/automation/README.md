@@ -1172,8 +1172,8 @@ curl "${A[@]}" "${J[@]}" -X POST $B/settings/codex/import/apply -d '{}'
 `ANYCODE_CODEX_PROFILES_HOME=<absolute dir>` is a **dev/test-only** override
 for the user home the Codex profiles root (`<home>/.anycode/codex/…`) derives
 from (`main/index.ts`'s `resolveCodexProfilesHome` wiring, same
-double-gate/ethic as `ANYCODE_SUBAGENTS_HOME` above) — resolved ONCE at the
-codex registration site and threaded into the profile registry
+double-gate/ethic as `ANYCODE_SUBAGENTS_HOME` above) — resolved ONCE at
+module top (W4-F0d eager fail-fast) and threaded into the profile registry
 (`registerCodexIpc`), the binary install/manifest plane
 (`registerCodexInstallIpc` + the boot `refreshCodexManifest` cache file), and
 the rollout-import sessions resolver, so a smoke run can mint
@@ -1189,10 +1189,14 @@ profile's live session derives its CODEX_HOME host-side at spawn, so
 (`applyCodexProfilesHomeOverride`, `main/host-env.ts` — the delete branch
 scrubs a raw ambient var that would otherwise ride the bootEnv spread), and
 the host re-gates it defense-in-depth (`resolveCodexProfilesHomeOverride`,
-`host/engines/codex/codex-home.ts`). Because the host CREATES the 0700
-profile home + auth.json symlink there, a malformed value under automation
-REFUSES the boot (throw) instead of silently falling back to the real
-homedir.
+`host/engines/codex/codex-home.ts`). Fail-closed write-plane contract
+(W4-F0d): var ABSENT under automation = the real home, the production
+byte-path; var present but MALFORMED (empty, or relative after trim —
+including an unexpanded `~`) under `ANYCODE_AUTOMATION=1` in a dev build =
+the app REFUSES to boot at module top (synchronous throw, non-zero exit,
+before a single mkdir of any plane) instead of silently falling back to the
+owner's real `~/.anycode/codex` behind a green-looking smoke run; a PACKAGED
+build never reads the var at all — it neither honors nor throws on it.
 
 ### Generic focus probe (TASK.45 W12-smoke)
 
