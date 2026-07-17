@@ -107,13 +107,21 @@ export interface TabIpcDeps {
    */
   resolveCodexProfile?(profileId: string): Promise<ResolveCodexProfileResult>;
   /**
-   * Consumes (reads-and-deletes) the model a rollout import pinned for a session
-   * (S4-1 arm 2, W4-F1). The FIRST resume of an imported session stamps this over
-   * the fork env's ANYCODE_MODEL so the tab boots on the user's picked model, not
-   * the active connection's default (§8.8). consume-once: a second resume of the
-   * same session sees nothing. Absent = disabled (legacy wiring / unit fixtures);
-   * a `new` request never consults it, and a non-imported resume finds no entry —
-   * both byte-identical to pre-S4-1.
+   * Reads WITHOUT deleting the model a rollout import pinned for a session (S4-1
+   * arm 2, W4-F1; L4·1 peek-then-confirm). The FIRST resume of an imported session
+   * PEEKS this to stamp it over the fork env's ANYCODE_MODEL so the tab boots on the
+   * user's picked model, not the active connection's default (§8.8). The pick is
+   * burned via `consumePendingImportModel` ONLY after createTab succeeds, so a
+   * refused/aborted resume leaves it intact for a later retry. Absent = disabled
+   * (legacy wiring / unit fixtures); a `new` request never consults it, and a
+   * non-imported resume finds no entry — both byte-identical to pre-S4-1.
+   */
+  peekPendingImportModel?(sessionId: string): string | undefined;
+  /**
+   * Consumes (reads-and-deletes) the pick previously surfaced by
+   * `peekPendingImportModel`, called ONLY after a successful createTab on the
+   * resume path (L4·1 peek-then-confirm) so consume-once triggers on the commit,
+   * never on a refused attempt. Absent = disabled (legacy wiring / unit fixtures).
    */
   consumePendingImportModel?(sessionId: string): string | undefined;
 }
@@ -332,10 +340,13 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // S4-1 arm 2 (W4-F1): the FIRST resume of an imported session carries the
     // user's picked model as a per-fork ANYCODE_MODEL override (consume-once).
     // Consulted only here (the resume path); a `new` request never reads it, and
-    // a non-imported resume finds no entry — both unchanged. Consumed right
-    // before createTab so an earlier refusal (session_not_found / already_open /
-    // connection_missing) never spends the pick.
-    const importModelOverride = deps.consumePendingImportModel?.(req.sessionId);
+    // a non-imported resume finds no entry — both unchanged. L4·1 (F1 review):
+    // PEEK the pick (read without delete), then CONSUME it only after createTab
+    // SUCCEEDS (below) — so a refusal (max_tabs / not_ready / already_open, or a
+    // throw) never spends the pick and a later resume of the reopened session
+    // still boots on the chosen model. No await sits between peek and consume
+    // (createTab is synchronous), so the consume window cannot race.
+    const importModelOverride = deps.peekPendingImportModel?.(req.sessionId);
     const result = deps.manager.createTab({
       workspace: meta.workspace,
       ...(meta.projectRoot !== undefined ? { projectRoot: meta.projectRoot } : {}),
@@ -350,6 +361,10 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     if (!result.ok) {
       return result;
     }
+    // L4·1: createTab committed the tab ⇒ the pick has now been applied; burn it
+    // so a second resume of the same session boots on the persisted model. A
+    // no-op for a non-imported resume (empty map).
+    deps.consumePendingImportModel?.(req.sessionId);
     deps.manager.deliverTabPort(result.tab);
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   } finally {

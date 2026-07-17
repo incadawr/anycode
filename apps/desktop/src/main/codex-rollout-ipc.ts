@@ -325,6 +325,14 @@ export interface CodexRolloutIpcHandle {
    * populated by import, so those paths are byte-identical to today.
    */
   consumePendingImportModel(sessionId: string): string | undefined;
+  /**
+   * Reads WITHOUT deleting the model an import pinned for `sessionId` (S4-1 arm 2;
+   * L4·1 peek-then-confirm). tab-ipc's resume path peeks the pick to stamp
+   * ANYCODE_MODEL, then calls `consumePendingImportModel` ONLY after createTab
+   * commits — so a refused resume (max_tabs / not_ready / already_open) leaves the
+   * pick intact for a later retry instead of spending it on a tab that never opened.
+   */
+  peekPendingImportModel(sessionId: string): string | undefined;
 }
 
 export function registerCodexRolloutIpc(deps: CodexRolloutIpcDeps): CodexRolloutIpcHandle {
@@ -346,6 +354,9 @@ export function registerCodexRolloutIpc(deps: CodexRolloutIpcDeps): CodexRollout
       const model = pendingImportModels.get(sessionId);
       if (model !== undefined) pendingImportModels.delete(sessionId);
       return model;
+    },
+    peekPendingImportModel(sessionId: string): string | undefined {
+      return pendingImportModels.get(sessionId);
     },
   };
 }

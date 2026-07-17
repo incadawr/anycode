@@ -344,26 +344,55 @@ describe("handleCreate — imported-session model override (codex-profiles S4-1 
     touchSession: async () => {},
   });
 
-  it("the FIRST resume of an imported session forwards the picked model as modelOverride; consume-once drops it on a repeat resume", async () => {
-    const { manager, createTab } = makeManager();
-    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
-    // Real consume-once semantics (mirrors registerCodexRolloutIpc's own map).
-    const pending = new Map<string, string>([["s-import", "pick-x"]]);
+  /** Shared peek-then-confirm fake over one map: peek reads, consume burns once (mirrors registerCodexRolloutIpc). */
+  function makeImportModelPlane(seed: Array<[string, string]>) {
+    const pending = new Map<string, string>(seed);
+    const peekPendingImportModel = vi.fn((sessionId: string) => pending.get(sessionId));
     const consumePendingImportModel = vi.fn((sessionId: string) => {
       const model = pending.get(sessionId);
       if (model !== undefined) pending.delete(sessionId);
       return model;
     });
-    const deps: TabIpcDeps = { manager, persistence: importPersistence(), dialog, consumePendingImportModel };
+    return { pending, peekPendingImportModel, consumePendingImportModel };
+  }
+
+  it("the FIRST resume of an imported session forwards the picked model as modelOverride; consume-once drops it on a repeat resume", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const { peekPendingImportModel, consumePendingImportModel } = makeImportModelPlane([["s-import", "pick-x"]]);
+    const deps: TabIpcDeps = { manager, persistence: importPersistence(), dialog, peekPendingImportModel, consumePendingImportModel };
 
     await handleCreate(deps, { kind: "resume", sessionId: "s-import" });
     expect(createTab).toHaveBeenLastCalledWith(expect.objectContaining({ resume: true, modelOverride: "pick-x" }));
 
-    // Second resume of the SAME session: the pick was consumed ⇒ no override.
+    // Second resume of the SAME session: the pick was consumed on the first
+    // successful open ⇒ no override.
     await handleCreate(deps, { kind: "resume", sessionId: "s-import" });
     const lastParams = createTab.mock.calls[createTab.mock.calls.length - 1]![0] as Record<string, unknown>;
     expect("modelOverride" in lastParams).toBe(false);
+    // consume fires once per SUCCESSFUL resume (both createTabs succeeded here).
     expect(consumePendingImportModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("a createTab refusal (max_tabs) does NOT spend the pick: a later successful resume still boots on it (L4·1 peek-then-confirm)", async () => {
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const { pending, peekPendingImportModel, consumePendingImportModel } = makeImportModelPlane([["s-import", "pick-x"]]);
+
+    // First resume: the tab table is full ⇒ createTab refuses `max_tabs`.
+    const { manager: fullManager } = makeManager({ createFails: true });
+    const failDeps: TabIpcDeps = { manager: fullManager, persistence: importPersistence(), dialog, peekPendingImportModel, consumePendingImportModel };
+    const first = await handleCreate(failDeps, { kind: "resume", sessionId: "s-import" });
+    expect(first).toEqual({ ok: false, reason: "max_tabs" });
+    // The refusal never burned the pick — it is still pending for a retry.
+    expect(consumePendingImportModel).not.toHaveBeenCalled();
+    expect(pending.get("s-import")).toBe("pick-x");
+
+    // A later resume (a tab was closed) succeeds and STILL carries the pick.
+    const { manager: okManager, createTab: okCreate } = makeManager();
+    const okDeps: TabIpcDeps = { manager: okManager, persistence: importPersistence(), dialog, peekPendingImportModel, consumePendingImportModel };
+    await handleCreate(okDeps, { kind: "resume", sessionId: "s-import" });
+    expect(okCreate).toHaveBeenLastCalledWith(expect.objectContaining({ resume: true, modelOverride: "pick-x" }));
+    expect(consumePendingImportModel).toHaveBeenCalledTimes(1);
   });
 
   it("a resume with no pending import model omits modelOverride entirely (byte-as-today)", async () => {
