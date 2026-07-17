@@ -5820,6 +5820,91 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     });
   });
 
+  it("atomic snapshot (W4-F0e finding H1): every DOM fact is captured synchronously before the digest await — a React commit landing mid-read cannot tear the payload (rows of one profile stamped with another)", async () => {
+    const renderedPreview = "pre-mutation preview text";
+    const preRow = importRow({ fileName: "2026/07/17/rollout-pre.jsonl", cwd: "/ws/pre", preview: renderedPreview, selected: true });
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      profileOptions: [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listEmptyText: null,
+      rollouts: [preRow],
+      rolloutsFor: "tmp-a",
+      previewFor: "2026/07/17/rollout-pre.jsonl",
+      statsLines: ["3 reasoning dropped"],
+      notices: ["pre notice"],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importButton: { label: "Import & open", disabled: false },
+    });
+    const facade = buildImportFacade(dom);
+    // The async read runs synchronously up to its first await — the snapshot
+    // exists by the time the promise is handed back.
+    const pending = facade.codexImportState();
+    // Synchronous mutation of EVERY cell field models a React commit landing
+    // during the digest await (the exact H1 tear: rows of profile A with
+    // profile B's stamp). The payload must equal the PRE-mutation values on
+    // ALL fields — moving any single field's DOM read past the await turns
+    // exactly that field's assert red.
+    dom.cell.open = false;
+    dom.cell.profileValue = "system";
+    dom.cell.profileOptions = [{ id: "system", label: "System (current environment)" }];
+    dom.cell.listEmptyText = "Loading sessions…";
+    dom.cell.listSettled = false;
+    dom.cell.rollouts = [importRow({ fileName: "2026/07/16/rollout-post.jsonl", cwd: null, preview: null, selected: false })];
+    // The already-materialized row object is ALSO mutated in place — this
+    // discriminates the read MOMENT of every row field (redactRolloutRow
+    // captures all six at entry, inside the same synchronous block).
+    preRow.fileName = "2026/07/16/rollout-post.jsonl";
+    preRow.timestamp = "post";
+    preRow.size = "post";
+    preRow.cwd = null;
+    preRow.preview = "post-mutation preview text";
+    preRow.selected = false;
+    dom.cell.rolloutsFor = "system";
+    dom.cell.previewSettled = false;
+    dom.cell.previewFor = "2026/07/16/rollout-post.jsonl";
+    dom.cell.statsLines = ["1 images omitted"];
+    dom.cell.notices = ["post notice"];
+    dom.cell.modelValue = "gpt-x";
+    dom.cell.modelOptions = [{ id: "gpt-x", name: "GPT X" }];
+    dom.cell.importButton = { label: "Importing…", disabled: true };
+    const state = await pending;
+    const expectedDigest = createHash("sha256").update(renderedPreview, "utf8").digest("hex").slice(0, 12);
+    expect(state).toEqual({
+      paneMounted: true,
+      open: true,
+      profileId: "tmp-a",
+      profileOptions: [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listLoading: false,
+      listEmptyText: null,
+      rollouts: [
+        {
+          fileName: "2026/07/17/rollout-pre.jsonl",
+          timestamp: "2026-07-17 03:14 UTC",
+          size: "12.3 KB",
+          cwdRendered: true,
+          preview: { rendered: true, length: renderedPreview.length, sha256_12: expectedDigest },
+          selected: true,
+        },
+      ],
+      rolloutsFor: "tmp-a",
+      previewLoading: false,
+      previewFor: "2026/07/17/rollout-pre.jsonl",
+      statsLines: ["3 reasoning dropped"],
+      notices: ["pre notice"],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importDisabled: false,
+      importing: false,
+    });
+  });
+
   it("classifies the list-loading placeholder honestly (listLoading true, listEmptyText null while loading)", async () => {
     const dom = fakeImportDom({ listEmptyText: "Loading sessions…" });
     const state = await buildImportFacade(dom).codexImportState();
@@ -5866,7 +5951,9 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
   });
 
   it("codexImportSelectRollout clicks the row's own radio by index and settles on the preview stamped with that row's fileName; unknown_rollout refuses", async () => {
-    const dom = fakeImportDom({ rollouts: [importRow(), importRow()] });
+    // The rendered list is stamped with the profile the select names — the
+    // W4-F0e list_stale guard is not what this test discriminates.
+    const dom = fakeImportDom({ profileValue: "tmp-a", rollouts: [importRow(), importRow()], rolloutsFor: "tmp-a" });
     await expect(buildImportFacade(dom).codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
     expect(dom.clickRolloutAt).toHaveBeenCalledWith(1);
     await expect(buildImportFacade(dom).codexImportSelectRollout(5)).resolves.toEqual({ ok: false, reason: "unknown_rollout" });
@@ -5945,7 +6032,9 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
 
   it("identity settle (preview, stale window): a SETTLED previous-file preview with its old stamp does not satisfy codexImportSelectRollout — settle keys on the fileName captured BEFORE the click", async () => {
     const dom = fakeImportDom({
+      profileValue: "tmp-a",
       rollouts: [importRow({ fileName: "rollout-a.jsonl", selected: true }), importRow({ fileName: "rollout-b.jsonl" })],
+      rolloutsFor: "tmp-a",
       previewFor: "rollout-a.jsonl",
       statsLines: ["3 reasoning dropped"],
     });
@@ -5976,7 +6065,9 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
 
   it("identity settle (preview, stale reply): the OLD row's preview landing settled AFTER the new pick — old stamp — does not satisfy; the poll outlasts it", async () => {
     const dom = fakeImportDom({
+      profileValue: "tmp-a",
       rollouts: [importRow({ fileName: "rollout-a.jsonl", selected: true }), importRow({ fileName: "rollout-b.jsonl" })],
+      rolloutsFor: "tmp-a",
       previewFor: null,
       statsLines: [],
     });
@@ -6002,6 +6093,37 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
     expect(state.previewFor).toBe("rollout-b.jsonl");
     expect(state.statsLines).toEqual(["1 images omitted"]);
     expect(polls).toBeGreaterThanOrEqual(6);
+  });
+
+  it("list-staleness guard (W4-F0e finding H3): a stale window where the OLD and NEW profile carry the SAME relative fileName — selectRollout refuses list_stale BEFORE any click, the old settled preview does not satisfy; after the identity settle the same call succeeds", async () => {
+    // fileName is relative to a profile's sessions dir, so a cross-profile
+    // name collision is legal. Without the guard, the fileName captured off
+    // the OLD profile's rows equals the OLD settled preview's stamp, and the
+    // identity settle is satisfied INSTANTLY — a wrong-profile ok.
+    const sharedFileName = "2026/07/17/rollout-shared.jsonl";
+    const dom = fakeImportDom({
+      // The select already names the NEW profile, but the rendered list is
+      // still the OLD profile's settled reply (the passive-effect window),
+      // with a settled preview for the SAME relative fileName.
+      profileValue: "tmp-a",
+      rollouts: [importRow({ fileName: sharedFileName })],
+      rolloutsFor: "system",
+      previewFor: sharedFileName,
+    });
+    const facade = buildImportFacade(dom);
+    await expect(facade.codexImportSelectRollout(0)).resolves.toEqual({ ok: false, reason: "list_stale" });
+    expect(dom.clickRolloutAt).not.toHaveBeenCalled();
+    // The NEW profile's stamped reply lands (identity settle completed) —
+    // legally rendering the same relative fileName — and the same call is ok.
+    dom.cell.rolloutsFor = "tmp-a";
+    await expect(facade.codexImportSelectRollout(0)).resolves.toEqual({ ok: true });
+    expect(dom.clickRolloutAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("list-staleness guard: a loading list (no data-rollouts-for stamp yet) refuses list_stale — fail-closed and distinct from unknown_rollout", async () => {
+    const dom = fakeImportDom({ profileValue: "tmp-a", rollouts: [importRow()], rolloutsFor: null });
+    await expect(buildImportFacade(dom).codexImportSelectRollout(0)).resolves.toEqual({ ok: false, reason: "list_stale" });
+    expect(dom.clickRolloutAt).not.toHaveBeenCalled();
   });
 
   it("codexImportSetModel drives the REAL model select; unknown_model for a value outside the rendered options (or no select yet)", async () => {
