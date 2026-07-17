@@ -12,9 +12,24 @@
  * rather than opening a second writer for one session.
  */
 import type { CreateTabResult } from "../../../shared/tabs.js";
+import type { EngineId } from "../../../shared/engines.js";
 
-/** Human-readable text for a failed `CreateTabRequest` (design §3.2/§4.3: `{ok:false}` branches surface as a notice-toast). */
-export function describeCreateTabFailure(result: Extract<CreateTabResult, { ok: false }>): string {
+/**
+ * Human-readable text for a failed `CreateTabRequest` (design §3.2/§4.3:
+ * `{ok:false}` branches surface as a notice-toast).
+ *
+ * `engine`, when given, only affects the `not_ready` branch (S1b-1): main's
+ * `tab-ipc.ts` returns the same `reason:"not_ready"` for both a Core draft
+ * missing provider config AND a Codex draft with no signed-in profile
+ * (`canSpawn(codex)`=false) — the historical copy ("Configure a provider…")
+ * only makes sense for the former. Omitting `engine` (every pre-existing call
+ * site except `start-session.ts`'s `submitStartDraft`) keeps this branch
+ * byte-identical to the historical text — 0 wire-δ for those callers.
+ */
+export function describeCreateTabFailure(
+  result: Extract<CreateTabResult, { ok: false }>,
+  engine?: EngineId,
+): string {
   switch (result.reason) {
     case "cancelled":
       return "Cancelled.";
@@ -25,7 +40,9 @@ export function describeCreateTabFailure(result: Extract<CreateTabResult, { ok: 
     case "already_open":
       return "That task is already open in another tab.";
     case "not_ready":
-
+      if (engine === "codex") {
+        return "Sign in to a Codex account in Settings → Codex before opening a tab.";
+      }
       // is configured. Renderer surfaces the configure-provider notice. 2.2.4
       // may refine the copy / route to the Settings screen.
       return "Configure a provider (API key + model) before opening a tab.";
@@ -89,11 +106,17 @@ export interface CreateTabCallbacks {
  * `extra.title`, when given, is forwarded onto a successful `onTabCreated` —
  * the resume path passes the resumed session's own title (task 2.1.6); the
  * "New session" path (no title exists yet) omits it.
+ *
+ * `extra.engine`, when given, is forwarded to `describeCreateTabFailure`
+ * (S1b-1) so a `not_ready` refusal on a Codex draft gets the codex-specific
+ * copy. Only `start-session.ts`'s `submitStartDraft` passes it (it has
+ * `draft.engine` in scope); every other call site omits it and keeps the
+ * historical copy.
  */
 export function handleCreateTabResult(
   result: CreateTabResult,
   callbacks: CreateTabCallbacks,
-  extra?: { title?: string },
+  extra?: { title?: string; engine?: EngineId },
 ): string | null {
   if (result.ok) {
     callbacks.onTabCreated({
@@ -106,5 +129,5 @@ export function handleCreateTabResult(
   if (result.reason === "already_open" && result.focusTabId) {
     callbacks.onFocusTab(result.focusTabId);
   }
-  return describeCreateTabFailure(result);
+  return describeCreateTabFailure(result, extra?.engine);
 }

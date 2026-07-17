@@ -378,6 +378,16 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft).toBeNull();
   });
 
+  it("setDraftCodexProfileId(undefined) clears a stale pick back to the system pseudo-profile (R3-2 facet i)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftCodexProfileId("work");
+    expect(store.getState().draft?.codexProfileId).toBe("work");
+
+    store.getState().setDraftCodexProfileId(undefined);
+    expect(store.getState().draft?.codexProfileId).toBeUndefined();
+  });
+
   it("discardDraft clears both draft and draftActive", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");
