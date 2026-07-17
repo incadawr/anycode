@@ -166,7 +166,11 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // notice.
   if (req.kind === "new") {
     const engine = req.engine ?? "core";
-    if (!deps.manager.canSpawn(engine)) {
+    // Codex-profiles S3-1: gate on the draft's PICKED profile (raw renderer id —
+    // a pure cache lookup, unknown ⇒ fail-closed refuse; identity authority stays
+    // with resolveCodexProfile below), so a ready non-active pick spawns even when
+    // the active account is signed out. Absent id ⇒ the active profile answers.
+    if (!deps.manager.canSpawn(engine, req.codexProfileId)) {
       return { ok: false, reason: "not_ready" };
     }
     // Codex-profiles W3-F: resolve the draft's profile pick BEFORE prompting
@@ -246,7 +250,11 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // A resumed engine is persisted host metadata, never renderer input. Old
   // rows have no identity and remain the historical core engine.
   const engine = meta.engineId ?? "core";
-  if (!isEngineId(engine) || !deps.manager.canSpawn(engine)) {
+  // Codex-profiles S3-1: gate on the profile the session was CREATED under
+  // (persisted `meta.codexProfileId` — never the renderer's current active pick),
+  // consistent with the re-resolve below; a legacy/system session (no id) keeps
+  // the active-profile answer.
+  if (!isEngineId(engine) || !deps.manager.canSpawn(engine, meta.codexProfileId)) {
     return { ok: false, reason: "not_ready" };
   }
   const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);

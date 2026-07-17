@@ -16,6 +16,7 @@ import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/cre
 import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
+import type { EngineId } from "../shared/engines.js";
 import {
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
@@ -401,6 +402,75 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     await flush();
 
     expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--session", "sess-S"]);
+  });
+});
+
+describe("TabHostManager — readiness gate keys on the PICKED Codex profile (S3-1)", () => {
+  // The authoritative createTab guard must ask the readiness oracle about the
+  // profile the spawn will actually run under, not the active one. Injected
+  // oracle: only "ready-x" is ready; the ambient/active answer (undefined) is
+  // NOT — so a rollback that keys the gate on the active profile flips these RED.
+  function gatedManager(
+    engineReady: (engine: EngineId, codexProfileId?: string) => boolean,
+    fork: HostForkFn,
+  ) {
+    return new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      engineReady,
+      logger: silentLogger,
+      limits: {},
+    });
+  }
+
+  it('a ready PICK spawns and the gate saw ("codex", pickedId) — not the active undefined', () => {
+    const { fork, hosts } = liveForkRig();
+    const engineReady = vi.fn((_engine: EngineId, codexProfileId?: string) => codexProfileId === "ready-x");
+    const manager = gatedManager(engineReady, fork);
+
+    const created = manager.createTab({
+      workspace: "/ws",
+      sessionId: "s-ready-pick",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "ready-x" },
+    });
+
+    expect(created).toMatchObject({ ok: true });
+    expect(hosts).toHaveLength(1);
+    expect(engineReady).toHaveBeenCalledWith("codex", "ready-x");
+  });
+
+  it("negative holds: a PICK the gate reports NOT ready refuses not_ready and never forks", () => {
+    const forkSpy = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const engineReady = vi.fn((_engine: EngineId, codexProfileId?: string) => codexProfileId === "ready-x");
+    const manager = gatedManager(engineReady, forkSpy);
+
+    const created = manager.createTab({
+      workspace: "/ws",
+      sessionId: "s-not-ready-pick",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "not-ready-y" },
+    });
+
+    expect(created).toEqual({ ok: false, reason: "not_ready" });
+    expect(engineReady).toHaveBeenCalledWith("codex", "not-ready-y");
+    expect(forkSpy).not.toHaveBeenCalled();
+  });
+
+  it("an absent pick preserves the active-profile answer (no symmetry): canSpawn defaults the id to undefined", () => {
+    const { fork } = liveForkRig();
+    const engineReady = vi.fn((_engine: EngineId, codexProfileId?: string) => codexProfileId === undefined);
+    const manager = gatedManager(engineReady, fork);
+
+    expect(manager.canSpawn("codex")).toBe(true);
+    const lastCall = engineReady.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe("codex");
+    expect(lastCall?.[1]).toBeUndefined();
   });
 });
 
