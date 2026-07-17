@@ -1231,6 +1231,9 @@ void app.whenReady().then(async () => {
   // path can override the fork model. The holder is filled at boot wiring — long
   // before any user-driven resume can run — so the lazy indirection never races.
   let consumeImportModel: ((sessionId: string) => string | undefined) | undefined;
+  // L4·1 peek-then-confirm: the resume path PEEKS the pick (read-only) to stamp
+  // the override, then consumes it (holder above) only after createTab commits.
+  let peekImportModel: ((sessionId: string) => string | undefined) | undefined;
   registerTabIpc({
     manager,
     persistence,
@@ -1242,6 +1245,9 @@ void app.whenReady().then(async () => {
     // imported session (see the holder above). Undefined until the rollout IPC
     // wires it below; harmless (no override) for any resume before then.
     consumePendingImportModel: (sessionId) => consumeImportModel?.(sessionId),
+    // L4·1: read-only peek of the import pick, burned via consume above only on a
+    // successful createTab (see the holders above; wired below with the rollout IPC).
+    peekPendingImportModel: (sessionId) => peekImportModel?.(sessionId),
     resolveResumePin,
     resolveCodexProfile: resolveCodexProfileForTab,
     validateWorktreeResume: async (meta) => {
@@ -1469,6 +1475,7 @@ void app.whenReady().then(async () => {
     // S4-1 arm 2: hand the import model plane's consume-once reader to tab-ipc's
     // resume path (captured in the holder wired above registerTabIpc).
     consumeImportModel = rolloutIpc.consumePendingImportModel;
+    peekImportModel = rolloutIpc.peekPendingImportModel;
   }
 
   // MCP config management control plane (design/slice-P7.19-cut.md §3/§4 W2):
