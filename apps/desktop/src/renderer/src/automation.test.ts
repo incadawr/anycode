@@ -45,6 +45,10 @@ import {
   type ProviderPaneDom,
   type ProviderConnectionRowView,
   type ProviderDrawerDomState,
+  type CodexPaneBinaryState,
+  type CodexPaneRowState,
+  type CodexProfileChipOptionState,
+  type CodexImportRolloutRowState,
 } from "./automation.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
@@ -5164,5 +5168,677 @@ describe("automation facade — provider connections grid/drawer probe/driver (T
       await expect(facade.settingsProviderDrawerClose()).resolves.toEqual({ ok: true });
       expect(clickDrawerClose).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("automation facade — modelPillState catalog parity (W4-F0, findings S5-1)", () => {
+  const noTranscriptDom: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
+  const noTodoPanelDom: TodoPanelDom = { panel: () => null };
+  const noStartScreenDom: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+
+  function pillDom(): ModelPillDom {
+    return {
+      mounted: () => true,
+      popoverOpen: () => false,
+      currentPage: () => "root",
+      manageDisabled: () => true,
+      clickChip: vi.fn<() => void>(),
+      clickRootRow: vi.fn<(row: "model" | "effort") => void>(),
+      clickItemAt: vi.fn<(index: number) => void>(),
+    };
+  }
+
+  function settingsStoreWith(snapshot: SettingsSnapshot | null): SettingsStoreApi {
+    const store = createSettingsStore();
+    store.setState({ snapshot });
+    return store;
+  }
+
+  it("resolves a custom:* provider's curated models via providerModelsFor — the FXH fallback the pre-fix expression missed", () => {
+    // The live S5 discriminant (W4-findings-S5.md): an active `custom:*`
+    // connection has NO builtin catalog entry — its models come from the
+    // record's own curated list. The pre-fix `catalog.find(id)?.models`
+    // yields undefined here, so modelItems collapsed to [currentModel] and
+    // the probe lied pessimistically against a correct popover. RED against
+    // reverting the pillCatalogModels fix.
+    const snapshot: SettingsSnapshot = {
+      settings: {
+        version: 2,
+        provider: {
+          ...providerV2({ id: "custom:lmstudio" }),
+          custom: [
+            {
+              id: "custom:lmstudio",
+              name: "LM Studio",
+              baseUrl: "http://localhost:1234",
+              kind: "openai-compatible",
+              models: ["google/gemma-4-12b-qat", "openai/gpt-oss-20b"],
+            },
+          ],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+      catalog: [],
+    };
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    tabsStore.getState().setActiveTab(tabId);
+    port.emit({ type: "model_changed", model: "openai/gpt-oss-20b", reasoningEffort: "off", availableEffortLevels: undefined });
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptDom,
+      noTodoPanelDom,
+      noStartScreenDom,
+      pillDom(),
+      settingsStoreWith(snapshot),
+    );
+    const state = facade.modelPillState(tabId);
+    expect(state.ok).toBe(true);
+    if (!state.ok) throw new Error("unreachable");
+    expect(state.modelItems).toEqual([
+      { id: "google/gemma-4-12b-qat", name: "google/gemma-4-12b-qat" },
+      { id: "openai/gpt-oss-20b", name: "openai/gpt-oss-20b" },
+    ]);
+  });
+
+  it("resolves a PINNED tab's catalog from the pin's provider, not the active one — resolvePillTarget parity with ModelPill.tsx", () => {
+    // Second S5-1 axis: a pinned tab's popover renders the PIN's provider
+    // catalog (TASK.45 W10-FIX F2); the pre-fix probe always computed from
+    // the ACTIVE provider, so it could lie optimistically too. RED against
+    // reverting the pillCatalogModels fix.
+    const snapshot: SettingsSnapshot = {
+      settings: {
+        version: 2,
+        provider: {
+          activeConnectionId: "conn-openai",
+          connections: [
+            { id: "conn-openai", providerId: "openai" },
+            { id: "conn-zai", providerId: "z-ai" },
+          ],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+      catalog: [
+        { id: "openai", name: "OpenAI", authKind: "api_key", models: [{ id: "gpt-x", name: "GPT-X" }] },
+        { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [{ id: "glm-5.2", name: "GLM-5.2" }] },
+      ],
+    };
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-pinned", "/ws/p", asPort(port), { connectionId: "conn-zai", providerId: "z-ai" });
+    port.emit(HOST_READY("/ws/p", "sess-p"));
+    tabsStore.getState().setActiveTab("tab-pinned");
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", availableEffortLevels: undefined });
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptDom,
+      noTodoPanelDom,
+      noStartScreenDom,
+      pillDom(),
+      settingsStoreWith(snapshot),
+    );
+    const state = facade.modelPillState("tab-pinned");
+    expect(state.ok).toBe(true);
+    if (!state.ok) throw new Error("unreachable");
+    // The pinned provider's catalog — NOT the active connection's ("gpt-x").
+    expect(state.modelItems).toEqual([{ id: "glm-5.2", name: "GLM-5.2" }]);
+    expect(state.label).toBe("GLM-5.2");
+  });
+});
+
+describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 probe (a))", () => {
+  function binaryState(overrides: Partial<CodexPaneBinaryState> = {}): CodexPaneBinaryState {
+    return {
+      statusHeadline: "Sign in required",
+      statusTone: "warn",
+      statusDetail: "Codex 0.144.5 found but not signed in.",
+      binaryPath: "/usr/local/bin/codex",
+      sourceLabel: "found on PATH",
+      supportedRange: ">=0.140.0 <0.150.0",
+      recommended: "0.144.5",
+      manifestSource: "cache",
+      installButton: null,
+      riskToggleVisible: false,
+      actions: [
+        { label: "Recheck all", disabled: false },
+        { label: "Choose binary…", disabled: false },
+        { label: "Refresh manifest", disabled: false },
+      ],
+      ...overrides,
+    };
+  }
+
+  /** A fully-controllable fake `CodexPaneDom` (pillDom discipline): read probes frozen via overrides; every click is a spy. */
+  function fakeCodexPaneDom(
+    overrides: Partial<{
+      mounted: boolean;
+      binary: CodexPaneBinaryState;
+      rows: CodexPaneRowState[];
+      notices: string[];
+    }> = {},
+  ) {
+    const binary = overrides.binary ?? binaryState();
+    return {
+      mounted: () => overrides.mounted ?? true,
+      binary: () => binary,
+      rows: () => overrides.rows ?? [],
+      notices: () => overrides.notices ?? [],
+      actionButton: (label: string) => {
+        const action = binary.actions.find((a) => a.label === label);
+        return action ? { disabled: action.disabled } : null;
+      },
+      clickAction: vi.fn((label: string) => binary.actions.some((a) => a.label === label)),
+      installButton: () => binary.installButton,
+      clickInstall: vi.fn(() => binary.installButton !== null),
+      clickImportSession: vi.fn(() => true),
+    };
+  }
+
+  function buildFacade(codexPaneDom: ReturnType<typeof fakeCodexPaneDom>) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createSettingsStore(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codexPaneDom,
+    );
+  }
+
+  it("reads mounted:false with empty defaults when the pane isn't mounted (a valid reading, not an error)", () => {
+    const facade = buildFacade(fakeCodexPaneDom({ mounted: false }));
+    expect(facade.codexPaneState()).toEqual({ mounted: false, binary: null, rows: [], notices: [] });
+  });
+
+  it("reads the binary/manifest block AND account rows off the DOM accessor (DoD probe (a) shape)", () => {
+    const rows: CodexPaneRowState[] = [
+      {
+        label: "System (current environment)",
+        statusHeadline: "Ready",
+        statusTone: "ok",
+        statusDetail: "Codex 0.144.5 — signed in (chatgpt · plus)",
+        emailRendered: true,
+        quotaLines: ["5h · 82% left · resets in 3h", "Weekly · 64% left · resets in 2d"],
+        buttons: [{ label: "Delete", disabled: false }],
+        signingIn: false,
+      },
+    ];
+    const binary = binaryState({
+      installButton: { label: "Install Codex 0.144.5", disabled: false },
+      riskToggleVisible: true,
+    });
+    const facade = buildFacade(fakeCodexPaneDom({ binary, rows, notices: ["Untested Codex version 0.151.0 — running outside the supported range on your own risk acceptance."] }));
+    const state = facade.codexPaneState();
+    expect(state.mounted).toBe(true);
+    expect(state.binary).toEqual(binary);
+    expect(state.rows).toEqual(rows);
+    expect(state.notices).toHaveLength(1);
+  });
+
+  it("codexPaneInstall refuses pane_not_mounted / button_not_present / button_disabled, else fires the real click and returns immediately", () => {
+    expect(buildFacade(fakeCodexPaneDom({ mounted: false })).codexPaneInstall()).toEqual({ ok: false, reason: "pane_not_mounted" });
+    expect(buildFacade(fakeCodexPaneDom()).codexPaneInstall()).toEqual({ ok: false, reason: "button_not_present" });
+    expect(
+      buildFacade(fakeCodexPaneDom({ binary: binaryState({ installButton: { label: "Install Codex 0.144.5", disabled: true } }) })).codexPaneInstall(),
+    ).toEqual({ ok: false, reason: "button_disabled" });
+    const dom = fakeCodexPaneDom({ binary: binaryState({ installButton: { label: "Install Codex 0.144.5", disabled: false } }) });
+    expect(buildFacade(dom).codexPaneInstall()).toEqual({ ok: true });
+    expect(dom.clickInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("codexPaneRecheckAll / codexPaneRefreshManifest click their EXACT labelled buttons and refuse while busy-disabled", () => {
+    const dom = fakeCodexPaneDom();
+    const facade = buildFacade(dom);
+    expect(facade.codexPaneRecheckAll()).toEqual({ ok: true });
+    expect(dom.clickAction).toHaveBeenCalledWith("Recheck all");
+    expect(facade.codexPaneRefreshManifest()).toEqual({ ok: true });
+    expect(dom.clickAction).toHaveBeenCalledWith("Refresh manifest");
+
+    const busyDom = fakeCodexPaneDom({
+      binary: binaryState({
+        actions: [
+          { label: "Recheck all", disabled: true },
+          { label: "Refresh manifest", disabled: true },
+        ],
+      }),
+    });
+    const busyFacade = buildFacade(busyDom);
+    expect(busyFacade.codexPaneRecheckAll()).toEqual({ ok: false, reason: "button_disabled" });
+    expect(busyFacade.codexPaneRefreshManifest()).toEqual({ ok: false, reason: "button_disabled" });
+    expect(busyDom.clickAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("automation facade — codexProfileChipState / open / pick (W4-F0, findings S1-1 probe (b))", () => {
+  /** A fully-controllable fake `CodexProfileChipDom` (pillDom discipline): reads frozen via a mutable cell so a click spy can flip them. */
+  function fakeChipDom(
+    overrides: Partial<{
+      mounted: boolean;
+      label: string;
+      menuOpen: boolean;
+      options: CodexProfileChipOptionState[];
+      addAccountLast: boolean;
+    }> = {},
+  ) {
+    const cell = {
+      mounted: overrides.mounted ?? true,
+      label: overrides.label ?? "System",
+      menuOpen: overrides.menuOpen ?? false,
+      options: overrides.options ?? [],
+      addAccountLast: overrides.addAccountLast ?? true,
+    };
+    const dom = {
+      cell,
+      mounted: () => cell.mounted,
+      label: () => cell.label,
+      menuOpen: () => cell.menuOpen,
+      options: () => cell.options,
+      addAccountLast: () => cell.addAccountLast,
+      clickChip: vi.fn(() => {
+        cell.menuOpen = !cell.menuOpen;
+      }),
+      clickOptionAt: vi.fn((index: number) => index >= 0 && index < cell.options.length),
+    };
+    return dom;
+  }
+
+  function buildChipFixture(dom: ReturnType<typeof fakeChipDom>) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createSettingsStore(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      dom,
+    );
+    return { facade, tabsStore };
+  }
+
+  it("reads chipVisible:false with empty defaults when the chip isn't rendered — the read-only-after-start observability (no draft, no chip)", () => {
+    const { facade } = buildChipFixture(fakeChipDom({ mounted: false }));
+    expect(facade.codexProfileChipState()).toEqual({
+      ok: true,
+      chipVisible: false,
+      label: null,
+      menuOpen: false,
+      options: [],
+      addAccountLast: false,
+      draftActive: false,
+      draftCodexProfileId: null,
+    });
+  });
+
+  it("reads label/menuOpen/options{label,disabled}/addAccountLast off the rendered popover, and the draft's raw codexProfileId off the store", () => {
+    const options: CodexProfileChipOptionState[] = [
+      { label: "main", disabled: false, current: false },
+      { label: "acc2", disabled: true, current: false },
+    ];
+    const dom = fakeChipDom({ label: "acc2", menuOpen: true, options, addAccountLast: true });
+    const { facade, tabsStore } = buildChipFixture(dom);
+    tabsStore.getState().openDraft("/ws/x");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setDraftCodexProfileId("acc2");
+    expect(facade.codexProfileChipState()).toEqual({
+      ok: true,
+      chipVisible: true,
+      label: "acc2",
+      menuOpen: true,
+      options,
+      addAccountLast: true,
+      draftActive: true,
+      draftCodexProfileId: "acc2",
+    });
+  });
+
+  it("options are only populated while the popover is open (rows are read off the RENDERED popover, a closed one renders none)", () => {
+    const dom = fakeChipDom({ menuOpen: false, options: [{ label: "main", disabled: false, current: true }] });
+    const { facade } = buildChipFixture(dom);
+    const state = facade.codexProfileChipState();
+    expect(state.menuOpen).toBe(false);
+    expect(state.options).toEqual([]);
+  });
+
+  it("codexProfileChipOpen fires the real chip click and settles on the committed popover state; not_present without a chip", async () => {
+    const dom = fakeChipDom();
+    const { facade } = buildChipFixture(dom);
+    await expect(facade.codexProfileChipOpen(true)).resolves.toEqual({ ok: true });
+    expect(dom.clickChip).toHaveBeenCalledTimes(1);
+    // Already open -> idempotent no-op, no second click.
+    await expect(facade.codexProfileChipOpen(true)).resolves.toEqual({ ok: true });
+    expect(dom.clickChip).toHaveBeenCalledTimes(1);
+    await expect(facade.codexProfileChipOpen(false)).resolves.toEqual({ ok: true });
+
+    const absent = fakeChipDom({ mounted: false });
+    const { facade: absentFacade } = buildChipFixture(absent);
+    await expect(absentFacade.codexProfileChipOpen(true)).resolves.toEqual({ ok: false, reason: "not_present" });
+  });
+
+  it("codexProfileChipPick auto-opens the popover, FIRES the click even on a disabled row (the product's own gate is what a smoke must observe), refuses out-of-range", async () => {
+    const options: CodexProfileChipOptionState[] = [
+      { label: "main", disabled: false, current: false },
+      { label: "acc2", disabled: true, current: false },
+    ];
+    const dom = fakeChipDom({ options });
+    const { facade } = buildChipFixture(dom);
+    await expect(facade.codexProfileChipPick(1)).resolves.toEqual({ ok: true });
+    expect(dom.clickChip).toHaveBeenCalledTimes(1);
+    // The DISABLED row's click was fired, not pre-refused — a real click on a
+    // disabled button no-ops in the browser, which is exactly the product
+    // behavior the S1b gate asserts (draft unchanged, popover still open).
+    expect(dom.clickOptionAt).toHaveBeenCalledWith(1);
+    await expect(facade.codexProfileChipPick(7)).resolves.toEqual({ ok: false, reason: "unknown_option" });
+  });
+});
+
+describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", () => {
+  function importRow(overrides: Partial<CodexImportRolloutRowState> = {}): CodexImportRolloutRowState {
+    return {
+      timestamp: "2026-07-17 03:14 UTC",
+      size: "12.3 KB",
+      cwd: "/ws/proj",
+      preview: "fix the flaky test…",
+      selected: false,
+      ...overrides,
+    };
+  }
+
+  /** A fully-controllable fake `CodexImportDialogDom` over a mutable cell, so the drive spies can flip what the read probes report (waitUntil-visible transitions). */
+  function fakeImportDom(
+    overrides: Partial<{
+      open: boolean;
+      profileValue: string;
+      profileOptions: { id: string; label: string }[];
+      listEmptyText: string | null;
+      listSettled: boolean;
+      rollouts: CodexImportRolloutRowState[];
+      previewSettled: boolean;
+      statsLines: string[];
+      notices: string[];
+      modelValue: string | null;
+      modelOptions: { id: string; name: string }[];
+      importButton: { label: string; disabled: boolean } | null;
+    }> = {},
+  ) {
+    const cell = {
+      open: overrides.open ?? true,
+      profileValue: overrides.profileValue ?? "",
+      profileOptions: overrides.profileOptions ?? [
+        { id: "system", label: "System (current environment)" },
+        { id: "tmp-a", label: "tmp-a" },
+      ],
+      listEmptyText: overrides.listEmptyText ?? null,
+      listSettled: overrides.listSettled ?? true,
+      rollouts: overrides.rollouts ?? [],
+      previewSettled: overrides.previewSettled ?? true,
+      statsLines: overrides.statsLines ?? [],
+      notices: overrides.notices ?? [],
+      modelValue: overrides.modelValue ?? null,
+      modelOptions: overrides.modelOptions ?? [],
+      importButton: overrides.importButton !== undefined ? overrides.importButton : { label: "Import & open", disabled: false },
+    };
+    const dom = {
+      cell,
+      open: () => cell.open,
+      clickClose: vi.fn(() => {
+        cell.open = false;
+        return true;
+      }),
+      profileValue: () => cell.profileValue,
+      profileOptions: () => cell.profileOptions,
+      setProfile: vi.fn((id: string) => {
+        if (!cell.profileOptions.some((o) => o.id === id)) return false;
+        cell.profileValue = id;
+        return true;
+      }),
+      listEmptyText: () => cell.listEmptyText,
+      listLoadingVisible: () => cell.listEmptyText === "Loading sessions…",
+      listSettled: () => cell.listSettled && cell.listEmptyText !== "Loading sessions…",
+      rollouts: () => cell.rollouts,
+      clickRolloutAt: vi.fn((index: number) => index >= 0 && index < cell.rollouts.length),
+      previewLoadingVisible: () => false,
+      previewSettled: () => cell.previewSettled,
+      statsLines: () => cell.statsLines,
+      notices: () => cell.notices,
+      modelValue: () => cell.modelValue,
+      modelOptions: () => cell.modelOptions,
+      setModel: vi.fn((id: string) => {
+        if (!cell.modelOptions.some((o) => o.id === id)) return false;
+        cell.modelValue = id;
+        return true;
+      }),
+      importButton: () => cell.importButton,
+      clickImport: vi.fn(() => cell.importButton !== null && !cell.importButton.disabled),
+    };
+    return dom;
+  }
+
+  function fakePaneForImport(mounted = true, clickResult = true) {
+    return {
+      mounted: () => mounted,
+      binary: () => {
+        throw new Error("unused");
+      },
+      rows: () => [],
+      notices: () => [],
+      actionButton: () => null,
+      clickAction: () => false,
+      installButton: () => null,
+      clickInstall: () => false,
+      clickImportSession: vi.fn(() => clickResult),
+    };
+  }
+
+  function buildImportFacade(importDom: ReturnType<typeof fakeImportDom>, paneDom = fakePaneForImport()) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createSettingsStore(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      paneDom,
+      undefined,
+      importDom,
+    );
+  }
+
+  it("reads open:false with empty defaults when the dialog is closed (a valid reading, not an error)", () => {
+    const facade = buildImportFacade(fakeImportDom({ open: false }));
+    expect(facade.codexImportState()).toEqual({
+      paneMounted: true,
+      open: false,
+      profileId: null,
+      profileOptions: [],
+      listLoading: false,
+      listEmptyText: null,
+      rollouts: [],
+      previewLoading: false,
+      statsLines: [],
+      notices: [],
+      modelValue: null,
+      modelOptions: [],
+      importDisabled: true,
+      importing: false,
+    });
+  });
+
+  it("reads the whole DoD probe (c) shape: profile options, rollout rows, loss stats, notices (import-disabled reason rides here), model select, Import button state", () => {
+    const dom = fakeImportDom({
+      profileValue: "tmp-a",
+      rollouts: [importRow({ selected: true }), importRow({ timestamp: "2026-07-16 22:00 UTC", size: "1.0 KB", cwd: null, preview: null })],
+      statsLines: ["3 reasoning dropped", "2 tools collapsed to text"],
+      notices: ["Pick a model for the new session first."],
+      modelValue: "glm-5.2",
+      modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }],
+      importButton: { label: "Import & open", disabled: true },
+    });
+    const facade = buildImportFacade(dom);
+    const state = facade.codexImportState();
+    expect(state.open).toBe(true);
+    expect(state.profileId).toBe("tmp-a");
+    expect(state.profileOptions.map((o) => o.id)).toEqual(["system", "tmp-a"]);
+    expect(state.rollouts).toHaveLength(2);
+    expect(state.rollouts[0]?.selected).toBe(true);
+    expect(state.statsLines).toEqual(["3 reasoning dropped", "2 tools collapsed to text"]);
+    expect(state.notices).toEqual(["Pick a model for the new session first."]);
+    expect(state.modelValue).toBe("glm-5.2");
+    expect(state.importDisabled).toBe(true);
+    expect(state.importing).toBe(false);
+  });
+
+  it("classifies the list-loading placeholder honestly (listLoading true, listEmptyText null while loading)", () => {
+    const dom = fakeImportDom({ listEmptyText: "Loading sessions…" });
+    const state = buildImportFacade(dom).codexImportState();
+    expect(state.listLoading).toBe(true);
+    expect(state.listEmptyText).toBeNull();
+  });
+
+  it("codexImportOpen(true) clicks the pane's own entry button and settles on the dialog mounting; pane_not_mounted / button_not_present refusals", async () => {
+    const dom = fakeImportDom({ open: false });
+    const pane = fakePaneForImport();
+    pane.clickImportSession = vi.fn(() => {
+      dom.cell.open = true;
+      return true;
+    });
+    await expect(buildImportFacade(dom, pane).codexImportOpen(true)).resolves.toEqual({ ok: true });
+    expect(pane.clickImportSession).toHaveBeenCalledTimes(1);
+
+    await expect(buildImportFacade(fakeImportDom({ open: false }), fakePaneForImport(false)).codexImportOpen(true)).resolves.toEqual({
+      ok: false,
+      reason: "pane_not_mounted",
+    });
+    await expect(buildImportFacade(fakeImportDom({ open: false }), fakePaneForImport(true, false)).codexImportOpen(true)).resolves.toEqual({
+      ok: false,
+      reason: "button_not_present",
+    });
+  });
+
+  it("codexImportOpen(false) clicks the dialog's own Close button; already-closed is an idempotent ok", async () => {
+    const dom = fakeImportDom();
+    await expect(buildImportFacade(dom).codexImportOpen(false)).resolves.toEqual({ ok: true });
+    expect(dom.clickClose).toHaveBeenCalledTimes(1);
+    await expect(buildImportFacade(fakeImportDom({ open: false })).codexImportOpen(false)).resolves.toEqual({ ok: true });
+  });
+
+  it("codexImportSetProfile drives the REAL select and settles once the list leaves loading; unknown_profile / dialog_not_open refuse", async () => {
+    const dom = fakeImportDom();
+    await expect(buildImportFacade(dom).codexImportSetProfile("tmp-a")).resolves.toEqual({ ok: true });
+    expect(dom.setProfile).toHaveBeenCalledWith("tmp-a");
+    await expect(buildImportFacade(dom).codexImportSetProfile("nope")).resolves.toEqual({ ok: false, reason: "unknown_profile" });
+    await expect(buildImportFacade(fakeImportDom({ open: false })).codexImportSetProfile("tmp-a")).resolves.toEqual({
+      ok: false,
+      reason: "dialog_not_open",
+    });
+  });
+
+  it("codexImportSelectRollout clicks the row's own radio by index and settles on the preview; unknown_rollout refuses", async () => {
+    const dom = fakeImportDom({ rollouts: [importRow(), importRow()] });
+    await expect(buildImportFacade(dom).codexImportSelectRollout(1)).resolves.toEqual({ ok: true });
+    expect(dom.clickRolloutAt).toHaveBeenCalledWith(1);
+    await expect(buildImportFacade(dom).codexImportSelectRollout(5)).resolves.toEqual({ ok: false, reason: "unknown_rollout" });
+  });
+
+  it("codexImportSetModel drives the REAL model select; unknown_model for a value outside the rendered options (or no select yet)", async () => {
+    const dom = fakeImportDom({ modelOptions: [{ id: "glm-5.2", name: "GLM-5.2" }] });
+    await expect(buildImportFacade(dom).codexImportSetModel("glm-5.2")).resolves.toEqual({ ok: true });
+    expect(dom.setModel).toHaveBeenCalledWith("glm-5.2");
+    await expect(buildImportFacade(dom).codexImportSetModel("gpt-x")).resolves.toEqual({ ok: false, reason: "unknown_model" });
+  });
+
+  it("codexImportApply: success = the dialog closes; a fresh refusal notice = import_refused; a disabled button = import_disabled (no click fired)", async () => {
+    const successDom = fakeImportDom();
+    successDom.clickImport = vi.fn(() => {
+      successDom.cell.open = false;
+      return true;
+    });
+    await expect(buildImportFacade(successDom).codexImportApply()).resolves.toEqual({ ok: true });
+
+    const refusedDom = fakeImportDom();
+    refusedDom.clickImport = vi.fn(() => {
+      refusedDom.cell.notices = ["That session file is too large to import (32 MiB limit)."];
+      return true;
+    });
+    await expect(buildImportFacade(refusedDom).codexImportApply()).resolves.toEqual({ ok: false, reason: "import_refused" });
+
+    const disabledDom = fakeImportDom({ importButton: { label: "Import & open", disabled: true } });
+    await expect(buildImportFacade(disabledDom).codexImportApply()).resolves.toEqual({ ok: false, reason: "import_disabled" });
   });
 });
