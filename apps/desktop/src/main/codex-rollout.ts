@@ -38,6 +38,15 @@ export interface RolloutImportReport {
     unknownRecordsSkipped: number;
     unknownItemsSkipped: number;
     unknownPartsSkipped: number;
+    /**
+     * Tool outputs that arrived with a `call_id` matching NO pending call (R2-M2,
+     * W4-F1). This happens when a still-live collapse slot is orphaned mid-turn
+     * (its assistant turn flushed by an earlier bash output) and its own late
+     * output lands after `collapsePending` was already cleared. Previously such
+     * an output was dropped SILENTLY; counting it keeps the loss honest rather
+     * than pretending the import was lossless.
+     */
+    droppedUnmatched: number;
   };
   meta: { cwd?: string; cliVersion?: string; model?: string; startedAt?: string };
   warnings: string[];
@@ -117,6 +126,7 @@ class RolloutImporter {
     unknownRecordsSkipped: 0,
     unknownItemsSkipped: 0,
     unknownPartsSkipped: 0,
+    droppedUnmatched: 0,
   };
   private readonly meta: RolloutImportReport["meta"] = {};
   private readonly items: HistoryItem[] = [];
@@ -373,7 +383,14 @@ class RolloutImporter {
       this.stats.toolPairs++;
       return;
     }
-    // An output with no matching pending call — 0 observed across the W0-R3 corpus. Dropped silently rather than guessed at.
+    // R2-M2 (W4-F1): an output whose `call_id` matches no pending call. This is
+    // reachable when an earlier bash output flushed the assistant turn and
+    // orphaned a still-live collapse slot (flushAssistant clears collapsePending
+    // mid-turn), so this slot's own late output finds nothing to fold into.
+    // There is no safe slot to append it to (its assistant message already
+    // rendered), but the loss must be COUNTED, not dropped silently — the
+    // report's honesty mandate ("потери честно посчитаны").
+    this.stats.droppedUnmatched++;
   }
 
   private handleResponseItem(payload: Record<string, unknown>): void {
@@ -470,6 +487,11 @@ class RolloutImporter {
     const skippedRecords = this.stats.malformedLines + this.stats.unknownRecordsSkipped + this.stats.unknownItemsSkipped;
     if (this.totalRecords > 0 && skippedRecords / this.totalRecords > MOSTLY_UNRECOGNIZED_THRESHOLD) {
       warnings.push("file is mostly unrecognized; likely a newer rollout format");
+    }
+    // R2-M2 (W4-F1): surface any silently-orphaned tool output so the loss is
+    // visible in the report, not merely counted in stats.
+    if (this.stats.droppedUnmatched > 0) {
+      warnings.push(`dropped ${this.stats.droppedUnmatched} tool output(s) with no matching call`);
     }
     return warnings;
   }

@@ -28,7 +28,8 @@ import { ipcMain } from "electron";
 import { constants as fsConstants } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import type { PermissionMode, PersistencePort } from "@anycode/core";
 import { importCodexRollout, type ImportCodexRolloutOptions, type RolloutImportReport } from "./codex-rollout.js";
 
@@ -88,6 +89,26 @@ export interface CodexRolloutIpcDeps {
   persistence: Pick<PersistencePort, "createSession" | "appendHistory">;
   /** `profileId` -> absolute path of THAT profile's `sessions/` directory (§1.3: "rollout лежит в доме своего профиля"); `null` = unknown profile. Owned by lane A's profile registry — injected so this file never imports it. */
   resolveProfileSessionsDir(profileId: string): Promise<string | null>;
+  /**
+   * The active provider connection at the moment of `import & apply` (S4-1 arm 1,
+   * W4-F1). The imported session's model was picked from THIS connection's
+   * catalog (§8.1: import = a NEW core session), so the new session is pinned to
+   * it — otherwise a default-switch between import and open would resolve the
+   * per-fork model override (arm 2) against a DIFFERENT provider. Absent OR
+   * returning `undefined` (no active connection) ⇒ the row is persisted without a
+   * pin, byte-identical to pre-S4-1. Mirrors tab-ipc's own `activeConnectionId`
+   * (the source is the same active-connection getter in main/index.ts).
+   */
+  activeConnectionId?: () => string | undefined;
+  /**
+   * Records the user's picked model against the freshly created session id
+   * (S4-1 arm 2). The first resume of that session consumes it (consume-once)
+   * and stamps it over the fork env's ANYCODE_MODEL, so the imported tab boots on
+   * the CHOSEN model instead of the active connection's default (§8.8: the whole
+   * point of the picker). `registerCodexRolloutIpc` binds this to its own ephemeral
+   * map; absent = no ephemeral model plane (legacy wiring / unit fixtures).
+   */
+  recordPendingImportModel?: (sessionId: string, model: string) => void;
   maxItems?: number;
   maxOutputChars?: number;
 }
@@ -265,20 +286,66 @@ export async function handleCodexRolloutImport(deps: CodexRolloutIpcDeps, raw: u
   // §8.1: a brand-new core session, never a link back to the source codex
   // session — no `externalSessionRef`, so it is never mistaken for a
   // resumable codex thread.
-  const workspace = imported.report.meta.cwd ?? ".";
+  //
+  // R2-M3 (W4-F1): `meta.cwd` is UNTRUSTED content read verbatim from the
+  // rollout file. A relative fallback (`"."`) resolves against the Electron
+  // process cwd — `/` when launched from Finder — silently rooting the resumed
+  // session in an unpredictable place; a garbage/relative string from the file
+  // would ride into the session row as-is. Only an ABSOLUTE cwd is trusted;
+  // anything else (absent head, relative, junk) falls back to the user's home.
+  const rawCwd = imported.report.meta.cwd;
+  const workspace = typeof rawCwd === "string" && isAbsolute(rawCwd) ? rawCwd : homedir();
+  // S4-1 arm 1 (W4-F1): pin the NEW session to the connection active at apply
+  // time. `undefined` (no active connection) ⇒ no pin field, byte-as-today.
+  const connectionId = deps.activeConnectionId?.();
   const session = await deps.persistence.createSession({
     id: randomUUID(),
     workspace,
     model,
     mode: request?.mode ?? "build",
     engineId: "core",
+    ...(connectionId !== undefined ? { connectionId } : {}),
   });
+  // S4-1 arm 2 (W4-F1): register the picked model so the first resume overrides
+  // the fork env's ANYCODE_MODEL. Recorded AFTER a successful createSession so a
+  // failed create never leaves a stale pending entry.
+  deps.recordPendingImportModel?.(session.id, model);
   await deps.persistence.appendHistory(session.id, imported.report.items);
   return { ok: true, sessionId: session.id, workspace: session.workspace, report: imported.report };
 }
 
-export function registerCodexRolloutIpc(deps: CodexRolloutIpcDeps): void {
-  ipcMain.handle(CODEX_ROLLOUT_LIST_CHANNEL, (_event, raw: unknown) => handleCodexRolloutList(deps, raw));
-  ipcMain.handle(CODEX_ROLLOUT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleCodexRolloutPreview(deps, raw));
-  ipcMain.handle(CODEX_ROLLOUT_IMPORT_CHANNEL, (_event, raw: unknown) => handleCodexRolloutImport(deps, raw));
+/** The handle returned by `registerCodexRolloutIpc` so main can wire the import model plane into tab-ipc. */
+export interface CodexRolloutIpcHandle {
+  /**
+   * Reads-and-deletes the model an import pinned for `sessionId` (S4-1 arm 2,
+   * consume-once). Main injects this as tab-ipc's `consumePendingImportModel`, so
+   * the FIRST resume of an imported session overrides the fork env's ANYCODE_MODEL
+   * to the user's pick; a second resume of the same session (already consumed), a
+   * new tab, or any non-imported resume gets `undefined` — the map is only ever
+   * populated by import, so those paths are byte-identical to today.
+   */
+  consumePendingImportModel(sessionId: string): string | undefined;
+}
+
+export function registerCodexRolloutIpc(deps: CodexRolloutIpcDeps): CodexRolloutIpcHandle {
+  // S4-1 arm 2 (W4-F1): the ephemeral pending-model map lives in THIS closure —
+  // never persisted, never a session-row field. Import writes the pick; the
+  // first resume (via the returned consumer, wired into tab-ipc) reads-and-deletes.
+  const pendingImportModels = new Map<string, string>();
+  const wired: CodexRolloutIpcDeps = {
+    ...deps,
+    recordPendingImportModel: (sessionId, model) => {
+      pendingImportModels.set(sessionId, model);
+    },
+  };
+  ipcMain.handle(CODEX_ROLLOUT_LIST_CHANNEL, (_event, raw: unknown) => handleCodexRolloutList(wired, raw));
+  ipcMain.handle(CODEX_ROLLOUT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleCodexRolloutPreview(wired, raw));
+  ipcMain.handle(CODEX_ROLLOUT_IMPORT_CHANNEL, (_event, raw: unknown) => handleCodexRolloutImport(wired, raw));
+  return {
+    consumePendingImportModel(sessionId: string): string | undefined {
+      const model = pendingImportModels.get(sessionId);
+      if (model !== undefined) pendingImportModels.delete(sessionId);
+      return model;
+    },
+  };
 }

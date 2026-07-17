@@ -114,12 +114,15 @@ describe("importCodexRollout — gate invariants across every W0-R3 fixture", ()
     }
   });
 
-  it("stats carries EXACTLY the 11 frozen fields of cut §3.7 + amendment A5 — no more, no fewer (C0 review F3)", () => {
+  it("stats carries EXACTLY the 12 frozen fields of cut §3.7 + amendment A5 + W4-F1 R2-M2 — no more, no fewer (C0 review F3)", () => {
     // Exact-key enumeration, not a subset check: a lane silently adding or
     // renaming a counter must fail here (Fable F3 disposition, iter-3).
+    // `droppedUnmatched` was added deliberately by W4-F1 R2-M2 (a silently
+    // dropped orphan output is now honestly counted) — updated here on purpose.
     const FROZEN_STATS_KEYS = [
       "collapsedToText",
       "developerDropped",
+      "droppedUnmatched",
       "imagesDropped",
       "malformedLines",
       "messages",
@@ -406,5 +409,41 @@ describe("importCodexRollout — synthetic orphan handling (red-proof: an invert
     expect(toolResultIds(report.items)).toEqual(new Set(["orphan-1"]));
     const toolItem = report.items.find((item) => item.message.role === "tool");
     expect(toolItem?.message.role === "tool" && toolItem.message.content[0]?.status).toBe("cancelled");
+  });
+});
+
+describe("importCodexRollout — R2-M2: a late orphaned tool output is honestly COUNTED, not dropped silently (W4-F1)", () => {
+  it("a non-bash collapse slot orphaned mid-turn by an earlier bash output has its late output counted + warned", () => {
+    // A: a non-bash function_call → collapses, awaiting its own output (collapsePending).
+    // B: an exec_command → a Bash tool_call, awaiting its tool_result (bashPending).
+    // B's output lands FIRST → flushAssistant() closes the turn, orphaning A's still-open
+    // collapse slot; A's output then arrives with nothing to fold into (unmatched).
+    const lines = [
+      JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "response_item", payload: { type: "function_call", name: "some_tool", call_id: "A", arguments: JSON.stringify({ q: "x" }) } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:02.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "B", arguments: JSON.stringify({ cmd: "echo hi" }) } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:03.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "B", output: "hi" } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:04.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "A", output: "late A result" } }),
+    ];
+    const report = importCodexRollout(lines, DEFAULT_OPTS);
+    // The honest loss count: A's late output matched no pending call.
+    expect(report.stats.droppedUnmatched).toBe(1);
+    // The pre-existing false "interrupted" marker on A is unchanged (minimal variant:
+    // the loss is now COUNTED; slot-reference preservation is out of scope).
+    expect(report.stats.orphansSynthesized).toBe(1);
+    expect(report.warnings).toContain("dropped 1 tool output(s) with no matching call");
+    // A's late output text never entered the transcript (that is the loss being counted).
+    expect(allText(report.items)).not.toContain("late A result");
+  });
+
+  it("a well-paired transcript never counts a dropped-unmatched output", () => {
+    const lines = [
+      JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "B", arguments: JSON.stringify({ cmd: "echo hi" }) } }),
+      JSON.stringify({ timestamp: "2026-01-01T00:00:02.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "B", output: "hi" } }),
+    ];
+    const report = importCodexRollout(lines, DEFAULT_OPTS);
+    expect(report.stats.droppedUnmatched).toBe(0);
+    expect(report.warnings).not.toContain("dropped 1 tool output(s) with no matching call");
   });
 });

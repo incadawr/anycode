@@ -25,7 +25,7 @@ import {
 } from "../shared/credentials.js";
 import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
-import { ENV_CONNECTION_ID } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import {
   ENGINE_PROCESS_REGISTRATION_TYPE,
@@ -165,6 +165,17 @@ export interface TabHost {
    * the host runs on the current default and no ANYCODE_CONNECTION_ID is stamped.
    */
   connectionId?: string;
+  /**
+   * A per-fork ANYCODE_MODEL override (codex-profiles S4-1 arm 2, W4-F1). Set
+   * ONLY on the first resume of a rollout-imported session, from the model the
+   * user picked in the import dialog: the base fork env's ANYCODE_MODEL is the
+   * ACTIVE connection's model (core resume takes the live model from the env, not
+   * the session row — global by-design behaviour), so without this stamp the
+   * imported tab would boot on the wrong model. Lives on the tab object, so it
+   * rides every respawn. Absent = no override (every non-import spawn), stamping
+   * nothing — byte-identical to today.
+   */
+  modelOverride?: string;
   /** Engine choice is main-owned and retained across every host respawn. */
   engine: EngineId;
   /**
@@ -507,6 +518,8 @@ export class TabHostManager {
     codexProfile?: { id?: string; home?: string; authLink?: string };
     /** Pinned provider connection (TASK.45 W10, core only); stamped into the fork env + persisted by the host. */
     connectionId?: string;
+    /** Per-fork ANYCODE_MODEL override (S4-1 arm 2): the imported-session model pick; see TabHost.modelOverride. */
+    modelOverride?: string;
   }): CreateTabResult {
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
@@ -536,6 +549,7 @@ export class TabHostManager {
       ...(worktree !== undefined ? { worktree } : {}),
       sessionId: params.sessionId,
       ...(params.connectionId !== undefined ? { connectionId: params.connectionId } : {}),
+      ...(params.modelOverride !== undefined ? { modelOverride: params.modelOverride } : {}),
       engine,
       engineModel: argvId(params.engineModel),
       enginePreset: argvId(params.enginePreset),
@@ -610,6 +624,11 @@ export class TabHostManager {
         // base env — a legacy/unpinned tab must not inherit another tab's pin).
         ...baseEnv,
         ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
+        // S4-1 arm 2 (W4-F1): an imported session's picked model, stamped over
+        // the base env's ANYCODE_MODEL (the active connection's model). Per-fork
+        // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
+        // tab). Absent for every non-import spawn ⇒ nothing stamped.
+        ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
         ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}),
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
       },

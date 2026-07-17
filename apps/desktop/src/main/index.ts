@@ -1225,6 +1225,12 @@ void app.whenReady().then(async () => {
     },
   });
 
+  // S4-1 arm 2 (W4-F1): the rollout-import IPC (registered further below, once
+  // persistence exists) owns the ephemeral import-model map; its consume-once
+  // reader is captured into this holder there and read lazily here, so the resume
+  // path can override the fork model. The holder is filled at boot wiring — long
+  // before any user-driven resume can run — so the lazy indirection never races.
+  let consumeImportModel: ((sessionId: string) => string | undefined) | undefined;
   registerTabIpc({
     manager,
     persistence,
@@ -1232,6 +1238,10 @@ void app.whenReady().then(async () => {
     // TASK.45 W10: a NEW core session pins to the active connection; a RESUMED
     // one re-pins to its stored connection (or refuses `connection_missing`).
     activeConnectionId: () => settings?.provider.activeConnectionId,
+    // S4-1 arm 2: consume-once import-model override for the first resume of an
+    // imported session (see the holder above). Undefined until the rollout IPC
+    // wires it below; harmless (no override) for any resume before then.
+    consumePendingImportModel: (sessionId) => consumeImportModel?.(sessionId),
     resolveResumePin,
     resolveCodexProfile: resolveCodexProfileForTab,
     validateWorktreeResume: async (meta) => {
@@ -1435,8 +1445,11 @@ void app.whenReady().then(async () => {
   // with no injection would write to. Read-only with respect to the rollout
   // files themselves — the importer never writes into any CODEX_HOME.
   if (persistence !== null) {
-    registerCodexRolloutIpc({
+    const rolloutIpc = registerCodexRolloutIpc({
       persistence,
+      // S4-1 arm 1 (W4-F1): pin an imported session to the connection active at
+      // apply time (same source as registerTabIpc's `activeConnectionId` above).
+      activeConnectionId: () => settings?.provider.activeConnectionId,
       resolveProfileSessionsDir: async (profileId) => {
         if (profileId === SYSTEM_PROFILE_ID) {
           const ambient = process.env.CODEX_HOME;
@@ -1453,6 +1466,9 @@ void app.whenReady().then(async () => {
         return join(resolution.profile.codexHome, "sessions");
       },
     });
+    // S4-1 arm 2: hand the import model plane's consume-once reader to tab-ipc's
+    // resume path (captured in the holder wired above registerTabIpc).
+    consumeImportModel = rolloutIpc.consumePendingImportModel;
   }
 
   // MCP config management control plane (design/slice-P7.19-cut.md §3/§4 W2):

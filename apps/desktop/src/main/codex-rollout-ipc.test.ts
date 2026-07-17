@@ -6,14 +6,29 @@
  */
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HistoryItem, PersistencePort, SessionMeta } from "@anycode/core";
+
+// Only registerCodexRolloutIpc touches ipcMain; the handle* functions under
+// test never do. A minimal stub lets the registration-level consume-once test
+// (S4-1 arm 2) run without an Electron runtime.
+const mockHandlers = new Map<string, (event: unknown, raw: unknown) => unknown>();
+vi.mock("electron", () => ({
+  ipcMain: {
+    handle: (channel: string, listener: (event: unknown, raw: unknown) => unknown): void => {
+      mockHandlers.set(channel, listener);
+    },
+  },
+}));
+
 import {
+  CODEX_ROLLOUT_IMPORT_CHANNEL,
   handleCodexRolloutImport,
   handleCodexRolloutList,
   handleCodexRolloutPreview,
+  registerCodexRolloutIpc,
   type CodexRolloutIpcDeps,
 } from "./codex-rollout-ipc.js";
 
@@ -279,5 +294,128 @@ describe("handleCodexRolloutPreview — FIFO refusal without hanging the process
 
     const result = await handleCodexRolloutPreview(deps, { profileId: "p1", fileName: relPath });
     expect(result).toEqual({ ok: false, reason: "not_readable" });
+  });
+});
+
+describe("handleCodexRolloutImport — S4-1 connection pin + pending model (W4-F1)", () => {
+  it("pins the NEW session to the connection active at apply time and registers the picked model", async () => {
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-s4a.jsonl";
+    await seedRollout(sessionsDir, relPath, BASIC_RECORDS);
+    const persistence = new FakePersistence();
+    const recorded: Array<[string, string]> = [];
+    const deps: CodexRolloutIpcDeps = {
+      persistence,
+      resolveProfileSessionsDir: async (p) => (p === "p1" ? sessionsDir : null),
+      activeConnectionId: () => "conn-active",
+      recordPendingImportModel: (sessionId, model) => recorded.push([sessionId, model]),
+    };
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const session = persistence.sessions.get(result.sessionId);
+    expect(session?.connectionId).toBe("conn-active");
+    expect(recorded).toEqual([[result.sessionId, "gpt-oss-20b"]]);
+  });
+
+  it("leaves the session unpinned when there is no active connection (byte-as-today)", async () => {
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-s4b.jsonl";
+    await seedRollout(sessionsDir, relPath, BASIC_RECORDS);
+    const persistence = new FakePersistence();
+    const deps: CodexRolloutIpcDeps = {
+      persistence,
+      resolveProfileSessionsDir: async (p) => (p === "p1" ? sessionsDir : null),
+      activeConnectionId: () => undefined,
+    };
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const session = persistence.sessions.get(result.sessionId);
+    expect(session).toBeDefined();
+    expect("connectionId" in (session ?? {})).toBe(false);
+  });
+});
+
+describe("registerCodexRolloutIpc — consume-once pending import model (S4-1 arm 2, W4-F1)", () => {
+  it("import registers the pick; the returned consumer reads-and-deletes it exactly once", async () => {
+    mockHandlers.clear();
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-reg.jsonl";
+    await seedRollout(sessionsDir, relPath, BASIC_RECORDS);
+    const handle = registerCodexRolloutIpc({
+      persistence: new FakePersistence(),
+      resolveProfileSessionsDir: async (p) => (p === "p1" ? sessionsDir : null),
+      activeConnectionId: () => "conn-active",
+    });
+    const importHandler = mockHandlers.get(CODEX_ROLLOUT_IMPORT_CHANNEL);
+    expect(importHandler).toBeDefined();
+    const result = (await importHandler!(null, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" })) as {
+      ok: boolean;
+      sessionId?: string;
+    };
+    expect(result.ok).toBe(true);
+    const sessionId = result.sessionId!;
+    // consume-once: first read yields the pick, second yields nothing.
+    expect(handle.consumePendingImportModel(sessionId)).toBe("gpt-oss-20b");
+    expect(handle.consumePendingImportModel(sessionId)).toBeUndefined();
+    // A session that was never imported has no pending entry.
+    expect(handle.consumePendingImportModel("never-imported")).toBeUndefined();
+  });
+});
+
+describe("handleCodexRolloutImport — R2-M3 untrusted meta.cwd workspace validation (W4-F1)", () => {
+  const userMessage = {
+    timestamp: "2026-07-01T00:00:01.000Z",
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+  };
+
+  it("falls back to the user's home for a rollout with NO cwd (never the relative '.')", async () => {
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-nocwd.jsonl";
+    await seedRollout(sessionsDir, relPath, [
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { cli_version: "0.144.5" } },
+      userMessage,
+    ]);
+    const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: relPath, model: "m" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.workspace).toBe(homedir());
+    expect(result.workspace).not.toBe(".");
+  });
+
+  it("falls back to the user's home for a RELATIVE cwd string from the file", async () => {
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-relcwd.jsonl";
+    await seedRollout(sessionsDir, relPath, [
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "relative/evil" } },
+      userMessage,
+    ]);
+    const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: relPath, model: "m" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.workspace).toBe(homedir());
+  });
+
+  it("passes an ABSOLUTE cwd through verbatim", async () => {
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-abscwd.jsonl";
+    await seedRollout(sessionsDir, relPath, [
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp/real-project" } },
+      userMessage,
+    ]);
+    const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: relPath, model: "m" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.workspace).toBe("/tmp/real-project");
   });
 });

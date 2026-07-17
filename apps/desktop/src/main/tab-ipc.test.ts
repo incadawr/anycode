@@ -334,6 +334,64 @@ describe("handleCreate — persisted engine identity", () => {
   });
 });
 
+describe("handleCreate — imported-session model override (codex-profiles S4-1 arm 2, W4-F1)", () => {
+  function importMeta(id = "s-import") {
+    return { id, workspace: "/project", model: "m", mode: "build" as const, createdAt: 1, updatedAt: 1 };
+  }
+  const importPersistence = (id = "s-import"): TabIpcDeps["persistence"] => ({
+    getSession: async () => importMeta(id),
+    listSessions: async () => [],
+    touchSession: async () => {},
+  });
+
+  it("the FIRST resume of an imported session forwards the picked model as modelOverride; consume-once drops it on a repeat resume", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    // Real consume-once semantics (mirrors registerCodexRolloutIpc's own map).
+    const pending = new Map<string, string>([["s-import", "pick-x"]]);
+    const consumePendingImportModel = vi.fn((sessionId: string) => {
+      const model = pending.get(sessionId);
+      if (model !== undefined) pending.delete(sessionId);
+      return model;
+    });
+    const deps: TabIpcDeps = { manager, persistence: importPersistence(), dialog, consumePendingImportModel };
+
+    await handleCreate(deps, { kind: "resume", sessionId: "s-import" });
+    expect(createTab).toHaveBeenLastCalledWith(expect.objectContaining({ resume: true, modelOverride: "pick-x" }));
+
+    // Second resume of the SAME session: the pick was consumed ⇒ no override.
+    await handleCreate(deps, { kind: "resume", sessionId: "s-import" });
+    const lastParams = createTab.mock.calls[createTab.mock.calls.length - 1]![0] as Record<string, unknown>;
+    expect("modelOverride" in lastParams).toBe(false);
+    expect(consumePendingImportModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("a resume with no pending import model omits modelOverride entirely (byte-as-today)", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const consumePendingImportModel = vi.fn(() => undefined);
+    await handleCreate(
+      { manager, persistence: importPersistence(), dialog, consumePendingImportModel },
+      { kind: "resume", sessionId: "s-import" },
+    );
+    const params = createTab.mock.calls[createTab.mock.calls.length - 1]![0] as Record<string, unknown>;
+    expect("modelOverride" in params).toBe(false);
+  });
+
+  it("a NEW request never consults the import model plane", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const consumePendingImportModel = vi.fn(() => "pick-x");
+    await handleCreate(
+      { manager, persistence: persistenceStub, dialog, consumePendingImportModel },
+      { kind: "new", workspace: "/x" },
+    );
+    expect(consumePendingImportModel).not.toHaveBeenCalled();
+    const params = createTab.mock.calls[createTab.mock.calls.length - 1]![0] as Record<string, unknown>;
+    expect("modelOverride" in params).toBe(false);
+  });
+});
+
 describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", () => {
   function resumeMeta(over: Record<string, unknown> = {}) {
     return {

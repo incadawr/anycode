@@ -730,6 +730,57 @@ describe("TabHostManager — credential channel (slice 2.5 §3.3)", () => {
   });
 });
 
+describe("TabHostManager — imported-session model override (codex-profiles S4-1 arm 2, W4-F1)", () => {
+  it("stamps ANYCODE_MODEL from the tab's modelOverride over the base env's model, and keeps it across respawn", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      // Base env carries the ACTIVE connection's model; the picked override must win.
+      env: () => ({ PATH: "/base", ANYCODE_MODEL: "base-m" }),
+      logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, modelOverride: "pick-x" });
+    expect(created.ok).toBe(true);
+    // Respawn (sub-healthy exit still respawns below the per-tab cap): the override
+    // lives on the tab object, so the picked model rides every fork.
+    hosts[0]!.emit("exit", 1);
+    expect(envs).toEqual([
+      { PATH: "/base", ANYCODE_MODEL: "pick-x" },
+      { PATH: "/base", ANYCODE_MODEL: "pick-x" },
+    ]);
+  });
+
+  it("omits any ANYCODE_MODEL override for a tab with no modelOverride (base env's model untouched)", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({ PATH: "/base", ANYCODE_MODEL: "base-m" }),
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true });
+    // No override ⇒ the base env's model passes through verbatim (byte-as-today).
+    expect(envs[0]).toEqual({ PATH: "/base", ANYCODE_MODEL: "base-m" });
+  });
+});
+
 describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
   it("stamps ANYCODE_CONNECTION_ID from the tab's connectionId and keeps it across respawn", () => {
     const { hosts } = liveForkRig();
