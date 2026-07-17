@@ -1,0 +1,5 @@
+# Raw recon captures that embedded the user's leaked ~/.claude config (public-repo hygiene).
+# Canonical fixtures are re-captured with --setting-sources project,local (no user leakage).
+w0-bootstrap-debug.log
+w0-bootstrap-stderr.log
+w0-bootstrap-stdout.jsonl
