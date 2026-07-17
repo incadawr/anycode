@@ -115,6 +115,54 @@ export function resolveCodexProfile(args: CodexProfileArgs, homeDir: string = ho
 }
 
 /**
+ * Dev/automation-ONLY override for the user home the managed profile tree
+ * derives from (codex-profiles W4-F0b, f0b-host-lever-ruling-fable-iter10):
+ * `resolveCodexProfile` above derives `<home>/.anycode/codex/profile-<id>`
+ * from the HOST process's homedir, so main's `ANYCODE_CODEX_PROFILES_HOME`
+ * lever (which isolates every main-plane consumer) would otherwise be blind
+ * to the one host-side derivation — a live managed-profile session would
+ * still create its home + auth.json symlink in the owner's real `~`.
+ *
+ * The gate AUTHORITY is main: `resolveCodexProfilesHome` (main/index.ts,
+ * `ANYCODE_AUTOMATION==="1" && !app.isPackaged`) vets the value, and
+ * `applyCodexProfilesHomeOverride` (main/host-env.ts) structurally
+ * set-or-DELETEs it in every host fork env — a packaged build NEVER sees the
+ * var. This predicate is defense-in-depth, not the only gate (this process
+ * has no `isPackaged` signal to re-derive main's double gate) — the same
+ * trust shape as `resolveExtensionsHomeOverride` (host/dev-home.ts), with the
+ * env-var literal duplicated by contract: host never imports main/**.
+ *
+ * Write-plane delta from that precedent: this base is where the host CREATES
+ * a 0700 home and plants the auth.json symlink (`assertCodexProfileHome`
+ * below), so a malformed value under automation must NOT fall back to the
+ * real homedir — that silent fallback would be exactly the forbidden write
+ * into the owner's real `~/.anycode/codex`, masked as a green smoke run.
+ * Fail-closed instead: throw, the boot refuses visibly (the same posture as
+ * malformed profile argv above).
+ */
+export function resolveCodexProfilesHomeOverride(env: NodeJS.ProcessEnv): string | null {
+  if (env.ANYCODE_AUTOMATION !== "1") {
+    return null;
+  }
+  const raw = env.ANYCODE_CODEX_PROFILES_HOME;
+  if (raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    throw new Error(
+      "ANYCODE_CODEX_PROFILES_HOME is set but empty under automation; refusing to boot instead of falling back to the real home",
+    );
+  }
+  if (!isAbsolute(trimmed)) {
+    throw new Error(
+      `ANYCODE_CODEX_PROFILES_HOME must be an absolute path under automation, got ${JSON.stringify(trimmed)}; refusing to boot instead of falling back to the real home`,
+    );
+  }
+  return trimmed;
+}
+
+/**
  * Idempotent per-spawn re-assert of the profile home (amendment §A2) plus the
  * auth-link lstat guard (amendment §A1.2). Returns null when the spawn may
  * proceed, or a human-readable diagnostic that REFUSES it (fail-closed).

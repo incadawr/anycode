@@ -48,6 +48,7 @@ import { defaultSecretsPath, defaultSettingsPath, loadSettings } from "../settin
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById } from "../shared/settings.js";
 import {
+  applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
@@ -724,6 +725,19 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     resolveActiveCredential: resolveActiveCredential(current),
   });
   applySubagentsHomeOverride(env, resolveSubagentsHome(bootEnv, app.isPackaged));
+  // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
+  // ambient var can never ride the bootEnv spread into a host fork ungated.
+  // Deliberately re-resolved stateless per env rebuild (NOT the module-level
+  // `codexProfilesHome`): refreshProviderState runs BEFORE the codex
+  // registration site that assigns it. The resolver is pure over the same
+  // inputs, so both resolutions are identical by construction.
+  // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
+  // ambient var can never ride the bootEnv spread into a host fork ungated.
+  // Deliberately re-resolved stateless per env rebuild (NOT the module-level
+  // `codexProfilesHome`): refreshProviderState runs BEFORE the codex
+  // registration site that assigns it. The resolver is pure over the same
+  // inputs, so both resolutions are identical by construction.
+  applyCodexProfilesHomeOverride(env, resolveCodexProfilesHome(bootEnv, app.isPackaged));
   return env;
 }
 

@@ -11,6 +11,7 @@ import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
+  applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
@@ -804,6 +805,36 @@ describe("applySubagentsHomeOverride (dispatch-parity fix, design/slice-P7.21-cu
     // separately by main (byte-for-byte packaged-production path: gate always null there).
     applySubagentsHomeOverride(hostEnv, null);
     expect(hostEnv.ANYCODE_SUBAGENTS_HOME).toBeUndefined();
+    expect(hostEnv.ANYCODE_API_KEY).toBe("sk-live");
+  });
+});
+
+describe("applyCodexProfilesHomeOverride (codex-profiles W4-F0b, Fable ruling iter-10)", () => {
+  it("sets ANYCODE_CODEX_PROFILES_HOME when given a non-null (main-vetted) override", () => {
+    const env: NodeJS.ProcessEnv = {};
+    applyCodexProfilesHomeOverride(env, "/tmp/anycode-lever-root");
+    expect(env.ANYCODE_CODEX_PROFILES_HOME).toBe("/tmp/anycode-lever-root");
+  });
+
+  it("RED-proof (main-scrub): deletes ANYCODE_CODEX_PROFILES_HOME on a null override, even when the env already carried it", () => {
+    const env: NodeJS.ProcessEnv = { ANYCODE_CODEX_PROFILES_HOME: "/tmp/stale-ambient-value" };
+    applyCodexProfilesHomeOverride(env, null);
+    expect(env.ANYCODE_CODEX_PROFILES_HOME).toBeUndefined();
+  });
+
+  it("composes with buildHostEnv: the bootEnv-spread hazard is REAL, and the gated-null scrub removes it", async () => {
+    const hostEnv = await buildHostEnv({
+      bootEnv: { ANYCODE_API_KEY: "sk-live", ANYCODE_CODEX_PROFILES_HOME: "/tmp/ambient-from-owner-shell" },
+      settings: settings(),
+      getSecret: noSecret,
+    });
+    // Without the scrub, the raw ambient var rides the bootEnv spread straight
+    // into the host fork — this assertion documents the hazard the delete
+    // branch exists to close.
+    expect(hostEnv.ANYCODE_CODEX_PROFILES_HOME).toBe("/tmp/ambient-from-owner-shell");
+    // Gate refused (no automation / packaged) ⇒ structural delete.
+    applyCodexProfilesHomeOverride(hostEnv, null);
+    expect(hostEnv.ANYCODE_CODEX_PROFILES_HOME).toBeUndefined();
     expect(hostEnv.ANYCODE_API_KEY).toBe("sk-live");
   });
 });

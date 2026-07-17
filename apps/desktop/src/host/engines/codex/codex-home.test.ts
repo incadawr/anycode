@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
   assertCodexProfileHome,
   parseCodexProfileArgs,
   resolveCodexProfile,
+  resolveCodexProfilesHomeOverride,
 } from "./codex-home.js";
 
 // ONLY temp directories are ever touched here — never a real ~/.codex or
@@ -174,5 +175,67 @@ describe("assertCodexProfileHome — auth.json symlink guard (amendment §A1.2)"
     mkdirSync(join(home, "auth.json"), { recursive: true });
     chmodSync(home, 0o700);
     expect(assertCodexProfileHome({ kind: "managed", home, authLink: target })).toMatch(/neither a symlink nor absent/i);
+  });
+});
+
+describe("resolveCodexProfilesHomeOverride (W4-F0b host lever, Fable ruling iter-10)", () => {
+  it("GREEN: automation + absolute lever — the managed profile derives, is created 0700, and auth.json links under the LEVER root", () => {
+    const lever = join(freshDir(), "lever-root");
+    const authTarget = join(freshDir(), "external-auth.json");
+    writeFileSync(authTarget, "");
+    const override = resolveCodexProfilesHomeOverride({
+      ANYCODE_AUTOMATION: "1",
+      ANYCODE_CODEX_PROFILES_HOME: lever,
+    });
+    expect(override).toBe(lever);
+    // Call-site composition (host/index.ts bootCodexSession): override ?? homedir default.
+    const profile = resolveCodexProfile({ profileId: "smoke", authLink: authTarget }, override ?? undefined);
+    // Containment moved WITH the base: the derived home sits under
+    // <lever>/.anycode/codex, and the whole custody plane (0700 dir +
+    // auth.json symlink) lands THERE — the smoke measures the production
+    // code path, just rooted elsewhere.
+    expect(profile).toEqual({
+      kind: "managed",
+      home: join(lever, ".anycode", "codex", "profile-smoke"),
+      authLink: authTarget,
+    });
+    expect(assertCodexProfileHome(profile!)).toBeNull();
+    expect(statSync(profile!.home).mode & 0o777).toBe(0o700);
+    expect(lstatSync(join(profile!.home, "auth.json")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(profile!.home, "auth.json"))).toBe(authTarget);
+  });
+
+  it("RED-proof (host gate): the lever WITHOUT automation is ignored — derivation stays on the injected homedir", () => {
+    const injectedHome = freshDir();
+    const override = resolveCodexProfilesHomeOverride({
+      ANYCODE_CODEX_PROFILES_HOME: "/tmp/ungated-ambient-lever",
+    });
+    expect(override).toBeNull();
+    const profile = resolveCodexProfile({ profileId: "smoke" }, override ?? injectedHome);
+    expect(profile!.home).toBe(join(injectedHome, ".anycode", "codex", "profile-smoke"));
+  });
+
+  const nullCases: Array<[string, NodeJS.ProcessEnv]> = [
+    ["automation unset", { ANYCODE_CODEX_PROFILES_HOME: "/tmp/x" }],
+    ["automation = 0", { ANYCODE_AUTOMATION: "0", ANYCODE_CODEX_PROFILES_HOME: "/tmp/x" }],
+    ["automation = true (not the literal \"1\")", { ANYCODE_AUTOMATION: "true", ANYCODE_CODEX_PROFILES_HOME: "/tmp/x" }],
+    ["automation unset + relative var (ignored outside automation, no throw)", { ANYCODE_CODEX_PROFILES_HOME: "relative/x" }],
+    ["var unset, automation on (production byte-path)", { ANYCODE_AUTOMATION: "1" }],
+    ["var unset, automation off (production byte-path)", {}],
+  ];
+
+  it.each(nullCases)("returns null: %s", (_label, env) => {
+    expect(resolveCodexProfilesHomeOverride(env)).toBeNull();
+  });
+
+  it("RED-proof (fail-closed): automation + malformed lever REFUSES the boot (throw) — no silent fallback to the real home, not a single mkdir", () => {
+    const wouldBeRealHome = join(freshDir(), "would-be-real-home");
+    for (const bad of ["", "   ", "relative/lever-root"]) {
+      expect(() =>
+        resolveCodexProfilesHomeOverride({ ANYCODE_AUTOMATION: "1", ANYCODE_CODEX_PROFILES_HOME: bad }),
+      ).toThrow(/refusing to boot/i);
+    }
+    // The refusal fires BEFORE any derivation or home assert — nothing was created.
+    expect(existsSync(join(wouldBeRealHome, ".anycode"))).toBe(false);
   });
 });
