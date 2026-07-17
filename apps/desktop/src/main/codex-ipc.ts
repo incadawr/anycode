@@ -134,11 +134,35 @@ export interface CodexIpcDeps {
   /** DI seams for tests; production defaults to the real doctor/login runners. */
   runDoctor?: (binaryPath: string, options?: RunCodexDoctorOptions) => Promise<CodexDoctorReport>;
   runLogin?: (binaryPath: string, options: RunCodexLoginOptions) => Promise<CodexLoginOutcome>;
+  /**
+   * TASK.65: injectable monotonic clock for the doctor TTL cache (tests advance
+   * it to cross `CODEX_DOCTOR_TTL_MS`); production defaults to `Date.now`. Only
+   * the in-memory freshness math reads it — the persisted `lastCheck.at` still
+   * comes from the snapshot's own ISO `checkedAt`, so nothing new crosses to disk.
+   */
+  now?: () => number;
 }
 
 export interface CodexOnboardingController {
-  /** Diagnoses ONE profile (the active one when `profileId` is absent) against the discovered binary (cut §4.2: readiness = f(binary, profile)). */
-  recheck(profileId?: string): Promise<CodexOnboardingSnapshot>;
+  /**
+   * Diagnoses ONE profile (the active one when `profileId` is absent) against
+   * the discovered binary (cut §4.2: readiness = f(binary, profile)). TASK.65:
+   * a thin alias for `ensureChecked` — TTL-guarded by default, `force:true`
+   * bypasses the cache (the Settings "Recheck all" action).
+   */
+  recheck(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot>;
+  /**
+   * TASK.65: the ONE TTL-guarded entry every readiness probe funnels through —
+   * the tab-gate hydrate, the boot prime, the StartScreen draft catalog, and
+   * the Settings pane's mount refresh. A verdict stored less than
+   * `CODEX_DOCTOR_TTL_MS` ago is REUSED without spawning the doctor (so a
+   * settings re-entry inside the window runs zero extra doctors — the owner's
+   * repeat-recheck symptom); `force:true` bypasses the cache and re-runs.
+   * Concurrent callers for one profile share a single doctor run (via the same
+   * per-key coalescence `recheck` has always had). A failed profile resolution
+   * caches nothing, so a bogus id stays UNKNOWN and re-resolves cheaply.
+   */
+  ensureChecked(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
   /** Runs the native login INTO a profile's home (TASK.50 п.2); an authLink profile refuses `unsupported` (amended §A1). */
   loginStart(profileId?: string): Promise<CodexLoginStartResult>;
@@ -216,6 +240,14 @@ function lastCheckOf(snapshot: CodexOnboardingSnapshot): { status: CodexDoctorRe
 const ACTIVE_PROFILE_KEY = "recheck:active";
 
 /**
+ * TASK.65: how long a doctor verdict is reused before a fresh spawn. The doctor
+ * is an app-server round-trip (email/plan/quota + version), so a status probed
+ * seconds ago must not re-spawn it on every settings re-entry / tab-gate check.
+ * Mirrors the host-side credential cache's `CREDENTIAL_CACHE_TTL_MS` (60s).
+ */
+export const CODEX_DOCTOR_TTL_MS = 60_000;
+
+/**
  * The coalescence key a login-in-progress occupies in `inFlightByKey` (F1). A
  * reserved token that neither a concrete-profile key (`id:<profileId>`) nor the
  * active-profile key (`recheck:active`) can ever equal, so NOTHING coalesces
@@ -240,6 +272,7 @@ const LOGIN_KEY = "login:active";
 export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboardingController {
   const runDoctor = deps.runDoctor ?? runCodexDoctor;
   const runLogin = deps.runLogin ?? runCodexLogin;
+  const now = deps.now ?? Date.now;
   const registry = createCodexProfilesRegistry({
     readCodex: deps.readCodexSettings,
     writeCodex: async (patch) => {
@@ -253,8 +286,14 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
    * Per-profile report cache (cut §4.3): main memory only, never disk —
    * e-mail/plan/quotas live here and in the renderer projection, nowhere
    * else. Keyed by profile id; `system` is the pseudo-profile's slot.
+   *
+   * TASK.65: the stored value carries the full snapshot plus a NUMERIC
+   * `checkedAt` (from the injectable `now`) so `ensureChecked` can answer the
+   * TTL question — `now() - checkedAt < CODEX_DOCTOR_TTL_MS` — without a spawn.
+   * `checkedAt` is memory-only; the disk `lastCheck.at` still comes from the
+   * snapshot's own ISO `checkedAt` (custody §4.4 — nothing new crosses out).
    */
-  const reports = new Map<string, CodexDoctorReport>();
+  const reports = new Map<string, { snapshot: CodexOnboardingSnapshot; checkedAt: number }>();
   /** Last-read `activeProfileId` — refreshed on every registry read so the sync `readyFor()` gate can answer for "the active profile". */
   let cachedActiveProfileId: string = SYSTEM_PROFILE_ID;
   /** Keeps the runners' pre-spawn home guard on the SAME filesystem seam as the registry — absent, they default to the real fs. */
@@ -431,7 +470,11 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
     const snapshot: CodexOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
-    reports.set(report.profileId ?? SYSTEM_PROFILE_ID, report);
+    // TASK.65: stamp the numeric TTL clock alongside the snapshot. Only a real
+    // doctor run reaches here, so a cache entry always means "a verdict landed"
+    // — a resolution refusal returns resolutionErrorSnapshot without caching,
+    // keeping a bogus id UNKNOWN (hasVerdictFor stays false).
+    reports.set(report.profileId ?? SYSTEM_PROFILE_ID, { snapshot, checkedAt: now() });
     await persist(snapshot);
     deps.onSnapshot(snapshot);
     return snapshot;
@@ -465,17 +508,48 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     return checkPath(discovery.path, discovery.source, resolution.profile);
   }
 
+  /**
+   * The forced discovery+doctor pass (the pre-TTL `recheck` body): shutdown-
+   * gated, then funneled through `runExclusive`. Namespace the concrete-profile
+   * key (F2): a renderer-supplied `profileId` lives in `id:<profileId>`, never
+   * bare, so it cannot collide with the reserved ACTIVE_PROFILE_KEY string even
+   * if a caller passes the literal "recheck:active". (A bogus id still fails
+   * resolution downstream — this only keeps the key domains disjoint, it does
+   * NOT drop an invalid id to the active recheck.) runExclusive coalesces a
+   * same-key pair onto one child and serializes different keys — this is ALSO
+   * the in-flight dedup `ensureChecked` relies on: two concurrent probes of one
+   * profile both miss the sync cache read below, both land here, and coalesce.
+   */
+  function runRecheck(profileId: string | undefined): Promise<CodexOnboardingSnapshot> {
+    if (shuttingDown) {
+      return Promise.resolve(shutdownSnapshot());
+    }
+    return runExclusive(profileId !== undefined ? `id:${profileId}` : ACTIVE_PROFILE_KEY, () => discoverAndCheck(profileId));
+  }
+
+  /**
+   * TASK.65 TTL gate. A verdict stored less than `CODEX_DOCTOR_TTL_MS` ago is
+   * reused WITHOUT a doctor spawn unless `force`. The cache key is the resolved
+   * profile id — `undefined` reads the last-known active slot, the same slot
+   * `readyFor()`/`hasVerdictFor()` answer from — so a hit primed under an
+   * explicit id (e.g. the boot prime's `ensureChecked("acc")`) is reused by a
+   * later active-profile probe once "acc" is active, and vice versa. The cache
+   * read is synchronous and sits directly before `runRecheck`, so concurrent
+   * callers coalesce there (no separate in-flight map needed).
+   */
+  function ensureChecked(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot> {
+    if (options?.force !== true) {
+      const cached = reports.get(profileId ?? cachedActiveProfileId);
+      if (cached !== undefined && now() - cached.checkedAt < CODEX_DOCTOR_TTL_MS) {
+        return Promise.resolve(cached.snapshot);
+      }
+    }
+    return runRecheck(profileId);
+  }
+
   return {
-    recheck: (profileId?: string): Promise<CodexOnboardingSnapshot> =>
-      shuttingDown
-        ? Promise.resolve(shutdownSnapshot())
-        : // Namespace the concrete-profile key (F2): a renderer-supplied
-          // `profileId` lives in `id:<profileId>`, never bare, so it cannot
-          // collide with the reserved ACTIVE_PROFILE_KEY string even if a
-          // caller passes the literal "recheck:active". (A bogus id still
-          // fails resolution downstream — this only keeps the key domains
-          // disjoint, it does NOT drop an invalid id to the active recheck.)
-          runExclusive(profileId !== undefined ? `id:${profileId}` : ACTIVE_PROFILE_KEY, () => discoverAndCheck(profileId)),
+    recheck: (profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot> => ensureChecked(profileId, options),
+    ensureChecked,
 
     async pickBinary(): Promise<CodexPickBinaryResult> {
       if (shuttingDown) {
@@ -614,8 +688,8 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       cachedActiveProfileId = listed.activeProfileId;
       return {
         profiles: listed.profiles.map((profile) => {
-          const report = reports.get(profile.id);
-          return { profile, ...(report !== undefined ? { report } : {}) };
+          const entry = reports.get(profile.id);
+          return { profile, ...(entry !== undefined ? { report: entry.snapshot.report } : {}) };
         }),
         activeProfileId: listed.activeProfileId,
       };
@@ -671,7 +745,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     },
 
     readyFor(profileId?: string): boolean {
-      return reports.get(profileId ?? cachedActiveProfileId)?.status === "ready";
+      return reports.get(profileId ?? cachedActiveProfileId)?.snapshot.report.status === "ready";
     },
 
     hasVerdictFor(profileId?: string): boolean {
@@ -707,10 +781,15 @@ function idArg(args: unknown): string {
   return typeof id === "string" ? id : "";
 }
 
+/** TASK.65: the renderer's explicit "Recheck all" sets `force:true` to bypass the doctor TTL cache; any non-true value (absent / mount-refresh) is TTL-guarded. */
+function forceArg(args: unknown): boolean {
+  return (args as { force?: unknown } | undefined)?.force === true;
+}
+
 /** Wires the invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (TASK.41 п.1: discovery must run without the user visiting Settings first) and read `readyFor()` as the per-profile tab gate. */
 export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController {
   const controller = createCodexOnboardingController(deps);
-  ipcMain.handle(CODEX_RECHECK_CHANNEL, (_event, args?: unknown) => controller.recheck(profileIdArg(args)));
+  ipcMain.handle(CODEX_RECHECK_CHANNEL, (_event, args?: unknown) => controller.recheck(profileIdArg(args), { force: forceArg(args) }));
   ipcMain.handle(CODEX_PICK_BINARY_CHANNEL, () => controller.pickBinary());
   ipcMain.handle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => controller.loginStart(profileIdArg(args)));
   ipcMain.handle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());

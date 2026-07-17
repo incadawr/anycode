@@ -1260,10 +1260,11 @@ void app.whenReady().then(async () => {
       engine === "core" ? true : engine === "codex" && (codexOnboarding?.hasVerdictFor(codexProfileId) ?? false),
     hydrateEngineReady: async (engine, codexProfileId) => {
       if (engine === "codex" && codexOnboarding !== null) {
-        // An argless recheck coalesces onto the in-flight boot run (same
-        // active-profile key); an explicit profile id queues its own doctor
-        // behind it — at most one extra run, only inside the boot window.
-        await codexOnboarding.recheck(codexProfileId);
+        // TASK.65: resolve UNKNOWN through the ONE TTL-guarded path. If the boot
+        // prime already landed a fresh verdict for this profile the doctor does
+        // NOT re-run (cache hit); if the boot run is still in flight the same
+        // per-profile coalescence shares it — at most one doctor inside the TTL.
+        await codexOnboarding.ensureChecked(codexProfileId);
       }
     },
     validateWorktreeResume: async (meta) => {
@@ -1434,7 +1435,31 @@ void app.whenReady().then(async () => {
   // action). Never awaited here — a slow or hung Codex CLI must not delay
   // the window from appearing; `engineReady("codex")` simply stays false
   // (its safe default) until this resolves.
-  void codexOnboarding.recheck().catch((error: unknown) => {
+  // TASK.65: prime EVERY profile's readiness at boot, not just the active one
+  // (TASK.41 п.1: a compatible CLI must be found with no env var and no user
+  // action), so a Codex tab — or a resume pinned to a non-active profile —
+  // opens without a trip to Settings: the tab gate then reads a warm verdict
+  // instead of the fail-closed UNKNOWN default. SEQUENTIAL ("не N параллельных
+  // app-server'ов"): each `ensureChecked` awaits the previous, so at most one
+  // doctor child runs at a time. The active profile is always one of
+  // `[SYSTEM, ...profiles]`, so this single chain SUBSUMES the old standalone
+  // active-only recheck (its top-level lastCheck still lands via
+  // `ensureChecked(activeId)`) — one fire-and-forget instead of two racing
+  // ones. Never awaited here — a slow/hung CLI must not delay the window from
+  // appearing; `readyFor(...)` simply stays its safe default until each lands.
+  void (async () => {
+    const active = codexOnboarding;
+    let profileIds: string[] = [];
+    try {
+      const { profiles } = await active.listProfiles();
+      profileIds = profiles.map((row) => row.profile.id);
+    } catch (error) {
+      console.warn("[main] initial Codex profile enumeration failed", error);
+    }
+    for (const id of [SYSTEM_PROFILE_ID, ...profileIds]) {
+      await active.ensureChecked(id).catch(() => {});
+    }
+  })().catch((error: unknown) => {
     console.warn("[main] initial Codex check failed", error);
   });
 
@@ -1450,7 +1475,9 @@ void app.whenReady().then(async () => {
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     onChanged: () => {
       win?.webContents.send(ENGINES_CHANGED_CHANNEL);
-      void codexOnboarding?.recheck().catch(() => {});
+      // TASK.65: an install / risk-acceptance changed the binary or its support
+      // verdict, so the cached doctor result is stale — force past the TTL.
+      void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
     },
   });
   setActiveCodexVersionPolicy({ riskAcceptedVersions: settings?.codex?.riskAcceptedVersions ?? [] });
@@ -1464,7 +1491,9 @@ void app.whenReady().then(async () => {
       // leaves whatever readiness the boot-time recheck already established.
       const changed = setActiveCodexVersionPolicy({ manifest: result.manifest });
       if (changed) {
-        void codexOnboarding?.recheck().catch(() => {});
+        // TASK.65: the supported-version policy moved, so a cached verdict may
+        // now be wrong (e.g. a version that just became unsupported) — force.
+        void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
       }
     })
     .catch(() => {});

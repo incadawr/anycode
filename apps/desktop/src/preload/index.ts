@@ -445,8 +445,15 @@ contextBridge.exposeInMainWorld("anycode", {
     // `profileId` (TASK.50, cut §4.2): omitted diagnoses/signs into the
     // ACTIVE profile — main's own default, unchanged for every pre-existing
     // caller of these two methods.
-    recheck: (profileId?: string): Promise<CodexOnboardingSnapshot> =>
-      ipcRenderer.invoke(CODEX_RECHECK_CHANNEL, profileId ? { profileId } : undefined) as Promise<CodexOnboardingSnapshot>,
+    // `force` (TASK.65): true bypasses main's doctor TTL cache (the explicit
+    // "Recheck all"); omitted/false lets a re-check inside the TTL reuse the
+    // cached verdict — byte-identical payload to before for every existing
+    // caller that passes neither argument.
+    recheck: (profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot> =>
+      ipcRenderer.invoke(
+        CODEX_RECHECK_CHANNEL,
+        profileId !== undefined || force ? { ...(profileId !== undefined ? { profileId } : {}), ...(force ? { force: true } : {}) } : undefined,
+      ) as Promise<CodexOnboardingSnapshot>,
     pickBinary: (): Promise<CodexPickBinaryResult> =>
       ipcRenderer.invoke(CODEX_PICK_BINARY_CHANNEL) as Promise<CodexPickBinaryResult>,
     loginStart: (profileId?: string): Promise<CodexLoginStartResult> =>
