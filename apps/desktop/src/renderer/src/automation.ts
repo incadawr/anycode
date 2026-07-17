@@ -3733,16 +3733,22 @@ async function sha256Prefix12(text: string): Promise<string> {
  * `CodexImportState` — the only shape the HTTP channel ever serializes.
  */
 async function redactRolloutRow(row: CodexImportRolloutRowDomFacts): Promise<CodexImportRolloutRowState> {
+  // Every row field is read HERE, synchronously at entry (W4-F0e finding H1):
+  // Promise.all's map runs this far before codexImportState's await, so the
+  // whole row belongs to the same atomic snapshot — no field is read after
+  // the digest suspension (the literal-order form this replaces read
+  // `selected` post-await).
+  const { fileName, timestamp, size, cwd, preview, selected } = row;
   return {
-    fileName: row.fileName ?? "",
-    timestamp: row.timestamp,
-    size: row.size,
-    cwdRendered: row.cwd !== null,
+    fileName: fileName ?? "",
+    timestamp,
+    size,
+    cwdRendered: cwd !== null,
     preview:
-      row.preview === null
+      preview === null
         ? { rendered: false, length: 0, sha256_12: null }
-        : { rendered: true, length: row.preview.length, sha256_12: await sha256Prefix12(row.preview) },
-    selected: row.selected,
+        : { rendered: true, length: preview.length, sha256_12: await sha256Prefix12(preview) },
+    selected,
   };
 }
 
@@ -6293,29 +6299,47 @@ export function createAutomationFacade(
           importing: false,
         };
       }
+      // Atomic synchronous DOM snapshot (W4-F0e finding H1): EVERY DOM fact —
+      // the raw row facts, both provenance stamps, all scalars — is captured
+      // in one uninterruptible synchronous block BEFORE the first await, so a
+      // React commit landing during the digest await can never tear the
+      // payload (rows of profile A stamped with profile B). The digest runs
+      // afterwards over this snapshot (row facts are materialized at read
+      // time and never re-read), and the payload is assembled from the
+      // snapshot ONLY — zero DOM reads after the first await.
       const listLoading = codexImportDom.listLoadingVisible();
       const listText = codexImportDom.listEmptyText();
       const importButton = codexImportDom.importButton();
       const profileValue = codexImportDom.profileValue();
+      const profileOptions = codexImportDom.profileOptions();
+      const rows = codexImportDom.rollouts();
+      const rolloutsFor = codexImportDom.rolloutsFor();
+      const previewLoading = codexImportDom.previewLoadingVisible();
+      const previewFor = codexImportDom.previewFor();
+      const statsLines = codexImportDom.statsLines();
+      const notices = codexImportDom.notices();
+      const modelValue = codexImportDom.modelValue();
+      const modelOptions = codexImportDom.modelOptions();
+      // Custody redaction (W4-F0c finding A): the raw DOM facts never reach
+      // this shape — cwd/preview cross as presence/length/digest only.
+      const rollouts = await Promise.all(rows.map((row) => redactRolloutRow(row)));
       return {
         paneMounted,
         open: true,
         // "" is the disabled "Choose a profile…" placeholder — reported as
         // null, never as a pickable id.
         profileId: profileValue === "" ? null : profileValue,
-        profileOptions: codexImportDom.profileOptions(),
+        profileOptions,
         listLoading,
         listEmptyText: listLoading ? null : listText,
-        // Custody redaction (W4-F0c finding A): the raw DOM facts never reach
-        // this shape — cwd/preview cross as presence/length/digest only.
-        rollouts: await Promise.all(codexImportDom.rollouts().map((row) => redactRolloutRow(row))),
-        rolloutsFor: codexImportDom.rolloutsFor(),
-        previewLoading: codexImportDom.previewLoadingVisible(),
-        previewFor: codexImportDom.previewFor(),
-        statsLines: codexImportDom.statsLines(),
-        notices: codexImportDom.notices(),
-        modelValue: codexImportDom.modelValue(),
-        modelOptions: codexImportDom.modelOptions(),
+        rollouts,
+        rolloutsFor,
+        previewLoading,
+        previewFor,
+        statsLines,
+        notices,
+        modelValue,
+        modelOptions,
         // Byte-parity with the rendered button's own `disabled` — the
         // committed result of the component's importDisabled() predicate.
         importDisabled: importButton?.disabled ?? true,
@@ -6372,6 +6396,19 @@ export function createAutomationFacade(
     async codexImportSelectRollout(index: number): Promise<FacadeResult> {
       if (!codexImportDom.open()) {
         return { ok: false, reason: "dialog_not_open" };
+      }
+      // List-staleness guard (W4-F0e finding H3): the rendered rows must be
+      // stamped with the profile the select CURRENTLY names before any row
+      // is captured or clicked. `fileName` is RELATIVE to a profile's
+      // sessions dir, so two profiles can legally render the SAME fileName —
+      // in the stale window after a profile switch the OLD profile's settled
+      // preview (same name) would otherwise satisfy the identity settle
+      // below. A loading list (no stamp) or a foreign stamp refuses
+      // fail-closed, with a reason distinct from unknown_rollout.
+      const currentProfile = codexImportDom.profileValue();
+      const rowsStampedFor = codexImportDom.rolloutsFor();
+      if (rowsStampedFor === null || rowsStampedFor !== (currentProfile === "" ? null : currentProfile)) {
+        return { ok: false, reason: "list_stale" };
       }
       // The clicked row's identity is captured BEFORE the click (W4-F0c
       // finding B): rows carry their machine-generated `data-file-name`, and
