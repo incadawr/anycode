@@ -8,7 +8,7 @@
  *     the https/localhost URL policy per element; the handlers here re-check
  *     the URL policy explicitly so a rejection carries a specific reason
  *     instead of a generic schema-mismatch `invalid`).
- *  2. A guarded `/v1/models` fetch main runs on the user's behalf — the
+ *  2. A guarded models-list fetch main runs on the user's behalf — the
  *     renderer never holds a key long enough to call an arbitrary origin
  *     itself (custody: a decrypted key only ever travels main-side, and only
  *     to the ONE origin the user configured).
@@ -63,12 +63,12 @@ import type { SecretSetResult } from "./vault.js";
 
 export const isAllowedCustomProviderUrl = isHttpsOrLocalhostUrl;
 
-// ── guarded `/v1/models` fetch ──
+// ── guarded models-list fetch (S5-2: baseUrl already carries `/v1` like the session wire's `normalizeExplicitBaseUrl` expects, so appending `/models` still lands on `/v1/models`) ──
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 /** A models list is small JSON; 2 MiB is generous headroom over any real catalog. */
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
-const MODELS_PATH = "/v1/models";
+const MODELS_PATH = "/models";
 
 export type FetchModelsFailureReason =
   | "invalid_request"
@@ -111,7 +111,7 @@ function authHeaders(kind: CustomProviderRecord["kind"] | undefined, apiKey: str
   return { Authorization: `Bearer ${apiKey}` };
 }
 
-/** Runs the guarded `/v1/models` GET described in the module doc's threat model. */
+/** Runs the guarded models-list GET described in the module doc's threat model. */
 export async function fetchCustomProviderModels(params: FetchModelsParams): Promise<FetchModelsOutcome> {
   if (!isAllowedCustomProviderUrl(params.baseUrl)) {
     return { ok: false, reason: "invalid_url" };
@@ -456,7 +456,7 @@ const fetchModelsSchema = z.union([
 ]);
 
 /**
- * custom-provider-fetch-models: the guarded `/v1/models` GET (module doc's
+ * custom-provider-fetch-models: the guarded models-list GET (module doc's
  * threat model), for either an ALREADY-SAVED record (`{id}` — main resolves
  * `baseUrl`/`kind`/the decrypted key itself) or a NOT-YET-SAVED endpoint the
  * user is still previewing (`{baseUrl, apiKey, kind}` — the plaintext key
