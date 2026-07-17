@@ -117,6 +117,45 @@ export function truncateRolloutPreview(text: string | undefined): string | undef
   return `${collapsed.slice(0, FIRST_MESSAGE_PREVIEW_CAP)}…`;
 }
 
+// ── provenance stamps (W4-F0c finding B) ──
+
+/**
+ * Async results stamped with the id they answer (W4-F0c finding B): the
+ * stamp is attached in the SAME guarded callback that resolves the bridge
+ * call, so it rides WITH the reply — a stale reply that lands late still
+ * carries its own (old) stamp, and the DOM below signs whose content it
+ * actually shows (`data-rollouts-for`/`data-preview-for`). Render-only
+ * self-description; the epoch gates above stay the sole clobber guard.
+ */
+export interface StampedRolloutList {
+  forProfileId: string;
+  result: CodexRolloutListResult;
+}
+
+export interface StampedRolloutPreview {
+  forFileName: string;
+  result: CodexRolloutPreviewResult;
+}
+
+/**
+ * `data-rollouts-for` value for `.codex-rollout-list`: always the committed
+ * RESULT's own provenance stamp, never the currently-selected profile —
+ * while a stale result still occupies the state (the passive-effect window
+ * after a profile switch), the DOM honestly signs it with its ORIGIN
+ * profile; while loading (no committed result) there is no stamp at all.
+ * Deliberately receives the current profileId too, so the dishonest
+ * from-select derivation is expressible — and red-proofed — under this
+ * file's pure-test discipline (node env, no rendered DOM).
+ */
+export function rolloutListProvenance(state: { profileId: string | null; listResult: StampedRolloutList | null }): string | undefined {
+  return state.listResult?.forProfileId;
+}
+
+/** Preview twin of `rolloutListProvenance`: `data-preview-for` is the RESULT's own file stamp, never the currently-selected row. */
+export function rolloutPreviewProvenance(state: { selectedFileName: string | null; previewResult: StampedRolloutPreview | null }): string | undefined {
+  return state.previewResult?.forFileName;
+}
+
 export type RolloutListViewState =
   | { kind: "loading" }
   | { kind: "empty" }
@@ -310,9 +349,9 @@ export function CodexRolloutImportDialog({
   const listGateRef = useRef(createAsyncEpochGate());
   const previewGateRef = useRef(createAsyncEpochGate());
   const [profileId, setProfileId] = useState<string | null>(null);
-  const [listResult, setListResult] = useState<CodexRolloutListResult | null>(null);
+  const [listResult, setListResult] = useState<StampedRolloutList | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
-  const [previewResult, setPreviewResult] = useState<CodexRolloutPreviewResult | null>(null);
+  const [previewResult, setPreviewResult] = useState<StampedRolloutPreview | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -351,7 +390,13 @@ export function CodexRolloutImportDialog({
     // `previewState:"loaded"` while `selectedFileName` is null, enabling
     // Import on a no-op.
     previewGateRef.current.invalidate();
-    issueGuarded(listGateRef.current, bridge.rolloutList(profileId), setListResult);
+    // The provenance stamp is attached in the same guarded chain (finding B):
+    // the reply and the id it answers commit as one value.
+    issueGuarded(
+      listGateRef.current,
+      bridge.rolloutList(profileId).then((result) => ({ forProfileId: profileId, result })),
+      setListResult,
+    );
   }, [profileId, bridge]);
 
   function selectRollout(fileName: string): void {
@@ -360,7 +405,11 @@ export function CodexRolloutImportDialog({
     setSelectedModel(null);
     setImportError(null);
     if (profileId !== null) {
-      issueGuarded(previewGateRef.current, bridge.rolloutPreview(profileId, fileName), setPreviewResult);
+      issueGuarded(
+        previewGateRef.current,
+        bridge.rolloutPreview(profileId, fileName).then((result) => ({ forFileName: fileName, result })),
+        setPreviewResult,
+      );
     }
   }
 
@@ -390,8 +439,8 @@ export function CodexRolloutImportDialog({
     }
   }
 
-  const listState = rolloutListViewState(listResult);
-  const previewState = rolloutPreviewViewState(previewResult);
+  const listState = rolloutListViewState(listResult?.result ?? null);
+  const previewState = rolloutPreviewViewState(previewResult?.result ?? null);
   const profileOptions = buildRolloutProfileOptions(profiles);
 
   return (
@@ -423,7 +472,7 @@ export function CodexRolloutImportDialog({
         </div>
 
         {profileId !== null && (
-          <div className="codex-rollout-list">
+          <div className="codex-rollout-list" data-rollouts-for={rolloutListProvenance({ profileId, listResult })}>
             {listState.kind === "loading" && <div className="settings-mcp-empty">Loading sessions…</div>}
             {listState.kind === "error" && (
               <div className="settings-notice" role="alert">
@@ -434,7 +483,7 @@ export function CodexRolloutImportDialog({
             {listState.kind === "loaded" && (
               <ul className="settings-mcp-list">
                 {listState.rollouts.map((entry) => (
-                  <li key={entry.fileName} className="settings-mcp-row codex-rollout-row">
+                  <li key={entry.fileName} className="settings-mcp-row codex-rollout-row" data-file-name={entry.fileName}>
                     <label className="codex-rollout-row-label">
                       <input type="radio" name="codex-rollout-pick" checked={selectedFileName === entry.fileName} onChange={() => selectRollout(entry.fileName)} />
                       <span className="settings-mcp-name">{formatRolloutTimestamp(entry.mtimeMs)}</span>
@@ -450,7 +499,7 @@ export function CodexRolloutImportDialog({
         )}
 
         {selectedFileName !== null && (
-          <div className="codex-rollout-preview">
+          <div className="codex-rollout-preview" data-preview-for={rolloutPreviewProvenance({ selectedFileName, previewResult })}>
             {previewState.kind === "loading" && <div className="settings-mcp-empty">Loading preview…</div>}
             {previewState.kind === "error" && (
               <div className="settings-notice" role="alert">
