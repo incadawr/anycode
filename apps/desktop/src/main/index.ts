@@ -1146,9 +1146,10 @@ void app.whenReady().then(async () => {
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
     // AND signed in, TASK.41 п.2/п.3) — a merely-discovered-but-unchecked or
     // stale-cached path is never enough to let a tab spawn. Readiness is
-    // per PROFILE (codex-profiles cut §4.2): the optional second argument is
-    // the tab draft's profile id once the tab layer threads it (lane C);
-    // absent, the ACTIVE profile answers — today's single-profile behavior.
+    // per PROFILE (codex-profiles cut §4.2): the tab layer threads the profile
+    // the spawn will run under as the optional second argument (S3-1 — the
+    // draft's pick on a new tab, the persisted meta pick on a resume); absent,
+    // the ACTIVE profile answers — today's single-profile behavior.
     engineReady: (engine: EngineId, codexProfileId?: string) =>
       engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false),
     engineEnv: (engine: EngineId, generation: number) => ({

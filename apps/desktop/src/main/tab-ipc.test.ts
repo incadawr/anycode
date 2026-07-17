@@ -179,7 +179,9 @@ describe("handleCreate — dialog skip vs legacy dialog (§2F.4 / §6#6)", () =>
       kind: "new", workspace: "/x", engine: "codex",
     })).resolves.toEqual({ ok: true, tabId: "tab-1", workspace: "/x" });
 
-    expect(canSpawn).toHaveBeenCalledWith("codex");
+    // Codex-profiles S3-1: the gate is now keyed on the picked profile id; a
+    // request with no pick threads `undefined` (the active profile answers).
+    expect(canSpawn).toHaveBeenCalledWith("codex", undefined);
     expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ engine: "codex", workspace: "/x", resume: false }));
     expect(showOpenDialog).not.toHaveBeenCalled();
   });
@@ -717,6 +719,81 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/project" });
     expect(resolveCodexProfile).toHaveBeenCalledWith("work");
     expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ codexProfile: { id: "work" } }));
+  });
+});
+
+describe("handleCreate — readiness gate keys on the PICKED Codex profile (S3-1)", () => {
+  function resumeMeta(over: Record<string, unknown> = {}) {
+    return {
+      id: "s-resume",
+      workspace: "/project",
+      model: "m",
+      mode: "build" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      engineId: "codex",
+      ...over,
+    };
+  }
+
+  it("new: the gate is asked about the PICKED profile id before the folder dialog", async () => {
+    const order: string[] = [];
+    const { manager, canSpawn } = makeManager({}, order);
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] }, order);
+    const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "new", engine: "codex", codexProfileId: "ready-x" });
+
+    // Fix present: :169 threads req.codexProfileId. On the rollback canSpawn saw
+    // only ("codex") ⇒ this tuple assertion is RED.
+    expect(canSpawn).toHaveBeenCalledWith("codex", "ready-x");
+    // The gate answers BEFORE the user is ever asked to pick a folder.
+    expect(order.indexOf("canSpawn")).toBeLessThan(order.indexOf("dialog"));
+  });
+
+  it("resume: the gate is asked about the profile the session was CREATED under (meta.codexProfileId)", async () => {
+    const { manager, canSpawn } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
+    const persistence: TabIpcDeps["persistence"] = {
+      getSession: async () => resumeMeta({ codexProfileId: "work" }),
+      listSessions: async () => [],
+      touchSession: async () => {},
+    };
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+
+    expect(canSpawn).toHaveBeenCalledWith("codex", "work");
+  });
+
+  it("negative holds at :169: a PICK the gate reports NOT ready refuses not_ready before resolving the profile", async () => {
+    const canSpawn = vi.fn((_engine: string, codexProfileId?: string) => codexProfileId === "ready-x");
+    const createTab = vi.fn();
+    const manager = {
+      canSpawn,
+      atCapacity: vi.fn(() => false),
+      createTab,
+      deliverTabPort: vi.fn(),
+      sessionOpenInTab: vi.fn(() => undefined),
+    } as unknown as TabHostManager;
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    const res = await handleCreate(deps, {
+      kind: "new",
+      workspace: "/x",
+      engine: "codex",
+      codexProfileId: "not-ready-y",
+    });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(canSpawn).toHaveBeenCalledWith("codex", "not-ready-y");
+    // Short-circuits at the gate — never resolves the profile nor creates a tab.
+    expect(resolveCodexProfile).not.toHaveBeenCalled();
+    expect(createTab).not.toHaveBeenCalled();
   });
 });
 
