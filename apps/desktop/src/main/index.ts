@@ -672,6 +672,18 @@ function selectedTransportInfo(current: AnycodeSettings): {
       supportedTransports: customSupportedTransports(customRecord.kind),
     };
   }
+  if (isCustomProviderRecordId(id)) {
+    // W4-R3-1: a `custom:*` id with NO live record (deleted while a connection
+    // still names it — e.g. removed via the generic settings-patch channel,
+    // which skips handleCustomProviderDelete's clear-first, leaving an orphaned
+    // vault key). `buildHostEnv` fail-closes here (neither baseUrl nor key), so
+    // readiness MUST be false even if that orphaned key or ANYCODE_API_KEY is
+    // present. An empty supportedTransports set trips computeProviderReady's
+    // transport guard — but only when resolvedTransport is defined, so pin a
+    // non-empty sentinel when neither env nor the connection selects one (a bare
+    // resolveLegacy() can be undefined, which would SKIP the guard entirely).
+    return { authOptional: false, resolvedTransport: resolveLegacy() ?? "custom-provider-deleted", supportedTransports: [] };
+  }
   const entry = findCatalogEntry(id);
   if (entry === undefined) {
     return { authOptional: false, resolvedTransport: resolveLegacy() };

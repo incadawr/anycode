@@ -786,6 +786,38 @@ describe("snapshot — custom:* RECORD readiness gate (FX4, Fable iter-7: the au
     const snap = await buildSettingsSnapshot(makeDeps());
     expect(snap.providerReady).toBe(false);
   });
+
+  // W4-R3-1 (deleted custom:* record fail-closed): a connection still names a
+  // `custom:*` provider whose RECORD is gone (deleted via the generic
+  // settings-patch channel, which skips handleCustomProviderDelete's clear-first
+  // ordering, so the vault key is orphaned). `buildHostEnv` fail-closes for a
+  // deleted record — neither baseUrl nor key — so the readiness gate MUST NOT
+  // report ready. Discriminating case: NO transport is selected (env + the
+  // connection both leave it unset), so a bare `resolveLegacy()` resolvedTransport
+  // is `undefined` and computeProviderReady's transport guard would be SKIPPED —
+  // an empty `supportedTransports` alone does not close the gate. The fix pins a
+  // defined resolvedTransport so the empty support set trips the guard regardless.
+  it("RED-PROOF (iv): a deleted custom:* record with an orphaned vault key + model but NO transport is fail-closed — providerReady false", async () => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: {
+          connections: [{ id: "conn-1", providerId: "custom:gone", model: "m" }],
+          activeConnectionId: "conn-1",
+          custom: [], // the record the connection points at was deleted
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+    // The now-orphaned per-provider key survives the record's deletion.
+    vault.store.set("provider.custom:gone.apiKey", "sk-orphan");
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.providerReady).toBe(false);
+  });
 });
 
 describe("handleSet — provider refine-reject (TASK.45 W12: the connection graph is CRUD-only)", () => {
