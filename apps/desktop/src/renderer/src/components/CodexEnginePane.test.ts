@@ -493,4 +493,19 @@ describe("deriveBinaryActions", () => {
     const widenedSupport: CodexSupportStatusResult = { ...support, supportedRange: ">=0.144.0 <0.147.0", riskAcceptedVersions: ["0.146.0"] };
     expect(deriveBinaryActions({ status: "ready", version: "0.146.0", account: null }, widenedSupport).untestedVersion).toBeNull();
   });
+
+  it("L6/L12 red-proof: never shows the banner for a risk-accepted version below the compile-time floor — main rejects it regardless of risk acceptance", () => {
+    const belowFloorSupport: CodexSupportStatusResult = { ...support, riskAcceptedVersions: ["0.100.0"] };
+    expect(deriveBinaryActions({ status: "update_required", version: "0.100.0" }, belowFloorSupport).untestedVersion).toBeNull();
+  });
+
+  it("L12 counter-form: still shows the banner for a risk-accepted version at/above the floor but outside the supported range", () => {
+    const riskySupport: CodexSupportStatusResult = { ...support, riskAcceptedVersions: ["0.146.0"] };
+    expect(deriveBinaryActions({ status: "update_required", version: "0.146.0" }, riskySupport).untestedVersion).toBe("0.146.0");
+  });
+
+  it("L12 counter-form: does not suppress the banner for an unparsable risk-accepted version (renderer parser need not match main's)", () => {
+    const unparsableSupport: CodexSupportStatusResult = { ...support, riskAcceptedVersions: ["not-a-version"] };
+    expect(deriveBinaryActions({ status: "update_required", version: "not-a-version" }, unparsableSupport).untestedVersion).toBe("not-a-version");
+  });
 });

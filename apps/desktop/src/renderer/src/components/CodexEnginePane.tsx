@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../../../shared/codex-quota.js";
+import { CODEX_MIN_FLOOR } from "../../../shared/codex-support.js";
 import type { CodexProfileRecord } from "../../../shared/settings.js";
 import { useTabsStore } from "../tabs-store.js";
 import { CodexRolloutImportDialog } from "./CodexRolloutImportDialog.js";
@@ -314,6 +315,20 @@ export function isCodexVersionWithinSupportedRange(version: string, supportedRan
   return supportedRange.split("||").some((conjunction) => versionSatisfiesConjunction(parsed, conjunction));
 }
 
+/**
+ * Mirrors main's compile-time floor rejection (`codex-manifest.ts`'s "risk
+ * acceptance cannot override the compiled floor") so the untested-banner gate
+ * below never claims risk-acceptance saved a version main will refuse
+ * unconditionally. Fails closed like `isCodexVersionWithinSupportedRange`:
+ * unparsable input is never treated as below-floor.
+ */
+function isCodexVersionBelowCompileTimeFloor(version: string): boolean {
+  const parsed = parseCodexSemverForRangeCheck(version);
+  const floor = parseCodexSemverForRangeCheck(CODEX_MIN_FLOOR);
+  if (parsed === null || floor === null) return false;
+  return compareCodexSemverForRangeCheck(parsed, floor) < 0;
+}
+
 export interface CodexBinaryActions {
   showInstall: boolean;
   showUpdate: boolean;
@@ -334,7 +349,11 @@ export function deriveBinaryActions(report: CodexDoctorReport | undefined, suppo
   const showUpdate = support !== null && report?.status === "update_required";
   const version = report?.version;
   const untestedVersion =
-    support !== null && version !== undefined && support.riskAcceptedVersions.includes(version) && !isCodexVersionWithinSupportedRange(version, support.supportedRange)
+    support !== null &&
+    version !== undefined &&
+    support.riskAcceptedVersions.includes(version) &&
+    !isCodexVersionWithinSupportedRange(version, support.supportedRange) &&
+    !isCodexVersionBelowCompileTimeFloor(version)
       ? version
       : null;
   return { showInstall, showUpdate, showUseAnyway: showUpdate, untestedVersion };
