@@ -325,8 +325,15 @@ export interface TabHostManagerDeps {
    * ready (preserves the pre-2.2 behaviour).
    */
   providerReady?: () => boolean;
-  /** Availability of a reviewed non-core engine; defaults fail-closed. */
-  engineReady?: (engine: EngineId) => boolean;
+  /**
+   * Availability of a reviewed non-core engine; defaults fail-closed. Codex
+   * readiness is per PROFILE (codex-profiles cut §4.2, TASK.50): the optional
+   * `codexProfileId` is the profile the spawn will actually run under — the
+   * draft's pick on a new tab, the persisted meta pick on a resume — so the gate
+   * answers about THAT account, not merely the active one. Absent id = the
+   * active profile answers (today's single-profile behaviour; no symmetry).
+   */
+  engineReady?: (engine: EngineId, codexProfileId?: string) => boolean;
   /** Fresh, engine-specific host-env overlay. It must contain no credentials. */
   engineEnv?: (engine: EngineId, generation: number) => NodeJS.ProcessEnv;
   /**
@@ -398,7 +405,7 @@ export class TabHostManager {
   private readonly limits: BreakerLimits;
   private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
-  private readonly isEngineReady: (engine: EngineId) => boolean;
+  private readonly isEngineReady: (engine: EngineId, codexProfileId?: string) => boolean;
   private readonly now: () => number;
   private readonly genId: () => string;
   private readonly logger: TabLogger;
@@ -447,8 +454,8 @@ export class TabHostManager {
    * the tab-ipc create path can refuse `not_ready` BEFORE prompting for a
    * workspace; createTab enforces it authoritatively regardless.
    */
-  canSpawn(engine: EngineId = "core"): boolean {
-    return this.isEngineReady(engine);
+  canSpawn(engine: EngineId = "core", codexProfileId?: string): boolean {
+    return this.isEngineReady(engine, codexProfileId);
   }
 
   getTab(tabId: string): TabHost | undefined {
@@ -504,7 +511,10 @@ export class TabHostManager {
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
     const engine = params.engine ?? "core";
-    if (!this.canSpawn(engine)) {
+    // Gate on the profile this spawn will actually run under (codex-profiles
+    // S3-1), not merely the active one — a ready non-active pick must be able to
+    // spawn even while the active account is signed out.
+    if (!this.canSpawn(engine, params.codexProfile?.id)) {
       return { ok: false, reason: "not_ready" };
     }
     const existing = this.bindings.get(params.sessionId);
