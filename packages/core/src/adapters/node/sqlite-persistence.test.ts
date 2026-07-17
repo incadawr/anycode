@@ -246,6 +246,34 @@ describe("SqlitePersistenceAdapter", () => {
       expect((await adapter.getSession("s-touch"))?.connectionId).toBe("conn-xyz");
     });
 
+    it("round-trips a codexProfileId through create/get/list (codex-profiles W3-F)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const created = await adapter.createSession({
+        id: "s-profile",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        codexProfileId: "work",
+      });
+      expect(created.codexProfileId).toBe("work");
+      expect((await adapter.getSession("s-profile"))?.codexProfileId).toBe("work");
+      expect((await adapter.listSessions({ workspace: "/repo" }))[0]?.codexProfileId).toBe("work");
+    });
+
+    it("omits codexProfileId entirely for a session created without one (legacy/system metadata)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const created = await adapter.createSession({ id: "s-legacy-profile", workspace: "/repo", model: "m", mode: "build" });
+      expect("codexProfileId" in created).toBe(false);
+      expect("codexProfileId" in ((await adapter.getSession("s-legacy-profile")) ?? {})).toBe(false);
+    });
+
+    it("patches codexProfileId through touchSession", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "s-touch-profile", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.touchSession("s-touch-profile", { codexProfileId: "personal" });
+      expect((await adapter.getSession("s-touch-profile"))?.codexProfileId).toBe("personal");
+    });
+
     it("atomically enters and exits a worktree, clearing false/default metadata on exit", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "s1", workspace: "/repo", model: "m", mode: "build" });
@@ -585,7 +613,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -651,12 +679,60 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
     expect(migrated.prepare("SELECT connection_id FROM sessions WHERE id = ?").get("legacy-v9")).toEqual({
       connection_id: null,
+    });
+    migrated.close();
+  });
+
+  it("migrates a pre-codexProfileId (v10) database to v11 adding codex_profile_id and is idempotent across opens (codex-profiles W3-F)", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v10-profile-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const old = new DatabaseSync(dbPath);
+    old.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at) VALUES (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        engine_id TEXT, external_session_ref TEXT, project_root TEXT,
+        worktree_id TEXT, worktree_path TEXT, worktree_branch TEXT, worktree_base_ref TEXT,
+        worktree_owned_by_anycode INTEGER, continuation_pending INTEGER NOT NULL DEFAULT 0,
+        continuation_mode TEXT, worktree_exit_notice_pending INTEGER NOT NULL DEFAULT 0,
+        worktree_cleanup_path TEXT, worktree_cleanup_mode TEXT,
+        worktree_cleanup_owned_by_anycode INTEGER, worktree_cleanup_branch TEXT, worktree_transition_json TEXT,
+        connection_id TEXT
+      );
+      INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
+        VALUES ('legacy-v10', '/repo', 'm', 'build', 1, 2, '/repo');
+    `);
+    old.close();
+
+    // Opening the pre-migration DB must not crash, must migrate to v11, and a
+    // legacy row (no codex_profile_id) reads back with NO codexProfileId field.
+    for (let open = 0; open < 2; open += 1) {
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      const legacy = await adapter.getSession("legacy-v10");
+      expect(legacy?.id).toBe("legacy-v10");
+      expect(legacy !== null && "codexProfileId" in legacy).toBe(false);
+      await adapter.close();
+    }
+
+    const migrated = new DatabaseSync(dbPath);
+    expect(
+      (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
+        ({ version }) => version,
+      ),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(
+      (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
+    ).toEqual(expect.arrayContaining(["codex_profile_id"]));
+    expect(migrated.prepare("SELECT codex_profile_id FROM sessions WHERE id = ?").get("legacy-v10")).toEqual({
+      codex_profile_id: null,
     });
     migrated.close();
   });

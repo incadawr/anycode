@@ -93,8 +93,34 @@ if (args[0] === "--version") {
       } else if (request.method === "initialized") {
         // notification — no response.
       } else if (request.method === "account/read") {
-        const account = signedOut ? null : { type: "chatgpt", email: "redacted@example.com", planType: "plus" };
-        process.stdout.write(`${JSON.stringify({ id: request.id, result: { account, requiresOpenaiAuth: true } })}\n`);
+        // Wire union variants (codex-profiles cut §1.1): flags pick which
+        // GetAccountResponse shape the doctor's status automat is fed.
+        const account = flag("--api-key-account")
+          ? { type: "apiKey" }
+          : signedOut || flag("--no-auth-required")
+            ? null
+            : { type: "chatgpt", email: "sentinel-custody@example.com", planType: "plus" };
+        const requiresOpenaiAuth = flag("--no-auth-required") ? false : true;
+        const result = flag("--no-requires-field") ? { account } : { account, requiresOpenaiAuth };
+        process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+      } else if (request.method === "account/rateLimits/read") {
+        // Live-shaped 0.144.5 snapshot (W0-R1 probe): ONE populated window,
+        // `secondary` present-but-null, byLimitId mirroring the top level,
+        // and a rateLimitResetCredits blob the decoder must silently drop.
+        if (flag("--no-rate-limits")) {
+          process.stdout.write(`${JSON.stringify({ id: request.id, error: { code: -32601, message: "method not found" } })}\n`);
+        } else {
+          const snapshot = {
+            primary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: 1784791993 },
+            secondary: null,
+            planType: "plus",
+            limitName: null,
+            credits: { hasCredits: false, unlimited: false, balance: "0" },
+          };
+          process.stdout.write(
+            `${JSON.stringify({ id: request.id, result: { rateLimits: snapshot, rateLimitsByLimitId: { codex: snapshot }, rateLimitResetCredits: { availableCount: 0, credits: [] } } })}\n`,
+          );
+        }
       } else if (request.method === "model/list") {
         const cursor = request.params && request.params.cursor;
         if (manyPages) {

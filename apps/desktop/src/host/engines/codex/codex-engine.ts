@@ -21,7 +21,7 @@
  * `turn/completed`, which the translator maps to `loop_end:cancelled`.
  */
 
-import type { AgentEvent, HistoryItem, PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { AgentEvent, CodexRateLimitsWire, HistoryItem, PermissionMode, ReasoningEffort } from "@anycode/core";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
   CODEX_POST_INTERRUPT_SETTLE_MS,
@@ -44,6 +44,7 @@ import {
   isEffectivePostureWeaker,
   type CodexPermissionPresetDefinition,
 } from "./presets.js";
+import { CodexQuotaTracker } from "./quota.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import { TurnItemIndex } from "./turn-item-index.js";
 import type { JsonRpcNotification } from "./protocol.js";
@@ -68,7 +69,12 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsRewind: false,
   supportsWorkflow: false,
   supportsGitMutations: false,
-  supportsContextUsage: false,
+  // C-bug-1 (codex-profiles cut §5): the translator genuinely reports
+  // provider-fed usage from `thread/tokenUsage/updated`; keeping this false
+  // was the defect that hid a working ctx meter behind the Composer gate.
+  supportsContextUsage: true,
+  // No per-category breakdown exists on the Codex wire — stays false so the
+  // popover honestly hides the breakdown block instead of skeletoning it.
   supportsContextBreakdown: false,
   supportsInteractiveApprovals: false,
   costAccounting: false,
@@ -150,7 +156,7 @@ type ThreadResult = {
   sandbox?: unknown;
   reasoningEffort?: unknown;
 };
-type AccountResult = { account?: unknown };
+type AccountResult = { account?: unknown; requiresOpenaiAuth?: unknown };
 type TurnResult = { turn?: { id?: unknown } };
 
 export interface CodexEngineConnectOptions {
@@ -373,6 +379,27 @@ function deadline(ms: number): SettleDeadline {
   return { promise, cancel: () => { if (timer !== undefined) clearTimeout(timer); } };
 }
 
+/**
+ * Boot quota pull (codex-profiles cut §6.1): runs AFTER the native thread
+ * exists (`thread/start`/`thread/resume`), so the starting snapshot rides
+ * `EnginePresentation.quota` on the first `ui_ready`. Params discipline
+ * (amendment §A3.7): `account/rateLimits/read` is called WITHOUT a params key
+ * — unlike `account/read`, whose `params: {}` is schema-mandated. Never
+ * boot-fatal: quota is additive presentation data, and a session must boot
+ * (and run) without it. On resume this is also the §5.4 rule: quotas are
+ * available immediately, while the ctx meter honestly waits for the first
+ * turn's `thread/tokenUsage/updated` (no false 0% is ever emitted here).
+ */
+async function pullQuotaSnapshot(client: CodexClient, timeoutMs: number): Promise<CodexQuotaTracker> {
+  const tracker = new CodexQuotaTracker();
+  try {
+    tracker.seedFromRead(await client.request("account/rateLimits/read", undefined, { timeoutMs }));
+  } catch {
+    // The block is simply hidden until a later push/pull delivers data.
+  }
+  return tracker;
+}
+
 async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number): Promise<void> {
   await client.request("initialize", {
     clientInfo: { name: "anycode", title: "AnyCode", version: "0.0.0" },
@@ -380,7 +407,14 @@ async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number
   }, { timeoutMs });
   client.notify("initialized");
   const account = await client.request<AccountResult>("account/read", {}, { timeoutMs });
-  if (account.account === null || account.account === undefined) throw new Error(CODEX_NOT_SIGNED_IN);
+  const requiresOpenaiAuth = typeof account.requiresOpenaiAuth === "boolean" ? account.requiresOpenaiAuth : undefined;
+  // Doctor row 7 (cut §4.2, main/codex-doctor.ts:778-785), byte-identical
+  // semantics: a null account with requiresOpenaiAuth:false is a READY
+  // api-key/bedrock profile, not signed-out — a null-account check alone
+  // false-negatives that config.toml setup.
+  if ((account.account === null || account.account === undefined) && requiresOpenaiAuth !== false) {
+    throw new Error(CODEX_NOT_SIGNED_IN);
+  }
 }
 
 /**
@@ -412,11 +446,12 @@ export async function createNativeCodexSession(
     ...(model !== undefined ? { model } : {}),
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
+  const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
   const settings = buildSettings(workspace, catalog, preset, result, native.model, notices);
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, 0, []),
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, 0, [], quota),
     ...native,
     presetId: preset.id,
   };
@@ -461,6 +496,7 @@ export async function resumeNativeCodexSession(
     { timeoutMs: bounds.bootRpcMs },
   );
   const threadRead = asThreadRead(rawRead, native.threadId);
+  const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
   const shadow = shadowLog !== undefined ? await shadowLog.list(native.threadId) : [];
   const historyItems = projectCodexHistory(threadRead, shadow, {
     maxItems: CODEX_HISTORY_MAX_ITEMS,
@@ -480,7 +516,7 @@ export async function resumeNativeCodexSession(
   const model = stored ?? native.model;
   const settings = buildSettings(workspace, catalog, preset, resumed, model, notices);
   return {
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems),
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota),
     threadId: native.threadId,
     model,
     presetId: preset.id,
@@ -595,6 +631,14 @@ export class CodexEngine implements SessionEngine {
     private readonly baseTurnOrdinal = 0,
     /** The one-shot resume-history projection (cut §2(e)); `[]` for a fresh session. */
     private readonly bootHistoryItems: readonly HistoryItem[] = [],
+    /**
+     * Session-lifetime quota state (codex-profiles cut §6): seeded by the boot
+     * pull, advanced by every live `account/rateLimits/updated` off the
+     * transport-wide notification tap (`observeNotification`) — so it moves
+     * BETWEEN turns too, not only while a turn's translator is emitting.
+     * Undefined only for bare test-constructed engines.
+     */
+    private readonly quota?: CodexQuotaTracker,
   ) {
     // Interactive approval is advertised only after the exact W0 bridge is
     // installed; direct/test-only engines retain the fail-closed capability.
@@ -602,7 +646,7 @@ export class CodexEngine implements SessionEngine {
     this.bounds = timeouts(overrides);
     this.settings = settings;
     this.applied = this.chosen();
-    this.unobserve = this.client.observeNotifications?.((notification) => this.indexItem(notification)) ?? (() => {});
+    this.unobserve = this.client.observeNotifications?.((notification) => this.observeNotification(notification)) ?? (() => {});
   }
 
   get activeTurnDetails(): ActiveCodexTurn | null {
@@ -631,6 +675,18 @@ export class CodexEngine implements SessionEngine {
   /** The resume projection built ONCE at boot (cut §2(e)) — `[]` for a fresh session. Session hydrates `bootHistory` from exactly this. */
   historyItems(): readonly HistoryItem[] {
     return this.bootHistoryItems;
+  }
+
+  /**
+   * The latest merged quota snapshot (codex-profiles cut §6.1): the boot pull
+   * plus every live push folded in. Session reads this into
+   * `EnginePresentation.quota` on each `ui_ready`, so a renderer reload gets
+   * the freshest snapshot without any bind-time push (hazard: per-connect
+   * pushes gate on ui_ready, never bindPort). Null = nothing observed yet —
+   * the renderer hides the block, it never paints "0%".
+   */
+  quotaSnapshot(): CodexRateLimitsWire | null {
+    return this.quota?.current() ?? null;
   }
 
   // ── engine-owned settings seam (host/session.ts `engineSettings`) ──────────
@@ -871,7 +927,16 @@ export class CodexEngine implements SessionEngine {
         for (const listener of this.appliedListeners) listener(applying);
       }
       this.activeTurn = { threadId: this.threadId, turnId, items };
-      const translator = new TurnTranslator({ threadId: this.threadId, turnId, turn, items });
+      const translator = new TurnTranslator({
+        threadId: this.threadId,
+        turnId,
+        turn,
+        items,
+        // The SESSION-lifetime tracker rides every per-turn translator, so a
+        // sparse push merges onto everything already known (cut §6.3), not
+        // onto a fresh per-turn blank.
+        ...(this.quota !== undefined ? { quota: this.quota } : {}),
+      });
       let terminal = false;
       // Two independent per-turn counters, both reset to 0 for every turn
       // (W6 fix — cut §2(e) errata): `seqInTurn` is the raw live-completion
@@ -1070,6 +1135,29 @@ export class CodexEngine implements SessionEngine {
 
   private addressesThisThread(notification: JsonRpcNotification): boolean {
     return record(notification.params)?.threadId === this.threadId;
+  }
+
+  /**
+   * The transport-wide notification tap (CodexClient.observeNotifications):
+   * runs synchronously for EVERY server notification at dispatch time, in wire
+   * order, independent of the per-turn NotificationQueue. Two state machines
+   * ride it because both must advance regardless of whether a turn is currently
+   * draining that queue: the approval-correlation index, and the session quota
+   * tracker.
+   */
+  private observeNotification(notification: JsonRpcNotification): void {
+    this.indexItem(notification);
+    // `account/rateLimits/updated` (codex-profiles cut §6.1) is ACCOUNT-scoped:
+    // it carries no threadId, so the per-turn queue's this-thread filter drops
+    // it — and between turns there is no turn iterator draining the queue at
+    // all, nor a TurnTranslator (the only in-turn writer). Advancing the
+    // session tracker from the tap makes the snapshot move on every live push
+    // regardless of turn phase (cut §6.1 "advanced by every live push"); the
+    // per-turn translator stays a pure `engine_quota` emitter for the in-turn
+    // UI event, re-folding the same push idempotently (frozen sparse merge).
+    if (notification.method === "account/rateLimits/updated") {
+      this.quota?.applyUpdate(notification.params);
+    }
   }
 
   /** Transport-ordered writer of the approval-correlation index (see CodexClient). */

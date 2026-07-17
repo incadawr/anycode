@@ -46,6 +46,22 @@ export interface AppServerClientOptions {
   cwd: string;
   /** Source only; buildCodexChildEnv selects an explicit allowlist. */
   sourceEnv: NodeJS.ProcessEnv;
+  /**
+   * Profile CODEX_HOME (codex-profiles cut §2.6): an absolute path main/host
+   * already resolved and validated. When present it OVERRIDES any ambient
+   * CODEX_HOME the allowlist passthrough would inherit — a developer shell's
+   * export must never hijack a profile session's account. Absent = the
+   * `system` pseudo-profile: env custody stays byte-identical to today.
+   */
+  codexHome?: string;
+  /**
+   * Per-spawn profile-home guard (cut §2.5 + amendment §A1.2), re-run
+   * immediately before EACH spawn exactly like `binaryTrust`: returns null
+   * when the home (and its auth.json symlink intent, when any) is still
+   * sound, or a diagnostic that REFUSES the spawn. The home holds a
+   * credential, so it gets the same TOCTOU narrative as the binary.
+   */
+  homeTrust?: () => string | null;
   /** Test-only launcher prefix; production keeps it empty. */
   binaryArgs?: readonly string[];
   bootstrap?: EngineBootstrap;
@@ -158,8 +174,14 @@ type Pending = {
   timer: ReturnType<typeof setTimeout> | undefined;
 };
 
-/** Explicit child env custody: no ambient spread, especially no ANYCODE_* secrets. */
-export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process.platform): NodeJS.ProcessEnv {
+/**
+ * Explicit child env custody: no ambient spread, especially no ANYCODE_* secrets.
+ * `codexHome` (codex-profiles cut §2.6.2) is assigned LAST, after the
+ * passthrough list, so a selected profile's home always beats an ambient
+ * `CODEX_HOME` from the developer shell; absent, the passthrough behaviour is
+ * byte-identical to the pre-profiles build.
+ */
+export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process.platform, codexHome?: string): NodeJS.ProcessEnv {
   const posix = [
     "HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "TERM",
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
@@ -178,6 +200,7 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
+  if (codexHome !== undefined) env.CODEX_HOME = codexHome;
   return env;
 }
 
@@ -249,10 +272,23 @@ export class AppServerClient {
   private closePromise: Promise<void> | null = null;
   private terminalError: Error | null = null;
   private stdoutPaused = false;
+  /**
+   * True once the initialize handshake's RESPONSE has been dispatched
+   * (amendment §A3.8). Until then EVERY server notification is silently
+   * dropped — the live 0.144.5 server emits `remoteControl/status/changed`
+   * around initialize, and pre-handshake chatter must be neither queued, nor
+   * an error, nor a terminalization-counter tick. Flipped SYNCHRONOUSLY
+   * inside dispatch() (not in the request's .then), because the response and
+   * a legitimate post-init notification can share one stdout chunk — a
+   * microtask-deferred flip would drop that notification too.
+   */
+  private initialized = false;
+  /** The in-flight initialize request's id; how dispatch() recognizes the handshake response. */
+  private initializeRequestId: number | null = null;
 
   constructor(private readonly options: AppServerClientOptions) {
     this.spawnImpl = options.spawnImpl ?? ((command, args, opts) => spawn(command, args, opts));
-    this.env = buildCodexChildEnv(options.sourceEnv);
+    this.env = buildCodexChildEnv(options.sourceEnv, process.platform, options.codexHome);
     this.maxLineBytes = options.maxLineBytes ?? CODEX_MAX_LINE_BYTES;
     this.maxPendingRequests = options.maxPendingRequests ?? CODEX_MAX_PENDING_REQUESTS;
     const highWater = options.notificationHighWater ?? CODEX_NOTIFICATION_HIGH_WATER;
@@ -324,6 +360,7 @@ export class AppServerClient {
       return Promise.reject(new AppServerClientError(`app-server pending request limit (${this.maxPendingRequests}) exceeded`));
     }
     const id = this.nextRequestId++;
+    if (method === "initialize") this.initializeRequestId = id;
     return new Promise<T>((resolve, reject) => {
       const timer = opts?.timeoutMs === undefined
         ? undefined
@@ -436,6 +473,14 @@ export class AppServerClient {
     const untrusted = (this.options.binaryTrust ?? checkCodexBinaryTrustOnDisk)(this.options.binaryPath);
     if (untrusted !== null) {
       throw new EngineVersionError(untrusted);
+    }
+    // The profile home carries a credential, so it gets the same per-spawn
+    // re-assertion as the binary (cut §2.5 + amendment §A1.2): validated once
+    // and spawned later is exactly the TOCTOU both gates narrow. Absent for
+    // the system pseudo-profile — zero behaviour delta without profiles.
+    const untrustedHome = this.options.homeTrust?.() ?? null;
+    if (untrustedHome !== null) {
+      throw new AppServerClientError(`Codex profile home rejected: ${untrustedHome}`);
     }
   }
 
@@ -592,6 +637,10 @@ export class AppServerClient {
       return;
     }
     if (typeof message.id === "number" && ("result" in message || "error" in message)) {
+      // The handshake gate flips here, in wire order, BEFORE the pending
+      // lookup — even a timed-out initialize whose response arrives late
+      // still opens the notification stream the moment the server answered.
+      if (message.id === this.initializeRequestId && message.error === undefined) this.initialized = true;
       const pending = this.pending.get(message.id);
       if (pending === undefined) return; // stale response after a timeout is harmless.
       this.pending.delete(message.id);
@@ -608,6 +657,9 @@ export class AppServerClient {
       return;
     }
     if (typeof message.method === "string") {
+      // Pre-initialize notifications are dropped SILENTLY (amendment §A3.8):
+      // not queued, not observed, not counted, never an error.
+      if (!this.initialized) return;
       const notification: JsonRpcNotification = {
         method: message.method,
         ...(message.params === undefined ? {} : { params: message.params }),

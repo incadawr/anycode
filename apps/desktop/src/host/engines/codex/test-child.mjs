@@ -25,20 +25,15 @@ if (args.includes("--version")) {
   else if (args.includes("--hang-version")) setInterval(() => {}, 1_000);
   else process.stdout.write("codex-cli 0.144.1\n");
   if (!args.includes("--hang-version") && !args.includes("--version-grandchild")) process.exit(0);
-} else if (args.includes("--close-stdin")) {
-  // A live app-server that closes fd 0 under us: the next write raises an
-  // asynchronous EPIPE on the parent's stdin socket, which with no `error`
-  // listener installed there terminates the OWNING process.
-  process.stdout.write(`${JSON.stringify({ method: "test/stdin-closed" })}\n`);
-  closeSync(0);
-  setInterval(() => {}, 1_000);
 } else {
   const fixture = args.find((arg) => arg.startsWith("--fixture="));
   if (args.includes("--malformed")) process.stdout.write("not-json\n");
   if (args.includes("--oversize")) process.stdout.write(`${"x".repeat(2_048)}\n`);
-  if (fixture) process.stdout.write(readFileSync(fixture.slice("--fixture=".length), "utf8"));
-  if (args.includes("--env")) {
-    process.stdout.write(`${JSON.stringify({ method: "test/env", params: process.env })}\n`);
+  if (args.includes("--pre-init-noise")) {
+    // Live-observed shape (amendment §A3.8): the real 0.144.5 server emits
+    // notifications AROUND initialize; the client must silently drop these.
+    process.stdout.write(`${JSON.stringify({ method: "remoteControl/status/changed", params: { status: "disabled" } })}\n`);
+    process.stdout.write(`${JSON.stringify({ method: "test/pre-init", params: { leaked: true } })}\n`);
   }
   if (args.includes("--stubborn-group")) {
     process.on("SIGTERM", () => {});
@@ -47,7 +42,25 @@ if (args.includes("--version")) {
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on("line", (line) => {
     const request = JSON.parse(line);
-    if (request.method === "echo") {
+    if (request.method === "initialize") {
+      // Notification-bearing scenarios emit AFTER the initialize response so
+      // their lines survive the client's pre-init drop (amendment §A3.8).
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`);
+      if (fixture) process.stdout.write(readFileSync(fixture.slice("--fixture=".length), "utf8"));
+      if (args.includes("--env")) {
+        process.stdout.write(`${JSON.stringify({ method: "test/env", params: process.env })}\n`);
+      }
+      if (args.includes("--pre-init-noise")) {
+        process.stdout.write(`${JSON.stringify({ method: "test/after-init" })}\n`);
+      }
+      if (args.includes("--close-stdin")) {
+        // A live app-server that closes fd 0 under us: the next write raises an
+        // asynchronous EPIPE on the parent's stdin socket, which with no `error`
+        // listener installed there terminates the OWNING process.
+        process.stdout.write(`${JSON.stringify({ method: "test/stdin-closed" })}\n`);
+        closeSync(0);
+      }
+    } else if (request.method === "echo") {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: request.params })}\n`);
     } else if (request.id === 88 || request.id === "request-88") {
       process.stdout.write(`${JSON.stringify({ method: "test/server-response", params: request })}\n`);

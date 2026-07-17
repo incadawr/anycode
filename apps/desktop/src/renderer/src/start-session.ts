@@ -40,14 +40,15 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
 
 /**
  * Keeps the historical Core create payload byte-for-byte additive. For a
- * non-core (Codex) draft, also forwards the draft's own model/preset picks
- * (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers both
- * already existed — this is the missing wire between them). Both are opaque
- * ids; omitted entirely when never explicitly picked, so the host applies
- * its own default rather than receiving a stale/invalid id.
+ * non-core (Codex) draft, also forwards the draft's own model/preset/profile
+ * picks (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers
+ * both already existed — this is the missing wire between them). All three
+ * are opaque ids; omitted entirely when never explicitly picked, so the host
+ * (or main's profile registry) applies its own default rather than receiving
+ * a stale/invalid id.
  */
 export function createStartTabRequest(
-  draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset">,
+  draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset" | "codexProfileId">,
 ): CreateTabRequest {
   if (draft.workspace === null) {
     throw new Error("A workspace is required to create a tab");
@@ -61,6 +62,7 @@ export function createStartTabRequest(
     engine: draft.engine,
     ...(draft.model !== null ? { engineModel: draft.model } : {}),
     ...(draft.enginePreset !== undefined ? { enginePreset: draft.enginePreset } : {}),
+    ...(draft.codexProfileId !== undefined ? { codexProfileId: draft.codexProfileId } : {}),
   };
 }
 
@@ -87,16 +89,20 @@ export async function submitStartDraft(
     return { ok: false, message: "Failed to create the task." };
   }
   let createdTabId: string | null = null;
-  const failure = handleCreateTabResult(result, {
-    onTabCreated: ({ tabId, workspace: tabWorkspace }) => {
-      createdTabId = tabId;
-      deps.tabsStore.getState().addTab({ tabId, workspace: tabWorkspace });
-      deps.tabsStore.getState().setActiveTab(tabId);
+  const failure = handleCreateTabResult(
+    result,
+    {
+      onTabCreated: ({ tabId, workspace: tabWorkspace }) => {
+        createdTabId = tabId;
+        deps.tabsStore.getState().addTab({ tabId, workspace: tabWorkspace });
+        deps.tabsStore.getState().setActiveTab(tabId);
+      },
+      onFocusTab: (tabId) => {
+        deps.tabsStore.getState().setActiveTab(tabId);
+      },
     },
-    onFocusTab: (tabId) => {
-      deps.tabsStore.getState().setActiveTab(tabId);
-    },
-  });
+    { engine },
+  );
 
   if (failure !== null || createdTabId === null) {
     return { ok: false, message: failure ?? "Failed to create the task." };

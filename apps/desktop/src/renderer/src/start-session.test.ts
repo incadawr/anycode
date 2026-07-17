@@ -92,6 +92,47 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello");
   });
 
+  it("codex-profiles W3-F: forwards the draft's Codex profile pick as codexProfileId", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setDraftCodexProfileId("work");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({
+      kind: "new",
+      workspace: "/ws/a",
+      engine: "codex",
+      codexProfileId: "work",
+    });
+  });
+
+  it("a Codex draft with no explicit profile pick omits codexProfileId from createTab (system pseudo-profile default)", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftEngine("codex");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
+  });
+
+  it("R3-2 facet ii: switching a draft codex->core after picking a profile never forwards the stale codexProfileId to the Core create request", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setDraftCodexProfileId("work");
+    tabsStore.getState().setDraftEngine("core");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
+  });
+
   it("a Codex draft with no explicit model/preset pick omits both from createTab, letting the host apply its own defaults", async () => {
     const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
