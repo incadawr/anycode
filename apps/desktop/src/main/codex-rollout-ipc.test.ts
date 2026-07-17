@@ -364,6 +364,36 @@ describe("registerCodexRolloutIpc — consume-once pending import model (S4-1 ar
     // A session that was never imported has no pending entry.
     expect(handle.consumePendingImportModel("never-imported")).toBeUndefined();
   });
+
+  it("peek reads WITHOUT deleting; consume deletes; peek after consume ⇒ undefined (L4·1 peek-then-confirm)", async () => {
+    mockHandlers.clear();
+    const sessionsDir = await tmp();
+    const relPath = "2026/07/01/rollout-peek.jsonl";
+    await seedRollout(sessionsDir, relPath, BASIC_RECORDS);
+    const handle = registerCodexRolloutIpc({
+      persistence: new FakePersistence(),
+      resolveProfileSessionsDir: async (p) => (p === "p1" ? sessionsDir : null),
+      activeConnectionId: () => "conn-active",
+    });
+    const importHandler = mockHandlers.get(CODEX_ROLLOUT_IMPORT_CHANNEL);
+    expect(importHandler).toBeDefined();
+    const result = (await importHandler!(null, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" })) as {
+      ok: boolean;
+      sessionId?: string;
+    };
+    expect(result.ok).toBe(true);
+    const sessionId = result.sessionId!;
+    // peek surfaces the pick WITHOUT spending it — idempotent across repeats.
+    expect(handle.peekPendingImportModel(sessionId)).toBe("gpt-oss-20b");
+    expect(handle.peekPendingImportModel(sessionId)).toBe("gpt-oss-20b");
+    // consume burns it once...
+    expect(handle.consumePendingImportModel(sessionId)).toBe("gpt-oss-20b");
+    // ...after which both peek and consume see nothing.
+    expect(handle.peekPendingImportModel(sessionId)).toBeUndefined();
+    expect(handle.consumePendingImportModel(sessionId)).toBeUndefined();
+    // A session that was never imported has no pending entry to peek.
+    expect(handle.peekPendingImportModel("never-imported")).toBeUndefined();
+  });
 });
 
 describe("handleCodexRolloutImport — R2-M3 untrusted meta.cwd workspace validation (W4-F1)", () => {
