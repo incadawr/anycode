@@ -147,3 +147,26 @@ describe("Claude permission presets — frozen table (cut §1.4)", () => {
     }
   });
 });
+
+describe("ClaudeModelCatalog.selectableForResolved — the ambiguous read-back (cut §1.5 hazard (б))", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
+
+  it("prefers a CONCRETE alias over `default` when both resolve to the same model", () => {
+    // Live fact: `default` and `opus[1m]` share `claude-opus-4-8[1m]`, and
+    // `default` is listed first — so plain `findByResolved` answers `default`.
+    expect(catalog.findByResolved("claude-opus-4-8[1m]")!.value).toBe("default");
+    // Persisting `default` for a session actually pinned to opus would silently
+    // re-point it the day the account's default model changes.
+    expect(catalog.selectableForResolved("claude-opus-4-8[1m]")!.value).toBe("opus[1m]");
+  });
+
+  it("answers the unambiguous cases identically to findByResolved", () => {
+    expect(catalog.selectableForResolved("claude-sonnet-5")!.value).toBe("sonnet");
+    expect(catalog.selectableForResolved("claude-haiku-4-5-20251001")!.value).toBe("haiku");
+    expect(catalog.selectableForResolved("no-such-model")).toBeUndefined();
+  });
+
+  it("an exact `value` hit wins outright (the CLI reporting a selectable id verbatim)", () => {
+    expect(catalog.selectableForResolved("sonnet")!.value).toBe("sonnet");
+  });
+});

@@ -134,6 +134,7 @@ describe("ClaudeClient", () => {
 
   it("drops the pending inbound can_use_tool handler when the CLI cancels it during an interrupt race, without answering it", async () => {
     let heldResponder: { success: (r?: unknown) => void; error: (m?: string) => void } | undefined;
+    let cancelSignal: AbortSignal | undefined;
     let sawCanUseTool = false;
     const canUseToolSeen = new Promise<void>((resolve) => {
       const check = (): void => {
@@ -150,12 +151,17 @@ describe("ClaudeClient", () => {
     const client = makeClient([`--fixture=${fixture("w0-03-interrupt-pending.jsonl")}`], {
       onControlRequest: (request, respond) => {
         if (request.subtype === "can_use_tool") {
-          // Simulate a real approval bridge that never answers before the
-          // interrupt races it — the returned promise deliberately never
-          // settles, so the transport's own "unanswered after handler
-          // settles" fallback never fires early.
+          // A real approval bridge parked on a user decision. It settles ONLY
+          // when the request's cancellation signal fires — so this promise is
+          // simultaneously the "slow handler" the pairing rule must tolerate
+          // AND the proof that a withdrawal actually releases the handler
+          // rather than merely suppressing its late write. If cancellation is
+          // not propagated, this never resolves.
           heldResponder = respond;
-          return new Promise<void>(() => {});
+          cancelSignal = request.signal;
+          return new Promise<void>((resolve) => {
+            request.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
         }
         respond.error();
         return undefined;
@@ -170,6 +176,12 @@ describe("ClaudeClient", () => {
 
       const interrupted = client.interrupt();
       await expect(interrupted).resolves.toEqual({ stillQueued: [] });
+
+      // The withdrawal must SETTLE the handler, not just silence it: a bridge
+      // parked on a user decision has nothing else to release it, and a leaked
+      // handler holds the approval modal open and refuses every later approval
+      // in the session.
+      expect(cancelSignal?.aborted).toBe(true);
 
       // Pairing rule (contract §2.2): the CLI's control_cancel_request already
       // withdrew this request. A slow handler settling AFTER that must be a

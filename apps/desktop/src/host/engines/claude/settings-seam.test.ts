@@ -163,3 +163,117 @@ describe("ClaudeSettingsSeam (cut §1.5 D3, hazard (д))", () => {
     expect(applied).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Concurrent changes. Each Claude control is a SEPARATE in-flight request, so
+ * two quick picks (model B, then preset Workspace) are genuinely overlapping
+ * and can acknowledge in either order.
+ *
+ * The bug this pins: publishing the snapshot CAPTURED at accept time. The
+ * preset change assembles its `next` from the engine as it stands — which, if
+ * the model ack has not landed yet, still says model A. Its own ack then
+ * republishes `{model: A, preset: Workspace}`, undoing the model change in the
+ * UI (and, since Session persists from this signal, on disk too). Publishing
+ * `engine.snapshot()` instead is monotonically true: it only ever reflects acks
+ * that actually landed.
+ */
+describe("ClaudeSettingsSeam — concurrent changes (each ack publishes the engine's real state)", () => {
+  /** Holds every in-flight control request so acks can be settled out of order. */
+  class QueueingTransport implements ClaudeTransport {
+    private readonly waiting: { subtype: string; resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+
+    async initialize(): Promise<{ commands: unknown[]; models: unknown[]; account: { tokenSource?: string } }> {
+      return { commands: [], models: [], account: { tokenSource: "oauth" } };
+    }
+
+    controlRequest<T>(subtype: string): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        this.waiting.push({ subtype, resolve: resolve as (v: unknown) => void, reject });
+      });
+    }
+
+    async getContextUsage(): Promise<Record<string, unknown>> {
+      return {};
+    }
+
+    async interrupt(): Promise<{ stillQueued: string[] }> {
+      return { stillQueued: [] };
+    }
+
+    sendUserMessage(): void {}
+
+    notifications(): AsyncIterable<ClaudeStreamMessage> {
+      return { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) };
+    }
+
+    async close(): Promise<void> {}
+
+    pendingSubtypes(): string[] {
+      return this.waiting.map((entry) => entry.subtype);
+    }
+
+    ack(subtype: string): void {
+      const index = this.waiting.findIndex((entry) => entry.subtype === subtype);
+      if (index < 0) throw new Error(`no in-flight ${subtype}`);
+      this.waiting.splice(index, 1)[0]!.resolve(undefined);
+    }
+  }
+
+  it("a later preset ack does not republish the pre-change model (in-order acks)", async () => {
+    const transport = new QueueingTransport();
+    const seam = new ClaudeSettingsSeam(buildEngine(transport));
+    const applied: { model: string; activePresetId: string }[] = [];
+    seam.onSettingsApplied((snapshot) => applied.push({ ...snapshot }));
+
+    seam.selectModel("model-b");
+    seam.selectPreset("workspace");
+    expect(transport.pendingSubtypes()).toEqual(["set_model", "set_permission_mode"]);
+
+    transport.ack("set_model");
+    await flushMicrotasks();
+    transport.ack("set_permission_mode");
+    await flushMicrotasks();
+
+    // Both changes are real, and the FINAL published snapshot carries both.
+    // Republishing the captured `next` would end on {model-a, workspace}.
+    expect(applied.at(-1)).toEqual({ model: "model-b", activePresetId: "workspace" });
+    expect(seam.snapshot()).toEqual({ model: "model-b", activePresetId: "workspace" });
+  });
+
+  it("survives OUT-OF-ORDER acks (the preset answers first)", async () => {
+    const transport = new QueueingTransport();
+    const seam = new ClaudeSettingsSeam(buildEngine(transport));
+    const applied: { model: string; activePresetId: string }[] = [];
+    seam.onSettingsApplied((snapshot) => applied.push({ ...snapshot }));
+
+    seam.selectModel("model-b");
+    seam.selectPreset("workspace");
+
+    transport.ack("set_permission_mode");
+    await flushMicrotasks();
+    transport.ack("set_model");
+    await flushMicrotasks();
+
+    expect(applied.at(-1)).toEqual({ model: "model-b", activePresetId: "workspace" });
+    expect(seam.snapshot()).toEqual({ model: "model-b", activePresetId: "workspace" });
+  });
+
+  it("the pending badge is owned by the NEWEST change — an older ack settling first does not clear it", async () => {
+    const transport = new QueueingTransport();
+    const seam = new ClaudeSettingsSeam(buildEngine(transport));
+
+    seam.selectModel("model-b");
+    seam.selectPreset("workspace");
+    expect(seam.pendingSnapshot()).not.toBeNull();
+
+    // The OLDER request answers first; the preset change is still in flight, so
+    // the badge must stay up.
+    transport.ack("set_model");
+    await flushMicrotasks();
+    expect(seam.pendingSnapshot()).not.toBeNull();
+
+    transport.ack("set_permission_mode");
+    await flushMicrotasks();
+    expect(seam.pendingSnapshot()).toBeNull();
+  });
+});

@@ -19,6 +19,9 @@
 
 import type { EngineModelChoice } from "../../../shared/protocol.js";
 
+/** The CLI's own "whatever this account defaults to" entry — a moving target, not a pin. */
+const DEFAULT_MODEL_ALIAS = "default";
+
 export interface ClaudeModelEntry {
   /** The id sent on the wire (`--model` / `set_model`). */
   value: string;
@@ -100,6 +103,27 @@ export class ClaudeModelCatalog {
    */
   findByResolved(resolved: string): ClaudeModelEntry | undefined {
     return this.entries.find((entry) => entry.resolvedModel === resolved) ?? this.get(resolved);
+  }
+
+  /**
+   * The catalog value best representing a CLI-reported model id — the mapping
+   * used when the engine adopts a resumed session's actual model (cut §1.5
+   * hazard (б)).
+   *
+   * `findByResolved` is not enough on its own, because the mapping is genuinely
+   * AMBIGUOUS: the live catalog lists both `default` and `opus[1m]` with the
+   * same `resolvedModel` (`claude-opus-4-8[1m]`), and `default` is listed
+   * first. Adopting `default` for a session that is really pinned to opus would
+   * re-point that session the day the account's default model changes —
+   * `default` is a MOVING alias, and a concrete alias is not. So a concrete
+   * entry wins whenever one exists; `default` is only chosen when the CLI is
+   * reporting a model nothing else in the catalog names.
+   */
+  selectableForResolved(resolved: string): ClaudeModelEntry | undefined {
+    const exact = this.get(resolved);
+    if (exact !== undefined) return exact;
+    const matches = this.entries.filter((entry) => entry.resolvedModel === resolved);
+    return matches.find((entry) => entry.value !== DEFAULT_MODEL_ALIAS) ?? matches[0];
   }
 
   /**

@@ -222,14 +222,22 @@ export type ClaudeStreamMessage =
   | ClaudeRateLimitEventMessage
   | ClaudeResultMessage;
 
-const STREAM_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+/**
+ * The stream-message vocabulary PRODUCTION accepts. Exported so the drift gate
+ * can read it rather than restating it: a hardcoded list in the test cannot go
+ * red when production starts accepting a type the pin has no live evidence for
+ * (cut invariant §0.2-5 — "не выдумывать wire").
+ */
+export const CLAUDE_STREAM_MESSAGE_TYPES = [
   "system",
   "assistant",
   "user",
   "stream_event",
   "rate_limit_event",
   "result",
-]);
+] as const;
+
+const STREAM_MESSAGE_TYPES: ReadonlySet<string> = new Set(CLAUDE_STREAM_MESSAGE_TYPES);
 
 export function isClaudeStreamMessageType(type: string): boolean {
   return STREAM_MESSAGE_TYPES.has(type);
