@@ -44,7 +44,7 @@ if (!arm || !outFixture) {
   console.error("usage: w0-custody-probe.mjs <arm> <out.jsonl> [claude-bin]");
   process.exit(2);
 }
-const CLAUDE_BIN = claudeBinArg || process.env.CLAUDE_BIN || "/Users/incadawr/.local/share/claude/versions/2.1.212";
+const CLAUDE_BIN = claudeBinArg || process.env.CLAUDE_BIN || "[HOME]/.local/share/claude/versions/2.1.212";
 
 const env = { ...process.env };
 for (const k of ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
