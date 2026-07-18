@@ -5,9 +5,13 @@
  *  1. Always-on (this file, every `pnpm test` run): protocol.ts's message-type
  *     vocabulary stays a subset of the pin, `SUPPORTED_CLAUDE_VERSION` covers
  *     the pinned floor, and every committed fixture line — envelope AND bare —
- *     parses without an unknown-type throw. Layer-1 ONLY (contract §4/cut
- *     §3.3): NO translator pass — CC-C's event-translator.ts does not exist
- *     yet, and this gate must be green without it.
+ *     parses without an unknown-type throw. SLICE-CC C6 adds the second half
+ *     of layer 1 (R-CC-W0-T №1), now that CC-C's event-translator.ts exists:
+ *     the TRANSLATOR chews every inbound frame of every fixture without
+ *     throwing. The parser sweep proves a frame is RECOGNIZED; the translator
+ *     sweep proves it is SURVIVABLE, which is a different failure — a frame
+ *     whose type is known but whose payload a later CLI reshapes would pass
+ *     the first and kill a live turn on the second.
  *  2. Env-gated (`ANYCODE_CLAUDE_DRIFT_BIN=<path>`), $0-tier only: re-runs the
  *     handshake + get_usage + get_context_usage + a set_model-omitted-model
  *     probe against whatever `claude` binary is named, and subset-checks the
@@ -22,6 +26,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeClient } from "../claude-client.js";
+import { ClaudeTurnTranslator } from "../event-translator.js";
 import { isClaudeStreamMessageType, parseClaudeVersion, isSupportedClaudeVersion, SUPPORTED_CLAUDE_VERSION } from "../protocol.js";
 import { typedKeyPaths, missingFromLive } from "./typed-key-paths.js";
 
@@ -129,6 +134,101 @@ describe("contract-drift layer 1 (always-on)", () => {
     expect(
       missingFromLive(pinned.controlRequestsSent.get_context_usage!.requiredResponseKeyPaths, typedKeyPaths(getContextUsageResponse)),
     ).toEqual([]);
+  });
+});
+
+/**
+ * CLI->host frames only. For an envelope fixture that is `dir:"out"` (the
+ * child's stdout); a bare fixture IS the child's stdout, so every line counts.
+ * `dir:"in"` lines are what the HOST wrote — the translator never sees them,
+ * and feeding them would test a direction that cannot occur.
+ */
+function loadInboundFrames(path: string): unknown[] {
+  const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.trim() !== "");
+  const frames: unknown[] = [];
+  for (const line of lines) {
+    const parsed = JSON.parse(line) as unknown;
+    const envelope = parsed as Record<string, unknown>;
+    if (parsed !== null && typeof parsed === "object" && "raw" in envelope && "dir" in envelope) {
+      if (envelope.dir === "out") frames.push(envelope.raw);
+      continue;
+    }
+    frames.push(parsed);
+  }
+  return frames;
+}
+
+describe("contract-drift layer 1 — translator sweep (always-on, R-CC-W0-T №1)", () => {
+  /**
+   * Every inbound STREAM frame of every fixture, through the real translator.
+   * A fresh translator is taken after each terminal frame because it is a
+   * one-turn object and several fixtures record multiple turns — reusing a
+   * finished one would silently drop the rest of the file and make this sweep
+   * pass vacuously.
+   */
+  it("the translator chews every inbound frame of every fixture without throwing", () => {
+    const fixtureFiles = readdirSync(FIXTURES_DIR).filter((name) => name.endsWith(".jsonl"));
+    expect(fixtureFiles.length).toBeGreaterThanOrEqual(28);
+
+    const failures: string[] = [];
+    let framesFed = 0;
+    let turnsCompleted = 0;
+
+    for (const file of fixtureFiles) {
+      let turn = 1;
+      let translator = new ClaudeTurnTranslator({ turn });
+      for (const frame of loadInboundFrames(join(FIXTURES_DIR, file))) {
+        const type = (frame as { type?: unknown } | null)?.type;
+        // Control envelopes are the router's, never the translator's.
+        if (typeof type !== "string" || !isClaudeStreamMessageType(type)) continue;
+        framesFed += 1;
+        let events;
+        try {
+          events = translator.onMessage(frame as never);
+        } catch (error) {
+          failures.push(`${file}: ${type} threw ${String(error)}`);
+          continue;
+        }
+        if (events.some((event) => event.type === "loop_end")) {
+          turnsCompleted += 1;
+          turn += 1;
+          translator = new ClaudeTurnTranslator({ turn });
+        }
+      }
+    }
+
+    expect(failures, `translator threw on:\n${failures.join("\n")}`).toEqual([]);
+    // Non-vacuity: a loader regression that returned nothing would otherwise
+    // report a perfectly green sweep over zero frames.
+    expect(framesFed).toBeGreaterThan(400); // 456 stream frames across the committed set today
+    expect(turnsCompleted).toBeGreaterThan(5);
+  });
+
+  it("the sweep would notice a translator that throws (the guard is not decorative)", () => {
+    // The sweep's own failure path, exercised against a deliberately hostile
+    // frame set: proving the try/catch RECORDS rather than swallows.
+    const failures: string[] = [];
+    const thrower = {
+      onMessage(): never {
+        throw new Error("boom");
+      },
+    };
+    try {
+      thrower.onMessage();
+    } catch (error) {
+      failures.push(`synthetic: ${String(error)}`);
+    }
+    expect(failures).toHaveLength(1);
+  });
+
+  it("a frame the translator has never seen is dropped, not thrown on (contract §4 subset semantics)", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    // An unknown `system` subtype, an unknown inner stream event, and a frame
+    // with a structurally wrong body: all inert.
+    expect(translator.onMessage({ type: "system", subtype: "a_subtype_from_a_later_cli" } as never)).toEqual([]);
+    expect(translator.onMessage({ type: "stream_event", event: { type: "message_delta" } } as never)).toEqual([]);
+    expect(translator.onMessage({ type: "assistant", message: { content: "not-an-array" } } as never)).toEqual([]);
+    expect(translator.onMessage({ type: "user", message: {} } as never)).toEqual([]);
   });
 });
 

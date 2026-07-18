@@ -1,0 +1,263 @@
+/**
+ * Approval-bridge tests, byte-anchored to the live exchange captured in
+ * `w0-02-control-writeprobe.jsonl` (cut §1.4 DoD, hazard (в)): the allow
+ * payload this bridge produces must equal, field for field, the one the real
+ * CLI accepted — an allow that quietly drops `updatedInput`/`toolUseID`
+ * degrades silently rather than failing loudly.
+ */
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import type { PermissionDecision, PermissionRequest } from "@anycode/core";
+import type { IpcPermissionBroker } from "../../permission-broker.js";
+import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
+import { ClaudeApprovalBridge, allowResponse, decodeCanUseTool, denyResponse } from "./approval-bridge.js";
+
+const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
+
+/** The captured `can_use_tool` request and the answer the live CLI accepted. */
+function liveWriteProbeExchange(): { request: Record<string, unknown>; acceptedResponse: Record<string, unknown> } {
+  const lines = readFileSync(join(FIXTURES_DIR, "w0-02-control-writeprobe.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as { dir: string; raw: Record<string, unknown> });
+  const request = lines.find(
+    (line) => line.raw.type === "control_request" && (line.raw.request as { subtype?: string } | undefined)?.subtype === "can_use_tool",
+  );
+  // dir "in" = what the W0 harness WROTE to the CLI's stdin and the CLI accepted.
+  const answer = lines.find(
+    (line) =>
+      line.dir === "in" &&
+      line.raw.type === "control_response" &&
+      ((line.raw.response as { response?: { behavior?: string } }).response?.behavior) !== undefined,
+  );
+  if (request === undefined || answer === undefined) throw new Error("w0-02 fixture is missing the can_use_tool exchange");
+  return {
+    request: request.raw.request as Record<string, unknown>,
+    acceptedResponse: (answer.raw.response as { response: Record<string, unknown> }).response,
+  };
+}
+
+function brokerStub(decision: PermissionDecision | Promise<PermissionDecision>): {
+  broker: IpcPermissionBroker;
+  requests: PermissionRequest[];
+} {
+  const requests: PermissionRequest[] = [];
+  const broker = {
+    requestPermission: (request: PermissionRequest) => {
+      requests.push(request);
+      return Promise.resolve(decision);
+    },
+    denyAll: vi.fn(),
+  } as unknown as IpcPermissionBroker;
+  return { broker, requests };
+}
+
+function responderSpy(): { responder: ControlRequestResponder; success: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> } {
+  const success = vi.fn();
+  const error = vi.fn();
+  return { responder: { success, error }, success, error };
+}
+
+function inbound(request: Record<string, unknown>, subtype = "can_use_tool"): InboundControlRequest {
+  return { requestId: "req-1", subtype, request };
+}
+
+describe("ClaudeApprovalBridge — allow payload is byte-identical to the live accepted answer", () => {
+  it("an allow reproduces the exact {behavior, updatedInput, toolUseID} the CLI accepted (hazard (в))", async () => {
+    const { request, acceptedResponse } = liveWriteProbeExchange();
+    const { broker } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, success, error } = responderSpy();
+
+    await bridge.handle(inbound(request), responder);
+
+    expect(error).not.toHaveBeenCalled();
+    expect(success).toHaveBeenCalledTimes(1);
+    // Field-for-field equality with the real bytes — not merely "has a behavior".
+    expect(success.mock.calls[0]![0]).toEqual(acceptedResponse);
+    expect(acceptedResponse).toMatchObject({
+      behavior: "allow",
+      updatedInput: { file_path: "/tmp/w0-cc-writeprobe.txt", content: "OK" },
+      toolUseID: "toolu_0146u56HDRZG2Nd3qz7tv67b",
+    });
+  });
+
+  it("an allow that omits updatedInput/toolUseID would NOT match the live bytes (the assert can go red)", () => {
+    const { acceptedResponse } = liveWriteProbeExchange();
+    expect({ behavior: "allow" }).not.toEqual(acceptedResponse);
+  });
+
+  it("a broker decision that rewrote the input echoes the REWRITTEN value, not the original", async () => {
+    const { request } = liveWriteProbeExchange();
+    const { broker } = brokerStub({ behavior: "allow", updatedInput: { file_path: "/tmp/edited.txt", content: "EDITED" } });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, success } = responderSpy();
+
+    await bridge.handle(inbound(request), responder);
+
+    expect(success.mock.calls[0]![0]).toMatchObject({
+      behavior: "allow",
+      updatedInput: { file_path: "/tmp/edited.txt", content: "EDITED" },
+      toolUseID: "toolu_0146u56HDRZG2Nd3qz7tv67b",
+    });
+  });
+});
+
+describe("ClaudeApprovalBridge — a denial is a normal answer, never a transport error (hazard (б))", () => {
+  it("deny answers with a SUCCESS envelope carrying {behavior:\"deny\", message, toolUseID}", async () => {
+    const { request } = liveWriteProbeExchange();
+    const { broker } = brokerStub({ behavior: "deny", reason: "use ls instead" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, success, error } = responderSpy();
+
+    await bridge.handle(inbound(request), responder);
+
+    // The scoped-error channel is what would kill the turn — it must stay unused.
+    expect(error).not.toHaveBeenCalled();
+    expect(success.mock.calls[0]![0]).toEqual({
+      behavior: "deny",
+      message: "use ls instead",
+      toolUseID: "toolu_0146u56HDRZG2Nd3qz7tv67b",
+    });
+  });
+
+  it("a broker that rejects still denies — no grant is ever invented", async () => {
+    const { request } = liveWriteProbeExchange();
+    const broker = {
+      requestPermission: () => Promise.reject(new Error("broker exploded")),
+      denyAll: vi.fn(),
+    } as unknown as IpcPermissionBroker;
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, success } = responderSpy();
+
+    await bridge.handle(inbound(request), responder);
+
+    expect(success.mock.calls[0]![0]).toMatchObject({ behavior: "deny" });
+  });
+});
+
+describe("ClaudeApprovalBridge — posture and scope rules", () => {
+  it("ExitPlanMode in the read-only preset is DENIED with an instruction, never auto-allowed (hazard (е))", async () => {
+    const { broker, requests } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "read-only" });
+    const { responder, success } = responderSpy();
+
+    await bridge.handle(
+      inbound({ tool_name: "ExitPlanMode", tool_use_id: "toolu_plan", input: { plan: "do things" } }),
+      responder,
+    );
+
+    const answer = success.mock.calls[0]![0] as { behavior: string; message: string };
+    expect(answer.behavior).toBe("deny");
+    expect(answer.message).toContain("Read-only");
+    // The user is never even prompted: escalating out of read-only is not theirs
+    // to approve mid-turn — they switch the preset instead.
+    expect(requests).toEqual([]);
+  });
+
+  it("ExitPlanMode outside read-only goes to the broker like any other tool", async () => {
+    const { broker, requests } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, success } = responderSpy();
+
+    await bridge.handle(inbound({ tool_name: "ExitPlanMode", tool_use_id: "toolu_plan", input: {} }), responder);
+
+    expect(requests).toHaveLength(1);
+    expect(success.mock.calls[0]![0]).toMatchObject({ behavior: "allow", toolUseID: "toolu_plan" });
+  });
+
+  it("AskUserQuestion is denied with an explanation (no interactive-question surface in the MVP)", async () => {
+    const { broker, requests } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, success } = responderSpy();
+
+    await bridge.handle(inbound({ tool_name: "AskUserQuestion", tool_use_id: "toolu_ask", input: {} }), responder);
+
+    const answer = success.mock.calls[0]![0] as { behavior: string; message: string };
+    expect(answer.behavior).toBe("deny");
+    expect(answer.message).toContain("Ask the user directly");
+    expect(requests).toEqual([]);
+  });
+
+  it("a second parallel can_use_tool is refused with a SCOPED error while the first is parked (serialization)", async () => {
+    let settle: (decision: PermissionDecision) => void = () => {};
+    const parked = new Promise<PermissionDecision>((resolve) => {
+      settle = resolve;
+    });
+    const broker = {
+      requestPermission: () => parked,
+      denyAll: vi.fn(),
+    } as unknown as IpcPermissionBroker;
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    const first = responderSpy();
+    const firstDone = bridge.handle(inbound({ tool_name: "Bash", tool_use_id: "t-1", input: {} }), first.responder);
+
+    const second = responderSpy();
+    await bridge.handle(inbound({ tool_name: "Write", tool_use_id: "t-2", input: {} }), second.responder);
+    expect(second.error).toHaveBeenCalledTimes(1);
+    expect(second.success).not.toHaveBeenCalled();
+
+    settle({ behavior: "allow" });
+    await firstDone;
+    expect(first.success).toHaveBeenCalledTimes(1);
+
+    // The latch releases: a later request is served normally.
+    const third = responderSpy();
+    await bridge.handle(inbound({ tool_name: "Bash", tool_use_id: "t-3", input: {} }), third.responder);
+    expect(third.success).toHaveBeenCalledTimes(1);
+  });
+
+  it("hook_callback / mcp_message / unknown subtypes are fail-closed scoped errors, never silence", async () => {
+    const { broker } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    for (const subtype of ["hook_callback", "mcp_message", "some_future_subtype"]) {
+      const { responder, success, error } = responderSpy();
+      await bridge.handle(inbound({}, subtype), responder);
+      // Silence would block the CLI's turn forever (contract §2.2).
+      expect(error, subtype).toHaveBeenCalledTimes(1);
+      expect(success, subtype).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a malformed can_use_tool (no tool_use_id) is a scoped error, not a crash", async () => {
+    const { broker } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, error } = responderSpy();
+
+    await bridge.handle(inbound({ tool_name: "Bash" }), responder);
+
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("decodeCanUseTool — tolerant of the live request's unprojected fields", () => {
+  it("decodes the live request and ignores permission_suggestions/decision_reason without rejecting it", () => {
+    const { request } = liveWriteProbeExchange();
+    // The live request really does carry these (they are not hypothetical).
+    expect(request).toHaveProperty("permission_suggestions");
+    expect(request).toHaveProperty("decision_reason_type");
+
+    const decoded = decodeCanUseTool(request);
+    expect(decoded).toMatchObject({
+      toolName: "Write",
+      toolUseId: "toolu_0146u56HDRZG2Nd3qz7tv67b",
+      input: { file_path: "/tmp/w0-cc-writeprobe.txt", content: "OK" },
+    });
+  });
+
+  it("returns null only when the correlation identity is missing", () => {
+    expect(decodeCanUseTool({ tool_name: "Bash" })).toBeNull();
+    expect(decodeCanUseTool({ tool_use_id: "t-1" })).toBeNull();
+    expect(decodeCanUseTool({ tool_name: "Bash", tool_use_id: "t-1" })).toMatchObject({ input: {} });
+  });
+
+  it("allowResponse/denyResponse always carry toolUseID", () => {
+    const approval = { toolName: "Bash", toolUseId: "t-9", input: { command: "ls" } };
+    expect(allowResponse(approval)).toEqual({ behavior: "allow", updatedInput: { command: "ls" }, toolUseID: "t-9" });
+    expect(denyResponse(approval, "no")).toEqual({ behavior: "deny", message: "no", toolUseID: "t-9" });
+  });
+});

@@ -1152,13 +1152,46 @@ describe('e2e-negative: engine:"claude" is refused by spawnableWhenKnown, NOT by
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  it("mirrors main/tabs.ts's REAL canSpawn: unconditionally false for claude even when the injected engineReady oracle would say yes", async () => {
-    // Not a fake manager this time — the actual TabHostManager, so this test
-    // fails if main/tabs.ts's hard block ever regresses to reading engineReady.
+  // SLICE-CC C5 (cut §1.4): CC-A's unconditional refusal is GONE — `bootClaude`
+  // now exists in host/index.ts's boot() switch, so a claude spawn can no longer
+  // land on the core boot path. What remains is the ordinary readiness gate, and
+  // this replaces CC-A's assertion that the hard block was present.
+  it("mirrors main/tabs.ts's REAL canSpawn: an UNREADY claude doctor still refuses not_ready, through the actual TabHostManager", async () => {
     const { TabHostManager } = await import("./tabs.js");
     const realManager = new TabHostManager({
       fork: (() => {
         throw new Error("must never fork for a refused claude request");
+      }) as unknown as import("./tabs.js").HostForkFn,
+      hostEntry: "/fake/host.js",
+      createChannel: () => ({ port1: {}, port2: {} }) as unknown as import("./tabs.js").TabChannel,
+      getWindow: () => null,
+      env: () => ({}),
+      // The doctor's verdict is now the whole gate for claude.
+      engineReady: (engine) => engine !== "claude",
+    });
+    const { dialog } = makeDialog({ canceled: true, filePaths: [] });
+    const deps: TabIpcDeps = { manager: realManager, persistence: persistenceStub, dialog };
+
+    const res = await runRegisteredCreate(deps, { kind: "new", workspace: "/x", engine: "claude" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+  });
+
+  it("a READY claude doctor now reaches the fork — the flip is observable end-to-end through tab-ipc", async () => {
+    const { TabHostManager } = await import("./tabs.js");
+    const forked: string[] = [];
+    const realManager = new TabHostManager({
+      fork: ((entry: string) => {
+        forked.push(entry);
+        return new (class {
+          on(): void {}
+          once(): void {}
+          postMessage(): void {}
+          kill(): boolean {
+            return true;
+          }
+          pid = 4242;
+        })();
       }) as unknown as import("./tabs.js").HostForkFn,
       hostEntry: "/fake/host.js",
       createChannel: () => ({ port1: {}, port2: {} }) as unknown as import("./tabs.js").TabChannel,
@@ -1171,6 +1204,7 @@ describe('e2e-negative: engine:"claude" is refused by spawnableWhenKnown, NOT by
 
     const res = await runRegisteredCreate(deps, { kind: "new", workspace: "/x", engine: "claude" });
 
-    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(res.ok).toBe(true);
+    expect(forked).toEqual(["/fake/host.js"]);
   });
 });
