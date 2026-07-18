@@ -1161,3 +1161,106 @@ describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut �
     expect(row?.codexProfileId).toBeUndefined();
   });
 });
+
+describe("host Claude session-row wiring (SLICE-CC C4, cut §1.4)", () => {
+  /**
+   * Reproduces the SHAPE of bootClaudeSession's create-vs-touch decision
+   * (index.ts is not importable — see this file's header), because the
+   * defect it prevents is invisible on a first spawn and fatal on every one
+   * after it: `main/tabs.ts.spawnTabHost` sends `--resume <id>` for EVERY
+   * respawn, and `createSession` is a plain INSERT, so a create-always branch
+   * aborts the boot on a duplicate primary key the moment a Claude host is
+   * respawned.
+   *
+   * CC-C cannot resume the NATIVE session (CC-D owns that), so a respawn
+   * starts a fresh one and REPOINTS the row at it — leaving the dead ref
+   * behind would hand CC-D's future resume a session id the CLI no longer has.
+   */
+  interface Row {
+    id: string;
+    engineId?: string;
+    externalSessionRef?: string;
+    title?: string;
+  }
+
+  async function claudeRowShape(
+    persistence: {
+      getSession(id: string): Promise<Row | null>;
+      createSession(row: Row & Record<string, unknown>): Promise<Row>;
+      touchSession(id: string, patch: Record<string, unknown>): Promise<void>;
+    },
+    argsSessionId: string | undefined,
+    connected: { sessionRef: string; model: string; presetId: string },
+  ): Promise<Row> {
+    const sessionRow = {
+      workspace: "/ws",
+      model: connected.model,
+      mode: connected.presetId,
+      engineId: "claude" as const,
+      externalSessionRef: connected.sessionRef,
+    };
+    const existing = argsSessionId === undefined ? null : await persistence.getSession(argsSessionId);
+    if (existing !== null && existing.engineId !== "claude") {
+      throw new Error(`Session ${existing.id} belongs to engine "${existing.engineId ?? "core"}", not claude`);
+    }
+    if (existing === null) {
+      return await persistence.createSession({ id: argsSessionId ?? "generated-uuid", ...sessionRow });
+    }
+    await persistence.touchSession(existing.id, sessionRow);
+    return { ...existing, ...sessionRow };
+  }
+
+  function rig(initial: Row | null) {
+    const created: Row[] = [];
+    const touched: { id: string; patch: Record<string, unknown> }[] = [];
+    return {
+      created,
+      touched,
+      persistence: {
+        getSession: vi.fn(async () => initial),
+        createSession: vi.fn(async (row: Row & Record<string, unknown>) => {
+          created.push(row);
+          return row;
+        }),
+        touchSession: vi.fn(async (id: string, patch: Record<string, unknown>) => {
+          touched.push({ id, patch });
+        }),
+      },
+    };
+  }
+
+  it("a first spawn INSERTS the row, native-first, with the spawn-assigned ref", async () => {
+    const r = rig(null);
+    const meta = await claudeRowShape(r.persistence, "s1", { sessionRef: "ref-1", model: "default", presetId: "ask" });
+
+    expect(r.created).toHaveLength(1);
+    expect(r.touched).toEqual([]);
+    expect(meta.id).toBe("s1");
+    expect(r.created[0]).toMatchObject({ engineId: "claude", externalSessionRef: "ref-1", mode: "ask" });
+  });
+
+  it("a RESPAWN (--resume) updates the existing row instead of double-inserting", async () => {
+    const r = rig({ id: "s1", engineId: "claude", externalSessionRef: "ref-old", title: "Kept title" });
+    const meta = await claudeRowShape(r.persistence, "s1", { sessionRef: "ref-new", model: "sonnet", presetId: "workspace" });
+
+    // The defect this pins: a create here throws SQLITE_CONSTRAINT and bricks
+    // every Claude respawn.
+    expect(r.persistence.createSession).not.toHaveBeenCalled();
+    expect(r.touched).toHaveLength(1);
+    // The dead native ref is REPLACED, never left for CC-D's resume to trip on.
+    expect(r.touched[0]!.patch).toMatchObject({ externalSessionRef: "ref-new", model: "sonnet", mode: "workspace" });
+    expect(meta.externalSessionRef).toBe("ref-new");
+    // Row identity and its non-engine fields survive the respawn.
+    expect(meta.id).toBe("s1");
+    expect(meta.title).toBe("Kept title");
+  });
+
+  it("refuses to take over a row belonging to another engine", async () => {
+    const r = rig({ id: "s1", engineId: "codex", externalSessionRef: "thread-9" });
+    await expect(
+      claudeRowShape(r.persistence, "s1", { sessionRef: "ref-new", model: "default", presetId: "ask" }),
+    ).rejects.toThrow(/belongs to engine "codex"/);
+    expect(r.persistence.createSession).not.toHaveBeenCalled();
+    expect(r.persistence.touchSession).not.toHaveBeenCalled();
+  });
+});

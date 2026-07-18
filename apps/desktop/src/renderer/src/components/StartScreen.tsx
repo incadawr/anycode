@@ -286,6 +286,83 @@ export const CODEX_DRAFT_PRESETS: readonly EnginePermissionPreset[] = [
 export const DEFAULT_CODEX_DRAFT_PRESET = "ask";
 
 /**
+ * SLICE-CC C5 (cut §1.4): the Claude draft's copy of the FROZEN Claude
+ * permission-preset table, duplicated from `host/engines/claude/presets.ts`'s
+ * `claudePresetChoices()` output on exactly the `CODEX_DRAFT_PRESETS`
+ * precedent above — there is no host at draft time to ask, the table is frozen
+ * by construction, and the host re-validates whatever id the draft submits
+ * against its OWN copy (`resolvePreset`), so this duplicate can only ever offer
+ * the same three ids the host already knows.
+ *
+ * The three CLI modes the host table deliberately withholds — `dontAsk`,
+ * `auto`, `bypassPermissions` — are equally absent here: an id this list does
+ * not carry can never be picked, and the host would refuse it anyway.
+ */
+export const CLAUDE_DRAFT_PRESETS: readonly EnginePermissionPreset[] = [
+  {
+    id: "read-only",
+    label: "Read-only",
+    description: "Claude plans and reads files, but cannot execute the plan without switching preset.",
+  },
+  {
+    id: "ask",
+    label: "Ask",
+    description: "Claude asks before running commands or changing files (default).",
+  },
+  {
+    id: "workspace",
+    label: "Workspace",
+    description: "Claude can accept file edits inside the workspace with fewer prompts.",
+  },
+];
+
+/** Mirrors `DEFAULT_CLAUDE_PRESET` in `host/engines/claude/presets.ts`. */
+export const DEFAULT_CLAUDE_DRAFT_PRESET = "ask";
+
+/**
+ * The Claude draft's model list. Unlike the preset table this is NOT a mirror
+ * of a frozen host table — `host/engines/claude/models.ts` is explicit that the
+ * real catalog is per-ACCOUNT and read live from the `initialize` response, and
+ * a static enum was disproven by the live payload. Two facts make a draft-time
+ * list nonetheless correct here:
+ *
+ *  1. There is no Claude catalog channel at draft time. The Claude doctor
+ *     (`ClaudeDoctorReport`) reports status/version only — it never runs an
+ *     `initialize`, so unlike `codexModels` there is nothing to fetch. Offering
+ *     the "Default (recommended)" entry alone would silently remove the user's
+ *     ability to pick a model on a new session.
+ *  2. A wrong pick is HARMLESS and visible. `startClaudeEngine`'s `resolveModel`
+ *     accepts an id only if the live catalog positively contains it, and
+ *     otherwise boots on the CLI default AND queues a warning
+ *     `engine_notice` that names the model — so an entry this account does not
+ *     have degrades loudly, never silently mis-runs.
+ *
+ * The values are the `value` (send) ids captured live in
+ * `w0-16-setmodel.jsonl`, never the `resolvedModel` (read-back) ids — sending a
+ * resolved id is the exact conflation models.ts exists to prevent.
+ */
+export const CLAUDE_DRAFT_MODELS: readonly EngineModelChoice[] = [
+  { id: "default", label: "Default (recommended)" },
+  { id: "opus[1m]", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
+];
+
+/**
+ * Resolves the Claude draft's displayed model id. Same hazard as
+ * `resolveCodexDraftModel`: `draft.model` is a single field shared with the
+ * Core and Codex model chips and is NOT reset on an engine switch, so a leftover
+ * id from another engine must never be displayed or submitted as if it were a
+ * Claude id. Exported for unit testing.
+ */
+export function resolveClaudeDraftModel(draftModel: string | null, available: readonly EngineModelChoice[]): string {
+  if (draftModel !== null && available.some((m) => m.id === draftModel)) {
+    return draftModel;
+  }
+  return available[0]?.id ?? "";
+}
+
+/**
  * Resolves the Codex draft's displayed/selected model id. `draft.model` is a
  * single field shared with the Core engine's own model chip (tabs-store.ts,
  * outside this file's zone) and is NOT reset on an engine switch — a Core
@@ -735,6 +812,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const sendDisabledReason = submitting ? "Sending…" : computeSendDisabledReason(draft);
   const canSend = sendDisabledReason === undefined;
   const codexDraft = draft.engine === "codex";
+  // SLICE-CC C5 (cut §1.4): the Claude draft's own branch of the composer
+  // footer. Both values are plain derived reads (no fetch — see
+  // CLAUDE_DRAFT_MODELS' doc comment for why there is nothing to fetch).
+  const claudeDraft = draft.engine === "claude";
+  const claudeDraftPreset = draft.enginePreset ?? DEFAULT_CLAUDE_DRAFT_PRESET;
+  const claudeDraftModel = resolveClaudeDraftModel(draft.model, CLAUDE_DRAFT_MODELS);
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
   async function submit(): Promise<void> {
@@ -1113,6 +1196,26 @@ export function StartScreen({ onToast }: StartScreenProps) {
                     onPick={(id) => useTabsStore.getState().setDraftModel(id)}
                   />
                 )}
+              </>
+            ) : claudeDraft ? (
+              // SLICE-CC C5 (cut §1.4): native Claude preset + model pickers,
+              // the codex branch's shape exactly. Both only ever submit a bare
+              // id on the draft; `startClaudeEngine` re-validates the preset
+              // against the frozen table and the model against the LIVE
+              // `initialize` catalog before either reaches the wire.
+              <>
+                <EnginePresetMenu
+                  permissions={{ presets: CLAUDE_DRAFT_PRESETS, activePresetId: claudeDraftPreset }}
+                  pendingPresetId={undefined}
+                  disabled={false}
+                  onPick={(id) => useTabsStore.getState().setDraftEnginePreset(id)}
+                />
+                <EngineModelMenu
+                  model={{ current: claudeDraftModel, available: CLAUDE_DRAFT_MODELS }}
+                  pendingModel={undefined}
+                  disabled={false}
+                  onPick={(id) => useTabsStore.getState().setDraftModel(id)}
+                />
               </>
             ) : (
               <>

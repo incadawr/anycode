@@ -465,9 +465,10 @@ export function registerTabIpc(deps: TabIpcDeps): void {
   ipcMain.handle(WORKSPACE_PICK_CHANNEL, async (): Promise<WorkspacePickResult> => handleWorkspacePick(deps));
 
   ipcMain.handle(ENGINES_LIST_CHANNEL, (): AvailableEngines => ({
-    // SLICE-CC A1: "claude" added to the candidate list — canSpawn("claude")
-    // is unconditionally false until CC-C (main/tabs.ts), so the Claude button
-    // does not appear on a real CC-A build (cut §1.2 DoD-3).
+    // SLICE-CC C5: "claude" is now a real candidate — CC-A's unconditional
+    // `canSpawn("claude") === false` was removed once `bootClaude` existed
+    // (main/tabs.ts), so the Claude button appears exactly when the doctor
+    // reports the profile ready, and not before (cut §1.4 DoD).
     engineIds: (["core", "codex", "claude"] as const).filter((engine) => deps.manager.canSpawn(engine)),
   }));
 }
