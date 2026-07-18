@@ -190,7 +190,7 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
       record: (sessionRef, items) => recorded.push({ sessionRef, items }),
       list: async () => [],
     };
-    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 0, undefined, tick());
+    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 0, tick());
 
     const forwarded = await drain(wrapped.runTurn("remember: parusnik", fakeOptions()));
     expect(forwarded).toEqual(turn1);
@@ -222,39 +222,41 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
       record: (_ref, items) => recorded.push(...items.map((i) => ({ turnOrdinal: i.turnOrdinal }))),
       list: async () => [],
     };
-    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 3, undefined, tick());
+    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 3, tick());
     await drain(wrapped.runTurn("next", fakeOptions()));
     expect(recorded.every((r) => r.turnOrdinal === 3)).toBe(true);
   });
 
-  it("fires onFirstTurnSettled exactly once, with the resolved model/permissionMode, after the first turn completes", async () => {
+  /**
+   * The resume settle-patch this decorator used to carry (`onFirstTurnSettled`,
+   * fired from the turn's `finally`) is gone. It settled at the END of the turn
+   * that carried the init, and it handed the host RAW wire values — a resolved
+   * model id the session row must never store. `ClaudeEngine.onFirstSystemInit`
+   * replaces it, at the init itself; its tests live in claude-engine.test.ts.
+   */
+  it("projects a UNIQUE user item id per turn — a bare \"user\" collides across a multi-turn resume", async () => {
     const engine = fakeEngine(
       [
         [{ type: "turn_end", turn: 1, finishReason: "stop" }, { type: "loop_end", reason: "completed", turns: 1 }],
         [{ type: "turn_end", turn: 2, finishReason: "stop" }, { type: "loop_end", reason: "completed", turns: 1 }],
       ],
-      { model: "claude-opus-4-8", permissionMode: "plan" },
+      { model: null, permissionMode: null },
     );
-    const sink: ClaudeShadowTranscriptPort = { record: () => {}, list: async () => [] };
-    const settled = vi.fn();
-    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 0, settled, tick());
+    const recorded: HistoryItem[] = [];
+    const sink: ClaudeShadowTranscriptPort = {
+      record: (_ref, items) => recorded.push(...items.map((i) => i.data as HistoryItem)),
+      list: async () => [],
+    };
+    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 0, tick());
 
     await drain(wrapped.runTurn("first", fakeOptions()));
     await drain(wrapped.runTurn("second", fakeOptions()));
 
-    expect(settled).toHaveBeenCalledTimes(1);
-    expect(settled).toHaveBeenCalledWith({ model: "claude-opus-4-8", permissionMode: "plan" });
-  });
-
-  it("never calls onFirstTurnSettled when the resolved model/permissionMode are still null (no system/init observed)", async () => {
-    const engine = fakeEngine([[{ type: "turn_end", turn: 1, finishReason: "stop" }, { type: "loop_end", reason: "completed", turns: 1 }]], {
-      model: null,
-      permissionMode: null,
-    });
-    const sink: ClaudeShadowTranscriptPort = { record: () => {}, list: async () => [] };
-    const settled = vi.fn();
-    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 0, settled, tick());
-    await drain(wrapped.runTurn("first", fakeOptions()));
-    expect(settled).not.toHaveBeenCalled();
+    const userIds = recorded.filter((item) => item.message.role === "user").map((item) => item.id);
+    expect(userIds).toHaveLength(2);
+    // The discriminator: an implementation hardcoding `id: "user"` produces
+    // ["user","user"] here, which hydrates two transcript blocks under one id.
+    expect(new Set(userIds).size).toBe(2);
+    expect(userIds).toEqual(["user:0", "user:1"]);
   });
 });

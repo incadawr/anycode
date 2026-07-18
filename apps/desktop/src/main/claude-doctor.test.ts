@@ -235,3 +235,91 @@ describe("runClaudeDoctor — real system binary (DoD-1/DoD real-binary check, $
     20_000,
   );
 });
+
+/**
+ * The abort/watchdog path must not RETURN while a spawned child is still
+ * alive.
+ *
+ * The shape this replaces raced the phase chain against the abort
+ * (`Promise.race([steps, aborted])`). That resolves the caller's promise while
+ * the handshake child — detached, in its own process group — is still running,
+ * with its EOF/SIGTERM/SIGKILL teardown left as a floating promise. The caller
+ * believes the doctor settled; an app quit immediately after abandons that
+ * teardown and orphans the group. Cancellation is therefore propagated INTO
+ * the active phase, which still settles through its own bounded teardown.
+ */
+describe("runClaudeDoctor — cancellation awaits child teardown (never returns over a live child)", () => {
+  it("an abort mid-handshake still reaps the child before the report is returned", async () => {
+    const spawned: ChildProcess[] = [];
+    const controller = new AbortController();
+    const spawnImpl = (command: string, args: readonly string[], options: SpawnOptions): ChildProcess => {
+      // `--no-response` makes the handshake child sit there, exactly like a CLI
+      // that accepted stdin and never answered.
+      const child = spawn(process.execPath, [fixturePath, ...args, "--no-response"], options);
+      spawned.push(child);
+      // Abort once the handshake child (the second spawn) is up.
+      if (!args.includes("--version")) setTimeout(() => controller.abort(), 20);
+      return child;
+    };
+
+    const report = await runClaudeDoctor("/fake/claude", {
+      spawnImpl,
+      trust: TRUSTED,
+      profileDir: freshProfileDir(),
+      signal: controller.signal,
+      env: { PATH: process.env.PATH },
+      initTimeoutMs: 10_000,
+    });
+
+    expect(report).toEqual({ status: "error", error: "claude doctor aborted" });
+    // The discriminator: by the time the report is in hand, every child this
+    // run spawned has already exited. A race-and-return implementation returns
+    // with the handshake child still running here.
+    for (const child of spawned) {
+      expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    }
+  }, 20_000);
+
+  it("a watchdog expiry reports the watchdog, and likewise leaves no live child behind", async () => {
+    const spawned: ChildProcess[] = [];
+    const spawnImpl = (command: string, args: readonly string[], options: SpawnOptions): ChildProcess => {
+      const child = spawn(process.execPath, [fixturePath, ...args, "--no-response"], options);
+      spawned.push(child);
+      return child;
+    };
+
+    const report = await runClaudeDoctor("/fake/claude", {
+      spawnImpl,
+      trust: TRUSTED,
+      profileDir: freshProfileDir(),
+      env: { PATH: process.env.PATH },
+      timeoutMs: 300,
+      initTimeoutMs: 10_000,
+    });
+
+    expect(report.status).toBe("error");
+    expect(report.error).toContain("watchdog");
+    for (const child of spawned) {
+      expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    }
+  }, 20_000);
+
+  it("a signal already aborted before the run starts short-circuits without spawning anything", async () => {
+    const spawned: ChildProcess[] = [];
+    const controller = new AbortController();
+    controller.abort();
+    const report = await runClaudeDoctor("/fake/claude", {
+      spawnImpl: (command, args, options) => {
+        const child = spawn(process.execPath, [fixturePath, ...args], options);
+        spawned.push(child);
+        return child;
+      },
+      trust: TRUSTED,
+      profileDir: freshProfileDir(),
+      signal: controller.signal,
+      env: { PATH: process.env.PATH },
+    });
+    expect(report).toEqual({ status: "error", error: "claude doctor aborted" });
+    expect(spawned).toEqual([]);
+  });
+});

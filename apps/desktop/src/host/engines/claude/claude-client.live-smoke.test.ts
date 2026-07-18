@@ -10,17 +10,19 @@
  * version-drift comparison never covered `capabilities[]`, because it isn't
  * observable on a handshake-only run at all — contract §3).
  */
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeClient, type ClaudeClientOptions } from "./claude-client.js";
+import { liveClaudeProfileDir } from "./live-profile-dir.js";
 import { GATED_CAPABILITY, type ClaudeStreamMessage } from "./protocol.js";
 
 const LIVE_BIN = process.env.ANYCODE_CLAUDE_LIVE_BIN;
 
 describe.skipIf(!LIVE_BIN)("ClaudeClient live smoke (env-gated, ANYCODE_CLAUDE_LIVE_BIN, 1 metered turn)", () => {
   it("spawns full argv, handshakes, completes one cheap turn to a result, tears down clean, and leaves zero orphans (R5-a: captures live capabilities[])", async () => {
-    const profileDir = process.env.ANYCODE_CLAUDE_LIVE_CONFIG_DIR ?? join(homedir(), ".claude");
+    // Custody C1: a dedicated profile, never the ambient `~/.claude` (see
+    // live-profile-dir.ts — a `~/.claude` default here would send the owner's
+    // global CLAUDE.md/AutoMem into this metered turn).
+    const profileDir = liveClaudeProfileDir();
     const options: ClaudeClientOptions = {
       binaryPath: LIVE_BIN!,
       cwd: process.cwd(),

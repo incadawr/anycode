@@ -22,12 +22,19 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeClient } from "../claude-client.js";
+import { liveClaudeProfileDir } from "../live-profile-dir.js";
 import { ClaudeTurnTranslator } from "../event-translator.js";
-import { isClaudeStreamMessageType, parseClaudeVersion, isSupportedClaudeVersion, SUPPORTED_CLAUDE_VERSION } from "../protocol.js";
+import {
+  CLAUDE_STREAM_MESSAGE_TYPES,
+  isClaudeStreamMessageType,
+  parseClaudeVersion,
+  isSupportedClaudeVersion,
+  SUPPORTED_CLAUDE_VERSION,
+} from "../protocol.js";
 import { typedKeyPaths, missingFromLive } from "./typed-key-paths.js";
 
 const CONTRACT_DIR = new URL(".", import.meta.url).pathname;
@@ -35,6 +42,9 @@ const PINNED_PATH = join(CONTRACT_DIR, "pinned-contract.json");
 const FIXTURES_DIR = join(CONTRACT_DIR, "fixtures");
 
 const CONTROL_ENVELOPE_TYPES = new Set(["control_request", "control_response", "control_cancel_request"]);
+
+/** Production's own stream vocabulary, read from protocol.ts rather than restated here. */
+const PRODUCTION_STREAM_TYPES: readonly string[] = CLAUDE_STREAM_MESSAGE_TYPES;
 
 interface PinnedContract {
   generatedFrom: string;
@@ -90,11 +100,29 @@ describe("contract-drift layer 1 (always-on)", () => {
     expect(pinned.generatedFrom).toContain("2.1.212");
   });
 
-  it("protocol.ts's stream-message-type vocabulary is a subset of the pinned message types", () => {
-    for (const type of ["system", "assistant", "user", "result", "stream_event", "rate_limit_event"]) {
-      expect(isClaudeStreamMessageType(type)).toBe(true);
-      expect(pinned.messageTypes.live).toContain(type);
-    }
+  it("protocol.ts's stream-message-type vocabulary matches the pin EXACTLY, in both directions", () => {
+    // Derived from the pin, never a literal list. A hardcoded array cannot go
+    // red for the two drifts that matter: a type added to the pin that
+    // production does not accept (traffic the client would terminalize on), and
+    // a type production accepts that the pin never evidenced (an INVENTED
+    // vocabulary — cut invariant §0.2-5, "не выдумывать wire").
+    const pinnedStreamTypes = pinned.messageTypes.live.filter((type) => !CONTROL_ENVELOPE_TYPES.has(type));
+    expect(pinnedStreamTypes.length).toBeGreaterThan(0);
+
+    const acceptedByProduction = pinnedStreamTypes.filter((type) => isClaudeStreamMessageType(type));
+    expect(acceptedByProduction, "pinned stream types production does not accept").toEqual(pinnedStreamTypes);
+
+    // The other direction: production's own set, read out of production rather
+    // than restated here, must introduce nothing the pin has no evidence for.
+    const invented = PRODUCTION_STREAM_TYPES.filter((type) => !pinned.messageTypes.live.includes(type));
+    expect(invented, `stream types accepted by production but absent from the pin:\n${invented.join("\n")}`).toEqual([]);
+  });
+
+  it("the pinned control-envelope vocabulary is exactly what the client dispatches", () => {
+    // Same rule for the control plane: every control envelope type in the pin
+    // is one the router handles, and the router handles no others.
+    const pinnedControl = pinned.messageTypes.live.filter((type) => CONTROL_ENVELOPE_TYPES.has(type));
+    expect([...pinnedControl].sort()).toEqual([...CONTROL_ENVELOPE_TYPES].sort());
   });
 
   it("every committed fixture line parses and classifies without an unknown-type throw (layer-1 parser sweep, no translator)", () => {
@@ -282,12 +310,11 @@ describe.skipIf(!process.env.ANYCODE_CLAUDE_DRIFT_BIN)("contract-drift layer 2 (
     expect(isSupportedClaudeVersion(version!), `${rawVersion} is outside ${SUPPORTED_CLAUDE_VERSION}`).toBe(true);
 
     const pinned = loadPinned();
-    // Diagnostic default: validate against whatever profile is already signed
-    // in (mirrors how W0 itself probed) — override with
-    // ANYCODE_CLAUDE_DRIFT_CONFIG_DIR to point at an isolated profile instead.
-    // Product spawns (claude-client.ts) never do this — profileDir there is a
-    // REQUIRED constructor option with no ambient-default fallback (cut C1).
-    const profileDir = process.env.ANYCODE_CLAUDE_DRIFT_CONFIG_DIR ?? join(homedir(), ".claude");
+    // Custody C1 has no diagnostic exemption: this spawn goes to AnyCode's own
+    // dedicated profile (or an explicitly named one), never the ambient
+    // `~/.claude`. These are $0 control requests, but the profile still governs
+    // which CLAUDE.md/AutoMem the CLI would load — see live-profile-dir.ts.
+    const profileDir = process.env.ANYCODE_CLAUDE_DRIFT_CONFIG_DIR ?? liveClaudeProfileDir();
     const client = new ClaudeClient({ binaryPath: bin, cwd: tmpdir(), sourceEnv: process.env, profileDir });
     try {
       await client.start();

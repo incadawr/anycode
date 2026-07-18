@@ -519,3 +519,102 @@ describe("ClaudeEngine — presentation surface", () => {
     expect(engineWith(new FakeTransport()).historyItems()).toEqual([]);
   });
 });
+
+/**
+ * cut §1.5 hazard (б) — the resumed session's FIRST `system/init` is the truth
+ * about model and permission mode, not the row we resumed from. These pin what
+ * the engine does with that init: it adopts the native posture into its own
+ * settings, translating the CLI's RESOLVED model id back into the catalog
+ * `value` the rest of AnyCode selects by, and it announces the init exactly
+ * once so the host can materialize/patch the session row at that moment.
+ */
+describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 hazard (б))", () => {
+  const RESULT: ClaudeStreamMessage = {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 1,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    total_cost_usd: 0,
+  } as unknown as ClaudeStreamMessage;
+
+  function initFrame(model: string, permissionMode: string): ClaudeStreamMessage {
+    return {
+      type: "system",
+      subtype: "init",
+      session_id: "native-session-1",
+      model,
+      permissionMode,
+      cwd: "/work",
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
+      skills: [],
+      capabilities: ["interrupt_receipt_v1"],
+      claude_code_version: "2.1.212",
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  it("adopts the native posture: a RESOLVED model id becomes the catalog `value`, and the wire mode becomes the preset", async () => {
+    // The row said `haiku`/`ask`. The native session actually survived on
+    // opus with acceptEdits — and reports opus by its RESOLVED id.
+    const catalog = liveCatalog();
+    const opus = catalog.get("opus[1m]")!;
+    expect(opus.resolvedModel).not.toBe(opus.value); // the split this test exists for
+    const transport = new FakeTransport({ frames: [initFrame(opus.resolvedModel, "acceptEdits"), RESULT] });
+    const engine = engineWith(transport, { model: "haiku", presetId: "ask", catalog });
+
+    await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+
+    // The SELECTABLE id, never the resolved one: persisting `claude-opus-4-8`
+    // would fail `catalog.has()` on the next resume and silently fall back to
+    // the default model.
+    expect(engine.snapshot().model).toBe("opus[1m]");
+    expect(catalog.has(engine.snapshot().model)).toBe(true);
+    expect(engine.snapshot().activePresetId).toBe("workspace");
+  });
+
+  it("keeps an alias selection that ALREADY resolves to the reported id (no spurious flip between aliases)", async () => {
+    const catalog = liveCatalog();
+    const opus = catalog.get("opus[1m]")!;
+    const transport = new FakeTransport({ frames: [initFrame(opus.resolvedModel, "default"), RESULT] });
+    const engine = engineWith(transport, { model: "opus[1m]", presetId: "ask", catalog });
+
+    await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+
+    // A naive `findByResolved` adoption would replace the user's `opus[1m]`
+    // with whichever catalog entry shares that resolved id and is listed first.
+    expect(engine.snapshot().model).toBe("opus[1m]");
+    expect(engine.snapshot().activePresetId).toBe("ask");
+  });
+
+  it("announces the first init exactly once, and only after a turn produced one", async () => {
+    const transport = new FakeTransport({ frames: [initFrame("model-x", "plan"), RESULT] });
+    const engine = engineWith(transport);
+    const seen: { sessionId: string; model: string; permissionMode: string }[] = [];
+    engine.onFirstSystemInit((init) => seen.push(init));
+
+    // A handshake alone emits no `system/init` at all (probe #13) — nothing yet.
+    expect(seen).toEqual([]);
+
+    await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan" }]);
+
+    // A second turn re-emits `system/init` (probe #1); the announcement does not repeat.
+    transport.push(initFrame("model-x", "plan"));
+    transport.push(RESULT);
+    await collect(engine.runTurn("again", { signal: new AbortController().signal }));
+    expect(seen).toHaveLength(1);
+  });
+
+  it("replays the latched init to a listener registered after the fact", async () => {
+    const transport = new FakeTransport({ frames: [initFrame("model-x", "plan"), RESULT] });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+
+    const seen: { model: string }[] = [];
+    engine.onFirstSystemInit((init) => seen.push(init));
+    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan" }]);
+  });
+});

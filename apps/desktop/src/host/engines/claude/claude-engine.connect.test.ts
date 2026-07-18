@@ -32,8 +32,13 @@ function makeFakeStream(): FakeStream {
 const MODELS = [{ value: "model-a", resolvedModel: "model-a", displayName: "A" }];
 
 /** A fake `claude` child: answers `--version`, then the `initialize` control-request over the NDJSON stdin/stdout pair. Captures the main spawn's argv. */
-function fakeSpawn(): { spawnImpl: (command: string, args: readonly string[]) => unknown; capturedArgs: () => string[] | undefined } {
+function fakeSpawn(): {
+  spawnImpl: (command: string, args: readonly string[]) => unknown;
+  capturedArgs: () => string[] | undefined;
+  controlSubtypes: () => string[];
+} {
   let mainArgs: string[] | undefined;
+  const controls: string[] = [];
   let callIndex = 0;
   const spawnImpl = (_command: string, args: readonly string[]): unknown => {
     callIndex++;
@@ -71,6 +76,7 @@ function fakeSpawn(): { spawnImpl: (command: string, args: readonly string[]) =>
         if (line.trim() === "") continue;
         const message = JSON.parse(line) as { type: string; request_id: string; request: { subtype: string } };
         if (message.type !== "control_request") continue;
+        controls.push(message.request.subtype);
         const response =
           message.request.subtype === "initialize"
             ? { commands: [], models: MODELS, account: { tokenSource: "oauth" } }
@@ -87,7 +93,7 @@ function fakeSpawn(): { spawnImpl: (command: string, args: readonly string[]) =>
     queueMicrotask(() => child.emit("spawn"));
     return child;
   };
-  return { spawnImpl, capturedArgs: () => mainArgs };
+  return { spawnImpl, capturedArgs: () => mainArgs, controlSubtypes: () => [...controls] };
 }
 
 function baseOptions(spawnImpl: (command: string, args: readonly string[]) => unknown) {
@@ -141,6 +147,84 @@ describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
     try {
       expect(connected.model).toBe("model-a");
       expect(connected.presetId).toBe("workspace");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+});
+
+/**
+ * cut §1.5 hazard (б) — a resume must not APPLY a persisted posture before it
+ * has read the one that survived. A native Claude session keeps its own model
+ * and `permissionMode` across process death (probe #4), and our row can be
+ * stale: it may have been written from a change the CLI rejected, or edited by
+ * a different tab. Sending `--permission-mode` at spawn and `set_model` right
+ * after the handshake overwrites the surviving truth before the first
+ * `system/init` can report it — which is how a session the user left at `ask`
+ * comes back running `acceptEdits`.
+ *
+ * A FRESH spawn is the opposite case: there is no prior posture to protect, so
+ * the requested one must ride the spawn exactly as before.
+ */
+describe("connect: a resume applies no posture ahead of the first system/init (cut §1.5 hazard (б))", () => {
+  it("resume sends NO --permission-mode flag, even with a persisted preset", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await resumeClaudeEngine({
+      ...baseOptions(spawnImpl),
+      externalSessionRef: "persisted-ref-1",
+      selection: { model: "model-a", presetId: "workspace", origin: "persisted" },
+    });
+    try {
+      expect(capturedArgs()).not.toContain("--permission-mode");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("resume sends NO set_model, even with a persisted model the catalog knows", async () => {
+    const { spawnImpl, controlSubtypes } = fakeSpawn();
+    const connected = await resumeClaudeEngine({
+      ...baseOptions(spawnImpl),
+      externalSessionRef: "persisted-ref-2",
+      selection: { model: "model-a", presetId: "workspace", origin: "persisted" },
+    });
+    try {
+      expect(controlSubtypes()).not.toContain("set_model");
+      // The handshake itself still happens — this is about POSTURE, not about
+      // skipping the connect protocol.
+      expect(controlSubtypes()).toContain("initialize");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("a FRESH spawn still carries the requested posture on the wire (the behaviour resume suppresses)", async () => {
+    const { spawnImpl, capturedArgs, controlSubtypes } = fakeSpawn();
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawnImpl),
+      selection: { model: "model-a", presetId: "workspace", origin: "draft" },
+    });
+    try {
+      const args = capturedArgs()!;
+      expect(args).toContain("--permission-mode");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
+      expect(controlSubtypes()).toContain("set_model");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("a resume whose persisted model is no longer in the catalog degrades quietly to a provisional default", async () => {
+    const { spawnImpl, controlSubtypes } = fakeSpawn();
+    const connected = await resumeClaudeEngine({
+      ...baseOptions(spawnImpl),
+      externalSessionRef: "persisted-ref-3",
+      selection: { model: "model-gone", presetId: "ask", origin: "persisted" },
+    });
+    try {
+      expect(connected.model).toBe("model-a");
+      // Still nothing sent: the real model arrives with the first system/init.
+      expect(controlSubtypes()).not.toContain("set_model");
     } finally {
       await connected.engine.dispose("session-close");
     }

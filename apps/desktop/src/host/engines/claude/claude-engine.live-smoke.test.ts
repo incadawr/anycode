@@ -18,11 +18,10 @@
  * requested alias itself (`w0-16-setmodel.jsonl`: a requested id and its
  * resolved id can differ, e.g. `claude-fable-5[1m]` vs `claude-fable-5`).
  */
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { resumeClaudeEngine, startClaudeEngine, type ClaudeEngineCreateOptions } from "./claude-engine.js";
+import { liveClaudeProfileDir } from "./live-profile-dir.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 
 const LIVE_BIN = process.env.ANYCODE_CLAUDE_LIVE_BIN;
@@ -33,7 +32,8 @@ function liveOptions(): Omit<ClaudeEngineCreateOptions, "selection"> {
     broker: new IpcPermissionBroker(() => {}),
     binaryPath: LIVE_BIN!,
     cwd: process.cwd(),
-    profileDir: process.env.ANYCODE_CLAUDE_LIVE_CONFIG_DIR ?? join(homedir(), ".claude"),
+    // Custody C1: dedicated profile only — never the ambient `~/.claude`.
+    profileDir: liveClaudeProfileDir(),
     sourceEnv: process.env,
   };
 }

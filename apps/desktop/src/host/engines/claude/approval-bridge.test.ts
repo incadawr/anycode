@@ -60,8 +60,12 @@ function responderSpy(): { responder: ControlRequestResponder; success: ReturnTy
   return { responder: { success, error }, success, error };
 }
 
-function inbound(request: Record<string, unknown>, subtype = "can_use_tool"): InboundControlRequest {
-  return { requestId: "req-1", subtype, request };
+function inbound(
+  request: Record<string, unknown>,
+  subtype = "can_use_tool",
+  signal: AbortSignal = new AbortController().signal,
+): InboundControlRequest {
+  return { requestId: "req-1", subtype, request, signal };
 }
 
 describe("ClaudeApprovalBridge — allow payload is byte-identical to the live accepted answer", () => {
@@ -259,5 +263,103 @@ describe("decodeCanUseTool — tolerant of the live request's unprojected fields
     const approval = { toolName: "Bash", toolUseId: "t-9", input: { command: "ls" } };
     expect(allowResponse(approval)).toEqual({ behavior: "allow", updatedInput: { command: "ls" }, toolUseID: "t-9" });
     expect(denyResponse(approval, "no")).toEqual({ behavior: "deny", message: "no", toolUseID: "t-9" });
+  });
+});
+
+/**
+ * Contract §2.2 pairing rule, the half that is NOT about writes.
+ *
+ * The CLI withdraws its own `can_use_tool` via `control_cancel_request` — on
+ * its OWN initiative (an interrupt it decided on, a tool it abandoned), with no
+ * `denyAll()` from AnyCode to unblock anything. Suppressing our late answer is
+ * necessary but not sufficient: the handler is parked on
+ * `broker.requestPermission`, which nothing else will settle. It holds the
+ * approval modal open and keeps the bridge's serialization latch shut, so every
+ * later approval in the session is refused with "another approval is already
+ * pending" — a session that silently stops being able to ask.
+ *
+ * These assert the handler is SETTLED, which is what the withdrawal has to
+ * achieve, rather than merely that no late write occurred.
+ */
+describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, not just the write", () => {
+  /** A broker whose ask parks until `denyAll` settles it — the real one's behaviour. */
+  function parkingBroker(): { broker: IpcPermissionBroker; denyAllCalls: string[]; asks: number } {
+    const parked: ((decision: PermissionDecision) => void)[] = [];
+    const state = {
+      denyAllCalls: [] as string[],
+      asks: 0,
+    };
+    const broker = {
+      requestPermission: (_request: PermissionRequest) => {
+        state.asks += 1;
+        return new Promise<PermissionDecision>((resolve) => parked.push(resolve));
+      },
+      denyAll: (reason: string) => {
+        state.denyAllCalls.push(reason);
+        for (const resolve of parked.splice(0)) resolve({ behavior: "deny", reason });
+      },
+    } as unknown as IpcPermissionBroker;
+    return { broker, get denyAllCalls() { return state.denyAllCalls; }, get asks() { return state.asks; } };
+  }
+
+  it("releases the parked broker ask when the CLI withdraws the request", async () => {
+    const { request } = liveWriteProbeExchange();
+    const parking = parkingBroker();
+    const bridge = new ClaudeApprovalBridge({ broker: parking.broker, activePresetId: () => "ask" });
+    const { responder } = responderSpy();
+    const cancel = new AbortController();
+
+    const handled = bridge.handle(inbound(request, "can_use_tool", cancel.signal), responder);
+    await Promise.resolve();
+    // Parked, exactly as a real modal awaiting the user.
+    expect(parking.asks).toBe(1);
+
+    cancel.abort();
+    // The discriminator: this await HANGS FOREVER on an implementation that
+    // only drops router bookkeeping.
+    await handled;
+    expect(parking.denyAllCalls).toEqual(["Claude withdrew this permission request"]);
+  });
+
+  it("frees the serialization latch, so the NEXT approval is asked rather than refused", async () => {
+    const { request } = liveWriteProbeExchange();
+    const parking = parkingBroker();
+    const bridge = new ClaudeApprovalBridge({ broker: parking.broker, activePresetId: () => "ask" });
+    const cancel = new AbortController();
+
+    const first = responderSpy();
+    const firstHandled = bridge.handle(inbound(request, "can_use_tool", cancel.signal), first.responder);
+    await Promise.resolve();
+    cancel.abort();
+    await firstHandled;
+
+    // A second, unrelated approval on the same live session.
+    const second = responderSpy();
+    const secondHandled = bridge.handle(inbound(request), second.responder);
+    await Promise.resolve();
+    expect(parking.asks).toBe(2);
+    // NOT the "another approval is already pending" refusal a leaked latch produces.
+    expect(second.error).not.toHaveBeenCalled();
+
+    parking.broker.denyAll("done", "turn_cancelled");
+    await secondHandled;
+    expect(second.success).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ALREADY-cancelled request never parks the broker and is never answered", async () => {
+    const { request } = liveWriteProbeExchange();
+    const parking = parkingBroker();
+    const bridge = new ClaudeApprovalBridge({ broker: parking.broker, activePresetId: () => "ask" });
+    const { responder, success, error } = responderSpy();
+    const cancel = new AbortController();
+    cancel.abort();
+
+    // Resolves rather than hanging, and puts no modal in front of the user for
+    // a tool the CLI has already abandoned.
+    await bridge.handle(inbound(request, "can_use_tool", cancel.signal), responder);
+    expect(parking.asks).toBe(0);
+    // Pairing rule: a withdrawn request is never answered.
+    expect(success).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
   });
 });

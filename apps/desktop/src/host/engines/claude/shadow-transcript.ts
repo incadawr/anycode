@@ -61,13 +61,20 @@ export function projectClaudeTurn(
   input: string,
   events: readonly AgentEvent[],
   now: () => number = Date.now,
+  turnOrdinal = 0,
 ): HistoryItem[] {
   const items: HistoryItem[] = [];
   const base = now();
   let cursor = 0;
   const nextCreatedAt = (): number => base + cursor++;
 
-  items.push({ id: "user", createdAt: nextCreatedAt(), message: { role: "user", content: input } });
+  // The turn ordinal is part of the id because a HistoryItem id must be unique
+  // across the WHOLE hydrated transcript, not just within one turn. Every other
+  // id here is derived from a wire id that is already turn-unique (a message id,
+  // a tool_use id); the user item has no such wire id of its own, so a bare
+  // "user" would repeat on every turn — and a two-turn resume would hydrate two
+  // items with the same id, colliding as React keys and making dedup ambiguous.
+  items.push({ id: `user:${turnOrdinal}`, createdAt: nextCreatedAt(), message: { role: "user", content: input } });
 
   const openText = new Map<string, string>();
   for (const event of events) {
@@ -133,24 +140,19 @@ export function projectClaudeTurn(
  * transcript from BEFORE this process started) — the underlying engine's own
  * `historyItems()` is always `[]` by construction (CC-C). Kept as a wrapper
  * rather than a `claude-engine.ts` change: every method it needs
- * (`models`/`presets`/`snapshot`/`selectModel`/`selectPreset`/`selectEffort`/
- * `resolvedModel`/`resolvedPermissionMode`) is already public there.
+ * (`models`/`presets`/`snapshot`/`selectModel`/`selectPreset`/`selectEffort`)
+ * is already public there.
  */
 export class ClaudeShadowTranscriptEngine implements SessionEngine {
   readonly id = "claude" as const;
   private nextTurnOrdinal: number;
-  private settled = false;
 
   constructor(
-    private readonly engine: SessionEngine & {
-      resolvedModel(): string | null;
-      resolvedPermissionMode(): string | null;
-    },
+    private readonly engine: SessionEngine,
     private readonly sink: ClaudeShadowTranscriptPort,
     private readonly sessionRef: string,
     private readonly bootHistory: readonly HistoryItem[],
     startingTurnOrdinal = 0,
-    private readonly onFirstTurnSettled?: (settled: { model: string; permissionMode: string }) => void,
     private readonly now: () => number = Date.now,
   ) {
     this.nextTurnOrdinal = startingTurnOrdinal;
@@ -185,14 +187,13 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
         yield event;
       }
     } finally {
-      if (!this.settled) {
-        this.settled = true;
-        const model = this.engine.resolvedModel();
-        const permissionMode = this.engine.resolvedPermissionMode();
-        if (model !== null && permissionMode !== null) this.onFirstTurnSettled?.({ model, permissionMode });
-      }
+      // The resume settle-patch that used to fire here is gone: the session row
+      // is materialized and patched from `ClaudeEngine.onFirstSystemInit`
+      // instead (host/index.ts), which is both earlier — the init, not the end
+      // of the turn that carried it — and reads the engine's reconciled
+      // snapshot rather than raw wire values.
       try {
-        const projected = projectClaudeTurn(input, events, this.now);
+        const projected = projectClaudeTurn(input, events, this.now, turn);
         this.sink.record(
           this.sessionRef,
           projected.map((data, index) => ({ turnOrdinal: turn, positionInTurn: index, itemId: `${turn}:${index}`, data })),

@@ -61,7 +61,13 @@ export class ClaudeClientError extends Error {
 // ── spawn argv (cut §1.3) ──
 
 export interface ClaudeSpawnArgsOptions {
-  permissionModeFlag: PermissionModeFlag;
+  /**
+   * Omitted entirely (no `--permission-mode` in argv) when undefined. That is
+   * the RESUME posture: a resumed native session carries its own surviving
+   * `permissionMode` (probe #4), and passing ours would overwrite it before
+   * the first `system/init` can report it (cut §1.5 hazard (б)).
+   */
+  permissionModeFlag?: PermissionModeFlag;
   model?: string;
   sessionId?: string;
   resume?: string;
@@ -92,9 +98,8 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     "--setting-sources",
     "project,local",
     "--strict-mcp-config",
-    "--permission-mode",
-    options.permissionModeFlag,
   ];
+  if (options.permissionModeFlag !== undefined) args.push("--permission-mode", options.permissionModeFlag);
   if (options.model !== undefined) args.push("--model", options.model);
   if (options.sessionId !== undefined) args.push("--session-id", options.sessionId);
   else if (options.resume !== undefined) args.push("--resume", options.resume);
@@ -236,6 +241,17 @@ export interface InboundControlRequest {
   requestId: string;
   subtype: string;
   request: Record<string, unknown>;
+  /**
+   * Aborted when the CLI WITHDRAWS this request via `control_cancel_request`
+   * (contract §2.2 pairing rule — it does this by itself on interrupt,
+   * `w0-03-interrupt-pending.jsonl`).
+   *
+   * Suppressing the late response is not enough on its own: an approval
+   * handler parked on a user decision would stay parked, holding the modal
+   * open and its own serialization latch shut, until something unrelated
+   * settled it. A handler MUST use this to unwind whatever it is waiting on.
+   */
+  signal: AbortSignal;
 }
 
 export interface ClaudeClientOptions {
@@ -344,7 +360,7 @@ export class ClaudeClient {
   /** Our own outbound control_request(s), keyed by the request_id WE generated. */
   private readonly pending = new Map<string, PendingControlRequest>();
   /** CLI-initiated inbound control_request(s) awaiting our answer, keyed by the CLI's request_id (contract §2.2 pairing rule). */
-  private readonly pendingInbound = new Map<string, { settled: boolean }>();
+  private readonly pendingInbound = new Map<string, { settled: boolean; cancel: AbortController }>();
   private readonly maxLineBytes: number;
   private readonly initTimeoutMs: number;
   private readonly controlRequestTimeoutMs: number;
@@ -408,7 +424,15 @@ export class ClaudeClient {
     // trust check is stale by a whole `--version` round trip (TOCTOU).
     this.assertTrusted();
     const args = buildClaudeSpawnArgs({
-      permissionModeFlag: this.options.permissionModeFlag ?? "manual",
+      // An explicit flag always wins. Without one, a FRESH spawn falls back to
+      // the fail-closed `manual` (= wire `default`, the Ask preset), while a
+      // RESUME sends no `--permission-mode` at all so the native session's own
+      // surviving posture stands (cut §1.5 hazard (б)).
+      ...(this.options.permissionModeFlag !== undefined
+        ? { permissionModeFlag: this.options.permissionModeFlag }
+        : this.options.resume !== undefined
+          ? {}
+          : { permissionModeFlag: "manual" as const }),
       model: this.options.model,
       sessionId: this.options.sessionId,
       resume: this.options.resume,
@@ -712,7 +736,7 @@ export class ClaudeClient {
    */
   private onControlRequestEnvelope(envelope: ClaudeControlRequestEnvelope): void {
     const requestId = envelope.request_id;
-    const state = { settled: false };
+    const state = { settled: false, cancel: new AbortController() };
     this.pendingInbound.set(requestId, state);
     const responder: ControlRequestResponder = {
       success: (response) => this.answerInbound(requestId, state, {
@@ -726,7 +750,10 @@ export class ClaudeClient {
       return;
     }
     Promise.resolve()
-      .then(() => this.options.onControlRequest!({ requestId, subtype: envelope.request.subtype, request: envelope.request }, responder))
+      .then(() => this.options.onControlRequest!(
+        { requestId, subtype: envelope.request.subtype, request: envelope.request, signal: state.cancel.signal },
+        responder,
+      ))
       .then(() => {
         if (!state.settled) responder.error();
       })
@@ -736,13 +763,25 @@ export class ClaudeClient {
   /**
    * Pairing rule (contract §2.2, normative): every CLI->host control_request
    * ends in exactly one of our control_response OR this cancel — never both.
-   * Dropping the bookkeeping here means a LATER `responder.success()`/`.error()`
+   * Dropping the bookkeeping means a LATER `responder.success()`/`.error()`
    * call from a slow approval handler becomes a safe no-op in `answerInbound`,
    * never a stray write (live-observed hazard: interrupt-during-approval,
    * `w0-03-interrupt-pending.jsonl`).
+   *
+   * Suppressing the write is only half of it: the handler itself has to be
+   * released, or it stays parked on a decision nobody will ever make. The CLI
+   * withdraws a `can_use_tool` on its OWN initiative (an interrupt it decided
+   * on, a tool it abandoned) — with no `denyAll()` from our side to unblock the
+   * bridge — and a handler left waiting there keeps the approval modal open and
+   * its serialization latch shut, so every subsequent approval in the session
+   * is refused with "another approval is already pending". Aborting FIRST, then
+   * dropping the bookkeeping, settles the handler and makes its eventual answer
+   * a no-op.
    */
   private onControlCancelRequest(envelope: ClaudeControlCancelRequestEnvelope): void {
+    const state = this.pendingInbound.get(envelope.request_id);
     this.pendingInbound.delete(envelope.request_id);
+    state?.cancel.abort();
   }
 
   private answerInbound(requestId: string, state: { settled: boolean }, envelope: ClaudeControlResponseEnvelope): void {
@@ -847,5 +886,10 @@ export class ClaudeClient {
       pending.reject(error);
     }
     this.pending.clear();
+    // Inbound requests die with the transport too: nothing can answer them and
+    // nothing will cancel them, so their handlers are released here rather than
+    // parked forever (same leak class as `onControlCancelRequest`).
+    for (const inbound of this.pendingInbound.values()) inbound.cancel.abort();
+    this.pendingInbound.clear();
   }
 }
