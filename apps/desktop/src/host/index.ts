@@ -289,6 +289,15 @@ import { parseCodexEngineArgs } from "./engines/codex/draft-args.js";
 import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
 import { SqliteCodexShadowLog } from "./engines/codex/shadow-log.js";
 import { ENV_CODEX_BIN } from "../shared/engines.js";
+// SLICE-CC C4 (cut §1.4): new import lines — the Claude composition mirrors the
+// codex one above. `readHostProcessOwnership` is aliased because the claude
+// directory carries its own deliberate duplicate of that module (cut §1.3), and
+// both are imported into this one composition root.
+import { ENV_CLAUDE_BIN } from "../shared/engines.js";
+import { startClaudeEngine } from "./engines/claude/claude-engine.js";
+import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
+import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./engines/claude/process-ownership.js";
+import { defaultClaudeProfileDir } from "./engines/claude/profile-dir.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
@@ -627,6 +636,158 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
 }
 
+/**
+ * Native Claude branch (SLICE-CC C4, cut §1.4). Structurally the codex branch
+ * above, minus everything CC-C deliberately does not own:
+ *
+ *  - NO `engineSettings` seam. Session's seam is SYNCHRONOUS choose-now/
+ *    apply-at-next-turn (`EngineSettingsChange`), while every Claude control
+ *    (`set_model`, `set_permission_mode`, `apply_flag_settings`) applies
+ *    IMMEDIATELY over an async control request. Bridging the two is the
+ *    set_model-settings-seam UI, which is CC-D. Omitting it is not a gap left
+ *    open by accident: `enginePresentation` then carries no model/permissions
+ *    block, so the renderer HIDES the mid-session pickers rather than
+ *    presenting controls that would silently do nothing. The DRAFT pickers
+ *    (StartScreen -> argv -> `parseClaudeEngineArgs`) are unaffected — they are
+ *    this slice's path and are honoured at boot.
+ *  - NO resume branch. `--resume` for Claude is CC-D; a Claude tab always
+ *    spawns a fresh native session here.
+ *  - NO shadow transcript, so `bootHistory` stays empty (`historyItems()` is
+ *    `[]` by construction in CC-C).
+ */
+async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugin): Promise<void> {
+  const binaryPath = process.env[ENV_CLAUDE_BIN];
+  if (binaryPath === undefined || binaryPath.trim() === "") {
+    throw new Error("Claude binary is unavailable; configure a validated Claude Code installation first");
+  }
+  const args = parseHostArgs(process.argv.slice(2));
+  // Deliberately the SAME resolver the codex branch uses rather than a
+  // duplicate: both native engines must open the one ANYCODE_DB_PATH database,
+  // and two copies of this two-line rule could drift into two databases.
+  const dbPath = resolveCodexDbPath(process.env);
+  persistence = new SqlitePersistenceAdapter(dbPath);
+  const broker = new IpcPermissionBroker(emit);
+  const processOwnership = readClaudeHostProcessOwnership(
+    process.env,
+    process.pid,
+    (message) => process.parentPort.postMessage(message),
+  ) ?? undefined;
+
+  // The draft (pre-session) model/preset choice arrives as argv from main. It is
+  // untrusted renderer input: nothing here interprets it — the engine validates
+  // the model against the LIVE `initialize` catalog and the preset against the
+  // frozen table, and an unusable value degrades to the default with a warning
+  // notice rather than reaching the wire.
+  const draft = parseClaudeEngineArgs(process.argv.slice(2));
+
+  const connected = await startClaudeEngine({
+    bootstrap,
+    broker,
+    binaryPath,
+    cwd: workspace,
+    // Cut invariant C1: every spawn is confined to the single fixed AnyCode
+    // profile — the SAME dir main's doctor diagnosed before it let this tab
+    // spawn — never the ambient `~/.claude`.
+    profileDir: defaultClaudeProfileDir(homedir()),
+    sourceEnv: process.env,
+    ...(processOwnership !== undefined ? { processOwnership } : {}),
+    selection: {
+      ...(draft.model !== undefined ? { model: draft.model } : {}),
+      ...(draft.preset !== undefined ? { presetId: draft.preset } : {}),
+      origin: "draft",
+    },
+  });
+
+  // Native-first, same product-level transaction ordering as codex: the native
+  // session exists and is proven signed-in before any row is written.
+  //
+  // CREATE vs TOUCH is load-bearing, and it is NOT the codex resume branch.
+  // main sends `--resume <id>` for EVERY spawn after the first
+  // (`tabs.ts.spawnTabHost`), so a plain create would hit an existing primary
+  // key and abort the boot with a SQLite constraint error the moment a Claude
+  // host is respawned. CC-C cannot resume the NATIVE session (that is CC-D), so
+  // a respawn honestly starts a fresh one — and rewrites the row's
+  // `externalSessionRef` to point at it. Leaving the dead ref behind would be
+  // the worse failure: CC-D's resume would later hand the CLI a session id that
+  // no longer exists. Nothing is lost that CC-C ever had — `historyItems()` is
+  // `[]` by construction until the shadow transcript lands.
+  const existing = args.sessionId === undefined ? null : await persistence.getSession(args.sessionId);
+  if (existing !== null && existing.engineId !== "claude") {
+    // Never take over another engine's row: the session's whole history and
+    // native ref belong to that engine.
+    throw new Error(`Session ${existing.id} belongs to engine "${existing.engineId ?? "core"}", not claude`);
+  }
+  const sessionRow = {
+    workspace,
+    // Both values are the RESOLVED ones the engine settled on (catalog-verified
+    // model, validated preset) — never the raw draft input.
+    model: connected.model,
+    // The `mode` TEXT column stores the Claude preset id verbatim, the same
+    // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
+    // column back as a core PermissionMode for a Claude session.
+    mode: connected.presetId as PermissionMode,
+    engineId: "claude" as const,
+    // The native ref. It is OURS: `--session-id <uuid>` rides the spawn argv,
+    // so the ref is known here without waiting for a turn; `system/init` echoes
+    // this exact value back on every turn (probe #1).
+    externalSessionRef: connected.sessionRef,
+  };
+  let sessionMeta;
+  if (existing === null) {
+    sessionMeta = await persistence.createSession({ id: args.sessionId ?? randomUUID(), ...sessionRow });
+  } else {
+    await persistence.touchSession(existing.id, sessionRow);
+    sessionMeta = { ...existing, ...sessionRow };
+  }
+
+  const booted = await plugin.boot({ claudeEngine: connected.engine });
+  const fs = new NodeFileSystemAdapter();
+
+  // Shell wiring, identical to the codex branch: AnyCode's own repo context
+  // (Git bridge, Review diff, Environment chip) is a property of the WORKSPACE,
+  // not the agent runtime, so a Claude session sees exactly what a core session
+  // does. `engine.capabilities.supportsGitMutations` stays false — that flag
+  // describes the AGENT's own tools; `shell.gitUserMutations` is the separate,
+  // shell-owned gate for the Review panel's user-initiated mutations.
+  const claudeExecAdapter = new NodeExecutionAdapter();
+  const claudeIsGitRepo = await fs.exists(`${workspace}/.git`);
+  const claudeGitEnabled = claudeIsGitRepo && typeof claudeExecAdapter.runBinary === "function";
+  const claudeGitService = new NodeGitAdapter({ exec: claudeExecAdapter, cwd: workspace, signal: gitAbort.signal });
+  gitBridge = new GitBridge({ git: claudeGitEnabled ? claudeGitService : null, outbound });
+  const shell: ShellCapabilitiesProjection = {
+    gitReadOnly: claudeGitEnabled,
+    gitUserMutations: claudeGitEnabled,
+    terminal: true,
+  };
+
+  session = new Session({
+    outbound,
+    engine: booted.engine,
+    broker,
+    fs,
+    workspace,
+    model: connected.model,
+    sessionId: sessionMeta.id,
+    hasTitle: sessionMeta.title !== undefined && sessionMeta.title.length > 0,
+    rules: new SessionPermissionRules(),
+    git: gitBridge,
+    shell,
+    persistence: {
+      touch(patch) {
+        const { enginePreset, ...rest } = patch;
+        const row = { ...rest, ...(enginePreset !== undefined ? { mode: enginePreset as PermissionMode } : {}) };
+        void persistence?.touchSession(sessionMeta.id, row).catch((error) => {
+          console.error(`[host] touchSession failed: ${describeError(error)}`);
+        });
+      },
+    },
+  });
+  // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated and
+  // the id is our own row id — no account email, token, subscription type or
+  // cost figure is ever written to a log line.
+  console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${sessionMeta.id} db=${dbPath}`);
+}
+
 async function boot(): Promise<void> {
   try {
     // Selection/probe is deliberately before loadEnvConfig: an external engine
@@ -635,6 +796,12 @@ async function boot(): Promise<void> {
     engineBootstrap = await beginEngineBootstrap(plugin);
     if (engineBootstrap.id === "codex") {
       await bootCodexSession(engineBootstrap, plugin);
+      return;
+    }
+    // SLICE-CC C4 (cut §1.4): the one new dispatch branch. Everything below
+    // stays the core boot path, byte-identical.
+    if (engineBootstrap.id === "claude") {
+      await bootClaudeSession(engineBootstrap, plugin);
       return;
     }
     const envConfig = loadEnvConfig(process.env);

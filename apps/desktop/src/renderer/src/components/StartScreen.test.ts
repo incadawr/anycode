@@ -425,7 +425,10 @@ describe("shouldShowClaudeEngineButton (SLICE-CC A4, cut §1.2 DoD-3)", () => {
     expect(shouldShowClaudeEngineButton(["core", "claude"])).toBe(true);
   });
 
-  it("false when \"claude\" is absent — the real CC-A build's ENGINES_LIST never includes it (canSpawn hard-blocks it, main/tabs.ts)", () => {
+  // SLICE-CC C5: since the canSpawn flip, "claude" is absent from ENGINES_LIST
+  // exactly when the Claude doctor is not ready (main/tabs.ts's canSpawn ->
+  // isEngineReady; the paired half of this assertion lives in tabs.test.ts).
+  it("false when \"claude\" is absent — an unready doctor keeps it out of ENGINES_LIST (main/tabs.ts)", () => {
     expect(shouldShowClaudeEngineButton(["core"])).toBe(false);
     expect(shouldShowClaudeEngineButton(["core", "codex"])).toBe(false);
     expect(shouldShowClaudeEngineButton([])).toBe(false);

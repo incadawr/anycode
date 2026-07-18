@@ -466,15 +466,12 @@ export class TabHostManager {
    * workspace; createTab enforces it authoritatively regardless.
    */
   canSpawn(engine: EngineId = "core", codexProfileId?: string): boolean {
-    // SLICE-CC A1 (cut §1.2): unconditionally false until CC-C wires
-    // `bootClaude` into host/index.ts's boot() switch — that switch today
-    // knows only the codex branch and falls everything else through to the
-    // core boot path, so a spawn attempt before CC-C would silently run a
-    // mismatched core session under engineId "claude". This refusal is the
-    // authoritative gate (not merely `engineReady`, which main/index.ts wires
-    // to real doctor readiness regardless — CC-C only needs to remove this
-    // line once bootClaude exists).
-    if (engine === "claude") return false;
+    // SLICE-CC C5 (cut §1.4): the CC-A hard refusal of `claude` is REMOVED here
+    // now that `host/index.ts`'s boot() switch dispatches a real `bootClaude`
+    // branch — a claude spawn can no longer land on the core boot path. Claude
+    // now answers from the same authority every other engine does:
+    // `isEngineReady`, which main/index.ts wires to the doctor's confirmed
+    // readiness (version-compatible AND signed in).
     return this.isEngineReady(engine, codexProfileId);
   }
 
