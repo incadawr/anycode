@@ -44,7 +44,11 @@ export const ENGINES_LIST_CHANNEL = "anycode:engines-list";
  * preload boundary.
  */
 export interface AvailableEngines {
-  engineIds: readonly ("core" | "codex")[];
+  // SLICE-CC A1: "claude" added alongside "codex" — main's ENGINES_LIST_CHANNEL
+  // handler (main/tab-ipc.ts) still filters this through canSpawn, so its
+  // presence here is a type-widening only, not a behavior change (main/tabs.ts
+  // refuses every claude canSpawn call unconditionally until CC-C).
+  engineIds: readonly ("core" | "codex" | "claude")[];
 }
 
 /** Request to open a tab: a brand-new session (workspace chosen by main) or a resume. */
@@ -55,7 +59,10 @@ export type CreateTabRequest =
   | {
       kind: "new";
       workspace?: string;
-      engine?: "core" | "codex";
+      // SLICE-CC A1: "claude" widened alongside "codex" (main/tab-ipc.ts's zod
+      // schema enum is the paired edit) — a request naming "claude" is still
+      // refused by spawnableWhenKnown/canSpawn until CC-C, never by this type.
+      engine?: "core" | "codex" | "claude";
       /**
        * The New Session start screen's Codex draft picks (W3 join, closing
        * TASK.39's dangling wire: the draft picker existed, main's argv

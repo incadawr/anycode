@@ -1268,3 +1268,64 @@ describe("TabHostManager — terminal channel delivery (design §3.2, slice 2.4.
     expect(posted.filter((p) => p.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1);
   });
 });
+
+describe("TabHostManager — canSpawn(\"claude\") is unconditionally false (SLICE-CC A1, cut §1.2)", () => {
+  it("refuses even when an injected engineReady would otherwise say yes — the hard block overrides it", () => {
+    const { fork } = liveForkRig();
+    const engineReady = vi.fn((_engine: EngineId) => true);
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      engineReady,
+      logger: silentLogger,
+      limits: {},
+    });
+
+    expect(manager.canSpawn("claude")).toBe(false);
+    // The hard block short-circuits BEFORE the injected oracle is even asked —
+    // this is a discriminating assertion: a rollback that merely made
+    // engineReady("claude") default to false (rather than refusing in
+    // canSpawn itself) would still pass a bare canSpawn("claude") check but
+    // fail this one.
+    expect(engineReady).not.toHaveBeenCalledWith("claude", undefined);
+  });
+
+  it("createTab refuses a claude request with not_ready and never forks", () => {
+    const forkSpy = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const manager = new TabHostManager({
+      fork: forkSpy,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      engineReady: () => true,
+      logger: silentLogger,
+      limits: {},
+    });
+
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s-claude", resume: false, engine: "claude" });
+
+    expect(created).toEqual({ ok: false, reason: "not_ready" });
+    expect(forkSpy).not.toHaveBeenCalled();
+  });
+
+  it("core and codex are unaffected by the claude hard block", () => {
+    const { fork } = liveForkRig();
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      engineReady: (engine) => engine === "core" || engine === "codex",
+      logger: silentLogger,
+      limits: {},
+    });
+
+    expect(manager.canSpawn("core")).toBe(true);
+    expect(manager.canSpawn("codex")).toBe(true);
+  });
+});

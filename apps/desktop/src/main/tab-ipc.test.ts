@@ -1134,3 +1134,43 @@ describe("handleCreate — unknown-readiness hydration (TASK.64)", () => {
     expect(showOpenDialog).not.toHaveBeenCalled();
   });
 });
+
+describe('e2e-negative: engine:"claude" is refused by spawnableWhenKnown, NOT by the schema (SLICE-CC A1, cut §1.2 DoD-3)', () => {
+  it('the schema ACCEPTS engine: "claude" (widened by the cut\'s two-point tab-ipc.ts edit)', () => {
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engine: "claude" }).success).toBe(true);
+  });
+
+  it("a full registered create request is refused not_ready at canSpawn — a schema-layer refusal would instead surface as the fail-closed \"cancelled\" no-op runRegisteredCreate uses for an UNPARSEABLE request, which this is not", async () => {
+    const { manager, canSpawn, createTab } = makeManager({ canSpawn: false });
+    const { dialog } = makeDialog({ canceled: true, filePaths: [] });
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+
+    const res = await runRegisteredCreate(deps, { kind: "new", workspace: "/x", engine: "claude" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(canSpawn).toHaveBeenCalledWith("claude", undefined);
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("mirrors main/tabs.ts's REAL canSpawn: unconditionally false for claude even when the injected engineReady oracle would say yes", async () => {
+    // Not a fake manager this time — the actual TabHostManager, so this test
+    // fails if main/tabs.ts's hard block ever regresses to reading engineReady.
+    const { TabHostManager } = await import("./tabs.js");
+    const realManager = new TabHostManager({
+      fork: (() => {
+        throw new Error("must never fork for a refused claude request");
+      }) as unknown as import("./tabs.js").HostForkFn,
+      hostEntry: "/fake/host.js",
+      createChannel: () => ({ port1: {}, port2: {} }) as unknown as import("./tabs.js").TabChannel,
+      getWindow: () => null,
+      env: () => ({}),
+      engineReady: () => true,
+    });
+    const { dialog } = makeDialog({ canceled: true, filePaths: [] });
+    const deps: TabIpcDeps = { manager: realManager, persistence: persistenceStub, dialog };
+
+    const res = await runRegisteredCreate(deps, { kind: "new", workspace: "/x", engine: "claude" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+  });
+});

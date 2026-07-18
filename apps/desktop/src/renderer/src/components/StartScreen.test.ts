@@ -23,6 +23,7 @@ import {
   resolveCodexDraftModel,
   resolveProviderDefaultModel,
   seedWorkspaceFromRecents,
+  shouldShowClaudeEngineButton,
   shouldShowCodexProfileChip,
   type FolderPickDeps,
   type ModelPickDeps,
@@ -415,5 +416,18 @@ describe("seedWorkspaceFromRecents (slice-start-composer-cut §5 — preselect l
 
   it("returns null when there is no draft at all", () => {
     expect(seedWorkspaceFromRecents(null, ["/ws/a"])).toBeNull();
+  });
+});
+
+describe("shouldShowClaudeEngineButton (SLICE-CC A4, cut §1.2 DoD-3)", () => {
+  it("true iff the injected availableEngines contains \"claude\"", () => {
+    expect(shouldShowClaudeEngineButton(["core", "codex", "claude"])).toBe(true);
+    expect(shouldShowClaudeEngineButton(["core", "claude"])).toBe(true);
+  });
+
+  it("false when \"claude\" is absent — the real CC-A build's ENGINES_LIST never includes it (canSpawn hard-blocks it, main/tabs.ts)", () => {
+    expect(shouldShowClaudeEngineButton(["core"])).toBe(false);
+    expect(shouldShowClaudeEngineButton(["core", "codex"])).toBe(false);
+    expect(shouldShowClaudeEngineButton([])).toBe(false);
   });
 });
