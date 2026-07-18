@@ -30,7 +30,7 @@ if (!scenario || !outFixture) {
   console.error("usage: w0-control-harness.mjs <scenario> <out.jsonl> [claude-bin]");
   process.exit(2);
 }
-const CLAUDE_BIN = claudeBinArg || process.env.CLAUDE_BIN || "/Users/incadawr/.local/bin/claude";
+const CLAUDE_BIN = claudeBinArg || process.env.CLAUDE_BIN || "[HOME]/.local/bin/claude";
 
 const env = { ...process.env };
 for (const k of ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
