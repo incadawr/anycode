@@ -206,6 +206,30 @@ const MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE sessions ADD COLUMN codex_profile_id TEXT",
     ],
   },
+  {
+    version: 12,
+    statements: [
+      // Claude shadow transcript mirror (SLICE-CC D-min, cut §1.5): a MIRROR of
+      // codex_thread_items, but the payload is a READY HistoryItem projection
+      // (`data`, JSON) rather than structured command/cwd/exitCode columns —
+      // Claude's shadow-transcript.ts writes the full turn's already-projected
+      // items, not raw bytes (raw carries thinking/truncated deltas). `--resume`
+      // never re-emits history on the wire (W0 probe #4), so this table is the
+      // ONLY source `history-projection.ts` reads on resume. `(session_ref,
+      // item_id)` is the primary key so a duplicate fire-and-forget write can
+      // never double a row.
+      `CREATE TABLE claude_transcript_items (
+        session_ref TEXT NOT NULL,
+        turn_ordinal INTEGER NOT NULL,
+        position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_ref, item_id)
+      )`,
+      `CREATE INDEX idx_claude_transcript_items_session ON claude_transcript_items (session_ref, turn_ordinal, position_in_turn)`,
+    ],
+  },
 ];
 
 /**
@@ -446,6 +470,38 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
     ...(row.cwd !== null ? { cwd: row.cwd } : {}),
     ...(row.exit_code !== null ? { exitCode: row.exit_code } : {}),
     ...(row.output_head !== null ? { outputHead: row.output_head } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Claude shadow transcript mirror (migration v12, cut §1.5) — mirrors the
+// codex_thread_items shape above, but the payload is a ready HistoryItem
+// projection rather than structured command fields.
+
+/** One turn's projected HistoryItem, keyed by the native Claude session it belongs to. */
+export interface ClaudeTranscriptItem {
+  itemId: string;
+  turnOrdinal: number;
+  positionInTurn: number;
+  /** A single ready `HistoryItem` (JSON round-trip) — the projected form shadow-transcript.ts writes, never raw wire bytes. */
+  data: unknown;
+}
+
+interface ClaudeTranscriptItemRow {
+  session_ref: string;
+  turn_ordinal: number;
+  position_in_turn: number;
+  item_id: string;
+  data: string;
+  created_at: number;
+}
+
+function rowToClaudeTranscriptItem(row: ClaudeTranscriptItemRow): ClaudeTranscriptItem {
+  return {
+    itemId: row.item_id,
+    turnOrdinal: row.turn_ordinal,
+    positionInTurn: row.position_in_turn,
+    data: JSON.parse(row.data) as unknown,
   };
 }
 
@@ -926,6 +982,35 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       .prepare("SELECT * FROM codex_thread_items WHERE thread_id = ? ORDER BY turn_ordinal ASC, position_in_turn ASC")
       .all(threadId) as unknown as CodexThreadItemRow[];
     return rows.map(rowToCodexShadowCommandItem);
+  }
+
+  // -------------------------------------------------------------------------
+  // Claude shadow transcript mirror (migration v12, cut §1.5). Additive to
+  // PersistencePort — host-only usage, never consumed through that interface
+  // (mirrors the codex_thread_items precedent immediately above).
+
+  /**
+   * First-write-wins, whole-row (no `DO UPDATE SET`): unlike the codex log,
+   * each row here is a COMPLETE, already-projected HistoryItem written once
+   * after its turn finishes — there is no partial/enrichable payload to merge,
+   * so a duplicate fire-and-forget write (same `item_id`) is simply ignored.
+   */
+  async recordClaudeTranscriptItem(sessionRef: string, item: ClaudeTranscriptItem): Promise<void> {
+    const db = this.open();
+    db.prepare(
+      `INSERT OR IGNORE INTO claude_transcript_items
+         (session_ref, turn_ordinal, position_in_turn, item_id, data, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(sessionRef, item.turnOrdinal, item.positionInTurn, item.itemId, JSON.stringify(item.data), Date.now());
+  }
+
+  /** Ordered for direct consumption by `history-projection.ts`: (turnOrdinal, then positionInTurn). */
+  async listClaudeTranscriptItems(sessionRef: string): Promise<ClaudeTranscriptItem[]> {
+    const db = this.open();
+    const rows = db
+      .prepare("SELECT * FROM claude_transcript_items WHERE session_ref = ? ORDER BY turn_ordinal ASC, position_in_turn ASC")
+      .all(sessionRef) as unknown as ClaudeTranscriptItemRow[];
+    return rows.map(rowToClaudeTranscriptItem);
   }
 
   async close(): Promise<void> {

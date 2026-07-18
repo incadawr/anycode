@@ -1264,3 +1264,96 @@ describe("host Claude session-row wiring (SLICE-CC C4, cut §1.4)", () => {
     expect(r.persistence.touchSession).not.toHaveBeenCalled();
   });
 });
+
+describe("host Claude resume wiring (SLICE-CC D-min, cut §1.5)", () => {
+  /**
+   * Reproduces the SHAPE of bootClaudeSession's `args.resume` branch (mirrors
+   * codex's index.ts:500-529) — index.ts is not importable (see this file's
+   * header). Real resume requires the persisted row's own native ref: unlike
+   * a fresh spawn (which mints its own uuid), a resume that finds no
+   * resumable row must fail closed rather than silently starting a fresh
+   * native session under the old row's id.
+   */
+  interface Row {
+    id: string;
+    engineId?: string;
+    externalSessionRef?: string;
+    model?: string;
+    mode?: string;
+  }
+
+  async function claudeResumeShape(
+    persistence: { getSession(id: string): Promise<Row | null> },
+    resumeEngine: (ref: string, selection: { model?: string; presetId?: string }) => Promise<{ sessionRef: string; model: string; presetId: string }>,
+    sessionId: string | undefined,
+  ): Promise<{ existing: Row; connected: { sessionRef: string; model: string; presetId: string } }> {
+    if (sessionId === undefined || sessionId.length === 0) {
+      throw new Error("Claude resume requires a session id");
+    }
+    const existing = await persistence.getSession(sessionId);
+    if (existing === null) throw new Error(`Claude session ${sessionId} was not found`);
+    if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
+      throw new Error(`Claude session ${sessionId} has no resumable native session`);
+    }
+    const connected = await resumeEngine(existing.externalSessionRef, { model: existing.model, presetId: existing.mode });
+    return { existing, connected };
+  }
+
+  it("resumes with the persisted externalSessionRef and selection, never a fresh id", async () => {
+    const getSession = vi.fn(async () => ({ id: "s1", engineId: "claude", externalSessionRef: "native-ref-1", model: "opus", mode: "workspace" }));
+    const resumeEngine = vi.fn(async (ref: string) => ({ sessionRef: ref, model: "opus", presetId: "workspace" }));
+
+    const { connected } = await claudeResumeShape({ getSession }, resumeEngine, "s1");
+
+    expect(resumeEngine).toHaveBeenCalledWith("native-ref-1", { model: "opus", presetId: "workspace" });
+    expect(connected.sessionRef).toBe("native-ref-1");
+  });
+
+  it("fails closed when the row has no resumable native session (missing ref, or belongs to another engine)", async () => {
+    const noRef = vi.fn(async () => ({ id: "s1", engineId: "claude" }));
+    await expect(claudeResumeShape({ getSession: noRef }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
+
+    const wrongEngine = vi.fn(async () => ({ id: "s1", engineId: "codex", externalSessionRef: "thread-1" }));
+    await expect(claudeResumeShape({ getSession: wrongEngine }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
+  });
+
+  it("fails closed when the row is gone entirely", async () => {
+    await expect(claudeResumeShape({ getSession: vi.fn(async () => null) }, vi.fn(), "s1")).rejects.toThrow(/was not found/);
+  });
+
+  /**
+   * Reproduces the shape of the resume-settle callback (test-hazard (б)):
+   * the persisted row's model/mode may diverge from what the resumed native
+   * session actually settled on (it keeps its own posture across process
+   * death) — the FIRST observed `system/init` is truth, and only the fields
+   * that actually diverged are patched.
+   */
+  function resumeSettlePatch(
+    sessionMeta: { model: string; mode: string },
+    resolved: { model: string; permissionMode: string },
+    presetIdForMode: (mode: string) => string | undefined,
+  ): Record<string, unknown> {
+    const presetId = presetIdForMode(resolved.permissionMode);
+    const patch: Record<string, unknown> = {};
+    if (sessionMeta.model !== resolved.model) patch.model = resolved.model;
+    if (presetId !== undefined && sessionMeta.mode !== presetId) patch.mode = presetId;
+    return patch;
+  }
+
+  it("patches only the fields that actually diverged from the resumed session's first system/init", () => {
+    const presetIdForMode = (mode: string): string | undefined => (mode === "plan" ? "read-only" : mode === "acceptEdits" ? "workspace" : undefined);
+
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "opus", permissionMode: "default" }, presetIdForMode)).toEqual({});
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "sonnet", permissionMode: "default" }, presetIdForMode)).toEqual({
+      model: "sonnet",
+    });
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "opus", permissionMode: "plan" }, presetIdForMode)).toEqual({
+      mode: "read-only",
+    });
+    // A wire mode this build never exposes as a preset (dontAsk/auto) degrades
+    // to leaving `mode` untouched rather than guessing — the model can still patch.
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "sonnet", permissionMode: "dontAsk" }, presetIdForMode)).toEqual({
+      model: "sonnet",
+    });
+  });
+});
