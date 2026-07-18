@@ -36,7 +36,13 @@ import { ClaudeApprovalBridge } from "./approval-bridge.js";
 import { ClaudeClient, type ClaudeClientOptions } from "./claude-client.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
 import { ClaudeModelCatalog } from "./models.js";
-import { permissionModeToFlag, type ClaudeResultMessage, type ClaudeStreamMessage, type ClaudeSystemInitMessage } from "./protocol.js";
+import {
+  permissionModeToFlag,
+  type ClaudeResultMessage,
+  type ClaudeStreamMessage,
+  type ClaudeSystemInitMessage,
+  type PermissionMode as ClaudeWirePermissionMode,
+} from "./protocol.js";
 import {
   CLAUDE_PERMISSION_PRESETS,
   DEFAULT_CLAUDE_PRESET,
@@ -199,7 +205,7 @@ function deadline(ms: number): SettleDeadline {
   };
 }
 
-export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bootstrap" | "onControlRequest" | "permissionModeFlag" | "model" | "sessionId"> {
+export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bootstrap" | "onControlRequest" | "permissionModeFlag" | "model" | "sessionId" | "resume"> {
   bootstrap: EngineBootstrap;
   broker: IpcPermissionBroker;
   selection?: ClaudeSessionSelection;
@@ -207,19 +213,23 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
 }
 
 /**
- * Boots a native Claude session. Ordering is load-bearing: the handshake
- * proves the CLI answers AND that the profile is signed in, and the model
- * catalog is read from that same `initialize` response — so a draft model that
- * no longer exists is caught here, before any turn is burned.
- *
- * The native session id is OURS: `--session-id <uuid>` is passed at spawn, so
- * the resumable ref exists at boot time. `system/init` (turn-scoped, probe #1)
- * later confirms it, but nothing waits for it.
+ * Shared boot path for a fresh spawn (`--session-id <uuid>`) and a resume
+ * spawn (`--resume <ref>`, CC-D) — the two differ ONLY in which of
+ * `ClaudeClient`'s two mutually-exclusive spawn fields is set
+ * (`buildClaudeSpawnArgs` prefers `sessionId`, cut §1.3). Everything else —
+ * handshake ordering, model/preset resolution, quota seed, bounded release on
+ * a failed boot step — is identical: the handshake proves the CLI answers AND
+ * that the profile is signed in, and the model catalog is read from that same
+ * `initialize` response, so a draft/persisted model that no longer exists is
+ * caught here, before any turn is burned.
  */
-export async function startClaudeEngine(options: ClaudeEngineCreateOptions): Promise<ConnectedClaudeEngine> {
+async function connectClaudeEngine(
+  options: ClaudeEngineCreateOptions,
+  spawn: { sessionId: string } | { resume: string },
+): Promise<ConnectedClaudeEngine> {
   const notices: AgentEvent[] = [];
   const preset = resolvePreset(options.selection, notices);
-  const sessionRef = randomUUID();
+  const sessionRef = "sessionId" in spawn ? spawn.sessionId : spawn.resume;
   let engine: ClaudeEngine | null = null;
   const approvals = new ClaudeApprovalBridge({
     broker: options.broker,
@@ -231,7 +241,7 @@ export async function startClaudeEngine(options: ClaudeEngineCreateOptions): Pro
   const client = new ClaudeClient({
     ...options,
     permissionModeFlag: permissionModeToFlag(preset.mode),
-    sessionId: sessionRef,
+    ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
   });
@@ -268,6 +278,34 @@ export async function startClaudeEngine(options: ClaudeEngineCreateOptions): Pro
   }
 }
 
+/**
+ * Boots a fresh native Claude session. The native session id is OURS:
+ * `--session-id <uuid>` is passed at spawn, so the resumable ref exists at
+ * boot time. `system/init` (turn-scoped, probe #1) later confirms it, but
+ * nothing waits for it.
+ */
+export async function startClaudeEngine(options: ClaudeEngineCreateOptions): Promise<ConnectedClaudeEngine> {
+  return connectClaudeEngine(options, { sessionId: randomUUID() });
+}
+
+/**
+ * Resumes one exact persisted native session via `--resume <ref>` (CC-D-min,
+ * cut §1.5, probe #4: `session_id`/model/`permissionMode` all survive process
+ * death). It deliberately never falls back to a fresh session — a resume
+ * whose native side has expired (retention, test-hazard в) surfaces as a
+ * boot failure, not a silent new session under the old id. The engine's own
+ * `model`/`presetId` here are the DRAFT/persisted request only — the ACTUAL
+ * settled posture is confirmed later, from the resumed session's first
+ * observed `system/init` (`resolvedModel()`/`resolvedPermissionMode()`), NOT
+ * from this connect step, because `--resume` never re-emits `system/init` at
+ * handshake time (probe #1/#4).
+ */
+export async function resumeClaudeEngine(
+  options: ClaudeEngineCreateOptions & { externalSessionRef: string },
+): Promise<ConnectedClaudeEngine> {
+  return connectClaudeEngine(options, { resume: options.externalSessionRef });
+}
+
 export class ClaudeEngine implements SessionEngine {
   readonly id = "claude" as const;
   readonly capabilities: EngineCapabilities;
@@ -281,6 +319,8 @@ export class ClaudeEngine implements SessionEngine {
   /** Live engine state from the most recent `system/init` (re-emitted every turn). */
   private sessionId: string | null = null;
   private liveModel: string | null = null;
+  /** The wire-level permission mode the CLI is ACTUALLY running (CC-D resume settle, cut §1.5 hazard (б)) — distinct from `activePresetId`, which is our own requested posture. */
+  private livePermissionMode: ClaudeWirePermissionMode | null = null;
   private quota: ClaudeQuotaSnapshot | null = null;
   /** Cumulative `result.total_cost_usd` for this session (capability `costAccounting`). */
   private totalCostUsd = 0;
@@ -572,6 +612,7 @@ export class ClaudeEngine implements SessionEngine {
   private onSystemInit(init: ClaudeSystemInitMessage): void {
     this.sessionId = init.session_id;
     this.liveModel = init.model;
+    this.livePermissionMode = init.permissionMode;
   }
 
   private onResult(result: ClaudeResultMessage): void {
@@ -588,6 +629,22 @@ export class ClaudeEngine implements SessionEngine {
   /** The model the CLI reports it is actually running (a RESOLVED id — compare via the catalog, never by string equality with the request). */
   resolvedModel(): string | null {
     return this.liveModel;
+  }
+
+  /** The wire-level permission mode the CLI reports it is actually running (CC-D resume settle). */
+  resolvedPermissionMode(): ClaudeWirePermissionMode | null {
+    return this.livePermissionMode;
+  }
+
+  /**
+   * Queues a notice for the NEXT turn's stream (same drain path boot notices
+   * use — an `AgentEvent` only travels inside a turn). Used by the
+   * Claude-settings-seam glue (CC-D-min, cut §1.5) to surface an async
+   * set_model/set_permission_mode ack-failure that happens BETWEEN turns,
+   * when there is no live stream to emit it on directly.
+   */
+  queueNotice(notice: AgentEvent): void {
+    this.settings?.notices.push(notice);
   }
 
   /**

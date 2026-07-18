@@ -70,6 +70,18 @@ export function findClaudePreset(id: string): ClaudePermissionPresetDefinition |
   return CLAUDE_PERMISSION_PRESETS.find((preset) => preset.id === id);
 }
 
+/**
+ * Reverse lookup: the wire-level `permissionMode` a resumed session's first
+ * `system/init` reports back, to a preset id (CC-D-min resume settle, cut
+ * §1.5 hazard (б)). `undefined` for one of the three modes this table
+ * deliberately never exposes (`dontAsk`/`auto`/`bypassPermissions`) — the
+ * caller degrades by leaving the persisted preset untouched rather than
+ * forcing a guess.
+ */
+export function findClaudePresetByMode(mode: PermissionMode): ClaudePermissionPresetDefinition | undefined {
+  return CLAUDE_PERMISSION_PRESETS.find((preset) => preset.mode === mode);
+}
+
 /** The wire projection consumed by `EnginePresentation.permissions.presets` — labels only, never the mode values. */
 export function claudePresetChoices(): EnginePermissionPreset[] {
   return CLAUDE_PERMISSION_PRESETS.map((preset) => ({

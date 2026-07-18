@@ -45,6 +45,11 @@ export type {
 // the desktop host's `SqliteCodexShadowLog` adapter (host/engines/codex/shadow-log.ts),
 // which wraps this same SqlitePersistenceAdapter — never a hand-duplicated row shape.
 export type { CodexShadowCommandItem } from "./adapters/node/sqlite-persistence.js";
+// Claude shadow transcript mirror DTO (SLICE-CC D-min, cut §1.5): re-exported
+// for the desktop host's `SqliteClaudeShadowTranscript` adapter
+// (host/engines/claude/shadow-transcript.ts), which wraps this same
+// SqlitePersistenceAdapter — never a hand-duplicated row shape.
+export type { ClaudeTranscriptItem } from "./adapters/node/sqlite-persistence.js";
 // Pure string helper (no I/O, no auto-run block — the NOTE about cli/main.ts
 // below does not apply): re-exported for the desktop host's notice injection
 // (slice 6.DP-2), so both wiring paths append byte-identical reminder blocks.
