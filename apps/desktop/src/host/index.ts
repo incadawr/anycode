@@ -228,6 +228,7 @@ import type {
   ResolvedTelemetryConfig,
   ResolvedWebSearchBackend,
   RepoMapConfig,
+  SessionMeta,
   SystemPromptEnv,
   TelemetryPort,
   WorktreeControlPort,
@@ -294,10 +295,15 @@ import { ENV_CODEX_BIN } from "../shared/engines.js";
 // directory carries its own deliberate duplicate of that module (cut §1.3), and
 // both are imported into this one composition root.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
-import { startClaudeEngine } from "./engines/claude/claude-engine.js";
+import { resumeClaudeEngine, startClaudeEngine } from "./engines/claude/claude-engine.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
+import { projectClaudeHistory } from "./engines/claude/history-projection.js";
+import { findClaudePresetByMode } from "./engines/claude/presets.js";
+import type { PermissionMode as ClaudeWirePermissionMode } from "./engines/claude/protocol.js";
 import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./engines/claude/process-ownership.js";
 import { defaultClaudeProfileDir } from "./engines/claude/profile-dir.js";
+import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
+import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
@@ -637,23 +643,23 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
 }
 
 /**
- * Native Claude branch (SLICE-CC C4, cut §1.4). Structurally the codex branch
- * above, minus everything CC-C deliberately does not own:
+ * Native Claude branch (SLICE-CC C4 + D-min, cut §1.4/§1.5). Structurally the
+ * codex branch above:
  *
- *  - NO `engineSettings` seam. Session's seam is SYNCHRONOUS choose-now/
- *    apply-at-next-turn (`EngineSettingsChange`), while every Claude control
- *    (`set_model`, `set_permission_mode`, `apply_flag_settings`) applies
- *    IMMEDIATELY over an async control request. Bridging the two is the
- *    set_model-settings-seam UI, which is CC-D. Omitting it is not a gap left
- *    open by accident: `enginePresentation` then carries no model/permissions
- *    block, so the renderer HIDES the mid-session pickers rather than
- *    presenting controls that would silently do nothing. The DRAFT pickers
- *    (StartScreen -> argv -> `parseClaudeEngineArgs`) are unaffected — they are
- *    this slice's path and are honoured at boot.
- *  - NO resume branch. `--resume` for Claude is CC-D; a Claude tab always
- *    spawns a fresh native session here.
- *  - NO shadow transcript, so `bootHistory` stays empty (`historyItems()` is
- *    `[]` by construction in CC-C).
+ *  - `engineSettings` seam: Claude's OWN immediate-apply semantics
+ *    (`ClaudeSettingsSeam`, settings-seam.ts) — deliberately NOT codex's
+ *    choose-now/apply-at-next-turn seam. Every Claude control (`set_model`,
+ *    `set_permission_mode`, `apply_flag_settings`) applies IMMEDIATELY over an
+ *    async control request (`w0-16-setmodel.jsonl`), so `onSettingsApplied`
+ *    fires on the control-ack, not on a `turn/start`.
+ *  - Resume branch (mirrors codex ~500-529): `getSession` -> `engineId ===
+ *    "claude"` + `externalSessionRef` -> `--resume`. `--resume` never
+ *    re-emits history on the wire (probe #4), so the shadow transcript mirror
+ *    (below) is the ONLY source `historyItems()` reads from on resume.
+ *  - Shadow transcript: `ClaudeShadowTranscriptEngine` wraps the connected
+ *    engine so every turn's translated stream is projected + recorded
+ *    fire-and-forget (never the renderer, never a parse of Claude Code's own
+ *    on-disk `.jsonl` — invariant §0.2-4).
  */
 async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugin): Promise<void> {
   const binaryPath = process.env[ENV_CLAUDE_BIN];
@@ -672,6 +678,10 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     process.pid,
     (message) => process.parentPort.postMessage(message),
   ) ?? undefined;
+  // Shadow transcript mirror (CC-D-min, cut §1.5): the HOST is the sole writer
+  // (ClaudeShadowTranscriptEngine below), from the live translated stream —
+  // never the renderer, never a parse of Claude Code's own `.jsonl`.
+  const shadowTranscript = new SqliteClaudeShadowTranscript(persistence);
 
   // The draft (pre-session) model/preset choice arrives as argv from main. It is
   // untrusted renderer input: nothing here interprets it — the engine validates
@@ -680,7 +690,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // notice rather than reaching the wire.
   const draft = parseClaudeEngineArgs(process.argv.slice(2));
 
-  const connected = await startClaudeEngine({
+  const options = {
     bootstrap,
     broker,
     binaryPath,
@@ -691,56 +701,103 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     profileDir: defaultClaudeProfileDir(homedir()),
     sourceEnv: process.env,
     ...(processOwnership !== undefined ? { processOwnership } : {}),
-    selection: {
-      ...(draft.model !== undefined ? { model: draft.model } : {}),
-      ...(draft.preset !== undefined ? { presetId: draft.preset } : {}),
-      origin: "draft",
-    },
-  });
+  };
+
+  const connected = await (args.resume
+    ? (async () => {
+        if (args.sessionId === undefined || args.sessionId.length === 0) {
+          throw new Error("Claude resume requires a session id");
+        }
+        const existing = await persistence!.getSession(args.sessionId);
+        if (existing === null) throw new Error(`Claude session ${args.sessionId} was not found`);
+        if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
+          throw new Error(`Claude session ${args.sessionId} has no resumable native session`);
+        }
+        const resumed = await resumeClaudeEngine({
+          ...options,
+          externalSessionRef: existing.externalSessionRef,
+          // Posture survives the resume through the PERSISTED preset id (same
+          // no-server-echo-to-trust discipline codex uses, cut §2(k).4): an
+          // unrecognized id (a pre-TASK.39-era "build" mode row) silently
+          // becomes the default preset rather than failing the resume.
+          selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
+        });
+        return { ...resumed, sessionMeta: existing };
+      })()
+    : (async () => {
+        const created = await startClaudeEngine({
+          ...options,
+          selection: {
+            ...(draft.model !== undefined ? { model: draft.model } : {}),
+            ...(draft.preset !== undefined ? { presetId: draft.preset } : {}),
+            origin: "draft",
+          },
+        });
+        return { ...created, sessionMeta: null };
+      })());
 
   // Native-first, same product-level transaction ordering as codex: the native
-  // session exists and is proven signed-in before any row is written.
-  //
-  // CREATE vs TOUCH is load-bearing, and it is NOT the codex resume branch.
-  // main sends `--resume <id>` for EVERY spawn after the first
-  // (`tabs.ts.spawnTabHost`), so a plain create would hit an existing primary
-  // key and abort the boot with a SQLite constraint error the moment a Claude
-  // host is respawned. CC-C cannot resume the NATIVE session (that is CC-D), so
-  // a respawn honestly starts a fresh one — and rewrites the row's
-  // `externalSessionRef` to point at it. Leaving the dead ref behind would be
-  // the worse failure: CC-D's resume would later hand the CLI a session id that
-  // no longer exists. Nothing is lost that CC-C ever had — `historyItems()` is
-  // `[]` by construction until the shadow transcript lands.
-  const existing = args.sessionId === undefined ? null : await persistence.getSession(args.sessionId);
-  if (existing !== null && existing.engineId !== "claude") {
-    // Never take over another engine's row: the session's whole history and
-    // native ref belong to that engine.
-    throw new Error(`Session ${existing.id} belongs to engine "${existing.engineId ?? "core"}", not claude`);
-  }
+  // session exists and is proven signed-in before any row is written. CREATE
+  // for a fresh spawn, TOUCH for a resume — never a second INSERT on the same
+  // primary key (main sends `--resume <id>` for every respawn).
   const sessionRow = {
     workspace,
-    // Both values are the RESOLVED ones the engine settled on (catalog-verified
-    // model, validated preset) — never the raw draft input.
+    // Both values are the RESOLVED ones the engine settled on at connect time
+    // (catalog-verified model, validated preset) — never the raw draft/
+    // persisted input. For a resume this is the REQUESTED posture; the
+    // ACTUALLY settled one is confirmed below, from the first turn's
+    // `system/init`, and patched in if it diverged.
     model: connected.model,
     // The `mode` TEXT column stores the Claude preset id verbatim, the same
     // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
     // column back as a core PermissionMode for a Claude session.
     mode: connected.presetId as PermissionMode,
     engineId: "claude" as const,
-    // The native ref. It is OURS: `--session-id <uuid>` rides the spawn argv,
-    // so the ref is known here without waiting for a turn; `system/init` echoes
-    // this exact value back on every turn (probe #1).
+    // The native ref. For a fresh spawn it is OURS (`--session-id <uuid>`
+    // rides the spawn argv); for a resume it is the persisted ref, echoed
+    // verbatim (resumeClaudeEngine never falls back to a new session).
     externalSessionRef: connected.sessionRef,
   };
-  let sessionMeta;
-  if (existing === null) {
+  let sessionMeta: SessionMeta;
+  if (connected.sessionMeta === null) {
     sessionMeta = await persistence.createSession({ id: args.sessionId ?? randomUUID(), ...sessionRow });
   } else {
-    await persistence.touchSession(existing.id, sessionRow);
-    sessionMeta = { ...existing, ...sessionRow };
+    await persistence.touchSession(connected.sessionMeta.id, sessionRow);
+    sessionMeta = { ...connected.sessionMeta, ...sessionRow };
   }
 
-  const booted = await plugin.boot({ claudeEngine: connected.engine });
+  // Resume-projection (cut §1.5 DoD-2): built ONCE at boot, from the shadow
+  // mirror only — `[]` for a fresh session (nothing to hydrate yet).
+  const mirrorRows = connected.sessionMeta === null ? [] : await shadowTranscript.list(connected.sessionRef);
+  const bootHistory = projectClaudeHistory(mirrorRows);
+  const nextTurnOrdinal = mirrorRows.reduce((max, row) => Math.max(max, row.turnOrdinal + 1), 0);
+  const claudeEngine = connected.engine;
+  const shadowEngine = new ClaudeShadowTranscriptEngine(
+    claudeEngine,
+    shadowTranscript,
+    connected.sessionRef,
+    bootHistory,
+    nextTurnOrdinal,
+    connected.sessionMeta === null
+      ? undefined
+      : // Test-hazard (б): our persisted row may diverge from what the resumed
+        // native session actually settled on (it keeps its own model/mode
+        // across process death, probe #4) — truth is the FIRST observed
+        // `system/init` of the resumed session, patched back here, once.
+        ({ model, permissionMode }) => {
+          const resumedSessionId = sessionMeta.id;
+          const presetId = findClaudePresetByMode(permissionMode as ClaudeWirePermissionMode)?.id;
+          const patch: Record<string, unknown> = {};
+          if (sessionMeta.model !== model) patch.model = model;
+          if (presetId !== undefined && sessionMeta.mode !== presetId) patch.mode = presetId;
+          if (Object.keys(patch).length === 0) return;
+          void persistence?.touchSession(resumedSessionId, patch).catch((error) => {
+            console.error(`[host] touchSession (claude resume settle) failed: ${describeError(error)}`);
+          });
+        },
+  );
+
+  const booted = await plugin.boot({ claudeEngine: shadowEngine });
   const fs = new NodeFileSystemAdapter();
 
   // Shell wiring, identical to the codex branch: AnyCode's own repo context
@@ -763,11 +820,17 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   session = new Session({
     outbound,
     engine: booted.engine,
+    // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
+    // codex's choose-now/apply-at-next-turn one — settings-seam.ts).
+    engineSettings: new ClaudeSettingsSeam(claudeEngine),
     broker,
     fs,
     workspace,
     model: connected.model,
     sessionId: sessionMeta.id,
+    // The resume projection built above — `[]` for a fresh session, the
+    // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
+    bootHistory,
     hasTitle: sessionMeta.title !== undefined && sessionMeta.title.length > 0,
     rules: new SessionPermissionRules(),
     git: gitBridge,
@@ -782,9 +845,9 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       },
     },
   });
-  // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated and
-  // the id is our own row id — no account email, token, subscription type or
-  // cost figure is ever written to a log line.
+  // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated (or
+  // the persisted one, on resume) and the id is our own row id — no account
+  // email, token, subscription type or cost figure is ever written to a log line.
   console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${sessionMeta.id} db=${dbPath}`);
 }
 

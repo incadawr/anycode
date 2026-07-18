@@ -320,6 +320,32 @@ describe("ClaudeTurnTranslator — finish() guarantees (codex TurnTranslator par
   });
 });
 
+describe("ClaudeTurnTranslator — resume dedup (SLICE-CC D-min, cut §1.5 DoD-3)", () => {
+  /**
+   * `--resume` never re-emits history on the wire (probe #4): part2 carries
+   * only a fresh `system/init` + the `--replay-user-messages` echo of the
+   * NEW input + a normal new turn — nothing from turn1. So the only dedup
+   * unit CC-D needs is that the echo of the new input (`isReplay:true`,
+   * `w0-16-setmodel.jsonl` hazard (д)'s same class) projects nothing, while
+   * the turn's real content still projects normally.
+   */
+  it("projects zero events for the echoed new-input user frame, and the real turn content normally, over w0-04-resume-part2.jsonl", () => {
+    const frames = streamFrames("w0-04-resume-part2.jsonl");
+    const echoFrame = frames.find((frame) => frame.type === "user");
+    expect(echoFrame).toMatchObject({ isReplay: true });
+
+    const events = translate("w0-04-resume-part2.jsonl");
+    // No user-authored event exists in AnyCode's vocabulary at all — the
+    // discriminating assert is that the echo contributed NOTHING (not text,
+    // not a duplicate turn marker) while the assistant's real reply and the
+    // terminal frames still came through.
+    const text = ofType(events, "text_delta").map((event) => event.text).join("");
+    expect(text).toContain("RESUME-PART2-OK");
+    expect(ofType(events, "turn_end")).toHaveLength(1);
+    expect(ofType(events, "loop_end")).toHaveLength(1);
+  });
+});
+
 describe("ClaudeTurnTranslator — drift-gate contribution (cut §3.3 layer-1 item (в-translator))", () => {
   it("chews every inbound stream frame of every committed fixture without an unknown-shape throw", () => {
     const files = readdirSync(FIXTURES_DIR).filter((name) => name.endsWith(".jsonl"));
