@@ -1,0 +1,146 @@
+{
+  "generatedFrom": "claude v2.1.212 (fixtures; drift-verified on 2.1.214 — read-only surfaces)",
+  "supportedVersionFloor": ">=2.1.212",
+  "gatedCapability": "interrupt_receipt_v1",
+  "expectedCapabilities": ["interrupt_receipt_v1", "msg_lifecycle_v1"],
+  "messageTypes": {
+    "live": [
+      "system",
+      "assistant",
+      "user",
+      "result",
+      "stream_event",
+      "rate_limit_event",
+      "control_request",
+      "control_response",
+      "control_cancel_request"
+    ],
+    "evidence": [
+      "w0-01-persistence.jsonl",
+      "w0-02-control-writeprobe.jsonl",
+      "w0-03-interrupt-pending.jsonl",
+      "w0-13-authprobe-signedin.jsonl",
+      "w0-15-usage.jsonl",
+      "w0-16-setmodel.jsonl"
+    ]
+  },
+  "systemSubtypes": {
+    "live": ["init", "status", "permission_denied"],
+    "typedOnly": ["api_retry", "hook_started", "hook_response"],
+    "evidence": ["w0-01-persistence.jsonl", "w0-08-permmodes.jsonl"]
+  },
+  "systemInit": {
+    "requiredKeyPaths": [
+      "session_id:string",
+      "model:string",
+      "permissionMode:string",
+      "cwd:string",
+      "tools[]:string",
+      "mcp_servers[]",
+      "slash_commands[]:string",
+      "skills[]:string",
+      "capabilities[]:string",
+      "claude_code_version:string"
+    ],
+    "note": "Init-fixture pin MUST be captured under the full AnyCode isolation flag set + isolated CLAUDE_CONFIG_DIR (contract §4.3) — w0-01-persistence.jsonl was captured with --setting-sources project,local --strict-mcp-config but a DEFAULT config dir, so `mcp_servers`/`tools` sizes there are not AnyCode's own spawn shape; only the KEY-PATH structure (not counts) is pinned here.",
+    "evidence": ["w0-01-persistence.jsonl"]
+  },
+  "resultSubtypes": {
+    "live": ["success", "error_during_execution"],
+    "typedOnly": ["error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"],
+    "requiredKeyPaths": [
+      "subtype:string",
+      "is_error:boolean",
+      "num_turns:number",
+      "duration_ms:number",
+      "duration_api_ms:number",
+      "total_cost_usd:number",
+      "session_id:string"
+    ],
+    "localZeroCostDiscriminator": "num_turns:0 AND duration_api_ms:0 (message.model:\"<synthetic>\" on the paired assistant frame)",
+    "evidence": ["w0-01-persistence.jsonl", "w0-03-interrupt-pending.jsonl"]
+  },
+  "rateLimitEvent": {
+    "requiredKeyPaths": ["rate_limit_info.status:string", "session_id:string"],
+    "evidence": ["w0-01-persistence.jsonl", "w0-03-interrupt-pending.jsonl"]
+  },
+  "controlRequestsSent": {
+    "initialize": {
+      "requiredResponseKeyPaths": [
+        "account.apiProvider:string",
+        "models[].value:string",
+        "models[].resolvedModel:string"
+      ],
+      "note": "account.subscriptionType is live only when SIGNED IN; account.tokenSource is live only on a SIGNED-OUT probe (w0-07/w0-13-authprobe-signedout) — the two are mutually exclusive, so neither is in requiredResponseKeyPaths (a universally-required set); the doctor/client read whichever is present. `commands[]` is deliberately NOT required: AnyCode's OWN spawn argv always carries --disable-slash-commands, which zeroes `commands` to `[]` BY DESIGN (probe #6) — the evidence fixture below (w0-13-authprobe-signedin.jsonl) omits that flag and does observe populated commands, but pinning a per-item field on it would contradict AnyCode's actual spawn contract; live-verified empty on the real 2.1.214 binary under AnyCode's own argv.",
+      "evidence": ["w0-13-authprobe-signedin.jsonl", "w0-13-authprobe-signedout.jsonl", "w0-07-verify1-configdir-probe.jsonl"]
+    },
+    "get_usage": {
+      "requiredResponseKeyPaths": ["rate_limits_available:boolean", "session.total_cost_usd:number"],
+      "conditionalKeyPaths": {
+        "when rate_limits_available === true": [
+          "subscription_type:string",
+          "rate_limits.limits[].kind:string",
+          "rate_limits.limits[].percent:number",
+          "rate_limits.limits[].severity:string",
+          "rate_limits.limits[].is_active:boolean"
+        ]
+      },
+      "note": "CC-B B4 layer-2 live probe (2.1.214, this machine's own login) found a shape NOT in any W0 fixture: `rate_limits_available:false` with `subscription_type`/`rate_limits`/`behaviors` all `null` — plausibly a non-Claude-Max auth mode (API key / non-subscription). Only `rate_limits_available` itself and `session.total_cost_usd` are unconditionally required; the richer `limits[]` shape W0 captured is conditional on `rate_limits_available === true` and is NOT asserted by the always-on layer-1 gate (residual, quota-UI consumer CC-E must branch on the flag). Subset semantics is separately load-bearing here (contract §6.2): the live payload is already a strict superset of the SDK type (8 undeclared rate_limits buckets, all unreleased-feature codenames) — never validate with .strict()/exhaustive key enumeration.",
+      "evidence": ["w0-15-usage.jsonl"]
+    },
+    "get_context_usage": {
+      "requiredResponseKeyPaths": [
+        "totalTokens:number",
+        "maxTokens:number",
+        "percentage:number",
+        "autoCompactThreshold:number",
+        "isAutoCompactEnabled:boolean",
+        "model:string",
+        "categories[].name:string",
+        "categories[].tokens:number"
+      ],
+      "conditionalKeyPaths": {
+        "when memoryFiles[] is non-empty": ["memoryFiles[].path:string", "memoryFiles[].type:string", "memoryFiles[].tokens:number"]
+      },
+      "note": "CC-B B4 layer-2 live probe (2.1.214) found `memoryFiles: []` on a run where `~/.claude/CLAUDE.md` genuinely exists on disk — memoryFiles[] entry presence is not universal even for an existing global CLAUDE.md (mechanism not fully understood; plausibly tied to the same non-subscription auth mode that also zeroed get_usage's rate_limits, or to cwd not being a project the CLI recognizes). The per-entry shape (`path`/`type`/`tokens`) is still evidenced live whenever the array IS populated (all four w0-17 custody arms) — memoryFiles[].path carries the REAL home path even under full CLAUDE_CONFIG_DIR isolation (R-W0-6/C2), and CC-B's client redacts it at the parse layer; the redactor is unit-tested directly (claude-client.test.ts) and via the w0-17-custody-B-isolated.jsonl regression, independent of whether THIS run's array happened to be empty.",
+      "evidence": ["w0-15-usage.jsonl", "w0-17-custody-A-default.jsonl", "w0-17-custody-B-isolated.jsonl", "w0-17-custody-C-project.jsonl"]
+    },
+    "interrupt": {
+      "requiredResponseKeyPaths": ["still_queued[]"],
+      "evidence": ["w0-03-interrupt-early.jsonl", "w0-03-interrupt-pending.jsonl"]
+    },
+    "set_permission_mode": {
+      "requiredResponseKeyPaths": ["mode:string"],
+      "note": "Echo-body ack — differs from set_model, which has NO response body on success at all.",
+      "evidence": ["w0-08-permmodes.jsonl", "w0-08-permmodes2.jsonl"]
+    },
+    "set_model": {
+      "requiredResponseKeyPaths": [],
+      "note": "Success = {subtype:\"success\",request_id} with NO `response` key at all (absent, not empty). Reject = {subtype:\"error\",error:string}. Discriminate on response.subtype, never on the error text.",
+      "evidence": ["w0-16-setmodel.jsonl"]
+    },
+    "apply_flag_settings": {
+      "requiredResponseKeyPaths": [],
+      "note": "Success = {subtype:\"success\"} only, no response body.",
+      "evidence": ["w0-14-apply-flag-settings.jsonl"]
+    }
+  },
+  "controlRequestsReceived": {
+    "can_use_tool": {
+      "requiredRequestKeyPaths": ["tool_name:string", "input.file_path:string", "tool_use_id:string"],
+      "requiredAllowResponseKeyPaths": ["behavior:string", "toolUseID:string"],
+      "requiredDenyResponseKeyPaths": ["behavior:string", "message:string"],
+      "evidence": ["w0-02-control-writeprobe.jsonl", "w0-08-permmodes.jsonl", "w0-08-permmodes2.jsonl"]
+    }
+  },
+  "controlCancelRequest": {
+    "requiredKeyPaths": ["request_id:string"],
+    "note": "CLI -> host, withdrawing one of ITS own pending control_request(s) to us (contract §2.2 pairing rule) — our client must drop the pending handler without answering.",
+    "evidence": ["w0-03-interrupt-pending.jsonl"]
+  },
+  "unhandledSubtypeRule": "Any control_request subtype CC-B does not implement MUST still get a fail-closed control_response error envelope carrying the same request_id — silence hangs the CLI's turn (contract §2.2, normative).",
+  "custody": {
+    "neverPersisted": ["account.email", "account.organization", "total_cost_usd (raw, beyond in-memory session aggregate)", "CLAUDE_CODE_OAUTH_TOKEN / setup-token output"],
+    "redactedAtParseLayer": ["memoryFiles[].path (both /Users/<user> literal AND -Users-<user> dash-slug encodings)"]
+  }
+}
