@@ -9,6 +9,12 @@
 //   node w0-control-harness.mjs <scenario> <out-fixture.jsonl> [claude-bin]
 //
 // Scenarios: baseline | interrupt-early | interrupt-pending | permmodes | resume-emit
+//            | authprobe | usage-probe | setmodel-probe
+//
+// usage-probe / setmodel-probe / authprobe are HANDSHAKE-ONLY: they drive the
+// control channel and finish without ever sending a `user` message, so they
+// bill $0 (no `type:"result"` is ever produced — its presence in a fixture from
+// these scenarios would mean the probe design leaked a live turn).
 //
 // Env hygiene: strips CLAUDECODE/CLAUDE_CODE_ENTRYPOINT/ANTHROPIC_API_KEY/
 // ANTHROPIC_AUTH_TOKEN from the child's env (nested-spawn hygiene per lane brief).
@@ -17,6 +23,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import fs from "node:fs";
+import os from "node:os";
 
 const [, , scenario, outFixture, claudeBinArg] = process.argv;
 if (!scenario || !outFixture) {
@@ -30,13 +37,15 @@ for (const k of ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "ANTHROPIC_API_KEY", "A
   delete env[k];
 }
 
+// W0_NO_REPLAY=1 drops --replay-user-messages, to test whether a wire artifact
+// is genuinely emitted by the CLI or is only an echo of that flag.
 const baseArgs = [
   "-p",
   "--input-format", "stream-json",
   "--output-format", "stream-json",
   "--verbose",
   "--include-partial-messages",
-  "--replay-user-messages",
+  ...(process.env.W0_NO_REPLAY === "1" ? [] : ["--replay-user-messages"]),
   "--setting-sources", "project,local",
   "--strict-mcp-config",
   // Hidden flag (absent from --help in v2.1.212, confirmed present in the
@@ -54,13 +63,34 @@ const t0 = Date.now();
 // logged-in account's email/org (SDKControlInitializeResponse.account) — this
 // is NOT gated by --setting-sources and must never land in a public-repo
 // fixture. Redact in place, recursively, at record time.
+//
+// Home-path redaction: get_context_usage.memoryFiles[].path (and other file
+// paths in control payloads) carry the absolute home prefix. The structural
+// fact — which files, how many tokens — is contract-relevant and kept; the
+// operator's username is not. Applied to string values AND object keys, since
+// some payloads key by path.
+// Two encodings of the home path leak into control payloads:
+//   1. literal            -> /Users/<user>/.claude/...
+//   2. dash-encoded slug  -> ~/.claude/projects/-Users-<user>-projects-.../
+// get_context_usage.memoryFiles[].path carries BOTH (an AutoMem file lives under
+// the slug dir), so redacting only the literal form still ships the username.
+const HOME = os.homedir();
+const HOME_SLUG = HOME.replace(/\//g, "-");
+function scrubPath(s) {
+  let out = s;
+  if (HOME && out.includes(HOME)) out = out.split(HOME).join("[HOME]");
+  if (HOME_SLUG && out.includes(HOME_SLUG)) out = out.split(HOME_SLUG).join("[HOME-SLUG]");
+  return out;
+}
 function scrub(node) {
+  if (typeof node === "string") return scrubPath(node);
   if (Array.isArray(node)) return node.map(scrub);
   if (node && typeof node === "object") {
     const out = {};
     for (const [k, v] of Object.entries(node)) {
-      if (k === "email" || k === "organization") { out[k] = "[REDACTED]"; continue; }
-      out[k] = scrub(v);
+      const key = scrubPath(k);
+      if (key === "email" || key === "organization") { out[key] = "[REDACTED]"; continue; }
+      out[key] = scrub(v);
     }
     return out;
   }
@@ -70,7 +100,7 @@ function scrub(node) {
 function rec(dir, raw, extra) {
   let parsed = null;
   try { parsed = JSON.parse(raw); } catch { /* keep raw only */ }
-  lines.push({ t_ms: Date.now() - t0, dir, ...(extra || {}), raw: parsed ? scrub(parsed) : raw });
+  lines.push({ t_ms: Date.now() - t0, dir, ...(extra || {}), raw: parsed ? scrub(parsed) : scrubPath(String(raw)) });
 }
 function flush() {
   fs.writeFileSync(outFixture, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
@@ -100,6 +130,18 @@ function runScenario(name) {
       child.stdin.write(line + "\n");
     }
 
+    // Handshake-only probe sequencing: label each control_request we originate so
+    // its control_response can be matched back and drive the next step. Used by
+    // the $0 scenarios (usage-probe / setmodel-probe) which never send a `user`
+    // message and therefore never bill a model turn.
+    const pendingControl = new Map();
+    function sendControl(label, request) {
+      const reqId = randomUUID();
+      pendingControl.set(reqId, label);
+      send({ type: "control_request", request_id: reqId, request });
+      return reqId;
+    }
+
     const rl = createInterface({ input: child.stdout });
     let turnCount = 0;
     let modeIdx = 0;
@@ -121,12 +163,21 @@ function runScenario(name) {
     child.on("close", (code, signal) => { rec("meta", JSON.stringify({ event: "close", code, signal })); finish("close"); });
 
     let initRequestId = null;
+    let initPayload = null;
     function handle(msg) {
       if (msg.type === "control_response") {
         if (msg.response?.request_id === initRequestId) {
+          initPayload = msg.response?.response || null;
           rec("meta", JSON.stringify({ event: "init_handshake_ack", subtype: msg.response?.subtype }));
           if (name === "authprobe") { finish("authprobe_zero_cost_no_turn_sent"); return; }
           if (msg.response?.subtype === "success") afterInit();
+          return;
+        }
+        const label = pendingControl.get(msg.response?.request_id);
+        if (label) {
+          pendingControl.delete(msg.response.request_id);
+          rec("meta", JSON.stringify({ event: "probe_response", label, subtype: msg.response?.subtype }));
+          probeStep(label, msg.response?.response);
         }
         return; // our own requests' acks
       }
@@ -188,6 +239,48 @@ function runScenario(name) {
         send({ type: "user", message: { role: "user", content: "Reply with exactly: RESUME-OK" } });
       } else if (name === "persistence") {
         send({ type: "user", message: { role: "user", content: "Reply with exactly: TURN-ONE-OK" } });
+      } else if (name === "usage-probe") {
+        sendControl("get_usage", { subtype: "get_usage" });
+      } else if (name === "setmodel-probe") {
+        rec("meta", JSON.stringify({
+          event: "init_models_offered",
+          models: (initPayload?.models || []).map((m) => ({ value: m.value, resolvedModel: m.resolvedModel })),
+        }));
+        sendControl("ctx_before", { subtype: "get_context_usage" });
+      }
+    }
+
+    // Handshake-only step machines. Neither ever sends a `user` message, so no
+    // model turn is billed; `get_context_usage.model` is used as the free
+    // observable for whether a set_model actually took effect.
+    let baselineModel = null;
+    function probeStep(label, payload) {
+      if (name === "usage-probe") {
+        if (label === "get_usage") { sendControl("get_context_usage", { subtype: "get_context_usage" }); return; }
+        if (label === "get_context_usage") { finish("usage_probe_done_no_turn_sent"); return; }
+        return;
+      }
+      if (name !== "setmodel-probe") return;
+      if (label === "ctx_before") {
+        baselineModel = payload?.model ?? null;
+        // Pick a model that differs from the session's current one, so a successful
+        // set_model is discriminable from a silent no-op via get_context_usage.model.
+        const offered = initPayload?.models || [];
+        const target = (offered.find((m) => m.resolvedModel && m.resolvedModel !== baselineModel) || offered[0])?.value;
+        rec("meta", JSON.stringify({ event: "setmodel_target_chosen", baselineModel, target }));
+        sendControl("set_model_valid", { subtype: "set_model", model: target });
+        return;
+      }
+      if (label === "set_model_valid") { sendControl("ctx_after_valid", { subtype: "get_context_usage" }); return; }
+      if (label === "ctx_after_valid") {
+        rec("meta", JSON.stringify({ event: "model_after_valid_setmodel", model: payload?.model ?? null, baselineModel }));
+        sendControl("set_model_invalid", { subtype: "set_model", model: "no-such-model-xyz" });
+        return;
+      }
+      if (label === "set_model_invalid") { sendControl("ctx_after_invalid", { subtype: "get_context_usage" }); return; }
+      if (label === "ctx_after_invalid") {
+        rec("meta", JSON.stringify({ event: "model_after_invalid_setmodel", model: payload?.model ?? null }));
+        finish("setmodel_probe_done_no_turn_sent");
       }
     }
 
