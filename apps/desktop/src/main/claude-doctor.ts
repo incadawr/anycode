@@ -223,10 +223,12 @@ function preflightVersion(
   env: NodeJS.ProcessEnv,
   spawnImpl: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess,
   timeoutMs: number,
+  cancellation?: DoctorCancellation,
 ): Promise<PreflightResult> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
+    let disarm: () => void = () => {};
     const child = spawnImpl(binaryPath, ["--version"], {
       env,
       shell: false,
@@ -237,10 +239,14 @@ function preflightVersion(
     const settle = (result: PreflightResult): void => {
       if (settled) return;
       settled = true;
+      disarm();
       clearTimeout(timer);
+      // The group dies before this promise resolves, on EVERY path including
+      // cancellation — that is the property the outer watchdog now depends on.
       signalGroupOrChild(child, "SIGKILL");
       resolve(result);
     };
+    disarm = cancellation?.arm(() => settle({ error: "claude doctor aborted" })) ?? (() => {});
     const timer = setTimeout(() => {
       settle({ error: `Claude version check timed out after ${timeoutMs}ms` });
     }, timeoutMs);
@@ -274,6 +280,7 @@ async function runInitializeHandshake(
   env: NodeJS.ProcessEnv,
   spawnImpl: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess,
   timeoutMs: number,
+  cancellation?: DoctorCancellation,
 ): Promise<HandshakeResult> {
   const child = spawnImpl(binaryPath, AUTH_PROBE_ARGS, {
     env,
@@ -289,15 +296,21 @@ async function runInitializeHandshake(
 
   const result = await new Promise<HandshakeResult>((resolve) => {
     let settled = false;
+    let disarm: () => void = () => {};
     const settle = (value: HandshakeResult): void => {
       if (settled) return;
       settled = true;
+      disarm();
       clearTimeout(timer);
       resolve(value);
     };
     const timer = setTimeout(() => {
       settle({ ok: false, error: `Claude auth-probe timed out after ${timeoutMs}ms waiting for control_response` });
     }, timeoutMs);
+    // Cancellation settles this promise early, but the bounded teardown below
+    // it still runs to completion before the function returns — the child is
+    // never left behind for an app exit to orphan.
+    disarm = cancellation?.arm(() => settle({ ok: false, error: "claude doctor aborted" })) ?? (() => {});
 
     child.stdout?.on("data", (chunk: Buffer) => {
       lineBuffer += decoder.write(chunk);
@@ -379,20 +392,48 @@ async function runInitializeHandshake(
   return result;
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
+/**
+ * Relays the outer watchdog/abort INTO whichever phase is currently running.
+ *
+ * Racing the phase chain to a return instead (`Promise.race([steps, aborted])`)
+ * is what this replaces, and it was unsound: the race resolves while the phase
+ * is still holding a live, detached `claude` child, so the caller believes the
+ * doctor settled and an immediate app exit abandons the teardown promise —
+ * leaving the process group orphaned. Cancelling through this instead lets the
+ * active phase settle EARLY but still through its own bounded EOF/TERM/KILL
+ * chain, so `runClaudeDoctor` never returns while a child is alive.
+ */
+class DoctorCancellation {
+  private active: (() => void) | null = null;
+  private tripped = false;
+
+  get cancelled(): boolean {
+    return this.tripped;
+  }
+
+  /**
+   * Registers the running phase's early-settle. Returns its disarm, which the
+   * phase MUST call once it settles for any reason. An already-tripped
+   * cancellation settles the phase immediately.
+   */
+  arm(cancel: () => void): () => void {
+    if (this.tripped) {
+      cancel();
+      return () => {};
+    }
+    this.active = cancel;
+    return () => {
+      if (this.active === cancel) this.active = null;
+    };
+  }
+
+  trip(): void {
+    if (this.tripped) return;
+    this.tripped = true;
+    const cancel = this.active;
+    this.active = null;
+    cancel?.();
+  }
 }
 
 export interface RunClaudeDoctorOptions {
@@ -436,7 +477,8 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     options.timeoutMs ??
     versionTimeoutMs + initTimeoutMs + TEARDOWN_STDIN_EOF_WAIT_MS + TEARDOWN_SIGTERM_WAIT_MS + TEARDOWN_SIGKILL_WAIT_MS + 2_000;
   const childEnv = buildClaudeDoctorChildEnv(options.env ?? process.env, options.profileDir, platform);
-  const quitRequested = (): boolean => options.signal?.aborted === true;
+  const cancellation = new DoctorCancellation();
+  const quitRequested = (): boolean => options.signal?.aborted === true || cancellation.cancelled;
 
   const steps = async (): Promise<ClaudeDoctorReport> => {
     if (quitRequested()) {
@@ -446,7 +488,7 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     if (untrusted !== null) {
       return { status: "error", error: untrusted };
     }
-    const preflight = await preflightVersion(binaryPath, childEnv, spawnImpl, versionTimeoutMs);
+    const preflight = await preflightVersion(binaryPath, childEnv, spawnImpl, versionTimeoutMs, cancellation);
     if (preflight.error !== undefined) {
       return { status: "error", error: preflight.error };
     }
@@ -470,7 +512,7 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
       return { status: "error", error: untrustedAtSpawn };
     }
 
-    const handshake = await runInitializeHandshake(binaryPath, childEnv, spawnImpl, initTimeoutMs);
+    const handshake = await runInitializeHandshake(binaryPath, childEnv, spawnImpl, initTimeoutMs, cancellation);
     if (!handshake.ok) {
       return { status: "error", version, error: handshake.error };
     }
@@ -480,22 +522,33 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     return { status: isClaudeSignedIn(handshake.account) ? "ready" : "signed_out", version };
   };
 
-  const run = withTimeout(steps(), watchdogMs, `claude doctor exceeded its ${watchdogMs}ms watchdog`);
-  run.catch(() => {});
-  const aborted = new Promise<never>((_resolve, reject) => {
-    const signal = options.signal;
-    if (signal === undefined) return;
-    if (signal.aborted) {
-      reject(new Error("claude doctor aborted"));
-      return;
-    }
-    signal.addEventListener("abort", () => reject(new Error("claude doctor aborted")), { once: true });
-  });
-  aborted.catch(() => {});
+  // The watchdog and the abort signal both CANCEL rather than race: whichever
+  // fires trips the active phase, and we then AWAIT the phase chain so its
+  // bounded teardown (EOF -> SIGTERM -> SIGKILL -> group sweep) has completed
+  // before this function returns. Returning early instead would hand the caller
+  // a settled doctor while a detached `claude` child was still alive, and an
+  // immediate app exit would abandon the teardown promise and orphan the group.
+  let watchdogFired = false;
+  const watchdog = setTimeout(() => {
+    watchdogFired = true;
+    cancellation.trip();
+  }, watchdogMs);
+  const onAbort = (): void => cancellation.trip();
+  const signal = options.signal;
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted === true) cancellation.trip();
 
   try {
-    return await Promise.race([run, aborted]);
+    const report = await steps();
+    if (!cancellation.cancelled) return report;
+    return {
+      status: "error",
+      error: watchdogFired ? `claude doctor exceeded its ${watchdogMs}ms watchdog` : "claude doctor aborted",
+    };
   } catch (error) {
     return { status: "error", error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(watchdog);
+    signal?.removeEventListener("abort", onAbort);
   }
 }

@@ -21,6 +21,7 @@ import type {
   ClaudeSystemInitMessage,
   ClaudeUserMessage,
   SDKAssistantMessageError,
+  TerminalReason,
 } from "./protocol.js";
 import { isClaudeSystemInitMessage } from "./protocol.js";
 
@@ -73,20 +74,80 @@ function assistantErrorMessage(error: string): string {
 }
 
 /**
- * The terminal `result` frame's own account of how the turn ended.
- * `terminal_reason` is canonical (cut §1.4 table); `subtype` is only the
- * fallback — and specifically NOT `is_error`, which lies in the signed-out
- * case (`subtype:"success"` WITH `is_error:true`, probe #12; the truth there
- * arrives earlier, on `assistant.error`, and has already been latched).
+ * Every `TerminalReason` the contract enumerates, classified. `terminal_reason`
+ * is CANONICAL (cut §1.4 table), and treating it as canonical means mapping all
+ * of it: the signed-out fixture carries `terminal_reason:"api_error"` together
+ * with `subtype:"success"` (probe #12), so a mapping that handles three reasons
+ * and then defers to `subtype` reports a failed turn as `loop_end:"completed"`.
+ *
+ * `is_error` is deliberately not consulted anywhere — it is the field that lies
+ * in that same fixture.
+ */
+const TERMINAL_REASON_OUTCOMES: Record<TerminalReason, { loop: LoopEndReason; finish: FinishReason }> = {
+  completed: { loop: "completed", finish: "stop" },
+  // User/host cancellation — the interrupt path (probe #3).
+  aborted_streaming: { loop: "cancelled", finish: "other" },
+  aborted_tools: { loop: "cancelled", finish: "other" },
+  background_requested: { loop: "cancelled", finish: "other" },
+  // Bounded-out rather than broken.
+  max_turns: { loop: "max_turns", finish: "length" },
+  budget_exhausted: { loop: "max_turns", finish: "length" },
+  // Hooks stopping a turn is a policy decision, not a failure.
+  stop_hook_prevented: { loop: "completed", finish: "stop" },
+  hook_stopped: { loop: "completed", finish: "stop" },
+  // Genuine failures.
+  blocking_limit: { loop: "error", finish: "error" },
+  rapid_refill_breaker: { loop: "error", finish: "error" },
+  prompt_too_long: { loop: "error", finish: "error" },
+  image_error: { loop: "error", finish: "error" },
+  model_error: { loop: "error", finish: "error" },
+  api_error: { loop: "error", finish: "error" },
+  malformed_tool_use_exhausted: { loop: "error", finish: "error" },
+  tool_deferred: { loop: "error", finish: "error" },
+  tool_deferred_unavailable: { loop: "error", finish: "error" },
+  structured_output_retry_exhausted: { loop: "error", finish: "error" },
+  turn_setup_failed: { loop: "error", finish: "error" },
+};
+
+/** Why a turn failed, for the ONE terminal `error` event an error terminal must carry. */
+const TERMINAL_REASON_MESSAGES: Partial<Record<TerminalReason, string>> = {
+  blocking_limit: "Claude stopped the turn: a usage limit was reached.",
+  rapid_refill_breaker: "Claude stopped the turn: too many requests in a short window.",
+  prompt_too_long: "Claude stopped the turn: the prompt exceeded the model's context window.",
+  image_error: "Claude stopped the turn: an attached image could not be processed.",
+  model_error: "Claude stopped the turn: the model reported an error.",
+  api_error: "Claude stopped the turn: the API request failed.",
+  malformed_tool_use_exhausted: "Claude stopped the turn: it could not produce a well-formed tool call.",
+  tool_deferred: "Claude stopped the turn: a tool call was deferred and AnyCode does not support deferral.",
+  tool_deferred_unavailable: "Claude stopped the turn: a deferred tool was unavailable.",
+  structured_output_retry_exhausted: "Claude stopped the turn: structured output could not be produced.",
+  turn_setup_failed: "Claude stopped the turn: it could not be started.",
+};
+
+/**
+ * `terminal_reason` is canonical; `subtype` is consulted ONLY when the frame
+ * carries no terminal reason at all (an older CLI, or a shape the contract has
+ * not seen). `is_error` is never consulted — see above.
  */
 function resultOutcome(result: ClaudeResultMessage): { loop: LoopEndReason; finish: FinishReason } {
   const reason = result.terminal_reason;
-  if (reason === "aborted_streaming" || reason === "aborted_tools") {
-    return { loop: "cancelled", finish: "other" };
+  if (reason !== undefined) {
+    const mapped = TERMINAL_REASON_OUTCOMES[reason];
+    // An unknown FUTURE reason is not silently a success: it degrades to the
+    // subtype fallback below rather than being asserted as completed.
+    if (mapped !== undefined) return mapped;
   }
-  if (reason === "max_turns") return { loop: "max_turns", finish: "length" };
   if (result.subtype === "success") return { loop: "completed", finish: "stop" };
   return { loop: "error", finish: "error" };
+}
+
+/** The failure text an error terminal should carry when nothing earlier latched one. */
+function resultErrorMessage(result: ClaudeResultMessage): string {
+  const reason = result.terminal_reason;
+  const known = reason === undefined ? undefined : TERMINAL_REASON_MESSAGES[reason];
+  if (known !== undefined) return known;
+  if (reason !== undefined) return `Claude ended the turn with an error (${reason}).`;
+  return `Claude ended the turn with an error (${result.subtype}).`;
 }
 
 function toolStatus(isError: unknown): ToolCallStatus {
@@ -132,6 +193,15 @@ export class ClaudeTurnTranslator {
   private finished = false;
   /** Latches the ONE terminal `{type:"error"}` a turn may emit. */
   private errorEmitted = false;
+  /**
+   * A failure observed mid-turn (`assistant.error`, or an `api_retry` that can
+   * never succeed). Forces the terminal to be an ERROR terminal even if the
+   * `result` frame claims otherwise — the signed-out fixture claims
+   * `subtype:"success"` on a turn that plainly failed (probe #12).
+   */
+  private failureLatched = false;
+  /** The message the terminal `error` event carries when nothing has been emitted yet. */
+  private latchedFailureMessage: string | null = null;
 
   constructor(private readonly options: ClaudeTurnTranslatorOptions) {}
 
@@ -194,6 +264,16 @@ export class ClaudeTurnTranslator {
         // typed-only in v2.1.212 (no natural retry occurred during W0) — mapped
         // because the turn keeps running and the user deserves to know why it stalled.
         const detail = text(frame.error) ?? text(frame.message);
+        // ...except when the "retry" cannot succeed. `authentication_failed`
+        // must terminalize the turn with an honest error (cut §1.4 table): a
+        // signed-out profile will fail every retry, and reporting "retrying"
+        // leaves the user watching a turn that can never finish. The error is
+        // LATCHED here and emitted by `finish()` so the turn still ends through
+        // the single terminal path, with exactly one `error` event.
+        if (text(frame.error) === "authentication_failed") {
+          this.latchFailure(assistantErrorMessage("authentication_failed"));
+          return [];
+        }
         return [{
           type: "engine_notice",
           level: "retry",
@@ -214,6 +294,7 @@ export class ClaudeTurnTranslator {
     // so THIS is where a turn's real failure becomes visible.
     if (typeof message.error === "string" && !this.errorEmitted) {
       this.errorEmitted = true;
+      this.failureLatched = true;
       events.push({ type: "error", error: new Error(assistantErrorMessage(message.error)) });
     }
     const content = message.message?.content;
@@ -377,9 +458,22 @@ export class ClaudeTurnTranslator {
     return [{ type: "engine_notice", level: "warning", message: detail }];
   }
 
+  /** Records a mid-turn failure whose terminal `error` event `finish()` will emit. */
+  private latchFailure(message: string): void {
+    this.failureLatched = true;
+    if (this.latchedFailureMessage === null) this.latchedFailureMessage = message;
+  }
+
   private onResult(message: ClaudeResultMessage): AgentEvent[] {
     this.options.onResult?.(message);
-    return this.finish(resultOutcome(message));
+    const outcome = resultOutcome(message);
+    // A failure latched earlier (assistant.error / unrecoverable api_retry)
+    // overrides a `result` that claims success — probe #12's fixture is exactly
+    // that shape, and trusting it reports a signed-out turn as completed.
+    if (this.failureLatched && outcome.loop === "completed") {
+      return this.finish({ loop: "error", finish: "error" }, this.latchedFailureMessage ?? resultErrorMessage(message));
+    }
+    return this.finish(outcome, outcome.loop === "error" ? this.latchedFailureMessage ?? resultErrorMessage(message) : undefined);
   }
 
   private closeOpenBlocks(): AgentEvent[] {
@@ -391,11 +485,25 @@ export class ClaudeTurnTranslator {
     return events;
   }
 
-  /** The one terminal path: every open block closed, every dangling tool cancelled, then always `turn_end`+`loop_end`. */
-  private finish(outcome: { loop: LoopEndReason; finish: FinishReason }): AgentEvent[] {
+  /**
+   * The one terminal path: every open block closed, every dangling tool
+   * cancelled, an `error` event when (and only when) the turn ends in error and
+   * none has been emitted yet, then always `turn_end`+`loop_end`.
+   *
+   * `errorEmitted` keeps the "exactly one terminal error" guarantee: an
+   * `assistant.error` earlier in the turn already told the user what went
+   * wrong, so the terminal does not repeat it — but a turn that fails with NO
+   * earlier signal must not end faceless either, which is what an error
+   * `loop_end` with no `error` event looks like in the UI.
+   */
+  private finish(outcome: { loop: LoopEndReason; finish: FinishReason }, errorMessage?: string): AgentEvent[] {
     if (this.finished) return [];
     this.finished = true;
     const events: AgentEvent[] = [...this.closeOpenBlocks()];
+    if (outcome.loop === "error" && !this.errorEmitted) {
+      this.errorEmitted = true;
+      events.push({ type: "error", error: new Error(errorMessage ?? "Claude ended the turn with an error.") });
+    }
     for (const [toolCallId, projection] of this.tools) {
       events.push({
         type: "tool_result",

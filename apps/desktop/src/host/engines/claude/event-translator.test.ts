@@ -358,3 +358,135 @@ describe("ClaudeTurnTranslator — drift-gate contribution (cut §3.3 layer-1 it
     }
   });
 });
+
+/**
+ * cut §1.4 — `result.terminal_reason` is CANONICAL, and treating it as
+ * canonical means mapping all of it. The committed signed-out fixture is the
+ * proof this matters: it carries `terminal_reason:"api_error"` together with
+ * `subtype:"success"` and `is_error:true`, so a mapping that handles three
+ * reasons and then falls through to `subtype` calls a failed turn completed.
+ *
+ * Second half of the same rule: a turn that ends in error must SAY something.
+ * An error `loop_end` with no `error` event is a faceless failure in the UI —
+ * the turn just stops.
+ */
+describe("ClaudeTurnTranslator — terminal reasons are exhaustively mapped, and error terminals carry an error", () => {
+  function result(fields: Record<string, unknown>): ClaudeStreamMessage {
+    return {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      num_turns: 1,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      total_cost_usd: 0,
+      ...fields,
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  function terminalOf(frame: ClaudeStreamMessage): { events: AgentEvent[]; loop: string } {
+    const events = new ClaudeTurnTranslator({ turn: 1 }).onMessage(frame);
+    const loopEnd = events.find((event) => event.type === "loop_end") as Extract<AgentEvent, { type: "loop_end" }>;
+    return { events, loop: loopEnd.reason };
+  }
+
+  it("api_error is an ERROR terminal even when subtype claims success (the signed-out shape, probe #12)", () => {
+    const { events, loop } = terminalOf(result({ terminal_reason: "api_error", is_error: true }));
+    expect(loop).toBe("error");
+    const errors = events.filter((event) => event.type === "error");
+    expect(errors).toHaveLength(1);
+    expect((errors[0]!.error as Error).message).toContain("API request failed");
+  });
+
+  it.each([
+    ["blocking_limit", "error"],
+    ["rapid_refill_breaker", "error"],
+    ["prompt_too_long", "error"],
+    ["image_error", "error"],
+    ["model_error", "error"],
+    ["malformed_tool_use_exhausted", "error"],
+    ["tool_deferred", "error"],
+    ["tool_deferred_unavailable", "error"],
+    ["structured_output_retry_exhausted", "error"],
+    ["turn_setup_failed", "error"],
+    ["aborted_streaming", "cancelled"],
+    ["aborted_tools", "cancelled"],
+    ["background_requested", "cancelled"],
+    ["max_turns", "max_turns"],
+    ["budget_exhausted", "max_turns"],
+    ["completed", "completed"],
+    ["stop_hook_prevented", "completed"],
+    ["hook_stopped", "completed"],
+  ])("terminal_reason %s -> loop_end %s, regardless of subtype:\"success\"", (reason, expected) => {
+    expect(terminalOf(result({ terminal_reason: reason })).loop).toBe(expected);
+  });
+
+  it("every error terminal carries exactly one error event, and it is never faceless", () => {
+    const { events } = terminalOf(result({ terminal_reason: "prompt_too_long" }));
+    const errors = events.filter((event) => event.type === "error");
+    expect(errors).toHaveLength(1);
+    expect((errors[0]!.error as Error).message).toContain("context window");
+    // Order: the error precedes the terminal pair.
+    expect(events.map((event) => event.type).slice(-3)).toEqual(["error", "turn_end", "loop_end"]);
+  });
+
+  it("does not DOUBLE-report: an assistant.error already shown is not repeated at the terminal", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    const early = translator.onMessage({
+      type: "assistant",
+      error: "authentication_failed",
+      message: { model: "m", content: [] },
+    } as unknown as ClaudeStreamMessage);
+    expect(early.filter((event) => event.type === "error")).toHaveLength(1);
+
+    const terminal = translator.onMessage(result({ terminal_reason: "api_error", is_error: true }));
+    expect(terminal.filter((event) => event.type === "error")).toHaveLength(0);
+    expect((terminal.find((event) => event.type === "loop_end") as { reason: string }).reason).toBe("error");
+  });
+
+  it("a latched failure overrides a result that claims a clean completion", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    translator.onMessage({
+      type: "assistant",
+      error: "authentication_failed",
+      message: { model: "m", content: [] },
+    } as unknown as ClaudeStreamMessage);
+    // No terminal_reason at all, subtype success — the pre-fix happy path.
+    const terminal = translator.onMessage(result({}));
+    expect((terminal.find((event) => event.type === "loop_end") as { reason: string }).reason).toBe("error");
+  });
+
+  it("an UNKNOWN future terminal_reason is not asserted as success — it falls back to subtype", () => {
+    expect(terminalOf(result({ terminal_reason: "some_future_reason" })).loop).toBe("completed");
+    expect(terminalOf(result({ terminal_reason: "some_future_reason", subtype: "error_during_execution" })).loop).toBe("error");
+  });
+
+  it("api_retry{authentication_failed} TERMINALIZES the turn instead of promising a retry (cut §1.4 table)", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    const retry = translator.onMessage({
+      type: "system",
+      subtype: "api_retry",
+      error: "authentication_failed",
+    } as unknown as ClaudeStreamMessage);
+    // A signed-out profile fails every retry — saying "retrying" leaves the
+    // user watching a turn that can never finish.
+    expect(retry.filter((event) => event.type === "engine_notice")).toHaveLength(0);
+
+    const terminal = translator.onMessage(result({}));
+    expect((terminal.find((event) => event.type === "loop_end") as { reason: string }).reason).toBe("error");
+    const errors = terminal.filter((event) => event.type === "error");
+    expect(errors).toHaveLength(1);
+    expect((errors[0]!.error as Error).message).toContain("not signed in");
+  });
+
+  it("a RECOVERABLE api_retry still reports as a retry notice", () => {
+    const events = new ClaudeTurnTranslator({ turn: 1 }).onMessage({
+      type: "system",
+      subtype: "api_retry",
+      error: "overloaded",
+    } as unknown as ClaudeStreamMessage);
+    expect(events).toEqual([
+      { type: "engine_notice", level: "retry", message: "Claude is retrying an API request: overloaded" },
+    ]);
+  });
+});

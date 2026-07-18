@@ -48,6 +48,7 @@ import {
   DEFAULT_CLAUDE_PRESET,
   claudePresetChoices,
   findClaudePreset,
+  findClaudePresetByMode,
   type ClaudePermissionPresetDefinition,
 } from "./presets.js";
 import { decodeClaudeUsage, quotaNotice, type ClaudeQuotaSnapshot } from "./quota.js";
@@ -228,6 +229,7 @@ async function connectClaudeEngine(
   spawn: { sessionId: string } | { resume: string },
 ): Promise<ConnectedClaudeEngine> {
   const notices: AgentEvent[] = [];
+  const resuming = !("sessionId" in spawn);
   const preset = resolvePreset(options.selection, notices);
   const sessionRef = "sessionId" in spawn ? spawn.sessionId : spawn.resume;
   let engine: ClaudeEngine | null = null;
@@ -238,9 +240,18 @@ async function connectClaudeEngine(
   // The catalog is not known until after the handshake, so a draft model cannot
   // ride the spawn argv. It is applied right after `initialize` via `set_model`
   // — live-proven to apply immediately, with a rejection being a clean no-op.
+  //
+  // On RESUME neither posture is applied here (cut §1.5 hazard (б)): the native
+  // session kept its OWN model and permissionMode across process death (probe
+  // #4), and our persisted row may have drifted from them. Sending
+  // `--permission-mode`/`set_model` before the first `system/init` would
+  // overwrite the surviving truth with a stale row — the exact failure where a
+  // row saying `workspace` silently re-widens a session the CLI left at `ask`.
+  // The persisted values stay a PROVISIONAL display until that init arrives and
+  // `reconcileFromInit` replaces them with the native fact.
   const client = new ClaudeClient({
     ...options,
-    permissionModeFlag: permissionModeToFlag(preset.mode),
+    ...(resuming ? {} : { permissionModeFlag: permissionModeToFlag(preset.mode) }),
     ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
@@ -252,16 +263,27 @@ async function connectClaudeEngine(
       throw new Error(CLAUDE_NOT_SIGNED_IN);
     }
     const catalog = ClaudeModelCatalog.fromInitialize(initialized.models);
-    const requested = resolveModel(catalog, options.selection, notices);
-    let model = requested ?? catalog.defaultValue() ?? "";
-    if (requested !== undefined) {
-      try {
-        await client.controlRequest("set_model", { model: requested });
-      } catch {
-        // A rejected set_model is a clean no-op live (`w0-16-setmodel.jsonl`) —
-        // the prior model survives, so the session boots on the CLI default.
-        notices.push(warning(`Claude refused the model "${requested}"; the default model is used.`));
-        model = catalog.defaultValue() ?? "";
+    let model: string;
+    if (resuming) {
+      // Provisional only — never sent. The resumed session's own model is
+      // reported by its first `system/init` and adopted there
+      // (`reconcileFromInit`). A persisted id the catalog no longer knows
+      // degrades silently, exactly as `resolvePreset` does for a stale preset:
+      // it is not a choice the user just made, so it is not a user-visible error.
+      const persisted = options.selection?.model;
+      model = persisted !== undefined && catalog.has(persisted) ? persisted : catalog.defaultValue() ?? "";
+    } else {
+      const requested = resolveModel(catalog, options.selection, notices);
+      model = requested ?? catalog.defaultValue() ?? "";
+      if (requested !== undefined) {
+        try {
+          await client.controlRequest("set_model", { model: requested });
+        } catch {
+          // A rejected set_model is a clean no-op live (`w0-16-setmodel.jsonl`) —
+          // the prior model survives, so the session boots on the CLI default.
+          notices.push(warning(`Claude refused the model "${requested}"; the default model is used.`));
+          model = catalog.defaultValue() ?? "";
+        }
       }
     }
     const settings: ClaudeEngineSettings = { catalog, model, preset, notices };
@@ -321,6 +343,11 @@ export class ClaudeEngine implements SessionEngine {
   private liveModel: string | null = null;
   /** The wire-level permission mode the CLI is ACTUALLY running (CC-D resume settle, cut §1.5 hazard (б)) — distinct from `activePresetId`, which is our own requested posture. */
   private livePermissionMode: ClaudeWirePermissionMode | null = null;
+  /** Latch + one-shot observers for the FIRST turn-scoped `system/init` (`onFirstSystemInit`). */
+  private firstInitSeen = false;
+  private readonly firstInitListeners = new Set<
+    (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode }) => void
+  >();
   private quota: ClaudeQuotaSnapshot | null = null;
   /** Cumulative `result.total_cost_usd` for this session (capability `costAccounting`). */
   private totalCostUsd = 0;
@@ -613,6 +640,65 @@ export class ClaudeEngine implements SessionEngine {
     this.sessionId = init.session_id;
     this.liveModel = init.model;
     this.livePermissionMode = init.permissionMode;
+    this.reconcileFromInit(init);
+    if (!this.firstInitSeen) {
+      this.firstInitSeen = true;
+      for (const listener of this.firstInitListeners) {
+        try {
+          listener({ sessionId: init.session_id, model: init.model, permissionMode: init.permissionMode });
+        } catch {
+          // A first-init observer is a side-channel (row materialization,
+          // resume settle); it can never fail a turn.
+        }
+      }
+      this.firstInitListeners.clear();
+    }
+  }
+
+  /**
+   * Adopts the CLI's OWN posture into the engine's settings (cut §1.5 hazard
+   * (б): the first `system/init` of a resumed session is the truth, not our
+   * persisted row). Runs on every init, which is a no-op for a fresh session
+   * that already spawned under exactly this posture.
+   *
+   * The model comparison is deliberately RESOLVED-vs-RESOLVED. `init.model` is
+   * a resolved id (`claude-opus-4-8[1m]`) while the catalog value we hold is
+   * the selectable alias (`opus[1m]`), and several aliases DO share one
+   * resolved id live (`default` and `opus[1m]` both resolve to
+   * `claude-opus-4-8[1m]`) — so adopting on every init would flip a perfectly
+   * correct `opus[1m]` selection to whichever alias is listed first. The
+   * current selection is therefore kept whenever it already resolves to what
+   * the CLI reports; only a genuine divergence adopts a new entry, and
+   * `selectableForResolved` then picks a concrete alias over `default`.
+   */
+  private reconcileFromInit(init: ClaudeSystemInitMessage): void {
+    const settings = this.settings;
+    if (settings === undefined) return;
+    if (!settings.catalog.readBackMatches(settings.model, init.model)) {
+      const entry = settings.catalog.selectableForResolved(init.model);
+      if (entry !== undefined) settings.model = entry.value;
+    }
+    const preset = findClaudePresetByMode(init.permissionMode);
+    if (preset !== undefined) settings.preset = preset;
+  }
+
+  /**
+   * Fires ONCE, on the first turn-scoped `system/init` this engine observes —
+   * the moment the native session provably materialized (probe #1: init is
+   * emitted per TURN, never at handshake, so nothing before this proves a
+   * resumable native session exists). The host uses it for native-first row
+   * creation and the resume settle-patch (cut §1.5 hazard (а)/(б)). A listener
+   * registered after the first init has already been seen is invoked
+   * immediately with the latched values.
+   */
+  onFirstSystemInit(listener: (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode }) => void): void {
+    if (this.firstInitSeen) {
+      if (this.sessionId !== null && this.liveModel !== null && this.livePermissionMode !== null) {
+        listener({ sessionId: this.sessionId, model: this.liveModel, permissionMode: this.livePermissionMode });
+      }
+      return;
+    }
+    this.firstInitListeners.add(listener);
   }
 
   private onResult(result: ClaudeResultMessage): void {

@@ -228,7 +228,6 @@ import type {
   ResolvedTelemetryConfig,
   ResolvedWebSearchBackend,
   RepoMapConfig,
-  SessionMeta,
   SystemPromptEnv,
   TelemetryPort,
   WorktreeControlPort,
@@ -298,12 +297,11 @@ import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { resumeClaudeEngine, startClaudeEngine } from "./engines/claude/claude-engine.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
 import { projectClaudeHistory } from "./engines/claude/history-projection.js";
-import { findClaudePresetByMode } from "./engines/claude/presets.js";
-import type { PermissionMode as ClaudeWirePermissionMode } from "./engines/claude/protocol.js";
 import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./engines/claude/process-ownership.js";
 import { defaultClaudeProfileDir } from "./engines/claude/profile-dir.js";
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
+import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
@@ -736,34 +734,58 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         return { ...created, sessionMeta: null };
       })());
 
-  // Native-first, same product-level transaction ordering as codex: the native
-  // session exists and is proven signed-in before any row is written. CREATE
-  // for a fresh spawn, TOUCH for a resume — never a second INSERT on the same
-  // primary key (main sends `--resume <id>` for every respawn).
+  const claudeEngine = connected.engine;
+
+  // Identity facts, known the moment the transport connected. The POSTURE
+  // (model/preset) is deliberately NOT here: it is written only from the
+  // native session's own first `system/init` below.
   const sessionRow = {
     workspace,
-    // Both values are the RESOLVED ones the engine settled on at connect time
-    // (catalog-verified model, validated preset) — never the raw draft/
-    // persisted input. For a resume this is the REQUESTED posture; the
-    // ACTUALLY settled one is confirmed below, from the first turn's
-    // `system/init`, and patched in if it diverged.
-    model: connected.model,
-    // The `mode` TEXT column stores the Claude preset id verbatim, the same
-    // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
-    // column back as a core PermissionMode for a Claude session.
-    mode: connected.presetId as PermissionMode,
     engineId: "claude" as const,
     // The native ref. For a fresh spawn it is OURS (`--session-id <uuid>`
     // rides the spawn argv); for a resume it is the persisted ref, echoed
     // verbatim (resumeClaudeEngine never falls back to a new session).
     externalSessionRef: connected.sessionRef,
   };
-  let sessionMeta: SessionMeta;
-  if (connected.sessionMeta === null) {
-    sessionMeta = await persistence.createSession({ id: args.sessionId ?? randomUUID(), ...sessionRow });
-  } else {
-    await persistence.touchSession(connected.sessionMeta.id, sessionRow);
-    sessionMeta = { ...connected.sessionMeta, ...sessionRow };
+  // The AnyCode row id is preallocated IN MEMORY so Session, the shadow mirror
+  // and every `touch` can use it immediately — but no row is written yet
+  // (native-first, cut §1.5 hazard (а); the ordering rule itself, plus the
+  // buffering of patches that arrive before the row exists, lives in
+  // session-row.ts where it is unit-tested).
+  const rowId = connected.sessionMeta?.id ?? args.sessionId ?? randomUUID();
+  const rowWriter = new ClaudeSessionRowWriter({
+    rowId,
+    identity: sessionRow,
+    rowExists: connected.sessionMeta !== null,
+    port: {
+      create: (id, row) => persistence!.createSession({ id, ...row } as Parameters<SqlitePersistenceAdapter["createSession"]>[0]),
+      touch: (id, patch) => persistence!.touchSession(id, patch as { title?: string; mode?: PermissionMode; model?: string }),
+    },
+    onError: (error, stage) => {
+      console.error(`[host] claude session row ${stage} failed: ${describeError(error)}`);
+    },
+  });
+
+  // The first turn-scoped `system/init` is the earliest proof the native
+  // session exists — and the only honest source of the POSTURE. `ClaudeEngine`
+  // has by now reconciled its settings against that init, so `snapshot()`
+  // carries the catalog `value` (`opus[1m]`) rather than the resolved id the
+  // CLI reports (`claude-opus-4-8`); persisting the latter would fail
+  // `catalog.has()` on the next resume and fall back to the default model.
+  claudeEngine.onFirstSystemInit(() => {
+    const settled = claudeEngine.snapshot();
+    // The `mode` TEXT column stores the Claude preset id verbatim, the same
+    // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
+    // column back as a core PermissionMode for a Claude session.
+    rowWriter.materialize({ model: settled.model, mode: settled.activePresetId });
+  });
+
+  if (connected.sessionMeta !== null) {
+    // Resume: the row is already there, so only the identity facts are
+    // refreshed now. Its model/mode stay untouched until the resumed session's
+    // own `system/init` reports what actually survived (hazard (б)) — writing
+    // our persisted posture back here would relaunder a stale row as fresh.
+    await persistence.touchSession(rowId, sessionRow);
   }
 
   // Resume-projection (cut §1.5 DoD-2): built ONCE at boot, from the shadow
@@ -771,30 +793,17 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   const mirrorRows = connected.sessionMeta === null ? [] : await shadowTranscript.list(connected.sessionRef);
   const bootHistory = projectClaudeHistory(mirrorRows);
   const nextTurnOrdinal = mirrorRows.reduce((max, row) => Math.max(max, row.turnOrdinal + 1), 0);
-  const claudeEngine = connected.engine;
+  // The settle-patch that used to live here (a turn-END callback comparing raw
+  // wire values against the row) is gone: `onFirstSystemInit` above now owns
+  // both row materialization and the posture patch, at the earlier and correct
+  // moment — the init itself — and reads the ENGINE's reconciled snapshot, so
+  // the catalog `value` is persisted rather than the CLI's resolved id.
   const shadowEngine = new ClaudeShadowTranscriptEngine(
     claudeEngine,
     shadowTranscript,
     connected.sessionRef,
     bootHistory,
     nextTurnOrdinal,
-    connected.sessionMeta === null
-      ? undefined
-      : // Test-hazard (б): our persisted row may diverge from what the resumed
-        // native session actually settled on (it keeps its own model/mode
-        // across process death, probe #4) — truth is the FIRST observed
-        // `system/init` of the resumed session, patched back here, once.
-        ({ model, permissionMode }) => {
-          const resumedSessionId = sessionMeta.id;
-          const presetId = findClaudePresetByMode(permissionMode as ClaudeWirePermissionMode)?.id;
-          const patch: Record<string, unknown> = {};
-          if (sessionMeta.model !== model) patch.model = model;
-          if (presetId !== undefined && sessionMeta.mode !== presetId) patch.mode = presetId;
-          if (Object.keys(patch).length === 0) return;
-          void persistence?.touchSession(resumedSessionId, patch).catch((error) => {
-            console.error(`[host] touchSession (claude resume settle) failed: ${describeError(error)}`);
-          });
-        },
   );
 
   const booted = await plugin.boot({ claudeEngine: shadowEngine });
@@ -827,28 +836,28 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     fs,
     workspace,
     model: connected.model,
-    sessionId: sessionMeta.id,
+    sessionId: rowId,
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
-    hasTitle: sessionMeta.title !== undefined && sessionMeta.title.length > 0,
+    hasTitle: connected.sessionMeta?.title !== undefined && connected.sessionMeta.title.length > 0,
     rules: new SessionPermissionRules(),
     git: gitBridge,
     shell,
     persistence: {
       touch(patch) {
         const { enginePreset, ...rest } = patch;
-        const row = { ...rest, ...(enginePreset !== undefined ? { mode: enginePreset as PermissionMode } : {}) };
-        void persistence?.touchSession(sessionMeta.id, row).catch((error) => {
-          console.error(`[host] touchSession failed: ${describeError(error)}`);
-        });
+        const row = { ...rest, ...(enginePreset !== undefined ? { mode: enginePreset } : {}) };
+        // Buffered until the row exists (native-first); serialized behind the
+        // CREATE once it does.
+        rowWriter.touch(row);
       },
     },
   });
   // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated (or
   // the persisted one, on resume) and the id is our own row id — no account
   // email, token, subscription type or cost figure is ever written to a log line.
-  console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${sessionMeta.id} db=${dbPath}`);
+  console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${rowId} db=${dbPath}`);
 }
 
 async function boot(): Promise<void> {

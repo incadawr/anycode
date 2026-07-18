@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CLAUDE_RENDERABLE_WINDOWS,
+  claudeQuotaToWire,
   decodeClaudeUsage,
   governingLimit,
   quotaNotice,
@@ -145,5 +146,44 @@ describe("governingLimit — selection order", () => {
     const snapshot = decodeClaudeUsage({ rate_limits: { limits: [at("session", 3, "normal", false)] } })!;
     expect(governingLimit(snapshot)!.severity).toBe("normal");
     expect(quotaNotice(snapshot)).toBeNull();
+  });
+});
+
+/**
+ * The quota has to actually REACH the renderer. `refreshQuota()` decoding
+ * correctly is only half the path — before this projection existed the snapshot
+ * stayed engine-private, so `host_ready` carried no quota while every decoder
+ * test stayed green.
+ */
+describe("claudeQuotaToWire — the decoded snapshot on the shared quota wire", () => {
+  it("reports the GOVERNING limit as primary, not the under-reporting flat window", () => {
+    const snapshot = decodeClaudeUsage(liveUsageResponse())!;
+    const wire = claudeQuotaToWire(snapshot)!;
+
+    const governing = governingLimit(snapshot)!;
+    expect(wire.primary!.usedPercent).toBe(governing.percent);
+    // The whole point of rule 1: the flat seven_day window reads lower than the
+    // active limit does, and showing the window would understate the exposure.
+    const flat = snapshot.windows.find((window) => window.key === "seven_day");
+    expect(flat!.utilization).toBeLessThan(wire.primary!.usedPercent);
+  });
+
+  it("carries the plan type and a named limit, and a second limit as secondary", () => {
+    const wire = claudeQuotaToWire(decodeClaudeUsage(liveUsageResponse()))!;
+    expect(wire.planType).toBeDefined();
+    expect(wire.limitName).toBeDefined();
+    expect(wire.secondary).not.toBeNull();
+    expect(wire.observedAt).toEqual(expect.any(String));
+  });
+
+  it("is null for an absent snapshot, so an engine with no quota keeps the projection byte-identical", () => {
+    expect(claudeQuotaToWire(null)).toBeNull();
+  });
+
+  it("tolerates the unauthenticated variant that carries no limits at all", () => {
+    const wire = claudeQuotaToWire({ subscriptionType: "pro", windows: [], limits: [], observedAt: "2026-07-18T00:00:00.000Z" })!;
+    expect(wire.primary).toBeNull();
+    expect(wire.secondary).toBeNull();
+    expect(wire.planType).toBe("pro");
   });
 });

@@ -36,9 +36,11 @@
  *    can travel on between turns).
  */
 
+import type { CodexRateLimitsWire } from "@anycode/core";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { EngineSettingsChange, EngineSettingsSeam } from "../../session.js";
 import type { ClaudeEngine } from "./claude-engine.js";
+import { claudeQuotaToWire } from "./quota.js";
 
 type SettingsSnapshot = { model: string; activePresetId: string; effort?: string };
 
@@ -48,7 +50,22 @@ function warningNotice(message: string): { type: "engine_notice"; level: "warnin
 
 export class ClaudeSettingsSeam implements EngineSettingsSeam {
   private pending: SettingsSnapshot | null = null;
+  /**
+   * Monotonic id of the LATEST accepted change. A control-ack that is not the
+   * newest generation may no longer clear `pending` or publish — see
+   * `beginPending`.
+   */
+  private generation = 0;
   private readonly listeners = new Set<(snapshot: SettingsSnapshot) => void>();
+
+  /**
+   * Session persists Claude's model/preset ONLY from `onSettingsApplied`
+   * (host/session.ts `persistsOnApply`). An accept-time write would survive a
+   * control request the CLI rejected or timed out on, and a later resume would
+   * spawn under a posture the engine never adopted — silently widening
+   * permissions. Failure therefore retains the prior row by construction.
+   */
+  readonly persistsOnApply = true;
 
   constructor(private readonly engine: ClaudeEngine) {}
 
@@ -62,6 +79,17 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
 
   snapshot(): SettingsSnapshot {
     return this.engine.snapshot();
+  }
+
+  /**
+   * The decoded `get_usage` snapshot, projected onto the shared quota wire
+   * (`EnginePresentation.quota`, rebuilt on every `ui_ready`). Without this the
+   * engine's `refreshQuota()` succeeds at boot and after every turn and the
+   * result never leaves the engine — decoder unit tests stay green while the
+   * host-ready payload carries no quota at all.
+   */
+  quotaSnapshot(): CodexRateLimitsWire | null {
+    return claudeQuotaToWire(this.engine.quotaSnapshot());
   }
 
   selectModel(id: string): EngineSettingsChange {
@@ -111,20 +139,41 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     return this.pending;
   }
 
-  /** Fires the async control request without awaiting it here; settles `pending` on the ack, one way or the other. */
+  /**
+   * Fires the async control request without awaiting it here; settles
+   * `pending` on the ack, one way or the other.
+   *
+   * Two rules make CONCURRENT changes safe (model B, then preset Workspace a
+   * moment later, each with its own in-flight control request):
+   *
+   *  1. What is published on success is the ENGINE's own snapshot, never the
+   *     `next` captured at accept time. `next` was assembled from the engine
+   *     state as it stood BEFORE the earlier change acked, so republishing it
+   *     would resurrect the pre-change model — the later ack would undo the
+   *     earlier one in the UI. `engine.snapshot()` only ever reflects acks
+   *     that actually landed, so every publication is monotonically true and
+   *     the final one carries both changes regardless of ack order.
+   *  2. `pending` is cleared only by the NEWEST change's ack (generation
+   *     check). An older request settling second must not drop the badge for
+   *     a change still in flight.
+   */
   private beginPending(next: SettingsSnapshot, fire: () => Promise<{ ok: true } | { ok: false; reason: string }>): void {
+    const generation = ++this.generation;
     this.pending = next;
+    const settle = (): void => {
+      if (generation === this.generation) this.pending = null;
+    };
     void fire()
       .then((result) => {
-        this.pending = null;
+        settle();
         if (result.ok) {
-          this.notify(next);
+          this.notify(this.engine.snapshot());
         } else {
           this.engine.queueNotice(warningNotice(result.reason));
         }
       })
       .catch((error: unknown) => {
-        this.pending = null;
+        settle();
         const message = error instanceof Error ? error.message : String(error);
         this.engine.queueNotice(warningNotice(`Claude settings change failed: ${message}`));
       });

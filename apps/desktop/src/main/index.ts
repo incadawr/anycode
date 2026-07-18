@@ -1177,14 +1177,15 @@ void app.whenReady().then(async () => {
     // the spawn will run under as the optional second argument (S3-1 — the
     // draft's pick on a new tab, the persisted meta pick on a resume); absent,
     // the ACTIVE profile answers — today's single-profile behavior.
-    engineReady: (engine: EngineId, codexProfileId?: string) => {
-      // SLICE-CC A1 (cut §1.2): claude branch tracks REAL doctor readiness
-      // even though main/tabs.ts's canSpawn("claude") refuses every spawn
-      // unconditionally until CC-C — CC-C then only needs to remove that
-      // hard block, since this readiness fact is already wired correctly.
-      if (engine === "claude") return claudeOnboarding?.readyFor() ?? false;
-      return engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false);
-    },
+    // SLICE-CC A1 (cut §1.2): the claude disjunct is prepended; the core/codex
+    // expression after it is byte-identical to its pre-SLICE-CC form, so a
+    // parallel track touching it merges add/add. Claude tracks REAL doctor
+    // readiness even though main/tabs.ts's canSpawn("claude") refuses every
+    // spawn unconditionally until CC-C — CC-C then only removes that hard
+    // block, since this readiness fact is already wired correctly.
+    engineReady: (engine: EngineId, codexProfileId?: string) =>
+      (engine === "claude" && (claudeOnboarding?.readyFor() ?? false)) ||
+      (engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false)),
     engineEnv: (engine: EngineId, generation: number) => ({
       [ENV_ENGINE]: engine,
       [ENV_HOST_GENERATION]: String(generation),
@@ -1278,13 +1279,13 @@ void app.whenReady().then(async () => {
     // configured". The gate splits that UNKNOWN from a KNOWN not-ready and
     // awaits the first verdict instead of falsely refusing. Core readiness is
     // settled at boot before IPC registers, so it is always known here.
-    engineReadyKnown: (engine, codexProfileId) => {
-      // SLICE-CC A1 (cut §1.2): claude branch mirrors codex's — a session
-      // pinned to claude nobody diagnosed yet is UNKNOWN, not known-bad, even
-      // though canSpawn refuses it unconditionally regardless (main/tabs.ts).
-      if (engine === "claude") return claudeOnboarding?.hasVerdictFor() ?? false;
-      return engine === "core" ? true : engine === "codex" && (codexOnboarding?.hasVerdictFor(codexProfileId) ?? false);
-    },
+    // SLICE-CC A1 (cut §1.2): additive claude disjunct, mirroring codex's — a
+    // session pinned to claude nobody diagnosed yet is UNKNOWN, not known-bad,
+    // even though canSpawn refuses it unconditionally regardless
+    // (main/tabs.ts). The core/codex expression is left exactly as it was.
+    engineReadyKnown: (engine, codexProfileId) =>
+      (engine === "claude" && (claudeOnboarding?.hasVerdictFor() ?? false)) ||
+      (engine === "core" ? true : engine === "codex" && (codexOnboarding?.hasVerdictFor(codexProfileId) ?? false)),
     hydrateEngineReady: async (engine, codexProfileId) => {
       if (engine === "codex" && codexOnboarding !== null) {
         // An argless recheck coalesces onto the in-flight boot run (same

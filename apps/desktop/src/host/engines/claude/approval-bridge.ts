@@ -180,7 +180,25 @@ export class ClaudeApprovalBridge {
       return;
     }
 
+    // Already withdrawn before we got here: asking the user about a tool the
+    // CLI has abandoned would park a modal nothing can answer, and the pairing
+    // rule forbids responding anyway. Nothing to do at all.
+    if (request.signal.aborted) return;
+
     this.pending = true;
+    // The CLI can also withdraw it WHILE the user is looking at the modal
+    // (`control_cancel_request` — it does this by itself on interrupt, hazard
+    // (д)). Nothing else would release the broker in that case: our own Stop
+    // path calls `denyAll` explicitly, but a CLI-originated withdrawal has no
+    // such trigger, so the ask stays parked, the modal stays open, and
+    // `pending` never clears — refusing every later approval in the session
+    // with "another approval is already pending". Settling the broker here
+    // resolves that await; the answer it produces is then discarded by the
+    // client's pairing rule (the request is already gone from `pendingInbound`).
+    const releaseOnCancel = (): void => {
+      this.options.broker.denyAll("Claude withdrew this permission request", "turn_cancelled");
+    };
+    request.signal.addEventListener("abort", releaseOnCancel, { once: true });
     try {
       const decision = await this.options.broker.requestPermission(this.toPermissionRequest(approval));
       // Both outcomes are a control_response SUCCESS envelope: a denial is a
@@ -197,6 +215,7 @@ export class ClaudeApprovalBridge {
       // The broker never rejects; if it somehow does, no grant may be invented.
       responder.success(denyResponse(approval, "AnyCode could not settle this permission request."));
     } finally {
+      request.signal.removeEventListener("abort", releaseOnCancel);
       this.pending = false;
     }
   }
