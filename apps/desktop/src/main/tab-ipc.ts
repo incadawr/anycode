@@ -151,7 +151,10 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
   z.object({
     kind: z.literal("new"),
     workspace: z.string().min(1).max(4096).optional(),
-    engine: z.enum(["core", "codex"]).optional(),
+    // SLICE-CC A1: "claude" widened alongside "codex" — a claude tab request
+    // is still refused by spawnableWhenKnown (canSpawn is unconditionally
+    // false until CC-C, main/tabs.ts), never by this schema.
+    engine: z.enum(["core", "codex", "claude"]).optional(),
     // W3 join: bounds only (a hostile-length string). IDENTITY is the host's
     // job (its own live catalog / frozen preset table), never main's.
     engineModel: z.string().min(1).max(128).optional(),
@@ -462,6 +465,9 @@ export function registerTabIpc(deps: TabIpcDeps): void {
   ipcMain.handle(WORKSPACE_PICK_CHANNEL, async (): Promise<WorkspacePickResult> => handleWorkspacePick(deps));
 
   ipcMain.handle(ENGINES_LIST_CHANNEL, (): AvailableEngines => ({
-    engineIds: (["core", "codex"] as const).filter((engine) => deps.manager.canSpawn(engine)),
+    // SLICE-CC A1: "claude" added to the candidate list — canSpawn("claude")
+    // is unconditionally false until CC-C (main/tabs.ts), so the Claude button
+    // does not appear on a real CC-A build (cut §1.2 DoD-3).
+    engineIds: (["core", "codex", "claude"] as const).filter((engine) => deps.manager.canSpawn(engine)),
   }));
 }

@@ -84,7 +84,11 @@ import { TabHostManager, createPinReservations } from "./tabs.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
+// SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
+import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
+// SLICE-CC A3 (cut §1.2): new import line — mirrors the codex-ipc import above.
+import { registerClaudeIpc, type ClaudeOnboardingController } from "./claude-ipc.js";
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
@@ -346,6 +350,17 @@ let manager: TabHostManager | null = null;
  * Critical) — `before-quit`/`will-quit` below await `shutdown()`.
  */
 let codexOnboarding: CodexOnboardingController | null = null;
+/**
+ * Claude onboarding control plane (SLICE-CC A3, cut §1.2 mirror of
+ * `codexOnboarding` above). Its doctor children are bounded, short-lived
+ * one-shot probes (main/claude-doctor.ts) that tear themselves down before
+ * their own promise settles — unlike Codex's login flow, CC-A has no
+ * long-lived detached child that could outlive quit, so `shutdown()` here is
+ * a lighter hook (see claude-ipc.ts's own doc comment).
+ */
+let claudeOnboarding: ClaudeOnboardingController | null = null;
+/** Discovery ladder's last winning candidate for the Claude engine (mirrors `codexBinaryPath` below). */
+let claudeBinaryPath: string | null = null;
 /** Set once quit begins, to gate the before-quit handler's second pass. */
 let quitting = false;
 /** Auto-updater controller (TASK.47 W15) — held module-level so before-quit can clear its armed schedule timer. Null until boot registers it. */
@@ -1162,12 +1177,19 @@ void app.whenReady().then(async () => {
     // the spawn will run under as the optional second argument (S3-1 — the
     // draft's pick on a new tab, the persisted meta pick on a resume); absent,
     // the ACTIVE profile answers — today's single-profile behavior.
-    engineReady: (engine: EngineId, codexProfileId?: string) =>
-      engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false),
+    engineReady: (engine: EngineId, codexProfileId?: string) => {
+      // SLICE-CC A1 (cut §1.2): claude branch tracks REAL doctor readiness
+      // even though main/tabs.ts's canSpawn("claude") refuses every spawn
+      // unconditionally until CC-C — CC-C then only needs to remove that
+      // hard block, since this readiness fact is already wired correctly.
+      if (engine === "claude") return claudeOnboarding?.readyFor() ?? false;
+      return engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false);
+    },
     engineEnv: (engine: EngineId, generation: number) => ({
       [ENV_ENGINE]: engine,
       [ENV_HOST_GENERATION]: String(generation),
       ...(engine === "codex" && codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
+      ...(engine === "claude" && claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
     }),
     reapEngineProcess: createEngineProcessReaper(),
     // Credential channel (slice 2.5 §3.3 + TASK.45 W10): an oauth-mode host asks
@@ -1256,14 +1278,24 @@ void app.whenReady().then(async () => {
     // configured". The gate splits that UNKNOWN from a KNOWN not-ready and
     // awaits the first verdict instead of falsely refusing. Core readiness is
     // settled at boot before IPC registers, so it is always known here.
-    engineReadyKnown: (engine, codexProfileId) =>
-      engine === "core" ? true : engine === "codex" && (codexOnboarding?.hasVerdictFor(codexProfileId) ?? false),
+    engineReadyKnown: (engine, codexProfileId) => {
+      // SLICE-CC A1 (cut §1.2): claude branch mirrors codex's — a session
+      // pinned to claude nobody diagnosed yet is UNKNOWN, not known-bad, even
+      // though canSpawn refuses it unconditionally regardless (main/tabs.ts).
+      if (engine === "claude") return claudeOnboarding?.hasVerdictFor() ?? false;
+      return engine === "core" ? true : engine === "codex" && (codexOnboarding?.hasVerdictFor(codexProfileId) ?? false);
+    },
     hydrateEngineReady: async (engine, codexProfileId) => {
       if (engine === "codex" && codexOnboarding !== null) {
         // An argless recheck coalesces onto the in-flight boot run (same
         // active-profile key); an explicit profile id queues its own doctor
         // behind it — at most one extra run, only inside the boot window.
         await codexOnboarding.recheck(codexProfileId);
+      }
+      // SLICE-CC A1 (cut §1.2): claude has no profiles yet (CC-E), so there is
+      // nothing to key a recheck by.
+      if (engine === "claude" && claudeOnboarding !== null) {
+        await claudeOnboarding.recheck();
       }
     },
     validateWorktreeResume: async (meta) => {
@@ -1436,6 +1468,29 @@ void app.whenReady().then(async () => {
   // (its safe default) until this resolves.
   void codexOnboarding.recheck().catch((error: unknown) => {
     console.warn("[main] initial Codex check failed", error);
+  });
+
+  // SLICE-CC A3 (cut §1.2): Claude onboarding wiring — mirrors the codex
+  // block immediately above, minus everything CC-A is out of scope for
+  // (native login, profile CRUD, quotas, install/manifest).
+  claudeOnboarding = registerClaudeIpc({
+    bootEnv,
+    readBinaryPathSetting: async () => settings?.claude?.binaryPath,
+    writeClaudeSettings: (patch) => handleSet(settingsIpcDeps, { claude: patch }),
+    dialog,
+    onSnapshot: (snapshot) => {
+      claudeBinaryPath = snapshot.binaryPath;
+      // Same unconditional-send push shape as the codex onSnapshot above.
+      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+    },
+  });
+
+  // Kick off the first discovery+doctor pass in the background, mirroring the
+  // codex boot-time recheck above (`engineReady("claude")` simply stays false
+  // until this resolves, and canSpawn("claude") refuses regardless of it
+  // until CC-C).
+  void claudeOnboarding.recheck().catch((error: unknown) => {
+    console.warn("[main] initial Claude check failed", error);
   });
 
   // Codex install/version control plane (TASK.53, cut §7): download-with-
@@ -1631,12 +1686,15 @@ async function shutdownEverything(): Promise<void> {
   const activeManager = manager;
   const activePersistence = persistence;
   const activeOnboarding = codexOnboarding;
+  // SLICE-CC A3 (cut §1.2): mirrors `activeOnboarding` above.
+  const activeClaudeOnboarding = claudeOnboarding;
   // TASK.47 W15: clear the armed auto-check timer, if any — synchronous,
   // ahead of the awaited teardown below (nothing here depends on it).
   updaterController?.stop();
   await Promise.allSettled([
     activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
     activeOnboarding?.shutdown() ?? Promise.resolve(),
+    activeClaudeOnboarding?.shutdown() ?? Promise.resolve(),
   ]);
   await activePersistence?.close();
 }

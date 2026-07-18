@@ -128,6 +128,18 @@ export function isSendKeydown(event: { key: string; shiftKey: boolean }): boolea
   return event.key === "Enter" && !event.shiftKey;
 }
 
+/**
+ * SLICE-CC A4 (cut §1.2 DoD-3): the Claude engine button's visibility
+ * predicate, extracted to a pure function so the unit half of DoD-3 ("the
+ * button renders iff availableEngines contains claude") doesn't need to
+ * render this component — this package's vitest config runs
+ * `environment: "node"` (no jsdom), the same rationale every other derived
+ * value in this file is already exported for.
+ */
+export function shouldShowClaudeEngineButton(availableEngines: readonly EngineId[]): boolean {
+  return availableEngines.includes("claude");
+}
+
 /** Starter cards preserve typed work by appending after it instead of replacing it. */
 export function applyStarterPreset(current: string, preset: string): string {
   return current.length === 0 ? preset : current.endsWith("\n") ? current + preset : `${current}\n${preset}`;
@@ -972,6 +984,22 @@ export function StartScreen({ onToast }: StartScreenProps) {
               onClick={() => useTabsStore.getState().setDraftEngine("codex")}
             >
               Codex
+            </button>
+          )}
+          {/* SLICE-CC A4 (cut §1.2): visibility gated by availableEngines the
+              same way as the Codex button above — canSpawn("claude") is
+              unconditionally false until CC-C (main/tabs.ts), so
+              ENGINES_LIST_CHANNEL never includes "claude" on a real CC-A
+              build and this button never renders in production yet. Claude
+              draft-model/preset selectors are CC-C's job. */}
+          {shouldShowClaudeEngineButton(availableEngines) && (
+            <button
+              type="button"
+              className={`start-engine-choice${draft.engine === "claude" ? " start-engine-choice-selected" : ""}`}
+              aria-pressed={draft.engine === "claude"}
+              onClick={() => useTabsStore.getState().setDraftEngine("claude")}
+            >
+              Claude
             </button>
           )}
         </div>

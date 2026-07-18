@@ -82,6 +82,7 @@ import type {
 import type { UpdateActionResult, UpdateStatus } from "../../shared/updates";
 import type { DesktopPlatform, WindowState } from "../../shared/window";
 import type { CodexDoctorReport } from "../../shared/codex-doctor";
+import type { ClaudeDoctorReport } from "../../shared/claude-doctor";
 
 // TASK.41 (design/slice-codex-fixes-cut.md §2(g)/§3.8): mirrors the SAME
 // duplicated shapes declared in preload/index.ts (that file's own header
@@ -226,6 +227,19 @@ export interface CustomProviderUpdateRequest {
   models?: string[];
 }
 
+// SLICE-CC A4 (cut §1.2): mirrors the SAME duplicated shapes declared in
+// preload/index.ts and main/claude-ipc.ts.
+export interface ClaudeOnboardingSnapshot {
+  report: ClaudeDoctorReport;
+  binaryPath: string | null;
+  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  checkedAt: string;
+}
+
+export type ClaudePickBinaryResult =
+  | { ok: true; snapshot: ClaudeOnboardingSnapshot }
+  | { ok: false; reason: "cancelled" | "invalid" };
+
 declare global {
   interface Window {
     anycode: {
@@ -271,6 +285,14 @@ declare global {
         rolloutList(profileId: string): Promise<CodexRolloutListResult>;
         rolloutPreview(profileId: string, fileName: string): Promise<CodexRolloutPreviewResult>;
         rolloutImport(profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult>;
+      };
+      // SLICE-CC A4 (cut §1.2): Claude onboarding invoke-API — a minimal
+      // subset of `codex` above (no login/profile/quota surface in CC-A). No
+      // token/credential/account value ever crosses this bridge in either
+      // direction — every result carries only status/version (custody).
+      claude: {
+        recheck(): Promise<ClaudeOnboardingSnapshot>;
+        pickBinary(): Promise<ClaudePickBinaryResult>;
       };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
