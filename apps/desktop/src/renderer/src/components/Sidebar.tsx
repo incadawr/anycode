@@ -506,23 +506,15 @@ export function Sidebar({
     [menuFor, closeProjectMenu, openProjectMenu],
   );
 
-  /** Menu item 1 — `createNewSession` verbatim (design §2F.2) plus the group's workspace. */
-  const createSessionInProject = useCallback(
-    async (workspace: string) => {
-      try {
-        const result = await window.anycode.createTab({ kind: "new", workspace });
-        const message = handleCreateTabResult(result, { onTabCreated, onFocusTab });
-        if (message) {
-          setNotice(message);
-          setNoticeAction(null); // a fresh notice supersedes any armed re-pin action
-        }
-      } catch (err) {
-        setNotice(err instanceof Error ? err.message : "Failed to create a new task.");
-        setNoticeAction(null);
-      }
-    },
-    [onTabCreated, onFocusTab],
-  );
+  /**
+   * Menu item 1 — enter the same New Task draft as every other new-session
+   * affordance, preselecting this project's workspace.  Starting a tab here
+   * used to bypass the draft and omit `engine`, silently selecting main's
+   * default native harness before the user could make a choice.
+   */
+  const createSessionInProject = useCallback((workspace: string) => {
+    useTabsStore.getState().openDraft(workspace);
+  }, []);
 
   /* */
   const removeProjectFromList = useCallback((workspace: string) => {
@@ -942,7 +934,7 @@ export function Sidebar({
             onClick={() => {
               const workspace = menuFor.workspace;
               closeProjectMenu(false);
-              void createSessionInProject(workspace);
+              createSessionInProject(workspace);
             }}
           >
             New task in this project

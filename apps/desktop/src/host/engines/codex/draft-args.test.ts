@@ -3,9 +3,9 @@ import { parseCodexEngineArgs } from "./draft-args.js";
 
 describe("parseCodexEngineArgs", () => {
   it("reads both flag forms", () => {
-    expect(parseCodexEngineArgs(["--session", "s1", "--engine-model", "gpt-5.6-sol", "--engine-preset=read-only"])).toEqual({
+    expect(parseCodexEngineArgs(["--session", "s1", "--engine-model", "gpt-5.6-sol", "--engine-preset=approve-for-me"])).toEqual({
       model: "gpt-5.6-sol",
-      preset: "read-only",
+      preset: "approve-for-me",
     });
   });
 
@@ -25,12 +25,12 @@ describe("parseCodexEngineArgs", () => {
 
   it("never accepts a policy/config payload — only the two id flags exist", () => {
     const args = parseCodexEngineArgs([
-      "--engine-preset=workspace",
+      "--engine-preset=ask",
       "--engine-sandbox",
       "danger-full-access",
       "--engine-config",
       '{"approvalPolicy":"never"}',
     ]);
-    expect(args).toEqual({ preset: "workspace" });
+    expect(args).toEqual({ preset: "ask" });
   });
 });

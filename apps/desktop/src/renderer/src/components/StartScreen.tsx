@@ -266,19 +266,19 @@ export function pickModelForDraft(modelId: string, deps: ModelPickDeps = default
  */
 export const CODEX_DRAFT_PRESETS: readonly EnginePermissionPreset[] = [
   {
-    id: "read-only",
-    label: "Read-only",
-    description: "Codex can read files but cannot run commands, write files, or reach the network.",
-  },
-  {
     id: "ask",
-    label: "Ask",
-    description: "Codex asks before running commands or changing files (default).",
+    label: "Ask for approval",
+    description: "Codex works in this workspace and asks before going beyond it.",
   },
   {
-    id: "workspace",
-    label: "Workspace",
-    description: "Codex can write inside the workspace and run commands with fewer prompts.",
+    id: "approve-for-me",
+    label: "Approve for me",
+    description: "Codex keeps the workspace boundary and sends eligible approvals to automatic review.",
+  },
+  {
+    id: "full-access",
+    label: "Full access",
+    description: "Codex can access files and the internet without sandbox or approval prompts.",
   },
 ];
 
