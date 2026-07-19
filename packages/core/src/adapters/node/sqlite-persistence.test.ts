@@ -613,7 +613,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -679,7 +679,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -727,7 +727,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -1567,6 +1567,65 @@ describe("SqlitePersistenceAdapter", () => {
       const rows = raw.prepare("SELECT item_id FROM codex_thread_items").all() as { item_id: string }[];
       expect(rows.map((row) => row.item_id)).toEqual(["exec-a"]);
       raw.close();
+    });
+  });
+
+  describe("claude shadow transcript mirror (migration v12, SLICE-CC D-min cut §1.5)", () => {
+    it("records and lists items ordered by (turnOrdinal, positionInTurn), not insertion order", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordClaudeTranscriptItem("session-1", {
+        itemId: "1:0",
+        turnOrdinal: 1,
+        positionInTurn: 0,
+        data: { id: "b", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "b" }] } },
+      });
+      await adapter.recordClaudeTranscriptItem("session-1", {
+        itemId: "0:0",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        data: { id: "a", createdAt: 1, message: { role: "user", content: "a" } },
+      });
+
+      const items = await adapter.listClaudeTranscriptItems("session-1");
+      expect(items.map((i) => i.itemId)).toEqual(["0:0", "1:0"]);
+      expect(items[0]).toEqual({
+        itemId: "0:0",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        data: { id: "a", createdAt: 1, message: { role: "user", content: "a" } },
+      });
+    });
+
+    it("scopes items to their own session_ref", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.recordClaudeTranscriptItem("session-1", {
+        itemId: "0:0",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        data: { id: "x", createdAt: 0, message: { role: "user", content: "x" } },
+      });
+      await adapter.recordClaudeTranscriptItem("session-2", {
+        itemId: "0:0",
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        data: { id: "y", createdAt: 0, message: { role: "user", content: "y" } },
+      });
+
+      expect((await adapter.listClaudeTranscriptItems("session-1")).map((i) => (i.data as { id: string }).id)).toEqual(["x"]);
+      expect((await adapter.listClaudeTranscriptItems("session-2")).map((i) => (i.data as { id: string }).id)).toEqual(["y"]);
+      expect(await adapter.listClaudeTranscriptItems("session-missing")).toEqual([]);
+    });
+
+    it("a repeated write for the same (session_ref, item_id) is a no-op — first-write-wins, no duplicate row", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const first = { id: "a", createdAt: 0, message: { role: "user" as const, content: "first" } };
+      const second = { id: "a", createdAt: 0, message: { role: "user" as const, content: "second" } };
+      await adapter.recordClaudeTranscriptItem("session-1", { itemId: "0:0", turnOrdinal: 0, positionInTurn: 0, data: first });
+      await adapter.recordClaudeTranscriptItem("session-1", { itemId: "0:0", turnOrdinal: 0, positionInTurn: 0, data: second });
+
+      const items = await adapter.listClaudeTranscriptItems("session-1");
+      expect(items).toHaveLength(1);
+      expect(items[0]!.data).toEqual(first);
     });
   });
 });
