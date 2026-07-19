@@ -92,6 +92,7 @@ import { applyThemePreference } from "../theme.js";
 import { tabRegistry } from "../tab-registry.js";
 import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
+import { ClaudeEnginePane } from "./ClaudeEnginePane.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
 import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
 import { ConsentDialog } from "./ConsentDialog.js";
@@ -110,7 +111,7 @@ import "../settings.css";
 
 const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "permissions" | "tools" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -131,6 +132,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
   { id: "profile", label: "Profile", description: "Your usage stats from local telemetry.", icon: Person },
   { id: "provider", label: "Provider", description: "Choose a provider, model, and credentials.", icon: Gear },
   { id: "codex", label: "Codex", description: "Discover, verify, and sign in to the Codex agent engine.", icon: Cube },
+  { id: "claude", label: "Claude", description: "Discover and verify the Claude Code agent engine.", icon: Cube },
   { id: "permissions", label: "Permissions", description: "Rules that let tools run without asking.", icon: Check },
   { id: "tools", label: "Tools", description: "Concurrency, stall timeout, and turn limits.", icon: Terminal },
   { id: "mcp", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
@@ -162,6 +164,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   profile: ["profile", "usage", "stats", "tokens", "streak", "heatmap"],
   provider: ["api key", "model", "base url", "oauth", "sign in", "credentials"],
   codex: ["codex", "agent", "engine", "sign in", "chatgpt", "cli", "binary", "install", "update"],
+  claude: ["claude", "agent", "engine", "sign in", "anthropic", "cli", "binary"],
   permissions: ["always allow", "rules", "bash", "pattern", "tool"],
   tools: ["concurrency", "stall timeout", "max turns", "tool"],
   mcp: ["mcp", "server", "status"],
@@ -1295,6 +1298,8 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
             {activePane === "provider" && <ProviderSettings store={store} />}
 
             {activePane === "codex" && <CodexEnginePane onRequestCloseSettings={onClose} />}
+
+            {activePane === "claude" && <ClaudeEnginePane />}
 
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 

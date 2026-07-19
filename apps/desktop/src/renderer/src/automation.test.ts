@@ -1371,7 +1371,8 @@ describe("automation facade — startScreenState (design/slice-P7.12-cut.md §5 
       // draft exists (mirrors workspace/prompt/model's draft-scoped reads);
       // `availableEngines` is the compiled-in catalog regardless of draft state.
       engine: undefined,
-      availableEngines: ["core", "codex"],
+      // SLICE-CC A1: the compiled-in catalog now also includes "claude".
+      availableEngines: ["core", "codex", "claude"],
     });
   });
 
@@ -1397,7 +1398,8 @@ describe("automation facade — startScreenState (design/slice-P7.12-cut.md §5 
       // Codex-fixes TASK.42 (cut §3.7, B5-auto): openDraft() defaults the
       // draft's engine to "core" (tabs-store.ts) — the catalog is unchanged.
       engine: "core",
-      availableEngines: ["core", "codex"],
+      // SLICE-CC A1: the compiled-in catalog now also includes "claude".
+      availableEngines: ["core", "codex", "claude"],
     });
   });
 

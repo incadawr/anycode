@@ -252,6 +252,27 @@ export interface AnycodeSettings {
     /** Codex versions the user explicitly accepted running outside the supported range (cut §7.4), per-version — not a blanket opt-out. */
     riskAcceptedVersions?: string[];
   };
+  /**
+   * Claude engine onboarding metadata (SLICE-CC A1, cut §1.2, additive-optional;
+   * version NOT bumped — same forward-compat reasoning as `codex` above: an
+   * existing settings.json with no `claude` field round-trips byte-identically).
+   * `binaryPath` is the validated absolute path the user picked/confirmed
+   * (NEVER the `ANYCODE_CLAUDE_BIN` dev env-override, which always wins at read
+   * time and is never persisted). `lastCheck` is an advisory cache of the last
+   * claude-doctor run — it NEVER carries a credential, email, or subscription
+   * tier (cut §0.2 invariant 2; `ClaudeDoctorReport` itself excludes them).
+   * No `profiles`/`activeProfileId` in CC-A — the engine runs on the user's
+   * single ambient `~/.claude` profile by default (owner pivot) until CC-E.
+   */
+  claude?: {
+    binaryPath?: string;
+    lastCheck?: {
+      status: "ready" | "not_installed" | "update_required" | "signed_out" | "error";
+      version?: string;
+      /** ISO timestamp; advisory-cache only. */
+      at: string;
+    };
+  };
 }
 
 /**

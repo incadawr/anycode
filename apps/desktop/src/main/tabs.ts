@@ -466,6 +466,12 @@ export class TabHostManager {
    * workspace; createTab enforces it authoritatively regardless.
    */
   canSpawn(engine: EngineId = "core", codexProfileId?: string): boolean {
+    // SLICE-CC C5 (cut §1.4): the CC-A hard refusal of `claude` is REMOVED here
+    // now that `host/index.ts`'s boot() switch dispatches a real `bootClaude`
+    // branch — a claude spawn can no longer land on the core boot path. Claude
+    // now answers from the same authority every other engine does:
+    // `isEngineReady`, which main/index.ts wires to the doctor's confirmed
+    // readiness (version-compatible AND signed in).
     return this.isEngineReady(engine, codexProfileId);
   }
 

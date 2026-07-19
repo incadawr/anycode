@@ -156,6 +156,24 @@ export interface EngineSettingsSeam {
    */
   pendingSnapshot?(): { model: string; activePresetId: string; effort?: string } | null;
   /**
+   * True when the engine applies a settings change over its OWN acknowledged
+   * control request instead of on the next `turn/start` (Claude, SLICE-CC
+   * §1.5). Session then records the choice ONLY from `onSettingsApplied`.
+   *
+   * Accept-time persistence is correct for codex — nothing was sent, so the
+   * choice cannot have been refused, and the engine re-asserts it on every
+   * turn/start. It is UNSAFE for an immediate-apply engine: the control
+   * request can be rejected or time out, leaving the CLI on its previous
+   * posture while the row already holds the new one. A later resume then
+   * spawns under a preset the engine never adopted — silently WIDENING
+   * permissions (`ask` -> `workspace`). Retaining the prior row on failure is
+   * therefore by construction here: the write simply never happens until the
+   * ack lands.
+   *
+   * Absent/false keeps the pre-SLICE-CC accept-time path byte-identical.
+   */
+  persistsOnApply?: boolean;
+  /**
    * The engine's latest merged subscription-quota snapshot (codex-profiles
    * cut §6.1), read into `EnginePresentation.quota` on every `ui_ready` — a
    * renderer reload gets the freshest snapshot without any bind-time push.
@@ -622,6 +640,14 @@ export class Session {
     // survives a renderer reload via replay rather than racing it.
     this.engineSettingsUnsubscribe = this.engineSettings?.onSettingsApplied((applied) => {
       this.model = applied.model;
+      // SLICE-CC §1.5: for an immediate-apply seam THIS is the only honest
+      // moment to persist — the engine has now acknowledged the change, so the
+      // row can no longer describe a posture the CLI refused (see
+      // `persistsOnApply`). A rejected/timed-out change never reaches here, so
+      // the prior row simply stands.
+      if (this.engineSettings?.persistsOnApply === true) {
+        this.persistence?.touch({ model: applied.model, enginePreset: applied.activePresetId });
+      }
       this.outbound.emit({
         type: "engine_settings_changed",
         model: applied.model,
@@ -1447,17 +1473,22 @@ export class Session {
       this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
       return;
     }
-    if (intent.model !== undefined) {
-      // `this.model` is the ACTIVE model echoed in host_ready — advancing it
-      // here would present a merely-CHOSEN model as active on the next
-      // handshake. It advances in the `onSettingsApplied` hook instead, when a
-      // turn/start has actually carried it. Persistence is unchanged: the
-      // choice is still recorded at ACCEPT time (cut §2(k).4), so quitting
-      // before the next turn still resumes under the chosen posture.
-      this.persistence?.touch({ model: result.model });
-    }
-    if (intent.presetId !== undefined) {
-      this.persistence?.touch({ enginePreset: result.activePresetId });
+    // An immediate-apply engine records the choice from its ack instead
+    // (SLICE-CC §1.5) — writing it here would outlive a REJECTED change and
+    // resume the session under a posture the engine never adopted.
+    if (this.engineSettings?.persistsOnApply !== true) {
+      if (intent.model !== undefined) {
+        // `this.model` is the ACTIVE model echoed in host_ready — advancing it
+        // here would present a merely-CHOSEN model as active on the next
+        // handshake. It advances in the `onSettingsApplied` hook instead, when a
+        // turn/start has actually carried it. Persistence is unchanged: the
+        // choice is still recorded at ACCEPT time (cut §2(k).4), so quitting
+        // before the next turn still resumes under the chosen posture.
+        this.persistence?.touch({ model: result.model });
+      }
+      if (intent.presetId !== undefined) {
+        this.persistence?.touch({ enginePreset: result.activePresetId });
+      }
     }
     this.outbound.emit({
       type: "engine_settings_changed",

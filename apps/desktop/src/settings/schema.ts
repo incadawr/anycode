@@ -352,6 +352,25 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       })
       .optional()
       .catch(undefined),
+    // Claude engine onboarding metadata (SLICE-CC A1, cut §1.2, additive-optional;
+    // version NOT bumped, same forward-compat reasoning as `codex` above).
+    // `.catch(undefined)`: `claude` is an ADVISORY cache field, not a functional
+    // setting — a foreign/wrong-shaped value here must never fail the whole
+    // document (same reasoning as `codex`'s own outer catch). No per-element
+    // array validation needed yet (CC-A has no `profiles` array).
+    claude: z
+      .object({
+        binaryPath: z.string().optional(),
+        lastCheck: z
+          .object({
+            status: codexDoctorStatusSchema,
+            version: z.string().optional(),
+            at: z.string(),
+          })
+          .optional(),
+      })
+      .optional()
+      .catch(undefined),
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

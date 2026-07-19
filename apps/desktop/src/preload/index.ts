@@ -60,6 +60,7 @@ import type {
 } from "../shared/mcp-config.js";
 import { ENGINES_LIST_CHANNEL, type AvailableEngines } from "../shared/tabs.js";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
+import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
 import type {
   SkillsCreateRequest,
   SkillsDeleteRequest,
@@ -193,6 +194,16 @@ const CODEX_MANIFEST_REFRESH_CHANNEL = "anycode:codex-manifest-refresh";
 const CODEX_ROLLOUT_LIST_CHANNEL = "anycode:codex-rollout-list";
 const CODEX_ROLLOUT_PREVIEW_CHANNEL = "anycode:codex-rollout-preview";
 const CODEX_ROLLOUT_IMPORT_CHANNEL = "anycode:codex-rollout-import";
+// SLICE-CC A4 + SLICE-CC-LOGIN (TASK.66, cut §1.2/§4): Claude onboarding
+// channels — main/claude-ipc.ts holds the byte-identical source of truth,
+// same duplicated-literal convention as every Codex channel above.
+const CLAUDE_RECHECK_CHANNEL = "anycode:claude-recheck";
+const CLAUDE_PICK_BINARY_CHANNEL = "anycode:claude-pick-binary";
+const CLAUDE_LOGIN_START_CHANNEL = "anycode:claude-login-start";
+const CLAUDE_LOGIN_CANCEL_CHANNEL = "anycode:claude-login-cancel";
+// Doctor-spawn-loop fix: the dedicated snapshot push — main/claude-ipc.ts's
+// `CLAUDE_SNAPSHOT_CHANGED_CHANNEL` holds the byte-identical source of truth.
+const CLAUDE_SNAPSHOT_CHANGED_CHANNEL = "anycode:claude-snapshot-changed";
 // TASK.45 W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
 // (main/settings-ipc.ts) persists a real request outcome's advisory health
 // deliberately WITHOUT firing the normal `onMutation` broadcast (health must
@@ -392,6 +403,28 @@ export type ArtifactActionResult =
       reason: "invalid" | "no_workspace" | "not_found" | "outside_allowed_roots" | "not_openable" | "io_error";
     };
 
+// SLICE-CC A4 (cut §1.2): duplicated from main/claude-ipc.ts's own
+// `ClaudeOnboardingSnapshot`/`ClaudePickBinaryResult` (same "shared/** froze
+// read-only" reasoning as every Codex shape above). `ClaudeDoctorReport`
+// itself IS a frozen shared/** type, imported (never edited) above.
+export interface ClaudeOnboardingSnapshot {
+  report: ClaudeDoctorReport;
+  binaryPath: string | null;
+  source: "env" | "settings" | "path" | "common" | "picker" | "none";
+  checkedAt: string;
+}
+
+export type ClaudePickBinaryResult =
+  | { ok: true; snapshot: ClaudeOnboardingSnapshot }
+  | { ok: false; reason: "cancelled" | "invalid" };
+
+// SLICE-CC-LOGIN (TASK.66, cut §4): duplicated from main/claude-ipc.ts's own
+// `ClaudeLoginStartResult` (same "shared/** froze read-only" reasoning as
+// every shape above).
+export type ClaudeLoginStartResult =
+  | { ok: true; snapshot: ClaudeOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+
 // §3.1: forward the main-side payload as-is. The port envelope carries
 // { tabId, workspace }, the host-exited envelope carries { tabId }; preload just
 // re-stamps the `type` and re-posts (still window.postMessage, since
@@ -529,6 +562,35 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_ROLLOUT_PREVIEW_CHANNEL, { profileId, fileName }) as Promise<CodexRolloutPreviewResult>,
     rolloutImport: (profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult> =>
       ipcRenderer.invoke(CODEX_ROLLOUT_IMPORT_CHANNEL, { profileId, fileName, model }) as Promise<CodexRolloutImportResult>,
+  },
+  // SLICE-CC A4 (cut §1.2): Claude onboarding invoke-API — a minimal subset of
+  // the codex bridge above (no login/profile/quota surface in CC-A). No
+  // token/credential/account value ever crosses this bridge in either
+  // direction — every result carries only status/version (custody).
+  claude: {
+    recheck: (): Promise<ClaudeOnboardingSnapshot> => ipcRenderer.invoke(CLAUDE_RECHECK_CHANNEL) as Promise<ClaudeOnboardingSnapshot>,
+    pickBinary: (): Promise<ClaudePickBinaryResult> =>
+      ipcRenderer.invoke(CLAUDE_PICK_BINARY_CHANNEL) as Promise<ClaudePickBinaryResult>,
+    // SLICE-CC-LOGIN (TASK.66, cut §4): the native subscription-login
+    // invoke-API. No token/credential value ever crosses this bridge in
+    // either direction (custody) — `loginStart` resolves with only
+    // status/version (via the same `ClaudeOnboardingSnapshot` recheck uses).
+    loginStart: (): Promise<ClaudeLoginStartResult> =>
+      ipcRenderer.invoke(CLAUDE_LOGIN_START_CHANNEL) as Promise<ClaudeLoginStartResult>,
+    loginCancel: (): Promise<void> => ipcRenderer.invoke(CLAUDE_LOGIN_CANCEL_CHANNEL) as Promise<void>,
+    // Doctor-spawn-loop fix: pushes the fresh snapshot itself after every
+    // recheck/pick/login step, so the Settings pane can apply it directly
+    // instead of answering the shared `engines-changed` push with another
+    // recheck — same "thin unsubscribe-returning wrapper" shape as
+    // `updates.onUpdateStatus`/`window.onWindowState` below. No token/account
+    // value crosses this bridge — same `ClaudeOnboardingSnapshot` `recheck` returns.
+    onSnapshotChanged: (callback: (snapshot: ClaudeOnboardingSnapshot) => void): (() => void) => {
+      function listener(_event: unknown, snapshot: ClaudeOnboardingSnapshot): void {
+        callback(snapshot);
+      }
+      ipcRenderer.on(CLAUDE_SNAPSHOT_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(CLAUDE_SNAPSHOT_CHANGED_CHANNEL, listener);
+    },
   },
   settings: {
     get: (): Promise<SettingsSnapshot> =>
