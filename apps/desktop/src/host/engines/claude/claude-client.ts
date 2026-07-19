@@ -21,6 +21,7 @@ import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
 import { ENGINE_PROCESS_REGISTRATION_TYPE } from "../../../shared/engines.js";
 import { checkCodexBinaryTrust, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
+import { resolveClaudeConfigDir } from "../../../shared/claude-config-dir.js";
 import {
   CLAUDE_CONTROL_REQUEST_TIMEOUT_MS,
   CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS,
@@ -107,16 +108,19 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
 }
 
 /**
- * Explicit child env custody (cut §0.2 invariant 2, C1): `CLAUDE_CONFIG_DIR`
- * is a REQUIRED parameter, never optional and never ambient — every spawn
- * gets a dedicated AnyCode profile, never the default `~/.claude` (R1/
- * VERIFY-1: this one mechanism closes both credential custody AND the
- * CLAUDE.md/AutoMem content leak). `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
+ * Explicit child env custody: `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
  * (silently override the subscription) and `CLAUDECODE` (breaks a nested
  * claude-under-claude-code launch) are never forwarded — the allowlist simply
  * never names them.
+ *
+ * `CLAUDE_CONFIG_DIR` goes through `resolveClaudeConfigDir` (owner pivot):
+ * ambient is the product default, so an omitted `profileDir` sets NO
+ * `CLAUDE_CONFIG_DIR` key at all and the CLI resolves its own `~/.claude`
+ * exactly like a terminal invocation would. An explicit `profileDir` keeps
+ * the isolated-profile capability available (used by the env-gated live
+ * tests, which must never fall back to ambient).
  */
-export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: string, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: string | undefined, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const posix = [
     "HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "TERM",
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
@@ -135,7 +139,8 @@ export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: strin
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  env.CLAUDE_CONFIG_DIR = profileDir;
+  const resolvedConfigDir = resolveClaudeConfigDir(profileDir);
+  if (resolvedConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = resolvedConfigDir;
   env.DISABLE_AUTOUPDATER = "1";
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   env.DISABLE_TELEMETRY = "1";
@@ -258,8 +263,8 @@ export interface ClaudeClientOptions {
   binaryPath: string;
   cwd: string;
   sourceEnv: NodeJS.ProcessEnv;
-  /** REQUIRED (cut invariant C1) — every spawn is isolated to this profile, never the ambient default. */
-  profileDir: string;
+  /** Isolated-profile override (owner pivot: OPTIONAL, ambient `~/.claude` is the default when omitted). */
+  profileDir?: string;
   /** CLI flag value (`manual` for the wire's `default`); defaults to `manual`. */
   permissionModeFlag?: PermissionModeFlag;
   model?: string;

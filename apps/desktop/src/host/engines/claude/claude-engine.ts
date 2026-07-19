@@ -54,7 +54,16 @@ import {
 import { decodeClaudeUsage, quotaNotice, type ClaudeQuotaSnapshot } from "./quota.js";
 
 export const CLAUDE_NOT_SIGNED_IN =
-  "Claude Code is not signed in for the AnyCode profile — run `CLAUDE_CONFIG_DIR=<profile> claude` in a terminal, sign in with /login, then start a new Claude session.";
+  "Claude Code is not signed in — run `claude auth login` in a terminal, then start a new Claude session.";
+
+// Mirrors `isClaudeSignedIn` in main/claude-doctor.ts (host cannot import across
+// the main/** boundary). A signed-in subscription profile's `initialize` response
+// omits `tokenSource` entirely (live handshake, binary 2.1.215) — the fallback to
+// `subscriptionType` is what distinguishes that case from a genuinely signed-out one.
+function isClaudeSignedIn(account: { tokenSource?: string; subscriptionType?: string }): boolean {
+  if (typeof account.tokenSource === "string") return account.tokenSource !== "none";
+  return account.subscriptionType !== undefined;
+}
 
 export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsCorePermissions: false,
@@ -259,7 +268,7 @@ async function connectClaudeEngine(
   try {
     await client.start();
     const initialized = await client.initialize();
-    if (initialized.account.tokenSource === "none" || initialized.account.tokenSource === undefined) {
+    if (!isClaudeSignedIn(initialized.account)) {
       throw new Error(CLAUDE_NOT_SIGNED_IN);
     }
     const catalog = ClaudeModelCatalog.fromInitialize(initialized.models);

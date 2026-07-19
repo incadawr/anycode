@@ -240,6 +240,12 @@ export type ClaudePickBinaryResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
 
+// SLICE-CC-LOGIN (TASK.66, cut §4): mirrors the SAME duplicated shape
+// declared in preload/index.ts and main/claude-ipc.ts.
+export type ClaudeLoginStartResult =
+  | { ok: true; snapshot: ClaudeOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+
 declare global {
   interface Window {
     anycode: {
@@ -293,6 +299,15 @@ declare global {
       claude: {
         recheck(): Promise<ClaudeOnboardingSnapshot>;
         pickBinary(): Promise<ClaudePickBinaryResult>;
+        // SLICE-CC-LOGIN (TASK.66, cut §4): the native subscription-login
+        // invoke-API — no token/credential value ever crosses this bridge.
+        loginStart(): Promise<ClaudeLoginStartResult>;
+        loginCancel(): Promise<void>;
+        // Doctor-spawn-loop fix: pushes the fresh snapshot itself after every
+        // recheck/pick/login step — same "thin unsubscribe-returning wrapper"
+        // shape as `onProviderHealthChanged` below, but payload-carrying (same
+        // shape as `updates.onUpdateStatus`/`window.onWindowState`).
+        onSnapshotChanged(callback: (snapshot: ClaudeOnboardingSnapshot) => void): () => void;
       };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.

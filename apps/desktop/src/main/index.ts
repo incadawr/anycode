@@ -88,7 +88,15 @@ import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from ".
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
 // SLICE-CC A3 (cut §1.2): new import line — mirrors the codex-ipc import above.
-import { registerClaudeIpc, type ClaudeOnboardingController } from "./claude-ipc.js";
+// Doctor-spawn-loop fix: the dedicated snapshot push + its material-change
+// gate (see the `claudeOnboarding` `onSnapshot` wiring below).
+import {
+  CLAUDE_SNAPSHOT_CHANGED_CHANNEL,
+  isClaudeSnapshotChangeMaterial,
+  registerClaudeIpc,
+  type ClaudeOnboardingController,
+  type ClaudeOnboardingSnapshot,
+} from "./claude-ipc.js";
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
@@ -361,6 +369,8 @@ let codexOnboarding: CodexOnboardingController | null = null;
 let claudeOnboarding: ClaudeOnboardingController | null = null;
 /** Discovery ladder's last winning candidate for the Claude engine (mirrors `codexBinaryPath` below). */
 let claudeBinaryPath: string | null = null;
+/** Doctor-spawn-loop fix: the last snapshot `claudeOnboarding`'s `onSnapshot` saw, for `isClaudeSnapshotChangeMaterial`'s comparison. */
+let lastClaudeSnapshot: ClaudeOnboardingSnapshot | undefined;
 /** Set once quit begins, to gate the before-quit handler's second pass. */
 let quitting = false;
 /** Auto-updater controller (TASK.47 W15) — held module-level so before-quit can clear its armed schedule timer. Null until boot registers it. */
@@ -1471,18 +1481,33 @@ void app.whenReady().then(async () => {
     console.warn("[main] initial Codex check failed", error);
   });
 
-  // SLICE-CC A3 (cut §1.2): Claude onboarding wiring — mirrors the codex
-  // block immediately above, minus everything CC-A is out of scope for
-  // (native login, profile CRUD, quotas, install/manifest).
+  // SLICE-CC A3 + SLICE-CC-LOGIN (cut §1.2/§4): Claude onboarding wiring —
+  // mirrors the codex block immediately above, minus everything still out of
+  // scope for this track (profile CRUD, quotas, install/manifest — CC-E).
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
     readBinaryPathSetting: async () => settings?.claude?.binaryPath,
     writeClaudeSettings: (patch) => handleSet(settingsIpcDeps, { claude: patch }),
     dialog,
+    // SLICE-CC-LOGIN (cut §4): the same `shell.openPath` pattern `openExternal`
+    // already uses for codex above — the login script's terminal window is
+    // opened, never spawned as our own child.
+    openPath: (p) => shell.openPath(p),
     onSnapshot: (snapshot) => {
       claudeBinaryPath = snapshot.binaryPath;
-      // Same unconditional-send push shape as the codex onSnapshot above.
-      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+      // Doctor-spawn-loop fix: the snapshot payload itself always goes out on
+      // its own dedicated channel — the Settings pane applies it directly,
+      // with zero recheck (root-cause fix). `ENGINES_CHANGED_CHANNEL` (the
+      // shared push every onboarding surface subscribes to) only fires when
+      // this snapshot MATERIALLY differs from the last one (belt fix) — an
+      // identical routine recheck must not re-trigger every OTHER
+      // subscriber's own refresh.
+      win?.webContents.send(CLAUDE_SNAPSHOT_CHANGED_CHANNEL, snapshot);
+      const changed = isClaudeSnapshotChangeMaterial(lastClaudeSnapshot, snapshot);
+      lastClaudeSnapshot = snapshot;
+      if (changed) {
+        win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+      }
     },
   });
 

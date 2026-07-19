@@ -261,8 +261,8 @@ export interface AnycodeSettings {
    * time and is never persisted). `lastCheck` is an advisory cache of the last
    * claude-doctor run — it NEVER carries a credential, email, or subscription
    * tier (cut §0.2 invariant 2; `ClaudeDoctorReport` itself excludes them).
-   * No `profiles`/`activeProfileId` in CC-A — the engine runs on a single
-   * fixed AnyCode profile (`~/.anycode/claude/profile-default`) until CC-E.
+   * No `profiles`/`activeProfileId` in CC-A — the engine runs on the user's
+   * single ambient `~/.claude` profile by default (owner pivot) until CC-E.
    */
   claude?: {
     binaryPath?: string;
