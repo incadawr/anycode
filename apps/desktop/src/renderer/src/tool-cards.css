@@ -189,6 +189,9 @@
 }
 
 .subagent-activity-row {
+  /* The feed is a height-capped column: rows must overflow it, not flex down
+     below their own line box (which makes glyphs overlap and defeats scroll). */
+  flex-shrink: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-3);

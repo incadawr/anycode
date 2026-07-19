@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "smoke:subagent-feed-layout": "node ./scripts/subagent-activity-feed-layout-smoke.mjs",
     "package": "electron-vite build && electron-builder --config electron-builder.yml",
     "package:dir": "electron-vite build && electron-builder --dir --config electron-builder.yml",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.web.json --noEmit",
