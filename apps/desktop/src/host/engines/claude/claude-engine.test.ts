@@ -175,6 +175,7 @@ function engineWith(
     catalog,
     model: overrides.model ?? "default",
     preset: findClaudePreset(overrides.presetId ?? "ask")!,
+    effortsByModel: new Map(),
     notices: [],
   });
 }
@@ -430,6 +431,22 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
     await expect(opus.selectEffort("high")).resolves.toEqual({ ok: true, effort: "high" });
     expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { effortLevel: "high" } }]);
     expect(opus.snapshot().effort).toBe("high");
+  });
+
+  it("re-resolves the effort for the switched-to model and restores the remembered value when switching back (TASK.60 shape)", async () => {
+    const transport = new FakeTransport();
+    const engine = engineWith(transport, { model: "opus[1m]" });
+    await expect(engine.selectEffort("high")).resolves.toEqual({ ok: true, effort: "high" });
+
+    // sonnet has no remembered effort yet, so the switch clears the local
+    // record rather than carrying opus's "high" over onto an unrelated model.
+    await expect(engine.selectModel("sonnet")).resolves.toEqual({ ok: true, model: "sonnet" });
+    expect(engine.snapshot().effort).toBeUndefined();
+
+    await expect(engine.selectModel("opus[1m]")).resolves.toEqual({ ok: true, model: "opus[1m]" });
+    expect(engine.snapshot().effort).toBe("high");
+    // Restoring re-asserts it live too, not just in the local record.
+    expect(transport.controls.at(-1)).toEqual({ subtype: "apply_flag_settings", request: { effortLevel: "high" } });
   });
 });
 

@@ -71,6 +71,7 @@ function buildEngine(transport: ClaudeTransport): ClaudeEngine {
     catalog: catalog(),
     model: "model-a",
     preset: findClaudePreset("ask")!,
+    effortsByModel: new Map(),
     notices: [],
   });
 }
