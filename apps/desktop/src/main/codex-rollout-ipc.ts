@@ -212,7 +212,10 @@ export async function handleCodexRolloutList(deps: CodexRolloutIpcDeps, raw: unk
     const peek = await peekRolloutMeta(fullPath);
     rollouts.push({ fileName, sizeBytes: stat.size, mtimeMs: stat.mtimeMs, ...peek });
   }
-  rollouts.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  // Newest first by mtime; equal mtimes (coarse fs timestamps, back-to-back
+  // writes) fall back to the date-encoded path so the order never depends on
+  // readdir enumeration order.
+  rollouts.sort((a, b) => b.mtimeMs - a.mtimeMs || b.fileName.localeCompare(a.fileName));
   return { ok: true, rollouts };
 }
 

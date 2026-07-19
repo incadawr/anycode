@@ -5,7 +5,7 @@
  * — mirrors profile-ipc.test.ts's own convention for this codebase.
  */
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -48,10 +48,14 @@ function jsonl(records: Record<string, unknown>[]): string {
   return records.map((r) => JSON.stringify(r)).join("\n") + "\n";
 }
 
-async function seedRollout(sessionsDir: string, relPath: string, records: Record<string, unknown>[]): Promise<void> {
+async function seedRollout(sessionsDir: string, relPath: string, records: Record<string, unknown>[], mtime?: Date): Promise<void> {
   const full = join(sessionsDir, relPath);
   await mkdir(join(full, ".."), { recursive: true });
   await writeFile(full, jsonl(records), "utf-8");
+  // Ordering tests must CONSTRUCT their mtimes: back-to-back writes can land in
+  // the same fs-timestamp tick (seen on the Linux CI runner), so "written later
+  // means newer" is not a property a test may rely on.
+  if (mtime !== undefined) await utimes(full, mtime, mtime);
 }
 
 const BASIC_RECORDS = [
@@ -85,11 +89,11 @@ function makeDeps(persistence: FakePersistence, sessionsDirByProfile: Record<str
 describe("handleCodexRolloutList", () => {
   it("lists rollouts under YYYY/MM/DD, newest first, with a cheap cwd/first-message peek", async () => {
     const sessionsDir = await tmp();
-    await seedRollout(sessionsDir, "2026/07/01/rollout-2026-07-01T00-00-00-aaa.jsonl", BASIC_RECORDS);
+    await seedRollout(sessionsDir, "2026/07/01/rollout-2026-07-01T00-00-00-aaa.jsonl", BASIC_RECORDS, new Date("2026-07-01T00:00:00.000Z"));
     await seedRollout(sessionsDir, "2026/07/02/rollout-2026-07-02T00-00-00-bbb.jsonl", [
       { timestamp: "2026-07-02T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp/project-b" } },
       { timestamp: "2026-07-02T00:00:01.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "second session" }] } },
-    ]);
+    ], new Date("2026-07-02T00:00:00.000Z"));
     const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
 
     const result = await handleCodexRolloutList(deps, { profileId: "p1" });
@@ -101,6 +105,25 @@ describe("handleCodexRolloutList", () => {
     expect(result.rollouts[0]?.firstUserMessage).toBe("second session");
     expect(result.rollouts[1]?.fileName).toBe("2026/07/01/rollout-2026-07-01T00-00-00-aaa.jsonl");
     expect(result.rollouts[1]?.cwd).toBe("/tmp/project-a");
+  });
+
+  it("breaks an mtime tie by the date-encoded fileName (descending) — readdir order must not decide", async () => {
+    const sessionsDir = await tmp();
+    const sameMtime = new Date("2026-07-03T00:00:00.000Z");
+    // Seeded ascending on purpose: with identical mtimes and no tiebreaker the
+    // stable sort keeps walk order (aaa first under both insertion-order and
+    // alphabetical readdir), so this test discriminates the tiebreaker itself.
+    await seedRollout(sessionsDir, "2026/07/02/rollout-2026-07-02T00-00-00-aaa.jsonl", BASIC_RECORDS, sameMtime);
+    await seedRollout(sessionsDir, "2026/07/02/rollout-2026-07-02T00-01-00-bbb.jsonl", BASIC_RECORDS, sameMtime);
+    const deps = makeDeps(new FakePersistence(), { p1: sessionsDir });
+
+    const result = await handleCodexRolloutList(deps, { profileId: "p1" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rollouts.map((r) => r.fileName)).toEqual([
+      "2026/07/02/rollout-2026-07-02T00-01-00-bbb.jsonl",
+      "2026/07/02/rollout-2026-07-02T00-00-00-aaa.jsonl",
+    ]);
   });
 
   it("ignores files outside the YYYY/MM/DD/rollout-*.jsonl shape (no crash, just skipped)", async () => {
