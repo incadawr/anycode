@@ -22,6 +22,8 @@ export interface EngineBootContext {
   coreEngine?: SessionEngine;
   /** Codex composition supplies an already-connected native lifecycle owner. */
   codexEngine?: SessionEngine;
+  /** Claude composition supplies an already-connected native lifecycle owner (wired starting CC-C; unused until then). */
+  claudeEngine?: SessionEngine;
 }
 
 export interface BootedEngine {
@@ -65,9 +67,31 @@ const codexPlugin: EnginePlugin = {
   },
 };
 
+/**
+ * Statically linked first-party adapter (SLICE-CC A1, cut §1.2). CC-A only
+ * registers identity — `boot()` throwing unconditionally is correct and
+ * intentional here: `host/index.ts`'s boot switch has no `claude` branch
+ * until CC-C wires `bootClaude`, and `main/tabs.ts`'s `canSpawn("claude")`
+ * refuses every spawn attempt unconditionally before this plugin's `boot()`
+ * could ever be reached in practice.
+ */
+const claudePlugin: EnginePlugin = {
+  id: "claude",
+  async probe(): Promise<EngineAvailability> {
+    return { available: true };
+  },
+  async boot(ctx: EngineBootContext): Promise<BootedEngine> {
+    if (ctx.claudeEngine?.id !== "claude") {
+      throw new Error("Claude engine bootstrap was not provided");
+    }
+    return { engine: ctx.claudeEngine };
+  },
+};
+
 export const ENGINE_REGISTRY: ReadonlyMap<EngineId, EnginePlugin> = new Map([
   [corePlugin.id, corePlugin],
   [codexPlugin.id, codexPlugin],
+  [claudePlugin.id, claudePlugin],
 ]);
 
 export function getEnginePlugin(id: string): EnginePlugin | undefined {

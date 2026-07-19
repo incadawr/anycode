@@ -4,7 +4,7 @@
  * compiled into the desktop application can appear here.
  */
 
-export const ENGINE_IDS = ["core", "codex"] as const;
+export const ENGINE_IDS = ["core", "codex", "claude"] as const;
 export type EngineId = (typeof ENGINE_IDS)[number];
 
 export function isEngineId(value: string | undefined): value is EngineId {
@@ -14,6 +14,8 @@ export function isEngineId(value: string | undefined): value is EngineId {
 export const ENV_ENGINE = "ANYCODE_ENGINE";
 /** Absolute main-validated Codex CLI path passed only to the host process. */
 export const ENV_CODEX_BIN = "ANYCODE_CODEX_BIN";
+/** Absolute main-validated Claude Code CLI path (SLICE-CC A1) — mirrors ENV_CODEX_BIN; wired to the host process starting CC-C. */
+export const ENV_CLAUDE_BIN = "ANYCODE_CLAUDE_BIN";
 /** Main-owned utility-process generation; never trusted from renderer input. */
 export const ENV_HOST_GENERATION = "ANYCODE_HOST_GENERATION";
 

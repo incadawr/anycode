@@ -1268,3 +1268,78 @@ describe("TabHostManager — terminal channel delivery (design §3.2, slice 2.4.
     expect(posted.filter((p) => p.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1);
   });
 });
+
+/**
+ * SLICE-CC C5 (cut §1.4): the canSpawn flip. CC-A's `if (engine === "claude")
+ * return false` is gone, so `claude` now answers from `isEngineReady` — the
+ * doctor's confirmed readiness — exactly like every other engine.
+ *
+ * These replace CC-A's "unconditionally false" block, which asserted the very
+ * behaviour this slice removes and could not survive the flip.
+ */
+describe("TabHostManager — canSpawn(\"claude\") follows doctor readiness (SLICE-CC C5, cut §1.4)", () => {
+  function managerWith(engineReady: (engine: EngineId, codexProfileId?: string) => boolean, fork: HostForkFn) {
+    return new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      engineReady,
+      logger: silentLogger,
+      limits: {},
+    });
+  }
+
+  it("a ready doctor now lets claude spawn — and the readiness oracle is actually consulted", () => {
+    const { fork } = liveForkRig();
+    const engineReady = vi.fn((_engine: EngineId) => true);
+    const manager = managerWith(engineReady, fork);
+
+    expect(manager.canSpawn("claude")).toBe(true);
+    // Discriminating against a partial rollback: restoring the CC-A hard block
+    // would short-circuit before the oracle is asked, so this call is the proof
+    // that claude reaches the shared readiness path rather than a claude-shaped
+    // special case that happens to return true.
+    expect(engineReady).toHaveBeenCalledWith("claude", undefined);
+  });
+
+  it("an unready doctor still refuses — the flip delegates the gate, it does not remove it", () => {
+    const { fork } = liveForkRig();
+    const manager = managerWith((engine) => engine !== "claude", fork);
+
+    expect(manager.canSpawn("claude")).toBe(false);
+    expect(manager.canSpawn("core")).toBe(true);
+    expect(manager.canSpawn("codex")).toBe(true);
+  });
+
+  it("createTab forks a claude host when ready, and refuses not_ready without forking when not", () => {
+    const readyFork = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const ready = managerWith(() => true, readyFork);
+    expect(ready.createTab({ workspace: "/ws", sessionId: "s-claude", resume: false, engine: "claude" }).ok).toBe(true);
+    expect(readyFork).toHaveBeenCalled();
+
+    const blockedFork = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const blocked = managerWith((engine) => engine !== "claude", blockedFork);
+    expect(blocked.createTab({ workspace: "/ws", sessionId: "s-claude-2", resume: false, engine: "claude" })).toEqual({
+      ok: false,
+      reason: "not_ready",
+    });
+    expect(blockedFork).not.toHaveBeenCalled();
+  });
+
+  it("the ENGINES_LIST projection (tab-ipc.ts) therefore contains claude iff the doctor is ready", () => {
+    // The renderer's `availableEngines` is exactly this filter over canSpawn
+    // (tab-ipc.ts's ENGINES_LIST handler); StartScreen's
+    // `shouldShowClaudeEngineButton` consumes its output, so these two
+    // assertions are the two halves of the button's visibility.
+    const { fork } = liveForkRig();
+    const candidates = ["core", "codex", "claude"] as const;
+
+    const ready = managerWith(() => true, fork);
+    expect(candidates.filter((engine) => ready.canSpawn(engine))).toContain("claude");
+
+    const unready = managerWith((engine) => engine !== "claude", fork);
+    expect(candidates.filter((engine) => unready.canSpawn(engine))).not.toContain("claude");
+  });
+});

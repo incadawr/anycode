@@ -23,6 +23,7 @@ import {
   resolveCodexDraftModel,
   resolveProviderDefaultModel,
   seedWorkspaceFromRecents,
+  shouldShowClaudeEngineButton,
   shouldShowCodexProfileChip,
   type FolderPickDeps,
   type ModelPickDeps,
@@ -415,5 +416,21 @@ describe("seedWorkspaceFromRecents (slice-start-composer-cut §5 — preselect l
 
   it("returns null when there is no draft at all", () => {
     expect(seedWorkspaceFromRecents(null, ["/ws/a"])).toBeNull();
+  });
+});
+
+describe("shouldShowClaudeEngineButton (SLICE-CC A4, cut §1.2 DoD-3)", () => {
+  it("true iff the injected availableEngines contains \"claude\"", () => {
+    expect(shouldShowClaudeEngineButton(["core", "codex", "claude"])).toBe(true);
+    expect(shouldShowClaudeEngineButton(["core", "claude"])).toBe(true);
+  });
+
+  // SLICE-CC C5: since the canSpawn flip, "claude" is absent from ENGINES_LIST
+  // exactly when the Claude doctor is not ready (main/tabs.ts's canSpawn ->
+  // isEngineReady; the paired half of this assertion lives in tabs.test.ts).
+  it("false when \"claude\" is absent — an unready doctor keeps it out of ENGINES_LIST (main/tabs.ts)", () => {
+    expect(shouldShowClaudeEngineButton(["core"])).toBe(false);
+    expect(shouldShowClaudeEngineButton(["core", "codex"])).toBe(false);
+    expect(shouldShowClaudeEngineButton([])).toBe(false);
   });
 });

@@ -1161,3 +1161,199 @@ describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut �
     expect(row?.codexProfileId).toBeUndefined();
   });
 });
+
+describe("host Claude session-row wiring (SLICE-CC C4, cut §1.4)", () => {
+  /**
+   * Reproduces the SHAPE of bootClaudeSession's create-vs-touch decision
+   * (index.ts is not importable — see this file's header), because the
+   * defect it prevents is invisible on a first spawn and fatal on every one
+   * after it: `main/tabs.ts.spawnTabHost` sends `--resume <id>` for EVERY
+   * respawn, and `createSession` is a plain INSERT, so a create-always branch
+   * aborts the boot on a duplicate primary key the moment a Claude host is
+   * respawned.
+   *
+   * CC-C cannot resume the NATIVE session (CC-D owns that), so a respawn
+   * starts a fresh one and REPOINTS the row at it — leaving the dead ref
+   * behind would hand CC-D's future resume a session id the CLI no longer has.
+   */
+  interface Row {
+    id: string;
+    engineId?: string;
+    externalSessionRef?: string;
+    title?: string;
+  }
+
+  async function claudeRowShape(
+    persistence: {
+      getSession(id: string): Promise<Row | null>;
+      createSession(row: Row & Record<string, unknown>): Promise<Row>;
+      touchSession(id: string, patch: Record<string, unknown>): Promise<void>;
+    },
+    argsSessionId: string | undefined,
+    connected: { sessionRef: string; model: string; presetId: string },
+  ): Promise<Row> {
+    const sessionRow = {
+      workspace: "/ws",
+      model: connected.model,
+      mode: connected.presetId,
+      engineId: "claude" as const,
+      externalSessionRef: connected.sessionRef,
+    };
+    const existing = argsSessionId === undefined ? null : await persistence.getSession(argsSessionId);
+    if (existing !== null && existing.engineId !== "claude") {
+      throw new Error(`Session ${existing.id} belongs to engine "${existing.engineId ?? "core"}", not claude`);
+    }
+    if (existing === null) {
+      return await persistence.createSession({ id: argsSessionId ?? "generated-uuid", ...sessionRow });
+    }
+    await persistence.touchSession(existing.id, sessionRow);
+    return { ...existing, ...sessionRow };
+  }
+
+  function rig(initial: Row | null) {
+    const created: Row[] = [];
+    const touched: { id: string; patch: Record<string, unknown> }[] = [];
+    return {
+      created,
+      touched,
+      persistence: {
+        getSession: vi.fn(async () => initial),
+        createSession: vi.fn(async (row: Row & Record<string, unknown>) => {
+          created.push(row);
+          return row;
+        }),
+        touchSession: vi.fn(async (id: string, patch: Record<string, unknown>) => {
+          touched.push({ id, patch });
+        }),
+      },
+    };
+  }
+
+  it("a first spawn INSERTS the row, native-first, with the spawn-assigned ref", async () => {
+    const r = rig(null);
+    const meta = await claudeRowShape(r.persistence, "s1", { sessionRef: "ref-1", model: "default", presetId: "ask" });
+
+    expect(r.created).toHaveLength(1);
+    expect(r.touched).toEqual([]);
+    expect(meta.id).toBe("s1");
+    expect(r.created[0]).toMatchObject({ engineId: "claude", externalSessionRef: "ref-1", mode: "ask" });
+  });
+
+  it("a RESPAWN (--resume) updates the existing row instead of double-inserting", async () => {
+    const r = rig({ id: "s1", engineId: "claude", externalSessionRef: "ref-old", title: "Kept title" });
+    const meta = await claudeRowShape(r.persistence, "s1", { sessionRef: "ref-new", model: "sonnet", presetId: "workspace" });
+
+    // The defect this pins: a create here throws SQLITE_CONSTRAINT and bricks
+    // every Claude respawn.
+    expect(r.persistence.createSession).not.toHaveBeenCalled();
+    expect(r.touched).toHaveLength(1);
+    // The dead native ref is REPLACED, never left for CC-D's resume to trip on.
+    expect(r.touched[0]!.patch).toMatchObject({ externalSessionRef: "ref-new", model: "sonnet", mode: "workspace" });
+    expect(meta.externalSessionRef).toBe("ref-new");
+    // Row identity and its non-engine fields survive the respawn.
+    expect(meta.id).toBe("s1");
+    expect(meta.title).toBe("Kept title");
+  });
+
+  it("refuses to take over a row belonging to another engine", async () => {
+    const r = rig({ id: "s1", engineId: "codex", externalSessionRef: "thread-9" });
+    await expect(
+      claudeRowShape(r.persistence, "s1", { sessionRef: "ref-new", model: "default", presetId: "ask" }),
+    ).rejects.toThrow(/belongs to engine "codex"/);
+    expect(r.persistence.createSession).not.toHaveBeenCalled();
+    expect(r.persistence.touchSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("host Claude resume wiring (SLICE-CC D-min, cut §1.5)", () => {
+  /**
+   * Reproduces the SHAPE of bootClaudeSession's `args.resume` branch (mirrors
+   * codex's index.ts:500-529) — index.ts is not importable (see this file's
+   * header). Real resume requires the persisted row's own native ref: unlike
+   * a fresh spawn (which mints its own uuid), a resume that finds no
+   * resumable row must fail closed rather than silently starting a fresh
+   * native session under the old row's id.
+   */
+  interface Row {
+    id: string;
+    engineId?: string;
+    externalSessionRef?: string;
+    model?: string;
+    mode?: string;
+  }
+
+  async function claudeResumeShape(
+    persistence: { getSession(id: string): Promise<Row | null> },
+    resumeEngine: (ref: string, selection: { model?: string; presetId?: string }) => Promise<{ sessionRef: string; model: string; presetId: string }>,
+    sessionId: string | undefined,
+  ): Promise<{ existing: Row; connected: { sessionRef: string; model: string; presetId: string } }> {
+    if (sessionId === undefined || sessionId.length === 0) {
+      throw new Error("Claude resume requires a session id");
+    }
+    const existing = await persistence.getSession(sessionId);
+    if (existing === null) throw new Error(`Claude session ${sessionId} was not found`);
+    if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
+      throw new Error(`Claude session ${sessionId} has no resumable native session`);
+    }
+    const connected = await resumeEngine(existing.externalSessionRef, { model: existing.model, presetId: existing.mode });
+    return { existing, connected };
+  }
+
+  it("resumes with the persisted externalSessionRef and selection, never a fresh id", async () => {
+    const getSession = vi.fn(async () => ({ id: "s1", engineId: "claude", externalSessionRef: "native-ref-1", model: "opus", mode: "workspace" }));
+    const resumeEngine = vi.fn(async (ref: string) => ({ sessionRef: ref, model: "opus", presetId: "workspace" }));
+
+    const { connected } = await claudeResumeShape({ getSession }, resumeEngine, "s1");
+
+    expect(resumeEngine).toHaveBeenCalledWith("native-ref-1", { model: "opus", presetId: "workspace" });
+    expect(connected.sessionRef).toBe("native-ref-1");
+  });
+
+  it("fails closed when the row has no resumable native session (missing ref, or belongs to another engine)", async () => {
+    const noRef = vi.fn(async () => ({ id: "s1", engineId: "claude" }));
+    await expect(claudeResumeShape({ getSession: noRef }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
+
+    const wrongEngine = vi.fn(async () => ({ id: "s1", engineId: "codex", externalSessionRef: "thread-1" }));
+    await expect(claudeResumeShape({ getSession: wrongEngine }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
+  });
+
+  it("fails closed when the row is gone entirely", async () => {
+    await expect(claudeResumeShape({ getSession: vi.fn(async () => null) }, vi.fn(), "s1")).rejects.toThrow(/was not found/);
+  });
+
+  /**
+   * Reproduces the shape of the resume-settle callback (test-hazard (б)):
+   * the persisted row's model/mode may diverge from what the resumed native
+   * session actually settled on (it keeps its own posture across process
+   * death) — the FIRST observed `system/init` is truth, and only the fields
+   * that actually diverged are patched.
+   */
+  function resumeSettlePatch(
+    sessionMeta: { model: string; mode: string },
+    resolved: { model: string; permissionMode: string },
+    presetIdForMode: (mode: string) => string | undefined,
+  ): Record<string, unknown> {
+    const presetId = presetIdForMode(resolved.permissionMode);
+    const patch: Record<string, unknown> = {};
+    if (sessionMeta.model !== resolved.model) patch.model = resolved.model;
+    if (presetId !== undefined && sessionMeta.mode !== presetId) patch.mode = presetId;
+    return patch;
+  }
+
+  it("patches only the fields that actually diverged from the resumed session's first system/init", () => {
+    const presetIdForMode = (mode: string): string | undefined => (mode === "plan" ? "read-only" : mode === "acceptEdits" ? "workspace" : undefined);
+
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "opus", permissionMode: "default" }, presetIdForMode)).toEqual({});
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "sonnet", permissionMode: "default" }, presetIdForMode)).toEqual({
+      model: "sonnet",
+    });
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "opus", permissionMode: "plan" }, presetIdForMode)).toEqual({
+      mode: "read-only",
+    });
+    // A wire mode this build never exposes as a preset (dontAsk/auto) degrades
+    // to leaving `mode` untouched rather than guessing — the model can still patch.
+    expect(resumeSettlePatch({ model: "opus", mode: "ask" }, { model: "sonnet", permissionMode: "dontAsk" }, presetIdForMode)).toEqual({
+      model: "sonnet",
+    });
+  });
+});
