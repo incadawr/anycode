@@ -247,11 +247,12 @@ export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinar
 }
 
 /**
- * AnyCode's fixed default profile directory for the Claude engine (cut §0.2
- * invariant 2 C1 / §0.3-6, VERIFY-1+R1-validated mechanism): the directory
- * CC-B will spawn every claude child with as `CLAUDE_CONFIG_DIR`, never the
- * default `~/.claude`. CC-A/CC-B/CC-C/CC-D-min run on this ONE profile;
- * multi-profile UI (`~/.anycode/claude/profile-<id>`) is CC-E.
+ * AnyCode's isolated Claude profile directory. Ambient `~/.claude` is the
+ * product default (owner pivot — see shared/claude-config-dir.ts): no spawn
+ * site sets `CLAUDE_CONFIG_DIR` to this path unless explicitly overridden.
+ * This function survives as the isolated-profile builder the env-gated live
+ * tests pin to (live-profile-dir.ts) and the capability an explicit override
+ * can still opt into.
  */
 export function defaultClaudeProfileDir(home: string, platform: NodeJS.Platform = process.platform): string {
   const paths = platform === "win32" ? win32 : posix;

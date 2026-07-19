@@ -294,11 +294,11 @@ import { ENV_CODEX_BIN } from "../shared/engines.js";
 // directory carries its own deliberate duplicate of that module (cut §1.3), and
 // both are imported into this one composition root.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
+import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 import { resumeClaudeEngine, startClaudeEngine } from "./engines/claude/claude-engine.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
 import { projectClaudeHistory } from "./engines/claude/history-projection.js";
 import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./engines/claude/process-ownership.js";
-import { defaultClaudeProfileDir } from "./engines/claude/profile-dir.js";
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
@@ -693,10 +693,10 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     broker,
     binaryPath,
     cwd: workspace,
-    // Cut invariant C1: every spawn is confined to the single fixed AnyCode
-    // profile — the SAME dir main's doctor diagnosed before it let this tab
-    // spawn — never the ambient `~/.claude`.
-    profileDir: defaultClaudeProfileDir(homedir()),
+    // Ambient by default (owner pivot): no override here, so ClaudeClient
+    // sets no `CLAUDE_CONFIG_DIR` at all and the CLI resolves the SAME
+    // `~/.claude` main's doctor diagnosed before it let this tab spawn.
+    profileDir: resolveClaudeConfigDir(),
     sourceEnv: process.env,
     ...(processOwnership !== undefined ? { processOwnership } : {}),
   };

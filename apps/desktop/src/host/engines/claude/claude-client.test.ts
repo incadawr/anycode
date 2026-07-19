@@ -343,7 +343,7 @@ describe("ClaudeClient", () => {
 });
 
 describe("buildClaudeChildEnv", () => {
-  it("never forwards ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDECODE, and always sets a dedicated CLAUDE_CONFIG_DIR", () => {
+  it("never forwards ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDECODE, and sets CLAUDE_CONFIG_DIR to an explicit override", () => {
     const env = buildClaudeChildEnv(
       {
         HOME: "/home/test",
@@ -359,6 +359,11 @@ describe("buildClaudeChildEnv", () => {
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDECODE).toBeUndefined();
     expect(env.CLAUDE_CONFIG_DIR).toBe("/home/test/.anycode/claude/profile-default");
+  });
+
+  it("ambient default (owner pivot): no profileDir override -> no CLAUDE_CONFIG_DIR key at all, so the CLI resolves its own ambient ~/.claude", () => {
+    const env = buildClaudeChildEnv({ HOME: "/home/test", PATH: "/usr/bin" }, undefined, "darwin");
+    expect("CLAUDE_CONFIG_DIR" in env).toBe(false);
   });
 });
 
