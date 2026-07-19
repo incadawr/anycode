@@ -9,7 +9,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ClaudeModelCatalog } from "./models.js";
+import { CLAUDE_ENGINE_CAPABILITIES } from "./claude-engine.js";
+import { CLAUDE_EFFORT_LEVELS, ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
   CLAUDE_PERMISSION_PRESETS,
   DEFAULT_CLAUDE_PRESET,
@@ -104,6 +105,46 @@ describe("ClaudeModelCatalog — built from the live initialize models[], never 
     expect(mixed.choices().map((choice) => choice.id)).toEqual(["ok"]);
     // A missing resolvedModel degrades to an identity read-back, never a throw.
     expect(mixed.get("ok")!.resolvedModel).toBe("ok");
+  });
+});
+
+describe("CLAUDE_EFFORT_LEVELS / isClaudeEffortLevel (TASK.75) — the fixed pre-spawn vocabulary", () => {
+  it("the claude engine declares reasoning-effort support, and the selector helper exposes exactly the 5 CLI levels", () => {
+    expect(CLAUDE_ENGINE_CAPABILITIES.supportsReasoningEffort).toBe(true);
+    expect(CLAUDE_EFFORT_LEVELS).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  it("exposes exactly the CLI's own --help vocabulary, in order", () => {
+    expect(CLAUDE_EFFORT_LEVELS).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  it("accepts every listed level and rejects anything else", () => {
+    for (const level of CLAUDE_EFFORT_LEVELS) expect(isClaudeEffortLevel(level)).toBe(true);
+    expect(isClaudeEffortLevel("ultra")).toBe(false);
+    expect(isClaudeEffortLevel("")).toBe(false);
+    expect(isClaudeEffortLevel("High")).toBe(false); // case-sensitive — the CLI's own values are lowercase
+  });
+});
+
+describe("ClaudeModelCatalog.resolveEffort — TASK.75 per-model memory normalization", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
+
+  it("keeps a preferred effort the model still supports", () => {
+    expect(catalog.resolveEffort("sonnet", "high")).toBe("high");
+  });
+
+  it("drops a preferred effort the model does not support", () => {
+    expect(catalog.resolveEffort("sonnet", "ultra")).toBeUndefined();
+    // haiku carries no effort levels live at all (models.test.ts above).
+    expect(catalog.resolveEffort("haiku", "high")).toBeUndefined();
+  });
+
+  it("no preference at all resolves to nothing — never guesses a default", () => {
+    expect(catalog.resolveEffort("sonnet", undefined)).toBeUndefined();
+  });
+
+  it("an unknown model id resolves to nothing", () => {
+    expect(catalog.resolveEffort("no-such-model-xyz", "high")).toBeUndefined();
   });
 });
 

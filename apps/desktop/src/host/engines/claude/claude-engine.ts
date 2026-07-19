@@ -35,7 +35,7 @@ import type { IpcPermissionBroker } from "../../permission-broker.js";
 import { ClaudeApprovalBridge } from "./approval-bridge.js";
 import { ClaudeClient, type ClaudeClientOptions } from "./claude-client.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
-import { ClaudeModelCatalog } from "./models.js";
+import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
   permissionModeToFlag,
   type ClaudeResultMessage,
@@ -119,6 +119,14 @@ export interface ClaudeTransport {
 export interface ClaudeSessionSelection {
   model?: string;
   presetId?: string;
+  /**
+   * Initial effort (TASK.75). Unlike `model`/`presetId`, this has no
+   * "persisted, trust the origin distinction" branch: the model catalog that
+   * would validate it against a specific model is not known pre-spawn either
+   * way, so both a draft pick and a resumed row are validated the same way,
+   * against the fixed `CLAUDE_EFFORT_LEVELS` vocabulary (`resolveEffort`).
+   */
+  effort?: string;
   origin?: "draft" | "persisted";
 }
 
@@ -136,6 +144,13 @@ interface ClaudeEngineSettings {
   model: string;
   preset: ClaudePermissionPresetDefinition;
   effort?: string;
+  /**
+   * Remembered effort per model id (TASK.60 shape, mirrors
+   * `CodexEngineSettings.effortsByModel`), restored on `selectModel`. In-RAM
+   * only, scoped to this one live engine instance — same as Codex's own
+   * memory, which likewise never reaches a durable store.
+   */
+  effortsByModel: Map<string, string>;
   /** Boot-time warnings (unusable draft model, quota pressure) flushed into the first turn's stream. */
   notices: AgentEvent[];
 }
@@ -186,6 +201,30 @@ function resolveModel(
   return requested;
 }
 
+/**
+ * Resolves the effort to spawn with. Validated against the fixed
+ * `CLAUDE_EFFORT_LEVELS` vocabulary only — the model catalog that would
+ * validate a level against a SPECIFIC model is not readable until after
+ * `initialize`, exactly the constraint `resolveModel` documents for model
+ * ids, except here the closed 5-value CLI vocabulary makes a useful
+ * pre-spawn check possible where the open-ended model catalog offers none.
+ * A model that ends up not supporting this level is the server's own
+ * rejection to make (TASK.75 open question #4); `connectClaudeEngine`
+ * re-validates against the confirmed model once the catalog is known and
+ * only then records a local `settings.effort`.
+ */
+function resolveEffort(selection: ClaudeSessionSelection | undefined, notices: AgentEvent[]): string | undefined {
+  const requested = selection?.effort;
+  if (requested === undefined) return undefined;
+  if (!isClaudeEffortLevel(requested)) {
+    if (selection?.origin === "draft") {
+      notices.push(warning(`Claude effort "${requested}" is not a recognized level; the default effort is used.`));
+    }
+    return undefined;
+  }
+  return requested;
+}
+
 /** Resolves once on abort and never rejects; the listener is always removed. */
 function watchAbort(signal: AbortSignal): { promise: Promise<void>; dispose(): void } {
   if (signal.aborted) return { promise: Promise.resolve(), dispose: () => {} };
@@ -215,7 +254,7 @@ function deadline(ms: number): SettleDeadline {
   };
 }
 
-export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bootstrap" | "onControlRequest" | "permissionModeFlag" | "model" | "sessionId" | "resume"> {
+export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bootstrap" | "onControlRequest" | "permissionModeFlag" | "model" | "effort" | "sessionId" | "resume"> {
   bootstrap: EngineBootstrap;
   broker: IpcPermissionBroker;
   selection?: ClaudeSessionSelection;
@@ -240,6 +279,7 @@ async function connectClaudeEngine(
   const notices: AgentEvent[] = [];
   const resuming = !("sessionId" in spawn);
   const preset = resolvePreset(options.selection, notices);
+  const requestedEffort = resolveEffort(options.selection, notices);
   const sessionRef = "sessionId" in spawn ? spawn.sessionId : spawn.resume;
   let engine: ClaudeEngine | null = null;
   const approvals = new ClaudeApprovalBridge({
@@ -258,9 +298,16 @@ async function connectClaudeEngine(
   // row saying `workspace` silently re-widens a session the CLI left at `ask`.
   // The persisted values stay a PROVISIONAL display until that init arrives and
   // `reconcileFromInit` replaces them with the native fact.
+  //
+  // Effort is deliberately NOT held back the way model/permissionMode are:
+  // `system/init` carries no effort field at all (contract §1), so there is
+  // no native state a resend could clobber on resume — unlike model, where a
+  // stale row could overwrite a session's own surviving choice, an omitted
+  // `--effort` here would simply forget ours for no benefit.
   const client = new ClaudeClient({
     ...options,
     ...(resuming ? {} : { permissionModeFlag: permissionModeToFlag(preset.mode) }),
+    ...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
     ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
@@ -295,7 +342,15 @@ async function connectClaudeEngine(
         }
       }
     }
-    const settings: ClaudeEngineSettings = { catalog, model, preset, notices };
+    // The value actually sent at spawn is only known-good against the fixed
+    // vocabulary (`resolveEffort` above), not against THIS model — the
+    // catalog didn't exist yet. Re-validate now that both are known, so the
+    // local record never claims an effort the confirmed model doesn't
+    // support (same fail-closed discipline `resolveModel` applies to ids).
+    const effort = catalog.resolveEffort(model, requestedEffort);
+    const effortsByModel = new Map<string, string>();
+    if (effort !== undefined) effortsByModel.set(model, effort);
+    const settings: ClaudeEngineSettings = { catalog, model, preset, effortsByModel, notices, ...(effort !== undefined ? { effort } : {}) };
     engine = new ClaudeEngine(client, sessionRef, approvals, settings, options.timeouts);
     // $0 quota snapshot, seeded before the first turn so a user already at
     // their limit learns it from the first reply rather than a failed turn.
@@ -470,8 +525,46 @@ export class ClaudeEngine implements SessionEngine {
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : "Claude refused the model change." };
     }
+    // Each model keeps its own remembered effort (TASK.60 shape, mirrors
+    // `CodexEngine.selectModel`): the outgoing model's current effort is
+    // stashed before switching, and the incoming model's own remembered (or
+    // no longer supported) effort is restored.
+    this.rememberCurrentModelEffort();
     settings.model = id;
+    const effort = this.resolveEffortForModel(id);
+    if (effort === undefined) {
+      delete settings.effort;
+    } else {
+      settings.effort = effort;
+      try {
+        await this.client.controlRequest("apply_flag_settings", { effortLevel: effort });
+      } catch {
+        // Best-effort re-assertion of the remembered effort on the now-live
+        // model. The memory itself is unaffected by this failing — it stays
+        // available to restore on a later switch back — but the user is told
+        // the live process may not actually be running it.
+        settings.notices.push(warning(`Claude could not re-apply the remembered effort "${effort}" for model "${id}".`));
+      }
+    }
     return { ok: true, model: id };
+  }
+
+  /** Remembers the current model's effective effort before switching away. */
+  private rememberCurrentModelEffort(): void {
+    const settings = this.settings;
+    if (settings === undefined) return;
+    if (settings.effort === undefined) settings.effortsByModel.delete(settings.model);
+    else settings.effortsByModel.set(settings.model, settings.effort);
+  }
+
+  /** Restores the target model's remembered effort, normalizing it through the catalog. */
+  private resolveEffortForModel(modelId: string): string | undefined {
+    const settings = this.settings;
+    if (settings === undefined) return undefined;
+    const effort = settings.catalog.resolveEffort(modelId, settings.effortsByModel.get(modelId));
+    if (effort === undefined) settings.effortsByModel.delete(modelId);
+    else settings.effortsByModel.set(modelId, effort);
+    return effort;
   }
 
   /** Mid-session posture change: `set_permission_mode` (its success ack echoes `{"mode":…}`). */
@@ -502,6 +595,7 @@ export class ClaudeEngine implements SessionEngine {
       return { ok: false, reason: error instanceof Error ? error.message : "Claude refused the effort change." };
     }
     settings.effort = effort;
+    settings.effortsByModel.set(settings.model, effort);
     return { ok: true, effort };
   }
 
