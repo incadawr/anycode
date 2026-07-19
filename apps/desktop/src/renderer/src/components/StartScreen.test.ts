@@ -251,7 +251,7 @@ describe("computeModelChipDisplay (§3-D3)", () => {
 
 describe("CODEX_DRAFT_PRESETS / DEFAULT_CODEX_DRAFT_PRESET (TASK.39, cut §2(d)/§3.8)", () => {
   it("mirrors host/engines/codex/presets.ts's three ids, in the same order", () => {
-    expect(CODEX_DRAFT_PRESETS.map((p) => p.id)).toEqual(["read-only", "ask", "workspace"]);
+    expect(CODEX_DRAFT_PRESETS.map((p) => p.id)).toEqual(["ask", "approve-for-me", "full-access"]);
   });
 
   it("every preset carries a non-empty label and a plain-language description", () => {

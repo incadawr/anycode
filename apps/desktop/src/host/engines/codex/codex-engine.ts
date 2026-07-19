@@ -460,6 +460,7 @@ export async function createNativeCodexSession(
   const result = await client.request<ThreadResult>("thread/start", {
     cwd: workspace,
     approvalPolicy: preset.threadParams.approvalPolicy,
+    approvalsReviewer: preset.threadParams.approvalsReviewer,
     sandbox: preset.threadParams.sandbox,
     ...(model !== undefined ? { model } : {}),
   }, { timeoutMs: bounds.bootRpcMs });
@@ -862,6 +863,7 @@ export class CodexEngine implements SessionEngine {
       ...(verifiedModel !== undefined ? { model: verifiedModel } : {}),
       ...(verifiedModel !== undefined && settings.effort !== undefined ? { effort: settings.effort } : {}),
       approvalPolicy: override.approvalPolicy,
+      approvalsReviewer: override.approvalsReviewer,
       sandboxPolicy: override.sandboxPolicy,
     };
   }
