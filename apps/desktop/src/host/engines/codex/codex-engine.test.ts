@@ -1212,27 +1212,28 @@ describe("TASK.39 — model catalog + initial values", () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
       model: "gpt-5.4-mini",
-      presetId: "read-only",
+      presetId: "approve-for-me",
       origin: "draft",
     });
 
     expect(server.threadStartParams).toEqual({
       cwd: "/work",
       approvalPolicy: "on-request",
-      sandbox: "read-only",
+      approvalsReviewer: "auto_review",
+      sandbox: "workspace-write",
       model: "gpt-5.4-mini",
     });
     // DoD-2: the value shown/persisted is the one the SERVER confirmed, not the ask.
     expect(connected.model).toBe("gpt-5.4-mini");
-    expect(connected.presetId).toBe("read-only");
-    expect(connected.engine.snapshot()).toEqual({ model: "gpt-5.4-mini", activePresetId: "read-only", effort: "medium" });
+    expect(connected.presetId).toBe("approve-for-me");
+    expect(connected.engine.snapshot()).toEqual({ model: "gpt-5.4-mini", activePresetId: "approve-for-me", effort: "medium" });
   });
 
   it("defaults to the `ask` preset and the server's own model when no draft was made", async () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work");
 
-    expect(server.threadStartParams).toEqual({ cwd: "/work", approvalPolicy: "untrusted", sandbox: "workspace-write" });
+    expect(server.threadStartParams).toEqual({ cwd: "/work", approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "workspace-write" });
     expect(connected.presetId).toBe("ask");
     expect(connected.model).toBe("gpt-native");
   });
@@ -1269,14 +1270,14 @@ describe("TASK.39 — model catalog + initial values", () => {
     expect(server.threadStartParams).not.toHaveProperty("model");
     expect(connected.engine.models()).toEqual([]);
     // Posture is still fully expressible — presets never depend on the catalog.
-    expect(connected.engine.presets().map((preset) => preset.id)).toEqual(["read-only", "ask", "workspace"]);
+    expect(connected.engine.presets().map((preset) => preset.id)).toEqual(["ask", "approve-for-me", "full-access"]);
 
     const events = await runTurn(server, connected.engine);
     expect(notices(events)[0]).toContain("could not be verified");
     const [turnStart] = server.turnStartParams();
     expect(turnStart).not.toHaveProperty("model");
     // Even with no catalog, the posture is asserted.
-    expect(turnStart).toMatchObject({ approvalPolicy: "untrusted" });
+    expect(turnStart).toMatchObject({ approvalPolicy: "on-request", approvalsReviewer: "user" });
   });
 
   it("degrades a draft preset that is really a raw-config payload to the default posture (DoD-4)", async () => {
@@ -1290,14 +1291,15 @@ describe("TASK.39 — model catalog + initial values", () => {
     });
 
     expect(connected.presetId).toBe("ask");
-    expect(server.threadStartParams).toEqual({ cwd: "/work", approvalPolicy: "untrusted", sandbox: "workspace-write" });
+    expect(server.threadStartParams).toEqual({ cwd: "/work", approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "workspace-write" });
 
     await runTurn(server, connected.engine);
     expect(server.turnStartParams()[0]).toMatchObject({
-      approvalPolicy: "untrusted",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandboxPolicy: { type: "workspaceWrite", writableRoots: ["/work"] },
     });
-    expect(JSON.stringify(server.calls)).not.toContain("danger-full-access");
+    expect(JSON.stringify(server.calls)).not.toContain('"sandbox":"danger-full-access"');
   });
 
   it("projects the catalog for the UI: hidden models dropped, unknown wire fields ignored", async () => {
@@ -1327,7 +1329,7 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
       model: "gpt-5.6-sol",
-      presetId: "workspace",
+      presetId: "approve-for-me",
       origin: "draft",
     });
 
@@ -1340,6 +1342,7 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
       // never silently downgraded to the model's catalog default ("medium").
       effort: "high",
       approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
       sandboxPolicy: {
         type: "workspaceWrite",
         writableRoots: ["/work"],
@@ -1363,18 +1366,20 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
 
     await runTurn(server, engine);
     expect(server.turnStartParams()[0]).toMatchObject({
-      approvalPolicy: "untrusted",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandboxPolicy: { type: "workspaceWrite" },
     });
 
-    expect(engine.selectPreset("read-only")).toEqual({ ok: true, model: "gpt-native", activePresetId: "read-only" });
+    expect(engine.selectPreset("full-access")).toEqual({ ok: true, model: "gpt-native", activePresetId: "full-access" });
     // Not a single RPC is made by the change itself — it rides the next turn.
     expect(server.calls.filter((call) => call.method === "turn/start")).toHaveLength(1);
 
     await runTurn(server, engine, "second");
     expect(server.turnStartParams()[1]).toMatchObject({
-      approvalPolicy: "on-request",
-      sandboxPolicy: { type: "readOnly", networkAccess: false },
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandboxPolicy: { type: "dangerFullAccess" },
     });
   });
 
@@ -1432,12 +1437,12 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     const applied: { model: string; activePresetId: string }[] = [];
     engine.onSettingsApplied((snapshot) => applied.push(snapshot));
 
-    expect(engine.selectPreset("workspace")).toMatchObject({ ok: true });
+    expect(engine.selectPreset("approve-for-me")).toMatchObject({ ok: true });
     // Phase 1: nothing is applied yet — the server has not been told anything.
     expect(applied).toEqual([]);
 
     await runTurn(server, engine);
-    expect(applied).toEqual([{ model: "gpt-native", activePresetId: "workspace" }]);
+    expect(applied).toEqual([{ model: "gpt-native", activePresetId: "approve-for-me" }]);
 
     // A turn with nothing pending acks nothing (the posture is still re-asserted).
     await runTurn(server, engine, "second");
@@ -1451,7 +1456,7 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     const { engine } = await createNativeCodexSession(server, "/work", undefined, { turnStartMs: 20 });
     const applied: unknown[] = [];
     engine.onSettingsApplied((snapshot) => applied.push(snapshot));
-    engine.selectPreset("read-only");
+    engine.selectPreset("full-access");
 
     server.turnStartMode = "never";
     const turn = drive(engine, "hi", new AbortController().signal);
@@ -1463,7 +1468,7 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     // ever carried is NOT active, however much the user asked for it — that is
     // the whole meaning of the two-phase ack. It is reported as pending instead.
     expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "ask" });
-    expect(engine.pendingSnapshot()).toEqual({ model: "gpt-native", activePresetId: "read-only" });
+    expect(engine.pendingSnapshot()).toEqual({ model: "gpt-native", activePresetId: "full-access" });
   });
 
   // W3-review: display truth vs enforcement. Enforcement is NOT in question —
@@ -1471,20 +1476,20 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
   // one has, the UI must not present the choice as active.
   it("keeps a chosen-but-unapplied change OUT of snapshot() while still enforcing it on the next turn", async () => {
     const server = new FakeAppServer();
-    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, { presetId: "workspace", origin: "draft" });
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, { presetId: "approve-for-me", origin: "draft" });
     const engine = connected.engine;
 
-    expect(engine.selectPreset("read-only")).toMatchObject({ ok: true, activePresetId: "read-only" });
+    expect(engine.selectPreset("full-access")).toMatchObject({ ok: true, activePresetId: "full-access" });
     // Displayed: still the old posture. Pending: the new one.
-    expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "workspace" });
-    expect(engine.pendingSnapshot()).toEqual({ model: "gpt-native", activePresetId: "read-only" });
+    expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "approve-for-me" });
+    expect(engine.pendingSnapshot()).toEqual({ model: "gpt-native", activePresetId: "full-access" });
 
     await runTurn(server, engine);
 
     // The turn CARRIED the new posture (enforcement, untouched) and only now is
     // it applied — and therefore only now displayed as active.
-    expect(server.turnStartParams()[0]).toMatchObject({ sandboxPolicy: { type: "readOnly" } });
-    expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "read-only" });
+    expect(server.turnStartParams()[0]).toMatchObject({ sandboxPolicy: { type: "dangerFullAccess" } });
+    expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "full-access" });
     expect(engine.pendingSnapshot()).toBeNull();
   });
 
@@ -1493,7 +1498,7 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, { presetId: "ask", origin: "draft" });
     const engine = connected.engine;
 
-    engine.selectPreset("read-only");
+    engine.selectPreset("full-access");
     expect(engine.pendingSnapshot()).not.toBeNull();
 
     engine.selectPreset("ask");
@@ -1581,7 +1586,7 @@ describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
     expect(notices(events)).toEqual([]);
     // Display truth stays OUR preset; the posture is re-asserted regardless.
     expect(connected.engine.snapshot().activePresetId).toBe("ask");
-    expect(server.turnStartParams()[0]).toMatchObject({ approvalPolicy: "untrusted" });
+    expect(server.turnStartParams()[0]).toMatchObject({ approvalPolicy: "on-request", approvalsReviewer: "user" });
   });
 
   it("warns exactly once when the server's sandbox is genuinely weaker than the preset", async () => {

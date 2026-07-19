@@ -9,18 +9,18 @@
  * the session's workspace (its `writableRoots` root) rather than a baked-in
  * path — the table itself carries no per-session state.
  *
- * `never`/`danger-full-access`/granular `AskForApproval` are deliberately NOT
- * represented here (cut §2(d) residual) — renderer/host can only ever pick a
- * `presetId` from this table (host-authoritative membership check), never a
- * raw sandbox/policy object.
+ * The public choices match Codex's permission menu. Renderer/host can only
+ * ever pick a `presetId` from this table (host-authoritative membership check),
+ * never a raw sandbox/policy object.
  */
 
 import type { EnginePermissionPreset } from "../../../shared/protocol.js";
 
-export type CodexApprovalPolicy = "untrusted" | "on-request";
+export type CodexApprovalPolicy = "untrusted" | "on-request" | "never";
+export type CodexApprovalsReviewer = "user" | "auto_review";
 
 /** `ThreadStartParams.sandbox` (cut §1.3) — the coarse posture sent on `thread/start`. */
-export type CodexThreadSandboxMode = "read-only" | "workspace-write";
+export type CodexThreadSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export interface CodexSandboxPolicyReadOnly {
   type: "readOnly";
@@ -35,11 +35,16 @@ export interface CodexSandboxPolicyWorkspaceWrite {
   excludeSlashTmp: false;
 }
 
+export interface CodexSandboxPolicyDangerFullAccess {
+  type: "dangerFullAccess";
+}
+
 /** `TurnStartParams.sandboxPolicy` (cut §1.3) — the full object form sent on a between-turns override. */
-export type CodexTurnSandboxPolicy = CodexSandboxPolicyReadOnly | CodexSandboxPolicyWorkspaceWrite;
+export type CodexTurnSandboxPolicy = CodexSandboxPolicyReadOnly | CodexSandboxPolicyWorkspaceWrite | CodexSandboxPolicyDangerFullAccess;
 
 export interface CodexTurnOverride {
   approvalPolicy: CodexApprovalPolicy;
+  approvalsReviewer: CodexApprovalsReviewer;
   sandboxPolicy: CodexTurnSandboxPolicy;
 }
 
@@ -48,7 +53,7 @@ export interface CodexPermissionPresetDefinition {
   label: string;
   description: string;
   /** Sent verbatim on `thread/start` (initial policy, cut §2(d) "Применение"). */
-  threadParams: { approvalPolicy: CodexApprovalPolicy; sandbox: CodexThreadSandboxMode };
+  threadParams: { approvalPolicy: CodexApprovalPolicy; approvalsReviewer: CodexApprovalsReviewer; sandbox: CodexThreadSandboxMode };
   /** Pure function of the session workspace — never baked into this frozen table. */
   turnOverride: (workspace: string) => CodexTurnOverride;
 }
@@ -63,36 +68,49 @@ function workspaceWritePolicy(workspace: string): CodexSandboxPolicyWorkspaceWri
   };
 }
 
-/** The frozen table (cut §2(d)) — order matches the cut's own table for readability; lookups use `id`, never index. */
+/** The frozen public menu — order matches Codex's permission picker. */
 export const CODEX_PERMISSION_PRESETS: readonly CodexPermissionPresetDefinition[] = [
   {
-    id: "read-only",
-    label: "Read-only",
-    description: "Codex can read files but cannot run commands, write files, or reach the network.",
-    threadParams: { approvalPolicy: "on-request", sandbox: "read-only" },
-    turnOverride: () => ({ approvalPolicy: "on-request", sandboxPolicy: { type: "readOnly", networkAccess: false } }),
-  },
-  {
     id: "ask",
-    label: "Ask",
-    description: "Codex asks before running commands or changing files (default).",
-    threadParams: { approvalPolicy: "untrusted", sandbox: "workspace-write" },
-    turnOverride: (workspace) => ({ approvalPolicy: "untrusted", sandboxPolicy: workspaceWritePolicy(workspace) }),
+    label: "Ask for approval",
+    description: "Codex works in this workspace and asks before going beyond it.",
+    threadParams: { approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "workspace-write" },
+    turnOverride: (workspace) => ({ approvalPolicy: "on-request", approvalsReviewer: "user", sandboxPolicy: workspaceWritePolicy(workspace) }),
   },
   {
-    id: "workspace",
-    label: "Workspace",
-    description: "Codex can write inside the workspace and run commands with fewer prompts.",
-    threadParams: { approvalPolicy: "on-request", sandbox: "workspace-write" },
-    turnOverride: (workspace) => ({ approvalPolicy: "on-request", sandboxPolicy: workspaceWritePolicy(workspace) }),
+    id: "approve-for-me",
+    label: "Approve for me",
+    description: "Codex keeps the workspace boundary and sends eligible approvals to automatic review.",
+    threadParams: { approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandbox: "workspace-write" },
+    turnOverride: (workspace) => ({ approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandboxPolicy: workspaceWritePolicy(workspace) }),
+  },
+  {
+    id: "full-access",
+    label: "Full access",
+    description: "Codex can access files and the internet without sandbox or approval prompts.",
+    threadParams: { approvalPolicy: "never", approvalsReviewer: "user", sandbox: "danger-full-access" },
+    turnOverride: () => ({ approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "dangerFullAccess" } }),
   },
 ];
+
+/**
+ * Kept only to resume sessions created before the Codex-menu alignment. It is
+ * deliberately omitted from `CODEX_PERMISSION_PRESETS`, so a new session can
+ * never choose it; mapping it to `ask` would silently broaden an old session.
+ */
+const LEGACY_READ_ONLY_PRESET: CodexPermissionPresetDefinition = {
+  id: "read-only",
+  label: "Read-only (legacy)",
+  description: "Legacy read-only Codex session.",
+  threadParams: { approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "read-only" },
+  turnOverride: () => ({ approvalPolicy: "on-request", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly", networkAccess: false } }),
+};
 
 /** Current default posture (cut §2(d): "ask (default = текущее поведение)") — matches the pre-existing `createNativeCodexSession` thread/start literals verbatim. */
 export const DEFAULT_CODEX_PRESET = "ask" as const;
 
 export function findCodexPreset(id: string): CodexPermissionPresetDefinition | undefined {
-  return CODEX_PERMISSION_PRESETS.find((preset) => preset.id === id);
+  return CODEX_PERMISSION_PRESETS.find((preset) => preset.id === id) ?? (id === LEGACY_READ_ONLY_PRESET.id ? LEGACY_READ_ONLY_PRESET : undefined);
 }
 
 /** The wire projection consumed by `EnginePresentation.permissions.presets` — labels/descriptions only, never the policy objects. */
@@ -146,7 +164,7 @@ export function isEffectivePostureWeaker(
   preset: CodexPermissionPresetDefinition,
   effective: CodexEffectiveSettings,
 ): boolean {
-  if (effective.approvalPolicy === "never") return true;
+  if (effective.approvalPolicy === "never" && preset.threadParams.approvalPolicy !== "never") return true;
   const expected = sandboxTier(preset.threadParams.sandbox);
   const actual = sandboxTier(effective.sandbox);
   if (expected === undefined || actual === undefined) return false;
