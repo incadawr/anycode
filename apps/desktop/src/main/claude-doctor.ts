@@ -28,6 +28,7 @@ import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
 import { checkClaudeBinaryPathTrust } from "./claude-binary.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
+import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 
 // ── version floor gate (cut §0.2 invariant 4 / §0.3-9: a floor, never an
 // exact pin — R5 measured zero structural drift on initialize/get_usage/
@@ -118,7 +119,7 @@ const AUTH_PROBE_ARGS: readonly string[] = [
  */
 export function buildClaudeDoctorChildEnv(
   source: NodeJS.ProcessEnv,
-  profileDir: string,
+  profileDir: string | undefined,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const posixKeys = [
@@ -134,12 +135,12 @@ export function buildClaudeDoctorChildEnv(
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  // Custody (cut §0.2 invariant 2, C1): every spawn goes with a DEDICATED
-  // CLAUDE_CONFIG_DIR, never the ambient default `~/.claude` implicitly — this
-  // is the ONE mechanism that closes both credential AND CLAUDE.md/AutoMem
-  // custody (R1/VERIFY-1, W0-FINDINGS §"R1"). Callers that want to diagnose
-  // the real default profile pass its path explicitly (never omit this var).
-  env.CLAUDE_CONFIG_DIR = profileDir;
+  // Ambient by default (owner pivot): omitting `profileDir` sets no
+  // `CLAUDE_CONFIG_DIR` key at all, so the probe diagnoses the SAME
+  // `~/.claude` the user's own terminal is signed into. An explicit
+  // `profileDir` keeps the isolated-profile capability available.
+  const resolvedConfigDir = resolveClaudeConfigDir(profileDir);
+  if (resolvedConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = resolvedConfigDir;
   env.DISABLE_AUTOUPDATER = "1";
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   env.DISABLE_TELEMETRY = "1";
@@ -449,13 +450,13 @@ export interface RunClaudeDoctorOptions {
   /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkClaudeBinaryPathTrust`). */
   trust?: (binaryPath: string) => string | null;
   /**
-   * Absolute `CLAUDE_CONFIG_DIR` this run diagnoses (cut §0.3-7: the doctor
-   * probes the profile it is TOLD to, never assumes `~/.claude` implicitly).
-   * Required — callers pass `main/claude-binary.ts`'s
-   * `defaultClaudeProfileDir()` result, or an isolated temp dir to prove the
-   * `signed_out` discriminator.
+   * Isolated-profile override (owner pivot: OPTIONAL). Omitted (the product
+   * default) means the probe sets no `CLAUDE_CONFIG_DIR` at all and diagnoses
+   * the ambient `~/.claude`. Callers that need isolation — an env-gated live
+   * test proving the `signed_out` discriminator against a fresh temp dir —
+   * pass an explicit path here instead.
    */
-  profileDir: string;
+  profileDir?: string;
   versionTimeoutMs?: number;
   initTimeoutMs?: number;
 }

@@ -1,18 +1,24 @@
 /**
  * Claude onboarding Settings pane (SLICE-CC A4, cut §1.2 mirror of
  * CodexEnginePane.tsx, deliberately much smaller): status of the bounded
- * claude-doctor probe, the discovered binary path, and — while
- * `signed_out` — the manual terminal onboarding text (CC-A does not
- * orchestrate a native login; cut §1.2 "НЕ делаем").
+ * claude-doctor probe, the discovered binary path, the SLICE-CC-LOGIN
+ * (TASK.66, cut §3) native "Use my Claude subscription" flow, and — while
+ * `signed_out` — the manual terminal onboarding text as a fallback.
  *
  * CUSTODY: `ClaudeDoctorReport` never carries an account/email/subscription
  * fact (shared/claude-doctor.ts's own header) — there is nothing to redact
- * here because nothing crosses this bridge to redact.
+ * here because nothing crosses this bridge to redact. `ClaudeLoginStartResult`
+ * carries the same credential-free `ClaudeOnboardingSnapshot` on success and
+ * only a closed reason enum on failure — no token ever reaches this pane.
  *
  * DATA FLOW: `bridge` (injectable, defaults to `window.anycode.claude`, same
- * DI ethic as every other pane in this directory) rechecks on mount and on
- * the shared `engines-changed` push every onboarding surface already
- * subscribes to.
+ * DI ethic as every other pane in this directory) rechecks once on mount,
+ * then applies every subsequent snapshot straight from the dedicated
+ * `onSnapshotChanged` push (doctor-spawn-loop fix) — it deliberately does NOT
+ * react to the shared `engines-changed` push: answering that push with a
+ * fresh recheck is what caused an infinite doctor-spawn loop (each recheck's
+ * own `onSnapshot` fired another `engines-changed` push, which triggered
+ * another recheck, forever).
  */
 import { useCallback, useEffect, useState } from "react";
 import type { ClaudeDoctorReport } from "../../../shared/claude-doctor.js";
@@ -34,6 +40,13 @@ export interface ClaudeOnboardingSnapshot {
 export type ClaudePickBinaryResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
+
+// SLICE-CC-LOGIN (TASK.66, cut §4): duplicated from main/claude-ipc.ts's own
+// `ClaudeLoginStartResult` (same "shared/** froze read-only" reasoning as
+// every shape above).
+export type ClaudeLoginStartResult =
+  | { ok: true; snapshot: ClaudeOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
 
 // ── pure helpers (unit-tested directly — see ClaudeEnginePane.test.ts) ──
 
@@ -95,8 +108,121 @@ export function pickClaudeBinaryFailureMessage(reason: "cancelled" | "invalid"):
   return reason === "invalid" ? "That file isn't a valid, executable Claude Code binary." : null;
 }
 
-/** The exact terminal command the onboarding text prescribes (mirrors main/claude-binary.ts's `defaultClaudeProfileDir` — CC-A's single fixed AnyCode profile). */
-export const CLAUDE_PROFILE_LOGIN_COMMAND = "CLAUDE_CONFIG_DIR=~/.anycode/claude/profile-default claude";
+/** The exact terminal command the onboarding text prescribes — ambient by default (owner pivot): no `CLAUDE_CONFIG_DIR`, so it signs into the SAME `~/.claude` the doctor diagnoses. */
+export const CLAUDE_PROFILE_LOGIN_COMMAND = "claude auth login";
+
+// SLICE-CC-LOGIN (TASK.66, cut §3): the "Use my Claude subscription" flow.
+
+/** Cut §3's exact in-progress copy — a real terminal window opened, not ours to poll manually. */
+export const CLAUDE_LOGIN_IN_PROGRESS_COPY = "A Terminal window has opened — complete sign-in there (your browser will open). Waiting…";
+
+/** The sign-in button is only ever offered while the report is exactly `signed_out` — every other status is either already fine or needs a different fix first (cut §3). */
+export function canShowSignInButton(report: ClaudeDoctorReport | undefined): boolean {
+  return report?.status === "signed_out";
+}
+
+/**
+ * UX un-lock: the sign-in button is disabled — never left clickable to
+ * produce the busy-failure banner — while a recheck, a binary pick, or a
+ * login attempt already occupies the exclusive main-process slot.
+ */
+export function signInButtonDisabled(checking: boolean, busy: boolean, signingIn: boolean): boolean {
+  return checking || busy || signingIn;
+}
+
+// TASK.76 (owner directive 2026-07-19): an honest, non-blocking informational
+// note — this is Claude Code's own OAuth login and quota, spawned as-is, not
+// a separate AnyCode account or a separate usage pool, and using a
+// subscription through a third-party UI sits in a gray area of Anthropic's
+// terms even though no enforcement precedent against as-is CLI wrappers is
+// known (see TASK.76.md's verdict for the source citations).
+export const CLAUDE_SUBSCRIPTION_RISK_NOTE =
+  "AnyCode spawns the official Claude Code CLI as-is and signs in with your own Claude Code login — we never read or store your tokens. " +
+  "This usage shares the same subscription quota as claude.ai and the terminal, not a separate pool. " +
+  "Anthropic steers third-party tools toward API keys, so using a subscription here is a gray area of their terms; enforcement without notice is possible, though no action against as-is CLI wrappers is known.";
+
+/** Ready-state echo of {@link CLAUDE_SUBSCRIPTION_RISK_NOTE} — the disclosure doesn't vanish once sign-in succeeds, just compresses to one line. */
+export const CLAUDE_READY_QUOTA_TRACE = "Official Claude Code CLI, used as-is — usage draws from your shared Claude subscription quota.";
+
+/** The compact Ready-state trace is shown only once the doctor reports `ready` — the fuller note lives alongside the sign-in button above, in the `signed_out` state. */
+export function canShowReadyTrace(report: ClaudeDoctorReport | undefined): boolean {
+  return report?.status === "ready";
+}
+
+/**
+ * Cut §3's per-outcome notice: `cancelled` stays silent (the terminal window
+ * is not ours to close, so there is nothing actionable to say — the pane just
+ * falls back to `idle`); `busy`/`unsupported` both point at the manual
+ * fallback command still visible on screen.
+ */
+export function loginFailureMessage(reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed"): string | null {
+  switch (reason) {
+    case "busy":
+      return "A Claude check is already in progress — try again in a moment.";
+    case "unsupported":
+      return `Native sign-in isn't available here — sign in manually instead: ${CLAUDE_PROFILE_LOGIN_COMMAND}`;
+    case "cancelled":
+      return null;
+    case "timeout":
+      return "Sign-in timed out. Try again.";
+    case "failed":
+      return "Sign-in failed. Try again.";
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
+}
+
+export interface ClaudeSignInCallbacks {
+  onStart: () => void;
+  onSuccess: (snapshot: ClaudeOnboardingSnapshot) => void;
+  onFailure: (message: string | null) => void;
+  onSettle: () => void;
+}
+
+/**
+ * The sign-in sequence extracted as a pure async helper (mirrors
+ * CodexEnginePane.tsx's `diagnoseProfilesSequentially` precedent — this
+ * codebase's component tests run in a jsdom-less `node` environment, so
+ * interactive logic is unit-tested through an injected-callback helper like
+ * this one, never a rendered DOM). Success hands the caller the fresh
+ * snapshot directly — the pane applies it with no separate manual Recheck
+ * (cut §3: "статус сам флипается в Ready").
+ */
+export async function runClaudeSignIn(bridge: Pick<ClaudeBridge, "loginStart">, callbacks: ClaudeSignInCallbacks): Promise<void> {
+  callbacks.onStart();
+  try {
+    const result = await bridge.loginStart();
+    if (result.ok) {
+      callbacks.onSuccess(result.snapshot);
+    } else {
+      callbacks.onFailure(loginFailureMessage(result.reason));
+    }
+  } finally {
+    callbacks.onSettle();
+  }
+}
+
+/** Cancel forwards to the bridge and nothing else (cut §3: the terminal window itself is not ours to close) — extracted so the one meaningful line of the click handler is unit-tested without a DOM. */
+export function cancelClaudeSignIn(bridge: Pick<ClaudeBridge, "loginCancel">): void {
+  void bridge.loginCancel();
+}
+
+/**
+ * Doctor-spawn-loop fix: forwards each fresh snapshot straight into state —
+ * zero IPC round-trip, zero doctor spawn. Replaces the old `engines-changed`-
+ * triggered recheck, whose own `onSnapshot` fired another `engines-changed`
+ * push that triggered another recheck, forever. Extracted so the one
+ * meaningful line of the subscription is unit-tested without a DOM (mirrors
+ * `cancelClaudeSignIn` above).
+ */
+export function subscribeToClaudeSnapshotPush(
+  bridge: Pick<ClaudeBridge, "onSnapshotChanged">,
+  setSnapshot: (snapshot: ClaudeOnboardingSnapshot) => void,
+): () => void {
+  return bridge.onSnapshotChanged(setSnapshot);
+}
 
 // ── component ──
 
@@ -104,6 +230,10 @@ export const CLAUDE_PROFILE_LOGIN_COMMAND = "CLAUDE_CONFIG_DIR=~/.anycode/claude
 export interface ClaudeBridge {
   recheck(): Promise<ClaudeOnboardingSnapshot>;
   pickBinary(): Promise<ClaudePickBinaryResult>;
+  loginStart(): Promise<ClaudeLoginStartResult>;
+  loginCancel(): Promise<void>;
+  /** Doctor-spawn-loop fix: pushes a fresh snapshot after every recheck/pick/login step. */
+  onSnapshotChanged(callback: (snapshot: ClaudeOnboardingSnapshot) => void): () => void;
 }
 
 export interface ClaudeEnginePaneProps {
@@ -116,6 +246,7 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
   const [checking, setChecking] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     setChecking(true);
@@ -131,14 +262,12 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
     void refresh();
   }, [refresh]);
 
-  // Shell-wide re-check-without-restart: the same `engines-changed` push
-  // every onboarding surface subscribes to (main pushes it after every
-  // codex AND claude onboarding step).
+  // Doctor-spawn-loop fix: apply every subsequent snapshot straight from the
+  // dedicated push — deliberately NOT the shared `engines-changed` push (see
+  // file header).
   useEffect(() => {
-    return window.anycode.onEnginesChanged(() => {
-      void refresh();
-    });
-  }, [refresh]);
+    return subscribeToClaudeSnapshotPush(bridge, setSnapshot);
+  }, [bridge]);
 
   async function pick(): Promise<void> {
     setNotice(null);
@@ -153,6 +282,16 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
     } finally {
       setBusy(false);
     }
+  }
+
+  async function signIn(): Promise<void> {
+    setNotice(null);
+    await runClaudeSignIn(bridge, {
+      onStart: () => setSigningIn(true),
+      onSuccess: (fresh) => setSnapshot(fresh),
+      onFailure: (message) => setNotice(message),
+      onSettle: () => setSigningIn(false),
+    });
   }
 
   const status = describeClaudeReportStatus(checking ? undefined : snapshot?.report);
@@ -174,18 +313,41 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
           {notice}
         </div>
       )}
-      {snapshot?.report.status === "signed_out" && (
-        <p className="settings-page-description">
-          Sign in to AnyCode's dedicated Claude profile from a terminal, then Recheck:
-          <br />
-          <code>{CLAUDE_PROFILE_LOGIN_COMMAND}</code> → <code>/login</code>
-        </p>
+      {canShowSignInButton(checking ? undefined : snapshot?.report) && (
+        <>
+          <div className="settings-field-row">
+            {signingIn ? (
+              <>
+                <span className="settings-oauth-pending">{CLAUDE_LOGIN_IN_PROGRESS_COPY}</span>
+                <button type="button" className="settings-button" onClick={() => cancelClaudeSignIn(bridge)}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="settings-button settings-button-primary"
+                disabled={signInButtonDisabled(checking, busy, signingIn)}
+                onClick={() => void signIn()}
+              >
+                Use my Claude subscription
+              </button>
+            )}
+          </div>
+          <p className="settings-page-description">
+            …or sign in manually:
+            <br />
+            <code>{CLAUDE_PROFILE_LOGIN_COMMAND}</code>
+          </p>
+          <p className="settings-page-description">{CLAUDE_SUBSCRIPTION_RISK_NOTE}</p>
+        </>
       )}
+      {canShowReadyTrace(checking ? undefined : snapshot?.report) && <p className="settings-page-description">{CLAUDE_READY_QUOTA_TRACE}</p>}
       <div className="settings-field-row">
-        <button type="button" className="settings-button" disabled={busy || checking} onClick={() => void refresh()}>
+        <button type="button" className="settings-button" disabled={busy || checking || signingIn} onClick={() => void refresh()}>
           Recheck
         </button>
-        <button type="button" className="settings-button" disabled={busy} onClick={() => void pick()}>
+        <button type="button" className="settings-button" disabled={busy || signingIn} onClick={() => void pick()}>
           Choose binary…
         </button>
       </div>

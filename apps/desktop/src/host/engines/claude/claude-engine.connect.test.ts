@@ -10,7 +10,7 @@
 
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
+import { CLAUDE_NOT_SIGNED_IN, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 
 interface FakeStream extends EventEmitter {
@@ -31,8 +31,14 @@ function makeFakeStream(): FakeStream {
 
 const MODELS = [{ value: "model-a", resolvedModel: "model-a", displayName: "A" }];
 
-/** A fake `claude` child: answers `--version`, then the `initialize` control-request over the NDJSON stdin/stdout pair. Captures the main spawn's argv. */
-function fakeSpawn(): {
+/**
+ * A fake `claude` child: answers `--version`, then the `initialize`
+ * control-request over the NDJSON stdin/stdout pair. Captures the main
+ * spawn's argv. `account` overrides the `initialize` response's account
+ * object, so callers can exercise the sign-in predicate against the exact
+ * shapes the live CLI returns (default mirrors a plain OAuth session).
+ */
+function fakeSpawn(account: Record<string, unknown> = { tokenSource: "oauth" }): {
   spawnImpl: (command: string, args: readonly string[]) => unknown;
   capturedArgs: () => string[] | undefined;
   controlSubtypes: () => string[];
@@ -79,7 +85,7 @@ function fakeSpawn(): {
         controls.push(message.request.subtype);
         const response =
           message.request.subtype === "initialize"
-            ? { commands: [], models: MODELS, account: { tokenSource: "oauth" } }
+            ? { commands: [], models: MODELS, account }
             : {};
         queueMicrotask(() => {
           child.stdout.emit(
@@ -228,5 +234,35 @@ describe("connect: a resume applies no posture ahead of the first system/init (c
     } finally {
       await connected.engine.dispose("session-close");
     }
+  });
+});
+
+/**
+ * A live handshake against a signed-in subscription profile (binary 2.1.215)
+ * returns an `initialize` `account` with NO `tokenSource` key at all — its
+ * keys are exactly `email`/`organization`/`subscriptionType`/`apiProvider`.
+ * The predicate must fall back to `subscriptionType` in that case, matching
+ * `isClaudeSignedIn` in main/claude-doctor.ts.
+ */
+describe("connect: sign-in detection from the initialize response", () => {
+  it("an account with no tokenSource key but a subscriptionType boots successfully (signed-in subscription profile)", async () => {
+    const { spawnImpl } = fakeSpawn({
+      email: "user@example.com",
+      organization: "example-org",
+      subscriptionType: "pro",
+      apiProvider: "anthropic",
+    });
+    const connected = await startClaudeEngine(baseOptions(spawnImpl));
+    await connected.engine.dispose("session-close");
+  });
+
+  it("tokenSource: \"none\" refuses the boot with CLAUDE_NOT_SIGNED_IN", async () => {
+    const { spawnImpl } = fakeSpawn({ tokenSource: "none" });
+    await expect(startClaudeEngine(baseOptions(spawnImpl))).rejects.toThrow(CLAUDE_NOT_SIGNED_IN);
+  });
+
+  it("an account with neither tokenSource nor subscriptionType refuses the boot with CLAUDE_NOT_SIGNED_IN", async () => {
+    const { spawnImpl } = fakeSpawn({ email: "user@example.com", organization: "example-org" });
+    await expect(startClaudeEngine(baseOptions(spawnImpl))).rejects.toThrow(CLAUDE_NOT_SIGNED_IN);
   });
 });

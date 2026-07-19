@@ -51,9 +51,14 @@ describe("parseClaudeVersion / meetsClaudeVersionFloor", () => {
 });
 
 describe("buildClaudeDoctorChildEnv", () => {
-  it("always sets CLAUDE_CONFIG_DIR to the given profile dir (custody C1)", () => {
+  it("sets CLAUDE_CONFIG_DIR to an explicit profile dir override", () => {
     const env = buildClaudeDoctorChildEnv({ HOME: "/home/me", PATH: "/usr/bin" }, "/tmp/some-profile", "linux");
     expect(env.CLAUDE_CONFIG_DIR).toBe("/tmp/some-profile");
+  });
+
+  it("ambient default (owner pivot): no profileDir override -> no CLAUDE_CONFIG_DIR key at all", () => {
+    const env = buildClaudeDoctorChildEnv({ HOME: "/home/me", PATH: "/usr/bin" }, undefined, "linux");
+    expect("CLAUDE_CONFIG_DIR" in env).toBe(false);
   });
 
   it("never forwards ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDECODE even if present in the source env", () => {
@@ -152,6 +157,24 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
     });
     expect(report.status).toBe("error");
     expect(report.error).toMatch(/simulated initialize rejection/);
+  });
+});
+
+describe("runClaudeDoctor — ambient default (owner pivot)", () => {
+  it("omitting profileDir spawns the probe with no CLAUDE_CONFIG_DIR key at all", async () => {
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    const spawnImpl = (_command: string, args: readonly string[], options: SpawnOptions): ChildProcess => {
+      capturedEnv ??= options.env;
+      return spawn(process.execPath, [fixturePath, ...args], options);
+    };
+    const report = await runClaudeDoctor("/fake/claude", {
+      trust: TRUSTED,
+      spawnImpl,
+      env: { HOME: "/home/me", PATH: process.env.PATH },
+    });
+    expect(report).toEqual({ status: "ready", version: "2.1.212" });
+    expect(capturedEnv).toBeDefined();
+    expect("CLAUDE_CONFIG_DIR" in capturedEnv!).toBe(false);
   });
 });
 
