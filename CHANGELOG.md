@@ -5,6 +5,48 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.4] — 2026-07-19
+
+### Alpha
+
+The Claude Code engine ships in TEST MODE: it works end-to-end but is still
+being polished — expect rough edges, and treat it as a preview.
+
+### Added
+
+- Claude Code engine (test mode). A session can run on the official Claude
+  Code CLI installed on your machine: AnyCode spawns the CLI as-is and signs
+  in with your own Claude Code login — the app never reads or stores your
+  tokens. Includes an onboarding pane with an environment doctor, an in-app
+  "Use my Claude subscription" sign-in, streamed reasoning and tool activity,
+  approval prompts, and session resume. The pane carries an honest note about
+  subscription quota sharing and terms-of-service gray areas.
+- Codex account profiles. Multiple Codex accounts side by side: add one with
+  the native login flow, pick a profile per tab, and see the active profile as
+  a chip next to the Agent selector.
+- Codex context meter and subscription quotas. Live context usage and the
+  provider-reported rate-limit/quota state are shown for Codex sessions.
+- Codex session import. An existing Codex CLI session (rollout) can be
+  imported and continued as an AnyCode session.
+- Managed codex binary. A version manifest with download/update from npm, so
+  the app can provision a known-good codex binary instead of relying on
+  whatever is on PATH.
+- Custom model providers. Add a provider by base URL with an optional API
+  key, fetch its model list, and choose which models to expose.
+- Image attachments. Images can be attached to a prompt and are delivered to
+  models that support vision; the attach control is capability-gated per
+  model.
+- Artifact previews in chat. Image files produced by the agent show up as
+  preview chips with open and reveal-in-Finder actions, contained to the
+  session's allowed roots.
+
+### Fixed
+
+- Codex readiness checks are cached and primed at boot, so tab creation no
+  longer stalls on a cold doctor probe.
+- A failed session resume now shows copy that matches the session's actual
+  engine instead of a generic message.
+
 ## [0.0.3] — 2026-07-17
 
 ### Alpha
