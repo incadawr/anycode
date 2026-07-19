@@ -140,6 +140,37 @@ describe("settingsSchema (v2)", () => {
       expect(parsed.data.provider.connections[0]?.authOptional).toBe(true);
     }
   });
+
+  it("accepts a connection's live-fetched models + modelsFetchedAt and preserves them through parse", () => {
+    const settings = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          {
+            id: "c1",
+            providerId: "kimi",
+            models: ["kimi-for-coding", "k3"],
+            modelsFetchedAt: "2026-07-18T00:00:00.000Z",
+          },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(settings);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.models).toEqual(["kimi-for-coding", "k3"]);
+      expect(parsed.data.provider.connections[0]?.modelsFetchedAt).toBe("2026-07-18T00:00:00.000Z");
+    }
+  });
+
+  it("rejects a connection whose models is not a string array", () => {
+    const bad = {
+      ...cloneDefaults(),
+      provider: { connections: [{ id: "c1", providerId: "kimi", models: [{ id: "k3" }] }] },
+    };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
 });
 
 describe("v1 reset (settingsMigrations[1])", () => {
