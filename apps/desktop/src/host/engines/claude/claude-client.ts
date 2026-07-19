@@ -70,6 +70,15 @@ export interface ClaudeSpawnArgsOptions {
    */
   permissionModeFlag?: PermissionModeFlag;
   model?: string;
+  /**
+   * Initial reasoning-effort level (TASK.75). Omitted entirely when undefined
+   * — the CLI's own default effort applies, exactly like an omitted `--model`
+   * defers to the account default. Unlike `model`, this rides EVERY spawn,
+   * resume included: `system/init` never reports an effort back (no wire
+   * field exists for it, contract §1), so there is no native truth a resend
+   * could clobber — we are the only record of what was chosen.
+   */
+  effort?: string;
   sessionId?: string;
   resume?: string;
 }
@@ -102,6 +111,7 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
   ];
   if (options.permissionModeFlag !== undefined) args.push("--permission-mode", options.permissionModeFlag);
   if (options.model !== undefined) args.push("--model", options.model);
+  if (options.effort !== undefined) args.push("--effort", options.effort);
   if (options.sessionId !== undefined) args.push("--session-id", options.sessionId);
   else if (options.resume !== undefined) args.push("--resume", options.resume);
   return args;
@@ -268,6 +278,8 @@ export interface ClaudeClientOptions {
   /** CLI flag value (`manual` for the wire's `default`); defaults to `manual`. */
   permissionModeFlag?: PermissionModeFlag;
   model?: string;
+  /** See `ClaudeSpawnArgsOptions.effort` — rides every spawn, fresh or resume. */
+  effort?: string;
   sessionId?: string;
   resume?: string;
   binaryArgs?: readonly string[];
@@ -439,6 +451,7 @@ export class ClaudeClient {
           ? {}
           : { permissionModeFlag: "manual" as const }),
       model: this.options.model,
+      effort: this.options.effort,
       sessionId: this.options.sessionId,
       resume: this.options.resume,
     });
