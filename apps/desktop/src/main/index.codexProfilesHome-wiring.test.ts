@@ -60,7 +60,7 @@ const { ipcHandlers, mockIsPackaged, fakeHomeRef, manifestCalls, hostEnvScrubCal
   mockIsPackaged: { current: false },
   fakeHomeRef: { current: "/tmp/anycode-fake-home-unset" },
   manifestCalls: [] as Array<{ cacheFile?: string; force?: boolean }>,
-  hostEnvScrubCalls: [] as Array<{ override: string | null; varAfter: string | undefined }>,
+  hostEnvScrubCalls: [] as Array<{ override: string | null; varAfter: string | undefined; settingsPath: string | undefined }>,
 }));
 
 /** Minimal fake BrowserWindow (index.appVersion-wiring.test.ts's shape). */
@@ -156,7 +156,16 @@ vi.mock("./host-env.js", async (importOriginal) => {
     ...real,
     applyCodexProfilesHomeOverride: (env: NodeJS.ProcessEnv, override: string | null): void => {
       real.applyCodexProfilesHomeOverride(env, override);
-      hostEnvScrubCalls.push({ override, varAfter: env.ANYCODE_CODEX_PROFILES_HOME });
+      // settingsPath is the boot fingerprint scrubCallsForThisBoot filters on:
+      // the vetted per-boot settings path rides the bootEnv spread into every
+      // fork env, so it identifies WHICH boot issued this call (the mock
+      // factory itself cannot re-run per boot — vi.resetModules never
+      // re-executes it — so the fingerprint must ride the call payload).
+      hostEnvScrubCalls.push({
+        override,
+        varAfter: env.ANYCODE_CODEX_PROFILES_HOME,
+        settingsPath: env.ANYCODE_SETTINGS_PATH,
+      });
     },
   };
 });
@@ -206,6 +215,29 @@ function profilesRoot(home: string): string {
   return join(home, ".anycode", "codex");
 }
 
+/**
+ * Cross-boot stale-call guards. A previous test's boot keeps running async
+ * tails (post-registration provider refreshes, the install controller's
+ * manifest refresh) that push into the shared hoisted arrays AFTER beforeEach
+ * cleared them — on a loaded runner such a stale entry lands mid-test and
+ * poisons whole-array assertions (observed on the release CI: a refused-gate
+ * test received a stale call carrying the PREVIOUS test's lever-root).
+ * Every call belonging to THIS boot carries a path minted from the current
+ * per-test scratch: the vetted settings path in each fork env, and a manifest
+ * cache file derived from the lever root or the mocked home — both live under
+ * `scratch`, while a stale call carries the previous test's scratch. Scratch
+ * containment therefore discriminates boots deterministically, in both
+ * directions: a product regression in the CURRENT boot still surfaces (its
+ * calls carry the current scratch and survive the filter).
+ */
+function scrubCallsForThisBoot(): Array<{ override: string | null; varAfter: string | undefined; settingsPath: string | undefined }> {
+  return hostEnvScrubCalls.filter((call) => call.settingsPath?.startsWith(`${scratch}/`) === true);
+}
+
+function manifestCallsForThisBoot(): Array<{ cacheFile?: string; force?: boolean }> {
+  return manifestCalls.filter((call) => call.cacheFile?.startsWith(`${scratch}/`) === true);
+}
+
 async function bootAndCreateProfile(): Promise<void> {
   await import("./index.js");
   const create = await waitForHandler(CODEX_PROFILE_CREATE_CHANNEL);
@@ -241,7 +273,10 @@ afterEach(async () => {
   delete process.env.ANYCODE_SECRETS_PATH;
   delete process.env.ANYCODE_CODEX_PROFILES_HOME;
   delete process.env.ANYCODE_DB_PATH;
-  await rm(scratch, { recursive: true, force: true });
+  // The previous boot's async tail can still be writing under `scratch` while
+  // rm walks it (observed as ENOTEMPTY on loaded CI runners); node's built-in
+  // retry re-walks the tree until the tail settles.
+  await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 describe("main/index.ts — ANYCODE_CODEX_PROFILES_HOME wiring (W4-F0, S1-2)", () => {
@@ -258,14 +293,14 @@ describe("main/index.ts — ANYCODE_CODEX_PROFILES_HOME wiring (W4-F0, S1-2)", (
     expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(false);
 
     // 2. refreshCodexManifest boot call: cache file under the lever root.
-    expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(leverRoot), "manifest.json"));
+    expect(manifestCallsForThisBoot()[0]?.cacheFile).toBe(join(profilesRoot(leverRoot), "manifest.json"));
 
     // 3. registerCodexInstallIpc: the install controller derived ITS manifest
     //    cache file from the lever too (observed via the refresh channel's
     //    forced call; the mocked fetch rejects — that rejection is expected).
     const refresh = await waitForHandler(CODEX_MANIFEST_REFRESH_CHANNEL);
     await expect(Promise.resolve(refresh({}))).rejects.toThrow("offline (codex-home wiring test)");
-    const forced = manifestCalls.find((call) => call.force === true);
+    const forced = manifestCallsForThisBoot().find((call) => call.force === true);
     expect(forced?.cacheFile).toBe(join(profilesRoot(leverRoot), "manifest.json"));
 
     // 4. rollout-import resolver: a rollout planted in the LEVER-rooted
@@ -290,7 +325,7 @@ describe("main/index.ts — ANYCODE_CODEX_PROFILES_HOME wiring (W4-F0, S1-2)", (
 
     expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(true);
     expect(existsSync(join(profilesRoot(leverRoot), "profile-smoke"))).toBe(false);
-    expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
+    expect(manifestCallsForThisBoot()[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
   });
 
   it("RED-proof: the lever in a PACKAGED build is ignored even with ANYCODE_AUTOMATION=1", async () => {
@@ -303,7 +338,7 @@ describe("main/index.ts — ANYCODE_CODEX_PROFILES_HOME wiring (W4-F0, S1-2)", (
 
     expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(true);
     expect(existsSync(join(profilesRoot(leverRoot), "profile-smoke"))).toBe(false);
-    expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
+    expect(manifestCallsForThisBoot()[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
   });
 });
 
@@ -318,8 +353,9 @@ describe("main/index.ts — host fork env forward of the lever (W4-F0b, Fable ru
 
     // refreshProviderState (and with it buildHostEnvFor) is awaited BEFORE the
     // codex registration site, so by now the scrub ran at least once.
-    expect(hostEnvScrubCalls.length).toBeGreaterThan(0);
-    for (const call of hostEnvScrubCalls) {
+    const calls = scrubCallsForThisBoot();
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
       expect(call.override).toBe(leverRoot);
       expect(call.varAfter).toBe(leverRoot);
     }
@@ -336,8 +372,9 @@ describe("main/index.ts — host fork env forward of the lever (W4-F0b, Fable ru
     await import("./index.js");
     await waitForHandler(CODEX_PROFILE_CREATE_CHANNEL);
 
-    expect(hostEnvScrubCalls.length).toBeGreaterThan(0);
-    for (const call of hostEnvScrubCalls) {
+    const calls = scrubCallsForThisBoot();
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
       expect(call.override).toBeNull();
       expect(call.varAfter).toBeUndefined();
     }
@@ -352,8 +389,9 @@ describe("main/index.ts — host fork env forward of the lever (W4-F0b, Fable ru
     await import("./index.js");
     await waitForHandler(CODEX_PROFILE_CREATE_CHANNEL);
 
-    expect(hostEnvScrubCalls.length).toBeGreaterThan(0);
-    for (const call of hostEnvScrubCalls) {
+    const calls = scrubCallsForThisBoot();
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
       expect(call.override).toBeNull();
       expect(call.varAfter).toBeUndefined();
     }
@@ -385,7 +423,7 @@ describe("main/index.ts — malformed lever under automation REFUSES boot (W4-F0
       expect(existsSync(join(fakeHome, ".anycode"))).toBe(false);
       expect(existsSync(leverRoot)).toBe(false);
       expect(ipcHandlers.size).toBe(0);
-      expect(hostEnvScrubCalls.length).toBe(0);
+      expect(scrubCallsForThisBoot().length).toBe(0);
     });
   }
 
@@ -398,7 +436,7 @@ describe("main/index.ts — malformed lever under automation REFUSES boot (W4-F0
     await bootAndCreateProfile();
 
     expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(true);
-    expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
+    expect(manifestCallsForThisBoot()[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
   });
 
   it("quiet packaged: a malformed lever with ANYCODE_AUTOMATION=1 in a PACKAGED build is ignored — boot proceeds, the var is never read", async () => {
@@ -411,6 +449,6 @@ describe("main/index.ts — malformed lever under automation REFUSES boot (W4-F0
     await bootAndCreateProfile();
 
     expect(existsSync(join(profilesRoot(fakeHome), "profile-smoke"))).toBe(true);
-    expect(manifestCalls[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
+    expect(manifestCallsForThisBoot()[0]?.cacheFile).toBe(join(profilesRoot(fakeHome), "manifest.json"));
   });
 });

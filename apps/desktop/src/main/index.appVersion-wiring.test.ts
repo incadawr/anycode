@@ -185,7 +185,10 @@ afterEach(async () => {
   delete process.env.ANYCODE_SETTINGS_PATH;
   delete process.env.ANYCODE_SECRETS_PATH;
   delete process.env.ANYCODE_DB_PATH;
-  await rm(dir, { recursive: true, force: true });
+  // The previous boot's async tail can still be writing under `dir` while rm
+  // walks it (observed as ENOTEMPTY on loaded CI runners); node's built-in
+  // retry re-walks the tree until the tail settles.
+  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 describe("main/index.ts — getAppVersion production wiring (TASK.49)", () => {
