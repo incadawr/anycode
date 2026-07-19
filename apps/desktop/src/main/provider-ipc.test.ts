@@ -813,3 +813,193 @@ describe("handleCustomProviderFetchModels", () => {
     expect(res).toEqual({ ok: false, reason: "invalid_url" });
   });
 });
+
+describe("catalogModelsBaseUrl (connection-scoped fetch URL rule)", () => {
+  it("appends /v1 to an anthropic-family catalog baseUrl (complete prefix without it)", () => {
+    expect(catalogModelsBaseUrl("https://api.kimi.com/coding")).toBe("https://api.kimi.com/coding/v1");
+    expect(catalogModelsBaseUrl("https://api.anthropic.com")).toBe("https://api.anthropic.com/v1");
+  });
+
+  it("leaves an OpenAI-family baseUrl already ending in /v1 untouched", () => {
+    expect(catalogModelsBaseUrl("https://api.openai.com/v1")).toBe("https://api.openai.com/v1");
+    expect(catalogModelsBaseUrl("https://openrouter.ai/api/v1")).toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("normalizes trailing slashes before deciding", () => {
+    expect(catalogModelsBaseUrl("https://api.openai.com/v1/")).toBe("https://api.openai.com/v1");
+    expect(catalogModelsBaseUrl("https://api.kimi.com/coding//")).toBe("https://api.kimi.com/coding/v1");
+  });
+});
+
+describe("handleCustomProviderFetchModels — catalog connection ({connectionId})", () => {
+  const servers: Server[] = [];
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+  });
+
+  /** Minimal v2 settings fixture carrying ONE provider connection. */
+  async function seedConnection(connection: Record<string, unknown>): Promise<void> {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: { connections: [connection], activeConnectionId: connection.id },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+  }
+
+  /** Deps with a fake catalog + spy fetch — asserts WHAT the handler resolves, not the wire (covered by the real-server test). */
+  function makeCatalogDeps(over: Partial<ProviderIpcDeps> = {}): {
+    deps: ProviderIpcDeps;
+    calls: FetchModelsParams[];
+  } {
+    const calls: FetchModelsParams[] = [];
+    const deps = makeDeps({
+      now: () => "2026-07-18T00:00:00.000Z",
+      catalogEntryById: (id) =>
+        (
+          {
+            kimi: { id: "kimi", baseUrl: "https://api.kimi.com/coding", defaultTransport: "anthropic-messages" },
+            openai: { id: "openai", baseUrl: "https://api.openai.com/v1", defaultTransport: "openai-responses" },
+            vllm: { id: "vllm", baseUrl: "", defaultTransport: "openai-chat-completions" },
+            custom: { id: "custom", baseUrl: "", defaultTransport: "anthropic-messages" },
+          } as Record<string, { id: string; baseUrl: string; defaultTransport?: string }>
+        )[id],
+      fetchModels: async (params) => {
+        calls.push(params);
+        return { ok: true, models: [{ id: "live-a" }, { id: "live-b" }] };
+      },
+      ...over,
+    });
+    return { deps, calls };
+  }
+
+  it("resolves entry baseUrl (+/v1), anthropic auth kind from the transport, and the connection vault key; persists the fetched ids", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi" });
+    vault.store.set(connectionApiKeySecretKey("conn-1"), "sk-kimi-secret");
+    const { deps, calls } = makeCatalogDeps();
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1" });
+    expect(res).toEqual({ ok: true, models: [{ id: "live-a" }, { id: "live-b" }] });
+    expect(calls).toEqual([
+      { baseUrl: "https://api.kimi.com/coding/v1", apiKey: "sk-kimi-secret", kind: "anthropic" },
+    ]);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]).toMatchObject({
+      id: "conn-1",
+      models: ["live-a", "live-b"],
+      modelsFetchedAt: "2026-07-18T00:00:00.000Z",
+    });
+  });
+
+  it("an OpenAI-family entry keeps its /v1 baseUrl and maps to Bearer auth (openai-compatible kind), keyless when no vault entry", async () => {
+    await seedConnection({ id: "conn-2", providerId: "openai" });
+    const { deps, calls } = makeCatalogDeps();
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-2" });
+    expect(res.ok).toBe(true);
+    expect(calls).toEqual([{ baseUrl: "https://api.openai.com/v1", apiKey: undefined, kind: "openai-compatible" }]);
+  });
+
+  it("a connection-level baseUrl override wins over the entry's (vllm template)", async () => {
+    await seedConnection({ id: "conn-3", providerId: "vllm", baseUrl: "http://localhost:8000/v1" });
+    const { deps, calls } = makeCatalogDeps();
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-3" });
+    expect(res.ok).toBe(true);
+    expect(calls[0]).toMatchObject({ baseUrl: "http://localhost:8000/v1", kind: "openai-compatible" });
+  });
+
+  it("an empty resolved baseUrl (vllm template with no override) is invalid_url and never fetches", async () => {
+    await seedConnection({ id: "conn-4", providerId: "vllm" });
+    const { deps, calls } = makeCatalogDeps();
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-4" });
+    expect(res).toEqual({ ok: false, reason: "invalid_url" });
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses an unknown connection, a custom:<slug> providerId, and the literal `custom` sentinel (each invalid_request, no fetch)", async () => {
+    const { deps, calls } = makeCatalogDeps();
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-none" })).toEqual({
+      ok: false,
+      reason: "invalid_request",
+    });
+    await seedConnection({ id: "conn-5", providerId: "custom:my-record" });
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-5" })).toEqual({
+      ok: false,
+      reason: "invalid_request",
+    });
+    await seedConnection({ id: "conn-6", providerId: "custom", baseUrl: "https://api.example.com" });
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-6" })).toEqual({
+      ok: false,
+      reason: "invalid_request",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("fail-closed without the injected catalog lookup (invalid_request)", async () => {
+    await seedConnection({ id: "conn-7", providerId: "kimi" });
+    const res = await handleCustomProviderFetchModels(makeDeps(), { connectionId: "conn-7" });
+    expect(res).toEqual({ ok: false, reason: "invalid_request" });
+  });
+
+  it("resolves the connection (settings + vault key) UNDER the settings lock (same W4-R1-L1 rationale as the {id} branch)", async () => {
+    await seedConnection({ id: "conn-8", providerId: "kimi" });
+    const { deps } = makeCatalogDeps();
+    lockProbe.loadUnderLock = undefined;
+    await handleCustomProviderFetchModels(deps, { connectionId: "conn-8" });
+    expect(lockProbe.loadUnderLock).toBe(true);
+  });
+
+  it("a failed fetch persists nothing", async () => {
+    await seedConnection({ id: "conn-9", providerId: "kimi" });
+    const { deps } = makeCatalogDeps({
+      fetchModels: async () => ({ ok: false, reason: "http_error" }),
+    });
+    saveSettingsSpy.count = 0;
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-9" });
+    expect(res).toEqual({ ok: false, reason: "http_error" });
+    expect(saveSettingsSpy.count).toBe(0);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.models).toBeUndefined();
+  });
+
+  it("an EMPTY fetched list is returned but never persisted (static-hints fallback stays intact)", async () => {
+    await seedConnection({ id: "conn-10", providerId: "kimi" });
+    const { deps } = makeCatalogDeps({ fetchModels: async () => ({ ok: true, models: [] }) });
+    saveSettingsSpy.count = 0;
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-10" });
+    expect(res).toEqual({ ok: true, models: [] });
+    expect(saveSettingsSpy.count).toBe(0);
+  });
+
+  it("REAL SERVER: an anthropic-family catalog baseUrl with a path prefix lands on <prefix>/v1/models with x-api-key auth", async () => {
+    let receivedPath: string | undefined;
+    let receivedApiKey: string | string[] | undefined;
+    let receivedAuth: string | undefined;
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      receivedPath = req.url;
+      receivedApiKey = req.headers["x-api-key"];
+      receivedAuth = req.headers.authorization;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "kimi-for-coding" }, { id: "k3" }] }));
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await seedConnection({ id: "conn-11", providerId: "kimi" });
+    vault.store.set(connectionApiKeySecretKey("conn-11"), "sk-kimi-live");
+    const { deps } = makeCatalogDeps({
+      fetchModels: undefined, // the REAL guarded fetch
+      catalogEntryById: () => ({ id: "kimi", baseUrl: `${origin}/coding`, defaultTransport: "anthropic-messages" }),
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-11" });
+    expect(res).toEqual({ ok: true, models: [{ id: "kimi-for-coding" }, { id: "k3" }] });
+    expect(receivedPath).toBe("/coding/v1/models");
+    expect(receivedApiKey).toBe("sk-kimi-live");
+    expect(receivedAuth).toBeUndefined();
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.models).toEqual(["kimi-for-coding", "k3"]);
+  });
+});

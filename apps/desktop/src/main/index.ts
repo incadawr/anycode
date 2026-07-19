@@ -23,7 +23,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { access, realpath as fsRealpath } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, MessageChannelMain, app, dialog, nativeImage, safeStorage, shell, utilityProcess } from "electron";
@@ -69,6 +69,7 @@ import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
+import { NodeArtifactsFs, registerArtifactsIpc } from "./artifacts-ipc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import {
@@ -1572,6 +1573,25 @@ void app.whenReady().then(async () => {
     home: () => resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeSubagentsFs(),
+    reveal: (path) => shell.showItemInFolder(path),
+  });
+
+  // Chat-artifact control plane (TASK.72): inline image previews + open/
+  // reveal actions for the file links the transcript renders. `home` uses
+  // the same dev/automation double-gated lever as the subagents editor
+  // (its allowed root `<home>/.anycode` IS the codex profile tree the
+  // harness redirects); `workspaceForTab` reads main's own tab-meta fact —
+  // the renderer supplies only tabId + the model-authored path, and every
+  // handler re-checks containment + the image-extension allowlist before
+  // touching disk or the shell. `openPath`/`reveal` inject the two Electron
+  // primitives so main/artifacts-ipc.ts stays Electron-free and unit-
+  // testable off a plain deps bag.
+  registerArtifactsIpc({
+    home: () => resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+    tmpdir: () => tmpdir(),
+    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    fs: new NodeArtifactsFs(),
+    openPath: (path) => shell.openPath(path),
     reveal: (path) => shell.showItemInFolder(path),
   });
 

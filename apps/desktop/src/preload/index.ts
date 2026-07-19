@@ -211,6 +211,13 @@ const CUSTOM_PROVIDER_CREATE_CHANNEL = "anycode:custom-provider-create";
 const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";
 const CUSTOM_PROVIDER_DELETE_CHANNEL = "anycode:custom-provider-delete";
 const CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL = "anycode:custom-provider-fetch-models";
+// TASK.72: the chat-artifact control plane (inline image preview + open/
+// reveal for transcript file links) — main/artifacts-ipc.ts holds the
+// byte-identical source of truth, same duplicated-literal convention as
+// every other channel in this file.
+const ARTIFACT_READ_IMAGE_CHANNEL = "anycode:artifact-read-image";
+const ARTIFACT_OPEN_CHANNEL = "anycode:artifact-open";
+const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
@@ -359,6 +366,31 @@ export interface CustomProviderUpdateRequest {
   authOptional?: boolean;
   models?: string[];
 }
+
+// TASK.72: duplicated from main/artifacts-ipc.ts's result shapes (same
+// "shared/** frozen" reasoning as every other shape above). The renderer
+// supplies only tabId + the model-authored path; main re-checks containment
+// and the image-extension allowlist before any read/open/reveal.
+export type ArtifactReadImageResult =
+  | { ok: true; mime: string; dataBase64: string; sizeBytes: number }
+  | {
+      ok: false;
+      reason:
+        | "invalid"
+        | "no_workspace"
+        | "not_found"
+        | "outside_allowed_roots"
+        | "not_previewable"
+        | "too_large"
+        | "io_error";
+    };
+
+export type ArtifactActionResult =
+  | { ok: true; resolvedTo?: "reveal" }
+  | {
+      ok: false;
+      reason: "invalid" | "no_workspace" | "not_found" | "outside_allowed_roots" | "not_openable" | "io_error";
+    };
 
 // §3.1: forward the main-side payload as-is. The port envelope carries
 // { tabId, workspace }, the host-exited envelope carries { tabId }; preload just
@@ -693,6 +725,21 @@ contextBridge.exposeInMainWorld("anycode", {
   platform: (["darwin", "win32", "linux"].includes(process.platform)
     ? process.platform
     : "linux") as DesktopPlatform,
+  // TASK.72: `artifacts.*` — the chat-artifact control plane. The renderer
+  // supplies only tabId + the model-authored path from the transcript; main
+  // (main/artifacts-ipc.ts) re-checks containment (workspace / ~/.anycode /
+  // tmpdir, symlink-resolved) and the image-extension allowlist before any
+  // read/open/reveal. Image bytes cross back base64-encoded (a `file://`
+  // URL would never pass CSP); `open` is the ONLY path to `shell.openPath`
+  // and is gated main-side on the image allowlist.
+  artifacts: {
+    readImage: (tabId: string, path: string): Promise<ArtifactReadImageResult> =>
+      ipcRenderer.invoke(ARTIFACT_READ_IMAGE_CHANNEL, { tabId, path }) as Promise<ArtifactReadImageResult>,
+    open: (tabId: string, path: string): Promise<ArtifactActionResult> =>
+      ipcRenderer.invoke(ARTIFACT_OPEN_CHANNEL, { tabId, path }) as Promise<ArtifactActionResult>,
+    reveal: (tabId: string, path: string): Promise<ArtifactActionResult> =>
+      ipcRenderer.invoke(ARTIFACT_REVEAL_CHANNEL, { tabId, path }) as Promise<ArtifactActionResult>,
+  },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL) as Promise<void>,
     toggleMaximize: (): Promise<void> => ipcRenderer.invoke(WINDOW_TOGGLE_MAXIMIZE_CHANNEL) as Promise<void>,

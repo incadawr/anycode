@@ -2310,6 +2310,80 @@ body {
   padding: 0.08em 0.4em;
 }
 
+/* TASK.72: chat-artifact preview — inline thumbnail of an agent-created
+   image + Open/Reveal actions. A <span>-rooted block-shaped box so it can
+   legally nest inside paragraph inline flow. */
+.md-artifact {
+  display: block;
+  margin-block: var(--sp-2);
+  max-width: 320px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.md-artifact-img {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  cursor: pointer;
+  background: var(--bg);
+}
+.md-artifact-loading,
+.md-artifact-error {
+  display: block;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.md-artifact-error {
+  color: var(--danger, var(--text-2));
+}
+.md-artifact-load {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  border: 0;
+  color: var(--accent);
+  background: var(--bg);
+  cursor: pointer;
+}
+.md-artifact-load:hover { background: var(--bg-hover); }
+.md-artifact-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-2);
+}
+.md-artifact-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-artifact-actions {
+  display: inline-flex;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+.md-artifact-btn {
+  font-size: var(--fs-2xs);
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.md-artifact-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+.md-artifact-reveal-link { margin-inline-start: var(--sp-1); }
+
 /* ── reasoning ── */
 
 .reasoning-block {

@@ -1787,6 +1787,55 @@ describe("handleConnectionUpdate — resets health on a significant ENDPOINT fie
   });
 });
 
+describe("handleConnectionUpdate — a baseUrl change drops the live-fetched model list", () => {
+  /** Stamps a live-fetched list onto conn-1 on disk (what provider-ipc's connection-scoped fetch persists). */
+  async function stampFetchedModels(): Promise<void> {
+    const raw = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      provider: { connections: Record<string, unknown>[] };
+    };
+    raw.provider.connections[0]!.models = ["live-a", "live-b"];
+    raw.provider.connections[0]!.modelsFetchedAt = "2026-07-18T00:00:00.000Z";
+    await writeFile(settingsPath, JSON.stringify(raw));
+  }
+
+  it("re-pointing baseUrl deletes models + modelsFetchedAt (stale list from the OLD endpoint)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", baseUrl: "http://localhost:8000/v1" }); // conn-1
+    await stampFetchedModels();
+
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      baseUrl: "http://localhost:9000/v1",
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.baseUrl).toBe("http://localhost:9000/v1");
+    expect(loaded.settings.provider.connections[0]?.models).toBeUndefined();
+    expect(loaded.settings.provider.connections[0]?.modelsFetchedAt).toBeUndefined();
+  });
+
+  it("a same-baseUrl resend (or a no-baseUrl metadata edit) keeps the fetched list", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", baseUrl: "http://localhost:8000/v1" }); // conn-1
+    await stampFetchedModels();
+
+    const resend = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      baseUrl: "http://localhost:8000/v1",
+      label: "Local",
+    });
+    expect(resend.ok).toBe(true);
+    const metaOnly = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      model: "live-b",
+    });
+    expect(metaOnly.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.models).toEqual(["live-a", "live-b"]);
+    expect(loaded.settings.provider.connections[0]?.modelsFetchedAt).toBe("2026-07-18T00:00:00.000Z");
+  });
+});
+
 // ── TASK.45 W12-FIX §3: `""`-sentinel clears transport back to catalog default (codex W12 review #3) ──
 
 describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)', () => {

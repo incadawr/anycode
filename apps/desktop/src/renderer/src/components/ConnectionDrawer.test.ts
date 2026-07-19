@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
 import {
   buildConnectionUpdatePayload,
+  liveModelSuggestions,
   providerSelectDisplayValue,
   resolveCreatedConnectionId,
   resolveCreatedCustomProviderId,
@@ -208,5 +209,35 @@ describe("providerSelectDisplayValue (dogfood 16.07: add-mode must show the plac
 
   it("edit-mode fallback fails soft to empty when the catalog carries no custom sentinel", () => {
     expect(providerSelectDisplayValue("", true, [CATALOG[0]!])).toBe("");
+  });
+});
+
+describe("liveModelSuggestions (live-over-static, mirrors providerModelsFor's precedence)", () => {
+  const HINTS = [
+    { id: "k3", name: "K3" },
+    { id: "kimi-for-coding", name: "K2.7 Coding" },
+  ];
+
+  it("static hints alone before any fetch (byte-identical pre-fetch behavior)", () => {
+    expect(liveModelSuggestions(null, undefined, HINTS)).toEqual(HINTS);
+    expect(liveModelSuggestions(null, [], HINTS)).toEqual(HINTS);
+  });
+
+  it("this session's fetch result wins, decorated with matching static names", () => {
+    expect(liveModelSuggestions([{ id: "k3" }, { id: "k4-new" }], ["stale-persisted"], HINTS)).toEqual([
+      { id: "k3", name: "K3" },
+      { id: "k4-new" },
+    ]);
+  });
+
+  it("falls back to the ids persisted on the connection when nothing was fetched this session", () => {
+    expect(liveModelSuggestions(null, ["kimi-for-coding", "extra"], HINTS)).toEqual([
+      { id: "kimi-for-coding", name: "K2.7 Coding" },
+      { id: "extra" },
+    ]);
+  });
+
+  it("an EMPTY fetch result yields an empty list (the endpoint's answer is authoritative once given)", () => {
+    expect(liveModelSuggestions([], ["persisted"], HINTS)).toEqual([]);
   });
 });
