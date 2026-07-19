@@ -39,6 +39,7 @@ import {
 } from "../diff/highlight.js";
 import { useResolvedTheme } from "../theme.js";
 import { Check, Copy } from "./icons.js";
+import { TabContext } from "../tab-context.js";
 
 /** Single copy slot per Markdown instance (design §4): which link href, if any, is currently showing its transient "Copied" hint. */
 interface CopyState {
@@ -47,6 +48,44 @@ interface CopyState {
 }
 
 const CopyContext = createContext<CopyState>({ linkTarget: null, copyLink: () => {} });
+
+/**
+ * TASK.72: the active tab's id, needed by the artifact IPC (main scopes
+ * containment to THAT tab's workspace). Read off the same TabContext
+ * MessageList uses; `null` outside a tab (tests, Storybook-ish mounts) —
+ * every artifact surface degrades to the plain copy-link in that case.
+ */
+const MarkdownTabContext = createContext<string | null>(null);
+
+const INLINE_PREVIEW_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const OPENABLE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".tiff", ".tif", ".heic"]);
+
+function extensionOfHref(href: string): string {
+  const base = href.slice(href.lastIndexOf("/") + 1);
+  const dot = base.lastIndexOf(".");
+  return dot <= 0 ? "" : base.slice(dot).toLowerCase();
+}
+
+/**
+ * TASK.72: is this link target a local filesystem path the artifact IPC can
+ * act on (vs a URL — http/mailto/any scheme — or an anchor)? Absolute POSIX
+ * (`/…`), absolute win32 (`C:\…` / `C:/…`), home-anchored (`~/…`), and
+ * bare relative paths (`out/icon.png`, `./icon.png`, `../x.png`) all
+ * qualify; main resolves the relative form against the tab's workspace.
+ */
+function isLocalFileHref(href: string): boolean {
+  if (href.startsWith("#")) {
+    return false;
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) && !/^[a-zA-Z]:[/\\]/.test(href)) {
+    return false; // has a URI scheme and is not a win32 drive path
+  }
+  return true;
+}
+
+function isInlinePreviewHref(href: string): boolean {
+  return isLocalFileHref(href) && INLINE_PREVIEW_EXTENSIONS.has(extensionOfHref(href));
+}
 
 /** Writes to the clipboard if available, swallowing rejection (no error theater for a clipboard edge). Returns whether a write was attempted. */
 function tryClipboardWrite(text: string, onSuccess: () => void): void {
@@ -61,6 +100,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const tokens = useMemo(() => lexMarkdown(text), [text]);
   const [linkTarget, setLinkTarget] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabId = useContext(TabContext)?.tabId ?? null;
 
   useEffect(
     () => () => {
@@ -85,7 +125,9 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
 
   return (
     <CopyContext.Provider value={copyState}>
-      <BlockTokens tokens={tokens} />
+      <MarkdownTabContext.Provider value={tabId}>
+        <BlockTokens tokens={tokens} />
+      </MarkdownTabContext.Provider>
     </CopyContext.Provider>
   );
 });
@@ -232,8 +274,22 @@ function InlineTokens({ tokens }: { tokens: Token[] }) {
           }
           case "image": {
             const t = token as Tokens.Image;
-            // Alt text only, never an <img> — CSP blocks remote loads, and a
-            // broken-image glyph is worse than an honest label.
+            // TASK.72: a LOCAL image (`![alt](/path/in/workspace.png)`)
+            // renders the real inline preview (main-side containment-checked
+            // read). A remote/URL image keeps the honest alt-text label —
+            // CSP blocks remote loads, and a broken-image glyph is worse
+            // than an honest label.
+            if (isInlinePreviewHref(t.href)) {
+              return <ArtifactPreview key={index} path={t.href} alt={t.text} />;
+            }
+            if (isLocalFileHref(t.href)) {
+              return (
+                <span key={index} className="md-image-alt">
+                  Image: {t.text || t.href}
+                  <ArtifactReveal path={t.href} />
+                </span>
+              );
+            }
             return (
               <span key={index} className="md-image-alt">
                 Image: {t.text || t.href}
@@ -334,8 +390,142 @@ function MdLink({ href, children }: { href: string; children: ReactNode }) {
         {children}
       </a>
       {copied && <span className="md-copied-hint">Copied</span>}
+      {isInlinePreviewHref(href) ? <ArtifactPreview path={href} /> : isLocalFileHref(href) ? <ArtifactReveal path={href} /> : null}
     </>
   );
+}
+
+// ── TASK.72: chat-artifact preview (inline thumbnail + open/reveal) ──
+
+type ArtifactState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; url: string; sizeBytes: number; dimensions?: string }
+  | { status: "unavailable"; reason: string };
+
+function artifactFailureMessage(reason: string): string {
+  switch (reason) {
+    case "not_found":
+      return "File not found (deleted or never created)";
+    case "outside_allowed_roots":
+      return "Path is outside the allowed roots — preview blocked";
+    case "not_previewable":
+      return "Preview not available for this format — use Open / Reveal";
+    case "too_large":
+      return "File too large for an inline preview — use Open / Reveal";
+    case "no_workspace":
+      return "No workspace is attached to this tab";
+    default:
+      return "Preview unavailable";
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Inline preview of an image the agent created on disk, with Open (system
+ * default viewer) and Reveal (show in folder) actions. Bytes are fetched
+ * lazily — main re-checks containment (tab workspace / ~/.anycode / tmpdir,
+ * symlink-resolved) and the image allowlist before every read/open/reveal,
+ * so this component never holds a `file://` URL (CSP) and never triggers an
+ * execution-capable open itself. Without a tab context (or without the
+ * preload API in a test mount) it renders nothing — the link alone stays.
+ */
+function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
+  const tabId = useContext(MarkdownTabContext);
+  const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const [shouldLoad, setShouldLoad] = useState(false);
+  const [state, setState] = useState<ArtifactState>({ status: "idle" });
+  const startLoad = () => {
+    setState({ status: "loading" });
+    setShouldLoad(true);
+  };
+
+  useEffect(() => {
+    const element = rootRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        startLoad();
+        observer.disconnect();
+      }
+    }, { rootMargin: "240px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!tabId || !api || !shouldLoad) {
+      return;
+    }
+    let cancelled = false;
+    void api.readImage(tabId, path).then((result) => {
+      if (cancelled) {
+        return;
+      }
+      if (result.ok) {
+        setState({ status: "ready", url: `data:${result.mime};base64,${result.dataBase64}`, sizeBytes: result.sizeBytes });
+      } else {
+        setState({ status: "unavailable", reason: artifactFailureMessage(result.reason) });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tabId, api, path, shouldLoad]);
+
+  if (!tabId || !api) {
+    return null;
+  }
+
+  const open = () => void api.open(tabId, path);
+  const reveal = () => void api.reveal(tabId, path);
+  const label = alt || path;
+  const openable = OPENABLE_IMAGE_EXTENSIONS.has(extensionOfHref(path));
+
+  return (
+    <span ref={rootRef} className="md-artifact" data-status={state.status}>
+      {state.status === "idle" && <button type="button" className="md-artifact-load" onClick={startLoad}>Load preview</button>}
+      {state.status === "loading" && <span className="md-artifact-loading">Loading preview…</span>}
+      {state.status === "ready" && (
+        <img className="md-artifact-img" src={state.url} alt={label} onClick={openable ? open : undefined}
+          onLoad={(event) => {
+            const { naturalHeight, naturalWidth } = event.currentTarget;
+            setState((current) => current.status === "ready" ? { ...current, dimensions: `${naturalWidth}×${naturalHeight}` } : current);
+          }} title={openable ? `${path} — click to open` : path} />
+      )}
+      {state.status === "unavailable" && <span className="md-artifact-error">{state.reason}</span>}
+      <span className="md-artifact-meta">
+        <span className="md-artifact-name" title={path}>
+          {label}
+          {state.status === "ready" ? ` — ${state.dimensions ? `${state.dimensions} ` : ""}${formatBytes(state.sizeBytes)}` : ""}
+        </span>
+        <span className="md-artifact-actions">
+          {openable && <button type="button" className="md-artifact-btn" onClick={open}>Open</button>}
+          <button type="button" className="md-artifact-btn" onClick={reveal}>
+            Reveal
+          </button>
+        </span>
+      </span>
+    </span>
+  );
+}
+
+/** Local non-images are reveal-only. The original link remains copy-only. */
+function ArtifactReveal({ path }: { path: string }) {
+  const tabId = useContext(MarkdownTabContext);
+  const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
+  if (!tabId || !api) return null;
+  return <button type="button" className="md-artifact-btn md-artifact-reveal-link" onClick={() => void api.reveal(tabId, path)}>Reveal in folder</button>;
 }
 
 /**

@@ -166,6 +166,22 @@ describe("providerModelsFor (F2 review lane FXH: custom providers must reach the
     expect(providerModelsFor("custom:my-endpoint", catalog, undefined)).toBeUndefined();
     expect(providerModelsFor("custom:my-endpoint", catalog, [])).toBeUndefined();
   });
+
+  it("a connection's live-fetched list takes precedence: live ids decide WHAT, static hints decorate names", () => {
+    expect(providerModelsFor("z-ai", catalog, custom, ["glm-6", "glm-5.2"])).toEqual([
+      { id: "glm-6" },
+      { id: "glm-5.2", name: "GLM-5.2" },
+    ]);
+  });
+
+  it("an absent or EMPTY live list keeps every pre-fetch behavior byte-identical (static-hints fallback)", () => {
+    expect(providerModelsFor("z-ai", catalog, custom, undefined)).toEqual(catalog[0]!.models);
+    expect(providerModelsFor("z-ai", catalog, custom, [])).toEqual(catalog[0]!.models);
+  });
+
+  it("a live list works even for a provider with no catalog entry (nothing to decorate with)", () => {
+    expect(providerModelsFor("unknown-provider", catalog, custom, ["m1"])).toEqual([{ id: "m1" }]);
+  });
 });
 
 describe("modelPickDisabled (client-side mirror of the host between-turns guard)", () => {

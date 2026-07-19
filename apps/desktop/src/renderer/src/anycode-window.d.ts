@@ -10,6 +10,30 @@
  * augmentation must be wrapped in `declare global` + a top-level `export {}`
  * to actually merge into the global `Window` interface.
  */
+// TASK.72: duplicated from main/artifacts-ipc.ts's result shapes (preload's
+// own copies are not exported to the renderer tsconfig; same "duplicated on
+// purpose" convention as preload's channel literals).
+type ArtifactReadImageResult =
+  | { ok: true; mime: string; dataBase64: string; sizeBytes: number }
+  | {
+      ok: false;
+      reason:
+        | "invalid"
+        | "no_workspace"
+        | "not_found"
+        | "outside_allowed_roots"
+        | "not_previewable"
+        | "too_large"
+        | "io_error";
+    };
+
+type ArtifactActionResult =
+  | { ok: true; resolvedTo?: "reveal" }
+  | {
+      ok: false;
+      reason: "invalid" | "no_workspace" | "not_found" | "outside_allowed_roots" | "not_openable" | "io_error";
+    };
+
 import type {
   AvailableEngines,
   CloseTabResult,
@@ -393,6 +417,15 @@ declare global {
       // renderer branches chrome on + the caption-button invoke-API. First three
       // take no argument; `onWindowState` returns an unsubscribe.
       platform: DesktopPlatform;
+      // TASK.72: chat-artifact invoke-API (inline image preview + open/reveal
+      // for transcript file links). The renderer supplies only tabId + the
+      // model-authored path; main re-checks containment + the image-extension
+      // allowlist before any read/open/reveal (main/artifacts-ipc.ts).
+      artifacts: {
+        readImage(tabId: string, path: string): Promise<ArtifactReadImageResult>;
+        open(tabId: string, path: string): Promise<ArtifactActionResult>;
+        reveal(tabId: string, path: string): Promise<ArtifactActionResult>;
+      };
       window: {
         minimize(): Promise<void>;
         toggleMaximize(): Promise<void>;
