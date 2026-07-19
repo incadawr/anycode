@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { createDesktopStore, type TranscriptBlock } from "./store.js";
+import { progressLabel, selectCurrentTodos } from "./components/TodoPanel.js";
 import type { WireAgentEvent } from "../../shared/protocol.js";
 import { TurnTranslator } from "../../host/engines/codex/event-translator.js";
 import type { JsonRpcNotification } from "../../host/engines/codex/protocol.js";
@@ -107,5 +108,38 @@ describe("Codex live wiring — TurnTranslator output reaches the real store's t
     expect(toolBlock).toBeDefined();
     expect(toolBlock).toMatchObject({ toolName: "Bash", status: "denied" });
     expect((toolBlock?.input as { command?: string } | undefined)?.command).toContain("w1-sentinel.txt");
+  });
+});
+
+/**
+ * The same cross-contract proof for Codex's plan (`turn/plan/updated` — its
+ * own todo list). Three independently-owned layers have to hold for a live
+ * Codex plan to reach the progress panel, and this replays a REAL capture
+ * through all three: the translator's synthetic TodoWrite projection, the
+ * store's tool_call reducer, and `selectCurrentTodos` — the panel's actual
+ * selector, not a re-implementation of it here. Asserting the projected shape
+ * against the real reader is the point: a card the panel cannot parse renders
+ * a plan nobody sees.
+ */
+describe("Codex live wiring — turn/plan/updated reaches the real TodoPanel selector", () => {
+  it("w2-p1-plan-updated.jsonl: the panel selects the NEWEST plan revision", () => {
+    const events = translateLiveFixture("w2-p1-plan-updated.jsonl");
+    const transcript = runThroughStore(events);
+
+    const selected = selectCurrentTodos(transcript);
+    expect(selected).not.toBeNull();
+    // Last-wins: revision 2 (first step done, second in progress) is the live plan.
+    expect(selected!.todos.map((todo) => todo.status)).toEqual(["completed", "in_progress", "pending"]);
+    expect(progressLabel(selected!.todos)).toBe("Progress 1/3");
+
+    // The selected card is a real block in the transcript — the panel's
+    // jump-to-block affordance resolves `sourceBlockId` against `data-block-id`.
+    expect(transcript.some((block) => block.id === selected!.sourceBlockId)).toBe(true);
+
+    // Both revisions are their own block; a shared id would have patched the
+    // first card in place and stranded the panel on a stale plan.
+    const todoBlocks = transcript.filter((block) => block.kind === "tool_call" && block.toolName === "TodoWrite");
+    expect(todoBlocks).toHaveLength(2);
+    expect(todoBlocks.every((block) => block.kind === "tool_call" && block.status === "success")).toBe(true);
   });
 });

@@ -550,3 +550,122 @@ describe("TurnTranslator — onItemStarted redelivery is idempotent (W18)", () =
     expect(redelivered).toEqual([]);
   });
 });
+
+/**
+ * `turn/plan/updated` — Codex's own todo list (the `update_plan` tool's
+ * effect). Wire shape is schema-authoritative (codex-cli 0.144.5
+ * `TurnPlanUpdatedNotification`): `{threadId, turnId, plan: TurnPlanStep[],
+ * explanation?}` where a step is `{step: string, status: "pending" |
+ * "inProgress" | "completed"}` — a TURN-scoped notification, NOT a thread
+ * item, which is why nothing in the item-projection path ever saw it.
+ */
+describe("TurnTranslator — turn/plan/updated (Codex plan -> todo card)", () => {
+  function planUpdate(plan: unknown, extra: Record<string, unknown> = {}): JsonRpcNotification {
+    return { method: "turn/plan/updated", params: { threadId: THREAD_ID, turnId: TURN_ID, plan, ...extra } };
+  }
+
+  function inputOf(events: AgentEvent[]): unknown {
+    const call = events.find((event) => event.type === "tool_call");
+    return (call as { toolCall: { input: unknown } } | undefined)?.toolCall.input;
+  }
+
+  it("projects a plan update as a settled TodoWrite card, normalizing inProgress -> in_progress", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification(planUpdate([
+      { step: "read the config", status: "completed" },
+      { step: "wire the translator", status: "inProgress" },
+      { step: "run the gate", status: "pending" },
+    ]));
+
+    // The renderer's TodoPanel reads `{todos:[{content,status}]}` off a
+    // SUCCESSFUL TodoWrite tool_call block — that shape is the whole contract.
+    expect(types(events)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
+    expect(inputOf(events)).toEqual({
+      todos: [
+        { content: "read the config", status: "completed" },
+        { content: "wire the translator", status: "in_progress" },
+        { content: "run the gate", status: "pending" },
+      ],
+    });
+    const call = events[0] as { toolCall: { id: string; name: string } };
+    expect(call.toolCall.name).toBe("TodoWrite");
+    const outcome = (events[2] as { outcome: { toolCallId: string; toolName: string; status: string } }).outcome;
+    expect(outcome.status).toBe("success");
+    expect(outcome.toolName).toBe("TodoWrite");
+    expect(outcome.toolCallId).toBe(call.toolCall.id);
+  });
+
+  it("emits a NEW card per revision so the panel's last-wins selection tracks the newest plan", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const first = translator.onNotification(planUpdate([{ step: "one", status: "pending" }]));
+    const second = translator.onNotification(planUpdate([{ step: "one", status: "completed" }]));
+
+    const firstId = (first[0] as { toolCall: { id: string } }).toolCall.id;
+    const secondId = (second[0] as { toolCall: { id: string } }).toolCall.id;
+    // Same id would PATCH the first card (store.ts keys blocks by toolCallId)
+    // and leave the panel showing a stale plan forever.
+    expect(secondId).not.toBe(firstId);
+    expect(inputOf(second)).toEqual({ todos: [{ content: "one", status: "completed" }] });
+  });
+
+  it("drops a re-sent identical plan instead of stacking a duplicate card", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const plan = [{ step: "one", status: "inProgress" }];
+    translator.onNotification(planUpdate(plan));
+    expect(translator.onNotification(planUpdate(plan))).toEqual([]);
+  });
+
+  it("keeps a step whose status is an unknown future enum member, degrading it to pending", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification(planUpdate([{ step: "one", status: "blocked" }]));
+    // Dropping the step would silently shrink the plan's N/M counters; the
+    // panel would then report progress against a plan the user never wrote.
+    expect(inputOf(events)).toEqual({ todos: [{ content: "one", status: "pending" }] });
+  });
+
+  it("emits nothing for an empty, malformed, or step-less plan", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    expect(translator.onNotification(planUpdate([]))).toEqual([]);
+    expect(translator.onNotification(planUpdate("not-an-array"))).toEqual([]);
+    expect(translator.onNotification(planUpdate([{ step: 42, status: "pending" }]))).toEqual([]);
+    expect(translator.onNotification(planUpdate([{ step: "", status: "pending" }]))).toEqual([]);
+  });
+
+  it("ignores a plan addressed to another turn", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    expect(translator.onNotification({
+      method: "turn/plan/updated",
+      params: { threadId: THREAD_ID, turnId: "some-other-turn", plan: [{ step: "one", status: "pending" }] },
+    })).toEqual([]);
+  });
+});
+
+/**
+ * Replay of a REAL captured trace (`w2-p1-plan-updated.jsonl`, codex-cli
+ * 0.144.5, read-only sandbox): the synthetic tests above encode the schema's
+ * promise, this one encodes what the binary actually sent — two `update_plan`
+ * revisions of the same three-step plan, `explanation` null on the first and a
+ * string on the second, statuses in camelCase.
+ */
+describe("TurnTranslator — turn/plan/updated against a live capture", () => {
+  it("projects both real plan revisions into readable TodoWrite cards", () => {
+    const events = translateLiveFixture("w2-p1-plan-updated.jsonl");
+    const todoCalls = events.filter(
+      (event) => event.type === "tool_call" && (event as { toolCall: { name: string } }).toolCall.name === "TodoWrite",
+    ) as unknown as { toolCall: { id: string; input: { todos: { content: string; status: string }[] } } }[];
+
+    expect(todoCalls).toHaveLength(2);
+    expect(todoCalls[0]!.toolCall.input.todos.map((todo) => todo.status)).toEqual(["in_progress", "pending", "pending"]);
+    expect(todoCalls[1]!.toolCall.input.todos.map((todo) => todo.status)).toEqual(["completed", "in_progress", "pending"]);
+    // The plan text is carried verbatim — the panel renders `content`.
+    expect(todoCalls[0]!.toolCall.input.todos[0]!.content).toContain("Read the TypeScript file");
+    // Distinct ids: a second revision must APPEND a card, not patch the first.
+    expect(todoCalls[0]!.toolCall.id).not.toBe(todoCalls[1]!.toolCall.id);
+
+    // Each card settles successfully, which is what makes the panel select it.
+    const settled = events.filter(
+      (event) => event.type === "tool_result" && (event as { outcome: { toolName: string } }).outcome.toolName === "TodoWrite",
+    ) as unknown as { outcome: { status: string } }[];
+    expect(settled.map((event) => event.outcome.status)).toEqual(["success", "success"]);
+  });
+});
