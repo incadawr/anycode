@@ -5,6 +5,36 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.5] — 2026-07-19
+
+### Added
+
+- Reasoning effort for the Claude Code engine. A session running on the Claude
+  Code CLI can pick a reasoning effort level next to its model.
+- Codex plan in the progress panel. Codex keeps its own todo list while it
+  works; every revision of that plan now appears in the progress panel and as a
+  todo card in the transcript, the same way the built-in and Claude Code
+  engines already did. Previously the plan never reached the UI at all.
+
+### Changed
+
+- Codex permission presets now mirror Codex's own permission menu:
+  **Ask for approval**, **Approve for me**, and **Full access** replace the
+  previous Read-only/Ask/Workspace set. "Approve for me" keeps the workspace
+  boundary and routes eligible approvals to automatic review. **"Full access"
+  removes the sandbox and approval prompts entirely** — the agent can read and
+  write wherever you can and reach the network without asking, so pick it
+  deliberately. Sessions created on the old Read-only preset keep their
+  original posture when resumed; that preset is simply no longer offered for
+  new sessions.
+
+### Fixed
+
+- "New task in this project" now opens the same New Task draft as every other
+  entry point, with the project preselected, so the harness can be chosen
+  before the session starts. It previously created the tab immediately and
+  silently used the default engine.
+
 ## [0.0.4] — 2026-07-19
 
 ### Alpha
