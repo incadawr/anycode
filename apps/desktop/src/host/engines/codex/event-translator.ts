@@ -82,6 +82,45 @@ function projectTools(item: Record<string, unknown>): ToolProjection[] {
   return [];
 }
 
+/** The renderer-side tool name whose card the TodoPanel projects (core's TodoWrite). */
+const TODO_TOOL_NAME = "TodoWrite";
+
+/** `TurnPlanStepStatus` (wire, camelCase) -> the TodoWrite status vocabulary the renderer speaks. */
+const PLAN_STATUS: Record<string, "pending" | "in_progress" | "completed"> = {
+  pending: "pending",
+  inProgress: "in_progress",
+  completed: "completed",
+};
+
+/**
+ * `turn/plan/updated` -> the `{todos:[{content,status}]}` input the renderer's
+ * TodoPanel already reads off a settled `TodoWrite` card (TodoPanel.ts's
+ * `selectCurrentTodos`/`parseTodos`). Projecting into that existing vocabulary
+ * rather than a new event type is what makes the panel, the collapsed-card
+ * summary and the jump-to-block affordance work for Codex for free.
+ *
+ * All-or-nothing, mirroring `parseTodos`' own contract: one malformed step
+ * rejects the whole revision rather than silently shrinking the plan's N/M
+ * counters. `null` therefore also covers an empty/absent plan — a synthetic
+ * zero-todo card would be a permanently blank transcript entry whose only
+ * effect is to hide the panel.
+ *
+ * An unknown `status` degrades to `pending` instead of rejecting: a status
+ * enum widened by a future codex-cli must not blank a plan that is otherwise
+ * perfectly readable.
+ */
+function projectPlanTodos(plan: unknown): { todos: { content: string; status: string }[] } | null {
+  if (!Array.isArray(plan) || plan.length === 0) return null;
+  const todos: { content: string; status: string }[] = [];
+  for (const raw of plan) {
+    const step = record(raw);
+    if (step === null || typeof step.step !== "string" || step.step.length === 0) return null;
+    const status = typeof step.status === "string" ? PLAN_STATUS[step.status] ?? "pending" : "pending";
+    todos.push({ content: step.step, status });
+  }
+  return { todos };
+}
+
 /** A one-turn translator; callers must construct a fresh one for every native turn. */
 export class TurnTranslator {
   private readonly openText = new Set<string>();
@@ -105,6 +144,10 @@ export class TurnTranslator {
   /** Accumulated `item/commandExecution/outputDelta` text per itemId (cut §2(i) live command-output deltas). */
   private readonly commandOutputBuffers = new Map<string, string>();
   private finished = false;
+  /** Monotonic per-turn suffix for synthetic plan-card ids (`turn/plan/updated` carries no item id of its own). */
+  private planRevision = 0;
+  /** Serialized todos of the last EMITTED plan card — dedupes an unchanged plan redelivery. */
+  private lastPlanKey: string | null = null;
   /** Latches the ONE terminal `{type:"error"}` event a turn may ever emit (cut §2(i)) — a live `error` notification and a fallback in `finish()` must never double-report the same failure. */
   private errorEmitted = false;
 
@@ -138,6 +181,8 @@ export class TurnTranslator {
         return this.onCommandOutputDelta(params);
       case "item/completed":
         return this.onItemCompleted(params);
+      case "turn/plan/updated":
+        return this.onPlanUpdated(params);
       case "thread/tokenUsage/updated":
         return this.onTokenUsage(params);
       case "error":
@@ -184,6 +229,43 @@ export class TurnTranslator {
       events.push({ type: "tool_execution_start", toolCallId: projection.toolCallId, toolName: projection.toolName, input: projection.input });
     }
     return events;
+  }
+
+  /**
+   * Codex's own todo list. Unlike every other projection here this one has no
+   * native item to key on (`turn/plan/updated` is turn-scoped, carrying
+   * neither an `itemId` nor a lifecycle), so each accepted revision becomes a
+   * self-contained, already-settled synthetic tool call: created and closed in
+   * the same batch, with an id of its own so a later revision APPENDS a card
+   * instead of patching the previous one (store.ts keys blocks by
+   * `toolCallId`, and the panel's last-wins selection needs the newest card to
+   * be the newest block).
+   */
+  private onPlanUpdated(params: Record<string, unknown>): AgentEvent[] {
+    const input = projectPlanTodos(params.plan);
+    if (input === null) return [];
+    // Codex re-sends an unchanged plan alongside other turn activity; a card
+    // per redelivery would bury the transcript under identical todo lists.
+    const key = JSON.stringify(input.todos);
+    if (key === this.lastPlanKey) return [];
+    this.lastPlanKey = key;
+    const toolCallId = `${this.options.turnId}:plan:${this.planRevision}`;
+    this.planRevision += 1;
+    return [
+      { type: "tool_call", toolCall: { id: toolCallId, name: TODO_TOOL_NAME, input } },
+      { type: "tool_execution_start", toolCallId, toolName: TODO_TOOL_NAME, input },
+      {
+        type: "tool_result",
+        outcome: {
+          toolCallId,
+          toolName: TODO_TOOL_NAME,
+          status: "success",
+          modelText: "",
+          durationMs: 0,
+          result: { ok: true, output: "" },
+        },
+      },
+    ];
   }
 
   private onAgentMessageDelta(params: Record<string, unknown>): AgentEvent[] {
