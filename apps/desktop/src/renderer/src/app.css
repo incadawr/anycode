@@ -1675,6 +1675,8 @@ body {
 
 .start-model-item {
   display: flex;
+  /* Direct child of the height-capped scrolling column above. */
+  flex-shrink: 0;
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
@@ -3074,6 +3076,8 @@ body {
 }
 
 .slash-menu-section {
+  /* Direct child of the height-capped scrolling column above. */
+  flex-shrink: 0;
   padding: var(--sp-2) var(--sp-2) var(--sp-1);
   font-size: var(--fs-2xs);
   font-weight: var(--w-medium);
@@ -3084,6 +3088,7 @@ body {
 
 .slash-menu-row {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-2);
