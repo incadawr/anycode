@@ -7,6 +7,7 @@ import {
   ClaudeClient,
   ClaudeClientError,
   buildClaudeChildEnv,
+  buildClaudeSpawnArgs,
   redactHomePaths,
 } from "./claude-client.js";
 import { EngineVersionError } from "./protocol.js";
@@ -339,6 +340,26 @@ describe("ClaudeClient", () => {
     } finally {
       await client.close();
     }
+  });
+});
+
+describe("buildClaudeSpawnArgs — reasoning-effort flag (TASK.75)", () => {
+  it("includes --effort <level> immediately after --model when an effort is chosen", () => {
+    const args = buildClaudeSpawnArgs({ model: "sonnet", effort: "high", sessionId: "s-1" });
+    expect(args).toContain("--effort");
+    expect(args[args.indexOf("--effort") + 1]).toBe("high");
+    // Sits right after --model, mirroring how the two travel together as a pair.
+    expect(args.indexOf("--effort")).toBe(args.indexOf("--model") + 2);
+  });
+
+  it("omits --effort entirely when unset — the CLI's own default must never be fabricated as \"medium\"", () => {
+    const args = buildClaudeSpawnArgs({ model: "sonnet", sessionId: "s-1" });
+    expect(args).not.toContain("--effort");
+  });
+
+  it("omits --effort when there is no model either (bare fresh spawn)", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    expect(args).not.toContain("--effort");
   });
 });
 

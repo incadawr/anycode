@@ -160,6 +160,84 @@ describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
 });
 
 /**
+ * TASK.75 — the initial `--effort` spawn flag. Unlike model/permissionMode
+ * (suppressed on resume, see the hazard (б) describe block below), effort
+ * rides EVERY spawn: `system/init` carries no effort field at all, so there
+ * is no surviving native truth a resend could clobber.
+ */
+describe("connect: --effort rides the spawn (TASK.75)", () => {
+  it("a fresh spawn carries --effort when the selection names one", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawnImpl),
+      selection: { effort: "high", origin: "draft" },
+    });
+    try {
+      const args = capturedArgs()!;
+      expect(args).toContain("--effort");
+      expect(args[args.indexOf("--effort") + 1]).toBe("high");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("a resume ALSO carries --effort, unlike --permission-mode/set_model — there is no native state to protect", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await resumeClaudeEngine({
+      ...baseOptions(spawnImpl),
+      externalSessionRef: "persisted-ref-effort-1",
+      selection: { effort: "xhigh", origin: "persisted" },
+    });
+    try {
+      const args = capturedArgs()!;
+      expect(args).toContain("--effort");
+      expect(args[args.indexOf("--effort") + 1]).toBe("xhigh");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("no --effort flag at all when the selection names none — the CLI's own default must not be fabricated", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await startClaudeEngine(baseOptions(spawnImpl));
+    try {
+      expect(capturedArgs()).not.toContain("--effort");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("an unrecognized effort string is dropped before it ever reaches argv (fail-closed against the fixed vocabulary)", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawnImpl),
+      selection: { effort: "ultra-mega", origin: "draft" },
+    });
+    try {
+      expect(capturedArgs()).not.toContain("--effort");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("a spawn-time effort the confirmed model does not support is not claimed as the local record", async () => {
+    // MODELS' one entry has no supportedEffortLevels at all, so even though
+    // "high" rode the spawn argv (fixed-vocabulary check only), the local
+    // snapshot must not claim it once the real catalog is known.
+    const { spawnImpl } = fakeSpawn();
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawnImpl),
+      selection: { model: "model-a", effort: "high", origin: "draft" },
+    });
+    try {
+      expect(connected.engine.snapshot().effort).toBeUndefined();
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+});
+
+/**
  * cut §1.5 hazard (б) — a resume must not APPLY a persisted posture before it
  * has read the one that survived. A native Claude session keeps its own model
  * and `permissionMode` across process death (probe #4), and our row can be

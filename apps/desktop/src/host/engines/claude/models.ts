@@ -22,6 +22,26 @@ import type { EngineModelChoice } from "../../../shared/protocol.js";
 /** The CLI's own "whatever this account defaults to" entry — a moving target, not a pin. */
 const DEFAULT_MODEL_ALIAS = "default";
 
+/**
+ * The full `--effort` vocabulary the CLI's own `--help` advertises (TASK.75,
+ * binary 2.1.215) — a closed, version-independent set, unlike the model
+ * catalog which is account-specific and only known post-handshake. This is
+ * what makes spawn-time validation possible at all: a per-model catalog
+ * cannot be consulted before the child even exists, but this fixed list can.
+ * A model's own `supportedEffortLevels` (live, per-entry) is always a SUBSET
+ * of this — the CLI, not this list, is the authority on which levels a given
+ * model actually accepts.
+ */
+export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
+
+const EFFORT_LEVEL_SET: ReadonlySet<string> = new Set(CLAUDE_EFFORT_LEVELS);
+
+export function isClaudeEffortLevel(value: string): value is ClaudeEffortLevel {
+  return EFFORT_LEVEL_SET.has(value);
+}
+
 export interface ClaudeModelEntry {
   /** The id sent on the wire (`--model` / `set_model`). */
   value: string;
@@ -146,6 +166,19 @@ export class ClaudeModelCatalog {
 
   supportsEffort(value: string, effort: string): boolean {
     return this.effortsFor(value).includes(effort);
+  }
+
+  /**
+   * Resolves the effort to keep for `value` given a preferred (remembered)
+   * choice — mirrors `CodexModelCatalog.resolveEffort`. Unlike Codex's live
+   * payload, no entry here ever carries a `defaultEffort`, so there is no
+   * fallback branch: a preferred value the model no longer supports (or no
+   * preference at all) simply resolves to undefined, and the caller omits
+   * `effort` entirely rather than guessing one.
+   */
+  resolveEffort(value: string, preferred?: string): string | undefined {
+    if (preferred === undefined) return undefined;
+    return this.supportsEffort(value, preferred) ? preferred : undefined;
   }
 
   /** The wire projection consumed by `EnginePresentation.model.available`. */
