@@ -89,6 +89,10 @@ const SERVER_NOTIFICATION_METHODS = [
   { method: "item/agentMessage/delta" },
   { method: "thread/tokenUsage/updated" },
   { method: "turn/completed" },
+  // Codex's own todo list (the `update_plan` tool's effect). Turn-scoped, not
+  // a thread item — the translator projects each revision into a synthetic
+  // settled `TodoWrite` card so the renderer's TodoPanel reads it unchanged.
+  { method: "turn/plan/updated" },
   { method: "thread/settings/updated" },
   { method: "account/login/completed" },
   { method: "account/updated" },
