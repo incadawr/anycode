@@ -1,6 +1,6 @@
 {
   "name": "@anycode/desktop",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "type": "module",
   "description": "AnyCode — desktop AI coding agent",
