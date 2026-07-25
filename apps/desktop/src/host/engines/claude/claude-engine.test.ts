@@ -244,18 +244,36 @@ describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
     expect(texts.join("")).not.toContain("write a file");
   });
 
-  it("refuses image attachments at the wire boundary, not only at the Composer gate (R-W0-9)", async () => {
-    expect(CLAUDE_ENGINE_CAPABILITIES.supportsImages).toBe(false);
-    const transport = new FakeTransport();
-    const events = await collect(
+  /**
+   * R-W0-9 (the "live image delivery is impossible" finding) was DISPROVEN on
+   * 2026-07-25 against CLI 2.1.220: the model describes an attached image. The
+   * finding was never about the CLI — `runTurn` sent `input` as a bare string,
+   * so no image block ever rode the frame in the first place.
+   *
+   * The assertion is deliberately ON THE PAYLOAD, not on the capability flag: a
+   * flag says what the engine claims, only the sent frame says what the model
+   * can actually receive.
+   */
+  it("carries image attachments as content blocks in the sent user frame (R-W0-9 disproven)", async () => {
+    expect(CLAUDE_ENGINE_CAPABILITIES.supportsImages).toBe(true);
+    const transport = new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl") });
+    await collect(
       engineWith(transport).runTurn("look", {
         signal: new AbortController().signal,
-        attachments: [{ mediaType: "image/png", data: "AA==" } as never],
+        attachments: [{ mediaType: "image/png", data: "AA==" }],
       }),
     );
-    expect(types(events)).toEqual(["error", "turn_end", "loop_end"]);
-    // Nothing was sent: the refusal precedes the transport entirely.
-    expect(transport.sent).toEqual([]);
+    expect(transport.sent).toHaveLength(1);
+    expect(transport.sent[0]).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } },
+      { type: "text", text: "look" },
+    ]);
+  });
+
+  it("keeps sending a bare string when a turn carries no attachments (byte-shape lock)", async () => {
+    const transport = new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl") });
+    await collect(engineWith(transport).runTurn("look", { signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["look"]);
   });
 });
 
