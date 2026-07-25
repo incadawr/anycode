@@ -1548,7 +1548,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * cancelled/replaced turn must not resurrect stale UI).
      */
     function onAgentEvent(turnId: string, event: WireAgentEvent): void {
-      if (get().turn.turnId !== turnId) {
+      // `context_usage` is exempt from the turn-scoped guard: it is a
+      // SESSION-scoped status-bar reading, not turn content. The Claude engine
+      // reads it from `get_context_usage` AFTER the terminal result (the CLI's
+      // own accounting is only final then), and `loop_end` has by then already
+      // reset `turn.turnId` to null — so the guard would drop every reading
+      // that engine produces, leaving its meter permanently blank. Core and
+      // Codex emit theirs mid-turn, which is why only Claude was affected.
+      if (get().turn.turnId !== turnId && event.type !== "context_usage") {
         return;
       }
       switch (event.type) {
