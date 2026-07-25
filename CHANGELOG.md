@@ -5,6 +5,31 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.6] — 2026-07-25
+
+### Added
+
+- Image attachments for the Claude Code engine. A session running on the Claude
+  Code CLI can attach images and ask about them. Two separate gates had kept
+  this closed: the engine declared no image support, and the Claude session was
+  never given the seam the composer reads to offer the attach button, so
+  attachments were dropped before the engine ever saw them.
+
+### Fixed
+
+- The context meter now works for Claude Code sessions. The reading is taken
+  after the turn's terminal result — the point at which the CLI's own accounting
+  of the window is final — but the renderer discarded any event arriving after
+  the turn closed, so the meter had never displayed a value for this engine. The
+  reading is a session-level status, not turn content, and is no longer tied to
+  the turn that happened to precede it.
+
+### Changed
+
+- A failed or unusable context reading is logged instead of being swallowed
+  silently. Previously both failure paths returned no value without a trace,
+  which is what let the meter stay blank unnoticed.
+
 ## [0.0.5] — 2026-07-19
 
 ### Added
