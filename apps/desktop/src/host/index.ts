@@ -842,6 +842,13 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     bootHistory,
     hasTitle: connected.sessionMeta?.title !== undefined && connected.sessionMeta.title.length > 0,
     rules: new SessionPermissionRules(),
+    // Without this seam the Composer never receives an `imageInput` verdict and
+    // Session drops every attachment before the engine sees it (session.ts's
+    // `imageInputEnabled?.() !== true` gate) — the second, independent reason
+    // images could not be attached, on top of `supportsImages`. Flat, unlike
+    // the codex branch's per-model closure: `initialize.models[]` carries no
+    // modality field, so the engine-level verdict is the only one available.
+    imageInputEnabled: () => true,
     git: gitBridge,
     shell,
     persistence: {

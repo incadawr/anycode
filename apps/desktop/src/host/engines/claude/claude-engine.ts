@@ -26,7 +26,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, HistoryItem, PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { AgentEvent, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort } from "@anycode/core";
 import { CLAUDE_POST_INTERRUPT_SETTLE_MS } from "../../../shared/claude-timeouts.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { EngineBootstrap } from "../bootstrap.js";
@@ -83,10 +83,14 @@ export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
   costAccounting: true,
   supportsModelSelection: true,
   supportsReasoningEffort: true,
-  // R-W0-9: live image delivery was DISPROVEN (the model answered "no attached
-  // image data" for a user frame that demonstrably carried the image block).
-  // False honestly closes the Composer's attach path until that is re-probed.
-  supportsImages: false,
+  // R-W0-9 was DISPROVEN live on 2026-07-25 (CLI 2.1.220): a user frame built
+  // as a content-block array delivers the image, and the model describes it.
+  // The original finding (the model answered "no attached image data") dates to
+  // v2.1.207 and no longer reproduces. Engine-level and flat by necessity, not
+  // by shortcut: unlike codex's `model/list`, the CLI's `initialize.models[]`
+  // carries no modality field at all (contract pins only `value` +
+  // `resolvedModel`), so there is nothing to gate a per-model verdict on.
+  supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
 };
@@ -223,6 +227,28 @@ function resolveEffort(selection: ClaudeSessionSelection | undefined, notices: A
     return undefined;
   }
   return requested;
+}
+
+/**
+ * Builds the anthropic-shaped content-block array so an attachment physically
+ * rides the user frame. `sendUserMessage` has always accepted `string |
+ * unknown[]`; what was missing was a producer for the array form, which is why
+ * R-W0-9's "no attached image data" verdict could never have been about the
+ * CLI — a text-only frame cannot deliver an image no matter what the engine
+ * claims to support.
+ *
+ * A turn with no attachments keeps sending a bare string — the exact byte-shape
+ * the CLI has received on every turn to date.
+ */
+function userMessageContent(text: string, attachments?: ImageAttachment[]): string | unknown[] {
+  if (attachments === undefined || attachments.length === 0) return text;
+  return [
+    ...attachments.map((attachment) => ({
+      type: "image",
+      source: { type: "base64", media_type: attachment.mediaType, data: attachment.data },
+    })),
+    { type: "text", text },
+  ];
 }
 
 /** Resolves once on abort and never rejects; the listener is always removed. */
@@ -605,12 +631,6 @@ export class ClaudeEngine implements SessionEngine {
       yield* this.terminalEvents(turn, this.terminalError ?? new Error("Claude engine is closed"));
       return;
     }
-    if (options.attachments?.length) {
-      // supportsImages is false (R-W0-9): re-checked at the wire boundary, not
-      // only at the Composer gate.
-      yield* this.terminalEvents(turn, new Error("Claude sessions do not support image attachments yet"));
-      return;
-    }
     yield { type: "turn_start", turn };
     for (const notice of this.drainNotices()) yield notice;
 
@@ -646,7 +666,7 @@ export class ClaudeEngine implements SessionEngine {
     try {
       // A turn IS a user message on the shared stdin — one process, one
       // session, many turns (probe #1). There is no per-turn request/response.
-      this.client.sendUserMessage(input);
+      this.client.sendUserMessage(userMessageContent(input, options.attachments));
       // An abort that arrives before anything streamed still has a live
       // session to interrupt, so it fires immediately rather than latching.
       if (options.signal.aborted) {
@@ -728,12 +748,23 @@ export class ClaudeEngine implements SessionEngine {
         typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens < 0 ||
         typeof maxTokens !== "number" || !Number.isFinite(maxTokens) || maxTokens <= 0
       ) {
+        // Shape drift is the other way this read dies silently: the request
+        // succeeded, so the catch above never fires, yet the meter stays blank.
+        // Only the two numbers are logged — the rest of the payload carries
+        // custody-sensitive metadata (memoryFiles[] paths, C2).
+        console.error(
+          `[claude] get_context_usage returned an unusable reading: totalTokens=${JSON.stringify(totalTokens)} maxTokens=${JSON.stringify(maxTokens)}`,
+        );
         return null;
       }
       return { type: "context_usage", estimatedTokens: totalTokens, budgetTokens: maxTokens, source: "provider" };
-    } catch {
+    } catch (error) {
       // A failed read leaves the meter at its last value rather than painting a
-      // wrong one; it is never a turn failure.
+      // wrong one; it is never a turn failure. Logged rather than swallowed
+      // silently: a meter that never appears is otherwise indistinguishable
+      // from one the engine never tried to read, and this catch is the only
+      // place the difference is observable.
+      console.error(`[claude] get_context_usage failed: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }
