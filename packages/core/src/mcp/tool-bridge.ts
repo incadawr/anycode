@@ -23,6 +23,7 @@ import {
   MCP_DECL_BUDGET_BYTES_PER_SERVER,
   MCP_MAX_TOOLS_PER_SERVER,
   MCP_RESULT_MAX_BYTES,
+  MCP_RESULT_MAX_MODEL_BYTES,
   MCP_TOOL_DESCRIPTION_MAX_BYTES,
 } from "../types/config.js";
 import type {
@@ -152,6 +153,9 @@ function bridgedMetadata(input: BridgeMcpToolInput): ToolMetadata {
     sideEffectScope: input.transport === "http" ? "network" : "process",
     timeoutMs: MCP_CALL_TIMEOUT_MS,
     maxOutputBytes: MCP_RESULT_MAX_BYTES,
+    // An external server's output is the least trustworthy in size: the model
+    // budget is deliberately tighter than the inline cap above.
+    resultBudget: { maxModelBytes: MCP_RESULT_MAX_MODEL_BYTES },
   };
 }
 

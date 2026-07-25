@@ -10,7 +10,7 @@
  */
 
 import type { ToolDefinition, ToolMetadata } from "../types/tools.js";
-import { DEFAULT_TOOL_TIMEOUT_MS } from "../types/config.js";
+import { BASH_RESULT_MAX_MODEL_BYTES, DEFAULT_TOOL_TIMEOUT_MS } from "../types/config.js";
 import {
   bashOutputInputSchema,
   type BashOutputInput,
@@ -28,6 +28,9 @@ const metadata: ToolMetadata = {
   sideEffectScope: "none",
   needsApproval: false,
   timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
+  // Same reasoning as Bash: an oversized delta of a build log carries its
+  // verdict at the end, so the tail is what survives.
+  resultBudget: { maxModelBytes: BASH_RESULT_MAX_MODEL_BYTES, previewDirection: "tail" },
 };
 
 export const bashOutputTool: ToolDefinition<BashOutputInput, BashOutputToolOutput> = {
