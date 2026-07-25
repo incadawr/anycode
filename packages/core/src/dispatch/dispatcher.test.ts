@@ -41,6 +41,7 @@ import type { CorePorts } from "../ports/index.js";
 import type { ExecResult } from "../ports/execution.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { bashTool } from "../tools/bash.js";
+import { bashOutputTool } from "../tools/bash-output.js";
 import { writeTool } from "../tools/write.js";
 import { editTool } from "../tools/edit.js";
 import { readTool } from "../tools/read.js";
@@ -53,7 +54,12 @@ import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import { agentTool } from "../tools/agent.js";
 import { workflowTool } from "../tools/workflow.js";
 import { bridgeMcpTool } from "../mcp/tool-bridge.js";
-import { DISPATCH_TIMEOUT_GRACE_MS } from "../types/config.js";
+import {
+  BASH_RESULT_MAX_MODEL_BYTES,
+  DEFAULT_TOOL_RESULT_BUDGET,
+  DISPATCH_TIMEOUT_GRACE_MS,
+  MCP_RESULT_MAX_MODEL_BYTES,
+} from "../types/config.js";
 
 // ---------------------------------------------------------------------------
 // Mock builders
@@ -1062,5 +1068,201 @@ describe("executeToolCall — auto-checkpoint seam (design slice-4.7-cut.md §2.
     const outcome = await executeToolCall(ctx, call(), undefined, (event) => emitted.push(event));
     expect(outcome.status).toBe("success");
     expect(emitted).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.93 — the model-visible result budget. The guarantee under test: no path
+// through the dispatcher hands the model an unbounded tool result.
+
+describe("executeToolCall — result budget", () => {
+  const modelBytes = (outcome: { modelText: string }): number =>
+    Buffer.byteLength(outcome.modelText, "utf8");
+
+  it("caps a tool that declares no budget at all", async () => {
+    const tool = makeTool({ handler: async () => ({ ok: true, output: "x".repeat(1_000_000) }) });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(outcome.status).toBe("success");
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes);
+    expect(outcome.modelText).toContain("truncated");
+  });
+
+  it("caps output produced by the tool's own formatResultForModel", async () => {
+    const tool = makeTool({
+      metadata: { ...baseMetadata, resultBudget: { maxModelBytes: 2_000 } },
+      formatResultForModel: () => "y".repeat(500_000),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(2_000);
+    expect(outcome.modelText).toContain("truncated");
+  });
+
+  it("caps the error text of a failed handler", async () => {
+    const tool = makeTool({
+      metadata: { ...baseMetadata, resultBudget: { maxModelBytes: 2_000 } },
+      handler: async () => ({ ok: false, error: "z".repeat(500_000) }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(outcome.status).toBe("error");
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(2_000);
+  });
+
+  it("budgets UTF-8 bytes, not UTF-16 code units", async () => {
+    // 40k Cyrillic chars = 80k UTF-8 bytes but only 40k code units: a
+    // length-based cap of 10_000 would let ~20_000 bytes through.
+    const tool = makeTool({
+      metadata: { ...baseMetadata, resultBudget: { maxModelBytes: 10_000 } },
+      handler: async () => ({ ok: true, output: "я".repeat(40_000) }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(10_000);
+  });
+
+  it("cuts on a code-point boundary and never emits a lone surrogate", async () => {
+    const tool = makeTool({
+      metadata: { ...baseMetadata, resultBudget: { maxModelBytes: 4_000 } },
+      handler: async () => ({ ok: true, output: "😀".repeat(5_000) }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(4_000);
+    // A lone high or low surrogate means the cut landed inside a pair.
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(outcome.modelText)).toBe(false);
+  });
+
+  it("keeps the tail when the budget asks for it, with the notice still trailing", async () => {
+    const tool = makeTool({
+      metadata: {
+        ...baseMetadata,
+        resultBudget: { maxModelBytes: 1_000, previewDirection: "tail" },
+      },
+      handler: async () => ({ ok: true, output: `HEAD${"x".repeat(50_000)}TAIL` }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(1_000);
+    expect(outcome.modelText).not.toContain("HEAD");
+    expect(outcome.modelText).toContain("TAIL");
+    expect(outcome.modelText.indexOf("TAIL")).toBeLessThan(outcome.modelText.indexOf("truncated"));
+  });
+
+  it("cuts the TAIL on a code-point boundary, without replacement glyphs", async () => {
+    const tool = makeTool({
+      metadata: {
+        ...baseMetadata,
+        resultBudget: { maxModelBytes: 4_000, previewDirection: "tail" },
+      },
+      handler: async () => ({ ok: true, output: "😀".repeat(5_000) }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(4_000);
+    expect(outcome.modelText).not.toContain("\uFFFD");
+  });
+
+  it("treats a declared budget as authoritative over the inline cap", async () => {
+    // maxOutputBytes is what the HANDLER may buffer, not a promise about model
+    // bytes; letting it shrink the declared budget would steal the room a
+    // formatter needs for its own framing.
+    const tool = makeTool({
+      metadata: {
+        ...baseMetadata,
+        maxOutputBytes: 1_500,
+        resultBudget: { maxModelBytes: 50_000 },
+      },
+      handler: async () => ({ ok: true, output: "x".repeat(20_000) }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(outcome.modelText).toBe("x".repeat(20_000));
+  });
+
+  it("leaves room for a formatter's own framing around an already-capped body", async () => {
+    // The skill/workflow shape: the handler caps the body at exactly
+    // maxOutputBytes and the formatter appends its own marker on top.
+    const tool = makeTool({
+      metadata: { ...baseMetadata, maxOutputBytes: 1_000 },
+      handler: async () => ({ ok: true, output: "b".repeat(1_000) }),
+      formatResultForModel: () => `${"b".repeat(1_000)}\n[body truncated at 1000 bytes]`,
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(outcome.modelText).toContain("[body truncated at 1000 bytes]");
+  });
+
+  it("caps the text of a handler that throws an enormous Error", async () => {
+    const tool = makeTool({
+      handler: async () => {
+        throw new Error("q".repeat(1_000_000));
+      },
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(outcome.status).toBe("error");
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes);
+  });
+
+  it("caps an enormous denial reason", async () => {
+    const ctx = makeCtx({
+      permissionEngine: makeEngine({ decision: "deny", reason: "r".repeat(1_000_000) }),
+    });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(outcome.status).toBe("denied");
+    expect(modelBytes(outcome)).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes);
+  });
+
+  it("e2e: hands the model the TAIL of a huge BashOutput delta", async () => {
+    const registry = new ToolRegistry();
+    registry.register(bashOutputTool);
+    const tasks = {
+      readOutput: () => ({
+        snapshot: {
+          taskId: "t1",
+          status: "running",
+          exitCode: null,
+          outputTruncated: false,
+          startedAt: 0,
+          command: "build",
+        },
+        newOutput: `FIRST-LINE\n${"noise\n".repeat(100_000)}LAST-LINE`,
+      }),
+    } as unknown as BackgroundTaskPort;
+    const ctx = makeCtx({ registry: makeRegistry({ BashOutput: bashOutputTool }), tasks });
+
+    const outcome = await executeToolCall(ctx, {
+      id: "bo-1",
+      name: "BashOutput",
+      input: { task_id: "t1" },
+    });
+
+    expect(outcome.status).toBe("success");
+    expect(outcome.modelText).toContain("LAST-LINE");
+    expect(outcome.modelText).not.toContain("FIRST-LINE");
+  });
+
+  it("leaves a result that fits the budget byte-identical", async () => {
+    const tool = makeTool({
+      metadata: { ...baseMetadata, resultBudget: { maxModelBytes: 10_000 } },
+      handler: async () => ({ ok: true, output: "small enough" }),
+    });
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: tool }) });
+    const outcome = await executeToolCall(ctx, call());
+
+    expect(outcome.modelText).toBe("small enough");
   });
 });

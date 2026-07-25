@@ -30,6 +30,11 @@ export interface ReadOutput {
   content: string;
   totalLines: number;
   truncated: boolean;
+  /**
+   * Set when the token cap cut the view short (TASK.93 §4): tells the model how
+   * much it got and the exact offset/limit that continues from there.
+   */
+  notice?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -24,7 +24,12 @@ import { fileURLToPath } from "node:url";
 import { discoverPlugins } from "./discovery.js";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpHttpServerSpec, McpStdioServerSpec } from "../ports/mcp.js";
-import { MAX_PLUGINS, MCP_CALL_TIMEOUT_MS, MCP_RESULT_MAX_BYTES } from "../types/config.js";
+import {
+  MAX_PLUGINS,
+  MCP_CALL_TIMEOUT_MS,
+  MCP_RESULT_MAX_BYTES,
+  MCP_RESULT_MAX_MODEL_BYTES,
+} from "../types/config.js";
 import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import { NodeMcpTransportFactory, NodeStdioMcpTransport } from "../adapters/node/node-mcp-transport.js";
 import type { McpServerSpec, McpTransportFactory, McpWireTransport } from "../ports/mcp.js";
@@ -523,6 +528,8 @@ describe("discoverPlugins — real integration (tmpdir manifest + real fixture-s
         sideEffectScope: "process",
         timeoutMs: MCP_CALL_TIMEOUT_MS,
         maxOutputBytes: MCP_RESULT_MAX_BYTES,
+        // TASK.93: the model budget is tighter than the inline cap above.
+        resultBudget: { maxModelBytes: MCP_RESULT_MAX_MODEL_BYTES },
       };
       expect(echoTool!.metadata).toEqual(expectedMetadata);
 

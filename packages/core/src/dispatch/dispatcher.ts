@@ -43,8 +43,9 @@ import type { MediaCapabilityPort } from "../ports/media.js";
 import type { WorktreeControlPort } from "../ports/worktrees.js";
 import type { TurnCheckpointControl } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { DISPATCH_TIMEOUT_GRACE_MS } from "../types/config.js";
+import { DEFAULT_TOOL_RESULT_BUDGET, DISPATCH_TIMEOUT_GRACE_MS } from "../types/config.js";
 import { linkAbortSignal, raceWithTimeout } from "../util/abort.js";
+import { applyResultBudget, type ResultPreviewDirection } from "../util/result-budget.js";
 
 export interface DispatchContext {
   registry: ToolRegistry;
@@ -188,7 +189,10 @@ export async function executeToolCall(
         { signal: parentSignal },
       );
       if (hookResult.permissionDecision === "deny") {
-        return outcome("denied", hookResult.reason ?? `Blocked by a PreToolUse hook: ${toolName}.`);
+        return outcome(
+          "denied",
+          budgetExternalText(hookResult.reason ?? `Blocked by a PreToolUse hook: ${toolName}.`),
+        );
       }
       if (hookResult.updatedInput !== undefined) {
         const revalidated = tool.inputSchema.safeParse(hookResult.updatedInput);
@@ -221,7 +225,7 @@ export async function executeToolCall(
       }
 
       if (decision === "deny") {
-        return outcome("denied", denyReason ?? `Permission denied for ${toolName}.`);
+        return outcome("denied", budgetExternalText(denyReason ?? `Permission denied for ${toolName}.`));
       }
       if (decision === "ask") {
 
@@ -229,7 +233,10 @@ export async function executeToolCall(
           signal: parentSignal,
         });
         if (broker.behavior === "deny") {
-          return outcome("denied", broker.reason || `Permission denied for ${toolName}.`);
+          return outcome(
+            "denied",
+            budgetExternalText(broker.reason || `Permission denied for ${toolName}.`),
+          );
         }
         if (broker.updatedInput !== undefined) {
           const revalidated = tool.inputSchema.safeParse(broker.updatedInput);
@@ -313,7 +320,7 @@ export async function executeToolCall(
 
         if (metadata.terminalControl === true) {
           if (result.ok) {
-            return outcome("success", formatModelText(tool, result), result);
+            return outcome("success", formatModelText(tool, metadata, result), result);
           }
           if (parentSignal?.aborted) {
             return outcome("cancelled", `Tool ${toolName} was cancelled.`, result);
@@ -325,7 +332,7 @@ export async function executeToolCall(
         // B(2): the handler's own failure classification wins deterministically, so
         // a Bash timeout/cancel keeps its captured stdout/stderr on the outcome.
         const status: ToolCallStatus = result.ok ? "success" : (result.errorKind ?? "error");
-        return outcome(status, formatModelText(tool, result), result);
+        return outcome(status, formatModelText(tool, metadata, result), result);
       } catch (error) {
         if (parentSignal?.aborted) {
           return outcome("cancelled", `Tool ${toolName} was cancelled.`);
@@ -334,7 +341,7 @@ export async function executeToolCall(
           return outcome("timed_out", `Tool ${toolName} timed out after ${timeoutMs}ms.`);
         }
         if (controller.signal.aborted) return outcome("cancelled", `Tool ${toolName} was cancelled.`);
-        return outcome("error", `Tool ${toolName} threw: ${errorMessage(error)}`);
+        return outcome("error", budgetExternalText(`Tool ${toolName} threw: ${errorMessage(error)}`));
       } finally {
         dispose();
       }
@@ -344,7 +351,10 @@ export async function executeToolCall(
       if (parentSignal?.aborted) {
         return outcome("cancelled", `Tool ${toolName} was cancelled.`);
       }
-      return outcome("error", `Tool ${toolName} dispatch failed: ${errorMessage(error)}`);
+      return outcome(
+        "error",
+        budgetExternalText(`Tool ${toolName} dispatch failed: ${errorMessage(error)}`),
+      );
     }
   };
 
@@ -395,7 +405,40 @@ function resolveTimeoutMs(metadata: ToolMetadata, input: unknown): number {
   return timeoutMs;
 }
 
-function formatModelText(tool: AnyToolDefinition, result: ToolResult): string {
+/**
+ * Renders the result for the model and budgets it. The budget is applied HERE,
+ * after every rendering branch — a tool's own formatResultForModel and the
+ * error text are subject to it exactly like the default JSON rendering, because
+ * an unbounded string is unbounded whoever produced it (TASK.93).
+ */
+function formatModelText(
+  tool: AnyToolDefinition,
+  metadata: ToolMetadata,
+  result: ToolResult,
+): string {
+  const budget = resolveResultBudget(metadata);
+  return applyResultBudget(
+    renderModelText(tool, metadata, result),
+    budget.maxModelBytes,
+    budget.previewDirection,
+  );
+}
+
+/**
+ * Budgets text the dispatcher only half-authored. A hook's or broker's denial
+ * reason and a handler's own Error message are third-party strings under no
+ * size contract, so they get the DEFAULT budget rather than the tool's — the
+ * tool's budget describes its result, not its failure to produce one.
+ */
+function budgetExternalText(text: string): string {
+  return applyResultBudget(text, DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes);
+}
+
+function renderModelText(
+  tool: AnyToolDefinition,
+  metadata: ToolMetadata,
+  result: ToolResult,
+): string {
   if (tool.formatResultForModel) {
     try {
       return tool.formatResultForModel(result);
@@ -404,10 +447,32 @@ function formatModelText(tool: AnyToolDefinition, result: ToolResult): string {
     }
   }
   if (!result.ok) {
-    return result.error ?? `Tool ${tool.metadata.name} returned an error.`;
+    return result.error ?? `Tool ${metadata.name} returned an error.`;
   }
-  const payload = result.output === undefined ? "" : stringifyOutput(result.output);
-  return capText(payload, tool.metadata.maxOutputBytes);
+  return result.output === undefined ? "" : stringifyOutput(result.output);
+}
+
+/**
+ * Effective model-visible cap: the tool's declared budget, or the default when
+ * it declares none.
+ *
+ * Deliberately NOT min()'d with metadata.maxOutputBytes, which ZCode's
+ * equivalent does. There, both numbers are declared together per tool; here
+ * maxOutputBytes predates this layer as a handler-side buffer cap, and min()
+ * only ever bites in one case — a handler that fills its buffer exactly and a
+ * formatter that then frames it (the Skill body plus its own truncation
+ * marker). Clamping there would evict the framing to no purpose: the payload is
+ * already within the inline cap by construction, so min() protects nothing.
+ */
+function resolveResultBudget(metadata: ToolMetadata): {
+  maxModelBytes: number;
+  previewDirection: ResultPreviewDirection;
+} {
+  const declared = metadata.resultBudget ?? DEFAULT_TOOL_RESULT_BUDGET;
+  return {
+    maxModelBytes: declared.maxModelBytes,
+    previewDirection: declared.previewDirection ?? "head",
+  };
 }
 
 function formatValidationError(toolName: string, error: ZodError): string {
@@ -424,11 +489,6 @@ function stringifyOutput(output: unknown): string {
   } catch {
     return String(output);
   }
-}
-
-function capText(text: string, maxBytes?: number): string {
-  if (maxBytes === undefined || text.length <= maxBytes) return text;
-  return `${text.slice(0, maxBytes)}… [truncated]`;
 }
 
 function errorMessage(error: unknown): string {
