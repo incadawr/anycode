@@ -17,6 +17,7 @@ import type { ImageAttachment } from "./images.js";
 import type { PlanModeControl } from "./permissions.js";
 import type { AgentEvent } from "./events.js";
 import type { WorkspaceTransition, WorktreeControlPort } from "../ports/worktrees.js";
+import type { ResultPreviewDirection } from "../util/result-budget.js";
 
 export type RiskLevel = "low" | "medium" | "high";
 
@@ -39,8 +40,28 @@ export interface ToolMetadata {
   timeoutMs: number;
   /** Upper bound for a per-call timeout override (e.g. the Bash `timeout` input field). */
   maxTimeoutMs?: number;
-  /** Cap on model-visible result size; larger payloads are truncated by the formatter. */
+  /**
+   * Inline cap: how much the handler itself may buffer and return (the Bash
+   * ExecutionPort request, the WebFetch body cap). It is NOT the model-visible
+   * cap — that is `resultBudget`, which the dispatcher enforces. The two are
+   * separate numbers on purpose: Bash may keep megabytes for the host while the
+   * model only ever sees the budgeted tail.
+   */
   maxOutputBytes?: number;
+  /**
+   * Model-visible result budget (TASK.93). Omitting it does NOT mean "no
+   * limit" — the dispatcher falls back to DEFAULT_TOOL_RESULT_BUDGET, so a new
+   * tool is bounded before anyone remembers to declare anything.
+   */
+  resultBudget?: ToolResultBudget;
+}
+
+/** Per-tool cap on the text a result contributes to the model's context. */
+export interface ToolResultBudget {
+  /** Hard cap in UTF-8 bytes, inclusive of the truncation notice. */
+  maxModelBytes: number;
+  /** Which end of an oversized payload survives. Default "head". */
+  previewDirection?: ResultPreviewDirection;
 }
 
 /**

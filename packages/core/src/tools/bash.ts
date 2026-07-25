@@ -1,5 +1,10 @@
 import type { ToolDefinition, ToolMetadata } from "../types/tools.js";
-import { BASH_MAX_TIMEOUT_MS, DEFAULT_TOOL_TIMEOUT_MS } from "../types/config.js";
+import {
+  BASH_EXEC_MAX_OUTPUT_BYTES,
+  BASH_MAX_TIMEOUT_MS,
+  BASH_RESULT_MAX_MODEL_BYTES,
+  DEFAULT_TOOL_TIMEOUT_MS,
+} from "../types/config.js";
 import { bashInputSchema, type BashInput, type BashOutput } from "./schemas.js";
 
 const metadata: ToolMetadata = {
@@ -13,6 +18,9 @@ const metadata: ToolMetadata = {
   needsApproval: true,
   timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
   maxTimeoutMs: BASH_MAX_TIMEOUT_MS,
+  maxOutputBytes: BASH_EXEC_MAX_OUTPUT_BYTES,
+  // A build log's verdict is its last lines, so an oversized run keeps the tail.
+  resultBudget: { maxModelBytes: BASH_RESULT_MAX_MODEL_BYTES, previewDirection: "tail" },
 };
 
 /**

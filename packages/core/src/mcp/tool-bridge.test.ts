@@ -11,6 +11,7 @@ import {
   MCP_CALL_TIMEOUT_MS,
   MCP_MAX_TOOLS_PER_SERVER,
   MCP_RESULT_MAX_BYTES,
+  MCP_RESULT_MAX_MODEL_BYTES,
   MCP_TOOL_DESCRIPTION_MAX_BYTES,
 } from "../types/config.js";
 import type { ToolContext, ToolMetadata } from "../types/tools.js";
@@ -47,6 +48,8 @@ const FROZEN_STDIO_METADATA: ToolMetadata = {
   sideEffectScope: "process",
   timeoutMs: MCP_CALL_TIMEOUT_MS,
   maxOutputBytes: MCP_RESULT_MAX_BYTES,
+  // TASK.93: the model budget is tighter than the inline cap above.
+  resultBudget: { maxModelBytes: MCP_RESULT_MAX_MODEL_BYTES },
 };
 
 describe("bridgeMcpTool — frozen metadata", () => {

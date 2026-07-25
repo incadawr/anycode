@@ -2,6 +2,7 @@
 
 import type { ImageInputOverride } from "../provider/capabilities.js";
 import type { ProviderTransport } from "../provider/catalog.js";
+import type { ToolResultBudget } from "./tools.js";
 
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 
@@ -66,6 +67,46 @@ export const DEFAULT_HOOK_TIMEOUT_MS = 60_000;
 
 /** Default cap on captured child-process output per stream. */
 export const DEFAULT_MAX_OUTPUT_BYTES = 262_144;
+
+/**
+ * Model-visible result budget applied by the dispatcher to any tool that
+ * declares no `metadata.resultBudget` (TASK.93). The point of a default is that
+ * there is no "unbounded" branch to fall into: a tool omitting the field is
+ * bounded, not exempt.
+ */
+export const DEFAULT_TOOL_RESULT_BUDGET = {
+  maxModelBytes: 100_000,
+  previewDirection: "head",
+} as const satisfies ToolResultBudget;
+
+/** Model-visible cap on a Bash result; the tail is what carries the verdict. */
+export const BASH_RESULT_MAX_MODEL_BYTES = 30_000;
+
+/** Inline cap on captured Bash output per stream — the host's buffer, not the model's. */
+export const BASH_EXEC_MAX_OUTPUT_BYTES = 1_048_576;
+
+/**
+ * Token ceiling on a single Read result (TASK.93 §4). The budget that matters
+ * for a file read is what the model is charged, not what the file weighs.
+ */
+export const READ_MAX_TOKENS = 25_000;
+
+/**
+ * Share of READ_MAX_TOKENS a partial view targets. The headroom absorbs the
+ * continuation notice and the line numbering a renderer may add.
+ */
+export const READ_PARTIAL_VIEW_RATIO = 0.85;
+
+/**
+ * Byte ceiling on the content of one Read result. Sits under
+ * DEFAULT_TOOL_RESULT_BUDGET with room for the JSON framing and the
+ * continuation notice, so a partial view is never cut a second time by the
+ * dispatcher's budget.
+ */
+export const READ_CONTENT_MAX_BYTES = 90_000;
+
+/** Model-visible cap on a bridged MCP result (the inline cap is MCP_RESULT_MAX_BYTES). */
+export const MCP_RESULT_MAX_MODEL_BYTES = 50_000;
 
 // ---------------------------------------------------------------------------
 // Phase 1 constants (design §2.13)
