@@ -175,6 +175,31 @@ type Pending = {
 };
 
 /**
+ * macOS GUI PATH augmentation (byte-mirror of main/codex-doctor.ts's
+ * `augmentPathForGui`, duplicated for the same host->main-independence reason
+ * as the rest of this file). An app launched from Finder/Dock inherits the
+ * launchd default PATH — never the user's login-shell PATH — so a
+ * node-shebang CLI (the npm `codex` shim, `#!/usr/bin/env node`) dies with
+ * exit 127 ("env: node: No such file or directory") even though the same
+ * spawn succeeds in a terminal. Appending the well-known install prefixes
+ * after the inherited PATH keeps a user-set PATH first (it always wins)
+ * while giving `/usr/bin/env node` somewhere to resolve from.
+ */
+export function augmentCodexPathForGui(pathValue: string | undefined, platform = process.platform): string {
+  if (platform === "win32") {
+    return pathValue ?? "";
+  }
+  const wellKnown = ["/usr/local/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin"];
+  const entries = (pathValue ?? "").split(":").filter((entry) => entry !== "");
+  for (const candidate of wellKnown) {
+    if (!entries.includes(candidate)) {
+      entries.push(candidate);
+    }
+  }
+  return entries.join(":");
+}
+
+/**
  * Explicit child env custody: no ambient spread, especially no ANYCODE_* secrets.
  * `codexHome` (codex-profiles cut §2.6.2) is assigned LAST, after the
  * passthrough list, so a selected profile's home always beats an ambient
@@ -200,6 +225,7 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
+  env.PATH = augmentCodexPathForGui(env.PATH, platform);
   if (codexHome !== undefined) env.CODEX_HOME = codexHome;
   return env;
 }

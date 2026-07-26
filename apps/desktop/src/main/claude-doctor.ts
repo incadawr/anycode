@@ -27,6 +27,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
 import { checkClaudeBinaryPathTrust } from "./claude-binary.js";
+import { augmentPathForGui } from "./codex-doctor.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
 import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 
@@ -135,6 +136,10 @@ export function buildClaudeDoctorChildEnv(
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
+  // Same GUI-launch PATH fix as the Codex doctor: the npm `claude` shim is a
+  // node-shebang script too, so a Finder-launched probe hits the identical
+  // exit-127 without the well-known prefixes appended.
+  env.PATH = augmentPathForGui(env.PATH, platform);
   // Ambient by default (owner pivot): omitting `profileDir` sets no
   // `CLAUDE_CONFIG_DIR` key at all, so the probe diagnoses the SAME
   // `~/.claude` the user's own terminal is signed into. An explicit

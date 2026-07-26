@@ -1,44 +1,62 @@
 # AnyCode
 
-AnyCode is an open desktop client for AI coding agents. It provides a single
-workspace UI for agent sessions: transcript, tool calls, permission requests,
-files, terminal commands, context usage, MCP servers, skills, subagents, and
-Git review.
+**One desktop workspace over several AI coding agents.** Run a session on the
+Claude Code CLI, on the Codex CLI, or on AnyCode's own multi-provider agent
+loop — and get the same workspace either way: transcript, tool calls,
+permission prompts, file actions, terminal, context usage, MCP servers, skills,
+subagents, and Git review.
 
-## Status
+AnyCode is not another agent — it is the shell around the agents you already run.
 
-AnyCode is at **0.0.1 Alpha**. APIs, storage, and UI may change without
-backward-compatibility guarantees.
-
-Manual end-to-end validation has so far covered only Z.AI (GLM). Anthropic and
-custom Anthropic-compatible endpoints are supported in the configuration model,
-but require further practical validation before they are release-ready.
-
-## Demo
+**Bring your own agent.** A profile launches an agent CLI you already installed
+and are entitled to use, under your own account and your own provider's terms.
+AnyCode neither stores nor proxies its credentials — the process runs on your
+machine.
 
 ![AnyCode showing an agent exploring and summarizing a codebase](docs/assets/anycode-demo.png)
 
+## Engine profiles
+
+| Profile | What runs the session | What it adds |
+|---|---|---|
+| **Claude Code** | The official Claude Code CLI, headless stream | Image attachments, reasoning effort, context meter, permission modes |
+| **Codex** | The OpenAI Codex CLI over its `app-server` protocol | Account profiles, quotas and plan panel, session import, managed binary |
+| **Native** | AnyCode's own agent loop | Anthropic, Z.AI (GLM), OpenAI, OpenRouter, DeepSeek, Moonshot, Kimi, and any OpenAI- or Anthropic-compatible endpoint, local ones included |
+
+Capabilities follow the engine. Each profile exposes what its backend actually
+supports, and an action the backend cannot perform is disabled rather than shown
+as working.
+
+Both CLI profiles are pinned against recorded protocol fixtures: the adapters
+have to stay in sync with the recorded streams, so a change on our side that
+drops or invents a wire message fails the build rather than surfacing as a
+broken session. Re-checking a pin against a freshly released CLI is a separate
+opt-in run against the real binary, not part of the default suite.
+
+## Status
+
+AnyCode is **0.0.7, alpha**. Storage, APIs, and UI may change without
+backward-compatibility guarantees, and alpha builds are unsigned — signing
+arrives with the beta.
+
+How far validation has gone: the Codex and Claude Code profiles are covered by
+protocol fixtures and live smoke runs. On the Native profile, end-to-end use has
+covered Z.AI (GLM) and Kimi; the remaining providers are supported by the
+configuration model but have seen less practical use.
+
 ## Download
 
-Installers for macOS, Windows, and Linux are published on the
+Installers for macOS, Windows, and Linux are on the
 [Releases](https://github.com/incadawr/anycode/releases) page.
 
-Alpha builds are not code-signed; signing arrives with the beta. Until then the
-operating system asks you to confirm the first launch:
+Because alpha builds are unsigned, the first launch needs one confirmation:
 
 - **Windows** — SmartScreen reports an unknown publisher: **More info → Run
   anyway**.
 - **macOS** — the first launch is refused: open **System Settings → Privacy &
   Security**, find AnyCode near the bottom, and press **Open Anyway**.
 
-## Repository layout
-
-- `apps/desktop` — Electron desktop application.
-- `apps/cli` — command-line interface.
-- `packages/core` — agent loop and shared platform logic.
-- `docs/development` — public development, automation, and release guidance.
-
-## Getting started
+## Getting started from source
 
 Requirements: Node.js 22 or newer and pnpm 10.
 
@@ -47,9 +65,8 @@ pnpm install --frozen-lockfile
 pnpm --filter @anycode/desktop dev
 ```
 
-Configure a provider in the application, or supply the relevant environment
-variables for local development, such as `ANYCODE_API_KEY`, `ANYCODE_MODEL`,
-and `ANYCODE_BASE_URL`.
+Configure a provider in the application, or, for local development, supply
+`ANYCODE_API_KEY`, `ANYCODE_MODEL`, and `ANYCODE_BASE_URL`.
 
 ## Verification
 
@@ -64,15 +81,20 @@ in [Automation smoke](docs/development/automation-smoke.md). See the
 [release policy](docs/development/release.md) for versioning and release
 procedure, and [CHANGELOG.md](CHANGELOG.md) for user-facing changes.
 
+## Repository layout
+
+- `apps/desktop` — the Electron application.
+- `apps/cli` — the command-line interface.
+- `packages/core` — the agent loop and shared platform logic.
+- `docs/development` — public development, automation, and release guidance.
+
 ## Roadmap and contribution guidance
 
-[ROADMAP.md](ROADMAP.md) describes direction and planned harness profiles.
-Repository conventions for agents are in [AGENTS.md](AGENTS.md).
+[ROADMAP.md](ROADMAP.md) describes the direction. Repository conventions for
+agents are in [AGENTS.md](AGENTS.md).
 
-## Contributing
-
-Contributions and feedback are welcome. Please read
-[CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+Contributions and feedback are welcome — please read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or a pull request.
 For security vulnerabilities, use the private reporting process in
 [SECURITY.md](SECURITY.md).
 

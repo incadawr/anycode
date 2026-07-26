@@ -66,6 +66,31 @@ function parseCodexVersion(output: string): ParsedCodexVersion | null {
 }
 
 /**
+ * macOS GUI PATH augmentation. An app launched from Finder/Dock inherits the
+ * launchd default PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — never the user's
+ * login-shell PATH — so a node-shebang CLI (`#!/usr/bin/env node`, exactly
+ * what the npm `codex` shim is) dies with exit 127 ("env: node: No such file
+ * or directory") even though the same probe succeeds in a terminal. Appending
+ * the well-known install prefixes after the inherited PATH fixes the GUI
+ * spawn without shadowing anything the parent already resolved: a PATH the
+ * user set themselves always wins because it comes first. POSIX-only —
+ * Windows resolves `node.exe` via its own loader search, not a `node` shim.
+ */
+export function augmentPathForGui(pathValue: string | undefined, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") {
+    return pathValue ?? "";
+  }
+  const wellKnown = ["/usr/local/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin"];
+  const entries = (pathValue ?? "").split(":").filter((entry) => entry !== "");
+  for (const candidate of wellKnown) {
+    if (!entries.includes(candidate)) {
+      entries.push(candidate);
+    }
+  }
+  return entries.join(":");
+}
+
+/**
  * Explicit child env allowlist — mirrors `buildCodexChildEnv` in
  * host/engines/codex/app-server-client.ts (duplicated for the same host->main
  * reason as the rest of this file). Never spreads the doctor's own
@@ -91,6 +116,7 @@ export function buildDoctorChildEnv(source: NodeJS.ProcessEnv, platform: NodeJS.
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
+  env.PATH = augmentPathForGui(env.PATH, platform);
   return env;
 }
 
