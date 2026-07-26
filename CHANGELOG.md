@@ -5,6 +5,33 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.7] — 2026-07-26
+
+### Fixed
+
+- A tool could send an unlimited amount of text to the model. Reading a large
+  file or running a command with megabytes of output put the whole payload into
+  the request, which burned through the context window in a single step and, on
+  providers that enforce a hard context limit, ended the session with an
+  authentication error instead of an answer. Every tool result now passes a
+  size budget on its way to the model — including results from custom
+  formatters, from MCP servers, and from failures, none of which were covered
+  before. Tools that declare no budget of their own get a safe default, so a
+  tool added tomorrow cannot reopen the hole.
+- `Read` no longer pulls an entire file into the context. A file over the
+  per-read limit comes back as a partial view with the exact offset and limit
+  needed to continue, and a request for an explicit range that does not fit
+  fails loudly instead of quietly returning less than was asked for.
+- Command output is now kept from the end rather than the beginning: the tail
+  of a build log is where the error is.
+- The Codex and Claude Code engines now start when AnyCode itself was launched
+  from Finder or the Dock. An application opened that way inherits the system's
+  default `PATH` rather than the one from your shell, so the `codex` and
+  `claude` launchers — scripts that resolve `node` through the environment —
+  failed with exit code 127, while the very same setup worked when AnyCode was
+  started from a terminal. The usual install locations are now appended to the
+  inherited `PATH`; a `PATH` you set yourself still takes precedence.
+
 ## [0.0.6] — 2026-07-25
 
 ### Added
