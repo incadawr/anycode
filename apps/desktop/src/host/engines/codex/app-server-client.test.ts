@@ -352,7 +352,14 @@ describe("AppServerClient", () => {
       ANYCODE_API_KEY: "must-not-pass",
       UNRELATED_SECRET: "must-not-pass",
     });
-    expect(env).toMatchObject({ HOME: "/home/test", PATH: "/bin", CODEX_HOME: "/codex", HTTPS_PROXY: "https://proxy" });
+    // PATH gains the well-known GUI-launch prefixes (augmentCodexPathForGui);
+    // the rest of the allowlist projection is byte-identical.
+    expect(env).toMatchObject({
+      HOME: "/home/test",
+      PATH: `/bin${process.platform === "win32" ? "" : ":/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin"}`,
+      CODEX_HOME: "/codex",
+      HTTPS_PROXY: "https://proxy",
+    });
     expect(env.ANYCODE_API_KEY).toBeUndefined();
     expect(env.UNRELATED_SECRET).toBeUndefined();
 

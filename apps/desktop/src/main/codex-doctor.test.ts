@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { CodexRpcClient, buildDoctorChildEnv, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
+import { CodexRpcClient, augmentPathForGui, buildDoctorChildEnv, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
 import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
 import type { CodexSupportManifest } from "../shared/codex-support.js";
 import type { ResolvedCodexProfile } from "./codex-profiles.js";
@@ -74,7 +74,7 @@ describe("buildDoctorChildEnv", () => {
       "darwin",
     );
     expect(env.HOME).toBe("/home/dev");
-    expect(env.PATH).toBe("/usr/bin");
+    expect(env.PATH).toBe("/usr/bin:/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin");
     expect(env.ANYCODE_API_KEY).toBeUndefined();
     expect(env.RANDOM_VAR).toBeUndefined();
   });
@@ -95,6 +95,35 @@ describe("buildDoctorChildEnv", () => {
     expect(env.PATH).toBe("C:\\tools");
     expect(env.HOME).toBeUndefined();
     expect(env.ANYCODE_API_KEY).toBeUndefined();
+  });
+
+  it("appends well-known prefixes after an inherited PATH without duplicating them", () => {
+    const env = buildDoctorChildEnv({ PATH: "/usr/local/bin:/usr/bin" }, "darwin");
+    expect(env.PATH).toBe("/usr/local/bin:/usr/bin:/opt/homebrew/bin:/opt/homebrew/sbin");
+  });
+
+  it("synthesises the well-known prefixes when the GUI launch left PATH unset", () => {
+    const env = buildDoctorChildEnv({}, "darwin");
+    expect(env.PATH).toBe("/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin");
+  });
+});
+
+describe("augmentPathForGui", () => {
+  it("appends missing prefixes, preserving inherited order", () => {
+    expect(augmentPathForGui("/usr/bin:/bin", "darwin")).toBe(
+      "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin",
+    );
+  });
+
+  it("never shadows a user-set prefix — it stays where the user put it", () => {
+    expect(augmentPathForGui("/opt/homebrew/bin:/usr/bin", "darwin")).toBe(
+      "/opt/homebrew/bin:/usr/bin:/usr/local/bin:/opt/homebrew/sbin",
+    );
+  });
+
+  it("is a byte-identical passthrough on win32 (no node-shim shebang there)", () => {
+    expect(augmentPathForGui("C:\\tools", "win32")).toBe("C:\\tools");
+    expect(augmentPathForGui(undefined, "win32")).toBe("");
   });
 });
 
