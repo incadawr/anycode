@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
 
-import { discoverAgentProfiles, type AgentProfileRoot } from "./profiles.js";
+import { discoverAgentProfiles, parseAgentProfileMd, type AgentProfileRoot } from "./profiles.js";
 import { PERSONAS } from "./personas.js";
 import { AGENT_PROFILE_PROMPT_MAX_BYTES, MAX_AGENT_PROFILES } from "../types/config.js";
 import type { FileStat, FileSystemPort } from "../ports/file-system.js";
@@ -338,5 +338,65 @@ describe("discoverAgentProfiles — precedence & caps", () => {
     // The alphabetically-first MAX names are admitted; the last two overflow.
     expect(profiles.map((p) => p.name)).not.toContain("p32");
     expect(profiles.map((p) => p.name)).not.toContain("p33");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `model:` frontmatter. Absent/blank ⇒ inherit the parent (the pre-field
+// behaviour, byte-for-byte); malformed ⇒ fatal, because a profile that asks for
+// one model and silently runs on another is worse than a profile that is loudly
+// ignored.
+
+describe("profile `model:` frontmatter", () => {
+  function parseOk(raw: string, fallback = "reviewer") {
+    const result = parseAgentProfileMd(raw, fallback);
+    if ("error" in result) {
+      throw new Error(`expected ok, got error ${result.error.kind}`);
+    }
+    return result.ok;
+  }
+
+  it("carries a well-formed model through the parse", () => {
+    const parsed = parseOk("---\nname: reviewer\ndescription: d\nmodel: claude-opus-5\n---\nBODY");
+
+    expect(parsed.model).toBe("claude-opus-5");
+  });
+
+  it("accepts the id vocabularies real hosts use (dots, slashes, colons)", () => {
+    for (const id of ["gpt-5.6-sol", "anthropic/claude-3", "k3", "vendor:model_v2"]) {
+      const parsed = parseOk(`---\nname: reviewer\ndescription: d\nmodel: ${id}\n---\nBODY`);
+      expect(parsed.model).toBe(id);
+    }
+  });
+
+  it("leaves model undefined when the line is absent or blank — inherit the parent", () => {
+    expect(parseOk("---\nname: reviewer\ndescription: d\n---\nBODY").model).toBeUndefined();
+    expect(parseOk("---\nname: reviewer\ndescription: d\nmodel:   \n---\nBODY").model).toBeUndefined();
+  });
+
+  it("refuses a malformed model rather than dropping the field", () => {
+    const result = parseAgentProfileMd(
+      "---\nname: reviewer\ndescription: d\nmodel: the fast one please\n---\nBODY",
+      "reviewer",
+    );
+
+    expect("error" in result && result.error).toEqual({
+      kind: "bad_model",
+      name: "reviewer",
+      model: "the fast one please",
+    });
+  });
+
+  it("discovery attaches the model to the persona and reports a malformed one as a problem", async () => {
+    const good = "---\nname: good\ndescription: d\nmodel: claude-opus-5\n---\nBODY";
+    const bad = "---\nname: bad\ndescription: d\nmodel: not a model id\n---\nBODY";
+    const fs = new FakeFs({ [WS]: { "good.md": good, "bad.md": bad } });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+
+    expect(profiles.map((p) => [p.name, p.model])).toEqual([["good", "claude-opus-5"]]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("bad.md");
+    expect(problems[0]).toContain("not a model id");
   });
 });

@@ -38,7 +38,10 @@ export interface SubagentOutcome {
 
 /** Coarse progress events bridged into the parent stream as subagent_* AgentEvents (design §3.3). */
 export type SubagentProgress =
-  | { kind: "start"; agentType: string; description: string }
+  // `model` is the RESOLVED id the child actually runs on (request override, else
+  // the profile's `model:`). Absent means the child inherited the parent's port —
+  // the renderer shows a model pill only when the child really differs.
+  | { kind: "start"; agentType: string; description: string; model?: string }
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   // Per-child-tool activity (slice P7.18/F16b): one bounded one-liner per child
   // tool call for the renderer's live feed. `summary` is a pre-capped, sanitized

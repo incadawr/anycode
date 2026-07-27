@@ -703,10 +703,11 @@ function fsWith(files: Record<string, string>): FileSystemPort {
 /** Discovers a single md-profile and returns its PersonaDefinition. */
 async function makeProfile(
   name: string,
-  opts: { body: string; tools?: readonly string[] },
+  opts: { body: string; tools?: readonly string[]; model?: string },
 ): Promise<PersonaDefinition> {
   const lines = [`name: ${name}`, "description: test profile"];
   if (opts.tools) lines.push(`tools: ${opts.tools.join(", ")}`);
+  if (opts.model) lines.push(`model: ${opts.model}`);
   const content = `---\n${lines.join("\n")}\n---\n${opts.body}`;
   const { profiles } = await discoverAgentProfiles(fsWith({ [`${name}.md`]: content }), PROFILE_ROOTS);
   const persona = profiles[0];
@@ -1231,4 +1232,102 @@ describe("subagent activity feed (slice P7.18/F16b)", () => {
       expect(activity[0]).toEqual({ kind: "tool", toolName: "TodoRead", summary: "" });
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Profile-declared model (`model:` frontmatter). Precedence is request >
+// profile > inherit-parent; a host with no resolver refuses honestly rather
+// than running the child on a model its author did not ask for.
+
+describe("profile-declared model", () => {
+  it("runs the child on the profile's model when the request names none", async () => {
+    const persona = await makeProfile("reviewer", { body: "REVIEWER", model: "profile-model" });
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const profileModel = new ScriptedModelPort(() => textStep("profile-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      profiles: [persona],
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return profileModel;
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("profile-report");
+    expect(resolved).toEqual(["profile-model"]);
+    expect(parentModel.calls).toBe(0);
+  });
+
+  it("an explicit request model outranks the profile's own", async () => {
+    const persona = await makeProfile("reviewer", { body: "REVIEWER", model: "profile-model" });
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [persona],
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return new ScriptedModelPort(() => textStep("resolved"));
+      },
+    });
+
+    const outcome = await runner.run(
+      { ...REQ, agentType: "reviewer", model: "request-model" },
+      {},
+    );
+
+    expect(outcome.status).toBe("completed");
+    expect(resolved).toEqual(["request-model"]);
+  });
+
+  it("a profile without `model:` still inherits the parent's port", async () => {
+    const persona = await makeProfile("reviewer", { body: "REVIEWER" });
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    let resolverCalls = 0;
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      profiles: [persona],
+      resolveChildModelPort: () => {
+        resolverCalls += 1;
+        return new ScriptedModelPort(() => textStep("never"));
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+
+    expect(outcome.finalText).toBe("parent-report");
+    expect(resolverCalls).toBe(0);
+  });
+
+  it("names the profile (not a phantom request field) when the host has no resolver", async () => {
+    const persona = await makeProfile("reviewer", { body: "REVIEWER", model: "profile-model" });
+    const parentModel = new ScriptedModelPort(() => textStep("should never run"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      profiles: [persona],
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(
+      'Agent: agent type "reviewer" declares model "profile-model", which is not supported in this host.',
+    );
+    expect(parentModel.calls).toBe(0);
+  });
+
+  it("a resolver that rejects an unknown id becomes an error outcome, not a rejected promise", async () => {
+    const persona = await makeProfile("reviewer", { body: "REVIEWER", model: "no-such-model" });
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [persona],
+      resolveChildModelPort: (modelId) => {
+        throw new Error(`unknown model ${modelId}`);
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain("no-such-model");
+    expect(outcome.finalText).toContain("unknown model no-such-model");
+  });
 });

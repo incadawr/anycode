@@ -56,6 +56,7 @@ describe("formatSubagentCounters — running (final: null)", () => {
     const subagent: SubagentSubStatus = {
       agentType: "explore",
       description: "survey the repo",
+      model: null,
       turns: 2,
       toolCalls: 3,
       lastTool: "Grep",
@@ -74,6 +75,7 @@ describe("formatSubagentCounters — running (final: null)", () => {
       toolCalls: 1,
       lastTool: "Read",
       activity: [],
+      model: null,
       activityDropped: 0,
       final: null,
     };
@@ -88,6 +90,7 @@ describe("formatSubagentCounters — running (final: null)", () => {
       toolCalls: 0,
       lastTool: null,
       activity: [],
+      model: null,
       activityDropped: 0,
       final: null,
     };
@@ -105,6 +108,7 @@ describe("formatSubagentCounters — settled (final set)", () => {
       toolCalls: 4,
       lastTool: "Bash",
       activity: [],
+      model: null,
       activityDropped: 0,
       final: { status: "completed", durationMs: 12345 },
     };
@@ -119,6 +123,7 @@ describe("formatSubagentCounters — settled (final set)", () => {
       toolCalls: 1,
       lastTool: null,
       activity: [],
+      model: null,
       activityDropped: 0,
       final: { status: "completed", durationMs: 500 },
     };
@@ -133,6 +138,7 @@ describe("formatSubagentCounters — settled (final set)", () => {
       toolCalls: 2,
       lastTool: null,
       activity: [],
+      model: null,
       activityDropped: 0,
     };
     expect(formatSubagentCounters({ ...base, final: { status: "max_turns", durationMs: 1000 } })).toBe(
@@ -719,6 +725,7 @@ function mkSubagent(overrides: Partial<SubagentSubStatus> = {}): SubagentSubStat
   return {
     agentType: "explore",
     description: "survey the repo",
+    model: null,
     turns: 1,
     toolCalls: 2,
     lastTool: "Read",

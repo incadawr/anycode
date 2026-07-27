@@ -285,20 +285,40 @@ export function createSubagentRunner(
       // Resolve an Agent-tool model override (slice 4.6, design §2.5) BEFORE
       // the semaphore: a host that cannot honor req.model must fail without
 
+      // Precedence: an explicit `Agent(model: …)` request outranks the profile's
+      // own `model:` frontmatter, which outranks inheriting the parent's port.
+      const requestedModel = req.model ?? persona.model;
       let childModelPort: ModelPort | undefined;
-      if (req.model !== undefined) {
+      if (requestedModel !== undefined) {
         const resolve = opts?.resolveChildModelPort;
         if (resolve === undefined) {
           return {
             status: "error",
-            finalText: `Agent: model override "${req.model}" is not supported in this host; retry without the model field.`,
+            finalText:
+              req.model !== undefined
+                ? `Agent: model override "${req.model}" is not supported in this host; retry without the model field.`
+                : `Agent: agent type "${persona.name}" declares model "${persona.model}", which is not supported in this host.`,
             truncated: false,
             turns: 0,
             toolCalls: 0,
             durationMs: Date.now() - startedAt,
           };
         }
-        childModelPort = resolve(req.model);
+        // The resolver owns the id→port mapping and may reject an id this
+        // module cannot validate (no catalogue here). The port contract is
+        // outcomes-not-throws, so a rejection becomes an error outcome.
+        try {
+          childModelPort = resolve(requestedModel);
+        } catch (error) {
+          return {
+            status: "error",
+            finalText: `Agent: model "${requestedModel}" could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
+            truncated: false,
+            turns: 0,
+            toolCalls: 0,
+            durationMs: Date.now() - startedAt,
+          };
+        }
       }
 
       // Abort-aware semaphore wait: a queued child that is cancelled returns
@@ -310,7 +330,12 @@ export function createSubagentRunner(
       }
 
       try {
-        onProgress?.({ kind: "start", agentType: persona.name, description: req.description });
+        onProgress?.({
+          kind: "start",
+          agentType: persona.name,
+          description: req.description,
+          ...(requestedModel !== undefined ? { model: requestedModel } : {}),
+        });
 
         const loop = new AgentLoop(
           buildChildConfig(parent, persona, req, {

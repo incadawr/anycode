@@ -1598,9 +1598,20 @@ async function boot(): Promise<void> {
     // env/memorySection (design slice-3.6-cut.md §2.4/§6) thread the same
     // session-static facts + AGENTS.md memory into every child's harness
     // prelude, so a subagent confabulates tools no more than the parent does.
+    //
+    // resolveChildModelPort is the SAME modelPortFactory the mid-session
+    // `/model` switch uses, so an `Agent(model: …)` override builds a child port
+    // from this session's provider/transport/key rather than failing closed.
+    // Without it the runner returns "model override is not supported in this
+    // host" — the CLI wired this from the start, the desktop host did not.
     const loop = new AgentLoop(
       withWorkflows(
-        withSubagents(config, { profiles: ext.profiles, env: systemPromptEnv, memorySection: ext.memorySection }),
+        withSubagents(config, {
+          profiles: ext.profiles,
+          env: systemPromptEnv,
+          memorySection: ext.memorySection,
+          resolveChildModelPort: modelPortFactory,
+        }),
         ext.workflows,
       ),
     );

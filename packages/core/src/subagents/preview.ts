@@ -76,6 +76,11 @@ export interface SubagentProfileDraft {
   tools?: readonly string[];
   /** Raw child systemPrompt body (the loader caps it + placeholders an empty one). */
   body: string;
+  /**
+   * Model id children of this profile run on. Absent/empty ⇒ inherit the
+   * parent's model, which is what every profile did before the field existed.
+   */
+  model?: string;
 }
 
 export interface ProfilePreview {
