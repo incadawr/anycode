@@ -18,7 +18,12 @@ import { join } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { discoverPlugins } from "../plugins/discovery.js";
 import { MAX_AGENT_PROFILES } from "../types/config.js";
-import { AGENT_PROFILE_NAME_RE, parseAgentProfileMd, type AgentProfileRoot } from "./profiles.js";
+import {
+  AGENT_PROFILE_MODEL_RE,
+  AGENT_PROFILE_NAME_RE,
+  parseAgentProfileMd,
+  type AgentProfileRoot,
+} from "./profiles.js";
 import { isUnderOwnRootsResolved } from "../util/path-containment.js";
 
 /** `<baseDir>/<relative>`, tolerating a trailing separator on baseDir (mirrors bootstrap.subdir). */
@@ -77,6 +82,8 @@ export interface AgentProfileAdminRow {
   path: string;
   /** UTF-8 byte length of the (capped) child systemPrompt body. */
   bodyBytes: number;
+  /** Frontmatter `model:` — absent means children inherit the parent's model. */
+  model?: string;
 }
 
 export interface AgentProfileAdminScanResult {
@@ -235,11 +242,20 @@ export async function scanAgentProfilesAdmin(
             claimed.add(err.name);
             problems.push(`Agent profile ${path}: missing "description" — ignored`);
             break;
+          case "bad_model":
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: model "${err.model}" must match ${AGENT_PROFILE_MODEL_RE.source} — ignored`,
+            );
+            break;
         }
         continue;
       }
 
-      const { name, description, tools, toolsExplicit, body } = result.ok;
+      const { name, description, tools, toolsExplicit, body, model } = result.ok;
       if (claimed.has(name)) {
         continue;
       }
@@ -262,6 +278,7 @@ export async function scanAgentProfilesAdmin(
         sourceKind: sourceKindOf(root.source),
         path,
         bodyBytes: Buffer.byteLength(body, "utf8"),
+        ...(model !== undefined ? { model } : {}),
       });
     }
   }

@@ -48,6 +48,15 @@ export interface AgentProfilesResult {
 /** Profile/skill name shape (design §2.10); the {0,63} tail also caps length at 64. */
 export const AGENT_PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
+/**
+ * Frontmatter `model:` shape. Deliberately permissive about the VOCABULARY —
+ * provider ids differ per host (`claude-opus-5`, `gpt-5.6-sol`, `kimi-k2.7`,
+ * `anthropic/claude-3`) and this module has no catalogue — but strict about the
+ * FORM, so a stray sentence or a multi-word phrase is refused at parse time
+ * instead of reaching the host as a nonsense model id.
+ */
+export const AGENT_PROFILE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
 /** One per-file parse of a profile `*.md`, ready for both discovery and admin. */
 export interface ParsedAgentProfile {
   /** Resolved name (frontmatter `name`, else the fallback), regex-valid, not reserved. */
@@ -65,6 +74,14 @@ export interface ParsedAgentProfile {
   /** Child systemPrompt: the body capped UTF-8-safe, empty → a placeholder. */
   body: string;
   /**
+   * Frontmatter `model:` — the model id children of this profile run on.
+   * Absent (or blank) leaves it undefined, i.e. inherit the parent's model.
+   * The id is NOT resolved here: the parser has no model catalogue and the
+   * host owns that mapping, so an unknown id surfaces at spawn time as the
+   * runner's honest error rather than as a silent parse-time drop.
+   */
+  model?: string;
+  /**
    * Non-fatal per-file problems (path-free suffixes) — currently only explicit
    * spawn-tool requests. The caller prefixes each with `Agent profile <path>: `.
    */
@@ -81,7 +98,8 @@ export type AgentProfileParseError =
   | { kind: "frontmatter"; detail: string }
   | { kind: "bad_name"; name: string }
   | { kind: "reserved_name"; name: string }
-  | { kind: "missing_description"; name: string };
+  | { kind: "missing_description"; name: string }
+  | { kind: "bad_model"; name: string; model: string };
 
 export type ParseAgentProfileResult =
   | { ok: ParsedAgentProfile }
@@ -139,13 +157,29 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     tools = PERSONAS["general-purpose"].tools;
   }
 
+  // model: optional. Blank/absent means "inherit the parent's model" — the same
+  // thing an omitted line has always meant — so only a non-empty value is
+  // validated, and a malformed one is FATAL rather than dropped: a profile that
+  // asks for a specific model and silently runs on another is the exact
+  // dishonesty the runner's missing-resolver branch already refuses.
+  const rawModel = (parsed.fields.model ?? "").trim();
+  let model: string | undefined;
+  if (rawModel !== "") {
+    if (!AGENT_PROFILE_MODEL_RE.test(rawModel)) {
+      return { error: { kind: "bad_model", name, model: rawModel } };
+    }
+    model = rawModel;
+  }
+
   // File body = child systemPrompt (user content, capped UTF-8-safe); an empty
   // body gets a placeholder like the built-in personas.
   const capped = capUtf8Bytes(parsed.body, AGENT_PROFILE_PROMPT_MAX_BYTES);
   const body =
     capped.text.trim().length > 0 ? capped.text : `[agent profile "${name}" — empty body]`;
 
-  return { ok: { name, description, tools, toolsExplicit, body, problems } };
+  return {
+    ok: { name, description, tools, toolsExplicit, body, problems, ...(model !== undefined ? { model } : {}) },
+  };
 }
 
 function describeError(error: unknown): string {
@@ -238,11 +272,23 @@ export async function discoverAgentProfiles(
             claimed.add(err.name);
             problems.push(`Agent profile ${path}: missing "description" — ignored`);
             break;
+          case "bad_model":
+            // Same claim semantics as missing_description: the name IS claimed
+            // (validation happens after the name resolves), so a lower-precedence
+            // same-named file stays shadowed rather than silently taking over.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: model "${err.model}" must match ${AGENT_PROFILE_MODEL_RE.source} — ignored`,
+            );
+            break;
         }
         continue;
       }
 
-      const { name, description, tools, body } = result.ok;
+      const { name, description, tools, body, model } = result.ok;
 
       // Precedence dedupe: a lower source's same-named file is shadowed silently.
       if (claimed.has(name)) {
@@ -265,7 +311,13 @@ export async function discoverAgentProfiles(
         problems.push(`Agent profile ${path}: ${suffix}`);
       }
 
-      profiles.push({ name, description, tools, systemPrompt: body });
+      profiles.push({
+        name,
+        description,
+        tools,
+        systemPrompt: body,
+        ...(model !== undefined ? { model } : {}),
+      });
     }
   }
 

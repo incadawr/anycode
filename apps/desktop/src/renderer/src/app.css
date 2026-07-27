@@ -2666,6 +2666,16 @@ body {
   min-width: 0;                    /* wraps; no ellipsis — it's the human meaning */
   font-size: var(--fs-xs);  /* clause-tail register (R15 §1.F): anchor-sized, quieter by face+tier */
 }
+/* Child model id — rendered only when the child ran on a model other than the
+   parent's, so its presence alone carries the signal. Quieter than the persona
+   anchor it follows: same mono face, one tier down in colour. */
+.tool-call-subagent-model {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+  flex: none;
+}
 .tool-call-subagent-counters,
 .tool-call-workflow-counters { font-variant-numeric: tabular-nums; }  /* live digits (R13 precedent) */
 

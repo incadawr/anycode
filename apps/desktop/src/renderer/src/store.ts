@@ -158,6 +158,8 @@ export interface ToolCallSnapshot {
 export interface SubagentSubStatus {
   agentType: string;
   description: string;
+  /** Resolved child model id; null when the child inherited the parent's model. */
+  model: string | null;
   turns: number;
   toolCalls: number;
   lastTool: string | null;
@@ -1251,7 +1253,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * different/unknown turn's toolCallId (foreign events are ignored by
      * construction — the map below simply finds nothing to patch).
      */
-    function patchSubagentStart(toolCallId: string, agentType: string, description: string): void {
+    function patchSubagentStart(
+      toolCallId: string,
+      agentType: string,
+      description: string,
+      model: string | null,
+    ): void {
       flushDeltas();
       set((state) => ({
         transcript: state.transcript.map((block) =>
@@ -1261,6 +1268,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 subagent: {
                   agentType,
                   description,
+                  model,
                   turns: 0,
                   toolCalls: 0,
                   lastTool: null,
@@ -1804,7 +1812,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // envelope, keyed onto the Agent tool's own tool_call block by
         // toolCallId (patch helpers above no-op on a foreign/unmatched id). ──
         case "subagent_start":
-          patchSubagentStart(event.toolCallId, event.agentType, event.description);
+          patchSubagentStart(
+            event.toolCallId,
+            event.agentType,
+            event.description,
+            event.model ?? null,
+          );
           return;
         case "subagent_progress":
           patchSubagentProgress(event.toolCallId, event.turns, event.toolCalls, event.lastTool ?? null);

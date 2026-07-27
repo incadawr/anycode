@@ -216,3 +216,41 @@ describe("create / save / delete with containment", () => {
     await expect(stat(join(targetRoot, "summarizer.md"))).rejects.toThrow();
   });
 });
+
+describe("profile `model:` round-trip through the editor", () => {
+  it("serializes the model and re-parses it to the same value", () => {
+    const draft = { name: "reviewer", description: "d", body: "BODY", model: "claude-opus-5" };
+
+    const serialized = serializeAgentProfile(draft);
+
+    expect(serialized).toContain("model: claude-opus-5");
+    const reparsed = parseAgentProfileMd(serialized, "reviewer");
+    expect("ok" in reparsed && reparsed.ok.model).toBe("claude-opus-5");
+    expect(validateAgentProfileDraft(draft).ok).toBe(true);
+  });
+
+  it("omits the line entirely when no model is set — byte-identical to a pre-field profile", () => {
+    const withoutField = serializeAgentProfile({ name: "reviewer", description: "d", body: "BODY" });
+    const withBlank = serializeAgentProfile({
+      name: "reviewer",
+      description: "d",
+      body: "BODY",
+      model: "   ",
+    });
+
+    expect(withoutField).not.toContain("model:");
+    expect(withBlank).toBe(withoutField);
+  });
+
+  it("refuses a malformed model at save time rather than writing a file discovery would reject", () => {
+    const result = validateAgentProfileDraft({
+      name: "reviewer",
+      description: "d",
+      body: "BODY",
+      model: "the fast one",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.issues?.join(" ")).toContain("the fast one");
+  });
+});
