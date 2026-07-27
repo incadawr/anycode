@@ -2013,6 +2013,13 @@
   color: var(--success);
 }
 
+/* Model badge — only present when the profile pins a model, so its absence is
+   itself the "inherits the parent" signal. Mono, because an id reads as an id. */
+.subagents-badge-model {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
 /* Monospace `built-in:<name>` id line under a built-in card's description
    (ref-PNG §1.3, verbatim format). */
 .subagents-id-line {
