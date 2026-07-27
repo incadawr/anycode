@@ -23,7 +23,7 @@ import { isUnderOwnRootsResolved } from "../util/path-containment.js";
 import { AGENT_PROFILE_PROMPT_MAX_BYTES } from "../types/config.js";
 import { isKnownPersona } from "./personas.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
-import { AGENT_PROFILE_NAME_RE, parseAgentProfileMd } from "./profiles.js";
+import { AGENT_PROFILE_MODEL_RE, AGENT_PROFILE_NAME_RE, parseAgentProfileMd } from "./profiles.js";
 import { DEFAULT_TOOL_NAMES, type SubagentProfileDraft } from "./preview.js";
 import type { FileSystemPort } from "../ports/file-system.js";
 
@@ -91,6 +91,14 @@ export function validateAgentProfileDraft(draft: SubagentProfileDraft): Validate
     }
   }
 
+  // model: refused up front with the parser's own shape rule, so the editor
+  // cannot save a file discovery would then reject wholesale (the single-oracle
+  // invariant — what you save is what spawns).
+  const model = draft.model?.trim() ?? "";
+  if (model !== "" && !AGENT_PROFILE_MODEL_RE.test(model)) {
+    issues.push(`model "${model}" must match ${AGENT_PROFILE_MODEL_RE.source}`);
+  }
+
   // P7.21 W1-FIX #5: a whitespace-only (or empty) body would round-trip to the
   // loader's `[agent profile "…" — empty body]` placeholder, so the saved bytes
   // would NOT be the model-governing prompt. The editor refuses it up front (the
@@ -140,7 +148,8 @@ export function validateAgentProfileDraft(draft: SubagentProfileDraft): Validate
   if (
     reparsed.ok.name !== name ||
     reparsed.ok.description !== description ||
-    reparsed.ok.body !== draft.body
+    reparsed.ok.body !== draft.body ||
+    (reparsed.ok.model ?? "") !== model
   ) {
     return {
       ok: false,
@@ -166,6 +175,12 @@ export function serializeAgentProfile(draft: SubagentProfileDraft): string {
   const lines = ["---", `name: ${draft.name.trim()}`, `description: ${draft.description.trim()}`];
   if (draft.tools !== undefined && draft.tools.length > 0) {
     lines.push(`tools: ${draft.tools.join(", ")}`);
+  }
+  // An absent/blank model omits the line entirely — the same bytes the profile
+  // had before the field existed, so "inherit the parent" stays the default.
+  const model = draft.model?.trim() ?? "";
+  if (model !== "") {
+    lines.push(`model: ${model}`);
   }
   lines.push("---");
   return `${lines.join("\n")}\n${draft.body}`;

@@ -134,7 +134,14 @@ export type AgentEvent =
   // the existing agent_event envelope on the desktop wire with no protocol
   // change. The full child result arrives in the Agent tool's tool_result;
   // these carry only the toolCallId + counters (no nested stream forwarding).
-  | { type: "subagent_start"; toolCallId: string; agentType: string; description: string }
+  | {
+      type: "subagent_start";
+      toolCallId: string;
+      agentType: string;
+      description: string;
+      /** Resolved child model id; absent ⇒ the child inherited the parent's. */
+      model?: string;
+    }
   | {
       type: "subagent_progress";
       toolCallId: string;

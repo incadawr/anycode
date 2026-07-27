@@ -459,6 +459,42 @@ describe("host workflow wiring (design slice-3.4-cut.md §2.10/§6, task 3.4.5)"
   });
 });
 
+describe("host subagent model-override wiring", () => {
+  /**
+   * The shape-mirroring idiom above cannot catch a MISSING option: a fake
+   * `withSubagents` accepts whatever it is handed. `resolveChildModelPort` was
+   * absent from this call site for exactly that reason — every test passed
+   * while `Agent(model: …)` failed closed in the packaged app and worked in the
+   * CLI. So this reads the real source and pins the option by name.
+   */
+  async function readHostSource(): Promise<string> {
+    return readFile(new URL("./index.ts", import.meta.url), "utf8");
+  }
+
+  it("passes resolveChildModelPort into withSubagents, or the runner rejects every Agent(model:) call", async () => {
+    const source = await readHostSource();
+
+    // Anchored on `profiles: ext.profiles` so the doc comment near the top of
+    // index.ts — which also spells `withSubagents(config, {profiles})` — can
+    // never satisfy this assertion in place of the real call.
+    const calls = [...source.matchAll(/withSubagents\(\s*config\s*,\s*\{([\s\S]*?)\}\s*\)/g)]
+      .map((match) => match[1]!)
+      .filter((options) => options.includes("profiles: ext.profiles"));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!).toContain("resolveChildModelPort");
+  });
+
+  it("resolves the child port through the same factory the mid-session model switch uses", async () => {
+    const source = await readHostSource();
+
+    // A second, independent factory would drift from the live provider/key on
+    // the next `/model` switch; both sites must read one closure.
+    expect(source).toContain("resolveChildModelPort: modelPortFactory");
+    expect(source).toContain("modelPort.setPort(modelPortFactory(id))");
+  });
+});
+
 describe("host shutdown order — background-task reap (design slice-6.DP-2-cut.md §1.2f/§6#6)", () => {
   /**
    * Reproduces index.ts's CURRENT handleShutdown body verbatim in shape, now

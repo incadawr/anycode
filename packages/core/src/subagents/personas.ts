@@ -36,6 +36,13 @@ export interface PersonaDefinition {
    * persona's own role and expectations.
    */
   systemPrompt: string;
+  /**
+   * Default model id for children of this persona (md-profile `model:`
+   * frontmatter). An explicit `Agent(model: …)` request outranks it; absent
+   * both, the child inherits the parent's port. Built-in personas leave this
+   * undefined — they are deliberately model-agnostic.
+   */
+  model?: string;
 }
 
 /**

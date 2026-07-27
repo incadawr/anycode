@@ -87,6 +87,15 @@
   flex: none;
 }
 
+/* Child model id on the collapsed row. Follows the accent-coloured persona it
+   belongs to, one tier quieter, mono so an id reads as an id. */
+.subagent-collapsed-model {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  flex: none;
+}
+
 /* Wraps to its own full-width row below the header (the header stays a
    single flex row otherwise; :has() precedent already used in app.css). */
 .tool-call-toggle:has(.subagent-collapsed-progress) {

@@ -267,7 +267,8 @@ function WorkflowStatus({ workflow }: { workflow: WorkflowSubStatus }) {
 
 /** Sub-status region mounted below the input summary when `block.subagent` is
  *  set (Agent tool only). A flat two-line panel sharing the row atoms: glyph ·
- *  persona (mono anchor) · description, then the frozen counters line. */
+ *  persona (mono anchor) · model (only when the child ran on its own) ·
+ *  description, then the frozen counters line. */
 function SubagentStatus({ subagent }: { subagent: SubagentSubStatus }) {
   const kind = substatusKind(subagent.final);
   return (
@@ -275,6 +276,14 @@ function SubagentStatus({ subagent }: { subagent: SubagentSubStatus }) {
       <div className={`tool-call-subagent-line substatus-${kind}`}>
         <StatusGlyph kind={kind} />
         <span className="tool-call-subagent-persona">{subagent.agentType}</span>
+        {/* Absent model = inherited the parent's, which the composer already
+            shows — a pill on every card would be noise, so only a genuinely
+            different child model is labelled. */}
+        {subagent.model !== null && (
+          <span className="tool-call-subagent-model" title={`Child model: ${subagent.model}`}>
+            {subagent.model}
+          </span>
+        )}
         <span className="tool-call-subagent-desc">{subagent.description}</span>
       </div>
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
@@ -778,6 +787,11 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
             <BotIcon />
             <span className="subagent-name">SubAgent</span>
             {block.subagent && <span className="subagent-persona">{block.subagent.agentType}</span>}
+            {/* The collapsed row is the DEFAULT state, so a model that only
+                showed once expanded would be invisible in practice. */}
+            {block.subagent?.model != null && (
+              <span className="subagent-collapsed-model">{block.subagent.model}</span>
+            )}
             <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
           </span>
         ) : (
