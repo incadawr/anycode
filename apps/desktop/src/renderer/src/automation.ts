@@ -837,6 +837,8 @@ export interface SubagentsPaneRowState {
   name: string;
   sourceKind: SubagentSourceKind;
   toolsBadge: string;
+  /** The row's model badge text; "" when the profile pins no model (inherits the parent's). */
+  model: string;
   description: string;
   /** false for `builtin` and `plugin` rows — no mutation affordance rendered (design §2-D2). */
   editable: boolean;
@@ -849,6 +851,8 @@ export interface SubagentsPaneEditorState {
   description: string;
   tools: string[];
   body: string;
+  /** The Model field's raw value; "" = inherit the parent's model. */
+  model: string;
   canSave: boolean;
   error: string | null;
   issues: string[];
@@ -874,6 +878,7 @@ function blankSubagentsEditorState(): SubagentsPaneEditorState {
     description: "",
     tools: [],
     body: "",
+    model: "",
     canSave: false,
     error: null,
     issues: [],
@@ -926,12 +931,13 @@ export interface SubagentsPaneDom {
   clickEditTab(): boolean;
   /** A real `.click()` on the "Preview" tab button; `false` while unmounted. */
   clickPreviewTab(): boolean;
-  /** Current live values of the Name/Description/Body fields + the selected tool chips; `null` while unmounted. */
-  fieldValues(): { name: string; description: string; tools: string[]; body: string } | null;
+  /** Current live values of the Name/Description/Model/Body fields + the selected tool chips; `null` while unmounted. */
+  fieldValues(): { name: string; description: string; tools: string[]; body: string; model: string } | null;
   /** Native-setter + dispatched `input` event on the Name field (design §5 W4's `setNativeInputValue` discipline); `false` while unmounted. */
   setName(value: string): boolean;
   setDescription(value: string): boolean;
   setBody(value: string): boolean;
+  setModel(value: string): boolean;
   /** Clicks tool chip checkboxes until the selected set reads EXACTLY `tools` (order-insensitive); `false` while unmounted. */
   setTools(tools: readonly string[]): boolean;
   /** Whether the preview tab's own `data-subagents-preview-loading` reads `"true"`. */
@@ -1925,7 +1931,7 @@ export interface AutomationFacade {
   // mirrors `skillsDelete`'s two-click (trash icon -> confirm) discipline. ──
   subagentsPaneState(): SubagentsPaneState;
   subagentsOpenEditor(name?: string): Promise<FacadeResult>;
-  subagentsEditorSet(args: { name?: string; description?: string; tools?: string[]; body?: string }): Promise<FacadeResult>;
+  subagentsEditorSet(args: { name?: string; description?: string; tools?: string[]; body?: string; model?: string }): Promise<FacadeResult>;
   subagentsEditorPreview(): Promise<SubagentsPreviewFacadeResult>;
   subagentsEditorSave(): Promise<SubagentsEditorSaveResult>;
   subagentsDelete(name: string): Promise<FacadeResult>;
@@ -2700,6 +2706,9 @@ function realSubagentsPaneDom(): SubagentsPaneDom {
       name: li.getAttribute("data-subagent-name") ?? "",
       sourceKind: (li.getAttribute("data-subagent-source") ?? "") as SubagentSourceKind,
       toolsBadge: li.querySelector(".subagents-badge-tools")?.textContent ?? "",
+      // "" (not null) when the row pins no model — the badge is absent by
+      // construction for a profile that inherits the parent's.
+      model: li.querySelector(".subagents-badge-model")?.textContent?.trim() ?? "",
       description: li.querySelector(".mcp-row-line2")?.textContent ?? "",
       // Only a User-group row renders a `.mcp-row-controls` cell at all
       // (design §2-D2 — built-in/plugin rows render NO mutation affordance).
@@ -2718,6 +2727,9 @@ function realSubagentsPaneDom(): SubagentsPaneDom {
   }
   function descriptionInput(): HTMLInputElement | null {
     return fieldByLabel("Description")?.querySelector<HTMLInputElement>("input") ?? null;
+  }
+  function modelInput(): HTMLInputElement | null {
+    return fieldByLabel("Model")?.querySelector<HTMLInputElement>("input") ?? null;
   }
   function bodyTextarea(): HTMLTextAreaElement | null {
     return dialog()?.querySelector<HTMLTextAreaElement>(".subagents-body-textarea") ?? null;
@@ -2811,7 +2823,16 @@ function realSubagentsPaneDom(): SubagentsPaneDom {
           .filter((chip) => chip.classList.contains("subagents-tool-chip-selected"))
           .map((chip) => chip.textContent?.trim() ?? ""),
         body: bodyTextarea()?.value ?? "",
+        model: modelInput()?.value ?? "",
       };
+    },
+    setModel: (value) => {
+      const input = modelInput();
+      if (!input) {
+        return false;
+      }
+      setNativeInputValue(input, value);
+      return true;
     },
     setName: (value) => {
       const input = nameInput();
@@ -5382,6 +5403,7 @@ export function createAutomationFacade(
               description: fields?.description ?? "",
               tools: fields?.tools ?? [],
               body: fields?.body ?? "",
+              model: fields?.model ?? "",
               canSave: subagentsPaneDom.canSave(),
               error: subagentsPaneDom.errorText(),
               issues: subagentsPaneDom.issues(),
@@ -5426,11 +5448,13 @@ export function createAutomationFacade(
       description,
       tools,
       body,
+      model,
     }: {
       name?: string;
       description?: string;
       tools?: string[];
       body?: string;
+      model?: string;
     }): Promise<FacadeResult> {
       if (!subagentsPaneDom.editorOpen()) {
         return { ok: false, reason: "editor_not_open" };
@@ -5452,6 +5476,15 @@ export function createAutomationFacade(
           () => subagentsPaneDom.fieldValues()?.description === description,
           SUBAGENTS_PANE_COMMIT_DEADLINE_MS,
         );
+        if (!applied) {
+          return { ok: false, reason: "set_failed" };
+        }
+      }
+      if (model !== undefined) {
+        if (!subagentsPaneDom.setModel(model)) {
+          return { ok: false, reason: "field_not_found" };
+        }
+        const applied = await waitUntil(() => subagentsPaneDom.fieldValues()?.model === model, SUBAGENTS_PANE_COMMIT_DEADLINE_MS);
         if (!applied) {
           return { ok: false, reason: "set_failed" };
         }

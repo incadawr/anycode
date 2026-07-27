@@ -235,6 +235,15 @@ export function isValidSubagentName(name: string): boolean {
   return SUBAGENT_NAME_RE.test(name.trim());
 }
 
+/** Mirrors core's `AGENT_PROFILE_MODEL_RE` (subagents/profiles.ts) for live validation — main is still the authority. */
+export const SUBAGENT_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+/** Blank is valid: an empty model field means "inherit the parent's model". */
+export function isValidSubagentModel(model: string): boolean {
+  const trimmed = model.trim();
+  return trimmed === "" || SUBAGENT_MODEL_RE.test(trimmed);
+}
+
 /** Mirror of core's `DEFAULT_TOOL_NAMES` (subagents/preview.ts) MINUS the two spawn-locked tools (Agent/Workflow) — selecting either always fails save-time validation (non-recursion lock, design §2-D7), so the chip list never offers them. */
 export const SUBAGENT_TOOL_CHOICES: readonly string[] = [
   "Read",
@@ -264,25 +273,43 @@ export interface SubagentEditorFields {
   /** Selected tool chips; empty = "inherit all (default)" (design §4 W3). */
   tools: string[];
   body: string;
+  /**
+   * Model id children of this profile spawn on; "" = inherit the parent's.
+   * REQUIRED (not optional) so every construction site has to decide what it
+   * carries — an editor field that silently defaults to absent is how a loaded
+   * `model:` line gets erased on the next save.
+   */
+  model: string;
 }
 
 const TEMPLATE_BODY =
   "Describe this subagent's role, responsibilities, and constraints here. This text becomes its system prompt.";
 
 export function blankSubagentEditorFields(): SubagentEditorFields {
-  return { name: "", description: "", tools: [], body: TEMPLATE_BODY };
+  return { name: "", description: "", tools: [], body: TEMPLATE_BODY, model: "" };
 }
 
 export function subagentEditorFieldsFromDraft(draft: SubagentProfileDraft): SubagentEditorFields {
-  return { name: draft.name, description: draft.description, tools: draft.tools ? [...draft.tools] : [], body: draft.body };
+  return {
+    name: draft.name,
+    description: draft.description,
+    tools: draft.tools ? [...draft.tools] : [],
+    body: draft.body,
+    model: draft.model ?? "",
+  };
 }
 
 export function buildSubagentDraft(fields: SubagentEditorFields): SubagentProfileDraft {
+  const model = fields.model.trim();
   return {
     name: fields.name.trim(),
     description: fields.description.trim(),
     ...(fields.tools.length > 0 ? { tools: [...fields.tools] } : {}),
     body: fields.body,
+    // A blank field omits the key entirely, so serialization writes the exact
+    // bytes a pre-model profile had — clearing the box means "inherit again",
+    // not "write an empty model".
+    ...(model !== "" ? { model } : {}),
   };
 }
 
@@ -304,12 +331,17 @@ export function canSubmitSubagentDraft(fields: SubagentEditorFields): boolean {
   if (utf8ByteLength(fields.body) > SUBAGENT_BODY_MAX_BYTES) {
     return false;
   }
+  if (!isValidSubagentModel(fields.model)) {
+    return false;
+  }
   return true;
 }
 
 /** Dirty check for Save-disabled-until-dirty (design §4 W3) — tool-set compared as a set (order-insensitive), everything else by value. */
 export function subagentEditorFieldsEqual(a: SubagentEditorFields, b: SubagentEditorFields): boolean {
-  if (a.name !== b.name || a.description !== b.description || a.body !== b.body) {
+  // `model` participates: without it, changing ONLY the model leaves the form
+  // "clean" and Save stays disabled — the field would look editable and be inert.
+  if (a.name !== b.name || a.description !== b.description || a.body !== b.body || a.model !== b.model) {
     return false;
   }
   if (a.tools.length !== b.tools.length) {
@@ -595,6 +627,11 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
                             <span className="skills-row-name settings-mcp-name">{row.name}</span>
                             <span className={`skills-badge skills-badge-${row.sourceKind}`}>{userRowSourceBadgeLabel(row.sourceKind)}</span>
                             <span className="skills-badge subagents-badge-tools">{row.toolsBadge}</span>
+                            {row.model !== undefined && (
+                              <span className="skills-badge subagents-badge-model" title={`Children spawn on ${row.model}`}>
+                                {row.model}
+                              </span>
+                            )}
                           </div>
                           <div className="mcp-row-line2" title={row.description}>
                             {row.description}
@@ -658,6 +695,11 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
                           {row.pluginName && <span className="skills-plugin-name">{row.pluginName}</span>}
                           <span className="skills-badge skills-badge-plugin">Plugin</span>
                           <span className="skills-badge subagents-badge-tools">{row.toolsBadge}</span>
+                          {row.model !== undefined && (
+                            <span className="skills-badge subagents-badge-model" title={`Children spawn on ${row.model}`}>
+                              {row.model}
+                            </span>
+                          )}
                         </div>
                         <div className="mcp-row-line2" title={row.description}>
                           {row.description}
@@ -748,6 +790,7 @@ function SubagentEditorDialog({
   const nameTouched = fields.name.trim().length > 0;
   const nameInvalid = nameTouched && !isValidSubagentName(fields.name);
   const descriptionInvalid = fields.description.trim().length > 0 && /[\r\n]/.test(fields.description);
+  const modelInvalid = !isValidSubagentModel(fields.model);
 
   return (
     <dialog
@@ -774,6 +817,26 @@ function SubagentEditorDialog({
           <span className="settings-field-label">Description</span>
           <input className="settings-field-input" type="text" value={fields.description} onChange={(e) => set("description", e.target.value)} />
           {descriptionInvalid && <span className="skills-field-invalid">Description must be a single line.</span>}
+        </label>
+        <label className="settings-field">
+          <span className="settings-field-label">Model</span>
+          <input
+            className="settings-field-input"
+            type="text"
+            value={fields.model}
+            placeholder="Inherit the parent's model"
+            onChange={(e) => set("model", e.target.value)}
+          />
+          {modelInvalid ? (
+            <span className="skills-field-invalid">
+              A model id has no spaces — letters, numbers, and ". _ : / -" only.
+            </span>
+          ) : (
+            <span className="subagents-tools-hint">
+              Children of this subagent run on this model id, on the session's current provider. Empty = same
+              model as the parent.
+            </span>
+          )}
         </label>
 
         {mode === "create" && (
