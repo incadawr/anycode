@@ -144,6 +144,18 @@ describe("handleSubagentsRead", () => {
     expect(result.raw).toContain("You review code.");
   });
 
+  it("carries a pinned model into the draft (a dropped one is erased by the next save)", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seed(join(ws, ".anycode/agents/pinned.md"), md({ name: "pinned", description: "Pinned", model: "k3" }, "body"));
+    const deps = makeDeps(ws, home);
+
+    const result = await handleSubagentsRead(deps, { tabId: TAB_ID, name: "pinned", sourceKind: "project" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.draft.model).toBe("k3");
+  });
+
   it("never lists or reads a symlinked profile that escapes the catalog (#2)", async () => {
     const ws = await tmp();
     const home = await tmp();
@@ -216,6 +228,55 @@ describe("handleSubagentsSave", () => {
     const onDisk = await readFile(path, "utf-8");
     expect(onDisk).toContain("new body");
     expect(onDisk).toContain("Reviews code better");
+  });
+
+  // The editor rewrites the file wholesale from the draft, so read->save is the
+  // real integrity test: a `model:` the read handler drops (or the request
+  // schema strips) vanishes from disk on an unrelated edit, and the profile
+  // silently starts inheriting the parent's model instead of the pinned one.
+  it("preserves a pinned model across an unrelated edit (read -> save round trip)", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const path = join(ws, ".anycode/agents/pinned.md");
+    await seed(path, md({ name: "pinned", description: "Pinned", model: "k3" }, "body"));
+    const deps = makeDeps(ws, home);
+
+    const read = await handleSubagentsRead(deps, { tabId: TAB_ID, name: "pinned", sourceKind: "project" });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+
+    const result = await handleSubagentsSave(deps, {
+      tabId: TAB_ID,
+      name: "pinned",
+      sourceKind: "project",
+      draft: { ...read.draft, description: "Pinned, edited" },
+    });
+    expect(result.ok).toBe(true);
+
+    const onDisk = await readFile(path, "utf-8");
+    expect(onDisk).toContain("model: k3");
+    expect(onDisk).toContain("Pinned, edited");
+    expect(result.ok && result.snapshot.rows.find((r) => r.name === "pinned")?.model).toBe("k3");
+  });
+
+  it("clearing the model omits the line entirely rather than writing a blank one", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const path = join(ws, ".anycode/agents/pinned.md");
+    await seed(path, md({ name: "pinned", description: "Pinned", model: "k3" }, "body"));
+    const deps = makeDeps(ws, home);
+
+    const result = await handleSubagentsSave(deps, {
+      tabId: TAB_ID,
+      name: "pinned",
+      sourceKind: "project",
+      draft: { name: "pinned", description: "Pinned", body: "body" },
+    });
+    expect(result.ok).toBe(true);
+
+    const onDisk = await readFile(path, "utf-8");
+    expect(onDisk).not.toContain("model:");
+    expect(result.ok && result.snapshot.rows.find((r) => r.name === "pinned")?.model).toBeUndefined();
   });
 
   it("renames — moves the file, old path gone, new path present", async () => {

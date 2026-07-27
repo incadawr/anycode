@@ -247,14 +247,14 @@ describe("SUBAGENT_TOOL_CHOICES", () => {
 describe("blankSubagentEditorFields / subagentEditorFieldsFromDraft round trip", () => {
   it("blank fields start with no tools selected (inherit-all default) and a non-empty template body", () => {
     const blank = blankSubagentEditorFields();
-    expect(blank).toEqual({ name: "", description: "", tools: [], body: blank.body });
+    expect(blank).toEqual({ name: "", description: "", tools: [], body: blank.body, model: "" });
     expect(blank.body.length).toBeGreaterThan(0);
   });
 
   it("a draft with explicit tools round-trips through fields->draft byte-stably (name/description trimmed, tools preserved)", () => {
     const draft: SubagentProfileDraft = { name: "researcher", description: "digs", tools: ["Read", "Grep"], body: "You research things." };
     const fields = subagentEditorFieldsFromDraft(draft);
-    expect(fields).toEqual({ name: "researcher", description: "digs", tools: ["Read", "Grep"], body: "You research things." });
+    expect(fields).toEqual({ name: "researcher", description: "digs", tools: ["Read", "Grep"], body: "You research things.", model: "" });
     expect(buildSubagentDraft(fields)).toEqual(draft);
   });
 
@@ -263,31 +263,55 @@ describe("blankSubagentEditorFields / subagentEditorFieldsFromDraft round trip",
     const fields = subagentEditorFieldsFromDraft(draft);
     expect(fields.tools).toEqual([]);
   });
+
+  // The editor rewrites the whole file from the draft it loaded, so a `model`
+  // that survives the load but not the round trip is silently ERASED from disk
+  // on the next save — the profile keeps its name and quietly starts inheriting
+  // the parent's model. This pair pins both directions of that trip.
+  it("carries a pinned model through load -> edit -> save unchanged", () => {
+    const draft: SubagentProfileDraft = { name: "reviewer", description: "reviews", body: "b", model: "k3" };
+    const fields = subagentEditorFieldsFromDraft(draft);
+    expect(fields.model).toBe("k3");
+    expect(buildSubagentDraft(fields)).toEqual(draft);
+  });
+
+  it("maps an absent model to an empty field, and an empty field back to an absent key (inherit stays inherit)", () => {
+    const draft: SubagentProfileDraft = { name: "plain", description: "d", body: "b" };
+    const fields = subagentEditorFieldsFromDraft(draft);
+    expect(fields.model).toBe("");
+    const rebuilt = buildSubagentDraft(fields);
+    expect("model" in rebuilt).toBe(false);
+  });
+
+  it("clearing a pinned model drops the key entirely rather than writing a blank one", () => {
+    const fields = { ...subagentEditorFieldsFromDraft({ name: "r", description: "d", body: "b", model: "k3" }), model: "   " };
+    expect("model" in buildSubagentDraft(fields)).toBe(false);
+  });
 });
 
 describe("buildSubagentDraft", () => {
   it("omits 'tools' entirely when the selection is empty — matches SubagentProfileDraft's inherit-baseline semantics", () => {
-    const draft = buildSubagentDraft({ name: "  a  ", description: "  b  ", tools: [], body: "c" });
+    const draft = buildSubagentDraft({ name: "  a  ", description: "  b  ", tools: [], body: "c", model: "" });
     expect(draft).toEqual({ name: "a", description: "b", body: "c" });
     expect("tools" in draft).toBe(false);
   });
 
   it("includes 'tools' when at least one chip is selected", () => {
-    const draft = buildSubagentDraft({ name: "a", description: "b", tools: ["Read"], body: "c" });
+    const draft = buildSubagentDraft({ name: "a", description: "b", tools: ["Read"], body: "c", model: "" });
     expect(draft).toEqual({ name: "a", description: "b", tools: ["Read"], body: "c" });
   });
 });
 
 describe("toggleSubagentToolChip", () => {
   it("adds an unselected tool, removes a selected one", () => {
-    const base = { name: "a", description: "b", tools: ["Read"], body: "c" };
+    const base = { name: "a", description: "b", tools: ["Read"], body: "c", model: "" };
     expect(toggleSubagentToolChip(base, "Grep").tools).toEqual(["Read", "Grep"]);
     expect(toggleSubagentToolChip(base, "Read").tools).toEqual([]);
   });
 });
 
 describe("canSubmitSubagentDraft", () => {
-  const valid = { name: "researcher", description: "digs through docs", tools: [], body: "short body" };
+  const valid = { name: "researcher", description: "digs through docs", tools: [], body: "short body", model: "" };
 
   it("requires a valid name, a non-empty single-line description, and a body under the byte cap", () => {
     expect(canSubmitSubagentDraft(valid)).toBe(true);
@@ -302,6 +326,14 @@ describe("canSubmitSubagentDraft", () => {
     expect(canSubmitSubagentDraft({ ...valid, body: "x".repeat(32_768) })).toBe(true);
     expect(canSubmitSubagentDraft({ ...valid, body: "x".repeat(32_769) })).toBe(false);
   });
+
+  it("accepts a blank model (inherit) and a well-formed id, refuses one the loader would reject", () => {
+    expect(canSubmitSubagentDraft({ ...valid, model: "" })).toBe(true);
+    expect(canSubmitSubagentDraft({ ...valid, model: "claude-opus-5" })).toBe(true);
+    expect(canSubmitSubagentDraft({ ...valid, model: "anthropic/claude-3" })).toBe(true);
+    expect(canSubmitSubagentDraft({ ...valid, model: "a model with spaces" })).toBe(false);
+    expect(canSubmitSubagentDraft({ ...valid, model: "-leading-dash" })).toBe(false);
+  });
 });
 
 describe("utf8ByteLength", () => {
@@ -312,7 +344,7 @@ describe("utf8ByteLength", () => {
 });
 
 describe("subagentEditorFieldsEqual (dirty check)", () => {
-  const base = { name: "a", description: "b", tools: ["Read", "Grep"], body: "c" };
+  const base = { name: "a", description: "b", tools: ["Read", "Grep"], body: "c", model: "" };
 
   it("is true for an identical value, including a reordered tool set (order-insensitive)", () => {
     expect(subagentEditorFieldsEqual(base, { ...base })).toBe(true);
@@ -325,6 +357,13 @@ describe("subagentEditorFieldsEqual (dirty check)", () => {
     expect(subagentEditorFieldsEqual(base, { ...base, body: "z" })).toBe(false);
     expect(subagentEditorFieldsEqual(base, { ...base, tools: ["Read"] })).toBe(false);
     expect(subagentEditorFieldsEqual(base, { ...base, tools: ["Read", "Grep", "Bash"] })).toBe(false);
+  });
+
+  // Save is gated on this dirty check, so a model-only edit that compares equal
+  // would render an editable field whose changes can never be saved.
+  it("is false when only the model differs, so a model-only edit can be saved", () => {
+    expect(subagentEditorFieldsEqual(base, { ...base, model: "k3" })).toBe(false);
+    expect(subagentEditorFieldsEqual({ ...base, model: "k3" }, { ...base, model: "" })).toBe(false);
   });
 });
 

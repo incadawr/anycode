@@ -366,6 +366,7 @@ const subagentsEditorSetBody = z.object({
   description: z.string().max(4096).optional(),
   tools: z.array(z.string().min(1).max(64)).max(32).optional(),
   body: z.string().max(65_536).optional(),
+  model: z.string().max(128).optional(),
 });
 const subagentsNameBody = z.object({ name: z.string().min(1).max(64) });
 

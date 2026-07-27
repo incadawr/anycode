@@ -3708,7 +3708,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
   }
 
   function subagentRow(overrides: Partial<SubagentsPaneRowState> = {}): SubagentsPaneRowState {
-    return { name: "researcher", sourceKind: "user", toolsBadge: "3 tools", description: "Researches things.", editable: true, ...overrides };
+    return { name: "researcher", sourceKind: "user", toolsBadge: "3 tools", model: "", description: "Researches things.", editable: true, ...overrides };
   }
 
   const blankEditor = {
@@ -3719,6 +3719,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     description: "",
     tools: [] as string[],
     body: "",
+    model: "",
     canSave: false,
     error: null as string | null,
     issues: [] as string[],
@@ -3736,7 +3737,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
       editorOpen: boolean;
       editorMode: "create" | "edit" | null;
       editorTab: "edit" | "preview" | null;
-      fieldValues: { name: string; description: string; tools: string[]; body: string } | null;
+      fieldValues: { name: string; description: string; tools: string[]; body: string; model: string } | null;
       canSave: boolean;
       errorText: string | null;
       issues: string[];
@@ -3753,6 +3754,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
       setNameResult: boolean;
       setDescriptionResult: boolean;
       setBodyResult: boolean;
+      setModelResult: boolean;
       setToolsResult: boolean;
     }> = {},
   ): SubagentsPaneDom {
@@ -3776,6 +3778,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
       setName: vi.fn<(value: string) => boolean>(() => overrides.setNameResult ?? true),
       setDescription: vi.fn<(value: string) => boolean>(() => overrides.setDescriptionResult ?? true),
       setBody: vi.fn<(value: string) => boolean>(() => overrides.setBodyResult ?? true),
+      setModel: vi.fn<(value: string) => boolean>(() => overrides.setModelResult ?? true),
       setTools: vi.fn<(tools: readonly string[]) => boolean>(() => overrides.setToolsResult ?? true),
       previewLoading: () => overrides.previewLoading ?? false,
       previewPromptText: () => overrides.previewPromptText ?? null,
@@ -3808,7 +3811,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
         editorOpen: true,
         editorMode: "edit",
         editorTab: "preview",
-        fieldValues: { name: "researcher", description: "Researches things.", tools: ["Read", "Grep"], body: "prompt body" },
+        fieldValues: { name: "researcher", description: "Researches things.", tools: ["Read", "Grep"], body: "prompt body", model: "" },
         canSave: true,
         errorText: null,
         issues: [],
@@ -3828,6 +3831,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
           description: "Researches things.",
           tools: ["Read", "Grep"],
           body: "prompt body",
+          model: "",
           canSave: true,
           error: null,
           issues: [],
@@ -3842,7 +3846,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
       const dom = fakeSubagentsPaneDom({
         mounted: true,
         editorOpen: true,
-        fieldValues: { name: "", description: "", tools: [], body: "" },
+        fieldValues: { name: "", description: "", tools: [], body: "", model: "" },
         previewPromptText: "prompt",
         previewToolsLine: "Effective tools: none",
       });
@@ -3932,7 +3936,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     });
 
     it("sets name/description/body and only returns ok once each field's live value visibly reflects the request", async () => {
-      const fields = { name: "", description: "", tools: [] as string[], body: "" };
+      const fields = { name: "", description: "", tools: [] as string[], body: "", model: "" };
       const dom: SubagentsPaneDom = {
         ...fakeSubagentsPaneDom({ editorOpen: true }),
         fieldValues: () => ({ ...fields }),
@@ -3953,11 +3957,35 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
       await expect(
         facade.subagentsEditorSet({ name: "summarizer", description: "Summarizes code.", body: "You summarize code." }),
       ).resolves.toEqual({ ok: true });
-      expect(fields).toEqual({ name: "summarizer", description: "Summarizes code.", tools: [], body: "You summarize code." });
+      expect(fields).toEqual({ name: "summarizer", description: "Summarizes code.", tools: [], body: "You summarize code.", model: "" });
+    });
+
+    it("drives the Model field through the same commit-visible path as the other scalars", async () => {
+      const fields = { name: "", description: "", tools: [] as string[], body: "", model: "" };
+      const dom: SubagentsPaneDom = {
+        ...fakeSubagentsPaneDom({ editorOpen: true }),
+        fieldValues: () => ({ ...fields }),
+        setModel: vi.fn((value: string) => {
+          fields.model = value;
+          return true;
+        }),
+      };
+      const facade = buildFacade(dom);
+      await expect(facade.subagentsEditorSet({ model: "k3" })).resolves.toEqual({ ok: true });
+      expect(fields.model).toBe("k3");
+    });
+
+    it("refuses set_failed when the Model field never visibly commits", async () => {
+      const dom = fakeSubagentsPaneDom({
+        editorOpen: true,
+        fieldValues: { name: "", description: "", tools: [], body: "", model: "stale" },
+      });
+      const facade = buildFacade(dom);
+      await expect(facade.subagentsEditorSet({ model: "k3" })).resolves.toEqual({ ok: false, reason: "set_failed" });
     });
 
     it("sets tools and only returns ok once the selected set exactly matches the request (order-insensitive)", async () => {
-      const fields = { name: "", description: "", tools: [] as string[], body: "" };
+      const fields = { name: "", description: "", tools: [] as string[], body: "", model: "" };
       const dom: SubagentsPaneDom = {
         ...fakeSubagentsPaneDom({ editorOpen: true }),
         fieldValues: () => ({ ...fields }),
@@ -3972,7 +4000,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     });
 
     it("refuses with set_failed when the field never visibly updates within the deadline", async () => {
-      const dom = fakeSubagentsPaneDom({ editorOpen: true, fieldValues: { name: "stale", description: "", tools: [], body: "" } });
+      const dom = fakeSubagentsPaneDom({ editorOpen: true, fieldValues: { name: "stale", description: "", tools: [], body: "", model: "" } });
       const facade = buildFacade(dom);
       await expect(facade.subagentsEditorSet({ name: "summarizer" })).resolves.toEqual({ ok: false, reason: "set_failed" });
     });

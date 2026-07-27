@@ -90,6 +90,8 @@ export interface SubagentRowView {
   sourceKind: SubagentSourceKind;
   pluginName?: string;
   path?: string;
+  /** Frontmatter `model:` — rendered as the row's model chip; absent ⇒ inherits the parent's. */
+  model?: string;
   /** false for `builtin` and `plugin` rows — no mutation affordance rendered. */
   editable: boolean;
 }
@@ -124,6 +126,8 @@ export interface SubagentProfileDraft {
   /** Absent ⇒ inherit the general-purpose baseline (nine non-spawn tools). */
   tools?: string[];
   body: string;
+  /** Model id children of this profile spawn on. Absent/blank ⇒ inherit the parent's. */
+  model?: string;
 }
 
 // ── read (identity = name + sourceKind, NEVER a path) ──
