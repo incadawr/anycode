@@ -42,6 +42,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type {
+  SubagentEngine,
   SubagentProfileDraft,
   SubagentReadResult,
   SubagentRowView,
@@ -60,6 +61,10 @@ import type {
   SubagentsSaveRequest,
   SubagentsSnapshot,
 } from "../../../shared/subagents-config.js";
+import type { EngineModelChoice } from "../../../shared/protocol.js";
+import { activeProviderView, connectionById } from "../../../shared/settings.js";
+import { useSettingsStore } from "../settings-store.js";
+import { providerModelsFor } from "./ModelPill.js";
 import { Chevron, FileIcon, Folder, Pencil, Plus, Robot, Search, Spinner, Trash, X } from "./icons.js";
 
 // ── bridge (DI, same ethic as SkillsPane.tsx's SkillsBridge) ──
@@ -235,13 +240,86 @@ export function isValidSubagentName(name: string): boolean {
   return SUBAGENT_NAME_RE.test(name.trim());
 }
 
-/** Mirrors core's `AGENT_PROFILE_MODEL_RE` (subagents/profiles.ts) for live validation — main is still the authority. */
+/** Mirrors core's `AGENT_PROFILE_MODEL_RE` (subagents/profiles.ts) — a safety net for a value that reached the draft outside the editor's own <select> (e.g. the automation facade), not a live-typing check (the select can only ever offer a well-formed id). */
 export const SUBAGENT_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 
 /** Blank is valid: an empty model field means "inherit the parent's model". */
 export function isValidSubagentModel(model: string): boolean {
   const trimmed = model.trim();
   return trimmed === "" || SUBAGENT_MODEL_RE.test(trimmed);
+}
+
+// ── engine + model selects (design: engine-selection slice) ──
+
+export interface SubagentEngineOption {
+  value: SubagentEngine | "";
+  label: string;
+}
+
+/** The Engine <select>'s fixed 3-item list — "" (inherit the parent's engine) plus the two spawnable external CLIs. */
+export const SUBAGENT_ENGINE_OPTIONS: readonly SubagentEngineOption[] = [
+  { value: "", label: "Same as parent" },
+  { value: "codex", label: "Codex" },
+  { value: "claude", label: "Claude" },
+];
+
+/** Row chip label for a profile that runs on a foreign engine instead of the parent's session. */
+export function engineBadgeLabel(engine: SubagentEngine): string {
+  return SUBAGENT_ENGINE_OPTIONS.find((option) => option.value === engine)?.label ?? engine;
+}
+
+export interface SubagentModelOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Builds a Model <select>'s option list: an always-first "inherit" option
+ * (empty value, caller-supplied label), then every catalog/engine model, then
+ * — ONLY if not already among them — the field's current value. That last
+ * step is load-bearing: a profile edited by hand (or saved against a catalog
+ * that has since changed) must never have its saved model silently vanish
+ * from the dropdown out from under it.
+ */
+export function buildModelSelectOptions(
+  models: readonly { id: string; name?: string }[],
+  currentModel: string,
+  inheritLabel: string,
+): SubagentModelOption[] {
+  const options: SubagentModelOption[] = [{ value: "", label: inheritLabel }];
+  for (const model of models) {
+    options.push({ value: model.id, label: model.name ?? model.id });
+  }
+  if (currentModel !== "" && !models.some((model) => model.id === currentModel)) {
+    options.push({ value: currentModel, label: currentModel });
+  }
+  return options;
+}
+
+/** `EngineModelChoice[]` (main's codex/claude doctor snapshot shape) down to the `{id, name?}` shape `buildModelSelectOptions` takes. */
+export function engineModelChoicesToModelList(choices: readonly EngineModelChoice[]): { id: string; name?: string }[] {
+  return choices.map((choice) => (choice.label !== undefined ? { id: choice.id, name: choice.label } : { id: choice.id }));
+}
+
+/**
+ * Picks which raw model list + "inherit" label feed the Model select, given
+ * the current Engine choice: the parent's own catalog when Engine is "Same as
+ * parent", else the lazily-fetched model list for that engine (the component
+ * fetches it once per engine choice and caches it in state — see
+ * SubagentsPane's own effect). An engine with no cached entry yet (still
+ * loading, or the recheck call failed) yields an empty list, which
+ * `buildModelSelectOptions` alone turns into a single "Default" option — never
+ * a spinner, never a retry loop.
+ */
+export function resolveSubagentModelOptions(
+  engine: SubagentEngine | "",
+  parentCatalogModels: readonly { id: string; name?: string }[],
+  engineModelChoices: Partial<Record<SubagentEngine, readonly EngineModelChoice[]>>,
+): { models: { id: string; name?: string }[]; inheritLabel: string } {
+  if (engine === "") {
+    return { models: [...parentCatalogModels], inheritLabel: "Same as parent" };
+  }
+  return { models: engineModelChoicesToModelList(engineModelChoices[engine] ?? []), inheritLabel: "Default" };
 }
 
 /** Mirror of core's `DEFAULT_TOOL_NAMES` (subagents/preview.ts) MINUS the two spawn-locked tools (Agent/Workflow) — selecting either always fails save-time validation (non-recursion lock, design §2-D7), so the chip list never offers them. */
@@ -280,13 +358,19 @@ export interface SubagentEditorFields {
    * `model:` line gets erased on the next save.
    */
   model: string;
+  /**
+   * Engine children of this profile spawn on; "" = inherit the parent's (the
+   * only behavior before this field existed). REQUIRED for the same reason
+   * `model` is — see above.
+   */
+  engine: SubagentEngine | "";
 }
 
 const TEMPLATE_BODY =
   "Describe this subagent's role, responsibilities, and constraints here. This text becomes its system prompt.";
 
 export function blankSubagentEditorFields(): SubagentEditorFields {
-  return { name: "", description: "", tools: [], body: TEMPLATE_BODY, model: "" };
+  return { name: "", description: "", tools: [], body: TEMPLATE_BODY, model: "", engine: "" };
 }
 
 export function subagentEditorFieldsFromDraft(draft: SubagentProfileDraft): SubagentEditorFields {
@@ -296,6 +380,7 @@ export function subagentEditorFieldsFromDraft(draft: SubagentProfileDraft): Suba
     tools: draft.tools ? [...draft.tools] : [],
     body: draft.body,
     model: draft.model ?? "",
+    engine: draft.engine ?? "",
   };
 }
 
@@ -310,6 +395,7 @@ export function buildSubagentDraft(fields: SubagentEditorFields): SubagentProfil
     // bytes a pre-model profile had — clearing the box means "inherit again",
     // not "write an empty model".
     ...(model !== "" ? { model } : {}),
+    ...(fields.engine !== "" ? { engine: fields.engine } : {}),
   };
 }
 
@@ -339,9 +425,16 @@ export function canSubmitSubagentDraft(fields: SubagentEditorFields): boolean {
 
 /** Dirty check for Save-disabled-until-dirty (design §4 W3) — tool-set compared as a set (order-insensitive), everything else by value. */
 export function subagentEditorFieldsEqual(a: SubagentEditorFields, b: SubagentEditorFields): boolean {
-  // `model` participates: without it, changing ONLY the model leaves the form
-  // "clean" and Save stays disabled — the field would look editable and be inert.
-  if (a.name !== b.name || a.description !== b.description || a.body !== b.body || a.model !== b.model) {
+  // `model`/`engine` participate: without them, changing ONLY one of these two
+  // leaves the form "clean" and Save stays disabled — the field would look
+  // editable and be inert.
+  if (
+    a.name !== b.name ||
+    a.description !== b.description ||
+    a.body !== b.body ||
+    a.model !== b.model ||
+    a.engine !== b.engine
+  ) {
     return false;
   }
   if (a.tools.length !== b.tools.length) {
@@ -384,6 +477,25 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
   const [previewLoading, setPreviewLoading] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [editorIssues, setEditorIssues] = useState<string[]>([]);
+  // Per-engine model list, fetched lazily (once per engine choice) and cached
+  // for the pane's lifetime — never re-fetched just because the editor closed
+  // and reopened on the same engine. An engine with no entry yet is either
+  // still loading or was never selected; both render as the Model select's
+  // single "Default" option (resolveSubagentModelOptions/buildModelSelectOptions).
+  const [engineModels, setEngineModels] = useState<Partial<Record<SubagentEngine, EngineModelChoice[]>>>({});
+
+  const settingsSnapshot = useSettingsStore((state) => state.snapshot);
+  const parentActiveConnection =
+    settingsSnapshot && settingsSnapshot.settings.provider.activeConnectionId !== undefined
+      ? connectionById(settingsSnapshot.settings, settingsSnapshot.settings.provider.activeConnectionId)
+      : undefined;
+  const parentCatalogModels =
+    providerModelsFor(
+      settingsSnapshot ? activeProviderView(settingsSnapshot.settings).id : undefined,
+      settingsSnapshot?.catalog,
+      settingsSnapshot?.settings.provider.custom,
+      parentActiveConnection?.models,
+    ) ?? [];
 
   useEffect(() => {
     let cancelled = false;
@@ -398,6 +510,44 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
+
+  // Lazy, once-per-engine model fetch (no polling, no dedicated bridge channel —
+  // straight off the existing codex/claude onboarding recheck). Fires only when
+  // the editor's Engine field actually holds "codex"/"claude" AND that engine
+  // has no cache entry yet; a failed call or an empty model list both cache as
+  // `[]`, which degrades the Model select to a single "Default" option rather
+  // than retrying.
+  useEffect(() => {
+    const engine = fields.engine;
+    if (engine === "" || engineModels[engine] !== undefined) {
+      return;
+    }
+    let cancelled = false;
+    function cache(models: EngineModelChoice[]): void {
+      if (!cancelled) {
+        setEngineModels((prev) => ({ ...prev, [engine]: models }));
+      }
+    }
+    // Branched (not a shared `.then`) because the two onboarding snapshots are
+    // genuinely different shapes: only Codex's doctor report carries `models`
+    // today — Claude's doesn't, so that branch always caches `[]` (the Model
+    // select's own "empty -> Default only" fallback, not a special case here).
+    if (engine === "codex") {
+      void window.anycode.codex
+        .recheck()
+        .then((snap) => cache(snap.report.models ?? []))
+        .catch(() => cache([]));
+    } else {
+      void window.anycode.claude
+        .recheck()
+        .then(() => cache([]))
+        .catch(() => cache([]));
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields.engine]);
 
   async function refresh(): Promise<void> {
     const snap = await bridge.list({ tabId });
@@ -627,6 +777,14 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
                             <span className="skills-row-name settings-mcp-name">{row.name}</span>
                             <span className={`skills-badge skills-badge-${row.sourceKind}`}>{userRowSourceBadgeLabel(row.sourceKind)}</span>
                             <span className="skills-badge subagents-badge-tools">{row.toolsBadge}</span>
+                            {row.engine !== undefined && (
+                              <span
+                                className="skills-badge subagents-badge-engine"
+                                title={`Runs as a separate ${engineBadgeLabel(row.engine)} CLI process`}
+                              >
+                                {engineBadgeLabel(row.engine)}
+                              </span>
+                            )}
                             {row.model !== undefined && (
                               <span className="skills-badge subagents-badge-model" title={`Children spawn on ${row.model}`}>
                                 {row.model}
@@ -695,6 +853,14 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
                           {row.pluginName && <span className="skills-plugin-name">{row.pluginName}</span>}
                           <span className="skills-badge skills-badge-plugin">Plugin</span>
                           <span className="skills-badge subagents-badge-tools">{row.toolsBadge}</span>
+                          {row.engine !== undefined && (
+                            <span
+                              className="skills-badge subagents-badge-engine"
+                              title={`Runs as a separate ${engineBadgeLabel(row.engine)} CLI process`}
+                            >
+                              {engineBadgeLabel(row.engine)}
+                            </span>
+                          )}
                           {row.model !== undefined && (
                             <span className="skills-badge subagents-badge-model" title={`Children spawn on ${row.model}`}>
                               {row.model}
@@ -725,6 +891,8 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
           error={editorError}
           issues={editorIssues}
           canSave={canSave}
+          parentCatalogModels={parentCatalogModels}
+          engineModels={engineModels}
           onChange={setFields}
           onScopeChange={setEditorScope}
           onEditTab={() => setEditorTab("edit")}
@@ -749,6 +917,10 @@ interface SubagentEditorDialogProps {
   error: string | null;
   issues: string[];
   canSave: boolean;
+  /** The parent's own model catalog (composer's own `useSettingsStore` -> `snapshot.catalog` path), offered when Engine = "Same as parent". */
+  parentCatalogModels: readonly { id: string; name?: string }[];
+  /** Lazily-fetched per-engine model list (component-cached; see SubagentsPane's own effect). */
+  engineModels: Partial<Record<SubagentEngine, EngineModelChoice[]>>;
   onChange: (fields: SubagentEditorFields) => void;
   onScopeChange: (scope: SubagentScope) => void;
   onEditTab: () => void;
@@ -767,6 +939,8 @@ function SubagentEditorDialog({
   error,
   issues,
   canSave,
+  parentCatalogModels,
+  engineModels,
   onChange,
   onScopeChange,
   onEditTab,
@@ -790,7 +964,12 @@ function SubagentEditorDialog({
   const nameTouched = fields.name.trim().length > 0;
   const nameInvalid = nameTouched && !isValidSubagentName(fields.name);
   const descriptionInvalid = fields.description.trim().length > 0 && /[\r\n]/.test(fields.description);
-  const modelInvalid = !isValidSubagentModel(fields.model);
+  const { models: modelChoices, inheritLabel: modelInheritLabel } = resolveSubagentModelOptions(
+    fields.engine,
+    parentCatalogModels,
+    engineModels,
+  );
+  const modelOptions = buildModelSelectOptions(modelChoices, fields.model, modelInheritLabel);
 
   return (
     <dialog
@@ -819,24 +998,37 @@ function SubagentEditorDialog({
           {descriptionInvalid && <span className="skills-field-invalid">Description must be a single line.</span>}
         </label>
         <label className="settings-field">
+          <span className="settings-field-label">Engine</span>
+          <select
+            className="settings-field-select"
+            value={fields.engine}
+            onChange={(e) => set("engine", e.target.value as SubagentEngine | "")}
+          >
+            {SUBAGENT_ENGINE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="subagents-tools-hint">
+            Empty = this child runs as part of the parent's session. Codex/Claude = the child runs as a separate
+            CLI process of that engine, with its own tools and permissions.
+          </span>
+        </label>
+        <label className="settings-field">
           <span className="settings-field-label">Model</span>
-          <input
-            className="settings-field-input"
-            type="text"
-            value={fields.model}
-            placeholder="Inherit the parent's model"
-            onChange={(e) => set("model", e.target.value)}
-          />
-          {modelInvalid ? (
-            <span className="skills-field-invalid">
-              A model id has no spaces — letters, numbers, and ". _ : / -" only.
-            </span>
-          ) : (
-            <span className="subagents-tools-hint">
-              Children of this subagent run on this model id, on the session's current provider. Empty = same
-              model as the parent.
-            </span>
-          )}
+          <select className="settings-field-select" value={fields.model} onChange={(e) => set("model", e.target.value)}>
+            {modelOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="subagents-tools-hint">
+            {fields.engine === ""
+              ? "Children spawn on this model id. Empty = the parent's model."
+              : "The model this engine runs the child on. Empty = the engine's own default."}
+          </span>
         </label>
 
         {mode === "create" && (

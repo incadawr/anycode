@@ -18,6 +18,7 @@ import { buildSubagentSystemPrompt } from "../prompts/subagent.js";
 import { capUtf8Bytes } from "../util/bytes.js";
 import { AGENT_PROFILE_PROMPT_MAX_BYTES } from "../types/config.js";
 import { PERSONAS } from "./personas.js";
+import type { AgentProfileEngine } from "./profiles.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 
 /**
@@ -81,6 +82,12 @@ export interface SubagentProfileDraft {
    * parent's model, which is what every profile did before the field existed.
    */
   model?: string;
+  /**
+   * Engine children of this profile run on. Absent ⇒ run in-process (today's
+   * only behavior, unchanged) — "codex"/"claude" runs children as a one-shot
+   * foreign CLI run instead (see PersonaDefinition.engine / SubagentRunnerOptions.runEngineChild).
+   */
+  engine?: AgentProfileEngine;
 }
 
 export interface ProfilePreview {

@@ -59,6 +59,17 @@ export type SubagentSourceKind = "builtin" | "project" | "user" | "plugin";
 /** Scope a create targets — `builtin`/`plugin` are never valid request values (no writer). */
 export type SubagentScope = "project" | "user";
 
+/**
+ * Engine choice for children of this profile. Absent/"" everywhere this rides
+ * as an optional field ⇒ the child spawns on the SAME engine as the parent
+ * (today's only behavior, unchanged) — "codex"/"claude" runs the child as a
+ * separate CLI process of that engine instead, with its own tools and
+ * permissions. Renderer-grain value-only twin of core's `AgentProfileEngine`
+ * (packages/core/src/subagents/admin-write.ts) — kept structurally identical
+ * by construction (same two-member literal union).
+ */
+export type SubagentEngine = "codex" | "claude";
+
 export type SubagentsRefusalReason =
   | "invalid"
   | "no_workspace"
@@ -92,6 +103,8 @@ export interface SubagentRowView {
   path?: string;
   /** Frontmatter `model:` — rendered as the row's model chip; absent ⇒ inherits the parent's. */
   model?: string;
+  /** Frontmatter `engine:` — rendered as the row's engine chip; absent ⇒ runs in the parent's session. */
+  engine?: SubagentEngine;
   /** false for `builtin` and `plugin` rows — no mutation affordance rendered. */
   editable: boolean;
 }
@@ -128,6 +141,8 @@ export interface SubagentProfileDraft {
   body: string;
   /** Model id children of this profile spawn on. Absent/blank ⇒ inherit the parent's. */
   model?: string;
+  /** Engine children of this profile spawn on. Absent ⇒ inherit the parent's. */
+  engine?: SubagentEngine;
 }
 
 // ── read (identity = name + sourceKind, NEVER a path) ──

@@ -99,6 +99,16 @@ export function validateAgentProfileDraft(draft: SubagentProfileDraft): Validate
     issues.push(`model "${model}" must match ${AGENT_PROFILE_MODEL_RE.source}`);
   }
 
+  // engine: a closed two-value set. The editor's own <select> can only ever
+  // produce one of these (or absent), but this function is the save/create
+  // trust boundary — the same posture every other field gets — so a caller
+  // that bypasses the UI (e.g. the automation facade) cannot smuggle a bogus
+  // value onto disk.
+  const engine = draft.engine;
+  if (engine !== undefined && engine !== "codex" && engine !== "claude") {
+    issues.push(`engine "${String(engine)}" must be "codex" or "claude"`);
+  }
+
   // P7.21 W1-FIX #5: a whitespace-only (or empty) body would round-trip to the
   // loader's `[agent profile "…" — empty body]` placeholder, so the saved bytes
   // would NOT be the model-governing prompt. The editor refuses it up front (the
@@ -142,14 +152,16 @@ export function validateAgentProfileDraft(draft: SubagentProfileDraft): Validate
   }
 
   // Round-trip integrity: the exact bytes we will write must reconstruct the same
-  // model-governing profile (name/description/body). A mismatch means the
-  // serialize→parse normalization silently changed the saved semantics — refuse
-  // rather than persist a file that spawns differently than it was authored.
+  // model-governing profile (name/description/body/model/engine). A mismatch
+  // means the serialize→parse normalization silently changed the saved
+  // semantics — refuse rather than persist a file that spawns differently than
+  // it was authored.
   if (
     reparsed.ok.name !== name ||
     reparsed.ok.description !== description ||
     reparsed.ok.body !== draft.body ||
-    (reparsed.ok.model ?? "") !== model
+    (reparsed.ok.model ?? "") !== model ||
+    (reparsed.ok.engine ?? undefined) !== engine
   ) {
     return {
       ok: false,
@@ -181,6 +193,11 @@ export function serializeAgentProfile(draft: SubagentProfileDraft): string {
   const model = draft.model?.trim() ?? "";
   if (model !== "") {
     lines.push(`model: ${model}`);
+  }
+  // An absent engine omits the line entirely — same rule as model, so
+  // "inherit the parent's engine" stays the byte-identical default.
+  if (draft.engine !== undefined) {
+    lines.push(`engine: ${draft.engine}`);
   }
   lines.push("---");
   return `${lines.join("\n")}\n${draft.body}`;

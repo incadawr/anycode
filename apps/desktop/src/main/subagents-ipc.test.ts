@@ -156,6 +156,22 @@ describe("handleSubagentsRead", () => {
     expect(result.draft.model).toBe("k3");
   });
 
+  it("carries a pinned engine into the draft alongside model (a dropped one is erased by the next save)", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seed(
+      join(ws, ".anycode/agents/pinned-engine.md"),
+      md({ name: "pinned-engine", description: "Pinned", engine: "claude", model: "k3" }, "body"),
+    );
+    const deps = makeDeps(ws, home);
+
+    const result = await handleSubagentsRead(deps, { tabId: TAB_ID, name: "pinned-engine", sourceKind: "project" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.draft.engine).toBe("claude");
+    expect(result.draft.model).toBe("k3");
+  });
+
   it("never lists or reads a symlinked profile that escapes the catalog (#2)", async () => {
     const ws = await tmp();
     const home = await tmp();
@@ -257,6 +273,83 @@ describe("handleSubagentsSave", () => {
     expect(onDisk).toContain("model: k3");
     expect(onDisk).toContain("Pinned, edited");
     expect(result.ok && result.snapshot.rows.find((r) => r.name === "pinned")?.model).toBe("k3");
+  });
+
+  // The full circle the engine-selection slice adds: saved profile with an
+  // engine -> reread -> engine still present AND model not erased. Same
+  // rewrite-the-whole-file hazard as the `model:` test above, now covering
+  // the second additive field alongside it.
+  it("preserves a pinned engine + model across an unrelated edit, and a fresh read sees both (save -> read round trip)", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const path = join(ws, ".anycode/agents/pinned-engine.md");
+    await seed(path, md({ name: "pinned-engine", description: "Pinned", engine: "claude", model: "k3" }, "body"));
+    const deps = makeDeps(ws, home);
+
+    const read = await handleSubagentsRead(deps, { tabId: TAB_ID, name: "pinned-engine", sourceKind: "project" });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.draft.engine).toBe("claude");
+    expect(read.draft.model).toBe("k3");
+
+    const result = await handleSubagentsSave(deps, {
+      tabId: TAB_ID,
+      name: "pinned-engine",
+      sourceKind: "project",
+      draft: { ...read.draft, description: "Pinned, edited" },
+    });
+    expect(result.ok).toBe(true);
+
+    const onDisk = await readFile(path, "utf-8");
+    expect(onDisk).toContain("engine: claude");
+    expect(onDisk).toContain("model: k3");
+    expect(onDisk).toContain("Pinned, edited");
+
+    const reread = await handleSubagentsRead(deps, { tabId: TAB_ID, name: "pinned-engine", sourceKind: "project" });
+    expect(reread.ok).toBe(true);
+    if (!reread.ok) return;
+    expect(reread.draft.engine).toBe("claude");
+    expect(reread.draft.model).toBe("k3");
+  });
+
+  it("clearing the engine omits the line entirely rather than writing a blank one, model untouched", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const path = join(ws, ".anycode/agents/pinned-engine.md");
+    await seed(path, md({ name: "pinned-engine", description: "Pinned", engine: "claude", model: "k3" }, "body"));
+    const deps = makeDeps(ws, home);
+
+    const result = await handleSubagentsSave(deps, {
+      tabId: TAB_ID,
+      name: "pinned-engine",
+      sourceKind: "project",
+      draft: { name: "pinned-engine", description: "Pinned", model: "k3", body: "body" },
+    });
+    expect(result.ok).toBe(true);
+
+    const onDisk = await readFile(path, "utf-8");
+    expect(onDisk).not.toContain("engine:");
+    expect(onDisk).toContain("model: k3");
+
+    const reread = await handleSubagentsRead(deps, { tabId: TAB_ID, name: "pinned-engine", sourceKind: "project" });
+    expect(reread.ok).toBe(true);
+    if (!reread.ok) return;
+    expect(reread.draft.engine).toBeUndefined();
+    expect(reread.draft.model).toBe("k3");
+  });
+
+  it("refuses an out-of-set engine value at the schema boundary", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seed(join(ws, ".anycode/agents/reviewer.md"), md({ name: "reviewer", description: "d" }, "b"));
+    const deps = makeDeps(ws, home);
+    const result = await handleSubagentsSave(deps, {
+      tabId: TAB_ID,
+      name: "reviewer",
+      sourceKind: "project",
+      draft: { name: "reviewer", description: "d", body: "b", engine: "gpt" },
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid" });
   });
 
   it("clearing the model omits the line entirely rather than writing a blank one", async () => {

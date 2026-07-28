@@ -50,6 +50,7 @@ export type {
   ParseAgentProfileResult,
   AgentProfileParseError,
   AgentProfileRoot,
+  AgentProfileEngine,
 } from "./profiles.js";
 
 export { PERSONAS, isKnownPersona, listPersonaNames } from "./personas.js";
