@@ -33,6 +33,7 @@ import {
   SUBAGENT_OUTPUT_MAX_BYTES,
 } from "../types/config.js";
 import type {
+  EngineChildSpec,
   SubagentOutcome,
   SubagentPort,
   SubagentRequest,
@@ -82,6 +83,17 @@ export interface SubagentRunnerOptions {
    * of silently spawning the child on the parent's model.
    */
   resolveChildModelPort?: (modelId: string) => ModelPort;
+  /**
+   * Runs ONE engine persona's child as a one-shot foreign CLI run (md-profile
+   * `engine:` frontmatter) instead of an in-process AgentLoop. `run()` builds the
+   * EngineChildSpec (persona body + the caller's request, joined the same way as
+   * any other one-shot child prompt) and hands it here whenever the resolved
+   * persona declares an `engine`; the whole buildChildConfig/AgentLoop/
+   * resolveChildModelPort path is skipped for that spawn. A host that omits this
+   * cannot run an engine persona at all: `run()` returns a honest error-outcome
+   * rather than silently falling back to the in-process loop.
+   */
+  runEngineChild?: (spec: EngineChildSpec, opts: SubagentRunOptions) => Promise<SubagentOutcome>;
 }
 
 /**
@@ -282,12 +294,76 @@ export function createSubagentRunner(
         return cancelledOutcome(startedAt);
       }
 
+      // Precedence: an explicit `Agent(model: …)` request outranks the profile's
+      // own `model:` frontmatter, which outranks inheriting the parent's port (or,
+      // for an engine persona, the engine's own default). Shared by both the
+      // engine and in-process paths below.
+      const requestedModel = req.model ?? persona.model;
+
+      // Engine persona (md-profile `engine:`): the whole in-process path
+      // (buildChildConfig/AgentLoop/resolveChildModelPort) is bypassed in favor
+      // of a one-shot foreign CLI run. Checked BEFORE the semaphore — same
+      // rationale as the model-override check below: a host that cannot honor it
+      // must fail without ever queuing behind running children.
+      if (persona.engine !== undefined) {
+        const runEngineChild = opts?.runEngineChild;
+        if (runEngineChild === undefined) {
+          return {
+            status: "error",
+            finalText: `Agent: agent type "${persona.name}" runs on the "${persona.engine}" engine, which is not supported in this host.`,
+            truncated: false,
+            turns: 0,
+            toolCalls: 0,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+
+        try {
+          await semaphore.acquire(signal);
+        } catch {
+          return cancelledOutcome(startedAt);
+        }
+
+        try {
+          onProgress?.({
+            kind: "start",
+            agentType: persona.name,
+            description: req.description,
+            engine: persona.engine,
+            ...(requestedModel !== undefined ? { model: requestedModel } : {}),
+          });
+
+          // The child's one-shot prompt: the persona body (same source
+          // buildSubagentSystemPrompt embeds for an in-process child) plus the
+          // caller's own request, separated so the foreign CLI sees both parts.
+          const spec: EngineChildSpec = {
+            engine: persona.engine,
+            prompt: `${persona.systemPrompt}\n\n---\n\n${req.prompt}`,
+            agentType: persona.name,
+            description: req.description,
+            ...(requestedModel !== undefined ? { model: requestedModel } : {}),
+          };
+
+          const outcome = await runEngineChild(spec, runOpts);
+
+          onProgress?.({
+            kind: "end",
+            status: outcome.status,
+            turns: outcome.turns,
+            durationMs: outcome.durationMs,
+          });
+
+          await fireSubagentStop(parent, persona, req, outcome, signal);
+
+          return outcome;
+        } finally {
+          semaphore.release();
+        }
+      }
+
       // Resolve an Agent-tool model override (slice 4.6, design §2.5) BEFORE
       // the semaphore: a host that cannot honor req.model must fail without
 
-      // Precedence: an explicit `Agent(model: …)` request outranks the profile's
-      // own `model:` frontmatter, which outranks inheriting the parent's port.
-      const requestedModel = req.model ?? persona.model;
       let childModelPort: ModelPort | undefined;
       if (requestedModel !== undefined) {
         const resolve = opts?.resolveChildModelPort;
@@ -465,22 +541,7 @@ export function createSubagentRunner(
         // fail-open observer that never alters the outcome — parity with the
         // Stop hook in agent-loop.ts. Only subagents that actually started reach
         // here (the early return-paths above never fire SubagentStop).
-        try {
-          await parent.hooks.runObservers(
-            "SubagentStop",
-            {
-              agentType: persona.name,
-              description: req.description,
-              status,
-              turns,
-              toolCalls,
-              durationMs: outcome.durationMs,
-            },
-            signal ? { signal } : undefined,
-          );
-        } catch {
-          // fail-open: a SubagentStop hook never alters the subagent outcome.
-        }
+        await fireSubagentStop(parent, persona, req, outcome, signal);
 
         return outcome;
       } finally {
@@ -488,6 +549,37 @@ export function createSubagentRunner(
       }
     },
   };
+}
+
+/**
+ * Fires the SubagentStop observer for a subagent that actually started —
+ * in-process or engine child alike — fail-open, never altering the outcome
+ * (parity with the Stop hook in agent-loop.ts). Shared by both `run()` code
+ * paths so the hook contract has one call site instead of two copies.
+ */
+async function fireSubagentStop(
+  parent: AgentLoopConfig,
+  persona: PersonaDefinition,
+  req: SubagentRequest,
+  outcome: SubagentOutcome,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    await parent.hooks.runObservers(
+      "SubagentStop",
+      {
+        agentType: persona.name,
+        description: req.description,
+        status: outcome.status,
+        turns: outcome.turns,
+        toolCalls: outcome.toolCalls,
+        durationMs: outcome.durationMs,
+      },
+      signal ? { signal } : undefined,
+    );
+  } catch {
+    // fail-open: a SubagentStop hook never alters the subagent outcome.
+  }
 }
 
 function cancelledOutcome(startedAt: number): SubagentOutcome {

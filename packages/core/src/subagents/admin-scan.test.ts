@@ -127,6 +127,29 @@ describe("scanAgentProfilesAdmin", () => {
     expect(result.problems.some((p) => p.includes("Invalid agent profile"))).toBe(true);
   });
 
+  it("carries frontmatter engine onto the row and names a bad engine in problems", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const wsRoot = join(ws, ".anycode/agents");
+    await seed(
+      wsRoot,
+      "scout.md",
+      md({ name: "scout", description: "Runs on Codex", tools: "Read", engine: "codex" }, "body"),
+    );
+    await seed(
+      wsRoot,
+      "bogus.md",
+      md({ name: "bogus", description: "Asks for an engine that does not exist", engine: "gemini" }, "body"),
+    );
+
+    const result = await scanAgentProfilesAdmin(fs, { workspace: ws, home });
+    const rows = Object.fromEntries(result.rows.map((r) => [r.name, r]));
+    expect(rows.scout?.engine).toBe("codex");
+    // A rejected profile is never listed AND never silent: the strip must name it.
+    expect(rows.bogus).toBeUndefined();
+    expect(result.problems.some((p) => p.includes('engine "gemini"'))).toBe(true);
+  });
+
   it("dedupes a name across roots (project wins) and tags user rows", async () => {
     const ws = await tmp();
     const home = await tmp();

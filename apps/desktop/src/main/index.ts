@@ -1197,11 +1197,19 @@ void app.whenReady().then(async () => {
     engineReady: (engine: EngineId, codexProfileId?: string) =>
       (engine === "claude" && (claudeOnboarding?.readyFor() ?? false)) ||
       (engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false)),
+    // Both validated binary paths ride EVERY host's env, regardless of which
+    // engine this particular session runs on: a core/codex session's Agent
+    // tool can spawn a Claude subagent (and a claude/core session a Codex
+    // one) via host/engine-children.ts, which reads ENV_CLAUDE_BIN/
+    // ENV_CODEX_BIN independent of ENV_ENGINE. Each is still gated on its own
+    // doctor-confirmed path (`!== null`) — an unconfigured engine simply never
+    // gets a key, same fail-soft posture as before this widened from
+    // engine-conditional to unconditional.
     engineEnv: (engine: EngineId, generation: number) => ({
       [ENV_ENGINE]: engine,
       [ENV_HOST_GENERATION]: String(generation),
-      ...(engine === "codex" && codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
-      ...(engine === "claude" && claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
+      ...(codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
+      ...(claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
     }),
     reapEngineProcess: createEngineProcessReaper(),
     // Credential channel (slice 2.5 §3.3 + TASK.45 W10): an oauth-mode host asks

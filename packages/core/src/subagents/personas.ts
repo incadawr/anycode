@@ -15,6 +15,8 @@
  * spelled out as data.
  */
 
+import type { AgentProfileEngine } from "./profiles.js";
+
 export type PersonaName = "general-purpose" | "explore";
 
 export interface PersonaDefinition {
@@ -43,6 +45,14 @@ export interface PersonaDefinition {
    * undefined — they are deliberately model-agnostic.
    */
   model?: string;
+  /**
+   * Md-profile `engine:` frontmatter. When set, children of this persona run as
+   * a one-shot foreign CLI run (Codex or Claude Code) instead of an in-process
+   * AgentLoop — the runner's whole buildChildConfig/AgentLoop path is bypassed
+   * in favor of SubagentRunnerOptions.runEngineChild. Built-in personas leave
+   * this undefined — they always run in-process.
+   */
+  engine?: AgentProfileEngine;
 }
 
 /**
