@@ -22,6 +22,7 @@ import {
   AGENT_PROFILE_MODEL_RE,
   AGENT_PROFILE_NAME_RE,
   parseAgentProfileMd,
+  type AgentProfileEngine,
   type AgentProfileRoot,
 } from "./profiles.js";
 import { isUnderOwnRootsResolved } from "../util/path-containment.js";
@@ -84,6 +85,8 @@ export interface AgentProfileAdminRow {
   bodyBytes: number;
   /** Frontmatter `model:` — absent means children inherit the parent's model. */
   model?: string;
+  /** Frontmatter `engine:` — absent means the child runs in-process, not on a foreign CLI. */
+  engine?: AgentProfileEngine;
 }
 
 export interface AgentProfileAdminScanResult {
@@ -251,11 +254,20 @@ export async function scanAgentProfilesAdmin(
               `Agent profile ${path}: model "${err.model}" must match ${AGENT_PROFILE_MODEL_RE.source} — ignored`,
             );
             break;
+          case "bad_engine":
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: engine "${err.engine}" must be "codex" or "claude" — ignored`,
+            );
+            break;
         }
         continue;
       }
 
-      const { name, description, tools, toolsExplicit, body, model } = result.ok;
+      const { name, description, tools, toolsExplicit, body, model, engine } = result.ok;
       if (claimed.has(name)) {
         continue;
       }
@@ -279,6 +291,7 @@ export async function scanAgentProfilesAdmin(
         path,
         bodyBytes: Buffer.byteLength(body, "utf8"),
         ...(model !== undefined ? { model } : {}),
+        ...(engine !== undefined ? { engine } : {}),
       });
     }
   }

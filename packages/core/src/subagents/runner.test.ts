@@ -33,7 +33,7 @@ import type {
 } from "../types/permissions.js";
 import type { HookRunner, SubagentStopHookInput } from "../types/hooks.js";
 import { MAX_CONCURRENT_SUBAGENTS, SUBAGENT_ACTIVITY_MAX_EVENTS } from "../types/config.js";
-import type { SubagentProgress } from "../ports/subagent.js";
+import type { EngineChildSpec, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type { ToolContext } from "../types/tools.js";
 import { SPAWN_TOOLS, buildChildConfig, createSubagentRunner, withSubagents } from "./runner.js";
 import { PERSONAS, getPersona, type PersonaDefinition } from "./personas.js";
@@ -1329,5 +1329,197 @@ describe("profile-declared model", () => {
     expect(outcome.status).toBe("error");
     expect(outcome.finalText).toContain("no-such-model");
     expect(outcome.finalText).toContain("unknown model no-such-model");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Engine persona (subagent-model contract): a md-profile `engine:` frontmatter
+// makes its children run as a one-shot foreign CLI run (Codex or Claude Code)
+// instead of an in-process AgentLoop. `run()` must dispatch to
+// SubagentRunnerOptions.runEngineChild and skip buildChildConfig/AgentLoop/
+// resolveChildModelPort entirely for such a persona; a host that omits
+// runEngineChild gets a honest error-outcome, never a silent in-process fallback.
+
+describe("engine persona (one-shot foreign CLI run)", () => {
+  const enginePersona: PersonaDefinition = {
+    name: "codex-worker",
+    description: "runs on the codex engine",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    engine: "codex",
+  };
+
+  function okOutcome(overrides: Partial<SubagentOutcome> = {}): SubagentOutcome {
+    return {
+      status: "completed",
+      finalText: "engine child report",
+      truncated: false,
+      turns: 1,
+      toolCalls: 0,
+      durationMs: 5,
+      ...overrides,
+    };
+  }
+
+  it("dispatches to runEngineChild with the persona-body+request prompt and never builds an in-process child", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("should never run"));
+    const specs: EngineChildSpec[] = [];
+    const runEngineChild = vi.fn(async (spec: EngineChildSpec): Promise<SubagentOutcome> => {
+      specs.push(spec);
+      return okOutcome();
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      profiles: [enginePersona],
+      runEngineChild,
+    });
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run(
+      { agentType: "codex-worker", description: "delegate", prompt: "do the thing" },
+      { onProgress: (p) => progress.push(p) },
+    );
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("engine child report");
+    expect(runEngineChild).toHaveBeenCalledTimes(1);
+    expect(specs[0]).toEqual({
+      engine: "codex",
+      prompt: "PERSONA BODY\n\n---\n\ndo the thing",
+      agentType: "codex-worker",
+      description: "delegate",
+    });
+    // Discriminating: no in-process child AgentLoop was ever built — a built
+    // child's first turn would have had to call the parent's model port.
+    expect(parentModel.calls).toBe(0);
+
+    const start = progress.find((p) => p.kind === "start");
+    expect(start).toMatchObject({ kind: "start", agentType: "codex-worker", engine: "codex" });
+    const end = progress.find((p) => p.kind === "end");
+    expect(end).toMatchObject({ kind: "end", status: "completed", turns: 1 });
+  });
+
+  it("model precedence: req.model outranks the persona's own, absent both the spec omits model", async () => {
+    const specs: EngineChildSpec[] = [];
+    const runEngineChild = vi.fn(async (spec: EngineChildSpec): Promise<SubagentOutcome> => {
+      specs.push(spec);
+      return okOutcome();
+    });
+    const withModel: PersonaDefinition = { ...enginePersona, model: "persona-model" };
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [withModel, enginePersona],
+      runEngineChild,
+    });
+
+    await runner.run({ agentType: "codex-worker", description: "d", prompt: "p" }, {});
+    expect(specs[0]?.model).toBe("persona-model");
+
+    await runner.run(
+      { agentType: "codex-worker", description: "d", prompt: "p", model: "request-model" },
+      {},
+    );
+    expect(specs[1]?.model).toBe("request-model");
+  });
+
+  it("fires SubagentStop with the engine child's own outcome fields", async () => {
+    const { hooks, calls } = recordingHooks();
+    const runEngineChild = vi.fn(
+      async (): Promise<SubagentOutcome> => okOutcome({ turns: 3, toolCalls: 2, durationMs: 42 }),
+    );
+    const runner = createSubagentRunner(makeParent({ hooks }), {
+      profiles: [enginePersona],
+      runEngineChild,
+    });
+
+    await runner.run({ agentType: "codex-worker", description: "engine task", prompt: "p" }, {});
+
+    const subCalls = calls.filter((c) => c.event === "SubagentStop");
+    expect(subCalls).toHaveLength(1);
+    expect(subCalls[0]!.input).toEqual({
+      agentType: "codex-worker",
+      description: "engine task",
+      status: "completed",
+      turns: 3,
+      toolCalls: 2,
+      durationMs: 42,
+    });
+  });
+
+  it("without runEngineChild: a honest error-outcome, NOT a silent fallback to the in-process loop", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("should never run"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      profiles: [enginePersona], // no runEngineChild
+    });
+
+    const outcome = await runner.run(
+      { agentType: "codex-worker", description: "d", prompt: "p" },
+      {},
+    );
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain("codex-worker");
+    expect(outcome.finalText).toContain("codex");
+    // Discriminating: the parent's own model port (what buildChildConfig would
+    // inherit by default) was never called — there is no fallback child loop.
+    expect(parentModel.calls).toBe(0);
+  });
+
+  it("an engine persona without a host resolver fails BEFORE the semaphore — it never queues behind running children", async () => {
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let started = 0;
+    const gatedModel: ModelPort = {
+      streamText(req: ModelRequest): AsyncIterable<ModelStreamEvent> {
+        started += 1;
+        const signal = req.abortSignal;
+        return (async function* () {
+          await gate;
+          if (signal?.aborted) {
+            throw new DOMException("Aborted", "AbortError");
+          }
+          yield { type: "start" };
+          yield { type: "text_delta", id: "t", text: "ok" };
+          yield { type: "finish", finishReason: "stop", usage: {} };
+        })();
+      },
+    };
+    // No runEngineChild: an engine-persona spawn can only ever error out.
+    const runner = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }), {
+      profiles: [enginePersona],
+    });
+
+    // Two real (built-in, in-process) children hold BOTH semaphore permits
+    // (MAX_CONCURRENT_SUBAGENTS = 2) and are gated open.
+    const p1 = runner.run({ ...REQ, agentType: "explore", prompt: "1" }, {});
+    const p2 = runner.run({ ...REQ, agentType: "explore", prompt: "2" }, {});
+    await delay(40);
+    expect(started).toBe(2);
+
+    const errOutcome = await runner.run(
+      { agentType: "codex-worker", description: "d", prompt: "p" },
+      {},
+    );
+    expect(errOutcome.status).toBe("error");
+    expect(started).toBe(2); // no third model call was ever attempted
+
+    releaseGate();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.status).toBe("completed");
+    expect(r2.status).toBe("completed");
+  });
+
+  it("a built-in agent_type is never affected by an unrelated engine profile sharing the runner", async () => {
+    const model = new ScriptedModelPort((req) =>
+      isChildRequest(req) ? textStep("built-in child report") : textStep("n/a"),
+    );
+    const runner = createSubagentRunner(makeParent({ modelPort: model }), {
+      profiles: [enginePersona],
+      // No runEngineChild — proves the built-in path below never consults it.
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {});
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("built-in child report");
   });
 });
