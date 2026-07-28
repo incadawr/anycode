@@ -283,6 +283,42 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: false, reason: "http_error" });
   });
 
+  // TASK.67: Moonshot's Anthropic-compatible proxy answers 404 on this route
+  // while POST /v1/messages works — the endpoint is fine, it just publishes no
+  // model list. Collapsing that into `http_error` ("The endpoint returned an
+  // error response") reads as "your connection is broken" and is the single
+  // reason every affected user hit.
+  it("RED-PROOF (TASK.67): reports a 404 on the models route as models_not_supported, not http_error", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "url.not_found" } }));
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: false, reason: "models_not_supported" });
+  });
+
+  // Same class, different shape: an endpoint that routes /models but refuses GET.
+  it("reports a 405 on the models route as models_not_supported", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(405);
+      res.end();
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: false, reason: "models_not_supported" });
+  });
+
+  // Discriminant: a rejected credential is NOT "this provider has no model
+  // list" — 401/403 must keep the generic http_error so the fix suggested to
+  // the user stays "check the key", not "type the model by hand".
+  it("keeps 401 on the models route as http_error", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(401);
+      res.end();
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: false, reason: "http_error" });
+  });
+
   it("rejects a non-JSON body", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
