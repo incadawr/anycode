@@ -30,6 +30,16 @@
  * `onAllow`'s signature grows an optional `remember` parameter — calling it
  * with no argument (checkbox unchecked) is byte-identical to the pre-2.2
  * behavior.
+ *
+ * TASK.27 adds ONE presentation special case, `describePermissionAsk`: an
+ * ExitPlanMode ask renders the plan as markdown with action-shaped buttons
+ * (Approve plan / Keep planning) and no "Always allow". Nothing about the
+ * transport changes — the tool reaches this modal through the same
+ * `permission_request` tract as every other ask (it is `needsApproval:true`, so
+ * the permission engine escalates it on its own), and the outgoing
+ * allow/deny messages are byte-identical. Esc, the "×" button and the deny
+ * button all remain the same fail-closed deny they always were; for a plan that
+ * deny simply means "keep planning", which is what its label now says.
  */
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
@@ -39,6 +49,7 @@ import type { UiToHostMessage } from "../../../shared/protocol.js";
 import type { EnginePresentation } from "../../../shared/protocol.js";
 import type { PermissionRuleAddRequest } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
+import { Markdown } from "./Markdown.js";
 import { X } from "./icons.js";
 import { commandBinary, sanitizeBashPattern } from "../permission-pattern.js";
 import "../settings.css";
@@ -118,6 +129,80 @@ export function formatPermissionTitle(toolName: string): PermissionTitle {
     tool: toolName,
     action,
     sentence: action ? `Allow ${toolName} to ${action}?` : `Allow ${toolName}?`,
+  };
+}
+
+/**
+ * Visible cap for a plan body (TASK.27), mirroring the CLI's own
+ * CLI_PLAN_PREVIEW_MAX_CHARS (terminal-broker.ts). The scroll well is CSS; this
+ * only stops a pathological multi-MB plan from being handed to the markdown
+ * lexer on every render. Counted in UTF-16 code units, exactly like the slice
+ * and the elided count derived from it.
+ */
+export const PLAN_PREVIEW_MAX_CHARS = 10_000;
+
+/** Presentation facts the modal needs, resolved from the ask alone. */
+export interface PermissionAskPresentation {
+  /** "plan" only for a well-formed ExitPlanMode approval ask. */
+  kind: "plan" | "generic";
+  /** Capped plan markdown, or null for a generic ask. */
+  plan: string | null;
+  /** Characters the cap removed; 0 when the plan fit. */
+  elidedChars: number;
+  /** Dialog aria-label. */
+  sentence: string;
+  allowLabel: string;
+  denyLabel: string;
+  /** One-line explanation of what approving actually does; null for generic asks. */
+  hint: string | null;
+  /** Whether an "Always allow" rule may be offered for this ask at all. */
+  canRemember: boolean;
+}
+
+/**
+ * Resolves how an ask should be presented (TASK.27). The plan branch is a
+ * PRESENTATION special case only — the tool reached this modal through the
+ * ordinary permission tract, and the outgoing allow/deny messages are
+ * unchanged.
+ *
+ * Fallback discipline mirrors the CLI's `planApprovalText`: an ExitPlanMode ask
+ * whose `plan` is missing or not a string is NOT a plan — it degrades to the
+ * generic JSON-dump presentation rather than rendering an empty plan well and
+ * pretending there was something to read. Exact, case-sensitive tool-name match
+ * for the same reason `formatPermissionTitle` refuses to fuzzy-match: guessing
+ * wrong on a security prompt is worse than being generic.
+ *
+ * `canRemember` is false for a plan: a remembered "always allow ExitPlanMode"
+ * rule would auto-approve every future plan before anyone read it, which is the
+ * one thing a plan gate exists to prevent.
+ */
+export function describePermissionAsk(toolName: string, input: unknown): PermissionAskPresentation {
+  const raw =
+    toolName === "ExitPlanMode"
+      ? (input !== null && typeof input === "object" ? (input as { plan?: unknown }).plan : undefined)
+      : undefined;
+  if (typeof raw !== "string") {
+    return {
+      kind: "generic",
+      plan: null,
+      elidedChars: 0,
+      sentence: formatPermissionTitle(toolName).sentence,
+      allowLabel: "Allow",
+      denyLabel: "Deny",
+      hint: null,
+      canRemember: true,
+    };
+  }
+  const elidedChars = Math.max(0, raw.length - PLAN_PREVIEW_MAX_CHARS);
+  return {
+    kind: "plan",
+    plan: elidedChars > 0 ? raw.slice(0, PLAN_PREVIEW_MAX_CHARS) : raw,
+    elidedChars,
+    sentence: "Review the implementation plan.",
+    allowLabel: "Approve plan",
+    denyLabel: "Keep planning",
+    hint: "Approving leaves plan mode and starts implementation — write actions still ask for approval individually.",
+    canRemember: false,
   };
 }
 
@@ -280,6 +365,14 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
   const suggestedPattern = suggestAlwaysAllowPattern(request.toolName, request.input);
   const title = formatPermissionTitle(request.toolName);
   const platform = window.anycode?.platform ?? "darwin";
+  // TASK.27: an ExitPlanMode ask is presented as a plan review — markdown body,
+  // action-shaped buttons, no Always-allow. `showRemember` folds the engine
+  // capability and the per-ask verdict into ONE flag used by both the checkbox
+  // and fireAllow, so a plan can never carry a `remember` even if the checkbox
+  // state somehow survived a request change.
+  const presentation = describePermissionAsk(request.toolName, request.input);
+  const isPlan = presentation.kind === "plan";
+  const showRemember = allowRemember && presentation.canRemember;
 
   // R12 §2 preview field narrowing (defensive, mirrors summarizeInput's style):
   // a missing/non-string field simply doesn't render its preview — never throws,
@@ -298,7 +391,7 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
   const editNewCapped = editNew !== null ? capPreviewLines(editNew, DIFF_SIDE_MAX_LINES) : null;
 
   function fireAllow(): void {
-    onAllow(allowRemember && alwaysAllow ? { pattern: suggestedPattern !== undefined ? pattern : undefined } : undefined);
+    onAllow(showRemember && alwaysAllow ? { pattern: suggestedPattern !== undefined ? pattern : undefined } : undefined);
   }
 
   function handleDialogKeyDown(event: KeyboardEvent<HTMLDialogElement>): void {
@@ -332,8 +425,8 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
   return (
     <dialog
       ref={dialogRef}
-      className="permission-modal"
-      aria-label={title.sentence}
+      className={isPlan ? "permission-modal permission-modal-plan" : "permission-modal"}
+      aria-label={presentation.sentence}
       onKeyDown={handleDialogKeyDown}
       onCancel={(event) => {
         // Esc fires the dialog's native "cancel" event; prevent the browser's
@@ -348,33 +441,68 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
           with the risk badge as a slightly deeper soft-pill sitting on top. */}
       <div className={`permission-modal-header permission-modal-header-${request.metadata.riskLevel}`}>
         <div className="permission-modal-header-text">
+          {/* TASK.27: a plan review is not an "Allow <Tool>?" question — the
+              risk badge is dropped too (a read-only mode switch has no risk
+              worth grading; the consequence is stated in words below). */}
           <span className="permission-modal-title">
-            Allow <strong className="permission-modal-tool">{title.tool}</strong>
-            {title.action !== null ? <> to {title.action}?</> : "?"}
+            {isPlan ? (
+              "Plan ready — review before implementation"
+            ) : (
+              <>
+                Allow <strong className="permission-modal-tool">{title.tool}</strong>
+                {title.action !== null ? <> to {title.action}?</> : "?"}
+              </>
+            )}
           </span>
-          <span className={`permission-risk-badge permission-risk-${request.metadata.riskLevel}`}>
-            {RISK_LABELS[request.metadata.riskLevel]}
-            {request.metadata.destructive && <span className="permission-destructive-tag">Destructive</span>}
-          </span>
+          {!isPlan && (
+            <span className={`permission-risk-badge permission-risk-${request.metadata.riskLevel}`}>
+              {RISK_LABELS[request.metadata.riskLevel]}
+              {request.metadata.destructive && <span className="permission-destructive-tag">Destructive</span>}
+            </span>
+          )}
         </div>
-        <button type="button" className="permission-modal-close" aria-label="Deny and close" onClick={onDeny}>
+        <button
+          type="button"
+          className="permission-modal-close"
+          aria-label={isPlan ? "Keep planning and close" : "Deny and close"}
+          onClick={onDeny}
+        >
           <X />
         </button>
       </div>
 
       <div className="permission-modal-body">
-        <div className="permission-input">
-          <div className="permission-input-label">{input.label}</div>
-          <pre
-            className={
-              input.emphasize
-                ? "permission-input-value permission-input-value-emphasized"
-                : "permission-input-value"
-            }
-          >
-            {input.value}
-          </pre>
-        </div>
+        {/* TASK.27: the plan IS the payload — rendered as markdown through the
+            same lexer-only renderer the transcript uses (no innerHTML), instead
+            of the generic JSON `Input` dump, which is unreadable for prose. */}
+        {isPlan && presentation.plan !== null ? (
+          <div className="permission-plan">
+            {presentation.plan.length === 0 ? (
+              <div className="permission-preview-more">The model submitted an empty plan.</div>
+            ) : (
+              <Markdown text={presentation.plan} />
+            )}
+            {presentation.elidedChars > 0 && (
+              <div className="permission-preview-more">
+                Plan truncated — {presentation.elidedChars} more character
+                {presentation.elidedChars === 1 ? "" : "s"} not shown
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="permission-input">
+            <div className="permission-input-label">{input.label}</div>
+            <pre
+              className={
+                input.emphasize
+                  ? "permission-input-value permission-input-value-emphasized"
+                  : "permission-input-value"
+              }
+            >
+              {input.value}
+            </pre>
+          </div>
+        )}
 
         {/* R12 §2: Write content preview — naive verbatim display of the bytes
             being permitted. Empty-content branch says so in words (an empty
@@ -438,9 +566,16 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
             </div>
           )}
 
-        <div className="permission-mode">Mode: {request.mode}</div>
+        {/* TASK.27: for a plan, the consequence of approving is the actual
+            information the user needs; "Mode: plan" is the state they can
+            already see on the composer chip. */}
+        {isPlan ? (
+          <div className="permission-plan-hint">{presentation.hint}</div>
+        ) : (
+          <div className="permission-mode">Mode: {request.mode}</div>
+        )}
 
-        {allowRemember && <div className="permission-remember">
+        {showRemember && <div className="permission-remember">
           <label className="permission-remember-label">
             <input
               type="checkbox"
@@ -469,10 +604,10 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
 
       <div className="permission-modal-actions">
         <button type="button" ref={denyRef} className="permission-deny-button" onClick={onDeny}>
-          Deny
+          {presentation.denyLabel}
         </button>
         <button type="button" className="permission-allow-button" onClick={fireAllow}>
-          Allow
+          {presentation.allowLabel}
           <span className="permission-allow-kbd" aria-hidden="true">
             {platform === "darwin" ? "⌘⏎" : "Ctrl+Enter"}
           </span>
