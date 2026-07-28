@@ -400,3 +400,82 @@ describe("profile `model:` frontmatter", () => {
     expect(problems[0]).toContain("not a model id");
   });
 });
+
+// ---------------------------------------------------------------------------
+// `engine:` frontmatter (subagent-model contract). Absent/blank ⇒ undefined —
+// today's in-process child, byte-for-byte the pre-field behaviour; the
+// vocabulary is fixed at exactly "codex" | "claude" (trim + lowercase), unlike
+// the open `model:` vocabulary above. An unrecognized value is FATAL rather than
+// silently dropped — a profile that asks for an engine and silently runs
+// in-process is the same dishonesty `bad_model` already refuses.
+
+describe("profile `engine:` frontmatter", () => {
+  function parseOk(raw: string, fallback = "reviewer") {
+    const result = parseAgentProfileMd(raw, fallback);
+    if ("error" in result) {
+      throw new Error(`expected ok, got error ${result.error.kind}`);
+    }
+    return result.ok;
+  }
+
+  it("carries a well-formed engine through the parse", () => {
+    expect(parseOk("---\nname: reviewer\ndescription: d\nengine: claude\n---\nBODY").engine).toBe(
+      "claude",
+    );
+    expect(parseOk("---\nname: reviewer\ndescription: d\nengine: codex\n---\nBODY").engine).toBe(
+      "codex",
+    );
+  });
+
+  it("normalizes the value (trim + lowercase) before matching", () => {
+    expect(parseOk("---\nname: reviewer\ndescription: d\nengine: Claude\n---\nBODY").engine).toBe(
+      "claude",
+    );
+    expect(
+      parseOk("---\nname: reviewer\ndescription: d\nengine:   CODEX  \n---\nBODY").engine,
+    ).toBe("codex");
+  });
+
+  it("leaves engine undefined when the line is absent or blank — today's in-process child", () => {
+    expect(parseOk("---\nname: reviewer\ndescription: d\n---\nBODY").engine).toBeUndefined();
+    expect(
+      parseOk("---\nname: reviewer\ndescription: d\nengine:   \n---\nBODY").engine,
+    ).toBeUndefined();
+  });
+
+  it("refuses an unrecognized engine rather than silently keeping the in-process child", () => {
+    const result = parseAgentProfileMd(
+      "---\nname: reviewer\ndescription: d\nengine: gpt-5\n---\nBODY",
+      "reviewer",
+    );
+
+    expect("error" in result && result.error).toEqual({
+      kind: "bad_engine",
+      name: "reviewer",
+      engine: "gpt-5",
+    });
+  });
+
+  it("discovery attaches the engine to the persona and reports an unrecognized one as a problem (profile not registered)", async () => {
+    const good = "---\nname: good\ndescription: d\nengine: claude\n---\nBODY";
+    const bad = "---\nname: bad\ndescription: d\nengine: gpt-5\n---\nBODY";
+    const fs = new FakeFs({ [WS]: { "good.md": good, "bad.md": bad } });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+
+    expect(profiles.map((p) => [p.name, p.engine])).toEqual([["good", "claude"]]);
+    expect(profiles.some((p) => p.name === "bad")).toBe(false);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("bad.md");
+    expect(problems[0]).toContain("gpt-5");
+  });
+
+  it("a profile without `engine:` still discovers with engine undefined (today's default)", async () => {
+    const fs = new FakeFs({
+      [WS]: { "plain.md": md({ name: "plain", description: "d" }, "body") },
+    });
+
+    const { profiles } = await discoverAgentProfiles(fs, ROOTS);
+    expect(profiles[0]?.engine).toBeUndefined();
+  });
+});

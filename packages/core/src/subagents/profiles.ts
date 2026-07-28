@@ -57,6 +57,14 @@ export const AGENT_PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
  */
 export const AGENT_PROFILE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 
+/**
+ * Frontmatter `engine:` shape (subagent-model contract). When set, children of
+ * this profile run as a one-shot foreign CLI run instead of an in-process
+ * AgentLoop — "claude" hands the run to the Claude Code CLI, "codex" to the
+ * Codex CLI.
+ */
+export type AgentProfileEngine = "codex" | "claude";
+
 /** One per-file parse of a profile `*.md`, ready for both discovery and admin. */
 export interface ParsedAgentProfile {
   /** Resolved name (frontmatter `name`, else the fallback), regex-valid, not reserved. */
@@ -82,6 +90,16 @@ export interface ParsedAgentProfile {
    */
   model?: string;
   /**
+   * Frontmatter `engine:` — when set, this profile's children run as a one-shot
+   * foreign CLI run (Codex or Claude Code) instead of an in-process AgentLoop.
+   * Absent (or blank) leaves it undefined, i.e. today's in-process child. The
+   * value is trim+lowercased before matching; an unrecognized value is FATAL
+   * (bad_engine) rather than silently dropped — same rationale as `model`: a
+   * profile that asks for one engine and silently runs in-process is worse than
+   * a profile that is loudly refused.
+   */
+  engine?: AgentProfileEngine;
+  /**
    * Non-fatal per-file problems (path-free suffixes) — currently only explicit
    * spawn-tool requests. The caller prefixes each with `Agent profile <path>: `.
    */
@@ -99,7 +117,8 @@ export type AgentProfileParseError =
   | { kind: "bad_name"; name: string }
   | { kind: "reserved_name"; name: string }
   | { kind: "missing_description"; name: string }
-  | { kind: "bad_model"; name: string; model: string };
+  | { kind: "bad_model"; name: string; model: string }
+  | { kind: "bad_engine"; name: string; engine: string };
 
 export type ParseAgentProfileResult =
   | { ok: ParsedAgentProfile }
@@ -171,6 +190,21 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     model = rawModel;
   }
 
+  // engine: optional. Blank/absent means "run as today's in-process child" — the
+  // same thing an omitted line has always meant. A recognized value is
+  // trim+lowercased before matching (vocabulary is fixed — exactly two known
+  // engines, unlike the open `model:` vocabulary above); an unrecognized one is
+  // FATAL rather than dropped, for the same reason as `model`.
+  const rawEngine = (parsed.fields.engine ?? "").trim();
+  let engine: AgentProfileEngine | undefined;
+  if (rawEngine !== "") {
+    const normalized = rawEngine.toLowerCase();
+    if (normalized !== "codex" && normalized !== "claude") {
+      return { error: { kind: "bad_engine", name, engine: rawEngine } };
+    }
+    engine = normalized;
+  }
+
   // File body = child systemPrompt (user content, capped UTF-8-safe); an empty
   // body gets a placeholder like the built-in personas.
   const capped = capUtf8Bytes(parsed.body, AGENT_PROFILE_PROMPT_MAX_BYTES);
@@ -178,7 +212,16 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     capped.text.trim().length > 0 ? capped.text : `[agent profile "${name}" — empty body]`;
 
   return {
-    ok: { name, description, tools, toolsExplicit, body, problems, ...(model !== undefined ? { model } : {}) },
+    ok: {
+      name,
+      description,
+      tools,
+      toolsExplicit,
+      body,
+      problems,
+      ...(model !== undefined ? { model } : {}),
+      ...(engine !== undefined ? { engine } : {}),
+    },
   };
 }
 
@@ -284,11 +327,23 @@ export async function discoverAgentProfiles(
               `Agent profile ${path}: model "${err.model}" must match ${AGENT_PROFILE_MODEL_RE.source} — ignored`,
             );
             break;
+          case "bad_engine":
+            // Same claim semantics as bad_model: the name IS claimed (validation
+            // happens after the name resolves), so a lower-precedence same-named
+            // file stays shadowed rather than silently taking over.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: engine "${err.engine}" must be "codex" or "claude" — ignored`,
+            );
+            break;
         }
         continue;
       }
 
-      const { name, description, tools, body, model } = result.ok;
+      const { name, description, tools, body, model, engine } = result.ok;
 
       // Precedence dedupe: a lower source's same-named file is shadowed silently.
       if (claimed.has(name)) {
@@ -317,6 +372,7 @@ export async function discoverAgentProfiles(
         tools,
         systemPrompt: body,
         ...(model !== undefined ? { model } : {}),
+        ...(engine !== undefined ? { engine } : {}),
       });
     }
   }

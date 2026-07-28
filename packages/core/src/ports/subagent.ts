@@ -26,6 +26,22 @@ export interface SubagentRequest {
   model?: string;
 }
 
+/**
+ * Everything SubagentRunnerOptions.runEngineChild needs to run ONE foreign-CLI
+ * child in place of an in-process AgentLoop (md-profile `engine:` frontmatter).
+ * The host owns the actual process spawn/parse; this module only describes what
+ * a single one-shot run needs to start.
+ */
+export interface EngineChildSpec {
+  engine: "codex" | "claude";
+  /** Ready one-shot child prompt: the persona body + the caller's request. */
+  prompt: string;
+  agentType: string;
+  description: string;
+  /** Model for the CLI flag; absent — the engine takes its own default. */
+  model?: string;
+}
+
 export interface SubagentOutcome {
   status: "completed" | "max_turns" | "cancelled" | "error";
   /** The child's final assistant text, capped at SUBAGENT_OUTPUT_MAX_BYTES. */
@@ -40,8 +56,10 @@ export interface SubagentOutcome {
 export type SubagentProgress =
   // `model` is the RESOLVED id the child actually runs on (request override, else
   // the profile's `model:`). Absent means the child inherited the parent's port —
-  // the renderer shows a model pill only when the child really differs.
-  | { kind: "start"; agentType: string; description: string; model?: string }
+  // the renderer shows a model pill only when the child really differs. `engine`
+  // is set only for an engine persona (md-profile `engine:`) — a one-shot foreign
+  // CLI run (Codex or Claude Code) in place of an in-process child.
+  | { kind: "start"; agentType: string; description: string; model?: string; engine?: "codex" | "claude" }
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   // Per-child-tool activity (slice P7.18/F16b): one bounded one-liner per child
   // tool call for the renderer's live feed. `summary` is a pre-capped, sanitized

@@ -302,6 +302,7 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
+import { createEngineChildRunner } from "./engine-children.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
@@ -1604,6 +1605,15 @@ async function boot(): Promise<void> {
     // from this session's provider/transport/key rather than failing closed.
     // Without it the runner returns "model override is not supported in this
     // host" — the CLI wired this from the start, the desktop host did not.
+    //
+    // runEngineChild (engine-children.ts) backs an `engine:` md-profile
+    // persona: a one-shot Claude Code / Codex CLI run in place of an
+    // in-process child. `env: process.env` is the HOST's own environment —
+    // main injects ENV_CLAUDE_BIN/ENV_CODEX_BIN into it whenever the doctor
+    // has a validated path, independent of which engine this session itself
+    // runs on (main/index.ts's `engineEnv`), so a core/codex session can still
+    // spawn a Claude subagent and vice versa. `cwd: workspace` roots the child
+    // in this session's own workspace, matching every other port above.
     const loop = new AgentLoop(
       withWorkflows(
         withSubagents(config, {
@@ -1611,6 +1621,7 @@ async function boot(): Promise<void> {
           env: systemPromptEnv,
           memorySection: ext.memorySection,
           resolveChildModelPort: modelPortFactory,
+          runEngineChild: createEngineChildRunner({ cwd: workspace, env: process.env }),
         }),
         ext.workflows,
       ),
