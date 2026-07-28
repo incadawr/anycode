@@ -372,6 +372,11 @@ const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
   invalid_url: "Only https:// URLs (or http:// on localhost) are allowed.",
   redirect_blocked: "That endpoint redirected to a different address — refused for safety.",
   http_error: "The endpoint returned an error response.",
+  // TASK.67: a 404/405 on the models route is ambiguous between two real
+  // causes (the provider never implemented a model-list endpoint, or the
+  // base URL is wrong) — the copy names both instead of guessing, and points
+  // at the manual entry field (datalist + preset chips) that already exists.
+  models_not_supported: "This provider may not publish a model list, or the base URL may be wrong — enter the model id manually instead.",
   response_too_large: "The endpoint's response was too large.",
   timeout: "The endpoint did not respond in time.",
   network_error: "Could not reach that endpoint.",
