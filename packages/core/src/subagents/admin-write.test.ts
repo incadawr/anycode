@@ -254,3 +254,55 @@ describe("profile `model:` round-trip through the editor", () => {
     expect(result.ok === false && result.issues?.join(" ")).toContain("the fast one");
   });
 });
+
+describe("profile `engine:` round-trip through the editor", () => {
+  it("serializes the engine and re-parses it to the same value", () => {
+    const draft = { name: "reviewer", description: "d", body: "BODY", engine: "claude" as const };
+
+    const serialized = serializeAgentProfile(draft);
+
+    expect(serialized).toContain("engine: claude");
+    const reparsed = parseAgentProfileMd(serialized, "reviewer");
+    expect("ok" in reparsed && reparsed.ok.engine).toBe("claude");
+    expect(validateAgentProfileDraft(draft).ok).toBe(true);
+  });
+
+  it("omits the line entirely when no engine is set — byte-identical to a pre-field profile", () => {
+    const withoutField = serializeAgentProfile({ name: "reviewer", description: "d", body: "BODY" });
+
+    expect(withoutField).not.toContain("engine:");
+    const reparsed = parseAgentProfileMd(withoutField, "reviewer");
+    expect("ok" in reparsed && reparsed.ok.engine).toBeUndefined();
+  });
+
+  it("keeps model and engine independent — both persist together", () => {
+    const draft = {
+      name: "reviewer",
+      description: "d",
+      body: "BODY",
+      model: "claude-opus-5",
+      engine: "claude" as const,
+    };
+
+    const serialized = serializeAgentProfile(draft);
+
+    expect(serialized).toContain("model: claude-opus-5");
+    expect(serialized).toContain("engine: claude");
+    const reparsed = parseAgentProfileMd(serialized, "reviewer");
+    expect("ok" in reparsed && reparsed.ok.model).toBe("claude-opus-5");
+    expect("ok" in reparsed && reparsed.ok.engine).toBe("claude");
+    expect(validateAgentProfileDraft(draft).ok).toBe(true);
+  });
+
+  it("refuses an out-of-set engine value rather than writing it to disk", () => {
+    const result = validateAgentProfileDraft({
+      name: "reviewer",
+      description: "d",
+      body: "BODY",
+      // @ts-expect-error — exercising the runtime guard for a caller that bypasses the UI's closed <select>.
+      engine: "gpt",
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "validation_failed" });
+  });
+});

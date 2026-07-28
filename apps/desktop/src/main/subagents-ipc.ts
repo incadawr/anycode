@@ -61,6 +61,7 @@ import {
   SUBAGENTS_SAVE_CHANNEL,
 } from "../shared/subagents-config.js";
 import type {
+  SubagentEngine,
   SubagentProfileDraft,
   SubagentReadResult,
   SubagentRowView,
@@ -173,6 +174,7 @@ export interface SubagentsIpcDeps {
 
 const sourceKindSchema: z.ZodType<SubagentSourceKind> = z.enum(["builtin", "project", "user", "plugin"]);
 const scopeSchema: z.ZodType<SubagentScope> = z.enum(["project", "user"]);
+const engineSchema: z.ZodType<SubagentEngine> = z.enum(["codex", "claude"]);
 
 const draftSchema: z.ZodType<SubagentProfileDraft> = z.object({
   name: z.string().min(1).max(64),
@@ -180,10 +182,11 @@ const draftSchema: z.ZodType<SubagentProfileDraft> = z.object({
   tools: z.array(z.string()).optional(),
   body: z.string(),
   // Zod strips unknown keys, so an absent entry here would drop the renderer's
-  // model on every save regardless of what the pane sends. 128 mirrors the
-  // parser's own AGENT_PROFILE_MODEL_RE tail cap; the shape itself is validated
-  // by validateAgentProfileDraft (single oracle).
+  // model/engine on every save regardless of what the pane sends. 128 mirrors
+  // the parser's own AGENT_PROFILE_MODEL_RE tail cap; the shape itself is
+  // validated by validateAgentProfileDraft (single oracle).
   model: z.string().max(128).optional(),
+  engine: engineSchema.optional(),
 });
 
 const listSchema = z.object({ tabId: z.string().optional() });
@@ -299,6 +302,7 @@ function toRowView(row: AgentProfileAdminRow, hasWorkspace: boolean): SubagentRo
     path: row.path,
     editable: sourceKind === "project" || sourceKind === "user",
     ...(row.model !== undefined ? { model: row.model } : {}),
+    ...(row.engine !== undefined ? { engine: row.engine } : {}),
   };
   if (pluginName !== undefined) {
     view.pluginName = pluginName;
@@ -434,17 +438,19 @@ export async function handleSubagentsRead(deps: SubagentsIpcDeps, raw: unknown):
     console.warn(`[subagents-ipc] re-parse failed for ${found.row.path}`, parsedProfile.error);
     return { ok: false, reason: "io_error" };
   }
-  const { name: parsedName, description, tools, toolsExplicit, body, model } = parsedProfile.ok;
-  // `model` MUST ride the draft: the editor round-trips whatever it loads back
-  // through serializeAgentProfile, so a field dropped here is a field silently
-  // erased from the file on the next save — a profile that asked for a specific
-  // model would quietly start inheriting the parent's.
+  const { name: parsedName, description, tools, toolsExplicit, body, model, engine } = parsedProfile.ok;
+  // `model`/`engine` MUST ride the draft: the editor round-trips whatever it
+  // loads back through serializeAgentProfile, so a field dropped here is a
+  // field silently erased from the file on the next save — a profile that
+  // asked for a specific model/engine would quietly start inheriting the
+  // parent's.
   const draft: SubagentProfileDraft = {
     name: parsedName,
     description,
     body,
     ...(toolsExplicit ? { tools: [...tools] } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(engine !== undefined ? { engine } : {}),
   };
   return { ok: true, draft, raw: rawMd };
 }

@@ -2020,6 +2020,13 @@
   color: var(--accent);
 }
 
+/* Foreign-engine chip: the child is a separate Codex/Claude CLI process, not a
+   child loop of this session — deliberately louder than the model chip. */
+.subagents-badge-engine {
+  color: var(--warning, var(--accent));
+  border-color: currentColor;
+}
+
 /* Monospace `built-in:<name>` id line under a built-in card's description
    (ref-PNG §1.3, verbatim format). */
 .subagents-id-line {

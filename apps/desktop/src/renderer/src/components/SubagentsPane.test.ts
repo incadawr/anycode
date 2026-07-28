@@ -9,9 +9,11 @@
  * custody) is exercised through the component's exported pure builders.
  */
 import { describe, expect, it } from "vitest";
+import type { EngineModelChoice } from "../../../shared/protocol.js";
 import type { SubagentProfileDraft, SubagentRowView, SubagentsRefusalReason } from "../../../shared/subagents-config.js";
 import {
   blankSubagentEditorFields,
+  buildModelSelectOptions,
   builtinIdLine,
   buildCreateRequest,
   buildDeleteRequest,
@@ -22,6 +24,7 @@ import {
   buildSubagentDraft,
   canManageSubagentRow,
   canSubmitSubagentDraft,
+  engineModelChoicesToModelList,
   filterSubagentRows,
   filterSubagentsBySource,
   firstRevealableRow,
@@ -29,6 +32,8 @@ import {
   isValidSubagentName,
   partitionSubagentRows,
   problemsStripLabel,
+  resolveSubagentModelOptions,
+  SUBAGENT_ENGINE_OPTIONS,
   SUBAGENT_TOOL_CHOICES,
   subagentEditorFieldsEqual,
   subagentEditorFieldsFromDraft,
@@ -247,14 +252,21 @@ describe("SUBAGENT_TOOL_CHOICES", () => {
 describe("blankSubagentEditorFields / subagentEditorFieldsFromDraft round trip", () => {
   it("blank fields start with no tools selected (inherit-all default) and a non-empty template body", () => {
     const blank = blankSubagentEditorFields();
-    expect(blank).toEqual({ name: "", description: "", tools: [], body: blank.body, model: "" });
+    expect(blank).toEqual({ name: "", description: "", tools: [], body: blank.body, model: "", engine: "" });
     expect(blank.body.length).toBeGreaterThan(0);
   });
 
   it("a draft with explicit tools round-trips through fields->draft byte-stably (name/description trimmed, tools preserved)", () => {
     const draft: SubagentProfileDraft = { name: "researcher", description: "digs", tools: ["Read", "Grep"], body: "You research things." };
     const fields = subagentEditorFieldsFromDraft(draft);
-    expect(fields).toEqual({ name: "researcher", description: "digs", tools: ["Read", "Grep"], body: "You research things.", model: "" });
+    expect(fields).toEqual({
+      name: "researcher",
+      description: "digs",
+      tools: ["Read", "Grep"],
+      body: "You research things.",
+      model: "",
+      engine: "",
+    });
     expect(buildSubagentDraft(fields)).toEqual(draft);
   });
 
@@ -287,31 +299,56 @@ describe("blankSubagentEditorFields / subagentEditorFieldsFromDraft round trip",
     const fields = { ...subagentEditorFieldsFromDraft({ name: "r", description: "d", body: "b", model: "k3" }), model: "   " };
     expect("model" in buildSubagentDraft(fields)).toBe(false);
   });
+
+  // Same silent-erasure hazard as `model` above, now for the engine-selection
+  // slice's second additive field.
+  it("carries a pinned engine through load -> edit -> save unchanged, alongside a pinned model", () => {
+    const draft: SubagentProfileDraft = { name: "reviewer", description: "reviews", body: "b", model: "k3", engine: "claude" };
+    const fields = subagentEditorFieldsFromDraft(draft);
+    expect(fields.engine).toBe("claude");
+    expect(fields.model).toBe("k3");
+    expect(buildSubagentDraft(fields)).toEqual(draft);
+  });
+
+  it("maps an absent engine to an empty field, and an empty field back to an absent key (inherit stays inherit)", () => {
+    const draft: SubagentProfileDraft = { name: "plain", description: "d", body: "b" };
+    const fields = subagentEditorFieldsFromDraft(draft);
+    expect(fields.engine).toBe("");
+    const rebuilt = buildSubagentDraft(fields);
+    expect("engine" in rebuilt).toBe(false);
+  });
 });
 
 describe("buildSubagentDraft", () => {
   it("omits 'tools' entirely when the selection is empty — matches SubagentProfileDraft's inherit-baseline semantics", () => {
-    const draft = buildSubagentDraft({ name: "  a  ", description: "  b  ", tools: [], body: "c", model: "" });
+    const draft = buildSubagentDraft({ name: "  a  ", description: "  b  ", tools: [], body: "c", model: "", engine: "" });
     expect(draft).toEqual({ name: "a", description: "b", body: "c" });
     expect("tools" in draft).toBe(false);
   });
 
   it("includes 'tools' when at least one chip is selected", () => {
-    const draft = buildSubagentDraft({ name: "a", description: "b", tools: ["Read"], body: "c", model: "" });
+    const draft = buildSubagentDraft({ name: "a", description: "b", tools: ["Read"], body: "c", model: "", engine: "" });
     expect(draft).toEqual({ name: "a", description: "b", tools: ["Read"], body: "c" });
+  });
+
+  it("includes 'engine' only when set — 'Same as parent' (\"\") omits the key entirely", () => {
+    const inherited = buildSubagentDraft({ name: "a", description: "b", tools: [], body: "c", model: "", engine: "" });
+    expect("engine" in inherited).toBe(false);
+    const codex = buildSubagentDraft({ name: "a", description: "b", tools: [], body: "c", model: "", engine: "codex" });
+    expect(codex).toEqual({ name: "a", description: "b", body: "c", engine: "codex" });
   });
 });
 
 describe("toggleSubagentToolChip", () => {
   it("adds an unselected tool, removes a selected one", () => {
-    const base = { name: "a", description: "b", tools: ["Read"], body: "c", model: "" };
+    const base = { name: "a", description: "b", tools: ["Read"], body: "c", model: "", engine: "" as const };
     expect(toggleSubagentToolChip(base, "Grep").tools).toEqual(["Read", "Grep"]);
     expect(toggleSubagentToolChip(base, "Read").tools).toEqual([]);
   });
 });
 
 describe("canSubmitSubagentDraft", () => {
-  const valid = { name: "researcher", description: "digs through docs", tools: [], body: "short body", model: "" };
+  const valid = { name: "researcher", description: "digs through docs", tools: [], body: "short body", model: "", engine: "" as const };
 
   it("requires a valid name, a non-empty single-line description, and a body under the byte cap", () => {
     expect(canSubmitSubagentDraft(valid)).toBe(true);
@@ -344,7 +381,7 @@ describe("utf8ByteLength", () => {
 });
 
 describe("subagentEditorFieldsEqual (dirty check)", () => {
-  const base = { name: "a", description: "b", tools: ["Read", "Grep"], body: "c", model: "" };
+  const base = { name: "a", description: "b", tools: ["Read", "Grep"], body: "c", model: "", engine: "" as const };
 
   it("is true for an identical value, including a reordered tool set (order-insensitive)", () => {
     expect(subagentEditorFieldsEqual(base, { ...base })).toBe(true);
@@ -365,11 +402,107 @@ describe("subagentEditorFieldsEqual (dirty check)", () => {
     expect(subagentEditorFieldsEqual(base, { ...base, model: "k3" })).toBe(false);
     expect(subagentEditorFieldsEqual({ ...base, model: "k3" }, { ...base, model: "" })).toBe(false);
   });
+
+  // Same reasoning as the model-only case above, for the engine-selection slice.
+  it("is false when only the engine differs, so an engine-only edit can be saved", () => {
+    expect(subagentEditorFieldsEqual(base, { ...base, engine: "codex" })).toBe(false);
+    expect(subagentEditorFieldsEqual({ ...base, engine: "codex" }, { ...base, engine: "claude" })).toBe(false);
+    expect(subagentEditorFieldsEqual({ ...base, engine: "codex" }, { ...base, engine: "" })).toBe(false);
+  });
 });
 
 describe("formatEffectiveToolsLine", () => {
   it("joins the effective tools, or reports 'none' for an empty list", () => {
     expect(formatEffectiveToolsLine(["Read", "Grep"])).toBe("Effective tools: Read, Grep");
     expect(formatEffectiveToolsLine([])).toBe("Effective tools: none");
+  });
+});
+
+// ── engine + model selects (design: engine-selection slice) ──
+
+describe("SUBAGENT_ENGINE_OPTIONS", () => {
+  it("is the fixed 3-item list: inherit ('') first, then Codex, then Claude", () => {
+    expect(SUBAGENT_ENGINE_OPTIONS).toEqual([
+      { value: "", label: "Same as parent" },
+      { value: "codex", label: "Codex" },
+      { value: "claude", label: "Claude" },
+    ]);
+  });
+});
+
+describe("buildModelSelectOptions", () => {
+  it("always puts the inherit option first, using the caller's label", () => {
+    const options = buildModelSelectOptions([], "", "Same as parent");
+    expect(options).toEqual([{ value: "", label: "Same as parent" }]);
+  });
+
+  it("lists every model, preferring its display name over the bare id", () => {
+    const options = buildModelSelectOptions([{ id: "claude-opus-5" }, { id: "gpt-5", name: "GPT-5" }], "", "Default");
+    expect(options).toEqual([
+      { value: "", label: "Default" },
+      { value: "claude-opus-5", label: "claude-opus-5" },
+      { value: "gpt-5", label: "GPT-5" },
+    ]);
+  });
+
+  it("appends the current value as its own option ONLY when it isn't already in the list — a hand-edited or stale saved model is never silently dropped", () => {
+    const inList = buildModelSelectOptions([{ id: "claude-opus-5" }], "claude-opus-5", "Default");
+    expect(inList).toEqual([{ value: "", label: "Default" }, { value: "claude-opus-5", label: "claude-opus-5" }]);
+
+    const notInList = buildModelSelectOptions([{ id: "claude-opus-5" }], "some-custom-id", "Default");
+    expect(notInList).toEqual([
+      { value: "", label: "Default" },
+      { value: "claude-opus-5", label: "claude-opus-5" },
+      { value: "some-custom-id", label: "some-custom-id" },
+    ]);
+  });
+
+  it("does not append an empty current value as a spurious option", () => {
+    const options = buildModelSelectOptions([{ id: "claude-opus-5" }], "", "Default");
+    expect(options).toEqual([{ value: "", label: "Default" }, { value: "claude-opus-5", label: "claude-opus-5" }]);
+  });
+});
+
+describe("engineModelChoicesToModelList", () => {
+  it("maps EngineModelChoice[] down to {id, name?}, using the label as the display name", () => {
+    const choices: EngineModelChoice[] = [{ id: "gpt-5.1", label: "GPT-5.1" }, { id: "gpt-5-mini" }];
+    expect(engineModelChoicesToModelList(choices)).toEqual([{ id: "gpt-5.1", name: "GPT-5.1" }, { id: "gpt-5-mini" }]);
+  });
+
+  it("maps an empty list to an empty list", () => {
+    expect(engineModelChoicesToModelList([])).toEqual([]);
+  });
+});
+
+describe("resolveSubagentModelOptions", () => {
+  const parentCatalogModels = [{ id: "claude-opus-5", name: "Claude Opus" }];
+  const codexChoices: EngineModelChoice[] = [{ id: "gpt-5.1", label: "GPT-5.1" }];
+
+  it("engine '' (Same as parent): uses the parent's catalog models and the 'Same as parent' label", () => {
+    expect(resolveSubagentModelOptions("", parentCatalogModels, {})).toEqual({
+      models: parentCatalogModels,
+      inheritLabel: "Same as parent",
+    });
+  });
+
+  it("engine 'codex' with a cached choice list: maps it and uses the 'Default' label", () => {
+    expect(resolveSubagentModelOptions("codex", parentCatalogModels, { codex: codexChoices })).toEqual({
+      models: [{ id: "gpt-5.1", name: "GPT-5.1" }],
+      inheritLabel: "Default",
+    });
+  });
+
+  it("engine 'claude' with NO cache entry yet (still loading, or the recheck failed): degrades to an empty list", () => {
+    expect(resolveSubagentModelOptions("claude", parentCatalogModels, {})).toEqual({
+      models: [],
+      inheritLabel: "Default",
+    });
+  });
+
+  it("engine 'claude' cached as an empty list (a real recheck that yielded nothing): still an empty list, not a re-fetch signal", () => {
+    expect(resolveSubagentModelOptions("claude", parentCatalogModels, { claude: [] })).toEqual({
+      models: [],
+      inheritLabel: "Default",
+    });
   });
 });
