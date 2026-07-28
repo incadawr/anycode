@@ -89,7 +89,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
       engineModel: "gpt-5.6-mini",
       enginePreset: "workspace",
     });
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello");
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, undefined, undefined);
   });
 
   it("codex-profiles W3-F: forwards the draft's Codex profile pick as codexProfileId", async () => {
@@ -142,7 +142,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     await submitStartDraft(deps);
 
     expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello");
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, undefined, undefined);
   });
 
   it("ordering: addTab -> setActive -> queueInitialPrompt -> discardDraft, returns {ok:true, tabId}", async () => {
@@ -166,7 +166,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(res).toEqual({ ok: true, tabId: "t1" });
     expect(order).toEqual(["createTab", "addTab", "setActive", "queueInitialPrompt"]);
     // No model was picked on the draft (defaults null) -> forwarded as undefined (slice F5#1b, D3).
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", undefined, "build");
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", undefined, "build", undefined, undefined);
     expect(tabsStore.getState().draft).toBeNull();
     expect(tabsStore.getState().draftActive).toBe(false);
 
@@ -182,7 +182,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", "gpt-5", "build");
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", "gpt-5", "build", undefined, undefined);
   });
 
   it("forwards the selected start-screen mode for first-turn setup", async () => {
@@ -193,7 +193,58 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "make a plan", undefined, "plan");
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "make a plan", undefined, "plan", undefined, undefined);
+  });
+
+  it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Core draft", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("look at this");
+    tabsStore.getState().setDraftImages([image]);
+
+    await submitStartDraft(deps);
+
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, "build", undefined, [image]);
+  });
+
+  it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Codex draft", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("look at this");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setDraftImages([image]);
+
+    await submitStartDraft(deps);
+
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, undefined, undefined, [image]);
+  });
+
+  it("TASK.81: forwards the draft's engine-effort pick to queueInitialPrompt for a Codex draft (never as part of the CreateTabRequest payload — set_engine_effort has no spawn-time channel)", async () => {
+    const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setDraftEngineEffort("high");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, "high", undefined);
+  });
+
+  it("TASK.81: a Core draft never forwards engineEffort, even if one is leftover from a prior Codex pick (engine switch does not reset it)", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setDraftEngineEffort("high");
+    tabsStore.getState().setDraftEngine("core");
+
+    await submitStartDraft(deps);
+
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, "build", undefined, undefined);
   });
 
   it("addTab is idempotent against the port-delivery race — a pre-existing tabId is a harmless no-op", async () => {

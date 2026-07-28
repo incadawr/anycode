@@ -29,6 +29,7 @@ import { createDesktopStore, type FrameScheduler, type TranscriptBlock } from ".
 import type { HostToUiMessage } from "../../shared/protocol.js";
 import type { TermToHostMessage, TermToUiMessage } from "../../shared/terminal.js";
 import type { TerminalDims, TerminalView } from "./terminal-view.js";
+import { MODEL_IMAGE_ATTACH_BLOCKED_TEXT } from "./components/Composer.js";
 
 /** Typed lookup by transcript block kind (same helper as store.test.ts) so `.text`/etc. narrow correctly. */
 function findBlock<K extends TranscriptBlock["kind"]>(
@@ -98,6 +99,51 @@ const HOST_READY = (workspace: string, sessionId: string): HostToUiMessage => ({
   model: "m1",
   sessionId,
 });
+
+/**
+ * A non-core (Codex-shaped) `host_ready` — TASK.81's effort/images dispatch-
+ * gate fixtures need `engine.model.effort` (the boot model's resolved
+ * effort, compared against a pending pick) and `imageInput` (the boot
+ * model's live vision verdict), neither of which the plain `HOST_READY`
+ * fixture above carries (legacy core wire).
+ */
+function CODEX_HOST_READY(
+  workspace: string,
+  sessionId: string,
+  options: { effort?: string; imageInput?: boolean } = {},
+): HostToUiMessage {
+  return {
+    type: "host_ready",
+    workspace,
+    mode: "build",
+    model: "gpt-5",
+    sessionId,
+    ...(options.imageInput !== undefined ? { imageInput: options.imageInput } : {}),
+    engine: {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: true,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: true,
+        costAccounting: false,
+        supportsModelSelection: true,
+        supportsReasoningEffort: true,
+        supportsImages: true,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      model: {
+        current: "gpt-5",
+        available: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }],
+        ...(options.effort !== undefined ? { effort: options.effort } : {}),
+      },
+    },
+  };
+}
 
 /**
  * A `TerminalView` double that just records every call (tabId + args) instead
@@ -620,6 +666,183 @@ describe("tab-registry — queueInitialPrompt task-model seam (slice F5#1b, D3)"
     registry.queueInitialPrompt("tab-a", "hello there", "gpt-5");
 
     expect(sentTypes(port).filter((t) => t === "set_model")).toHaveLength(0);
+  });
+});
+
+describe("tab-registry — queueInitialPrompt engine-effort seam (TASK.81)", () => {
+  /** Filters port.sent down to just the message `type`s, in send order. */
+  function sentTypes(port: FakeMessagePort): string[] {
+    return port.sent.map((m) => (m as { type: string }).type);
+  }
+
+  it("sends set_engine_effort BEFORE the initial user_message when the pick differs from the boot model's resolved effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there", undefined, undefined, "high");
+    expect(sentTypes(port)).toEqual(["ui_ready"]); // not dispatched yet
+
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { effort: "low" }));
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_engine_effort", "user_message"]);
+    expect(port.sent[1]).toEqual({ type: "set_engine_effort", effort: "high" });
+    expect(port.sent[2]).toMatchObject({ type: "user_message", text: "hello there" });
+  });
+
+  it("sends no set_engine_effort when the pick equals the boot model's resolved effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there", undefined, undefined, "low");
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { effort: "low" }));
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message"]);
+  });
+
+  it("sends no set_engine_effort when no effort was passed (core draft; current behavior preserved)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there");
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { effort: "low" }));
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message"]);
+  });
+
+  it("orders mode, model, effort, then the first user_message when all three differ", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "make a plan", "gpt-5-alt", "plan", "high");
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { effort: "low" })); // boot model "gpt-5"
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_mode", "set_model", "set_engine_effort", "user_message"]);
+  });
+
+  it("a respawn's second host_ready does not re-send an already-dispatched effort (delete-before-dispatch)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "only once", undefined, undefined, "high");
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { effort: "low" }));
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_engine_effort", "user_message"]);
+
+    registry.markHostExited("tab-a");
+    const respawnPort = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(respawnPort));
+    respawnPort.emit(CODEX_HOST_READY("/ws/a", "sess-a2", { effort: "low" }));
+
+    expect(sentTypes(respawnPort)).toEqual(["ui_ready"]);
+  });
+
+  it("already-ready shortcut: sends set_engine_effort when the pick differs from the current resolved effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { effort: "low" }));
+    expect(registry.getStore("tab-a")?.getState().connection).toBe("ready");
+
+    registry.queueInitialPrompt("tab-a", "hello there", undefined, undefined, "high");
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_engine_effort", "user_message"]);
+    expect(port.sent[1]).toEqual({ type: "set_engine_effort", effort: "high" });
+  });
+
+  it("already-ready shortcut: sends no set_engine_effort when the pick equals the current resolved effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { effort: "low" }));
+
+    registry.queueInitialPrompt("tab-a", "hello there", undefined, undefined, "low");
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message"]);
+  });
+});
+
+describe("tab-registry — queueInitialPrompt images (TASK.81)", () => {
+  const IMAGE = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+
+  it("delivers images on the first user_message and records them via recordSentMessage when the boot model accepts them", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: true }));
+
+    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
+    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
+    expect(registry.getStore("tab-a")?.getState().lastSentMessage).toEqual({ text: "look at this", images: [IMAGE] });
+
+    const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
+    expect(findBlock(transcript, "user_text")?.text).toBe("look at this\n\n[1 image attached]");
+  });
+
+  it("honest block: drops images and raises image_attach_rejected when the boot model cannot accept them — the text still sends", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: false }));
+
+    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
+    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this" });
+    expect(userMessage.images).toBeUndefined();
+    expect(registry.getStore("tab-a")?.getState().lastSentMessage).toEqual({ text: "look at this", images: [] });
+    expect(registry.getStore("tab-a")?.getState().notice).toEqual({
+      kind: "image_attach_rejected",
+      text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT,
+    });
+
+    const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
+    expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
+  });
+
+  it("no images passed: user_message carries no images field (current behavior preserved)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there");
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: true }));
+
+    const userMessage = port.sent[1] as { type: string; images?: unknown[] };
+    expect(userMessage.images).toBeUndefined();
+  });
+
+  it("already-ready shortcut: honest block applies against the tab's LIVE imageInput field too", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: false }));
+    expect(registry.getStore("tab-a")?.getState().connection).toBe("ready");
+
+    registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
+
+    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
+    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this" });
+    expect(userMessage.images).toBeUndefined();
+    expect(registry.getStore("tab-a")?.getState().notice).toEqual({
+      kind: "image_attach_rejected",
+      text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT,
+    });
   });
 });
 

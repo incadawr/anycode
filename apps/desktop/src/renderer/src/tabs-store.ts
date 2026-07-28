@@ -14,6 +14,7 @@ import { create } from "zustand";
 import type { PermissionMode } from "@anycode/core";
 import type { EngineId } from "../../shared/engines.js";
 import type { WorktreeProjection } from "../../shared/protocol.js";
+import type { QueuedPromptImage } from "./store.js";
 
 /** One open tab's shell-level metadata (design §4.3: "id, workspace, sessionId?, title?, host-exited flag"). */
 export interface TabInfo {
@@ -83,6 +84,38 @@ export interface SessionDraft {
    * CODEX_HOME, unchanged). Never read for a Core draft.
    */
   codexProfileId?: string;
+  /**
+   * Image attachments for the first turn (TASK.81, Composer.tsx parity —
+   * `attachedImages`, projected through the SAME `QueuedPromptImage` shape a
+   * queued prompt's images already use so `queueInitialPrompt`/
+   * `dispatchInitialPrompt` in tab-registry.ts can forward them without a
+   * third image type). Absent until the first successful attach/paste —
+   * mirrors `enginePreset`'s "unset in this slice" convention rather than
+   * `prompt`'s always-present-string one: an empty list and "never touched"
+   * are observably the same "nothing to send" state, so there is no reason
+   * to force the key present at `[]`. Once set it holds the CURRENT
+   * attachment list (not a touch-history flag) — removing the last image
+   * legitimately writes `[]` back.
+   */
+  images?: readonly QueuedPromptImage[];
+  /**
+   * Non-core engine reasoning-effort pick for the first turn (TASK.81,
+   * Composer.tsx parity — `handleEngineEffortPick`/`EngineModelMenu`'s
+   * `effort` prop). A free-form per-model string, never core's
+   * `ReasoningEffort` enum (codex/claude advertise their own vocabulary —
+   * shared/protocol.ts's `EngineModelChoice.efforts`), so this cannot reuse
+   * `model`'s always-present `null` = "provider default" sentinel: there is
+   * no draft-time catalog of per-model effort defaults to fall back to (main
+   * never projects `reasoning`/`effortLevels` into the renderer's provider-
+   * catalog summary — shared/settings.ts's `CatalogSummaryEntry` deliberately
+   * strips them, "renderer never imports core"), and the CORE engine has no
+   * draft-time effort data at all (its own `set_reasoning_effort` path needs
+   * a live host-resolved `availableEffortLevels`, which does not exist before
+   * a host boots). Absent until the user opens the draft's effort row and
+   * picks one — mirrors `enginePreset`/`codexProfileId`'s "unset in this
+   * slice" convention. Never read for a Core draft.
+   */
+  engineEffort?: string;
 }
 
 export interface TabsState {
@@ -139,6 +172,18 @@ export interface TabsState {
    * convention).
    */
   setDraftCodexProfileId(profileId: string | undefined): void;
+  /**
+   * No-op while `draft === null`. Full replace (mirrors `setDraftPrompt`) —
+   * the caller (StartScreen's attach/paste/remove handlers) computes the
+   * next attachment list and writes it whole, so this stays the single write
+   * path an automation facade could also drive.
+   */
+  setDraftImages(images: readonly QueuedPromptImage[]): void;
+  /**
+   * No-op while `draft === null`. Non-core only; a Core draft never calls
+   * this (mirrors `setDraftEnginePreset`). `undefined` clears the pick.
+   */
+  setDraftEngineEffort(effort: string | undefined): void;
   /** Discards the draft entirely (Cancel affordance / successful submit). */
   discardDraft(): void;
   setSessionId(tabId: string, sessionId: string): void;
@@ -310,6 +355,8 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
           mode: state.draft?.mode ?? "build",
           ...(state.draft?.enginePreset !== undefined ? { enginePreset: state.draft.enginePreset } : {}),
           ...(state.draft?.codexProfileId !== undefined ? { codexProfileId: state.draft.codexProfileId } : {}),
+          ...(state.draft?.images !== undefined ? { images: state.draft.images } : {}),
+          ...(state.draft?.engineEffort !== undefined ? { engineEffort: state.draft.engineEffort } : {}),
         },
         draftActive: true,
       }));
@@ -341,6 +388,14 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftCodexProfileId(profileId): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, codexProfileId: profileId } }));
+    },
+
+    setDraftImages(images): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, images } }));
+    },
+
+    setDraftEngineEffort(effort): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, engineEffort: effort } }));
     },
 
     discardDraft(): void {
