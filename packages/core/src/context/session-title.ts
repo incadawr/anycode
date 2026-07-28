@@ -24,7 +24,8 @@ export const SESSION_TITLE_TIMEOUT_MS = 10_000;
 
 /**
  * Paired reminder/context tags that hosts inject around raw user input
- * (agent-loop.ts's `<hook-context>`, cli/plan.ts's `<plan-mode-reminder>`, and
+ * (agent-loop.ts's `<hook-context>`, prompts/plan-reminder.ts's
+ * `<plan-mode-reminder>`, and
  * the assistant-side `<system-reminder>` convention). Both title tiers key off
 
  * second layer against a future caller that forwards already-wrapped text.

@@ -54,6 +54,27 @@ import type { HostToUiMessage, WireToolMeta } from "../shared/protocol.js";
 /** Ask deadline; a request with no answer by then is denied (fail-closed). */
 export const PERMISSION_ASK_TIMEOUT_MS = 120_000;
 
+/**
+ * Deadline for an ExitPlanMode ask (TASK.27). The generic 120 s suits a
+ * one-glance "allow this command?"; an ExitPlanMode ask is a human READING a
+ * complete implementation plan, and a fail-closed deny mid-read would be
+ * reported to the model as a rejected plan. Still fail-closed, just on a human
+ * reading timescale.
+ */
+export const PLAN_APPROVAL_ASK_TIMEOUT_MS = 900_000;
+
+/**
+ * Per-tool ask deadline. Only ExitPlanMode differs, and only ever upward —
+ * `Math.max` makes the plan deadline a FLOOR, so a host (or test) configured
+ * with a longer generic deadline keeps it and no configuration can shorten a
+ * plan review below the reading budget.
+ */
+export function resolveAskTimeoutMs(toolName: string, defaultTimeoutMs: number): number {
+  return toolName === "ExitPlanMode"
+    ? Math.max(defaultTimeoutMs, PLAN_APPROVAL_ASK_TIMEOUT_MS)
+    : defaultTimeoutMs;
+}
+
 /** Reason a parked ask was settled, surfaced to the UI in permission_settled. */
 export type SettleOrigin = "ui" | "timeout" | "turn_cancelled" | "disconnect" | "shutdown";
 
@@ -161,16 +182,20 @@ export class IpcPermissionBroker implements PermissionBroker {
   /** Sends `entry`'s request to the UI and arms its timeout; marks it as the shown request. */
   private present(requestId: string, entry: PendingAsk): void {
     this.current = requestId;
+    // Per-tool deadline (TASK.27): a plan review gets a reading budget instead
+    // of the generic ask deadline. Resolved here, at presentation time, so a
+    // queued ask still cannot start its clock before a human sees it.
+    const timeoutMs = resolveAskTimeoutMs(entry.request.toolName, this.timeoutMs);
     entry.timer = setTimeout(() => {
       this.settle(
         requestId,
         {
           behavior: "deny",
-          reason: `${entry.request.toolName}: permission request timed out after ${this.timeoutMs}ms`,
+          reason: `${entry.request.toolName}: permission request timed out after ${timeoutMs}ms`,
         },
         "timeout",
       );
-    }, this.timeoutMs);
+    }, timeoutMs);
     this.emit({
       type: "permission_request",
       requestId,

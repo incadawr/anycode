@@ -303,6 +303,7 @@ import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
+import { wirePlanExit } from "./plan-exit.js";
 import { Outbound, Session } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
@@ -1132,6 +1133,15 @@ async function boot(): Promise<void> {
       registry.register(enterWorktreeTool);
       registry.register(exitWorktreeTool);
     }
+    // Plan-exit contract (TASK.27, mirror of cli/main.ts): ONE call registers
+    // ExitPlanMode AND produces the planExitMode/onModeChange pair spread into
+    // AgentLoopConfig below — the halves are only safe together (plan-exit.ts).
+    // Placed STRICTLY before the toolNames snapshot below so the tool name
+    // reaches the system prompt. `session` is captured lazily: the loop only
+    // calls onModeChange from inside a running turn, long after it is assigned.
+    const planExit = wirePlanExit(registry, (changed) => {
+      session?.notifyModeChanged(changed);
+    });
     // Main selects resume engine from durable metadata, and the host verifies
     // it again before constructing the core graph. A forged/mismatched fork
     // must never silently resume an external session through AgentLoop.
@@ -1574,6 +1584,10 @@ async function boot(): Promise<void> {
       // above built a service; its absence keeps the turn byte-identical (L2 —
       // runTurn never touches the arc). Mirror of cli/main.ts:1101.
       ...(checkpointService !== null ? { checkpoints: checkpointService } : {}),
+      // TASK.27: planExitMode ("build") + onModeChange, produced together with
+      // the ExitPlanMode registration above. Without this spread the tool's
+      // handler fails closed and plan mode has no model-driven exit at all.
+      ...planExit,
       ...(telemetry !== null ? { eventTap: buildTelemetryTap(telemetry.port, telemetry.session) } : {}),
       // Context window (design §2.5 + slice 6.4): resolved above — mirrors cli/main.ts.
       ...(bootContextWindow !== undefined
