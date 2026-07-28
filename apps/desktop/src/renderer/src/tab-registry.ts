@@ -28,7 +28,7 @@
  * `markOpened`/`markDead`, and `disposeTab`/`markHostExited` call
  * `terminalView.dispose`/`markDead` to keep the two lifecycles in lockstep.
  */
-import { createDesktopStore, type DesktopState } from "./store.js";
+import { createDesktopStore, type DesktopState, type QueuedPromptImage } from "./store.js";
 import { transcriptTextWithImages } from "./queue-format.js";
 import type { PermissionMode } from "@anycode/core";
 import { connectHost, connectTerminal, type HostConnection, type TerminalConnection } from "./port.js";
@@ -38,6 +38,11 @@ import { terminalView as defaultTerminalView, type TerminalDims, type TerminalVi
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import { TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS, type TermToHostMessage } from "../../shared/terminal.js";
 import { loadUsageLimitNotices, saveUsageLimitNotice } from "./provider-notices.js";
+// TASK.81: the SAME model-level image gate Composer's own send-path uses
+// (`canSend`'s `!attachmentsBlockedByModel`), reused here — not re-derived —
+// for the one send site with no live composer to react from beforehand (the
+// FIRST turn of a brand-new tab).
+import { isSendBlockedByModelImages, MODEL_IMAGE_ATTACH_BLOCKED_TEXT } from "./components/Composer.js";
 
 /** Convenience alias for the store instance type `createDesktopStore()` returns. */
 export type DesktopStoreApi = ReturnType<typeof createDesktopStore>;
@@ -142,8 +147,28 @@ export interface TabRegistry {
    * `mode` follows the same recipe for the start screen's permission-mode
    * chip; it is sent before model and user_message, so the host persists it
    * before the first turn begins.
+   *
+   * `effort` (TASK.81) follows the identical in-order-before-first-turn
+   * recipe but targets a NON-core engine's own wire message
+   * (`set_engine_effort`, never `set_model`'s `ReasoningEffort` vocabulary —
+   * host/session.ts's `set_engine_effort` case only fires through
+   * `engineSettings`, which core never wires) — sent last, after model/mode,
+   * compared against the boot model's own resolved effort
+   * (`host_ready.engine.model.effort`) so an unchanged pick sends nothing.
+   * `images` (TASK.81) ride the first `user_message` exactly like a queued
+   * prompt's images (`dispatchQueuedPrompt`'s recipe) — a boot model that
+   * cannot accept them (`host_ready.imageInput === false`) drops them and
+   * raises an `image_attach_rejected` notice instead of silently sending
+   * them or losing the whole turn (the text half still goes out).
    */
-  queueInitialPrompt(tabId: string, text: string, model?: string, mode?: PermissionMode): void;
+  queueInitialPrompt(
+    tabId: string,
+    text: string,
+    model?: string,
+    mode?: PermissionMode,
+    effort?: string,
+    images?: readonly QueuedPromptImage[],
+  ): void;
 }
 
 /**
@@ -165,21 +190,26 @@ export function createTabRegistry(
   const entries = new Map<string, TabEntry>();
   const closedTabIds = new Set<string>();
   /**
-   * Slice P7.12 §4.2 / F5#1b D3: text (+ optional task-scoped model pick)
-   * queued via `queueInitialPrompt`, waiting for its tab's `host_ready`.
+   * Slice P7.12 §4.2 / F5#1b D3: text (+ optional task-scoped model/mode
+   * picks) queued via `queueInitialPrompt`, waiting for its tab's
+   * `host_ready`. `effort`/`images` (TASK.81) join the same slot.
    */
-  const pendingInitialPrompts = new Map<string, { text: string; model?: string; mode?: PermissionMode }>();
+  const pendingInitialPrompts = new Map<
+    string,
+    { text: string; model?: string; mode?: PermissionMode; effort?: string; images?: readonly QueuedPromptImage[] }
+  >();
 
   /**
    * First-turn picks must reach the host before the first user message. The
    * MessagePort preserves order, and host_ready guarantees that the session is
-   * idle, so the host can persist mode/model before it starts the turn.
+   * idle, so the host can persist mode/model/effort before it starts the turn.
    */
   function applyInitialPicks(
     entry: TabEntry,
     model: string | undefined,
     mode: PermissionMode | undefined,
-    current: { model: string | null; mode: PermissionMode | null },
+    effort: string | undefined,
+    current: { model: string | null; mode: PermissionMode | null; effort: string | undefined },
   ): void {
     if (mode !== undefined && mode !== current.mode) {
       entry.connection?.send({ type: "set_mode", mode });
@@ -187,16 +217,50 @@ export function createTabRegistry(
     if (model !== undefined && model !== current.model) {
       entry.connection?.send({ type: "set_model", model });
     }
+    // TASK.81: sent last (after a model switch, if any) so a validated effort
+    // always targets the model actually active by then — moot for the START
+    // flow today, since a non-core draft's model is fixed at CreateTabRequest
+    // spawn time and never switched through this path, but keeps the
+    // ordering correct if that ever changes.
+    if (effort !== undefined && effort !== current.effort) {
+      entry.connection?.send({ type: "set_engine_effort", effort });
+    }
   }
 
-  /** Dispatch recipe byte-parity with Composer.tsx's `handleSend`: echo the block, then send the wire message. */
-  function dispatchInitialPrompt(entry: TabEntry, text: string): void {
+  /**
+   * Dispatch recipe byte-parity with Composer.tsx's `handleSend`: echo the
+   * block, then send the wire message. TASK.81: `imageInput` is the boot
+   * model's live vision verdict (`host_ready.imageInput`, or the tab's
+   * already-live store field for the already-ready shortcut) — gated through
+   * the SAME `isSendBlockedByModelImages` predicate Composer's own send-gate
+   * uses, so a model that cannot take images never receives them on the
+   * FIRST turn either. Unlike Composer's gate (which disables Send entirely
+   * so the user can react before sending), there is no live composer to react
+   * from here: the text still goes out — the prompt is not stranded — and
+   * only the images are dropped, with a notice explaining why.
+   */
+  function dispatchInitialPrompt(
+    entry: TabEntry,
+    text: string,
+    images: readonly QueuedPromptImage[],
+    imageInput: boolean | undefined,
+  ): void {
+    const blocked = isSendBlockedByModelImages(imageInput, images.length);
+    const deliveredImages = blocked ? [] : images;
+    if (blocked) {
+      entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
+    }
     const requestId = crypto.randomUUID();
-    entry.store.getState().appendUserText(requestId, text);
+    entry.store.getState().appendUserText(requestId, transcriptTextWithImages(text, deliveredImages.length));
     // TASK.33 W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
-    entry.store.getState().recordSentMessage(text, []);
-    entry.connection?.send({ type: "user_message", requestId, text });
+    entry.store.getState().recordSentMessage(text, deliveredImages);
+    entry.connection?.send({
+      type: "user_message",
+      requestId,
+      text,
+      ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}),
+    });
   }
 
   /**
@@ -284,8 +348,12 @@ export function createTabRegistry(
           // F5#1b D3: a task-scoped model pick that differs from the boot
           // model is switched BEFORE the initial prompt, same port ⇒ in-order
           // delivery; the host is idle at host_ready so the busy-guard passes.
-          applyInitialPicks(entry, pending.model, pending.mode, { model: message.model, mode: message.mode });
-          dispatchInitialPrompt(entry, pending.text);
+          applyInitialPicks(entry, pending.model, pending.mode, pending.effort, {
+            model: message.model,
+            mode: message.mode,
+            effort: message.engine?.model?.effort,
+          });
+          dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput);
         }
       }
       if (message.type === "agent_event" && message.event.type === "error") {
@@ -490,7 +558,7 @@ export function createTabRegistry(
       statusStore.getState().reset();
     },
 
-    queueInitialPrompt(tabId, text, model, mode): void {
+    queueInitialPrompt(tabId, text, model, mode, effort, images): void {
       if (!tabId || closedTabIds.has(tabId)) {
         return;
       }
@@ -501,11 +569,15 @@ export function createTabRegistry(
         // model (set at host_ready, kept current by model_changed), so compare
         // against THAT instead of a boot-time message.
         const state = entry.store.getState();
-        applyInitialPicks(entry, model, mode, { model: state.model, mode: state.mode });
-        dispatchInitialPrompt(entry, text);
+        applyInitialPicks(entry, model, mode, effort, {
+          model: state.model,
+          mode: state.mode,
+          effort: state.engine?.model?.effort,
+        });
+        dispatchInitialPrompt(entry, text, images ?? [], state.imageInput);
         return;
       }
-      pendingInitialPrompts.set(tabId, { text, model, mode });
+      pendingInitialPrompts.set(tabId, { text, model, mode, effort, images });
     },
   };
 }
