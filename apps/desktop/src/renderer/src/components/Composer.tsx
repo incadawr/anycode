@@ -999,7 +999,7 @@ export function Composer() {
       setSlashDismissed(false);
     }
   }
-  const slashItemsKey = slashItems.map((item) => item.id).join(" ");
+  const slashItemsKey = slashItems.map((item) => item.id).join("\0");
   if (slashItemsKey !== lastSlashItemsKeyRef.current) {
     lastSlashItemsKeyRef.current = slashItemsKey;
     if (slashSelIndex !== 0) {
