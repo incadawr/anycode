@@ -16,6 +16,12 @@ import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/cre
 import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
+import {
+  PREVIEW_ARTIFACTS_TYPE,
+  PREVIEW_REQUEST_TYPE,
+  type PreviewArtifactsMessage,
+  type PreviewRequestMessage,
+} from "../shared/preview.js";
 import type { EngineId } from "../shared/engines.js";
 import {
   DEFAULT_BREAKER_LIMITS,
@@ -1069,6 +1075,126 @@ describe("TabHostManager — close guards", () => {
     expect(manager.sessionOpenInTab("sa")).toBeUndefined();
     // The freed session may now be opened again.
     expect(manager.sessionOpenInTab("sb")).toBe(b.ok ? b.tab.tabId : "");
+  });
+});
+
+describe("TabHostManager — preview control plane (night-track wave-1 cut §2.3, 96-A)", () => {
+  function previewManager(
+    fork: HostForkFn,
+    window: WindowLike,
+    deps: Partial<
+      Pick<TabHostManagerDeps, "onPreviewRequest" | "onPreviewArtifacts" | "onTabClosed">
+    >,
+  ) {
+    return new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      logger: silentLogger,
+      ...deps,
+    });
+  }
+
+  it("routes a PREVIEW_REQUEST_TYPE control message to onPreviewRequest, tabId-scoped", async () => {
+    const onPreviewRequest = vi.fn();
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = previewManager(fork, window, { onPreviewRequest });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    await flush();
+    expect(created.ok).toBe(true);
+    const tabId = created.ok ? created.tab.tabId : "";
+
+    const message: PreviewRequestMessage = {
+      type: PREVIEW_REQUEST_TYPE,
+      requestId: "req-1",
+      op: { kind: "screenshot" },
+    };
+    hosts[0]!.emit("message", message);
+    await flush();
+
+    expect(onPreviewRequest).toHaveBeenCalledWith(tabId, message);
+  });
+
+  it("routes a PREVIEW_ARTIFACTS_TYPE control message to onPreviewArtifacts, tabId-scoped", async () => {
+    const onPreviewArtifacts = vi.fn();
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = previewManager(fork, window, { onPreviewArtifacts });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    await flush();
+    const tabId = created.ok ? created.tab.tabId : "";
+
+    const message: PreviewArtifactsMessage = { type: PREVIEW_ARTIFACTS_TYPE, paths: ["/ws/out.html"] };
+    hosts[0]!.emit("message", message);
+    await flush();
+
+    expect(onPreviewArtifacts).toHaveBeenCalledWith(tabId, message);
+  });
+
+  it("routes each tab's preview messages to its own binding, never a sibling's", async () => {
+    const onPreviewRequest = vi.fn();
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = previewManager(fork, window, { onPreviewRequest });
+    const a = manager.createTab({ workspace: "/a", sessionId: "sa", resume: false });
+    const b = manager.createTab({ workspace: "/b", sessionId: "sb", resume: false });
+    await flush();
+    const [h0, h1] = hosts;
+
+    const msgA: PreviewRequestMessage = { type: PREVIEW_REQUEST_TYPE, requestId: "A", op: { kind: "screenshot" } };
+    const msgB: PreviewRequestMessage = { type: PREVIEW_REQUEST_TYPE, requestId: "B", op: { kind: "screenshot" } };
+    h0!.emit("message", msgA);
+    h1!.emit("message", msgB);
+    await flush();
+
+    expect(onPreviewRequest).toHaveBeenCalledWith(a.ok ? a.tab.tabId : "", msgA);
+    expect(onPreviewRequest).toHaveBeenCalledWith(b.ok ? b.tab.tabId : "", msgB);
+  });
+
+  it("fires onTabClosed on a real close, with the closed tab's id", async () => {
+    const onTabClosed = vi.fn();
+    const { fork } = liveForkRig();
+    const { window } = windowRig();
+    const manager = previewManager(fork, window, { onTabClosed });
+    const a = manager.createTab({ workspace: "/a", sessionId: "sa", resume: false });
+    manager.createTab({ workspace: "/b", sessionId: "sb", resume: false });
+    await flush();
+
+    const tabId = a.ok ? a.tab.tabId : "";
+    await manager.closeTab(tabId);
+
+    expect(onTabClosed).toHaveBeenCalledExactlyOnceWith(tabId);
+  });
+
+  it("does NOT fire onTabClosed for a refused close (last_tab / unknown_tab)", async () => {
+    const onTabClosed = vi.fn();
+    const { fork } = liveForkRig();
+    const { window } = windowRig();
+    const manager = previewManager(fork, window, { onTabClosed });
+    const only = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    await flush();
+
+    await manager.closeTab("does-not-exist");
+    await manager.closeTab(only.ok ? only.tab.tabId : "");
+
+    expect(onTabClosed).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire onTabClosed on a crash-triggered respawn (respawn is NOT a close)", async () => {
+    const onTabClosed = vi.fn();
+    const { fork, hosts } = dyingForkRig();
+    const { window } = windowRig();
+    const manager = previewManager(fork, window, { onTabClosed });
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    await flush();
+
+    // dyingForkRig's fork crash-loops (uptime ~0) until the per-tab breaker gives
+    // up — several respawns happen here, none of them a real close.
+    expect(hosts.length).toBeGreaterThan(1);
+    expect(onTabClosed).not.toHaveBeenCalled();
   });
 });
 
