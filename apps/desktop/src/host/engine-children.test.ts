@@ -73,7 +73,7 @@ describe("createEngineChildRunner: argv construction", () => {
       "--setting-sources",
       "project,local",
       "--strict-mcp-config",
-      "do the thing",
+      `Working directory: /work/session\nRun every command and resolve every relative path there. If the task below names a different absolute path, this line wins.\n\ndo the thing`,
     ]);
     expect(calls[0]?.options.cwd).toBe("/work/session");
 
@@ -91,7 +91,8 @@ describe("createEngineChildRunner: argv construction", () => {
     );
 
     const args = calls[0]?.args ?? [];
-    expect(args.slice(-3)).toEqual(["--model", "claude-op-test", "do the thing"]);
+    expect(args.slice(-3, -1)).toEqual(["--model", "claude-op-test"]);
+    expect(args.at(-1)).toContain("do the thing");
 
     child.emit("close", 0);
     await outcomePromise;
@@ -117,7 +118,7 @@ describe("createEngineChildRunner: argv construction", () => {
       "approval_policy=never",
       "--cd",
       "/work/session",
-      "do the thing",
+      `Working directory: /work/session\nRun every command and resolve every relative path there. If the task below names a different absolute path, this line wins.\n\ndo the thing`,
     ]);
 
     child.emit("close", 0);
@@ -134,7 +135,36 @@ describe("createEngineChildRunner: argv construction", () => {
     );
 
     const args = calls[0]?.args ?? [];
-    expect(args.slice(-3)).toEqual(["--model", "codex-op-test", "do the thing"]);
+    expect(args.slice(-3, -1)).toEqual(["--model", "codex-op-test"]);
+    expect(args.at(-1)).toContain("do the thing");
+
+    child.emit("close", 0);
+    await outcomePromise;
+  });
+
+  it("pins the spawn cwd in the prompt ahead of a conflicting path in the task text", async () => {
+    const { spawn, calls, child } = fakeSpawner();
+    const runner = createEngineChildRunner({ cwd: "/work/worktree", env: { ...baseDeps(), [ENV_CODEX_BIN]: "/opt/bin/codex" }, spawn });
+
+    const outcomePromise = runner(
+      {
+        engine: "codex",
+        // The parent named the WRONG directory in the task text — the live
+        // failure this pin exists for.
+        prompt: "List .anycode/agents (working directory: /work/repo-root)",
+        agentType: "explore",
+        description: "look around",
+      },
+      {},
+    );
+
+    const prompt = calls[0]?.args.at(-1) ?? "";
+    // The authoritative cwd is stated, precedes the task text, and is the real
+    // spawn cwd — not the one the task text claims.
+    expect(prompt.startsWith("Working directory: /work/worktree\n")).toBe(true);
+    expect(prompt.indexOf("/work/worktree")).toBeLessThan(prompt.indexOf("/work/repo-root"));
+    expect(calls[0]?.options.cwd).toBe("/work/worktree");
+    expect(calls[0]?.args).toContain("/work/worktree");
 
     child.emit("close", 0);
     await outcomePromise;
