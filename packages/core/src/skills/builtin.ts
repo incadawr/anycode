@@ -62,3 +62,39 @@ Do not reproduce these operations with shell Git commands. The tools own path co
 export const WORKTREE_BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = [
   USING_GIT_WORKTREES_SKILL,
 ];
+
+/**
+ * Optional guidance for desktop surfaces that register BrowserOpen and
+ * BrowserRead (night-track wave-1 cut §2.9). Docs-only: the skill never opens
+ * a preview itself, and is deliberately absent unless the caller opts in
+ * (same gate as the worktree skill above — mirrored by the same
+ * preview-availability boolean the host uses to register the tools).
+ */
+export const USING_BROWSER_PREVIEW_SKILL: BuiltinSkillDefinition = {
+  name: "using-browser-preview",
+  description:
+    "Use BrowserOpen/BrowserRead (and BrowserScreenshot, when available) to preview and iterate on a local HTML/Markdown artifact or a localhost dev server.",
+  body: `# Using the browser preview
+
+Use the browser-preview tools to see what an HTML or Markdown artifact you wrote actually looks like, and to catch runtime/console errors before telling the user it works.
+
+## Workflow
+
+1. Write the artifact (Write/Edit) — an \`.html\`/\`.htm\` file, a \`.md\` file, or point at a running localhost dev server.
+2. Call \`BrowserOpen\` with \`path\` (a local file) or \`url\` (a localhost dev server, e.g. \`http://localhost:3000\`). A remote (non-localhost) URL requires the user's explicit approval — expect that call to pause for it.
+3. Call \`BrowserScreenshot\` when it is registered to see the visible area as rendered (no scroll-stitching — only what fits in the window). Not every session has image input enabled; if the tool reports that, fall back to \`BrowserRead\`.
+4. Call \`BrowserRead\` with \`include_console\` left at its default (true) to catch JavaScript errors and console warnings alongside the page text/HTML.
+5. Fix anything the screenshot or console tail surfaced, then reload with \`BrowserOpen\` again using the SAME \`preview_id\` (navigates the existing window instead of stacking a new one).
+
+## Notes
+
+- \`.md\` files render through a sanitized Markdown pipeline; relative image paths in the source are not resolved — use absolute or data-URI images if a rendered screenshot needs to show one.
+- Omitting \`preview_id\` targets the most recently opened live preview; if none is open, open one first.
+- A remote URL is a deliberate escalation (network access outside the workspace) — do not retry around a declined approval.
+`,
+};
+
+/** A caller-friendly immutable list for the desktop browser-preview capability. */
+export const PREVIEW_BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = [
+  USING_BROWSER_PREVIEW_SKILL,
+];

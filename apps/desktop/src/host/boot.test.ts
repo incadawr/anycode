@@ -29,9 +29,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AiSdkModelPort, NodeExecutionAdapter } from "@anycode/core";
 import { CREDENTIAL_RESPONSE_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
 import {
+  PREVIEW_EVENT_TYPE,
+  PREVIEW_RESPONSE_TYPE,
+  type PreviewEventMessage,
+  type PreviewRequestMessage,
+  type PreviewResponseMessage,
+} from "../shared/preview.js";
+import {
   buildResolveApiKey,
   createMainCredentialProvider,
+  createPreviewRpcClient,
   hostDiagnosticSink,
+  routePreviewMessage,
   scrubSecretEnv,
   seedAlwaysAllowRules,
 } from "./boot.js";
@@ -535,5 +544,225 @@ describe("hostDiagnosticSink (slice 6.DP-1, §6#7)", () => {
     expect(warnSpy).toHaveBeenCalledWith(
       "[host] dropping unparsable provider stream artifact: sha256:deadbeef",
     );
+  });
+});
+
+describe("createPreviewRpcClient (night-track wave-1 cut §2.3)", () => {
+  function harness(overrides?: { timeoutMs?: number }) {
+    const sent: PreviewRequestMessage[] = [];
+    let listener: ((response: PreviewResponseMessage) => void) | undefined;
+    let unsubscribed = false;
+
+    const port = createPreviewRpcClient({
+      send: (request) => sent.push(request),
+      subscribe: (cb) => {
+        listener = cb;
+        unsubscribed = false;
+        return () => {
+          unsubscribed = true;
+        };
+      },
+      ...(overrides?.timeoutMs !== undefined ? { timeoutMs: overrides.timeoutMs } : {}),
+    });
+
+    return {
+      port,
+      sent,
+      respond: (result: PreviewResponseMessage["result"], requestId?: string) => {
+        listener?.({
+          type: PREVIEW_RESPONSE_TYPE,
+          requestId: requestId ?? sent[sent.length - 1]!.requestId,
+          result,
+        });
+      },
+      isUnsubscribed: () => unsubscribed,
+    };
+  }
+
+  it("open() sends an 'open' op and resolves with the correlated response value", async () => {
+    const { port, sent, respond } = harness();
+    const pending = port.open({ path: "/repo/index.html" }, { signal: new AbortController().signal });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ op: { kind: "open", path: "/repo/index.html" } });
+    expect(sent[0]!.op).not.toHaveProperty("allowRemote");
+
+    respond({ ok: true, value: { previewId: "p1", url: "file:///repo/index.html", kind: "file" } });
+    await expect(pending).resolves.toEqual({
+      ok: true,
+      value: { previewId: "p1", url: "file:///repo/index.html", kind: "file" },
+    });
+  });
+
+  it("open() forwards allowRemote:true ONLY when the caller passed it", async () => {
+    const { sent, port } = harness();
+    void port.open({ url: "https://example.com" }, { signal: new AbortController().signal, allowRemote: true });
+    expect(sent[0]!.op).toMatchObject({ kind: "open", allowRemote: true });
+  });
+
+  it("read() sends every optional field under its wire name", async () => {
+    const { sent, port, respond } = harness();
+    const pending = port.read(
+      { previewId: "p1", selector: "#app", format: "html", waitForSelector: "#ready", waitMs: 250, includeConsole: false },
+      { signal: new AbortController().signal },
+    );
+    expect(sent[0]).toMatchObject({
+      op: {
+        kind: "read",
+        previewId: "p1",
+        selector: "#app",
+        format: "html",
+        waitForSelector: "#ready",
+        waitMs: 250,
+        includeConsole: false,
+      },
+    });
+    respond({ ok: true, value: { previewId: "p1", url: "file:///x", text: "hi" } });
+    await expect(pending).resolves.toMatchObject({ ok: true });
+  });
+
+  it("screenshot() sends a 'screenshot' op", async () => {
+    const { sent, port, respond } = harness();
+    const pending = port.screenshot({ previewId: "p1" }, { signal: new AbortController().signal });
+    expect(sent[0]).toMatchObject({ op: { kind: "screenshot", previewId: "p1" } });
+    respond({
+      ok: true,
+      value: { previewId: "p1", url: "file:///x", mediaType: "image/png", data: "abc", width: 10, height: 10 },
+    });
+    await expect(pending).resolves.toMatchObject({ ok: true });
+  });
+
+  it("correlates by requestId: an unrelated response is ignored, the matching one settles it", async () => {
+    const { port, sent, respond } = harness();
+    const pending = port.read({}, { signal: new AbortController().signal });
+
+    respond({ ok: true, value: { previewId: "wrong", url: "file:///x", text: "nope" } }, "some-other-request-id");
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    respond({ ok: true, value: { previewId: "p1", url: "file:///x", text: "yes" } }, sent[0]!.requestId);
+    await expect(pending).resolves.toMatchObject({ ok: true, value: { text: "yes" } });
+  });
+
+  it("unsubscribes once the matching response arrives (no leaked listeners)", async () => {
+    const { port, respond, isUnsubscribed } = harness();
+    const pending = port.read({}, { signal: new AbortController().signal });
+    expect(isUnsubscribed()).toBe(false);
+    respond({ ok: true, value: { previewId: "p1", url: "file:///x", text: "hi" } });
+    await pending;
+    expect(isUnsubscribed()).toBe(true);
+  });
+
+  it("times out after the configured window with an honest {ok:false, errorKind:'timeout'} (never rejects)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port } = harness({ timeoutMs: 45_000 });
+      const pending = port.read({}, { signal: new AbortController().signal });
+      const assertion = expect(pending).resolves.toMatchObject({ ok: false, errorKind: "timeout" });
+      await vi.advanceTimersByTimeAsync(45_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defaults the timeout to PREVIEW_REQUEST_TIMEOUT_MS (45s) when unset", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port } = harness();
+      const pending = port.read({}, { signal: new AbortController().signal });
+      const assertion = expect(pending).resolves.toMatchObject({ ok: false, errorKind: "timeout" });
+      await vi.advanceTimersByTimeAsync(45_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an already-aborted signal resolves cancelled immediately without sending a request", async () => {
+    const { port, sent } = harness();
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await port.open({ path: "/x.html" }, { signal: controller.signal });
+    expect(result).toMatchObject({ ok: false, errorKind: "cancelled" });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("aborting mid-flight resolves cancelled and unsubscribes (no response ever arrives)", async () => {
+    const { port, sent, isUnsubscribed } = harness();
+    const controller = new AbortController();
+
+    const pending = port.read({}, { signal: controller.signal });
+    expect(sent).toHaveLength(1);
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorKind: "cancelled" });
+    expect(isUnsubscribed()).toBe(true);
+  });
+});
+
+describe("routePreviewMessage (night-track wave-1 cut §2.3 parentPort filter)", () => {
+  it("recognizes PREVIEW_RESPONSE_TYPE and fans it out to onResponse, returning true", () => {
+    const received: PreviewResponseMessage[] = [];
+    const message: PreviewResponseMessage = {
+      type: PREVIEW_RESPONSE_TYPE,
+      requestId: "r1",
+      result: { ok: true, value: { previewId: "p1", url: "file:///x", kind: "file" } },
+    };
+
+    const matched = routePreviewMessage(message, { onResponse: (m) => received.push(m) });
+
+    expect(matched).toBe(true);
+    expect(received).toEqual([message]);
+  });
+
+  it("recognizes PREVIEW_EVENT_TYPE as a seam: returns true and calls onEvent when provided", () => {
+    const received: PreviewEventMessage[] = [];
+    const message: PreviewEventMessage = {
+      type: PREVIEW_EVENT_TYPE,
+      previewId: "p1",
+      entry: { level: "error", message: "boom", at: "2026-08-01T00:00:00.000Z" },
+    };
+
+    const matched = routePreviewMessage(message, {
+      onResponse: () => {
+        throw new Error("must not be called for an event message");
+      },
+      onEvent: (m) => received.push(m),
+    });
+
+    expect(matched).toBe(true);
+    expect(received).toEqual([message]);
+  });
+
+  it("PREVIEW_EVENT_TYPE with no onEvent consumer registered is still recognized (silent no-op seam, slice 96-D not built)", () => {
+    const message: PreviewEventMessage = {
+      type: PREVIEW_EVENT_TYPE,
+      previewId: "p1",
+      entry: { level: "log", message: "hi", at: "2026-08-01T00:00:00.000Z" },
+    };
+
+    const matched = routePreviewMessage(message, {
+      onResponse: () => {
+        throw new Error("must not be called for an event message");
+      },
+    });
+
+    expect(matched).toBe(true);
+  });
+
+  it("an unrelated message type, and non-object data, are both left unmatched", () => {
+    const onResponse = vi.fn();
+    expect(routePreviewMessage({ type: "anycode:credential-response" }, { onResponse })).toBe(false);
+    expect(routePreviewMessage({ type: "shutdown" }, { onResponse })).toBe(false);
+    expect(routePreviewMessage(undefined, { onResponse })).toBe(false);
+    expect(routePreviewMessage(null, { onResponse })).toBe(false);
+    expect(routePreviewMessage("just a string", { onResponse })).toBe(false);
+    expect(onResponse).not.toHaveBeenCalled();
   });
 });
