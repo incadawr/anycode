@@ -10,7 +10,13 @@ import { mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_SOURCE_BYTES, PREVIEW_CSP, PREVIEW_DIR_NAME, renderMarkdownFile } from "./markdown-render.js";
+import {
+  MAX_SOURCE_BYTES,
+  PREVIEW_CSP,
+  PREVIEW_DIR_NAME,
+  SANITIZE_OPTIONS,
+  renderMarkdownFile,
+} from "./markdown-render.js";
 
 let sourceDir: string;
 
@@ -143,6 +149,25 @@ describe("renderMarkdownFile — sanitize allowlist (cut §1(g)/§3 96-F)", () =
     const path = await writeSource("enabled-checkbox.md", '<input type="checkbox">');
     const { html } = await renderOk(path);
     expect(html).not.toContain("<input");
+  });
+
+  it("drops a protocol-relative <img src> entirely (cut §1.7, F6 — no UNC/NTLM egress on win32)", async () => {
+    const path = await writeSource("protocol-relative-img.md", "![x](//evil.tld/x.png)");
+    const { html } = await renderOk(path);
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("evil.tld");
+  });
+
+  it("degrades a protocol-relative <a href> to plain text (cut §1.7, F6)", async () => {
+    const path = await writeSource("protocol-relative-href.md", "[click me](//evil.tld/x)");
+    const { html } = await renderOk(path);
+    expect(html).not.toContain("<a ");
+    expect(html).not.toContain("evil.tld");
+    expect(html).toContain("click me");
+  });
+
+  it("SANITIZE_OPTIONS carries the frozen allowProtocolRelative:false literal (cut §1.7, F6)", () => {
+    expect(SANITIZE_OPTIONS.allowProtocolRelative).toBe(false);
   });
 });
 
