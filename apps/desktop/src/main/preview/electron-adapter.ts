@@ -1,0 +1,163 @@
+/**
+ * Production Electron adapter for PreviewHost (night-track wave-1 cut §2.5,
+ * TASK.96 96-A): the ONLY file in this slice that touches real Electron
+ * primitives. `preview-host.ts` never imports "electron" — every test there
+ * runs against the fakes in its own test file. This module's job is narrow:
+ * construct a `BrowserWindow` with the frozen security webPreferences and
+ * adapt its real events/methods onto `PreviewWindowLike`/`PreviewWebContentsLike`.
+ *
+ * Console/pageerror capture: Electron's public `console-message` webContents
+ * event reports BOTH `console.error()` calls AND uncaught exceptions at the
+ * same `"error"` level — it cannot distinguish them. Chromium's own DevTools
+ * protocol can: `Runtime.consoleAPICalled` vs `Runtime.exceptionThrown` are
+ * separate CDP events. Attaching `webContents.debugger` and listening for
+ * `Runtime.exceptionThrown` gets the real distinction the `PreviewConsoleEntry`
+ * contract (`"pageerror"` as its own level) needs, WITHOUT a preload script —
+ * the "no preload" security invariant (preview-host.ts's header) stays intact.
+ */
+
+import { BrowserWindow, type NativeImage } from "electron";
+import type { PreviewConsoleEntry } from "../../shared/preview.js";
+import type {
+  CreateWindowOpts,
+  PreviewCapturedImage,
+  PreviewWebContentsLike,
+  PreviewWindowLike,
+} from "./preview-host.js";
+
+const DEFAULT_WIDTH = 1100;
+const DEFAULT_HEIGHT = 800;
+/** CDP protocol version for `webContents.debugger.attach` (pageerror capture). */
+const DEBUGGER_PROTOCOL_VERSION = "1.3";
+
+function classifyConsoleLevel(level: "info" | "warning" | "error" | "debug"): PreviewConsoleEntry["level"] {
+  if (level === "error") return "error";
+  if (level === "warning") return "warn";
+  return "log"; // "info" | "debug"
+}
+
+function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
+  return {
+    toPNG: () => image.toPNG(),
+    getSize: () => image.getSize(),
+    isEmpty: () => image.isEmpty(),
+  };
+}
+
+/** Best-effort CDP attach for `Runtime.exceptionThrown` -> classified "pageerror". Never throws. */
+function attachPageErrorCapture(win: BrowserWindow, onPageError: (message: string) => void): void {
+  const wc = win.webContents;
+  try {
+    wc.debugger.attach(DEBUGGER_PROTOCOL_VERSION);
+  } catch (error) {
+    console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only", error);
+    return;
+  }
+  wc.debugger.on("message", (_event, method, params) => {
+    if (method !== "Runtime.exceptionThrown") {
+      return;
+    }
+    const details = (params as { exceptionDetails?: { exception?: { description?: string }; text?: string } })
+      .exceptionDetails;
+    const message = details?.exception?.description ?? details?.text ?? "uncaught exception";
+    onPageError(message);
+  });
+  wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
+    console.warn("[preview] failed to enable CDP Runtime domain", error);
+  });
+  win.once("closed", () => {
+    try {
+      wc.debugger.detach();
+    } catch {
+      // Already detached (e.g. DevTools attached to the same target instead).
+    }
+  });
+}
+
+/**
+ * Adapts one real `BrowserWindow`'s `webContents` onto `PreviewWebContentsLike`.
+ * `onConsoleMessage` is settable exactly once by `preview-host.ts`'s wiring
+ * (right after construction) — a single mutable closure variable feeds BOTH
+ * the CDP pageerror capture (attached here, before the caller ever calls
+ * `onConsoleMessage`) and the ordinary `console-message` listener, so a
+ * pageerror is never lost to a registration-order race.
+ */
+function wrapWebContents(win: BrowserWindow): PreviewWebContentsLike {
+  const wc = win.webContents;
+  let consoleListener: (level: PreviewConsoleEntry["level"], message: string) => void = () => {};
+
+  attachPageErrorCapture(win, (message) => consoleListener("pageerror", message));
+  wc.on("console-message", (event) => {
+    consoleListener(classifyConsoleLevel(event.level), event.message);
+  });
+
+  return {
+    loadURL: (url) => wc.loadURL(url),
+    isDestroyed: () => wc.isDestroyed(),
+    executeJavaScript: (script) => wc.executeJavaScript(script),
+    capturePage: async () => wrapCapturedImage(await wc.capturePage()),
+    setBackgroundThrottling: (enabled) => wc.setBackgroundThrottling(enabled),
+    setWindowOpenHandler: (handler) => wc.setWindowOpenHandler(handler),
+    setPermissionRequestHandler: (handler) => {
+      // Session-scoped (Electron has no per-webContents permission handler); every
+      // preview window gets its own partition (see createElectronPreviewWindow), so
+      // this never touches the main app window's session.
+      wc.session.setPermissionRequestHandler((_webContents, permission, callback) => handler(permission, callback));
+    },
+    onDidFinishLoad: (listener) => {
+      wc.on("did-finish-load", () => listener());
+    },
+    onDidFailLoad: (listener) => {
+      wc.on("did-fail-load", (_event, errorCode, errorDescription) => {
+        listener(errorCode, errorDescription);
+      });
+    },
+    onRenderProcessGone: (listener) => {
+      wc.on("render-process-gone", (_event, details) => {
+        listener(details.reason);
+      });
+    },
+    onWillNavigate: (listener) => {
+      wc.on("will-navigate", (event) => {
+        listener(event.url, () => event.preventDefault());
+      });
+    },
+    onDidNavigate: (listener) => {
+      wc.on("did-navigate", (_event, url) => {
+        listener(url);
+      });
+    },
+    onConsoleMessage: (listener) => {
+      consoleListener = listener;
+    },
+  };
+}
+
+/** Real `BrowserWindow`-backed `PreviewWindowLike` (§2.5's frozen security invariants). */
+export function createElectronPreviewWindow(opts: CreateWindowOpts): PreviewWindowLike {
+  const win = new BrowserWindow({
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    ...(opts.x !== undefined && opts.y !== undefined ? { x: opts.x, y: opts.y } : {}),
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      // Unique, non-persistent session per preview: isolates cookies/storage
+      // between previews and keeps `setPermissionRequestHandler` scoped away
+      // from the main app window's (default) session.
+      partition: `preview-${opts.previewId}`,
+    },
+  });
+
+  return {
+    webContents: wrapWebContents(win),
+    isDestroyed: () => win.isDestroyed(),
+    destroy: () => win.destroy(),
+    show: () => win.show(),
+    showInactive: () => win.showInactive(),
+    onClosed: (listener) => {
+      win.once("closed", listener);
+    },
+  };
+}

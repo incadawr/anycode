@@ -24,6 +24,12 @@ import {
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import {
+  PREVIEW_ARTIFACTS_TYPE,
+  PREVIEW_REQUEST_TYPE,
+  type PreviewArtifactsMessage,
+  type PreviewRequestMessage,
+} from "../shared/preview.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { ENV_CONNECTION_ID, ENV_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
@@ -381,6 +387,26 @@ export interface TabHostManagerDeps {
    * ModelPill falls back to the active connection's catalog + write-target.
    */
   describeConnection?: (connectionId: string) => { providerId: string } | undefined;
+  /**
+   * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5, TASK.96
+   * 96-A): main routes a host's `PREVIEW_REQUEST_TYPE`/`PREVIEW_ARTIFACTS_TYPE`
+   * control-plane messages here unchanged, tabId-scoped — `main/index.ts` binds
+   * both to the same `PreviewHost` instance (`preview/preview-host.ts`). Neither
+   * is awaited here: `PreviewHost.handleRequest` never rejects (it always posts
+   * its own correlated response) and `handleArtifacts` is fire-and-forget by
+   * design (turn-end auto-open is best-effort). Absent = preview support is not
+   * wired (both messages are silently dropped, matching every other
+   * as-yet-unhandled control-plane type here).
+   */
+  onPreviewRequest?: (tabId: string, message: PreviewRequestMessage) => void;
+  onPreviewArtifacts?: (tabId: string, message: PreviewArtifactsMessage) => void;
+  /**
+   * Fires once a tab is actually gone (closeTab, NOT a host respawn — the two
+   * are never the same thing here, design §2.2). main wires this to
+   * `PreviewHost.closeForTab`, so a closed tab's preview windows never outlive
+   * it. Absent = no-op (every pre-96-A caller/test).
+   */
+  onTabClosed?: (tabId: string) => void;
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
@@ -677,6 +703,14 @@ export class TabHostManager {
     }
     if (data.type === ENGINE_PROCESS_REGISTRATION_TYPE) {
       this.registerEngineProcess(tab, child, message);
+      return;
+    }
+    if (data.type === PREVIEW_REQUEST_TYPE) {
+      this.deps.onPreviewRequest?.(tab.tabId, message as PreviewRequestMessage);
+      return;
+    }
+    if (data.type === PREVIEW_ARTIFACTS_TYPE) {
+      this.deps.onPreviewArtifacts?.(tab.tabId, message as PreviewArtifactsMessage);
       return;
     }
     if (data.type === PROVIDER_HEALTH_EVENT_TYPE) {
@@ -986,6 +1020,9 @@ export class TabHostManager {
     await this.shutdownTabHost(tab);
     this.tabs.delete(tabId);
     this.bindings.delete(tab.sessionId);
+    // Preview windows belong to the TAB, not the host proc — a respawn must
+    // never close them, but a real close (here) must always destroy them.
+    this.deps.onTabClosed?.(tabId);
     return { ok: true };
   }
 
