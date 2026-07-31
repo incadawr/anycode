@@ -38,7 +38,12 @@ import {
   type HighlightedLine,
 } from "../diff/highlight.js";
 import { useResolvedTheme } from "../theme.js";
-import { artifactActionFailureMessage, artifactFailureMessage } from "./artifact-messages.js";
+import {
+  artifactActionFailureMessage,
+  artifactAllowFailureMessage,
+  artifactChipState,
+  type ConsentAttemptStatus,
+} from "./artifact-messages.js";
 import { Check, Copy } from "./icons.js";
 import { TabContext } from "../tab-context.js";
 
@@ -402,6 +407,10 @@ type ArtifactState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; url: string; sizeBytes: number; dimensions?: string }
+  // `reason` is the RAW IPC reason code (e.g. "outside_allowed_roots"), not
+  // pre-formatted text: the chip-state machine (artifact-messages.ts) needs
+  // the code to decide whether to offer "Allow preview", and formats the
+  // row's copy itself.
   | { status: "unavailable"; reason: string };
 
 function formatBytes(bytes: number): string {
@@ -432,6 +441,11 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   // Open/Reveal failures are reported beside the buttons rather than through
   // `state`: the preview above may be perfectly fine while the action is refused.
   const [actionError, setActionError] = useState<string | null>(null);
+  // TASK.77-A: bumped after a successful Allow grant to re-run the read below
+  // for the SAME path — the grant itself lives main-side; this is only the
+  // renderer's retry trigger.
+  const [attempt, setAttempt] = useState(0);
+  const [consentAttempt, setConsentAttempt] = useState<ConsentAttemptStatus>("idle");
   const startLoad = () => {
     setState({ status: "loading" });
     setShouldLoad(true);
@@ -455,6 +469,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
       return;
     }
     let cancelled = false;
+    setState({ status: "loading" });
     void api.readImage(tabId, path).then((result) => {
       if (cancelled) {
         return;
@@ -462,13 +477,15 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
       if (result.ok) {
         setState({ status: "ready", url: `data:${result.mime};base64,${result.dataBase64}`, sizeBytes: result.sizeBytes });
       } else {
-        setState({ status: "unavailable", reason: artifactFailureMessage(result.reason) });
+        setState({ status: "unavailable", reason: result.reason });
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [tabId, api, path, shouldLoad]);
+    // `attempt` is a deliberate re-fetch trigger (TASK.77-A's Allow retry) —
+    // its value is never read, only its change matters.
+  }, [tabId, api, path, shouldLoad, attempt]);
 
   if (!tabId || !api) {
     return null;
@@ -480,8 +497,24 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   };
   const open = () => void runAction("open");
   const reveal = () => void runAction("reveal");
+  // TASK.77-A: an explicit click on this ONE path is the consent the OS
+  // "open outside the workspace" modal exists to collect — main widens WHERE
+  // (never WHAT: the extension/size gates are untouched) for this realPath,
+  // then the read is retried so a successful grant renders the real preview.
+  const allowPreview = async (): Promise<void> => {
+    setConsentAttempt("pending");
+    const result = await api.allow(tabId, path);
+    if (result.ok) {
+      setConsentAttempt("idle");
+      setAttempt((n) => n + 1);
+    } else {
+      setConsentAttempt("failed");
+      setActionError(artifactAllowFailureMessage(result.reason));
+    }
+  };
   const label = alt || path;
   const openable = OPENABLE_IMAGE_EXTENSIONS.has(extensionOfHref(path));
+  const chip = artifactChipState(state.status, state.status === "unavailable" ? state.reason : undefined, consentAttempt);
 
   return (
     <span ref={rootRef} className="md-artifact" data-status={state.status}>
@@ -494,17 +527,33 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
             setState((current) => current.status === "ready" ? { ...current, dimensions: `${naturalWidth}×${naturalHeight}` } : current);
           }} title={openable ? `${path} — click to open` : path} />
       )}
-      {state.status === "unavailable" && <span className="md-artifact-error">{state.reason}</span>}
+      {state.status === "unavailable" && (
+        <>
+          <span className="md-artifact-error">{chip.label}</span>
+          {chip.showAllow && (
+            <button
+              type="button"
+              className="md-artifact-btn"
+              disabled={consentAttempt === "pending"}
+              onClick={() => void allowPreview()}
+            >
+              {consentAttempt === "pending" ? "Allowing…" : "Allow preview"}
+            </button>
+          )}
+        </>
+      )}
       <span className="md-artifact-meta">
         <span className="md-artifact-name" title={path}>
           {label}
           {state.status === "ready" ? ` — ${state.dimensions ? `${state.dimensions} ` : ""}${formatBytes(state.sizeBytes)}` : ""}
         </span>
         <span className="md-artifact-actions">
-          {openable && <button type="button" className="md-artifact-btn" onClick={open}>Open</button>}
-          <button type="button" className="md-artifact-btn" onClick={reveal}>
-            Reveal
-          </button>
+          {openable && chip.showOpen && <button type="button" className="md-artifact-btn" onClick={open}>Open</button>}
+          {chip.showReveal && (
+            <button type="button" className="md-artifact-btn" onClick={reveal}>
+              Reveal
+            </button>
+          )}
           {actionError !== null && <span className="md-artifact-error">{actionError}</span>}
         </span>
       </span>

@@ -41,6 +41,10 @@ type ArtifactActionResult =
         | "io_error";
     };
 
+// TASK.77-A: duplicated from main/artifacts-ipc.ts's ArtifactAllowResult (and
+// preload's own mirror of it) — same "duplicated on purpose" convention.
+type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
+
 import type {
   AvailableEngines,
   CloseTabResult,
@@ -470,6 +474,9 @@ declare global {
         readImage(tabId: string, path: string): Promise<ArtifactReadImageResult>;
         open(tabId: string, path: string): Promise<ArtifactActionResult>;
         reveal(tabId: string, path: string): Promise<ArtifactActionResult>;
+        // TASK.77-A: explicit per-path consent for a path outside the
+        // allowed roots (main/artifacts-ipc.ts's ArtifactConsentStore).
+        allow(tabId: string, path: string): Promise<ArtifactAllowResult>;
       };
       window: {
         minimize(): Promise<void>;
