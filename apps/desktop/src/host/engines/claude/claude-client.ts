@@ -84,13 +84,30 @@ export interface ClaudeSpawnArgsOptions {
 }
 
 /**
- * The exact argv contract §1.3 pins, including the two flags W0 proved are
+ * TASK.90: the append-system-prompt seam. The stock `claude` system prompt
+ * describes its own output as rendered in a terminal — false under AnyCode,
+ * where stdout is captured by the Electron host and rendered as markdown in
+ * the desktop chat panel. This corrects the surface claim (and the ownership
+ * boundary around the CLI's own subagent registry/skills/slash-commands)
+ * without replacing the stock prompt outright. Static and prompt-cacheable;
+ * no native truth exists for it (`system/init` never reports it back), so
+ * there is nothing for a resend to clobber — same rationale as `effort` below.
+ */
+export const CLAUDE_GUI_SURFACE_PROMPT =
+  "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles.";
+
+/**
+ * The exact argv contract §1.3 pins, including the flags W0 proved are
  * mandatory-but-hidden: `--permission-prompt-tool stdio` (without it headless
  * `-p` silently auto-denies every tool permission — probe #2) and
  * `--disable-slash-commands` (without it the CLI's own built-in slash-command
  * and skill catalog leaks into `system/init`/`initialize.commands[]` — probe
  * #6). `--mcp-config` is deliberately omitted: probe #6 proved
- * `--strict-mcp-config` alone yields `mcp_servers: []`.
+ * `--strict-mcp-config` alone yields `mcp_servers: []`. `--append-system-prompt
+ * <CLAUDE_GUI_SURFACE_PROMPT>` (TASK.90) is mandatory-always-on for the same
+ * reason as `effort`: no native truth exists for it, so it rides EVERY spawn,
+ * unconditionally, including `--resume` — there is nothing a resumed native
+ * session could have of its own to protect from being overwritten.
  */
 export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] {
   const args = [
@@ -108,6 +125,8 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     "--setting-sources",
     "project,local",
     "--strict-mcp-config",
+    "--append-system-prompt",
+    CLAUDE_GUI_SURFACE_PROMPT,
   ];
   if (options.permissionModeFlag !== undefined) args.push("--permission-mode", options.permissionModeFlag);
   if (options.model !== undefined) args.push("--model", options.model);
