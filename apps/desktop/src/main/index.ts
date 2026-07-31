@@ -70,7 +70,19 @@ import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
-import { ArtifactConsentStore, NodeArtifactsFs, registerArtifactsIpc } from "./artifacts-ipc.js";
+import {
+  ArtifactConsentStore,
+  NodeArtifactsFs,
+  registerArtifactsIpc,
+  resolveContainedPath,
+  type ArtifactsIpcDeps,
+} from "./artifacts-ipc.js";
+// night-track wave-1 cut §2.5 (TASK.96 96-A): PreviewHost is the main-side half
+// of the host<->main preview control plane (shared/preview.ts §2.3); the
+// electron-adapter is the ONLY file that touches real Electron primitives, so
+// preview-host.ts itself stays unit-testable off plain fakes.
+import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
+import { createElectronPreviewWindow } from "./preview/electron-adapter.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import {
@@ -352,6 +364,8 @@ let win: BrowserWindow | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
 /** Multi-host lifecycle manager (§2.2); null until boot wires it. */
 let manager: TabHostManager | null = null;
+/** Live for the whole app lifetime once boot() constructs it (registerPreviewHost never returns null). */
+let previewHost: PreviewHostHandle | null = null;
 /**
  * Codex onboarding control plane (TASK.41). Held module-level for the SAME
  * reason `manager` is: quit must be able to tear down what it spawned. Its
@@ -548,6 +562,12 @@ function createWindow(): void {
   });
 
   win.on("closed", () => {
+    // Preview windows are their own real BrowserWindows: with any still open,
+    // Electron would NOT consider "all windows closed" once the main window
+    // goes away, so `window-all-closed` (below) would never fire and the app
+    // would linger. Destroying them here first (cut §2.5) keeps the existing
+    // single-window-MVP quit-on-close behavior intact.
+    previewHost?.closeAll();
     win = null;
   });
 
@@ -1162,6 +1182,81 @@ void app.whenReady().then(async () => {
   parkedResumeId = resolveResumeId();
   await refreshProviderState();
 
+  // Chat-artifact containment deps (TASK.72), hoisted here (was inline at
+  // `registerArtifactsIpc` below) so `resolveContainedPath` can be reused for
+  // PreviewHost's `resolveArtifact` — the SAME allowed-roots policy governs
+  // both what bytes the chat-artifact reader may return and what a preview
+  // window may load/navigate to.
+  // TASK.77-A: per-tab, per-path consent grants (in-memory, main-side — never
+  // the renderer, never persisted; see artifacts-ipc.ts's threat-model
+  // comment). A grant must not outlive the tab it was given to: cleared via
+  // the manager's `onTabClosed` hook below, which fires only on a REAL close,
+  // never on a host respawn.
+  const artifactConsentStore = new ArtifactConsentStore();
+  const artifactsIpcDeps: ArtifactsIpcDeps = {
+    home: () => resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+    tmpdir: () => tmpdir(),
+    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    fs: new NodeArtifactsFs(),
+    openPath: (path) => shell.openPath(path),
+    reveal: (path) => shell.showItemInFolder(path),
+    consent: artifactConsentStore,
+    // Opening OUTSIDE the allowed roots is permitted, but only through this
+    // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
+    // a dismissed sheet reads as "no". The full path is spelled out — the
+    // location is the whole reason we are asking. TASK.77-A: this modal is
+    // skipped entirely (deps.consent checked in artifacts-ipc.ts) once the
+    // SAME resolved path already has an Allow grant from the blocked-chip.
+    confirmOpen: async (path) => {
+      const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const options: MessageBoxOptions = {
+        type: "warning",
+        buttons: ["Cancel", "Open"],
+        defaultId: 0,
+        cancelId: 0,
+        title: "Open file outside the workspace?",
+        message: "This file is outside the workspace, ~/.anycode and the temp dir.",
+        detail: `${path}\n\nIt will be opened with the system default application.`,
+      };
+      const { response } = parent === undefined
+        ? await dialog.showMessageBox(options)
+        : await dialog.showMessageBox(parent, options);
+      return response === 1;
+    },
+  };
+
+  // PreviewHost (cut §2.5): registered before TabHostManager so the manager's
+  // `onPreviewRequest`/`onPreviewArtifacts`/`onTabClosed` deps below can close
+  // over it directly. `resolveArtifact` reuses the exact chat-artifact
+  // containment resolver above (workspace / `<home>/.anycode` / tmpdir) — a
+  // preview may only ever load a file the chat-artifact reader would also be
+  // willing to serve bytes for.
+  // `autoOpenEnabled` is hardwired ON for this checkpoint: `AnycodeSettings`
+  // gains a real `preview.autoOpen` key in 96-E (cut §2.7); until that lands,
+  // this matches the owner's documented default (ON) byte-for-byte.
+  previewHost = registerPreviewHost({
+    createWindow: (opts) => createElectronPreviewWindow(opts),
+    resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
+    autoOpenEnabled: () => true,
+    postToHost: (tabId, message) => {
+      const proc = manager?.getTab(tabId)?.proc;
+      if (proc === null || proc === undefined) {
+        return false;
+      }
+      try {
+        proc.postMessage(message);
+        return true;
+      } catch (error) {
+        console.warn(`[main] failed to post preview message to tab ${tabId}`, error);
+        return false;
+      }
+    },
+    // renderMarkdown absent this checkpoint (96-F injects it): every `.md`
+    // open refuses honestly instead of ever loading plaintext (cut §1(g)).
+    logger: console,
+    now: () => Date.now(),
+  });
+
   manager = new TabHostManager({
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
     hostEntry: resolveHostEntry(),
@@ -1265,6 +1360,23 @@ void app.whenReady().then(async () => {
         .catch((error) => {
           console.error(`[main] failed to record connection health`, error);
         });
+    },
+    // Preview control plane (cut §2.3/§2.5): tabId-scoped delegates to the
+    // PreviewHost constructed just above. Neither is awaited — `handleRequest`
+    // never rejects (always posts its own correlated response) and turn-end
+    // auto-open is fire-and-forget by design.
+    onPreviewRequest: (tabId, message) => {
+      void previewHost?.handleRequest(tabId, message);
+    },
+    onPreviewArtifacts: (tabId, message) => {
+      previewHost?.handleArtifacts(tabId, message);
+    },
+    // Respawn is NOT a close (design §2.2) — this fires only from a REAL
+    // `closeTab`, so preview windows never outlive the tab that owned them,
+    // and neither do the tab's artifact consent grants (TASK.77-A).
+    onTabClosed: (tabId) => {
+      previewHost?.closeForTab(tabId);
+      artifactConsentStore.clearTab(tabId);
     },
   });
 
@@ -1676,56 +1788,7 @@ void app.whenReady().then(async () => {
   // touching disk or the shell. `openPath`/`reveal` inject the two Electron
   // primitives so main/artifacts-ipc.ts stays Electron-free and unit-
   // testable off a plain deps bag.
-  // TASK.77-A: per-tab, per-path consent grants (in-memory, main-side —
-  // never the renderer, never persisted; see artifacts-ipc.ts's threat-model
-  // comment). A grant must not outlive the tab it was given to: every real
-  // close goes through `manager.closeTab` (the tab-close IPC today, any
-  // future caller tomorrow), so wrapping THAT one method clears the grant
-  // exactly on close without touching tabs.ts/tab-ipc.ts (outside TASK.77's
-  // file scope) — equivalent to an onTabClosed hook without adding one.
-  const artifactConsentStore = new ArtifactConsentStore();
-  if (manager !== null) {
-    const closeTabUnwrapped = manager.closeTab.bind(manager);
-    manager.closeTab = async (tabId: string) => {
-      const result = await closeTabUnwrapped(tabId);
-      if (result.ok) {
-        artifactConsentStore.clearTab(tabId);
-      }
-      return result;
-    };
-  }
-
-  registerArtifactsIpc({
-    home: () => resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
-    tmpdir: () => tmpdir(),
-    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
-    fs: new NodeArtifactsFs(),
-    openPath: (path) => shell.openPath(path),
-    reveal: (path) => shell.showItemInFolder(path),
-    consent: artifactConsentStore,
-    // Opening OUTSIDE the allowed roots is permitted, but only through this
-    // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
-    // a dismissed sheet reads as "no". The full path is spelled out — the
-    // location is the whole reason we are asking. TASK.77-A: this modal is
-    // skipped entirely (deps.consent checked in artifacts-ipc.ts) once the
-    // SAME resolved path already has an Allow grant from the blocked-chip.
-    confirmOpen: async (path) => {
-      const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-      const options: MessageBoxOptions = {
-        type: "warning",
-        buttons: ["Cancel", "Open"],
-        defaultId: 0,
-        cancelId: 0,
-        title: "Open file outside the workspace?",
-        message: "This file is outside the workspace, ~/.anycode and the temp dir.",
-        detail: `${path}\n\nIt will be opened with the system default application.`,
-      };
-      const { response } = parent === undefined
-        ? await dialog.showMessageBox(options)
-        : await dialog.showMessageBox(parent, options);
-      return response === 1;
-    },
-  });
+  registerArtifactsIpc(artifactsIpcDeps);
 
   // Profile-stats control plane (design/slice-P7.22-cut.md §2-D5 W2): mirrors
   // the skills/subagents registration exactly. `home` resolves via
@@ -1817,6 +1880,9 @@ async function shutdownEverything(): Promise<void> {
   // TASK.47 W15: clear the armed auto-check timer, if any — synchronous,
   // ahead of the awaited teardown below (nothing here depends on it).
   updaterController?.stop();
+  // Preview windows (cut §2.5): synchronous destroy, no write-behind queue to
+  // drain — closed ahead of the awaited teardown below, same as the updater.
+  previewHost?.closeAll();
   await Promise.allSettled([
     activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
     activeOnboarding?.shutdown() ?? Promise.resolve(),
@@ -1842,6 +1908,11 @@ app.on("before-quit", (event) => {
  * already gone and `closeAllCodexChildren()` finds an empty registry, so this
  * costs a microtask on the normal path.
  */
+app.on("will-quit", () => {
+  // Backstop alongside the codex-children one below (cut §2.5): idempotent,
+  // so a completed `before-quit`/window-closed pass finds nothing to do here.
+  previewHost?.closeAll();
+});
 app.on("will-quit", (event) => {
   if (liveCodexChildCount() === 0) return;
   event.preventDefault();
