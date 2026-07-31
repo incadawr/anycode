@@ -31,6 +31,7 @@ import {
   isLoopbackUrl,
   mergeSettings,
   parseSettings,
+  previewSchema,
   settingsSchema,
 } from "./schema.js";
 
@@ -292,6 +293,50 @@ describe("keybindings.overrides (F20, slice-P7.24-cut.md §1, additive-optional)
     const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
     expect(reloaded.status).toBe("ok");
     expect(reloaded.settings.keybindings?.overrides).toEqual([{ action: "session.new", bindings: ["mod+shift+n"] }]);
+  });
+});
+
+describe("preview (night-track wave-1 cut §2.7, TASK.96 96-E, additive-optional)", () => {
+  it("reads a file with no preview field, round-tripping byte-identically (v2)", () => {
+    const legacy = cloneDefaults();
+    const before = JSON.stringify(legacy);
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.preview).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before); // byte-identical round-trip
+  });
+
+  it("validates a file WITH preview.autoOpen (true and false)", () => {
+    for (const autoOpen of [true, false]) {
+      const withPreview: AnycodeSettings = { ...cloneDefaults(), preview: { autoOpen } };
+      const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withPreview)));
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.preview?.autoOpen).toBe(autoOpen);
+      }
+    }
+  });
+
+  it("previewSchema accepts an absent autoOpen (preview present but empty)", () => {
+    const parsed = previewSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+  });
+
+  it("previewSchema accepts a fully absent preview section", () => {
+    const parsed = previewSchema.safeParse(undefined);
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a non-boolean autoOpen", () => {
+    const bad = { ...cloneDefaults(), preview: { autoOpen: "yes" } };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("survives a read-modify-write cycle (autoOpen not stripped on reparse)", () => {
+    const written = mergeSettings(cloneDefaults(), { preview: { autoOpen: false } });
+    const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
+    expect(reloaded.status).toBe("ok");
+    expect(reloaded.settings.preview?.autoOpen).toBe(false);
   });
 });
 

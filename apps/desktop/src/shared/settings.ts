@@ -273,6 +273,17 @@ export interface AnycodeSettings {
       at: string;
     };
   };
+  /**
+   * Browser-preview settings (night-track wave-1 cut §1(e)/§2.7, TASK.96
+   * 96-E; additive-optional, version NOT bumped — same forward-compat
+   * reasoning as `claude`/`codex`/`keybindings` above: an existing
+   * settings.json with no `preview` field round-trips byte-identically).
+   * `autoOpen` absent means ON (owner default) — main's `autoOpenEnabled()`
+   * reads `settings.preview?.autoOpen ?? true`, never the other way around.
+   */
+  preview?: {
+    autoOpen?: boolean;
+  };
 }
 
 /**
