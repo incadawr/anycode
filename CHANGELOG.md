@@ -5,6 +5,66 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.8] — 2026-07-31
+
+### Added
+
+- Subagents can run on a different agent than the session itself. A profile in
+  `.anycode/agents/*.md` may declare `engine: codex` or `engine: claude`, and
+  its children then run as real Codex or Claude Code CLI processes instead of
+  inside AnyCode's own loop. A model override alone could never do this: it
+  reused the parent's transport and key, so the executor was always the
+  parent's provider. Permissions for such a child are enforced by that CLI
+  rather than by AnyCode — a one-shot run has no channel to ask you anything —
+  so the narrowest non-interactive mode that still allows work in the project
+  is used, not a full bypass. A profile naming an engine that is unavailable
+  fails loudly instead of quietly falling back to the parent's model.
+- A subagent profile can pin the model its children run on, through `model:`
+  in the frontmatter; an absent or empty line inherits the session's model.
+  The override changes the model id only, so it stays within the parent's
+  provider.
+- The subagent editor now offers engine and model as lists. The model was
+  free text with nothing to pick from, and a typo travelled all the way to the
+  host as a model id that does not exist.
+- A profile created while a session is running can be used without restarting
+  it. The set of available agent types used to be fixed when the session
+  started, so a newly written profile answered "Unknown agent_type" until a
+  restart.
+- The composer of the start screen now carries reasoning effort and image
+  attachments, which previously could only be set after the first message had
+  been sent.
+- Plan mode can be left from the desktop app. The model proposes the plan, you
+  approve it in a dialog, and the session switches to build. The machinery
+  existed but only the CLI used it; in the app the only way out was changing
+  the mode by hand.
+
+### Changed
+
+- Actions on a file the model produced are now judged one by one instead of by
+  a single rule. Reveal in Finder is no longer restricted; Open outside the
+  workspace, `~/.anycode` and the system temp directory asks for confirmation
+  first; reading a file's bytes into the window stays strictly confined, as
+  before. Models routinely write to `/tmp`, which on macOS is not the system
+  temp directory, so the old blanket refusal made those buttons look broken.
+
+### Fixed
+
+- Editing a subagent through Settings → Subagents silently erased its `model:`
+  line. The profile then ran on the session's model without saying so.
+- A subagent running on another engine could work in the wrong directory: the
+  only thing it knew about its working directory was whatever path the parent
+  happened to mention in the text of the task. The real directory is now
+  stated to it explicitly and outranks the task text.
+- Reveal in folder explains a refusal instead of doing nothing at all.
+- Onboarding no longer locks you into the connection you created first. The
+  provider of an existing connection cannot be changed by design, so a single
+  unlucky first choice left no way forward from inside the app; the welcome
+  screen now lets you add another connection and switch between them.
+- A provider whose API has no model listing is no longer reported as a broken
+  connection. Moonshot's Anthropic-compatible endpoint answers 404 to
+  `GET /v1/models` while messages work fine, and that case is now named for
+  what it is.
+
 ## [0.0.7] — 2026-07-26
 
 ### Fixed
