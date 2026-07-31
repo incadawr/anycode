@@ -358,6 +358,43 @@ describe("createEngineChildRunner: Codex JSONL parsing", () => {
     expect(outcome.status).toBe("error");
     expect(outcome.finalText).toContain("fatal startup error");
   });
+
+  it("TASK.97 R5: a multi-turn codex run settles with turns === 0 (not reported) while turn.started progress pings still fire", async () => {
+    const { spawn, child } = fakeSpawner();
+    const onProgress = vi.fn();
+    const runner = createEngineChildRunner({ cwd: "/work/session", env: { ...baseDeps(), [ENV_CODEX_BIN]: "/opt/bin/codex" }, spawn });
+
+    const outcomePromise = runner(
+      { engine: "codex", prompt: "multi-step task", agentType: "explore", description: "d" },
+      { onProgress },
+    );
+
+    child.stdout.emit(
+      "data",
+      ndjson([
+        { type: "thread.started", thread_id: "t1" },
+        { type: "turn.started" },
+        { type: "item.completed", item: { id: "item_0", type: "command_execution", command: "echo one", exit_code: 0 } },
+        // A real codex exec run only ever fires turn.started once per process,
+        // but the handler must not fabricate a count even if it fired again.
+        { type: "turn.started" },
+        { type: "item.completed", item: { id: "item_1", type: "agent_message", text: "DONE" } },
+        { type: "turn.completed", usage: {} },
+      ]),
+    );
+    child.emit("close", 0);
+
+    const outcome = await outcomePromise;
+    expect(outcome.status).toBe("completed");
+    expect(outcome.turns).toBe(0);
+
+    const progressPings = onProgress.mock.calls.map((call) => call[0]).filter((event) => event.kind === "progress");
+    // turn.started (x2) + the tool's own progress ping after item.completed = 3 pings, all with turns: 0.
+    expect(progressPings.length).toBeGreaterThanOrEqual(2);
+    for (const ping of progressPings) {
+      expect(ping.turns).toBe(0);
+    }
+  });
 });
 
 describe("createEngineChildRunner: cancellation", () => {

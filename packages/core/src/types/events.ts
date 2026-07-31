@@ -141,6 +141,15 @@ export type AgentEvent =
       description: string;
       /** Resolved child model id; absent ⇒ the child inherited the parent's. */
       model?: string;
+      /**
+       * Set only for an engine persona (md-profile `engine:`) — a one-shot
+       * foreign CLI run (Codex or Claude Code) in place of an in-process
+       * child (mirrors SubagentProgress's `start` variant, ports/subagent.ts).
+       * Additive: absent on a replay from before this field existed, which
+       * falls back to legacy (engine-agnostic) rendering — never infer the
+       * engine from `agentType` (TASK.97 R5, wave2-cut §5.4).
+       */
+      engine?: "codex" | "claude";
     }
   | {
       type: "subagent_progress";

@@ -57,6 +57,7 @@ describe("formatSubagentCounters — running (final: null)", () => {
       agentType: "explore",
       description: "survey the repo",
       model: null,
+      engine: null,
       turns: 2,
       toolCalls: 3,
       lastTool: "Grep",
@@ -76,6 +77,7 @@ describe("formatSubagentCounters — running (final: null)", () => {
       lastTool: "Read",
       activity: [],
       model: null,
+      engine: null,
       activityDropped: 0,
       final: null,
     };
@@ -91,6 +93,7 @@ describe("formatSubagentCounters — running (final: null)", () => {
       lastTool: null,
       activity: [],
       model: null,
+      engine: null,
       activityDropped: 0,
       final: null,
     };
@@ -109,6 +112,7 @@ describe("formatSubagentCounters — settled (final set)", () => {
       lastTool: "Bash",
       activity: [],
       model: null,
+      engine: null,
       activityDropped: 0,
       final: { status: "completed", durationMs: 12345 },
     };
@@ -124,6 +128,7 @@ describe("formatSubagentCounters — settled (final set)", () => {
       lastTool: null,
       activity: [],
       model: null,
+      engine: null,
       activityDropped: 0,
       final: { status: "completed", durationMs: 500 },
     };
@@ -139,6 +144,7 @@ describe("formatSubagentCounters — settled (final set)", () => {
       lastTool: null,
       activity: [],
       model: null,
+      engine: null,
       activityDropped: 0,
     };
     expect(formatSubagentCounters({ ...base, final: { status: "max_turns", durationMs: 1000 } })).toBe(
@@ -150,6 +156,93 @@ describe("formatSubagentCounters — settled (final set)", () => {
     expect(formatSubagentCounters({ ...base, final: { status: "error", durationMs: 1000 } })).toBe(
       "Error · 8 turns · 1.0s",
     );
+  });
+});
+
+describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)", () => {
+  it("running, engine null (in-process): byte-identical to the pre-R5 format — no prefix, turn segment present", () => {
+    const subagent: SubagentSubStatus = {
+      agentType: "explore",
+      description: "d",
+      model: null,
+      engine: null,
+      turns: 3,
+      toolCalls: 5,
+      lastTool: null,
+      activity: [],
+      activityDropped: 0,
+      final: null,
+    };
+    expect(formatSubagentCounters(subagent)).toBe("turn 3 · 5 tool calls");
+  });
+
+  it("running, engine claude: gains ONLY a 'claude · ' prefix ahead of the untouched turn/tool-call segment", () => {
+    const subagent: SubagentSubStatus = {
+      agentType: "claude-builder",
+      description: "d",
+      model: null,
+      engine: "claude",
+      turns: 3,
+      toolCalls: 5,
+      lastTool: null,
+      activity: [],
+      activityDropped: 0,
+      final: null,
+    };
+    expect(formatSubagentCounters(subagent)).toBe("claude · turn 3 · 5 tool calls");
+  });
+
+  it("running, engine codex: 'codex · ' prefix and the turn segment is OMITTED entirely (not reported)", () => {
+    const subagent: SubagentSubStatus = {
+      agentType: "codex-builder",
+      description: "d",
+      model: null,
+      engine: "codex",
+      turns: 0,
+      toolCalls: 5,
+      lastTool: "Bash",
+      activity: [],
+      activityDropped: 0,
+      final: null,
+    };
+    expect(formatSubagentCounters(subagent)).toBe("codex · 5 tool calls · Bash");
+    expect(formatSubagentCounters(subagent)).not.toContain("turn");
+  });
+
+  it("settled, engine null (in-process) and engine claude: BOTH byte-identical to the pre-R5 format — no prefix, ever", () => {
+    const inProcess: SubagentSubStatus = {
+      agentType: "explore",
+      description: "d",
+      model: null,
+      engine: null,
+      turns: 4,
+      toolCalls: 4,
+      lastTool: null,
+      activity: [],
+      activityDropped: 0,
+      final: { status: "completed", durationMs: 4200 },
+    };
+    const claude: SubagentSubStatus = { ...inProcess, agentType: "claude-builder", engine: "claude" };
+    expect(formatSubagentCounters(inProcess)).toBe("Completed · 4 turns · 4.2s");
+    expect(formatSubagentCounters(claude)).toBe("Completed · 4 turns · 4.2s");
+  });
+
+  it("settled, engine codex: the 'N turns' segment is OMITTED, no engine prefix either", () => {
+    const subagent: SubagentSubStatus = {
+      agentType: "codex-builder",
+      description: "d",
+      model: null,
+      engine: "codex",
+      turns: 0,
+      toolCalls: 4,
+      lastTool: null,
+      activity: [],
+      activityDropped: 0,
+      final: { status: "completed", durationMs: 4200 },
+    };
+    expect(formatSubagentCounters(subagent)).toBe("Completed · 4.2s");
+    expect(formatSubagentCounters(subagent)).not.toContain("turn");
+    expect(formatSubagentCounters(subagent)).not.toContain("codex");
   });
 });
 
@@ -726,6 +819,7 @@ function mkSubagent(overrides: Partial<SubagentSubStatus> = {}): SubagentSubStat
     agentType: "explore",
     description: "survey the repo",
     model: null,
+    engine: null,
     turns: 1,
     toolCalls: 2,
     lastTool: "Read",
