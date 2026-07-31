@@ -54,6 +54,10 @@ export type { ClaudeTranscriptItem } from "./adapters/node/sqlite-persistence.js
 // below does not apply): re-exported for the desktop host's notice injection
 // (slice 6.DP-2), so both wiring paths append byte-identical reminder blocks.
 export { withBackgroundTaskNotices } from "./cli/background-notice.js";
+// Pure string helper (TASK.27): the plan-discipline reminder both the CLI REPL
+// and the desktop host append to a plan-mode turn's user prompt. Exported so
+// there is exactly ONE copy of the rule text in the repo.
+export { PLAN_MODE_REMINDER, withPlanModeReminder } from "./prompts/plan-reminder.js";
 // Pure catalog matcher (no I/O, no auto-run block — the NOTE about cli/main.ts
 // below does not apply): re-exported for the desktop host's boot-time
 // context-window resolution (slice 6.4), so both wiring paths resolve the

@@ -8,10 +8,12 @@
  * change through ctx.planMode.
  *
  * The port is populated by the loop when the wiring set AgentLoopConfig.planExitMode
- * (cli/main.ts); its absence is the fail-closed lock (children, and any client that
- * did not opt in, get no control). This tool is NOT in createDefaultToolRegistry
- * and NOT in the tools barrel — the CLI wiring registers it directly, so the
- * desktop prompt and child registries are unchanged. The handler never throws —
+ * (cli/main.ts, apps/desktop/src/host/plan-exit.ts); its absence is the fail-closed
+ * lock (children, and any client that did not opt in, get no control). This tool is
+ * NOT in createDefaultToolRegistry — an interactive wiring registers it directly,
+ * alongside planExitMode, so child registries and every non-opted-in client are
+ * unchanged. TASK.27 put it on the tools barrel so the desktop host can register it
+ * without a deep import; importable is not registered. The handler never throws —
  * every path is a ToolResult.
  */
 

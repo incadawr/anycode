@@ -9,9 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  PLAN_PREVIEW_MAX_CHARS,
   buildAlwaysAllowRule,
   buildPermissionAllowMessage,
   canRememberPermission,
+  describePermissionAsk,
   formatPermissionTitle,
   suggestAlwaysAllowPattern,
 } from "./PermissionModal.js";
@@ -223,5 +225,93 @@ describe("formatPermissionTitle", () => {
 
   it("degrades safely on an empty tool name", () => {
     expect(formatPermissionTitle("")).toEqual({ tool: "", action: null, sentence: "Allow ?" });
+  });
+});
+
+/**
+ * TASK.27 — the ExitPlanMode special case. The permission engine already
+ * escalates the tool into the ordinary `permission_request` tract, so the modal
+ * renders it with no wiring change; what these pin is the PRESENTATION, which
+ * is the whole point of the special case:
+ *
+ *  - a plan is rendered as markdown, not as a JSON `Input` dump;
+ *  - the buttons say what they do (approve the plan / keep planning), because
+ *    "Allow"/"Deny" tells a user nothing about a mode switch;
+ *  - "Always allow" is impossible for a plan — a remembered rule would
+ *    auto-approve every future plan without anyone reading it;
+ *  - a malformed ask degrades to the generic presentation rather than
+ *    rendering an empty plan well (mirror of the CLI's own fallback in
+ *    terminal-broker.ts).
+ */
+describe("describePermissionAsk — plan approval (TASK.27)", () => {
+  it("recognizes a well-formed ExitPlanMode ask and carries the plan verbatim", () => {
+    const plan = "## Plan\n\n1. do the thing\n2. test it\n";
+    const presentation = describePermissionAsk("ExitPlanMode", { plan });
+
+    expect(presentation.kind).toBe("plan");
+    expect(presentation.plan).toBe(plan);
+    expect(presentation.elidedChars).toBe(0);
+  });
+
+  it("labels the actions by what they do, not by allow/deny", () => {
+    const presentation = describePermissionAsk("ExitPlanMode", { plan: "x" });
+
+    expect(presentation.allowLabel).toBe("Approve plan");
+    expect(presentation.denyLabel).toBe("Keep planning");
+    expect(presentation.hint).toContain("still ask");
+  });
+
+  it("never offers Always-allow for a plan", () => {
+    expect(describePermissionAsk("ExitPlanMode", { plan: "x" }).canRemember).toBe(false);
+  });
+
+  it("caps a pathological plan and reports exactly how many characters were elided", () => {
+    const elided = 137;
+    const plan = "P".repeat(PLAN_PREVIEW_MAX_CHARS + elided);
+    const presentation = describePermissionAsk("ExitPlanMode", { plan });
+
+    expect(presentation.plan).toHaveLength(PLAN_PREVIEW_MAX_CHARS);
+    expect(presentation.elidedChars).toBe(elided);
+  });
+
+  it("degrades to the generic presentation when the plan field is missing or not a string", () => {
+    for (const input of [{}, { plan: 42 }, { plan: null }, null, "nope"]) {
+      const presentation = describePermissionAsk("ExitPlanMode", input);
+      expect(presentation.kind).toBe("generic");
+      expect(presentation.plan).toBeNull();
+    }
+  });
+
+  it("accepts an empty plan string as a plan (honest empty block beats a JSON dump)", () => {
+    const presentation = describePermissionAsk("ExitPlanMode", { plan: "" });
+    expect(presentation.kind).toBe("plan");
+    expect(presentation.plan).toBe("");
+  });
+
+  it("is case-sensitive and never fuzzy-matches the tool name", () => {
+    expect(describePermissionAsk("exitplanmode", { plan: "x" }).kind).toBe("generic");
+    expect(describePermissionAsk("ExitPlanModeX", { plan: "x" }).kind).toBe("generic");
+  });
+
+  it("leaves every other ask exactly as before — generic labels, remember allowed", () => {
+    const presentation = describePermissionAsk("Bash", { command: "git status" });
+
+    expect(presentation.kind).toBe("generic");
+    expect(presentation.plan).toBeNull();
+    expect(presentation.allowLabel).toBe("Allow");
+    expect(presentation.denyLabel).toBe("Deny");
+    expect(presentation.canRemember).toBe(true);
+    expect(presentation.sentence).toBe(formatPermissionTitle("Bash").sentence);
+  });
+
+  it("gives the plan dialog its own aria-label instead of 'Allow ExitPlanMode?'", () => {
+    expect(describePermissionAsk("ExitPlanMode", { plan: "x" }).sentence).not.toContain("Allow");
+  });
+});
+
+describe("canRememberPermission x plan ask", () => {
+  it("an engine that permits remembering still cannot remember a plan", () => {
+    const presentation = describePermissionAsk("ExitPlanMode", { plan: "x" });
+    expect(canRememberPermission(null) && presentation.canRemember).toBe(false);
   });
 });

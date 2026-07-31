@@ -42,6 +42,7 @@ import type {
 import type { HostToUiMessage, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
+import { wirePlanExit } from "./plan-exit.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import type { SessionEngine } from "./engines/session-engine.js";
 import { Outbound, Session, type SessionOptions, type SessionPersistence } from "./session.js";
@@ -297,6 +298,15 @@ export interface HarnessOptions {
   onContinuationComplete?: () => Promise<void>;
   /** TASK.45 W11: surfaced directly to Session; omitted -> no-op (every pre-existing test unaffected). */
   reportProviderHealth?: SessionOptions["reportProviderHealth"];
+  /**
+   * TASK.27: opts this harness into the plan-exit contract EXACTLY as host boot
+   * does — through the one `wirePlanExit` call, which both registers
+   * `ExitPlanMode` into the registry and produces the `planExitMode`/
+   * `onModeChange` pair spread into AgentLoopConfig. Omitted by default ->
+   * registry and config byte-identical to pre-TASK.27 (every pre-existing test
+   * unaffected, and the tool stays invisible to the model).
+   */
+  planExit?: boolean;
 }
 
 export interface Harness {
@@ -366,6 +376,15 @@ export function createHarness(options: HarnessOptions): Harness {
     registry.register(bashOutputTool);
     registry.register(bashKillTool);
   }
+  // Mirror host boot EXACTLY (TASK.27): ONE call both registers ExitPlanMode
+  // and yields the loop control, so the harness can never reproduce the unsafe
+  // half-wiring. `session` below is captured lazily — onModeChange only ever
+  // fires from inside a running turn, long after construction.
+  const planExit = options.planExit
+    ? wirePlanExit(registry, (mode) => {
+        session.notifyModeChanged(mode);
+      })
+    : null;
   const hooks = new InMemoryHookRunner();
   hooks.register(createSnapshotHook(snapshotFs, emit));
   const broker = new IpcPermissionBroker(emit, options.brokerTimeoutMs);
@@ -397,6 +416,9 @@ export function createHarness(options: HarnessOptions): Harness {
     // Mirror host boot (slice P7.26/R1): a supplied capturer is spread into
     // config.checkpoints; absent -> the arc stays dormant (byte-identical).
     ...(options.checkpoints ? { checkpoints: options.checkpoints } : {}),
+    // Mirror host boot (TASK.27): planExitMode + onModeChange, or nothing at
+    // all -> ctx.planMode is never built and ExitPlanMode fails closed.
+    ...(planExit ?? {}),
   };
   const loop = new AgentLoop(config);
   const engine = options.engine ?? new CoreEngine({

@@ -75,6 +75,7 @@ export type FetchModelsFailureReason =
   | "invalid_url"
   | "redirect_blocked"
   | "http_error"
+  | "models_not_supported"
   | "response_too_large"
   | "timeout"
   | "network_error"
@@ -160,6 +161,18 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   }
 
   if (!response.ok) {
+    // 404/405 (TASK.67): the route itself is missing/unsupported, not a
+    // rejected request — live curl against Moonshot's Anthropic-compatible
+    // proxy confirmed `GET /v1/models` 404s `url.not_found` while
+    // `POST /v1/messages` 401s (base path is right, the models-list route
+    // just isn't implemented there). Surfacing that as the generic
+    // `http_error` reads to the user as "your connection is broken", when
+    // the fix is "type the model id by hand". 401/403 stay `http_error` on
+    // purpose — those mean the KEY was rejected on a route that exists, a
+    // different problem with a different fix.
+    if (response.status === 404 || response.status === 405) {
+      return { ok: false, reason: "models_not_supported" };
+    }
     return { ok: false, reason: "http_error" };
   }
 

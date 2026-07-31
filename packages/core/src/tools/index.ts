@@ -19,6 +19,10 @@ export { bashKillTool } from "./bash-kill.js";
 export { diagnosticsEditTool, diagnosticsWriteTool, formatDiagnostics } from "./diagnostics.js";
 export type { WithDiagnostics } from "./diagnostics.js";
 export { imageCapableReadTool } from "./read-image.js";
+// TASK.27: exported so a non-CLI wiring (the desktop host) can register it too.
+// Deliberately still absent from createDefaultToolRegistry — being importable is
+// not being registered, and the fail-closed default for children is unchanged.
+export { exitPlanModeTool } from "./exit-plan-mode.js";
 export {
   enterWorktreeInputSchema,
   enterWorktreeTool,

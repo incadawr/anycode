@@ -157,7 +157,8 @@ interface DraftImage {
   attachment: ImageAttachment;
 }
 
-const IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
+/** Exported for the start-screen composer (StartScreen.tsx, TASK.81 parity) — the same accept-list, no second copy of the format list. */
+export const IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
 
 function startsWithBytes(bytes: Uint8Array, prefix: readonly number[]): boolean {
   if (bytes.length < prefix.length) return false;
@@ -194,7 +195,8 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function formatImageSize(bytes: number): string {
+/** Exported for the start-screen composer (StartScreen.tsx, TASK.81 parity) — the same pill size formatting, no second copy. */
+export function formatImageSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
@@ -245,6 +247,56 @@ async function resizeComposerImage(file: File, mediaType: ImageMediaType): Promi
     bitmap.close();
   }
   throw new Error(`${file.name || "image"} could not be reduced below the ${formatImageSize(COMPOSER_IMAGE_MAX_BYTES)} limit.`);
+}
+
+/** One decoded, sendable image attachment — `DraftImage` minus the renderer-local `id` (a React list key, not a wire concept). */
+export interface ComposerImageRead {
+  name: string;
+  sizeBytes: number;
+  attachment: ImageAttachment;
+}
+
+/**
+ * Decodes + validates one dropped/picked/pasted File into a sendable image
+ * attachment: sniffs the real format (never trusts the browser-reported
+ * MIME), downsizes an oversized file once, and re-validates the resize
+ * output before accepting it. Exported so the start-screen composer
+ * (StartScreen.tsx, TASK.81 parity) shares this EXACT validation path — no
+ * second image decoder for the same job.
+ */
+export async function readComposerImageFile(
+  file: File,
+): Promise<{ ok: true; image: ComposerImageRead } | { ok: false; reason: string }> {
+  let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
+  const mediaType = sniffComposerImageMediaType(bytes);
+  if (mediaType === null) {
+    return { ok: false, reason: `${file.name || "image"} is not a supported image.` };
+  }
+  if (bytes.length > COMPOSER_IMAGE_MAX_BYTES) {
+    try {
+      bytes = await resizeComposerImage(file, mediaType);
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+    // Encoder output is untrusted input too: fail closed if Chromium ever
+    // produced a different format than requested.
+    if (sniffComposerImageMediaType(bytes) !== mediaType || bytes.length > COMPOSER_IMAGE_MAX_BYTES) {
+      return { ok: false, reason: `${file.name || "image"} could not be resized safely.` };
+    }
+  }
+  const sourcePath = file.name.length > 0 ? file.name : undefined;
+  return {
+    ok: true,
+    image: {
+      name: file.name || mediaType.replace("image/", ""),
+      sizeBytes: bytes.length,
+      attachment: {
+        mediaType,
+        data: bytesToBase64(bytes),
+        ...(sourcePath !== undefined ? { sourcePath } : {}),
+      },
+    },
+  };
 }
 
 /**
@@ -999,7 +1051,7 @@ export function Composer() {
       setSlashDismissed(false);
     }
   }
-  const slashItemsKey = slashItems.map((item) => item.id).join(" ");
+  const slashItemsKey = slashItems.map((item) => item.id).join("\0");
   if (slashItemsKey !== lastSlashItemsKeyRef.current) {
     lastSlashItemsKeyRef.current = slashItemsKey;
     if (slashSelIndex !== 0) {
@@ -1074,38 +1126,13 @@ export function Composer() {
     dispatchSlashIntent(item.intent);
   }
 
+  /** Thin wrapper: `readComposerImageFile` owns validation, this only mints the renderer-local list-key `id`. */
   async function readDraftImage(file: File): Promise<{ ok: true; image: DraftImage } | { ok: false; reason: string }> {
-    let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
-    const mediaType = sniffComposerImageMediaType(bytes);
-    if (mediaType === null) {
-      return { ok: false, reason: `${file.name || "image"} is not a supported image.` };
+    const result = await readComposerImageFile(file);
+    if (!result.ok) {
+      return result;
     }
-    if (bytes.length > COMPOSER_IMAGE_MAX_BYTES) {
-      try {
-        bytes = await resizeComposerImage(file, mediaType);
-      } catch (error) {
-        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-      }
-      // Encoder output is untrusted input too: fail closed if Chromium ever
-      // produced a different format than requested.
-      if (sniffComposerImageMediaType(bytes) !== mediaType || bytes.length > COMPOSER_IMAGE_MAX_BYTES) {
-        return { ok: false, reason: `${file.name || "image"} could not be resized safely.` };
-      }
-    }
-    const sourcePath = file.name.length > 0 ? file.name : undefined;
-    return {
-      ok: true,
-      image: {
-        id: nextImageIdRef.current++,
-        name: file.name || mediaType.replace("image/", ""),
-        sizeBytes: bytes.length,
-        attachment: {
-          mediaType,
-          data: bytesToBase64(bytes),
-          ...(sourcePath !== undefined ? { sourcePath } : {}),
-        },
-      },
-    };
+    return { ok: true, image: { id: nextImageIdRef.current++, ...result.image } };
   }
 
   async function addImageFiles(files: readonly File[]): Promise<void> {

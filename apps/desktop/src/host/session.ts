@@ -56,7 +56,13 @@ import type {
   TelemetryStatus,
   ToolCallOutcome,
 } from "@anycode/core";
-import { SESSION_TITLE_MAX_LENGTH, deriveSessionTitle, sanitizeTitleSource, withBackgroundTaskNotices } from "@anycode/core";
+import {
+  SESSION_TITLE_MAX_LENGTH,
+  deriveSessionTitle,
+  sanitizeTitleSource,
+  withBackgroundTaskNotices,
+  withPlanModeReminder,
+} from "@anycode/core";
 import { randomUUID } from "node:crypto";
 import type {
   EngineModelChoice,
@@ -1216,6 +1222,21 @@ export class Session {
     // busy gate already returned) — a rejected message drains nothing. A turn
     // with no notices keeps `turnInput === text`, byte-identical to pre-6.DP-2.
     let turnInput = text;
+    // Plan-mode reminder (TASK.27, mirror of cli/main.ts's REPL branch): the
+    // system prompt is static and shared, so the model is told it is in plan
+    // mode — and that ExitPlanMode exists — once per plan-mode turn. Injected
+    // AFTER the raw-text title derivation above (a reminder never leaks into
+    // the title) and BEFORE the background notices below, matching the CLI's
+    // plan -> notices tag order exactly.
+    //
+    // `engine.mode()` is the live source of truth: an approved ExitPlanMode
+    // already advanced it mid-turn, so the very next turn drops the reminder
+    // on its own. Gated on supportsCorePermissions because that is precisely
+    // the set of engines whose plan mode WE run — Claude and Codex own their
+    // own plan handling and must never be handed our tool's rules.
+    if (this.engine.capabilities.supportsCorePermissions && this.engine.mode() === "plan") {
+      turnInput = withPlanModeReminder(turnInput);
+    }
     const carriesWorktreeExitNotice = this.worktreeExitNoticePending;
     if (this.engine.capabilities.supportsTasks && this.tasks) {
       const notices = this.tasks.drainNotices();
@@ -1517,6 +1538,26 @@ export class Session {
     }
     this.engine.setMode(mode);
     // Persist the mode so a resume restores it (design §4.2); fire-and-forget.
+    this.persistence?.touch({ mode });
+    this.outbound.emit({ type: "mode_changed", mode });
+  }
+
+  /**
+   * Mode advance driven by the LOOP, not the UI (TASK.27): the single
+   * sanctioned mid-turn transition an approved ExitPlanMode performs, delivered
+   * through `AgentLoopConfig.onModeChange`. It deliberately differs from
+   * `onSetMode` above in both directions:
+   *
+   *  - it never calls `engine.setMode` — the loop already mutated `config.mode`
+   *    before notifying, so setting it again would be a redundant second write;
+   *  - it never consults `this.busy` — it fires from INSIDE a running turn,
+   *    which is exactly the state `onSetMode` refuses.
+   *
+   * Everything downstream is unchanged: the same `mode_changed` message the UI
+   * store already handles (the mode chip recolors itself), and the same
+   * persistence touch that lets a resume restore the mode.
+   */
+  notifyModeChanged(mode: PermissionMode): void {
     this.persistence?.touch({ mode });
     this.outbound.emit({ type: "mode_changed", mode });
   }

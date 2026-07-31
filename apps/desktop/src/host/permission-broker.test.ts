@@ -9,7 +9,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeTool } from "@anycode/core";
 import type { PermissionRequest } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
-import { IpcPermissionBroker, toWireToolMeta } from "./permission-broker.js";
+import {
+  IpcPermissionBroker,
+  PERMISSION_ASK_TIMEOUT_MS,
+  PLAN_APPROVAL_ASK_TIMEOUT_MS,
+  resolveAskTimeoutMs,
+  toWireToolMeta,
+} from "./permission-broker.js";
 
 function makeBroker(timeoutMs?: number): {
   broker: IpcPermissionBroker;
@@ -301,5 +307,51 @@ describe("IpcPermissionBroker.pendingToolName (slice 2.2.3, design §5)", () => 
     broker.handleResponse(id, "allow");
 
     expect(broker.pendingToolName(id)).toBeUndefined();
+  });
+});
+
+/**
+ * TASK.27: an ExitPlanMode ask is a human reading a whole implementation plan,
+ * not a one-glance "allow this command?" — the generic 120 s deadline would
+ * fail-closed-deny a plan the user is still reading, and the model would be
+ * told the plan was rejected. The plan ask therefore gets its own, longer
+ * deadline; it is a floor, never a shortening, so it can only ever be safer
+ * than the generic one.
+ */
+describe("plan-approval ask deadline (TASK.27)", () => {
+  const planRequest: PermissionRequest = {
+    toolName: "ExitPlanMode",
+    input: { plan: "## Plan\n\n1. do the thing" },
+    metadata: { ...writeTool.metadata, name: "ExitPlanMode", needsApproval: true },
+    mode: "plan",
+  };
+
+  it("resolves a longer deadline for ExitPlanMode than for any other tool", () => {
+    expect(resolveAskTimeoutMs("ExitPlanMode", PERMISSION_ASK_TIMEOUT_MS)).toBe(PLAN_APPROVAL_ASK_TIMEOUT_MS);
+    expect(PLAN_APPROVAL_ASK_TIMEOUT_MS).toBeGreaterThan(PERMISSION_ASK_TIMEOUT_MS);
+    expect(resolveAskTimeoutMs("Write", PERMISSION_ASK_TIMEOUT_MS)).toBe(PERMISSION_ASK_TIMEOUT_MS);
+    expect(resolveAskTimeoutMs("Bash", 5_000)).toBe(5_000);
+  });
+
+  it("is a floor, never a shortening — a host configured with an even longer deadline keeps it", () => {
+    const longer = PLAN_APPROVAL_ASK_TIMEOUT_MS * 2;
+    expect(resolveAskTimeoutMs("ExitPlanMode", longer)).toBe(longer);
+  });
+
+  it("does not deny a pending plan while the generic deadline elapses", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeBroker(120_000);
+    const decision = broker.requestPermission(planRequest);
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(settled(emitted)).toEqual([]);
+    expect(broker.pendingCount).toBe(1);
+
+    // Still fail-closed, just later: its own deadline eventually denies it.
+    await vi.advanceTimersByTimeAsync(PLAN_APPROVAL_ASK_TIMEOUT_MS);
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+    expect(settled(emitted)).toEqual([
+      expect.objectContaining({ behavior: "deny", origin: "timeout" }),
+    ]);
   });
 });

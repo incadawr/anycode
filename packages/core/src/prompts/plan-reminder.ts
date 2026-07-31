@@ -1,12 +1,19 @@
 /**
  * Plan-mode reminder (Phase 4 slice 4.3, design §2.7/§3.4). The system prompt is
- * static and shared with the desktop host, so it does not carry "you are in plan
- * mode"; the REPL appends this reminder to the user's prompt on every plan-mode
+ * static and shared by every client, so it does not carry "you are in plan
+ * mode"; a client appends this reminder to the user's prompt on every plan-mode
  * turn instead (the model does not remember the mode between turns). Pure string
  * function — no I/O, no state. The reminder rides inside a structural tag,
  * mirroring the <hook-context> tag the loop appends for UserPromptSubmit hooks;
  * it persists into history as part of the user message, which is honest about
-
+ * what the model was actually told. Both transcript sanitizers
+ * (context/session-title.ts, the renderer's transcript-sanitize.ts) strip the
+ * paired tag, so it never leaks into a title or the visible transcript.
+ *
+ * TASK.27: this used to live in cli/, which became a lie once the desktop host
+ * started appending the same reminder — a second copy of the rule text is the
+ * one outcome that must never happen, so the module moved to prompts/ (neutral,
+ * client-agnostic) and is re-exported from the package barrel.
  */
 
 /** Plan-discipline text wrapped by withPlanModeReminder; original prose, never copied. */
@@ -15,7 +22,7 @@ export const PLAN_MODE_REMINDER =
 
 /**
  * Appends the plan-mode reminder to a user prompt inside a <plan-mode-reminder>
- * tag. Called by the REPL only while the session mode is plan (design §2.8).
+ * tag. Called by a client only while the session mode is plan (design §2.8).
  */
 export function withPlanModeReminder(userInput: string): string {
   return `${userInput}\n<plan-mode-reminder>\n${PLAN_MODE_REMINDER}\n</plan-mode-reminder>`;
