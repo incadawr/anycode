@@ -33,6 +33,9 @@ mode switching are shared across engines.
   break the visual model.
 - **Capabilities depend on the engine.** Each profile exposes what its backend
   supports; inapplicable actions are disabled rather than presented as working.
+- **Subagents pick their own engine.** An agent profile can pin the children it
+  spawns to a specific agent CLI, independently of what runs the parent session,
+  so a task can be delegated to another agent without leaving the workspace.
 
 ---
 

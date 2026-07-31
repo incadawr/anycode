@@ -27,6 +27,11 @@ Capabilities follow the engine. Each profile exposes what its backend actually
 supports, and an action the backend cannot perform is disabled rather than shown
 as working.
 
+Subagents are not bound to the engine running the session. An agent profile
+can pin its children to the Codex or the Claude Code CLI, so a Native session
+can hand a task to a different agent and receive the result in the same
+transcript.
+
 Both CLI profiles are pinned against recorded protocol fixtures: the adapters
 have to stay in sync with the recorded streams, so a change on our side that
 drops or invents a wire message fails the build rather than surfacing as a
@@ -35,7 +40,7 @@ opt-in run against the real binary, not part of the default suite.
 
 ## Status
 
-AnyCode is **0.0.7, alpha**. Storage, APIs, and UI may change without
+AnyCode is **0.0.8, alpha**. Storage, APIs, and UI may change without
 backward-compatibility guarantees, and alpha builds are unsigned — signing
 arrives with the beta.
 
