@@ -175,6 +175,7 @@ import {
   SqlitePersistenceAdapter,
   SwitchableModelPort,
   WriteBehindHistorySink,
+  PREVIEW_BUILTIN_SKILLS,
   WORKTREE_BUILTIN_SKILLS,
   backgroundCapableBashTool,
   bashKillTool,
@@ -187,6 +188,8 @@ import {
   createDefaultToolRegistry,
   createSkillPort,
   createWebSearchTool,
+  browserOpenTool,
+  browserReadTool,
   diagnosticsEditTool,
   diagnosticsWriteTool,
   enterWorktreeTool,
@@ -216,6 +219,7 @@ import {
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
   AgentLoopConfig,
+  BuiltinSkillDefinition,
   CommandHookDeclaration,
   ExtensionsBootstrap,
   LspServerSpec,
@@ -223,6 +227,7 @@ import type {
   McpServerSpec,
   ModelPort,
   PermissionMode,
+  PreviewPort,
   ProviderTransport,
   ReasoningEffort,
   ResolvedTelemetryConfig,
@@ -243,6 +248,7 @@ import {
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import type { PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
 import {
   WORKTREE_CLEANUP_ENV,
   WORKTREE_TRANSITION_MESSAGE_TYPE,
@@ -250,10 +256,12 @@ import {
 } from "../shared/worktrees.js";
 import {
   buildResolveApiKey,
+  createPreviewRpcClient,
   hostDiagnosticSink,
   parseHostArgs,
   repairDanglingToolCalls,
   resolveBootSession,
+  routePreviewMessage,
   scrubSecretEnv,
   seedAlwaysAllowRules,
 } from "./boot.js";
@@ -345,6 +353,32 @@ function subscribeCredentialResponses(listener: (response: CredentialResponse) =
 function sendCredentialRequest(request: CredentialRequest): void {
   process.parentPort.postMessage(request);
 }
+
+// Preview RPC broker (night-track wave-1 cut §2.3): PreviewResponseMessage
+// messages arrive on the SAME parentPort "message" event, routed through
+// routePreviewMessage (boot.ts) below; createPreviewRpcClient's per-call
+// waiter subscribes here and correlates by requestId, mirroring the
+// credential broker immediately above.
+const previewResponseListeners = new Set<(response: PreviewResponseMessage) => void>();
+
+function subscribePreviewResponses(listener: (response: PreviewResponseMessage) => void): () => void {
+  previewResponseListeners.add(listener);
+  return () => {
+    previewResponseListeners.delete(listener);
+  };
+}
+
+function sendPreviewRequest(request: PreviewRequestMessage): void {
+  process.parentPort.postMessage(request);
+}
+
+// Built once at module scope (zero I/O — an RPC client is just closures over
+// the send/subscribe pair above); previewAvailable below gates whether the
+// Browser* tools/skill are actually registered, not whether this exists.
+const previewPort: PreviewPort = createPreviewRpcClient({
+  send: sendPreviewRequest,
+  subscribe: subscribePreviewResponses,
+});
 
 let session: Session | null = null;
 /** Exists before engine-specific boot; owns cleanup when Session was never built. */
@@ -1134,6 +1168,17 @@ async function boot(): Promise<void> {
       registry.register(enterWorktreeTool);
       registry.register(exitWorktreeTool);
     }
+    // Browser-preview capability (night-track wave-1 cut §2/§2.2): unlike
+    // worktreeAvailable, there is no local precondition to probe (main's
+    // PreviewHost is unconditionally wired, and the RPC client above is pure
+    // closures over parentPort — always constructible). The boolean stays for
+    // symmetry with the worktree gate and as a single flip point should a
+    // future precondition emerge; today it is unconditionally true.
+    const previewAvailable = true;
+    if (previewAvailable) {
+      registry.register(browserOpenTool);
+      registry.register(browserReadTool);
+    }
     // Plan-exit contract (TASK.27, mirror of cli/main.ts): ONE call registers
     // ExitPlanMode AND produces the planExitMode/onModeChange pair spread into
     // AgentLoopConfig below — the halves are only safe together (plan-exit.ts).
@@ -1331,13 +1376,22 @@ async function boot(): Promise<void> {
       repoMapFiles: [],
       problems: [],
     };
+    // Builtin skills combine every capability-gated set (worktree, preview, ...)
+    // into ONE array: discoverExtensions takes a single `builtinSkills` key, so
+    // two independent conditional spreads of that same key would silently
+    // overwrite each other instead of accumulating (each gate's own boolean
+    // still decides whether its skill is IN the combined list at all).
+    const builtinSkills: readonly BuiltinSkillDefinition[] = [
+      ...(worktreeAvailable ? WORKTREE_BUILTIN_SKILLS : []),
+      ...(previewAvailable ? PREVIEW_BUILTIN_SKILLS : []),
+    ];
     try {
       ext = await discoverExtensions(fsAdapter, {
         workspace,
         home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         repoMapConfig,
-        ...(worktreeAvailable ? { builtinSkills: WORKTREE_BUILTIN_SKILLS } : {}),
+        ...(builtinSkills.length > 0 ? { builtinSkills } : {}),
       });
     } catch (error) {
       console.error(`[host] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${describeError(error)}`);
@@ -1554,6 +1608,7 @@ async function boot(): Promise<void> {
       },
       media,
       ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
+      ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
       maxTurns: envConfig.maxTurns,
       maxOutputTokens: bootMaxOutputTokens,
@@ -2091,6 +2146,21 @@ process.parentPort.on("message", (event) => {
     for (const listener of credentialResponseListeners) {
       listener(response);
     }
+    return;
+  }
+  // Preview control-plane messages (night-track wave-1 cut §2.3): routed
+  // through the pure boot.ts filter so this handler stays a thin dispatch
+  // table. onEvent is deliberately unset — PREVIEW_EVENT_TYPE is recognized
+  // (never falls through to "shutdown") but has no consumer until slice 96-D.
+  if (
+    routePreviewMessage(data, {
+      onResponse: (response) => {
+        for (const listener of previewResponseListeners) {
+          listener(response);
+        }
+      },
+    })
+  ) {
     return;
   }
   if (data && data.type === "shutdown") {
