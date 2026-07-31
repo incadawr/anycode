@@ -71,6 +71,16 @@ export type {
   McpWireTransport,
 } from "./mcp.js";
 export type { MediaCapabilityPort } from "./media.js";
+export type {
+  PreviewConsoleEntry,
+  PreviewOpenRequest,
+  PreviewOpenSuccess,
+  PreviewPort,
+  PreviewReadRequest,
+  PreviewReadSuccess,
+  PreviewResult,
+  PreviewScreenshotSuccess,
+} from "./preview.js";
 export type { ImageAttachment, ImageMediaType } from "../types/images.js";
 export type {
   TelemetryEventRecord,

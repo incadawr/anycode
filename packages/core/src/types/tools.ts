@@ -17,6 +17,7 @@ import type { ImageAttachment } from "./images.js";
 import type { PlanModeControl } from "./permissions.js";
 import type { AgentEvent } from "./events.js";
 import type { WorkspaceTransition, WorktreeControlPort } from "../ports/worktrees.js";
+import type { PreviewPort } from "../ports/preview.js";
 import type { ResultPreviewDirection } from "../util/result-budget.js";
 
 export type RiskLevel = "low" | "medium" | "high";
@@ -150,6 +151,17 @@ export interface ToolContext {
    * this port; child loops and other clients fail closed.
    */
   worktrees?: WorktreeControlPort;
+  /**
+   * Host-owned browser-preview control plane (night-track wave-1 cut §2.1).
+   * Optional by design: its absence is the fail-closed lock — BrowserOpen/
+   * BrowserRead/BrowserScreenshot return an "unavailable" error-outcome
+   * rather than reaching a preview window. Only the desktop host registers
+   * the Browser* tools and supplies this port; a child subagent receives no
+   * port (buildChildConfig does not copy it), so a child's Browser* calls
+   * always fail closed — avoids window-focus/consent races between parallel
+   * children (wave1-cut.md §1(f)).
+   */
+  preview?: PreviewPort;
 }
 
 /** Handler-level result. Dispatcher-level failures (denied/timeout/...) live on ToolCallOutcome. */
