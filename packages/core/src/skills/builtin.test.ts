@@ -3,6 +3,8 @@ import type { FileSystemPort } from "../ports/file-system.js";
 import { createSkillPort, discoverSkills } from "./discovery.js";
 import {
   BUILTIN_SKILL_SOURCE,
+  CREATING_SUBAGENTS_SKILL,
+  SUBAGENT_BUILTIN_SKILLS,
   USING_GIT_WORKTREES_SKILL,
   WORKTREE_BUILTIN_SKILLS,
   builtinSkillPath,
@@ -108,5 +110,46 @@ describe("in-memory built-in skills", () => {
     );
     expect(USING_GIT_WORKTREES_SKILL.body).not.toMatch(/\bgit\s+worktree\b/);
     expect(USING_GIT_WORKTREES_SKILL.body).toContain("successful call as a workspace transition");
+  });
+
+  it("discovers and lazily loads the always-on creating-subagents skill", async () => {
+    const fs = fakeFs();
+    const result = await discoverSkills(fs, [], { builtins: SUBAGENT_BUILTIN_SKILLS });
+
+    expect(result.problems).toEqual([]);
+    expect(result.metas).toEqual([
+      expect.objectContaining({
+        name: "creating-subagents",
+        source: BUILTIN_SKILL_SOURCE,
+        path: builtinSkillPath("creating-subagents"),
+      }),
+    ]);
+
+    const port = createSkillPort(fs, result.metas, { builtins: SUBAGENT_BUILTIN_SKILLS });
+    const loaded = await port.load("creating-subagents");
+    expect(loaded?.body).toContain(".anycode/agents/");
+    expect(loaded?.truncated).toBe(false);
+  });
+
+  it("matches the frozen name and description verbatim (wave-2 cut §2.4)", () => {
+    expect(CREATING_SUBAGENTS_SKILL.name).toBe("creating-subagents");
+    expect(CREATING_SUBAGENTS_SKILL.description).toBe(
+      "Create a reusable subagent profile (.anycode/agents/*.md) when the user asks for a custom subagent or wants tasks delegated to a specific engine (codex/claude) or model.",
+    );
+  });
+
+  it("documents where to write the profile and that pickup is hot, no restart", () => {
+    expect(CREATING_SUBAGENTS_SKILL.body).toContain(".anycode/agents/");
+    expect(CREATING_SUBAGENTS_SKILL.body).toMatch(/no restart/);
+  });
+
+  it("documents the R4 rule: never combine tools: with engine:", () => {
+    expect(CREATING_SUBAGENTS_SKILL.body).toMatch(/never combine `tools:` with `engine:`/);
+  });
+
+  it("documents verify-by-absence as the only signal on this route", () => {
+    expect(CREATING_SUBAGENTS_SKILL.body).toMatch(/next turn/i);
+    expect(CREATING_SUBAGENTS_SKILL.body).toMatch(/profile list/i);
+    expect(CREATING_SUBAGENTS_SKILL.body).toMatch(/rejected/i);
   });
 });

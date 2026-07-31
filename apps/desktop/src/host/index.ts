@@ -176,6 +176,7 @@ import {
   SwitchableModelPort,
   WriteBehindHistorySink,
   PREVIEW_BUILTIN_SKILLS,
+  SUBAGENT_BUILTIN_SKILLS,
   WORKTREE_BUILTIN_SKILLS,
   backgroundCapableBashTool,
   bashKillTool,
@@ -1439,6 +1440,10 @@ async function boot(): Promise<void> {
     const builtinSkills: readonly BuiltinSkillDefinition[] = [
       ...(worktreeAvailable ? WORKTREE_BUILTIN_SKILLS : []),
       ...(previewAvailable ? PREVIEW_BUILTIN_SKILLS : []),
+      // Subagent port always attached, no capability boolean to mirror
+      // (withSubagents always attaches a SubagentPort and Write is always
+      // registered — night-track wave-2 cut §1.5).
+      ...SUBAGENT_BUILTIN_SKILLS,
     ];
     try {
       ext = await discoverExtensions(fsAdapter, {
