@@ -9,7 +9,15 @@ import { describe, expect, it } from "vitest";
 import { artifactActionFailureMessage, artifactFailureMessage } from "./artifact-messages.js";
 
 /** Every `ok: false` reason the artifact IPC can send (preload's ArtifactActionResult). */
-const ACTION_REASONS = ["invalid", "no_workspace", "not_found", "outside_allowed_roots", "not_openable", "io_error"];
+const ACTION_REASONS = [
+  "invalid",
+  "no_workspace",
+  "not_found",
+  "outside_allowed_roots",
+  "declined",
+  "not_openable",
+  "io_error",
+];
 
 describe("artifactActionFailureMessage", () => {
   it("names the containment refusal instead of blaming the file", () => {

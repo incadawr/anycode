@@ -400,7 +400,14 @@ export type ArtifactActionResult =
   | { ok: true; resolvedTo?: "reveal" }
   | {
       ok: false;
-      reason: "invalid" | "no_workspace" | "not_found" | "outside_allowed_roots" | "not_openable" | "io_error";
+      reason:
+        | "invalid"
+        | "no_workspace"
+        | "not_found"
+        | "outside_allowed_roots"
+        | "declined"
+        | "not_openable"
+        | "io_error";
     };
 
 // SLICE-CC A4 (cut §1.2): duplicated from main/claude-ipc.ts's own

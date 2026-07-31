@@ -10,17 +10,21 @@
  * assistant message is MODEL-CONTROLLED text. This module is therefore the
  * one place that decides what the renderer may do with it:
  *
- * - CONTAINMENT: a path is only served when it resolves (symlinks resolved,
- *   case-normalized on darwin/win32) under one of the allowed roots: the
+ * - CONTAINMENT, per action (owner decision, 31.07): the allowed roots are the
  *   requesting tab's workspace, `<home>/.anycode` (codex profile homes,
  *   including `generated_images/`, and every other app-owned artifact dir),
- *   or the OS temp dir (the agent's scratch space). A path outside every
- *   root is refused `outside_allowed_roots` — no read, no open, no reveal.
+ *   and the OS temp dir (the agent's scratch space). Reading bytes into the
+ *   renderer stays hard-confined to them. Opening outside them is possible but
+ *   never silent — it costs an explicit OS confirmation. Revealing is
+ *   unconfined: `shell.showItemInFolder` only points Finder/Explorer at a
+ *   file, and an agent writing to `/tmp` (which is NOT `os.tmpdir()` on macOS)
+ *   made the old blanket refusal read as a broken button.
  * - NO EXECUTION: `shell.openPath` runs the OS default handler — for
  *   `.app`/`.command`/`.scpt` that IS execution, not viewing. Open is
- *   therefore gated on a fixed image-extension allowlist; every other file
- *   (and every image on open-refusal) degrades to `reveal`
- *   (`shell.showItemInFolder`), which only ever shows a file, never runs it.
+ *   therefore gated on a fixed image-extension allowlist that NO confirmation
+ *   can widen; every other file (and every image on open-refusal) degrades to
+ *   `reveal` (`shell.showItemInFolder`), which only ever shows a file, never
+ *   runs it.
  * - READ CUSTODY: the renderer never gets a `file://` URL (CSP forbids it);
  *   image bytes are read main-side AFTER the containment check and returned
  *   base64 for a `data:` URL. A byte cap keeps a hostile/fat file from
@@ -64,7 +68,15 @@ export type ArtifactActionResult =
   | { ok: true; resolvedTo?: "reveal" }
   | {
       ok: false;
-      reason: "invalid" | "no_workspace" | "not_found" | "outside_allowed_roots" | "not_openable" | "io_error";
+      reason:
+        | "invalid"
+        | "no_workspace"
+        | "not_found"
+        | "outside_allowed_roots"
+        /** Open outside the allowed roots, and the user said no at the OS prompt. */
+        | "declined"
+        | "not_openable"
+        | "io_error";
     };
 
 // ── policy constants ──
@@ -131,6 +143,13 @@ export interface ArtifactsIpcDeps {
   openPath(path: string): Promise<string>;
   /** `shell.showItemInFolder` in production. */
   reveal(path: string): void;
+  /**
+   * Asks the user to confirm opening a path that lies outside the allowed
+   * roots; resolves true only on an explicit yes. Production wiring is a modal
+   * `dialog.showMessageBox`, so the decision is made by the OS window, not by
+   * anything the model can address.
+   */
+  confirmOpen(realPath: string): Promise<boolean>;
 }
 
 // ── payload schemas ──
@@ -187,11 +206,17 @@ export function isUnderRoot(resolvedChild: string, resolvedRoot: string, platfor
  * (missing file, symlink escape, outside roots) — callers map `null` to the
  * honest refusal their surface owns.
  */
-export async function resolveContainedPath(
+/**
+ * Resolves a model-supplied path to a real one and reports whether it lands
+ * under an allowed root. Containment is now a FACT the caller acts on rather
+ * than a verdict baked in here, because the three actions weigh it
+ * differently: read refuses, open asks, reveal ignores it.
+ */
+export async function resolveArtifactPath(
   deps: ArtifactsIpcDeps,
   tabId: string,
   rawPath: string,
-): Promise<{ realPath: string } | { failure: "no_workspace" | "not_found" | "outside_allowed_roots" }> {
+): Promise<{ realPath: string; contained: boolean } | { failure: "no_workspace" | "not_found" }> {
   const workspace = deps.workspaceForTab(tabId);
   if (workspace === undefined) {
     return { failure: "no_workspace" };
@@ -218,10 +243,26 @@ export async function resolveContainedPath(
       continue; // a root that doesn't exist (yet) contains nothing
     }
     if (isUnderRoot(realPath, realRoot)) {
-      return { realPath };
+      return { realPath, contained: true };
     }
   }
-  return { failure: "outside_allowed_roots" };
+  return { realPath, contained: false };
+}
+
+/**
+ * The strict form the inline reader still uses: outside the roots is a flat
+ * refusal, since a preview reads bytes into the renderer with no click at all.
+ */
+export async function resolveContainedPath(
+  deps: ArtifactsIpcDeps,
+  tabId: string,
+  rawPath: string,
+): Promise<{ realPath: string } | { failure: "no_workspace" | "not_found" | "outside_allowed_roots" }> {
+  const resolved = await resolveArtifactPath(deps, tabId, rawPath);
+  if ("failure" in resolved) {
+    return resolved;
+  }
+  return resolved.contained ? { realPath: resolved.realPath } : { failure: "outside_allowed_roots" };
 }
 
 /** Lowercased final-extension of a path ("" when none). */
@@ -274,22 +315,37 @@ export async function handleArtifactReadImage(deps: ArtifactsIpcDeps, raw: unkno
 }
 
 /**
- * artifact-open: `shell.openPath` on the containment-checked path, gated on
- * the image-extension allowlist (openPath EXECUTES non-viewable types via
- * the OS handler). An openPath error (no handler, user cancel) degrades to
- * reveal so the user is never left with a dead click.
+ * artifact-open: `shell.openPath`, gated on the image-extension allowlist
+ * (openPath EXECUTES non-viewable types via the OS handler) and — outside the
+ * allowed roots — on an explicit user confirmation. The extension gate runs
+ * FIRST: never prompt about a file that would be refused either way. An
+ * openPath error (no handler, user cancel) degrades to reveal so the user is
+ * never left with a dead click.
  */
 export async function handleArtifactOpen(deps: ArtifactsIpcDeps, raw: unknown): Promise<ArtifactActionResult> {
   const parsed = pathSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const resolved = await resolveContainedPath(deps, parsed.data.tabId, parsed.data.path);
+  const resolved = await resolveArtifactPath(deps, parsed.data.tabId, parsed.data.path);
   if ("failure" in resolved) {
     return { ok: false, reason: resolved.failure };
   }
   if (!OPENABLE_EXTENSIONS.has(extensionOf(resolved.realPath))) {
     return { ok: false, reason: "not_openable" };
+  }
+  if (!resolved.contained) {
+    let approved: boolean;
+    try {
+      approved = await deps.confirmOpen(resolved.realPath);
+    } catch (error) {
+      // A prompt that cannot be shown is a NO: never open on a broken gate.
+      console.warn(`[artifacts-ipc] open confirmation failed for ${resolved.realPath}`, error);
+      return { ok: false, reason: "declined" };
+    }
+    if (!approved) {
+      return { ok: false, reason: "declined" };
+    }
   }
   let openError: string;
   try {
@@ -313,15 +369,17 @@ export async function handleArtifactOpen(deps: ArtifactsIpcDeps, raw: unknown): 
 }
 
 /**
- * artifact-reveal: `shell.showItemInFolder` on the containment-checked path.
- * Never executes anything — the safe action offered for every file type.
+ * artifact-reveal: `shell.showItemInFolder` on any path that resolves. Never
+ * executes anything and never hands the renderer a byte — the safe action
+ * offered for every file type, so containment is deliberately not applied
+ * here (owner decision, 31.07).
  */
 export async function handleArtifactReveal(deps: ArtifactsIpcDeps, raw: unknown): Promise<ArtifactActionResult> {
   const parsed = pathSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const resolved = await resolveContainedPath(deps, parsed.data.tabId, parsed.data.path);
+  const resolved = await resolveArtifactPath(deps, parsed.data.tabId, parsed.data.path);
   if ("failure" in resolved) {
     return { ok: false, reason: resolved.failure };
   }

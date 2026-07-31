@@ -50,15 +50,27 @@ interface Rig {
   tmp: string;
   openPath: ReturnType<typeof vi.fn<(path: string) => Promise<string>>>;
   reveal: ReturnType<typeof vi.fn<(path: string) => void>>;
+  confirmOpen: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
 }
 
 /** workspace/home/tmp are three DISJOINT tmpdirs — the tmp root passed to deps is ours, not the OS one. */
-async function makeRig(opts?: { noTab?: boolean; openError?: string }): Promise<Rig> {
+async function makeRig(opts?: {
+  noTab?: boolean;
+  openError?: string;
+  /** Answer of the outside-the-roots open confirmation (default: approve). */
+  confirm?: boolean;
+  /** Makes the confirmation itself throw — a gate that cannot be shown. */
+  confirmThrows?: boolean;
+}): Promise<Rig> {
   const workspace = await tmpDir();
   const home = await tmpDir();
   const tmp = await tmpDir();
   const openPath = vi.fn<(path: string) => Promise<string>>().mockResolvedValue(opts?.openError ?? "");
   const reveal = vi.fn<(path: string) => void>();
+  const confirmOpen = vi.fn<(path: string) => Promise<boolean>>().mockImplementation(async () => {
+    if (opts?.confirmThrows === true) throw new Error("no window to attach the sheet to");
+    return opts?.confirm ?? true;
+  });
   const deps: ArtifactsIpcDeps = {
     home: () => home,
     tmpdir: () => tmp,
@@ -66,8 +78,9 @@ async function makeRig(opts?: { noTab?: boolean; openError?: string }): Promise<
     fs,
     openPath,
     reveal,
+    confirmOpen,
   };
-  return { deps, workspace, home, tmp, openPath, reveal };
+  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen };
 }
 
 // ---------------------------------------------------------------------------
@@ -218,12 +231,45 @@ describe("handleArtifactOpen", () => {
     expect(reveal).not.toHaveBeenCalled();
   });
 
-  it("refuses open outside allowed roots without touching the shell", async () => {
-    const { deps, home, openPath, reveal } = await makeRig();
-    await seed(join(home, "secret.png"), "png");
-    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(home, "secret.png") })).toEqual({ ok: false, reason: "outside_allowed_roots" });
+  it("opens outside the roots only after the user confirms — and names the path in the prompt", async () => {
+    const { deps, home, openPath, confirmOpen } = await makeRig({ confirm: true });
+    await seed(join(home, "outside.png"), "png");
+    const real = await realpath(join(home, "outside.png"));
+    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(home, "outside.png") })).toEqual({ ok: true });
+    // Asked about the RESOLVED path, not the model-authored string.
+    expect(confirmOpen).toHaveBeenCalledWith(real);
+    expect(openPath).toHaveBeenCalledWith(real);
+  });
+
+  it("does not open when the user declines, and never asks for an in-root file", async () => {
+    const declined = await makeRig({ confirm: false });
+    await seed(join(declined.home, "outside.png"), "png");
+    expect(await handleArtifactOpen(declined.deps, { tabId: TAB_ID, path: join(declined.home, "outside.png") })).toEqual({
+      ok: false,
+      reason: "declined",
+    });
+    expect(declined.openPath).not.toHaveBeenCalled();
+
+    const inRoot = await makeRig();
+    await seed(join(inRoot.workspace, "icon.png"), "png");
+    expect(await handleArtifactOpen(inRoot.deps, { tabId: TAB_ID, path: join(inRoot.workspace, "icon.png") })).toEqual({ ok: true });
+    expect(inRoot.confirmOpen).not.toHaveBeenCalled();
+  });
+
+  it("fails CLOSED when the confirmation cannot be shown", async () => {
+    const { deps, home, openPath } = await makeRig({ confirmThrows: true });
+    await seed(join(home, "outside.png"), "png");
+    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(home, "outside.png") })).toEqual({ ok: false, reason: "declined" });
     expect(openPath).not.toHaveBeenCalled();
-    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it("keeps the extension gate ahead of the prompt — no confirmation can widen it", async () => {
+    const { deps, home, openPath, confirmOpen } = await makeRig({ confirm: true });
+    await seed(join(home, "run.command"), "#!/bin/sh\nrm -rf ~\n");
+    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(home, "run.command") })).toEqual({ ok: false, reason: "not_openable" });
+    // Never even asked: an executable outside the roots is refused outright.
+    expect(confirmOpen).not.toHaveBeenCalled();
+    expect(openPath).not.toHaveBeenCalled();
   });
 
   it("degrades to reveal when openPath reports a launch failure", async () => {
@@ -243,10 +289,17 @@ describe("handleArtifactReveal", () => {
     expect(reveal).toHaveBeenCalledWith(await realpath(join(workspace, "run.command")));
   });
 
-  it("refuses reveal outside allowed roots and for a missing file", async () => {
-    const { deps, home, workspace, reveal } = await makeRig();
-    await seed(join(home, "secret.png"), "png");
-    expect(await handleArtifactReveal(deps, { tabId: TAB_ID, path: join(home, "secret.png") })).toEqual({ ok: false, reason: "outside_allowed_roots" });
+  it("reveals a file OUTSIDE the allowed roots — showItemInFolder neither reads nor runs it", async () => {
+    const { deps, home, reveal, confirmOpen } = await makeRig();
+    await seed(join(home, "outside.png"), "png");
+    expect(await handleArtifactReveal(deps, { tabId: TAB_ID, path: join(home, "outside.png") })).toEqual({ ok: true });
+    expect(reveal).toHaveBeenCalledWith(await realpath(join(home, "outside.png")));
+    // Reveal is not the gated action — it must never raise the open prompt.
+    expect(confirmOpen).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a path that does not resolve", async () => {
+    const { deps, workspace, reveal } = await makeRig();
     expect(await handleArtifactReveal(deps, { tabId: TAB_ID, path: join(workspace, "gone.png") })).toEqual({ ok: false, reason: "not_found" });
     expect(reveal).not.toHaveBeenCalled();
   });
