@@ -68,4 +68,64 @@ describe("CoreEngine", () => {
 
     expect(engine.switchModel).toBeUndefined();
   });
+
+  describe("onBeforeTurn (subagent-model: live extensions rescan before a new user turn)", () => {
+    it("is awaited before the loop's runTurn is invoked", async () => {
+      const order: string[] = [];
+      const runTurn = vi.fn(async function* (): AsyncIterable<AgentEvent> {
+        order.push("loop.runTurn");
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      });
+      const loop = { runTurn } as unknown as AgentLoop;
+      const onBeforeTurn = vi.fn(async () => {
+        order.push("onBeforeTurn");
+      });
+      const engine = new CoreEngine({
+        loop,
+        config: { mode: "build" } as AgentLoopConfig,
+        onBeforeTurn,
+      });
+
+      const events = await collect(engine.runTurn("work", { signal: new AbortController().signal }));
+
+      expect(order).toEqual(["onBeforeTurn", "loop.runTurn"]);
+      expect(events).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+    });
+
+    it("is fail-soft: a throwing hook is logged and the turn proceeds unchanged", async () => {
+      const emitted: AgentEvent[] = [{ type: "loop_end", reason: "completed", turns: 1 }];
+      const runTurn = vi.fn(async function* (): AsyncIterable<AgentEvent> {
+        yield* emitted;
+      });
+      const loop = { runTurn } as unknown as AgentLoop;
+      const onBeforeTurn = vi.fn(async () => {
+        throw new Error("rescan boom");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const engine = new CoreEngine({
+        loop,
+        config: { mode: "build" } as AgentLoopConfig,
+        onBeforeTurn,
+      });
+
+      const events = await collect(engine.runTurn("work", { signal: new AbortController().signal }));
+
+      expect(events).toEqual(emitted);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("rescan boom"));
+      warnSpy.mockRestore();
+    });
+
+    it("absent onBeforeTurn: runTurn delegates straight to the loop (unchanged pre-existing behavior)", async () => {
+      const emitted: AgentEvent[] = [{ type: "loop_end", reason: "completed", turns: 1 }];
+      const runTurn = vi.fn(async function* (): AsyncIterable<AgentEvent> {
+        yield* emitted;
+      });
+      const loop = { runTurn } as unknown as AgentLoop;
+      const engine = new CoreEngine({ loop, config: { mode: "build" } as AgentLoopConfig });
+
+      const events = await collect(engine.runTurn("work", { signal: new AbortController().signal }));
+
+      expect(events).toEqual(emitted);
+    });
+  });
 });

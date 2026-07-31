@@ -689,6 +689,7 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
       skillsPromptSection: "\n[skills section placeholder]\n- demo-skill (project): a demo skill\n",
       profiles: [fakeProfile],
       profilesPromptSection: "\n[profiles section placeholder]\n- reviewer: reviews code\n",
+      rescanProfiles: async () => null,
       // Left empty deliberately: a real plugin mcp spec would make
       // mcpManager.start() attempt an actual child-process connection, which
       // this wiring-level test has no business exercising (that belongs to
@@ -788,6 +789,7 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
       skillsPromptSection: "",
       profiles: [],
       profilesPromptSection: "",
+      rescanProfiles: async () => null,
       pluginMcpServerSpecs: [],
       workflows: [],
       workflowsPromptSection: "",

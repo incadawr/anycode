@@ -1313,6 +1313,7 @@ async function boot(): Promise<void> {
       skillsPromptSection: "",
       profiles: [],
       profilesPromptSection: "",
+      rescanProfiles: async () => null,
       pluginMcpServerSpecs: [],
       workflows: [],
       workflowsPromptSection: "",
@@ -1614,10 +1615,16 @@ async function boot(): Promise<void> {
     // runs on (main/index.ts's `engineEnv`), so a core/codex session can still
     // spawn a Claude subagent and vice versa. `cwd: workspace` roots the child
     // in this session's own workspace, matching every other port above.
+    // profiles is a THUNK, not a snapshot: `ext` is reassigned in place by
+    // refreshExtensionProfiles below (mirrors the switchModel callback's
+    // in-place `config` mutation), so the runner built here re-reads whatever
+    // `ext.profiles` currently holds on every listAgentTypes()/run() call — a
+    // profile authored into `.anycode/agents/` mid-session becomes a callable
+    // agent_type without recreating this AgentLoop.
     const loop = new AgentLoop(
       withWorkflows(
         withSubagents(config, {
-          profiles: ext.profiles,
+          profiles: () => ext.profiles,
           env: systemPromptEnv,
           memorySection: ext.memorySection,
           resolveChildModelPort: modelPortFactory,
@@ -1626,6 +1633,35 @@ async function boot(): Promise<void> {
         ext.workflows,
       ),
     );
+
+    // Live agent-profile rescan (subagent-model design): run at the start of
+    // EVERY new user turn (CoreEngine's onBeforeTurn, never continueTurn) so a
+    // profile dropped into `.anycode/agents/` during this session becomes
+    // callable without a restart. Re-scanning is skipped (not re-composing the
+    // prompt) when the profiles prompt section is byte-identical to the
+    // current one — comparing the rendered section rather than the profiles
+    // array avoids a spurious systemPrompt rebuild on every turn when nothing
+    // actually changed on disk.
+    const refreshExtensionProfiles = async (): Promise<void> => {
+      const rescanned = await ext.rescanProfiles();
+      if (rescanned === null) {
+        return;
+      }
+      for (const problem of rescanned.problems) {
+        console.warn(`[host] extensions: ${problem}`);
+      }
+      if (rescanned.promptSection === ext.profilesPromptSection) {
+        return;
+      }
+      ext = { ...ext, profiles: rescanned.profiles, profilesPromptSection: rescanned.promptSection };
+      // Components AND prompt, same as the switchModel branch below: the
+      // accounting split is derived from these components, so assigning only
+      // the prompt would leave contextBreakdown() reporting the pre-rescan
+      // "profiles" section — the drift composeSystemPrompt() exists to prevent.
+      const refreshedSystemPromptComponents = composeSystemPromptComponents();
+      config.systemPrompt = composeSystemPrompt(refreshedSystemPromptComponents);
+      config.systemPromptComponents = refreshedSystemPromptComponents;
+    };
 
     const sessionId = sessionMeta.id;
     // Slice P7.15 (F14, design §2.1): the narrow mid-session model-switch
@@ -1671,7 +1707,7 @@ async function boot(): Promise<void> {
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
       };
-    const engine = new CoreEngine({ loop, config, switchModelImpl });
+    const engine = new CoreEngine({ loop, config, switchModelImpl, onBeforeTurn: refreshExtensionProfiles });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     session = new Session({
       outbound,

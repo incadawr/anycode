@@ -672,6 +672,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     skillsPromptSection: "",
     profiles: [],
     profilesPromptSection: "",
+    rescanProfiles: async () => null,
     pluginMcpServerSpecs: [],
     workflows: [],
     workflowsPromptSection: "",
