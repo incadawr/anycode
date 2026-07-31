@@ -98,3 +98,54 @@ Use the browser-preview tools to see what an HTML or Markdown artifact you wrote
 export const PREVIEW_BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = [
   USING_BROWSER_PREVIEW_SKILL,
 ];
+
+/**
+ * Guidance for creating a reusable subagent profile via a plain Write to
+ * `.anycode/agents/<name>.md`. Registered unconditionally on the desktop host
+ * (night-track wave-2 cut §1.5) — unlike the worktree/preview skills above,
+ * there is no capability boolean to gate on: withSubagents always attaches a
+ * SubagentPort and Write is always registered, so the door this skill
+ * documents is always open.
+ */
+export const CREATING_SUBAGENTS_SKILL: BuiltinSkillDefinition = {
+  name: "creating-subagents",
+  description:
+    "Create a reusable subagent profile (.anycode/agents/*.md) when the user asks for a custom subagent or wants tasks delegated to a specific engine (codex/claude) or model.",
+  body: `# Creating subagents
+
+## When to use
+
+Use this when the user asks for a custom or repeat subagent, or when a delegated task should run on a specific engine (codex/claude) or model rather than whatever the Agent tool would pick by default.
+
+## Where
+
+Write the profile with the \`Write\` tool to \`.anycode/agents/<name>.md\` in the workspace. Pickup is hot: the profile becomes callable through the Agent tool's \`agent_type\` on the very next turn — no restart needed.
+
+## Format
+
+YAML frontmatter, then the child's prompt as the rest of the file:
+
+- \`name\` — optional, defaults to the filename. Must match \`[A-Za-z0-9][A-Za-z0-9_-]{0,63}\`. \`general-purpose\` and \`explore\` are reserved and cannot be reused.
+- \`description\` — REQUIRED. The parent model picks a profile by this line alone, so name the engine and/or purpose plainly (e.g. "Runs the delegated task on the Claude Code CLI").
+- \`model\` — optional.
+- \`engine\` — optional, \`codex\` or \`claude\`. When set, the child runs as a one-shot invocation of that real CLI in the session's workspace: \`claude\` runs with \`acceptEdits\`, \`codex\` runs in a workspace-write sandbox. The CLI must be installed on the machine; if it is missing, the spawn fails with an honest error rather than silently falling back.
+- \`tools\` — optional allowlist, but it only has an effect for IN-PROCESS children (no \`engine:\` set).
+
+## The rule: never combine \`tools:\` with \`engine:\`
+
+An engine child's toolset belongs to that CLI, not to us — an allowlist next to \`engine:\` would be a lie with extra steps, so it is refused at parse time. A profile written with both fields set is rejected outright: the name will not appear in the profile list at all, not partially.
+
+## Body
+
+Everything after the frontmatter closing \`---\` is the child's role/system prompt.
+
+## Verify by absence
+
+There is no validation feedback on this route — a malformed frontmatter is rejected silently (parse errors go to the logs only, not to the model). The only signal is the next turn's profile list: if the new name is present, the profile is live; if it is absent, the file was rejected. In that case, re-read the file, fix the frontmatter, and try again.
+`,
+};
+
+/** A caller-friendly immutable list for the desktop subagent-authoring capability. */
+export const SUBAGENT_BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = [
+  CREATING_SUBAGENTS_SKILL,
+];
