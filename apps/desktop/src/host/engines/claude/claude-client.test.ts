@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  CLAUDE_GUI_SURFACE_PROMPT,
   ClaudeClient,
   ClaudeClientError,
   buildClaudeChildEnv,
@@ -360,6 +361,56 @@ describe("buildClaudeSpawnArgs — reasoning-effort flag (TASK.75)", () => {
   it("omits --effort when there is no model either (bare fresh spawn)", () => {
     const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
     expect(args).not.toContain("--effort");
+  });
+});
+
+describe("buildClaudeSpawnArgs — GUI-surface system-prompt append (TASK.90)", () => {
+  it("a fresh spawn's argv carries --append-system-prompt paired with CLAUDE_GUI_SURFACE_PROMPT", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    expect(args).toContain("--append-system-prompt");
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(CLAUDE_GUI_SURFACE_PROMPT);
+  });
+
+  it("a RESUME spawn's argv carries the SAME pair — no native truth exists to clobber, unlike --permission-mode", () => {
+    const args = buildClaudeSpawnArgs({ resume: "persisted-ref-123" });
+    expect(args).toContain("--resume");
+    expect(args).toContain("--append-system-prompt");
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(CLAUDE_GUI_SURFACE_PROMPT);
+  });
+
+  it("the static block still carries every previously-pinned flag alongside the new pair (argv enumeration, updated for TASK.90)", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    expect(args).toEqual([
+      "-p",
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "--replay-user-messages",
+      "--permission-prompt-tool",
+      "stdio",
+      "--disable-slash-commands",
+      "--setting-sources",
+      "project,local",
+      "--strict-mcp-config",
+      "--append-system-prompt",
+      CLAUDE_GUI_SURFACE_PROMPT,
+      "--session-id",
+      "s-1",
+    ]);
+  });
+
+  it("CLAUDE_GUI_SURFACE_PROMPT names the desktop-GUI surface, not just the presence of a flag", () => {
+    expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/desktop GUI/);
+    expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not a terminal/i);
+    expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/chat panel/);
+    expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/stdout\/stderr/);
+    // Ownership-boundary clause (TASK.90 §"Связи"): the CLI's own subagent
+    // registry/skills/slash-commands support no conclusions about AnyCode.
+    expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/Task tool/);
+    expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not AnyCode features/);
   });
 });
 
