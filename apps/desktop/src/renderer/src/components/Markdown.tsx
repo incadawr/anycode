@@ -38,6 +38,7 @@ import {
   type HighlightedLine,
 } from "../diff/highlight.js";
 import { useResolvedTheme } from "../theme.js";
+import { artifactActionFailureMessage, artifactFailureMessage } from "./artifact-messages.js";
 import { Check, Copy } from "./icons.js";
 import { TabContext } from "../tab-context.js";
 
@@ -403,23 +404,6 @@ type ArtifactState =
   | { status: "ready"; url: string; sizeBytes: number; dimensions?: string }
   | { status: "unavailable"; reason: string };
 
-function artifactFailureMessage(reason: string): string {
-  switch (reason) {
-    case "not_found":
-      return "File not found (deleted or never created)";
-    case "outside_allowed_roots":
-      return "Path is outside the allowed roots — preview blocked";
-    case "not_previewable":
-      return "Preview not available for this format — use Open / Reveal";
-    case "too_large":
-      return "File too large for an inline preview — use Open / Reveal";
-    case "no_workspace":
-      return "No workspace is attached to this tab";
-    default:
-      return "Preview unavailable";
-  }
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -445,6 +429,9 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   const rootRef = useRef<HTMLSpanElement>(null);
   const [shouldLoad, setShouldLoad] = useState(false);
   const [state, setState] = useState<ArtifactState>({ status: "idle" });
+  // Open/Reveal failures are reported beside the buttons rather than through
+  // `state`: the preview above may be perfectly fine while the action is refused.
+  const [actionError, setActionError] = useState<string | null>(null);
   const startLoad = () => {
     setState({ status: "loading" });
     setShouldLoad(true);
@@ -487,8 +474,12 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
     return null;
   }
 
-  const open = () => void api.open(tabId, path);
-  const reveal = () => void api.reveal(tabId, path);
+  const runAction = async (action: "open" | "reveal"): Promise<void> => {
+    const result = action === "open" ? await api.open(tabId, path) : await api.reveal(tabId, path);
+    setActionError(result.ok ? null : artifactActionFailureMessage(result.reason));
+  };
+  const open = () => void runAction("open");
+  const reveal = () => void runAction("reveal");
   const label = alt || path;
   const openable = OPENABLE_IMAGE_EXTENSIONS.has(extensionOfHref(path));
 
@@ -514,6 +505,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
           <button type="button" className="md-artifact-btn" onClick={reveal}>
             Reveal
           </button>
+          {actionError !== null && <span className="md-artifact-error">{actionError}</span>}
         </span>
       </span>
     </span>
@@ -524,8 +516,18 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
 function ArtifactReveal({ path }: { path: string }) {
   const tabId = useContext(MarkdownTabContext);
   const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
+  const [failure, setFailure] = useState<string | null>(null);
   if (!tabId || !api) return null;
-  return <button type="button" className="md-artifact-btn md-artifact-reveal-link" onClick={() => void api.reveal(tabId, path)}>Reveal in folder</button>;
+  const reveal = async (): Promise<void> => {
+    const result = await api.reveal(tabId, path);
+    setFailure(result.ok ? null : artifactActionFailureMessage(result.reason));
+  };
+  return (
+    <>
+      <button type="button" className="md-artifact-btn md-artifact-reveal-link" onClick={() => void reveal()}>Reveal in folder</button>
+      {failure !== null && <span className="md-artifact-error">{failure}</span>}
+    </>
+  );
 }
 
 /**
