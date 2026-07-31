@@ -36,6 +36,16 @@
  *    `buildResolveApiKey` is the gate index.ts wires: unset/non-"oauth" mode
  *    returns `undefined` so `AiSdkModelPort` never receives the field at all
  *    (byte-for-byte the 2.2 static-key path).
+ *  - createPreviewRpcClient / routePreviewMessage (night-track wave-1 cut
+ *    §2.3): the host-side `PreviewPort` — an RPC client that asks main to run
+ *    one open/read/screenshot op over the SAME parentPort control plane
+ *    (shared/preview.ts), correlating the answer by requestId (mirror of
+ *    createMainCredentialProvider's req/resp pattern, just without the TTL
+ *    cache — a preview op is not a credential). `routePreviewMessage` is the
+ *    pure parentPort filter index.ts's `on("message")` handler calls into: it
+ *    recognizes PREVIEW_RESPONSE_TYPE (fans out to the requestId-matched RPC
+ *    waiter) and PREVIEW_EVENT_TYPE (a recognized no-op seam for slice 96-D's
+ *    console/pageerror -> AgentEvent bridge — not built here).
  */
 
 import { randomUUID } from "node:crypto";
@@ -44,6 +54,22 @@ import type { DiagnosticSink, HistoryItem, HistorySink, PersistencePort, Session
 import { SECRET_ENV_KEYS } from "../shared/settings.js";
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
+import type {
+  PreviewOpenSuccess,
+  PreviewPort,
+  PreviewReadSuccess,
+  PreviewScreenshotSuccess,
+} from "@anycode/core";
+import {
+  PREVIEW_EVENT_TYPE,
+  PREVIEW_REQUEST_TYPE,
+  PREVIEW_RESPONSE_TYPE,
+  type PreviewEventMessage,
+  type PreviewOp,
+  type PreviewRequestMessage,
+  type PreviewResponseMessage,
+  type PreviewResult,
+} from "../shared/preview.js";
 
 export interface HostArgs {
   /** Session id from `--session`/`--resume` (undefined = brand-new random session). */
@@ -420,4 +446,167 @@ export function buildResolveApiKey(
     return undefined;
   }
   return createMainCredentialProvider(options);
+}
+
+// ── PreviewPort RPC client: host-side over process.parentPort (night-track wave-1 cut §2.3) ──
+
+/** Per-request deadline before a preview op reports an honest timeout rather than hanging the tool call forever on an unresponsive main. */
+export const PREVIEW_REQUEST_TIMEOUT_MS = 45_000;
+
+export interface CreatePreviewRpcClientOptions {
+  /** Sends a PreviewRequestMessage to main (index.ts: process.parentPort.postMessage). */
+  send: (request: PreviewRequestMessage) => void;
+  /**
+   * Registers a listener for PreviewResponseMessage messages arriving on the
+   * control-plane channel (index.ts: filtered off process.parentPort's
+   * "message" event via routePreviewMessage below, matched by requestId).
+   * Returns an unsubscribe function — mirrors MainCredentialProviderOptions.subscribe.
+   */
+  subscribe: (listener: (response: PreviewResponseMessage) => void) => () => void;
+  /** Overrides PREVIEW_REQUEST_TIMEOUT_MS (tests only). */
+  timeoutMs?: number;
+  /** Injectable request-id generator (tests only); defaults to randomUUID. */
+  createRequestId?: () => string;
+}
+
+/**
+ * Builds the host-side `PreviewPort` (night-track wave-1 cut §2.3): an RPC
+ * client that asks main to run one open/read/screenshot op over the
+ * parentPort control plane, correlating the answer by `requestId` (mirror of
+ * `createMainCredentialProvider`'s req/resp pattern, §3.3 — without a TTL
+ * cache, since a preview op is a one-shot action, not a reusable credential).
+ *
+ * Every call:
+ *  - resolves immediately with a cancelled `PreviewResult` when the caller's
+ *    `AbortSignal` is already aborted, and finishes the SAME way if it aborts
+ *    mid-flight (dispatcher/handler abort, e.g. a parent turn cancel);
+ *  - times out after `timeoutMs` (default `PREVIEW_REQUEST_TIMEOUT_MS`) with
+ *    an honest `{ok:false, errorKind:"timeout"}` instead of hanging forever
+ *    on an unresponsive or crashed main;
+ *  - never throws — a broker hiccup can never fail the calling tool's await
+ *    (mirrors every other PreviewResult-returning path: always produced).
+ */
+export function createPreviewRpcClient(options: CreatePreviewRpcClientOptions): PreviewPort {
+  const timeoutMs = options.timeoutMs ?? PREVIEW_REQUEST_TIMEOUT_MS;
+  const createRequestId = options.createRequestId ?? randomUUID;
+
+  function call<T>(op: PreviewOp, signal: AbortSignal): Promise<PreviewResult<T>> {
+    if (signal.aborted) {
+      return Promise.resolve({ ok: false, error: "Preview request was cancelled.", errorKind: "cancelled" });
+    }
+
+    const requestId = createRequestId();
+    return new Promise<PreviewResult<T>>((resolve) => {
+      let settled = false;
+
+      const finish = (result: PreviewResult<T>): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe();
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      };
+
+      const onAbort = (): void => {
+        finish({ ok: false, error: "Preview request was cancelled.", errorKind: "cancelled" });
+      };
+
+      const unsubscribe = options.subscribe((response) => {
+        if (response.requestId !== requestId) {
+          return;
+        }
+        // The wire envelope carries a union of all three success shapes
+        // (shared/preview.ts does not re-encode the op kind in the response);
+        // each PreviewPort method below pins its own T when it calls here,
+        // exactly like the request op it sent determines what main returns.
+        finish(response.result as PreviewResult<T>);
+      });
+
+      const timer = setTimeout(() => {
+        finish({
+          ok: false,
+          error: `Preview request timed out after ${timeoutMs}ms.`,
+          errorKind: "timeout",
+        });
+      }, timeoutMs);
+
+      signal.addEventListener("abort", onAbort, { once: true });
+      options.send({ type: PREVIEW_REQUEST_TYPE, requestId, op });
+    });
+  }
+
+  return {
+    open: (req, opts) =>
+      call<PreviewOpenSuccess>(
+        {
+          kind: "open",
+          ...(req.path !== undefined ? { path: req.path } : {}),
+          ...(req.url !== undefined ? { url: req.url } : {}),
+          ...(req.previewId !== undefined ? { previewId: req.previewId } : {}),
+          ...(opts.allowRemote !== undefined ? { allowRemote: opts.allowRemote } : {}),
+        },
+        opts.signal,
+      ),
+    read: (req, opts) =>
+      call<PreviewReadSuccess>(
+        {
+          kind: "read",
+          ...(req.previewId !== undefined ? { previewId: req.previewId } : {}),
+          ...(req.selector !== undefined ? { selector: req.selector } : {}),
+          ...(req.format !== undefined ? { format: req.format } : {}),
+          ...(req.waitForSelector !== undefined ? { waitForSelector: req.waitForSelector } : {}),
+          ...(req.waitMs !== undefined ? { waitMs: req.waitMs } : {}),
+          ...(req.includeConsole !== undefined ? { includeConsole: req.includeConsole } : {}),
+        },
+        opts.signal,
+      ),
+    screenshot: (req, opts) =>
+      call<PreviewScreenshotSuccess>(
+        { kind: "screenshot", ...(req.previewId !== undefined ? { previewId: req.previewId } : {}) },
+        opts.signal,
+      ),
+  };
+}
+
+// ── parentPort message router: preview control-plane channel (night-track wave-1 cut §2.3) ──
+
+export interface PreviewMessageConsumers {
+  /** Fan-out target for a PreviewResponseMessage — index.ts routes it to the requestId-matched RPC waiter above. */
+  onResponse: (message: PreviewResponseMessage) => void;
+  /**
+   * Seam for slice 96-D (console/pageerror -> outbound AgentEvent bridge). No
+   * consumer is wired yet: a PREVIEW_EVENT_TYPE message is still recognized
+   * here (so it is never treated as an unknown/unhandled message) but is
+   * silently dropped until 96-D registers this callback.
+   */
+  onEvent?: (message: PreviewEventMessage) => void;
+}
+
+/**
+ * Pure parentPort message filter for the preview control-plane channel
+ * (shared/preview.ts). Returns true when `data` matched a known preview
+ * message type (so index.ts's `on("message")` handler can skip its own
+ * later branches for it); false for anything else, including a message with
+ * no recognizable `type` at all. A plain function with no `process.
+ * parentPort` reference of its own, so it is exercisable from a test with a
+ * literal message object — the same testability rationale as every other
+ * export in this file (see the file header).
+ */
+export function routePreviewMessage(data: unknown, consumers: PreviewMessageConsumers): boolean {
+  const message = data as { type?: unknown } | null | undefined;
+  if (!message || typeof message.type !== "string") {
+    return false;
+  }
+  if (message.type === PREVIEW_RESPONSE_TYPE) {
+    consumers.onResponse(data as PreviewResponseMessage);
+    return true;
+  }
+  if (message.type === PREVIEW_EVENT_TYPE) {
+    consumers.onEvent?.(data as PreviewEventMessage);
+    return true;
+  }
+  return false;
 }
