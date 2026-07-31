@@ -28,14 +28,16 @@ export function artifactFailureMessage(reason: string): string {
 
 /**
  * Open/Reveal was refused by the main process. Naming the reason is the whole
- * point: the artifact IPC confines actions to the workspace, ~/.anycode and
- * the OS temp dir, so a file the model wrote to /tmp is blocked even though it
- * exists — and a button that silently does nothing reads as broken.
+ * point — a button that silently does nothing reads as broken. `declined` is
+ * the user's own answer at the outside-the-roots confirmation, so it is stated
+ * flatly rather than dressed up as an error.
  */
 export function artifactActionFailureMessage(reason: string): string {
   switch (reason) {
     case "not_found":
       return "File not found (deleted or never created)";
+    case "declined":
+      return "Not opened — you cancelled";
     case "outside_allowed_roots":
       return "Outside the workspace, ~/.anycode and the temp dir — blocked";
     case "not_openable":
