@@ -83,6 +83,7 @@ import {
 // preview-host.ts itself stays unit-testable off plain fakes.
 import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
 import { createElectronPreviewWindow } from "./preview/electron-adapter.js";
+import { renderMarkdownFile } from "./preview/markdown-render.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import {
@@ -1251,8 +1252,11 @@ void app.whenReady().then(async () => {
         return false;
       }
     },
-    // renderMarkdown absent this checkpoint (96-F injects it): every `.md`
-    // open refuses honestly instead of ever loading plaintext (cut §1(g)).
+    // 96-F: markdown -> sanitized-HTML render (markdown-render.ts). `realPath`
+    // here is already containment-checked by `resolveArtifact` above — this
+    // module trusts the path it is given and never loads the raw source as
+    // plaintext HTML on any failure (cut §1(g)).
+    renderMarkdown: (realPath) => renderMarkdownFile(realPath),
     logger: console,
     now: () => Date.now(),
   });
