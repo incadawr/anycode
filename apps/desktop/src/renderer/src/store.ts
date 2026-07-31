@@ -259,7 +259,23 @@ export type TranscriptBlock =
    * only) — this gives the transcript a full history of every attempt this
    * turn made, not just the last one.
    */
-  | { kind: "stream_retry"; id: string; attempt: number; maxAttempts: number; delayMs: number; reason: string };
+  | { kind: "stream_retry"; id: string; attempt: number; maxAttempts: number; delayMs: number; reason: string }
+  /**
+   * One row per `preview_console` AgentEvent (slice 96-D, night-track
+   * wave-1 cut §2.4): a preview window's forwarded console/pageerror line,
+   * or a throttle-window summary (`suppressed` present, no single real
+   * `level` to report — see the AgentEvent's own doc comment in
+   * types/events.ts). Never reconstructed into prompt history — same
+   * renderer-only posture as `usage_limit` above.
+   */
+  | {
+      kind: "preview_console";
+      id: string;
+      previewId: string;
+      level: "log" | "warn" | "error" | "pageerror";
+      message: string;
+      suppressed?: number;
+    };
 
 /** Convenience alias for the tool_call variant of TranscriptBlock (used by ToolCallCard). */
 export type ToolCallBlock = Extract<TranscriptBlock, { kind: "tool_call" }>;
@@ -1064,6 +1080,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // variant carries no stream id of its own). Never reset: ids stay unique
   // across turns and resets.
   let errorSeq = 0;
+  // Monotonic id source for preview_console transcript blocks (slice 96-D):
+  // the AgentEvent carries no id of its own, and (unlike error/loop_end
+  // blocks) it is not even scoped to a turnId the renderer trusts — see
+  // onAgentEvent's turn-gate exemption below. Never reset, same posture as errorSeq.
+  let previewConsoleSeq = 0;
   // Monotonic id source for streamed text/reasoning transcript blocks. The
   // agent loop makes one streamText call per step, so the AI-SDK stream part
   // id (event.id on text_start/reasoning_start) is only unique *within* a
@@ -1563,7 +1584,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // reset `turn.turnId` to null — so the guard would drop every reading
       // that engine produces, leaving its meter permanently blank. Core and
       // Codex emit theirs mid-turn, which is why only Claude was affected.
-      if (get().turn.turnId !== turnId && event.type !== "context_usage") {
+      //
+      // `preview_console` (slice 96-D) is ALSO exempt, for a stronger reason
+      // than context_usage's timing race: it is not scoped to any turn AT
+      // ALL. A preview window can keep emitting console output long after its
+      // opening turn ended, or with no turn ever having run (the user just has
+      // the window open) — the host wires it onto a fixed sentinel turnId
+      // (index.ts's PREVIEW_CONSOLE_TURN_ID) precisely because there is no
+      // real turn to attribute it to, so it could never pass this guard on
+      // its own merits.
+      if (get().turn.turnId !== turnId && event.type !== "context_usage" && event.type !== "preview_console") {
         return;
       }
       switch (event.type) {
@@ -1899,6 +1929,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // Session consumes this control-plane event before it reaches the UI;
         // keep a defensive no-op for structural completeness on a rogue wire.
         case "workspace_transition":
+          return;
+
+        // Preview-window console/pageerror forward (slice 96-D, night-track
+        // wave-1 cut §2.4): additive AgentEvent variant the core loop never
+        // emits (dormant for every existing core/foreign-engine session,
+        // same test-hazard #3 discipline as `engine_notice` above) — only the
+        // desktop host's preview control-plane bridge (host/index.ts) ever
+        // constructs one. Appended as its own transcript block (like
+        // `stream_retry`) rather than patched onto a tool_call: a preview
+        // console line is not associated with any particular tool call, and
+        // may arrive long after the BrowserOpen call that opened the window
+        // has already settled.
+        case "preview_console":
+          appendBlock({
+            kind: "preview_console",
+            id: `preview-console:${previewConsoleSeq++}`,
+            previewId: event.previewId,
+            level: event.level,
+            message: event.message,
+            ...(event.suppressed !== undefined ? { suppressed: event.suppressed } : {}),
+          });
           return;
 
         default: {

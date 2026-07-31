@@ -240,6 +240,28 @@ export type AgentEvent =
       total: number;
       cachedInput?: number;
       reasoningOutput?: number;
+    }
+  /**
+   * Preview-window console/pageerror forward (night-track wave-1 cut
+   * §2.3/§2.4): additive AgentEvent variant the core loop never emits — only
+   * the desktop host's preview control-plane bridge (apps/desktop/src/host/
+   * index.ts) constructs one, translating a main-process `PREVIEW_EVENT_TYPE`
+   * control message (apps/desktop/src/shared/preview.ts) as it crosses into
+   * the outbound wire. NOT scoped to any turn: a preview window can emit
+   * console output long after its opening turn ended, or with no turn ever
+   * having run at all — the renderer's turn-scoped drop guard exempts this
+   * variant by type (same exemption shape as `context_usage`, store.ts).
+   * `suppressed` is present ONLY on a pure throttle-window summary (every
+   * entry in that window was dropped, main's forwarding cap is ≤20 forwarded
+   * per preview per rolling 10s); a normal forwarded entry never carries it.
+   * `message` is pre-capped to 500 chars main-side.
+   */
+  | {
+      type: "preview_console";
+      previewId: string;
+      level: "log" | "warn" | "error" | "pageerror";
+      message: string;
+      suppressed?: number;
     };
 
 /**
