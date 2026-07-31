@@ -84,6 +84,41 @@ describe("parseAgentProfileMd", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TASK.97 R4 (wave2-cut.md §1.3/§2.3): `engine:` + explicit `tools:` refused at
+// parse — asymmetric half-enforcement across CLIs is worse than an honest
+// refusal. An ABSENT `tools:` line on an engine profile stays valid; `tools:`
+// alone (no `engine:`) is unaffected.
+
+describe("parseAgentProfileMd — engine + tools conflict (TASK.97 R4)", () => {
+  it("refuses engine + explicit tools with engine_tools_conflict (name + engine)", () => {
+    const res = parseAgentProfileMd(
+      md({ name: "scout", description: "d", engine: "claude", tools: "Read, Grep" }, "b"),
+      "f",
+    );
+    expect(res).toEqual({
+      error: { kind: "engine_tools_conflict", name: "scout", engine: "claude" },
+    });
+  });
+
+  it("stays valid when an engine profile omits tools entirely", () => {
+    const res = parseAgentProfileMd(md({ name: "scout", description: "d", engine: "codex" }, "b"), "f");
+    expect("ok" in res).toBe(true);
+    if (!("ok" in res)) return;
+    expect(res.ok.engine).toBe("codex");
+    expect(res.ok.toolsExplicit).toBe(false);
+  });
+
+  it("stays valid when tools is explicit but engine is absent", () => {
+    const res = parseAgentProfileMd(md({ name: "narrow", description: "d", tools: "Read" }, "b"), "f");
+    expect("ok" in res).toBe(true);
+    if (!("ok" in res)) return;
+    expect(res.ok.engine).toBeUndefined();
+    expect(res.ok.toolsExplicit).toBe(true);
+    expect(res.ok.tools).toEqual(["Read"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Discovery byte-invariance: a crafted multi-file fixture whose profiles[] and
 // problems[] must stay byte-stable after the parseAgentProfileMd extraction.
 
