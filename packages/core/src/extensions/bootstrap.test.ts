@@ -281,6 +281,7 @@ describe("discoverExtensions — fail-soft subsystem isolation", () => {
       skillsPromptSection: "",
       profiles: [],
       profilesPromptSection: "",
+      rescanProfiles: expect.any(Function),
       pluginMcpServerSpecs: [],
       workflows: [],
       workflowsPromptSection: "",
@@ -438,6 +439,81 @@ describe("discoverExtensions — agent-profiles prompt section wiring (design sl
 
     expect(bootstrap.profilesPromptSection).not.toBe("");
     expect(bootstrap.profilesPromptSection).toContain("reviewer");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live profile rescan (subagent-model design): a profile authored into
+// .anycode/agents/ mid-session must become discoverable without a session
+// restart. rescanProfiles() re-runs discovery against the SAME agentRoots the
+// boot call computed, over the real (unmocked) discoverAgentProfiles.
+
+describe("discoverExtensions — live profile rescan (rescanProfiles)", () => {
+  const dir = "/proj/.anycode/agents";
+
+  /**
+   * A mutable single-directory FileSystemPort backed by a live Map: unlike
+   * makeFs's plain object (fine for a one-shot boot call), readdir/exists/stat
+   * here re-read the SAME map on every call, so a file written into it AFTER
+   * discoverExtensions has already returned is visible to a later call — the
+   * exact shape of a profile authored during a running session.
+   */
+  function makeAgentDirFs(files: Map<string, string>): FileSystemPort {
+    return {
+      readFile: async (path) => {
+        const content = files.get(path);
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      writeFile: async () => {},
+      stat: async (path) => ({
+        size: files.get(path)?.length ?? 0,
+        mtimeMs: 0,
+        isFile: files.has(path),
+        isDirectory: path === dir,
+      }),
+      exists: async (path) => path === dir || files.has(path),
+      mkdir: async () => {},
+      readdir: async (path) => {
+        if (path !== dir) return [];
+        return [...files.keys()].filter((p) => p.startsWith(`${dir}/`)).map((p) => p.slice(dir.length + 1));
+      },
+    };
+  }
+
+  it("a profile file written after discoverExtensions returns is visible through rescanProfiles()", async () => {
+    const files = new Map<string, string>();
+    const fs = makeAgentDirFs(files);
+
+    const { discoverExtensions } = await importBootstrap();
+    const bootstrap = await discoverExtensions(fs, { workspace: "/proj", home: "/home/u" });
+    expect(bootstrap.profiles).toEqual([]);
+
+    // Written AFTER boot discovery already returned — the live-session case
+    // rescanProfiles exists to cover.
+    files.set(`${dir}/reviewer.md`, "---\nname: reviewer\ndescription: reviews code\n---\nBODY");
+
+    const rescanned = await bootstrap.rescanProfiles();
+    expect(rescanned).not.toBeNull();
+    expect(rescanned?.profiles.map((p) => p.name)).toEqual(["reviewer"]);
+    expect(rescanned?.promptSection).toContain("reviewer");
+    expect(rescanned?.problems).toEqual([]);
+  });
+
+  it("returns null (fail-soft) when the rescanned discovery throws", async () => {
+    vi.doMock(PROFILES_PATH, () => ({
+      discoverAgentProfiles: vi.fn(async () => {
+        throw new Error("profiles boom");
+      }),
+    }));
+
+    const { discoverExtensions } = await importBootstrap();
+    // The initial boot-time discovery already absorbs the same throw fail-softly.
+    const bootstrap = await discoverExtensions(makeFs(), { workspace: "/proj", home: "/home/u" });
+    expect(bootstrap.profiles).toEqual([]);
+
+    const rescanned = await bootstrap.rescanProfiles();
+    expect(rescanned).toBeNull();
   });
 });
 
