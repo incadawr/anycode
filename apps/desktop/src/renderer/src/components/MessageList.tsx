@@ -29,6 +29,7 @@ import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { Markdown } from "./Markdown.js";
 import { ReasoningBlock } from "./ReasoningBlock.js";
 import { TodoPanel } from "./TodoPanel.js";
+import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
 import { WorkingRow, getTurnStartedAt } from "./WorkingRow.js";
@@ -727,6 +728,8 @@ export function MessageList({
               );
             case "output_truncated":
               return <div key={block.id} className="message message-error" role="alert">Output truncated at the model token limit. Raise ANYCODE_MAX_OUTPUT_TOKENS or split the write.</div>;
+            case "preview_console":
+              return <PreviewConsoleRow key={block.id} block={block} enter={enterIds.has(block.id)} />;
             default: {
               const _exhaustive: never = block;
               return _exhaustive;

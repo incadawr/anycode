@@ -219,6 +219,7 @@ import {
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
+  AgentEvent,
   AgentLoopConfig,
   BuiltinSkillDefinition,
   CommandHookDeclaration,
@@ -249,7 +250,7 @@ import {
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
-import type { PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
+import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
 import {
   WORKTREE_CLEANUP_ENV,
   WORKTREE_TRANSITION_MESSAGE_TYPE,
@@ -380,6 +381,58 @@ const previewPort: PreviewPort = createPreviewRpcClient({
   send: sendPreviewRequest,
   subscribe: subscribePreviewResponses,
 });
+
+// Preview console/pageerror bridge (night-track wave-1 cut §2.4): the OTHER
+// consumer boot.ts's routePreviewMessage recognizes on this same control
+// plane, wired below at the parentPort "message" handler. Unlike the RPC
+// broker above (request/response, correlated by requestId), a PREVIEW_EVENT_
+// TYPE message is unsolicited, so it is translated straight into an outbound
+// AgentEvent here rather than resolving a pending call.
+
+/** Narrows translatePreviewEvent's return to exactly the variant it builds, so it type-checks against WireAgentEvent's error-excluding member without going through session.ts's sanitizeAgentEvent (this bridge never produces an "error"-shaped event, so there is nothing to sanitize). */
+type PreviewConsoleAgentEvent = Extract<AgentEvent, { type: "preview_console" }>;
+
+/**
+ * Translates one main -> host PREVIEW_EVENT_TYPE message (shared/preview.ts)
+ * into the core `preview_console` AgentEvent. Two shapes cross this channel
+ * (PreviewEventMessage's own doc comment): a normal forwarded entry (`entry`
+ * present, `suppressed` absent) and a pure throttle-window summary (`entry`
+ * absent, `suppressed` present — every console message in that window was
+ * dropped, main's forwarding cap is ≤20 per preview per rolling 10s). The
+ * summary has no single real level to report honestly, so it is flagged
+ * "log" (the quietest level) rather than inventing one, and its `message`
+ * names the count instead of carrying a synthetic per-entry line.
+ */
+function translatePreviewEvent(message: PreviewEventMessage): PreviewConsoleAgentEvent {
+  if (message.entry) {
+    return {
+      type: "preview_console",
+      previewId: message.previewId,
+      level: message.entry.level,
+      message: message.entry.message,
+    };
+  }
+  const suppressed = message.suppressed ?? 0;
+  return {
+    type: "preview_console",
+    previewId: message.previewId,
+    level: "log",
+    message: `${suppressed} console message${suppressed === 1 ? "" : "s"} suppressed`,
+    suppressed,
+  };
+}
+
+/**
+ * `preview_console` is NOT scoped to any turn: a preview window can keep
+ * emitting console output long after its opening turn ended, or with no turn
+ * ever having run at all (the user simply has the window open). The wire's
+ * `agent_event` envelope still requires a `turnId` string, so this constant
+ * fills it; the renderer's turn-scoped drop guard is taught to exempt
+ * `preview_console` by event type (store.ts, the same exemption shape as
+ * `context_usage`), so the literal value here is never matched against the
+ * active turn — it only needs to satisfy the wire schema.
+ */
+const PREVIEW_CONSOLE_TURN_ID = "preview-console";
 
 let session: Session | null = null;
 /** Exists before engine-specific boot; owns cleanup when Session was never built. */
@@ -2150,16 +2203,26 @@ process.parentPort.on("message", (event) => {
     }
     return;
   }
-  // Preview control-plane messages (night-track wave-1 cut §2.3): routed
+  // Preview control-plane messages (night-track wave-1 cut §2.3/§2.4): routed
   // through the pure boot.ts filter so this handler stays a thin dispatch
-  // table. onEvent is deliberately unset — PREVIEW_EVENT_TYPE is recognized
-  // (never falls through to "shutdown") but has no consumer until slice 96-D.
+  // table. onEvent (slice 96-D) emits straight onto the module-level outbound
+  // sink rather than through Session: preview events are unsolicited and NOT
+  // turn-scoped (translatePreviewEvent's doc comment above), and `outbound`
+  // is the SAME instance every Session construction below is handed, so this
+  // reaches the wire identically whether or not a Session exists yet/still.
   if (
     routePreviewMessage(data, {
       onResponse: (response) => {
         for (const listener of previewResponseListeners) {
           listener(response);
         }
+      },
+      onEvent: (message) => {
+        outbound.emit({
+          type: "agent_event",
+          turnId: PREVIEW_CONSOLE_TURN_ID,
+          event: translatePreviewEvent(message),
+        });
       },
     })
   ) {
