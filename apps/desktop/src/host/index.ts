@@ -190,6 +190,7 @@ import {
   createWebSearchTool,
   browserOpenTool,
   browserReadTool,
+  browserScreenshotTool,
   diagnosticsEditTool,
   diagnosticsWriteTool,
   enterWorktreeTool,
@@ -1178,6 +1179,7 @@ async function boot(): Promise<void> {
     if (previewAvailable) {
       registry.register(browserOpenTool);
       registry.register(browserReadTool);
+      registry.register(browserScreenshotTool);
     }
     // Plan-exit contract (TASK.27, mirror of cli/main.ts): ONE call registers
     // ExitPlanMode AND produces the planExitMode/onModeChange pair spread into
