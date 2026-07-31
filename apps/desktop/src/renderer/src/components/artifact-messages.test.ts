@@ -84,7 +84,7 @@ describe("artifactChipState", () => {
   it("idle/loading/ready never offer Allow — only the blocked-by-roots refusal does", () => {
     for (const status of ["idle", "loading", "ready"] as const) {
       const chip = artifactChipState(status, undefined, "idle");
-      expect(chip).toEqual({ showAllow: false, showOpen: true, showReveal: true, label: "" });
+      expect(chip).toEqual({ showAllow: false, showOpen: true, showReveal: true, label: "", showPath: false });
     }
   });
 
@@ -103,6 +103,22 @@ describe("artifactChipState", () => {
       expect(chip.showOpen).toBe(true);
       expect(chip.showReveal).toBe(true);
       expect(chip.label).toBe(artifactFailureMessage(reason));
+    }
+  });
+
+  it("every unavailable-reason state shows the raw path; ready never does (night-track wave-1 fix cut §1.8, F7)", () => {
+    for (const reason of ["outside_allowed_roots", "not_previewable", "too_large", "no_workspace", "not_found", "io_error", undefined]) {
+      const chip = artifactChipState("unavailable", reason, "idle");
+      expect(chip.showPath).toBe(true);
+    }
+    const ready = artifactChipState("ready", undefined, "idle");
+    expect(ready.showPath).toBe(false);
+  });
+
+  it("idle/loading also do not show the path (only the blocked branch renders it)", () => {
+    for (const status of ["idle", "loading"] as const) {
+      const chip = artifactChipState(status, undefined, "idle");
+      expect(chip.showPath).toBe(false);
     }
   });
 
