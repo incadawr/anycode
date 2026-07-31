@@ -153,6 +153,7 @@ function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): Too
         agentType: progress.agentType,
         description: progress.description,
         ...(progress.model !== undefined ? { model: progress.model } : {}),
+        ...(progress.engine !== undefined ? { engine: progress.engine } : {}),
       };
     case "progress":
       return {
