@@ -70,7 +70,7 @@ import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
-import { NodeArtifactsFs, registerArtifactsIpc } from "./artifacts-ipc.js";
+import { ArtifactConsentStore, NodeArtifactsFs, registerArtifactsIpc } from "./artifacts-ipc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import {
@@ -1676,6 +1676,25 @@ void app.whenReady().then(async () => {
   // touching disk or the shell. `openPath`/`reveal` inject the two Electron
   // primitives so main/artifacts-ipc.ts stays Electron-free and unit-
   // testable off a plain deps bag.
+  // TASK.77-A: per-tab, per-path consent grants (in-memory, main-side —
+  // never the renderer, never persisted; see artifacts-ipc.ts's threat-model
+  // comment). A grant must not outlive the tab it was given to: every real
+  // close goes through `manager.closeTab` (the tab-close IPC today, any
+  // future caller tomorrow), so wrapping THAT one method clears the grant
+  // exactly on close without touching tabs.ts/tab-ipc.ts (outside TASK.77's
+  // file scope) — equivalent to an onTabClosed hook without adding one.
+  const artifactConsentStore = new ArtifactConsentStore();
+  if (manager !== null) {
+    const closeTabUnwrapped = manager.closeTab.bind(manager);
+    manager.closeTab = async (tabId: string) => {
+      const result = await closeTabUnwrapped(tabId);
+      if (result.ok) {
+        artifactConsentStore.clearTab(tabId);
+      }
+      return result;
+    };
+  }
+
   registerArtifactsIpc({
     home: () => resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
     tmpdir: () => tmpdir(),
@@ -1683,10 +1702,13 @@ void app.whenReady().then(async () => {
     fs: new NodeArtifactsFs(),
     openPath: (path) => shell.openPath(path),
     reveal: (path) => shell.showItemInFolder(path),
+    consent: artifactConsentStore,
     // Opening OUTSIDE the allowed roots is permitted, but only through this
     // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
     // a dismissed sheet reads as "no". The full path is spelled out — the
-    // location is the whole reason we are asking.
+    // location is the whole reason we are asking. TASK.77-A: this modal is
+    // skipped entirely (deps.consent checked in artifacts-ipc.ts) once the
+    // SAME resolved path already has an Allow grant from the blocked-chip.
     confirmOpen: async (path) => {
       const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
       const options: MessageBoxOptions = {

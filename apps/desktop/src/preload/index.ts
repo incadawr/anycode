@@ -229,6 +229,8 @@ const CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL = "anycode:custom-provider-fetch-mode
 const ARTIFACT_READ_IMAGE_CHANNEL = "anycode:artifact-read-image";
 const ARTIFACT_OPEN_CHANNEL = "anycode:artifact-open";
 const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
+/** TASK.77-A: per-tab, per-path consent grant for a previously-blocked path. */
+const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
@@ -410,6 +412,14 @@ export type ArtifactActionResult =
         | "not_openable"
         | "io_error";
     };
+
+/**
+ * TASK.77-A: result of an Allow click. An outside-roots path is exactly what
+ * this channel exists to unlock, so it is NEVER a refusal reason here — only
+ * a missing workspace (unknown tab) or a path that does not resolve at all
+ * can fail.
+ */
+export type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
 
 // SLICE-CC A4 (cut §1.2): duplicated from main/claude-ipc.ts's own
 // `ClaudeOnboardingSnapshot`/`ClaudePickBinaryResult` (same "shared/** froze
@@ -809,6 +819,11 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(ARTIFACT_OPEN_CHANNEL, { tabId, path }) as Promise<ArtifactActionResult>,
     reveal: (tabId: string, path: string): Promise<ArtifactActionResult> =>
       ipcRenderer.invoke(ARTIFACT_REVEAL_CHANNEL, { tabId, path }) as Promise<ArtifactActionResult>,
+    // TASK.77-A: explicit per-path consent that unlocks preview (and skips
+    // main's OS-confirmation modal for the SAME path on a later Open) for a
+    // path outside the allowed roots. Never widens the extension/size gates.
+    allow: (tabId: string, path: string): Promise<ArtifactAllowResult> =>
+      ipcRenderer.invoke(ARTIFACT_ALLOW_CHANNEL, { tabId, path }) as Promise<ArtifactAllowResult>,
   },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL) as Promise<void>,

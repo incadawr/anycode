@@ -6,34 +6,66 @@
  * (unit-testable without ipcMain), zod validates every payload at the
  * boundary, and `registerArtifactsIpc` is the only Electron-touching piece.
  *
- * THREAT MODEL (TASK.72 §«Риск, который нельзя проглядеть»): the path in an
- * assistant message is MODEL-CONTROLLED text. This module is therefore the
- * one place that decides what the renderer may do with it:
+ * THREAT MODEL (TASK.72 §«Риск, который нельзя проглядеть», extended by
+ * TASK.77-B and TASK.77-A below): the path in an assistant message is
+ * MODEL-CONTROLLED text. This module is therefore the one place that decides
+ * what the renderer may do with it:
  *
  * - CONTAINMENT, per action (owner decision, 31.07): the allowed roots are the
  *   requesting tab's workspace, `<home>/.anycode` (codex profile homes,
  *   including `generated_images/`, and every other app-owned artifact dir),
- *   and the OS temp dir (the agent's scratch space). Reading bytes into the
- *   renderer stays hard-confined to them. Opening outside them is possible but
- *   never silent — it costs an explicit OS confirmation. Revealing is
- *   unconfined: `shell.showItemInFolder` only points Finder/Explorer at a
- *   file, and an agent writing to `/tmp` (which is NOT `os.tmpdir()` on macOS)
- *   made the old blanket refusal read as a broken button.
+ *   the OS temp dir (the agent's scratch space), and — darwin ONLY (TASK.77-B,
+ *   owner decision 31.07) — the literal path `/tmp`. macOS's `os.tmpdir()`
+ *   resolves to a per-app `/var/folders/...` directory, NOT `/tmp`; agents
+ *   routinely write to the literal path anyway (it is the address every
+ *   shell/tool means by "temp"), so leaving it out of the roots turned the
+ *   documented "agent scratch space" into a gap at the address agents hit
+ *   most. Unconditional (all platforms) was rejected: `path.resolve("/tmp")`
+ *   on win32 resolves to the DRIVE-RELATIVE `C:\tmp`, and a directory that
+ *   happens to exist there would silently become an allowed root — win32
+ *   stays unchanged. Linux already has `/tmp` === `os.tmpdir()`, so the
+ *   darwin branch is a documented no-op there, not a behavior change. Reading
+ *   bytes into the renderer stays hard-confined to the roots, subject to the
+ *   per-path consent grant below. Opening outside them is possible but never
+ *   silent — it costs an explicit OS confirmation (or a prior Allow grant,
+ *   below). Revealing is unconfined: `shell.showItemInFolder` only points
+ *   Finder/Explorer at a file, and an agent writing to `/tmp` (which is NOT
+ *   `os.tmpdir()` on macOS) made the old blanket refusal read as a broken
+ *   button.
+ * - CONSENT (TASK.77-A, owner decision 31.07): containment is the correct
+ *   default, but a hard refusal with no way out reads as a dead end once the
+ *   user has SEEN the file the agent made (the owner's screenshot report:
+ *   `/tmp/anycode-icon-alt-2.png`, blocked, no way to say yes). For this
+ *   reason, `ArtifactConsentStore` (below) is an in-memory, per-tab,
+ *   per-resolved-path grant list — never persisted, never a settings key,
+ *   cleared the moment the granting tab closes (main/index.ts wraps
+ *   `TabHostManager.closeTab` to call `clearTab`). A grant widens WHERE
+ *   `handleArtifactReadImage`/`handleArtifactOpen` may act for that ONE
+ *   realPath ONLY — every other outside-root path, and every other tab,
+ *   stays refused exactly as before. It never widens WHAT: the image-
+ *   extension/size gates below run unchanged after a grant. A MISSING grant
+ *   leaves `handleArtifactOpen`'s existing OS-confirmation path untouched; a
+ *   PRESENT grant for the SAME realPath skips that modal, because the Allow
+ *   click is already the explicit, path-specific consent the modal exists to
+ *   collect — re-asking via a second, context-poorer prompt is a double-ask
+ *   of the same question. `handleArtifactReveal` is untouched by any of this:
+ *   it was already unconfined by design.
  * - NO EXECUTION: `shell.openPath` runs the OS default handler — for
  *   `.app`/`.command`/`.scpt` that IS execution, not viewing. Open is
  *   therefore gated on a fixed image-extension allowlist that NO confirmation
- *   can widen; every other file (and every image on open-refusal) degrades to
- *   `reveal` (`shell.showItemInFolder`), which only ever shows a file, never
- *   runs it.
+ *   and NO consent grant can widen; every other file (and every image on
+ *   open-refusal) degrades to `reveal` (`shell.showItemInFolder`), which only
+ *   ever shows a file, never runs it.
  * - READ CUSTODY: the renderer never gets a `file://` URL (CSP forbids it);
- *   image bytes are read main-side AFTER the containment check and returned
- *   base64 for a `data:` URL. A byte cap keeps a hostile/fat file from
- *   ballooning the renderer; SVG is never inlined (active format — scripts,
- *   external refs) and falls back to open/reveal.
+ *   image bytes are read main-side AFTER the containment-or-consent check and
+ *   returned base64 for a `data:` URL. A byte cap keeps a hostile/fat file
+ *   from ballooning the renderer; SVG is never inlined (active format —
+ *   scripts, external refs) and falls back to open/reveal.
  *
- * Deliberate residual (documented, accepted): ANY image-looking file under
- * an allowed root can be opened/revealed — containment is the security
- * boundary, not "did the agent create this exact file" provenance.
+ * Deliberate residual (documented, accepted): ANY image-looking file under an
+ * allowed root — or individually consented — can be opened/revealed:
+ * containment-or-consent is the security boundary, not "did the agent create
+ * this exact file" provenance.
  */
 
 import { ipcMain } from "electron";
@@ -47,6 +79,8 @@ import { z } from "zod";
 export const ARTIFACT_READ_IMAGE_CHANNEL = "anycode:artifact-read-image";
 export const ARTIFACT_OPEN_CHANNEL = "anycode:artifact-open";
 export const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
+/** TASK.77-A: per-tab, per-path consent grant for a previously-blocked path. */
+export const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
 
 // ── shared result shapes (duplicated on purpose in preload/index.ts + renderer) ──
 
@@ -78,6 +112,14 @@ export type ArtifactActionResult =
         | "not_openable"
         | "io_error";
     };
+
+/**
+ * TASK.77-A: result of an Allow click. An outside-roots path is exactly what
+ * this channel exists to unlock, so it is NEVER a refusal reason here — only
+ * a missing workspace (unknown tab) or a path that does not resolve at all
+ * can fail. Never widens what the OTHER two channels' extension gates allow.
+ */
+export type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
 
 // ── policy constants ──
 
@@ -131,6 +173,40 @@ export class NodeArtifactsFs implements ArtifactsFs {
   }
 }
 
+/**
+ * TASK.77-A: per-tab, per-resolved-path consent grants. In-memory only — no
+ * settings key, no disk persistence, "always for this folder" is explicitly
+ * out of wave 1 (owner cut). Backed by a plain `Map<tabId, Set<path>>`;
+ * `normalizeForCompare` (below) is reused so a grant survives the exact same
+ * case/separator normalization the containment check itself applies —
+ * otherwise a win32/darwin case-variant re-request of the SAME file would
+ * miss its own grant.
+ */
+export class ArtifactConsentStore {
+  private readonly byTab = new Map<string, Set<string>>();
+
+  /** Records consent for exactly this tab + resolved path. */
+  allow(tabId: string, realPath: string): void {
+    const key = normalizeForCompare(realPath, process.platform);
+    let paths = this.byTab.get(tabId);
+    if (paths === undefined) {
+      paths = new Set();
+      this.byTab.set(tabId, paths);
+    }
+    paths.add(key);
+  }
+
+  /** Whether this tab has previously been granted this exact resolved path. */
+  isAllowed(tabId: string, realPath: string): boolean {
+    return this.byTab.get(tabId)?.has(normalizeForCompare(realPath, process.platform)) ?? false;
+  }
+
+  /** Drops every grant for a tab (main wires this into the tab-close path — a grant must not outlive the tab it was given to). */
+  clearTab(tabId: string): void {
+    this.byTab.delete(tabId);
+  }
+}
+
 export interface ArtifactsIpcDeps {
   /** `os.homedir()` in production; dev/automation-overridable at the wiring site. */
   home(): string;
@@ -150,6 +226,8 @@ export interface ArtifactsIpcDeps {
    * anything the model can address.
    */
   confirmOpen(realPath: string): Promise<boolean>;
+  /** TASK.77-A: per-tab consent grants; main injects one process-lifetime singleton (main/index.ts). */
+  consent: ArtifactConsentStore;
 }
 
 // ── payload schemas ──
@@ -164,13 +242,20 @@ const pathSchema = z.object({
 /**
  * The roots a served path must live under: the tab's workspace, the app's
  * own artifact tree (`<home>/.anycode` — codex profile homes with
- * `generated_images/` etc.), and the OS temp dir. Home itself is NOT a root:
+ * `generated_images/` etc.), the OS temp dir, and — darwin only (TASK.77-B) —
+ * the literal path `/tmp` (see the module's threat-model comment for why this
+ * is darwin-specific rather than unconditional). Home itself is NOT a root:
  * containment is what keeps a model-invented `~/.ssh/id_rsa` out of the
  * reader (it would fail the extension gate anyway, but reveal must not
- * spotlight it either).
+ * spotlight it either). `platform` defaults to `process.platform`; tests pass
+ * it explicitly so all three platforms are exercised from one host.
  */
-export function allowedArtifactRoots(workspace: string, home: string, tmp: string): string[] {
-  return [workspace, join(home, ".anycode"), tmp];
+export function allowedArtifactRoots(workspace: string, home: string, tmp: string, platform: NodeJS.Platform = process.platform): string[] {
+  const roots = [workspace, join(home, ".anycode"), tmp];
+  if (platform === "darwin") {
+    roots.push("/tmp");
+  }
+  return roots;
 }
 
 /**
@@ -210,7 +295,8 @@ export function isUnderRoot(resolvedChild: string, resolvedRoot: string, platfor
  * Resolves a model-supplied path to a real one and reports whether it lands
  * under an allowed root. Containment is now a FACT the caller acts on rather
  * than a verdict baked in here, because the three actions weigh it
- * differently: read refuses, open asks, reveal ignores it.
+ * differently: read refuses (unless consented, TASK.77-A), open asks (unless
+ * consented), reveal ignores it.
  */
 export async function resolveArtifactPath(
   deps: ArtifactsIpcDeps,
@@ -250,8 +336,12 @@ export async function resolveArtifactPath(
 }
 
 /**
- * The strict form the inline reader still uses: outside the roots is a flat
- * refusal, since a preview reads bytes into the renderer with no click at all.
+ * The plain strict verdict, with NO consent overlay: outside the roots is a
+ * flat refusal. Exported for tests and any future strict-only consumer;
+ * `handleArtifactReadImage` no longer calls this directly (TASK.77-A) since
+ * it must consult the consent store before refusing — it calls
+ * `resolveArtifactPath` itself and applies the same strict mapping plus the
+ * consent check in one place.
  */
 export async function resolveContainedPath(
   deps: ArtifactsIpcDeps,
@@ -275,18 +365,24 @@ function extensionOf(path: string): string {
 // ── handlers (exported for unit tests) ──
 
 /**
- * artifact-read-image: containment-checked, extension-gated, byte-capped
- * read of one image file for the inline chat preview. SVG is refused
- * `not_previewable` (active format — the UI falls back to open/reveal).
+ * artifact-read-image: containment-or-consent-checked, extension-gated,
+ * byte-capped read of one image file for the inline chat preview. SVG is
+ * refused `not_previewable` (active format — the UI falls back to
+ * open/reveal). TASK.77-A: a path outside every root still reads if this
+ * tab was explicitly granted THIS exact realPath via the allow channel; the
+ * extension/size gates below are unaffected by consent.
  */
 export async function handleArtifactReadImage(deps: ArtifactsIpcDeps, raw: unknown): Promise<ArtifactReadImageResult> {
   const parsed = pathSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const resolved = await resolveContainedPath(deps, parsed.data.tabId, parsed.data.path);
+  const resolved = await resolveArtifactPath(deps, parsed.data.tabId, parsed.data.path);
   if ("failure" in resolved) {
     return { ok: false, reason: resolved.failure };
+  }
+  if (!resolved.contained && !deps.consent.isAllowed(parsed.data.tabId, resolved.realPath)) {
+    return { ok: false, reason: "outside_allowed_roots" };
   }
   const mime = PREVIEWABLE_MIME[extensionOf(resolved.realPath)];
   if (mime === undefined) {
@@ -317,10 +413,11 @@ export async function handleArtifactReadImage(deps: ArtifactsIpcDeps, raw: unkno
 /**
  * artifact-open: `shell.openPath`, gated on the image-extension allowlist
  * (openPath EXECUTES non-viewable types via the OS handler) and — outside the
- * allowed roots — on an explicit user confirmation. The extension gate runs
- * FIRST: never prompt about a file that would be refused either way. An
- * openPath error (no handler, user cancel) degrades to reveal so the user is
- * never left with a dead click.
+ * allowed roots, and not already consented (TASK.77-A) — on an explicit user
+ * confirmation. The extension gate runs FIRST: never prompt about (or
+ * silently allow via a stale grant) a file that would be refused either way.
+ * An openPath error (no handler, user cancel) degrades to reveal so the user
+ * is never left with a dead click.
  */
 export async function handleArtifactOpen(deps: ArtifactsIpcDeps, raw: unknown): Promise<ArtifactActionResult> {
   const parsed = pathSchema.safeParse(raw);
@@ -334,7 +431,7 @@ export async function handleArtifactOpen(deps: ArtifactsIpcDeps, raw: unknown): 
   if (!OPENABLE_EXTENSIONS.has(extensionOf(resolved.realPath))) {
     return { ok: false, reason: "not_openable" };
   }
-  if (!resolved.contained) {
+  if (!resolved.contained && !deps.consent.isAllowed(parsed.data.tabId, resolved.realPath)) {
     let approved: boolean;
     try {
       approved = await deps.confirmOpen(resolved.realPath);
@@ -392,9 +489,32 @@ export async function handleArtifactReveal(deps: ArtifactsIpcDeps, raw: unknown)
   return { ok: true };
 }
 
-/** Wires the three channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
+/**
+ * artifact-allow (TASK.77-A): records this tab's explicit consent for
+ * exactly this resolved path. An outside-roots path is exactly what Allow
+ * exists to unlock — it is NEVER refused for being outside; only a missing
+ * workspace (unknown tab) or a path that fails to resolve at all (deleted,
+ * never existed) produce a negative result. A malformed payload is bucketed
+ * under `not_found` (there is no path to resolve, and the frozen result type
+ * carries no `invalid` reason for this channel — see cut §2.6).
+ */
+export async function handleArtifactAllow(deps: ArtifactsIpcDeps, raw: unknown): Promise<ArtifactAllowResult> {
+  const parsed = pathSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "not_found" };
+  }
+  const resolved = await resolveArtifactPath(deps, parsed.data.tabId, parsed.data.path);
+  if ("failure" in resolved) {
+    return { ok: false, reason: resolved.failure };
+  }
+  deps.consent.allow(parsed.data.tabId, resolved.realPath);
+  return { ok: true, realPath: resolved.realPath };
+}
+
+/** Wires the four channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
 export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
   ipcMain.handle(ARTIFACT_READ_IMAGE_CHANNEL, (_event, raw: unknown) => handleArtifactReadImage(deps, raw));
   ipcMain.handle(ARTIFACT_OPEN_CHANNEL, (_event, raw: unknown) => handleArtifactOpen(deps, raw));
   ipcMain.handle(ARTIFACT_REVEAL_CHANNEL, (_event, raw: unknown) => handleArtifactReveal(deps, raw));
+  ipcMain.handle(ARTIFACT_ALLOW_CHANNEL, (_event, raw: unknown) => handleArtifactAllow(deps, raw));
 }
