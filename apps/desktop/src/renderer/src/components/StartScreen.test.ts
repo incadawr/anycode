@@ -15,12 +15,14 @@ import {
   DEFAULT_CODEX_DRAFT_PRESET,
   deriveCodexProfileOptions,
   deriveRecentWorkspaces,
+  draftModelEfforts,
   guardedSubmit,
   isDraftCodexProfileIdStale,
   isSendKeydown,
   pickFolderForDraft,
   pickModelForDraft,
   resolveCodexDraftModel,
+  resolveDraftEngineEffort,
   resolveProviderDefaultModel,
   seedWorkspaceFromRecents,
   shouldShowClaudeEngineButton,
@@ -60,6 +62,30 @@ describe("computeSendDisabledReason (§3-D3)", () => {
 
   it("enabled (undefined reason) once both a folder and a non-blank prompt are present", () => {
     expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "hello", engine: "core", model: null, mode: "build" })).toBeUndefined();
+  });
+
+  it("TASK.81: an attached image alone (no imageCount arg) still requires text — pre-existing single-arg call sites keep their exact behavior", () => {
+    expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "", engine: "core", model: null, mode: "build" })).toBe(
+      "Type a message to send",
+    );
+  });
+
+  it("TASK.81: enabled once an image is attached, even with a blank prompt (Composer.tsx's hasSendableDraft parity)", () => {
+    expect(
+      computeSendDisabledReason({ workspace: "/ws/a", prompt: "", engine: "core", model: null, mode: "build" }, 1),
+    ).toBeUndefined();
+  });
+
+  it("TASK.81: 'Type a message to send' still applies with zero images and a blank prompt", () => {
+    expect(
+      computeSendDisabledReason({ workspace: "/ws/a", prompt: "   ", engine: "core", model: null, mode: "build" }, 0),
+    ).toBe("Type a message to send");
+  });
+
+  it("TASK.81: 'Choose a project first' wins over an attached image with no workspace", () => {
+    expect(
+      computeSendDisabledReason({ workspace: null, prompt: "", engine: "core", model: null, mode: "build" }, 1),
+    ).toBe("Choose a project first");
   });
 });
 
@@ -284,6 +310,50 @@ describe("resolveCodexDraftModel (TASK.39 — cross-engine draft.model leakage g
 
   it("returns an empty string when the catalog itself hasn't loaded yet (defensive — caller gates rendering on a non-empty catalog)", () => {
     expect(resolveCodexDraftModel(null, [])).toBe("");
+  });
+});
+
+describe("draftModelEfforts (TASK.81)", () => {
+  const models = [
+    { id: "gpt-5.6-terra", label: "Terra", efforts: ["low", "high"] },
+    { id: "gpt-5.6-mini", label: "Mini" },
+  ];
+
+  it("returns the current model's effort vocabulary", () => {
+    expect(draftModelEfforts("gpt-5.6-terra", models)).toEqual(["low", "high"]);
+  });
+
+  it("returns [] for a model that declares no efforts", () => {
+    expect(draftModelEfforts("gpt-5.6-mini", models)).toEqual([]);
+  });
+
+  it("returns [] for a model id absent from the catalog", () => {
+    expect(draftModelEfforts("unknown", models)).toEqual([]);
+  });
+
+  it("returns [] against an empty catalog", () => {
+    expect(draftModelEfforts("gpt-5.6-terra", [])).toEqual([]);
+  });
+});
+
+describe("resolveDraftEngineEffort (TASK.81)", () => {
+  const efforts = ["low", "high"];
+
+  it("trusts an explicit draft pick that IS a member of the current model's effort vocabulary", () => {
+    expect(resolveDraftEngineEffort("high", efforts)).toBe("high");
+  });
+
+  it("falls back to the vocabulary's first entry when no pick has been made yet", () => {
+    expect(resolveDraftEngineEffort(undefined, efforts)).toBe("low");
+  });
+
+  it("falls back to the vocabulary's first entry when the pick is STALE (left over from a since-switched model/engine)", () => {
+    expect(resolveDraftEngineEffort("xhigh", efforts)).toBe("low");
+  });
+
+  it("returns undefined when the model has no effort vocabulary at all (caller hides the row)", () => {
+    expect(resolveDraftEngineEffort("high", [])).toBeUndefined();
+    expect(resolveDraftEngineEffort(undefined, [])).toBeUndefined();
   });
 });
 

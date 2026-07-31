@@ -117,7 +117,7 @@ import {
   shortSessionId,
   SESSIONS_PICKER_LIMIT,
 } from "./sessions.js";
-import { withPlanModeReminder } from "./plan.js";
+import { withPlanModeReminder } from "../prompts/plan-reminder.js";
 import { withBackgroundTaskNotices } from "./background-notice.js";
 import { applyStatus, createStatusLine, withStatusClear } from "./status.js";
 import { createCliTheme, detectColorEnabled } from "./theme.js";

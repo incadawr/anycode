@@ -136,6 +136,91 @@
   color: var(--text-2);
 }
 
+/* ── TASK.68 connection switcher: compact list of saved connections + "Add
+   another provider", the onboarding escape hatch from a locked edit form
+   (WelcomeScreen.tsx's `resolveWelcomeView`). Reuses `.connection-tile-status*`
+   (below) for the per-row credential/health badge, unchanged. ── */
+
+.welcome-connections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.welcome-connections-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.welcome-connections-title {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.welcome-connections-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.welcome-connections-add svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.welcome-connections-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.welcome-connection-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.welcome-connection-row:hover {
+  background: var(--bg-hover);
+}
+
+.welcome-connection-row-selected {
+  border-color: var(--accent);
+}
+
+.welcome-connection-row-provider {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.welcome-connection-row-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
 /* ── settings screen (embedded panel, or wrapped by .settings-dialog) ── */
 
 .settings-screen {

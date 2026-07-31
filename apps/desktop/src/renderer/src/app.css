@@ -4378,6 +4378,41 @@ body {
   color: var(--text-dim);
 }
 
+/* ── TASK.27: ExitPlanMode plan review ── */
+
+/* A plan is prose, not a path or a command: wider well and a taller scroll
+   budget than the generic ask, capped so the dialog never outgrows a short
+   window (the body scrolls, the page never does). */
+.permission-modal-plan {
+  width: min(48rem, 92vw);
+}
+
+.permission-plan {
+  max-height: min(28rem, 55vh);
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+/* The markdown renderer's own first/last block margins would double up with
+   the well's padding. */
+.permission-plan > :first-child {
+  margin-top: 0;
+}
+
+.permission-plan > :last-child {
+  margin-bottom: 0;
+}
+
+/* Consequence line: says what Approve actually does. One notch above the
+   generic "Mode:" footnote, since it is the decision the user is making. */
+.permission-plan-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
 .permission-modal-actions {
   display: flex;
   justify-content: flex-end;

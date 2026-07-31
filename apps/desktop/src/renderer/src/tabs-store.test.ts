@@ -388,6 +388,86 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft?.codexProfileId).toBeUndefined();
   });
 
+  it("setDraftImages sets the draft's image attachments, absent until then (TASK.81)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    expect(store.getState().draft?.images).toBeUndefined();
+
+    const image = { name: "a.png", sizeBytes: 100, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().setDraftImages([image]);
+    expect(store.getState().draft).toEqual({
+      workspace: "/ws/a",
+      prompt: "",
+      engine: "core",
+      model: null,
+      mode: "build",
+      images: [image],
+    });
+  });
+
+  it("setDraftImages([]) clears the attachment list back to empty without dropping the key (current content, not a touch flag)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    const image = { name: "a.png", sizeBytes: 100, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().setDraftImages([image]);
+    store.getState().setDraftImages([]);
+    expect(store.getState().draft?.images).toEqual([]);
+  });
+
+  it("re-opening an existing draft preserves its image attachments (focus, not reset)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    const image = { name: "a.png", sizeBytes: 100, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().setDraftImages([image]);
+    store.getState().openDraft(); // re-focus, no workspace arg
+    expect(store.getState().draft?.images).toEqual([image]);
+  });
+
+  it("setDraftImages is a no-op while draft is null", () => {
+    const store = createTabsStore();
+    store.getState().setDraftImages([{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png", data: "AA==" } }]);
+    expect(store.getState().draft).toBeNull();
+  });
+
+  it("setDraftEngineEffort sets the draft's non-core effort pick, absent until then (TASK.81)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftEngine("codex");
+    expect(store.getState().draft?.engineEffort).toBeUndefined();
+
+    store.getState().setDraftEngineEffort("high");
+    expect(store.getState().draft).toEqual({
+      workspace: "/ws/a",
+      prompt: "",
+      engine: "codex",
+      model: null,
+      mode: "build",
+      engineEffort: "high",
+    });
+  });
+
+  it("re-opening an existing draft preserves its effort pick (focus, not reset)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftEngineEffort("medium");
+    store.getState().openDraft(); // re-focus, no workspace arg
+    expect(store.getState().draft?.engineEffort).toBe("medium");
+  });
+
+  it("setDraftEngineEffort is a no-op while draft is null", () => {
+    const store = createTabsStore();
+    store.getState().setDraftEngineEffort("high");
+    expect(store.getState().draft).toBeNull();
+  });
+
+  it("setDraftEngineEffort(undefined) clears a pick", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftEngineEffort("high");
+    store.getState().setDraftEngineEffort(undefined);
+    expect(store.getState().draft?.engineEffort).toBeUndefined();
+  });
+
   it("discardDraft clears both draft and draftActive", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");

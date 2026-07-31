@@ -351,6 +351,7 @@ export type FetchModelsFailureReason =
   | "invalid_url"
   | "redirect_blocked"
   | "http_error"
+  | "models_not_supported"
   | "response_too_large"
   | "timeout"
   | "network_error"

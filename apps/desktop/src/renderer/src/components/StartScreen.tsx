@@ -41,16 +41,42 @@
  * runs `environment: "node"` (no jsdom, App.test.ts's precedent), so
  * StartScreen.test.ts exercises these directly rather than rendering the
  * component.
+ *
+ * TASK.81 (composer parity): the draft now carries image attachments
+ * (`draft.images`) and a non-core reasoning-effort pick (`draft.engineEffort`,
+ * tabs-store.ts) alongside the pre-existing model/mode/preset/profile picks.
+ * Images are attach/paste only (no drag-and-drop — out of this task's DoD)
+ * and reuse Composer.tsx's exact decode/resize pipeline
+ * (`readComposerImageFile`) and pill grammar — no second image path. Effort
+ * reuses `EngineModelMenu`'s existing `effort` prop (EngineControls.tsx),
+ * the SAME control the live Codex/Claude composer already renders, gated on
+ * the SAME "does this model even declare a vocabulary" predicate
+ * (`draftModelEfforts`/`resolveDraftEngineEffort`) — the CORE engine has no
+ * draft-time effort data at all (see `SessionDraft.engineEffort`'s doc
+ * comment in tabs-store.ts) so it never gets a row. Both values are
+ * delivered by `queueInitialPrompt` (tab-registry.ts) strictly before the
+ * first `user_message` — effort via its own `set_engine_effort` wire
+ * message, images inline on the `user_message` itself, honestly dropped
+ * (with a notice, text still sent) if the boot model turns out not to
+ * accept them.
  */
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { ClipboardEvent, KeyboardEvent } from "react";
 import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-store.js";
+import type { QueuedPromptImage } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { submitStartDraft, type StartSubmitResult } from "../start-session.js";
-import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, Search, Terminal, Warning } from "./icons.js";
+import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, ImageIcon, Search, Terminal, Warning, X } from "./icons.js";
 import { modelDisplayName, modelMenuItems, pillLabel, providerModelsFor, resolvePid } from "./ModelPill.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
+import {
+  COMPOSER_IMAGE_MAX_PER_MESSAGE,
+  IMAGE_ACCEPT,
+  formatImageSize,
+  hasSendableDraft,
+  readComposerImageFile,
+} from "./Composer.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
 import { activeConnection, activeProviderView } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
@@ -112,12 +138,20 @@ export function computeProjectLabel(workspace: string | null): string {
   return workspace !== null ? basename(workspace) : "Choose a project";
 }
 
-/** §3-D3: Send stays disabled until a project is chosen and the prompt is non-blank — mirrors Composer's `sendDisabledReason`. */
-export function computeSendDisabledReason(draft: SessionDraft): string | undefined {
+/**
+ * §3-D3: Send stays disabled until a project is chosen and the draft has
+ * something to send — mirrors Composer's `sendDisabledReason`, reusing the
+ * SAME `hasSendableDraft` predicate (TASK.81: an attached image alone, with
+ * no typed text, is sendable there and must be here too — no second
+ * "is this draft empty" rule). `imageCount` defaults to 0 so every pre-
+ * existing call site (none of which knew about images) keeps its exact
+ * original behavior.
+ */
+export function computeSendDisabledReason(draft: SessionDraft, imageCount: number = 0): string | undefined {
   if (draft.workspace === null) {
     return "Choose a project first";
   }
-  if (draft.prompt.trim().length === 0) {
+  if (!hasSendableDraft(draft.prompt, imageCount)) {
     return "Type a message to send";
   }
   return undefined;
@@ -379,6 +413,41 @@ export function resolveCodexDraftModel(draftModel: string | null, available: rea
   return available[0]?.id ?? "";
 }
 
+/**
+ * TASK.81: a non-core draft's effort vocabulary for the CURRENT model —
+ * mirrors `EngineModelMenu`'s own internal `efforts` lookup
+ * (EngineControls.tsx) byte-for-byte, so this file and that component never
+ * disagree about which models even have an effort row. `[]` when the model
+ * is absent from the catalog or declares none (a non-reasoning model, or a
+ * catalog that hasn't loaded yet). Exported for unit testing.
+ */
+export function draftModelEfforts(modelId: string, available: readonly EngineModelChoice[]): readonly string[] {
+  return available.find((item) => item.id === modelId)?.efforts ?? [];
+}
+
+/**
+ * Resolves the draft's displayed/selected effort for a non-core engine
+ * (TASK.81) — the SAME "trust an explicit pick only while it stays valid,
+ * else fall back to the catalog's first entry" rule
+ * `resolveCodexDraftModel`/`resolveClaudeDraftModel` already use for the
+ * model chip, applied to effort: a leftover pick from a since-switched model
+ * (or a different engine entirely — `engineEffort` is never reset on an
+ * engine switch, mirroring `enginePreset`) is harmless because it is only
+ * ever trusted when the CURRENT model's vocabulary still contains it.
+ * `EngineModelMenu`'s `effort.current` prop is required (not optional), so
+ * the caller needs SOME value to show whenever the row is visible at all —
+ * `undefined` only when the model has no effort vocabulary, which the
+ * caller reads as "hide the row" (never sent anywhere unless the user picks
+ * a row and `setDraftEngineEffort` actually fires). Exported for unit
+ * testing.
+ */
+export function resolveDraftEngineEffort(draftEffort: string | undefined, efforts: readonly string[]): string | undefined {
+  if (draftEffort !== undefined && efforts.includes(draftEffort)) {
+    return draftEffort;
+  }
+  return efforts[0];
+}
+
 /** One selectable row in the Codex account-profile chip's dropdown. */
 export interface CodexProfileChipOption {
   id: string;
@@ -501,6 +570,13 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const [submitting, setSubmitting] = useState(false);
   const submitGuardRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // TASK.81: image attach state. The attachment LIST itself is store-backed
+  // (`draft.images`, mirrors the store-controlled `draft.prompt` textarea —
+  // §4.1 above) so an automation facade could drive it the same way; the
+  // error banner is presentation-only local state, same split Composer.tsx
+  // uses for its own `imageError`.
+  const [imageError, setImageError] = useState<string | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
 
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [projectHintVisible, setProjectHintVisible] = useState(true);
@@ -553,6 +629,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // gating the Codex draft catalog fetch effect.
   const codexEngineSelected = draft?.engine === "codex";
   const codexDraftModel = resolveCodexDraftModel(draft?.model ?? null, codexModels);
+  // TASK.81: the effort row only ever shows for a model that actually
+  // declares a vocabulary (EngineModelMenu's own internal gate, mirrored
+  // here to decide whether to pass the `effort` prop at all — see
+  // `draftModelEfforts`'s doc comment).
+  const codexDraftEfforts = draftModelEfforts(codexDraftModel, codexModels);
+  const codexDraftEffort = resolveDraftEngineEffort(draft?.engineEffort, codexDraftEfforts);
   // W3 join: displays the draft's own pick once made; falls back to the same
   // default the picker starts on before the user ever touches it.
   const codexDraftPreset = draft?.enginePreset ?? DEFAULT_CODEX_DRAFT_PRESET;
@@ -809,7 +891,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
     return null;
   }
 
-  const sendDisabledReason = submitting ? "Sending…" : computeSendDisabledReason(draft);
+  const draftImages = draft.images ?? [];
+  const sendDisabledReason = submitting ? "Sending…" : computeSendDisabledReason(draft, draftImages.length);
   const canSend = sendDisabledReason === undefined;
   const codexDraft = draft.engine === "codex";
   // SLICE-CC C5 (cut §1.4): the Claude draft's own branch of the composer
@@ -818,6 +901,14 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const claudeDraft = draft.engine === "claude";
   const claudeDraftPreset = draft.enginePreset ?? DEFAULT_CLAUDE_DRAFT_PRESET;
   const claudeDraftModel = resolveClaudeDraftModel(draft.model, CLAUDE_DRAFT_MODELS);
+  // TASK.81: same "only show the row when the model actually has a
+  // vocabulary" discipline as the Codex branch above. `CLAUDE_DRAFT_MODELS`
+  // does not currently declare any `efforts` (no live per-model catalog at
+  // draft time — see that table's own doc comment), so this resolves to
+  // `undefined` and the row stays hidden today; wiring is generic so it
+  // lights up for free the moment that table ever gains real data.
+  const claudeDraftEfforts = draftModelEfforts(claudeDraftModel, CLAUDE_DRAFT_MODELS);
+  const claudeDraftEffort = resolveDraftEngineEffort(draft.engineEffort, claudeDraftEfforts);
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
   async function submit(): Promise<void> {
@@ -828,6 +919,65 @@ export function StartScreen({ onToast }: StartScreenProps) {
       submit: submitStartDraft,
       onToast,
     });
+  }
+
+  /**
+   * TASK.81: validates + attaches files (file-picker or paste), reusing
+   * Composer.tsx's exact `readComposerImageFile` decoder — no second image
+   * pipeline. Re-reads the draft's CURRENT image list at write time (not the
+   * `draftImages` closed over at render) so a slow multi-file read never
+   * clobbers a concurrent remove.
+   */
+  async function addDraftImageFiles(files: readonly File[]): Promise<void> {
+    const imageFiles = files.filter((file) => file.type.startsWith("image/") || file.name.match(/\.(png|jpe?g|gif|webp)$/i));
+    if (imageFiles.length === 0) {
+      return;
+    }
+    const slots = COMPOSER_IMAGE_MAX_PER_MESSAGE - (useTabsStore.getState().draft?.images?.length ?? 0);
+    if (slots <= 0) {
+      setImageError(`Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.`);
+      return;
+    }
+    const accepted: QueuedPromptImage[] = [];
+    let firstError: string | null = imageFiles.length > slots ? `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` : null;
+    for (const file of imageFiles.slice(0, slots)) {
+      try {
+        const result = await readComposerImageFile(file);
+        if (result.ok) {
+          accepted.push(result.image);
+        } else {
+          firstError ??= result.reason;
+        }
+      } catch (error) {
+        firstError ??= error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (accepted.length > 0) {
+      const current = useTabsStore.getState().draft?.images ?? [];
+      useTabsStore.getState().setDraftImages([...current, ...accepted]);
+      setImageError(null);
+    }
+    if (firstError !== null) {
+      setImageError(firstError);
+    }
+  }
+
+  function removeDraftImage(index: number): void {
+    const current = useTabsStore.getState().draft?.images ?? [];
+    useTabsStore.getState().setDraftImages(current.filter((_, i) => i !== index));
+    setImageError(null);
+  }
+
+  function openImagePicker(): void {
+    imageFileInputRef.current?.click();
+  }
+
+  function handleTextareaPaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
+    const pastedFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (pastedFiles.length > 0) {
+      event.preventDefault();
+      void addDraftImageFiles(pastedFiles);
+    }
   }
 
   function closeProjectMenu(returnFocus: boolean): void {
@@ -1158,6 +1308,29 @@ export function StartScreen({ onToast }: StartScreenProps) {
       </div>
 
       <div className="composer start-composer">
+        {/* TASK.81: image attachments, Composer.tsx's `.composer-pills` grammar
+            verbatim — attach/paste only (no drag-and-drop: out of this
+            task's scope, the DoD only calls for attach/paste parity). */}
+        {draftImages.length > 0 && (
+          <div className="composer-pills">
+            {draftImages.map((image, index) => (
+              <span key={`${image.name}-${index}`} className="composer-image-pill" title={image.name}>
+                <span className="composer-image-pill-name">{image.name}</span>
+                <span className="composer-image-pill-size">{formatImageSize(image.sizeBytes)}</span>
+                <button
+                  type="button"
+                  className="composer-image-pill-remove"
+                  aria-label={`Remove ${image.name}`}
+                  title="Remove image"
+                  onClick={() => removeDraftImage(index)}
+                >
+                  <X />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {imageError !== null && <div className="composer-image-error">{imageError}</div>}
         <textarea
           ref={textareaRef}
           className="composer-textarea"
@@ -1165,6 +1338,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
           placeholder="What do you want to do?"
           value={draft.prompt}
           onChange={(event) => useTabsStore.getState().setDraftPrompt(event.target.value)}
+          onPaste={handleTextareaPaste}
           onKeyDown={(event) => {
             if (isSendKeydown(event)) {
               event.preventDefault();
@@ -1174,6 +1348,33 @@ export function StartScreen({ onToast }: StartScreenProps) {
         />
         <div className="composer-footer">
           <div className="composer-footer-left">
+            {/* TASK.81: attach affordance, shown for every engine branch alike —
+                all three engines currently declare `supportsImages: true`
+                (host/engines/{session-engine,claude/claude-engine,codex/codex-engine}.ts),
+                mirroring Composer.tsx's own `engine?.capabilities.supportsImages
+                ?? true` default-on fallback for "no live capability data yet". */}
+            <input
+              ref={imageFileInputRef}
+              className="composer-file-input"
+              type="file"
+              accept={IMAGE_ACCEPT}
+              multiple
+              tabIndex={-1}
+              onChange={(event) => {
+                void addDraftImageFiles(Array.from(event.currentTarget.files ?? []));
+                event.currentTarget.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="composer-attach"
+              aria-label="Attach image"
+              title="Attach image"
+              disabled={submitting}
+              onClick={openImagePicker}
+            >
+              <ImageIcon />
+            </button>
             {codexDraft ? (
               // TASK.39 item 1: native Codex model + permission-preset pickers
               // (from the doctor-provided catalog, never AnyCode's provider
@@ -1194,6 +1395,14 @@ export function StartScreen({ onToast }: StartScreenProps) {
                     pendingModel={undefined}
                     disabled={false}
                     onPick={(id) => useTabsStore.getState().setDraftModel(id)}
+                    {...(codexDraftEffort !== undefined
+                      ? {
+                          effort: {
+                            current: codexDraftEffort,
+                            onPick: (effort: string) => useTabsStore.getState().setDraftEngineEffort(effort),
+                          },
+                        }
+                      : {})}
                   />
                 )}
               </>
@@ -1215,6 +1424,14 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   pendingModel={undefined}
                   disabled={false}
                   onPick={(id) => useTabsStore.getState().setDraftModel(id)}
+                  {...(claudeDraftEffort !== undefined
+                    ? {
+                        effort: {
+                          current: claudeDraftEffort,
+                          onPick: (effort: string) => useTabsStore.getState().setDraftEngineEffort(effort),
+                        },
+                      }
+                    : {})}
                 />
               </>
             ) : (
