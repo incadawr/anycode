@@ -134,7 +134,7 @@ describe("scanAgentProfilesAdmin", () => {
     await seed(
       wsRoot,
       "scout.md",
-      md({ name: "scout", description: "Runs on Codex", tools: "Read", engine: "codex" }, "body"),
+      md({ name: "scout", description: "Runs on Codex", engine: "codex" }, "body"),
     );
     await seed(
       wsRoot,
@@ -148,6 +148,37 @@ describe("scanAgentProfilesAdmin", () => {
     // A rejected profile is never listed AND never silent: the strip must name it.
     expect(rows.bogus).toBeUndefined();
     expect(result.problems.some((p) => p.includes('engine "gemini"'))).toBe(true);
+  });
+
+  it("refuses a profile combining engine: with explicit tools: (TASK.97 R4) — never listed, problem names both", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const wsRoot = join(ws, ".anycode/agents");
+    await seed(
+      wsRoot,
+      "conflict.md",
+      md({ name: "conflict", description: "d", engine: "claude", tools: "Read, Grep" }, "body"),
+    );
+
+    const result = await scanAgentProfilesAdmin(fs, { workspace: ws, home });
+    expect(result.rows.find((r) => r.name === "conflict")).toBeUndefined();
+    expect(
+      result.problems.some(
+        (p) => p.includes('"tools" cannot be combined with "engine: claude"') && p.includes("remove one of the two"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an engine row when tools: is entirely absent", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const wsRoot = join(ws, ".anycode/agents");
+    await seed(wsRoot, "bare-engine.md", md({ name: "bare-engine", description: "d", engine: "codex" }, "body"));
+
+    const result = await scanAgentProfilesAdmin(fs, { workspace: ws, home });
+    const row = result.rows.find((r) => r.name === "bare-engine");
+    expect(row?.engine).toBe("codex");
+    expect(row?.toolsExplicit).toBe(false);
   });
 
   it("dedupes a name across roots (project wins) and tags user rows", async () => {
