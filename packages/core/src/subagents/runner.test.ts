@@ -877,6 +877,53 @@ describe("agent profiles as personas (§3.5, §5.2-7)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Live profile rescan (subagent-model design): opts.profiles accepts a thunk
+// so a host can re-point the runner's profile source between turns (after a
+// rescan of .anycode/agents/) instead of only a boot-time snapshot. Proves the
+// runner never caches a profile map at construction time — every
+// listAgentTypes()/run() call re-reads the thunk.
+
+describe("opts.profiles as a live source (thunk)", () => {
+  it("a profile added to the thunk's result AFTER the runner was created is visible via listAgentTypes()", async () => {
+    let live: PersonaDefinition[] = [];
+    const runner = createSubagentRunner(makeParent(), { profiles: () => live });
+
+    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore"]);
+
+    const persona = await makeProfile("reviewer", { body: "P" });
+    live = [persona];
+
+    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "reviewer"]);
+  });
+
+  it("a profile added to the thunk's result AFTER the runner was created is runnable via run()", async () => {
+    let live: PersonaDefinition[] = [];
+    const model = new ScriptedModelPort(() => textStep("late profile ran"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }), {
+      profiles: () => live,
+    });
+
+    // Not yet visible: the thunk still returns an empty array at this point.
+    const early = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+    expect(early.status).toBe("error");
+    expect(early.finalText).toContain("Unknown agent_type");
+
+    const persona = await makeProfile("reviewer", { body: "P" });
+    live = [persona];
+
+    const late = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+    expect(late.status).toBe("completed");
+    expect(late.finalText).toBe("late profile ran");
+  });
+
+  it("an array source still behaves as a fixed boot-time snapshot (unchanged behavior)", async () => {
+    const persona = await makeProfile("reviewer", { body: "P" });
+    const runner = createSubagentRunner(makeParent(), { profiles: [persona] });
+    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "reviewer"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ExitPlanMode child-registry lock (Phase 4 slice 4.3, design §0.1/§5.2 item 8).
 // ExitPlanMode is deliberately NOT in createDefaultToolRegistry (design §2.5
 

@@ -62,8 +62,15 @@ export { SPAWN_TOOLS };
  * built-in (built-in always wins in resolution).
  */
 export interface SubagentRunnerOptions {
-  /** Md-profile personas (already validated/capped by subagents/profiles.ts). */
-  profiles?: readonly PersonaDefinition[];
+  /**
+   * Md-profile personas (already validated/capped by subagents/profiles.ts).
+   * A plain array is a boot-time snapshot. A thunk is re-invoked on every
+   * listAgentTypes()/run() call instead of being read once at construction —
+   * the host wiring passes `() => ext.profiles` so a profile authored into
+   * `.anycode/agents/` mid-session (host rescans and swaps `ext` in place)
+   * becomes a callable agent_type without restarting the runner/session.
+   */
+  profiles?: readonly PersonaDefinition[] | (() => readonly PersonaDefinition[]);
   /**
    * Session-static environment facts (slice 3.6, design §2.4). Threaded into
    * every child's harness prelude so a subagent sees the same `<env>` block as
@@ -254,22 +261,34 @@ export function createSubagentRunner(
   opts?: SubagentRunnerOptions,
 ): SubagentPort {
   const semaphore = new Semaphore(MAX_CONCURRENT_SUBAGENTS);
+
   // Profiles keyed by name; a built-in name in the map is unreachable because
-  // resolution consults isKnownPersona FIRST (built-in always wins).
-  const profileMap = new Map<string, PersonaDefinition>();
-  for (const profile of opts?.profiles ?? []) {
-    if (!profileMap.has(profile.name)) {
-      profileMap.set(profile.name, profile);
+  // resolution consults isKnownPersona FIRST (built-in always wins). Rebuilt
+  // on EVERY call rather than cached once at construction: opts.profiles may
+  // be a thunk the host re-points at a freshly rescanned profile list between
+  // turns, and a stale snapshot here would keep a live-session-authored
+  // profile permanently invisible to listAgentTypes()/run(). Rebuilding is
+  // cheap — profiles are capped at MAX_AGENT_PROFILES.
+  function currentProfiles(): Map<string, PersonaDefinition> {
+    const source = opts?.profiles;
+    const list = typeof source === "function" ? source() : (source ?? []);
+    const map = new Map<string, PersonaDefinition>();
+    for (const profile of list) {
+      if (!map.has(profile.name)) {
+        map.set(profile.name, profile);
+      }
     }
+    return map;
   }
 
   return {
     listAgentTypes(): string[] {
-      return [...listPersonaNames(), ...profileMap.keys()];
+      return [...listPersonaNames(), ...currentProfiles().keys()];
     },
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {
       const startedAt = Date.now();
       const { signal, onProgress } = runOpts;
+      const profileMap = currentProfiles();
 
       // Resolve the persona: built-in wins, else an md-profile. The Agent tool
       // validates agent_type before calling, but the port is public (workflow

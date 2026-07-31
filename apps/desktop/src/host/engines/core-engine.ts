@@ -1,6 +1,6 @@
 /** Built-in engine adapter. Every method delegates to the retained core object. */
 
-import type { AgentLoop, AgentLoopConfig } from "@anycode/core";
+import type { AgentEvent, AgentLoop, AgentLoopConfig } from "@anycode/core";
 import type {
   EngineCapabilities,
   ModelSwitchResult,
@@ -15,6 +15,15 @@ export interface CoreEngineOptions {
   config: AgentLoopConfig;
   switchModelImpl?: (id: string, effort: ReasoningEffort) => ModelSwitchResult;
   capabilities?: EngineCapabilities;
+  /**
+   * Awaited before every new user turn is handed to the loop (subagent-model
+   * design: a profile authored into `.anycode/agents/` during a live session
+   * must become callable without a restart, and re-scanning is host-only
+   * wiring the core loop knows nothing about). Fail-soft by contract: a
+   * throwing hook must never block the turn it was meant to precede, so the
+   * failure is logged and swallowed here rather than propagated.
+   */
+  onBeforeTurn?: () => Promise<void>;
 }
 
 /**
@@ -48,8 +57,21 @@ export class CoreEngine implements SessionEngine {
     this.options.config.reasoningEffort = effort;
   }
 
-  runTurn(input: string, options: RunTurnOptions) {
-    return this.options.loop.runTurn(input, options);
+  async *runTurn(input: string, options: RunTurnOptions): AsyncGenerator<AgentEvent> {
+    // onBeforeTurn runs on every NEW user turn only (never continueTurn — a
+    // rehost's terminal-control continuation is not "the start of a turn").
+    // Awaited before the loop sees the input so a just-rescanned profile is
+    // already live by the time this turn's Agent tool calls could reach it.
+    if (this.options.onBeforeTurn) {
+      try {
+        await this.options.onBeforeTurn();
+      } catch (error) {
+        console.warn(
+          `[core-engine] onBeforeTurn failed, continuing the turn unchanged: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    yield* this.options.loop.runTurn(input, options);
   }
 
   continueTurn(options: RunTurnOptions) {

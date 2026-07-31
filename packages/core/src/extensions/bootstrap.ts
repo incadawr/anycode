@@ -60,6 +60,18 @@ export interface ExtensionsBootstrap {
    * skillsPromptSection/workflowsPromptSection.
    */
   profilesPromptSection: string;
+  /**
+   * Re-runs just the agent-profile discovery pass against the SAME roots this
+   * boot resolved (host wiring only — a profile authored into
+   * `.anycode/agents/` during a live session is invisible to a running
+   * SubagentPort until its source is refreshed with this). Returns null on
+   * ANY discovery failure (fail-soft): the caller keeps its current profiles
+   * rather than replacing them with an empty result indistinguishable from
+   * "every profile was deleted".
+   */
+  rescanProfiles: () => Promise<
+    { profiles: PersonaDefinition[]; promptSection: string; problems: string[] } | null
+  >;
   /** Plugin-declared MCP server specs to add to manager.start(...). */
   pluginMcpServerSpecs: McpServerSpec[];
   /** Validated workflow definitions (empty when there are none, design §2.9). */
@@ -267,6 +279,30 @@ export async function discoverExtensions(
   }
   const profilesPromptSection = buildProfilesPromptSection(profiles);
 
+  // Live-rescan seam (design: a profile dropped into .anycode/agents/ during a
+  // live session must become callable without a restart). Closes over the
+  // SAME `agentRoots` array built above rather than recomputing it: the roots
+  // recipe reads pluginAgentRoots/workspace/home once at boot, and a second,
+  // independently-built array could silently drift from the one boot actually
+  // used (e.g. a plugin re-scanned differently on rescan). Deliberately does
+  // NOT touch the outer `problems`/`profiles` closures — a rescan's result is
+  // handed back to the caller to accept or discard, never applied here.
+  const rescanProfiles = async (): Promise<
+    { profiles: PersonaDefinition[]; promptSection: string; problems: string[] } | null
+  > => {
+    try {
+      const result = await discoverAgentProfiles(fs, agentRoots);
+      return {
+        profiles: result.profiles,
+        promptSection: buildProfilesPromptSection(result.profiles),
+        problems: result.problems,
+      };
+    } catch {
+      // fail-soft: the caller keeps its current profiles on a transient error.
+      return null;
+    }
+  };
+
   // Workflow discovery is the fourth subsystem (design §2.9): independent
   // fail-soft block, symmetric with the three above. Roots are project > user
 
@@ -326,6 +362,7 @@ export async function discoverExtensions(
     skillsPromptSection,
     profiles,
     profilesPromptSection,
+    rescanProfiles,
     pluginMcpServerSpecs,
     workflows,
     workflowsPromptSection,

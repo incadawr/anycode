@@ -474,12 +474,14 @@ describe("host subagent model-override wiring", () => {
   it("passes resolveChildModelPort into withSubagents, or the runner rejects every Agent(model:) call", async () => {
     const source = await readHostSource();
 
-    // Anchored on `profiles: ext.profiles` so the doc comment near the top of
-    // index.ts — which also spells `withSubagents(config, {profiles})` — can
-    // never satisfy this assertion in place of the real call.
+    // Anchored on `profiles: () => ext.profiles` (subagent-model: a thunk, not
+    // a boot-time snapshot, so a live rescan is visible to the runner) so the
+    // doc comment near the top of index.ts — which also spells
+    // `withSubagents(config, {profiles})` — can never satisfy this assertion
+    // in place of the real call.
     const calls = [...source.matchAll(/withSubagents\(\s*config\s*,\s*\{([\s\S]*?)\}\s*\)/g)]
       .map((match) => match[1]!)
-      .filter((options) => options.includes("profiles: ext.profiles"));
+      .filter((options) => options.includes("profiles: () => ext.profiles"));
 
     expect(calls).toHaveLength(1);
     expect(calls[0]!).toContain("resolveChildModelPort");
