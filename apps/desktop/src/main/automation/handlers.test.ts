@@ -107,12 +107,17 @@ import {
   checkpointPanelState,
   rewindState,
   checkpointRewind,
+  previewsForTab,
+  previewConsole,
+  previewScreenshot,
+  previewOpen,
   waitFor,
   type AutomationWindow,
   type HandlerDeps,
   type ManagerLike,
 } from "./handlers.js";
 import type { CreateTabResult, TabHost, TabSummary } from "../tabs.js";
+import type { PreviewHostHandle } from "../preview/preview-host.js";
 
 function fakeManager(overrides: Partial<ManagerLike> = {}): ManagerLike {
   return {
@@ -745,6 +750,144 @@ describe("Checkpoint timeline / rewind thin facade commands forward method + arg
     const deps = fakeDeps();
     await checkpointRewind(deps, "tab-a", { index: 0, scope: "files" });
     expect(deps.callFacade).toHaveBeenCalledWith("checkpointRewind", ["tab-a", { index: 0, scope: "files" }]);
+  });
+});
+
+/** A fake PreviewHostHandle (night-track wave-1 cut §2.8, 96-E) — zero Electron, mirrors PreviewHostHandle exactly so a handler test never drifts from the real interface. */
+function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle {
+  return {
+    openForTab: vi.fn(async () => ({ ok: true as const, value: { previewId: "pv-1", url: "file:///tmp/a.html", kind: "file" as const } })),
+    handleRequest: vi.fn(async () => {}),
+    handleArtifacts: vi.fn(),
+    closeForTab: vi.fn(),
+    closeAll: vi.fn(),
+    listForTab: vi.fn(() => []),
+    getConsole: vi.fn(() => ({ entries: [], dropped: 0 })),
+    screenshotFor: vi.fn(async () => ({
+      ok: true as const,
+      value: { previewId: "pv-1", url: "file:///tmp/a.html", mediaType: "image/png" as const, data: "UE5H", width: 10, height: 10 },
+    })),
+    ...overrides,
+  };
+}
+
+describe("preview probes/driver (night-track wave-1 cut §2.8, 96-E)", () => {
+  describe("previewsForTab (GET /tabs/:tabId/previews)", () => {
+    it("forwards to previewHost.listForTab and wraps the result", () => {
+      const previewHost = fakePreviewHost({
+        listForTab: vi.fn(() => [
+          { previewId: "pv-1", url: "file:///tmp/a.html", status: "ready" as const, consoleCount: 0, dropped: 0 },
+        ]),
+      });
+      const deps = fakeDeps({ previewHost });
+      const result = previewsForTab(deps, "tab-a");
+      expect(previewHost.listForTab).toHaveBeenCalledWith("tab-a");
+      expect(result).toEqual({
+        previews: [{ previewId: "pv-1", url: "file:///tmp/a.html", status: "ready", consoleCount: 0, dropped: 0 }],
+      });
+    });
+
+    it("answers an empty list (never throws) when previewHost is absent", () => {
+      const deps = fakeDeps({ previewHost: undefined });
+      expect(previewsForTab(deps, "tab-a")).toEqual({ previews: [] });
+    });
+  });
+
+  describe("previewConsole (GET /tabs/:tabId/previews/:previewId/console)", () => {
+    it("forwards tabId, previewId, and tail to previewHost.getConsole", () => {
+      const previewHost = fakePreviewHost({
+        getConsole: vi.fn(() => ({ entries: [{ level: "pageerror" as const, message: "boom", at: "2026-01-01T00:00:00.000Z" }], dropped: 2 })),
+      });
+      const deps = fakeDeps({ previewHost });
+      const result = previewConsole(deps, "tab-a", "pv-1", 5);
+      expect(previewHost.getConsole).toHaveBeenCalledWith("tab-a", "pv-1", 5);
+      expect(result).toEqual({
+        entries: [{ level: "pageerror", message: "boom", at: "2026-01-01T00:00:00.000Z" }],
+        dropped: 2,
+      });
+    });
+
+    it("forwards an unknown previewId's {error} verbatim", () => {
+      const previewHost = fakePreviewHost({ getConsole: vi.fn(() => ({ error: "no such preview: pv-x" })) });
+      const deps = fakeDeps({ previewHost });
+      expect(previewConsole(deps, "tab-a", "pv-x", undefined)).toEqual({ error: "no such preview: pv-x" });
+    });
+
+    it("answers {error: 'preview host unavailable'} when previewHost is absent", () => {
+      const deps = fakeDeps({ previewHost: undefined });
+      expect(previewConsole(deps, "tab-a", "pv-1", undefined)).toEqual({ error: "preview host unavailable" });
+    });
+  });
+
+  describe("previewScreenshot (GET /tabs/:tabId/previews/:previewId/screenshot)", () => {
+    it("maps an ok PreviewResult down to {png}", async () => {
+      const previewHost = fakePreviewHost({
+        screenshotFor: vi.fn(async () => ({
+          ok: true as const,
+          value: { previewId: "pv-1", url: "file:///tmp/a.html", mediaType: "image/png" as const, data: "UE5HREATA", width: 3, height: 4 },
+        })),
+      });
+      const deps = fakeDeps({ previewHost });
+      const result = await previewScreenshot(deps, "tab-a", "pv-1");
+      expect(previewHost.screenshotFor).toHaveBeenCalledWith("tab-a", "pv-1");
+      expect(result).toEqual({ png: "UE5HREATA" });
+    });
+
+    it("forwards a failed PreviewResult verbatim (not collapsed to a generic error)", async () => {
+      const previewHost = fakePreviewHost({
+        screenshotFor: vi.fn(async () => ({ ok: false as const, error: "preview is not ready", errorKind: "timeout" as const })),
+      });
+      const deps = fakeDeps({ previewHost });
+      const result = await previewScreenshot(deps, "tab-a", "pv-1");
+      expect(result).toEqual({ ok: false, error: "preview is not ready", errorKind: "timeout" });
+    });
+
+    it("answers unavailable (never throws) when previewHost is absent", async () => {
+      const deps = fakeDeps({ previewHost: undefined });
+      const result = await previewScreenshot(deps, "tab-a", "pv-1");
+      expect(result).toEqual({ ok: false, error: "preview host unavailable", errorKind: "unavailable" });
+    });
+  });
+
+  describe("previewOpen (POST /tabs/:tabId/previews)", () => {
+    it("forwards path to previewHost.openForTab, never passing allowRemote", async () => {
+      const previewHost = fakePreviewHost();
+      const deps = fakeDeps({ previewHost });
+      await previewOpen(deps, "tab-a", { path: "/tmp/a.html" });
+      expect(previewHost.openForTab).toHaveBeenCalledWith("tab-a", { path: "/tmp/a.html", url: undefined });
+      const [, forwardedReq] = (previewHost.openForTab as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(forwardedReq).not.toHaveProperty("allowRemote");
+    });
+
+    it("forwards url to previewHost.openForTab the same way", async () => {
+      const previewHost = fakePreviewHost();
+      const deps = fakeDeps({ previewHost });
+      await previewOpen(deps, "tab-a", { url: "http://localhost:3000" });
+      expect(previewHost.openForTab).toHaveBeenCalledWith("tab-a", { path: undefined, url: "http://localhost:3000" });
+    });
+
+    it("a remote URL is refused by PreviewHost's OWN policy, not by this handler (never allowRemote:true)", async () => {
+      const previewHost = fakePreviewHost({
+        openForTab: vi.fn(async () => ({
+          ok: false as const,
+          error: "remote URL requires explicit approval (allowRemote)",
+          errorKind: "invalid_input" as const,
+        })),
+      });
+      const deps = fakeDeps({ previewHost });
+      const result = await previewOpen(deps, "tab-a", { url: "https://example.com" });
+      expect(result).toEqual({
+        ok: false,
+        error: "remote URL requires explicit approval (allowRemote)",
+        errorKind: "invalid_input",
+      });
+    });
+
+    it("answers unavailable (never throws) when previewHost is absent", async () => {
+      const deps = fakeDeps({ previewHost: undefined });
+      const result = await previewOpen(deps, "tab-a", { path: "/tmp/a.html" });
+      expect(result).toEqual({ ok: false, error: "preview host unavailable", errorKind: "unavailable" });
+    });
   });
 });
 

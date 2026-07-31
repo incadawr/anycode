@@ -1232,13 +1232,17 @@ void app.whenReady().then(async () => {
   // containment resolver above (workspace / `<home>/.anycode` / tmpdir) — a
   // preview may only ever load a file the chat-artifact reader would also be
   // willing to serve bytes for.
-  // `autoOpenEnabled` is hardwired ON for this checkpoint: `AnycodeSettings`
-  // gains a real `preview.autoOpen` key in 96-E (cut §2.7); until that lands,
-  // this matches the owner's documented default (ON) byte-for-byte.
+  // `autoOpenEnabled` (96-E, cut §2.7): a LIVE read of `settings.preview.autoOpen`
+  // — `settings` is the same module-level variable every other live-settings
+  // read in this file closes over (e.g. `activeConnectionId` below), so a
+  // later settings mutation (the SettingsScreen checkbox) takes effect on the
+  // very next auto-open without any additional wiring. Absent key -> ON
+  // (owner default), matching the pre-96-E hardwired-true behavior byte-for-
+  // byte when the setting has never been touched.
   previewHost = registerPreviewHost({
     createWindow: (opts) => createElectronPreviewWindow(opts),
     resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
-    autoOpenEnabled: () => true,
+    autoOpenEnabled: () => settings?.preview?.autoOpen ?? true,
     postToHost: (tabId, message) => {
       const proc = manager?.getTab(tabId)?.proc;
       if (proc === null || proc === undefined) {
@@ -1854,6 +1858,10 @@ void app.whenReady().then(async () => {
         // automation-created tab silently spawned unpinned regardless of the
         // active connection.
         activeConnectionId: () => settings?.provider.activeConnectionId,
+        // Preview probes/driver (night-track wave-1 cut §2.8, 96-E): the SAME
+        // PreviewHost handle constructed above — a model-free smoke of 96-A's
+        // open/console/screenshot ops over the automation channel.
+        previewHost,
       });
     } catch (error) {
       console.error("[main] automation server failed to start", error);

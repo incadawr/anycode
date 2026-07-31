@@ -250,6 +250,7 @@ import {
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
 import {
   WORKTREE_CLEANUP_ENV,
@@ -372,6 +373,19 @@ function subscribePreviewResponses(listener: (response: PreviewResponseMessage) 
 
 function sendPreviewRequest(request: PreviewRequestMessage): void {
   process.parentPort.postMessage(request);
+}
+
+/**
+ * Turn-end auto-open (night-track wave-1 cut §1(a)/§2.3, TASK.96 96-E): posts
+ * a `PreviewArtifactsMessage` over the SAME parentPort control plane as the
+ * RPC broker above — unsolicited, host -> main, no requestId (fire-and-forget
+ * by design, same posture as `sendCredentialRequest`/`sendPreviewRequest`
+ * being the ONLY thing that touches `process.parentPort.postMessage`
+ * directly in this module). Wired into every `Session` construction below as
+ * `postPreviewArtifacts`.
+ */
+function sendPreviewArtifacts(paths: string[]): void {
+  process.parentPort.postMessage({ type: PREVIEW_ARTIFACTS_TYPE, paths });
 }
 
 // Built once at module scope (zero I/O — an RPC client is just closures over
@@ -726,6 +740,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         });
       },
     },
+    postPreviewArtifacts: sendPreviewArtifacts,
   });
   console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
 }
@@ -950,6 +965,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         rowWriter.touch(row);
       },
     },
+    postPreviewArtifacts: sendPreviewArtifacts,
   });
   // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated (or
   // the persisted one, on resume) and the id is our own row id — no account
@@ -2059,6 +2075,7 @@ async function boot(): Promise<void> {
       // host/test-harness.ts's ScriptedModelPort-backed tests are unaffected
       // unless they opt in via HarnessOptions.refineTitle.
       refineTitle: (text) => generateSessionTitle({ modelPort: config.modelPort, text }),
+      postPreviewArtifacts: sendPreviewArtifacts,
     });
 
     console.log(
