@@ -2,10 +2,12 @@
  * Unit tests for the chat-artifact IPC handlers (TASK.72), exercised as the
  * exported handle* functions off a REAL node fs in scratch tmpdirs (no
  * Electron ipcMain). The load-bearing suites are the security gates:
- * containment (allowed roots = tab workspace / `<home>/.anycode` / tmpdir;
- * symlink escapes refused AFTER realpath), the open allowlist (non-image
- * extensions can never reach `openPath`), the inline byte cap, and SVG
- * refused for inline read (active format).
+ * containment (allowed roots = tab workspace / `<home>/.anycode` / tmpdir /
+ * darwin-only literal `/tmp`, TASK.77-B), the open allowlist (non-image
+ * extensions can never reach `openPath`), the inline byte cap, SVG refused
+ * for inline read (active format), and per-tab per-path consent grants
+ * (TASK.77-A) that widen WHERE a refused path may be read/opened without
+ * ever widening WHAT the extension gates allow.
  */
 
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
@@ -14,6 +16,8 @@ import { join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   allowedArtifactRoots,
+  ArtifactConsentStore,
+  handleArtifactAllow,
   handleArtifactOpen,
   handleArtifactReadImage,
   handleArtifactReveal,
@@ -51,6 +55,7 @@ interface Rig {
   openPath: ReturnType<typeof vi.fn<(path: string) => Promise<string>>>;
   reveal: ReturnType<typeof vi.fn<(path: string) => void>>;
   confirmOpen: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
+  consent: ArtifactConsentStore;
 }
 
 /** workspace/home/tmp are three DISJOINT tmpdirs — the tmp root passed to deps is ours, not the OS one. */
@@ -71,6 +76,7 @@ async function makeRig(opts?: {
     if (opts?.confirmThrows === true) throw new Error("no window to attach the sheet to");
     return opts?.confirm ?? true;
   });
+  const consent = new ArtifactConsentStore();
   const deps: ArtifactsIpcDeps = {
     home: () => home,
     tmpdir: () => tmp,
@@ -79,8 +85,9 @@ async function makeRig(opts?: {
     openPath,
     reveal,
     confirmOpen,
+    consent,
   };
-  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen };
+  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent };
 }
 
 // ---------------------------------------------------------------------------
@@ -104,8 +111,52 @@ describe("isUnderRoot", () => {
 });
 
 describe("allowedArtifactRoots", () => {
-  it("is exactly workspace + <home>/.anycode + tmp (home itself is NOT a root)", () => {
-    expect(allowedArtifactRoots("/ws", "/home/u", "/tmp-x")).toEqual(["/ws", "/home/u/.anycode", "/tmp-x"]);
+  it("is exactly workspace + <home>/.anycode + tmp on linux/win32 (home itself is NOT a root)", () => {
+    expect(allowedArtifactRoots("/ws", "/home/u", "/tmp-x", "linux")).toEqual(["/ws", "/home/u/.anycode", "/tmp-x"]);
+    // `join()` is the host's real path.join (NOT platform-parameterized) —
+    // the expected middle element is computed the SAME way the function
+    // itself computes it, so this test is honest on any host OS.
+    expect(allowedArtifactRoots("C:\\ws", "C:\\Users\\u", "C:\\Users\\u\\AppData\\Local\\Temp", "win32")).toEqual([
+      "C:\\ws",
+      join("C:\\Users\\u", ".anycode"),
+      "C:\\Users\\u\\AppData\\Local\\Temp",
+    ]);
+  });
+
+  // TASK.77-B: darwin ONLY appends the literal "/tmp" (owner decision 31.07 —
+  // os.tmpdir() on macOS is a per-app /var/folders/... path, not /tmp, and
+  // agents routinely write to the literal path). Explicit `platform` arg per
+  // recon C §2 — never stub os.platform().
+  it("darwin: appends the literal /tmp root, on top of the injected tmp root", () => {
+    expect(allowedArtifactRoots("/ws", "/home/u", "/tmp-x", "darwin")).toEqual([
+      "/ws",
+      "/home/u/.anycode",
+      "/tmp-x",
+      "/tmp",
+    ]);
+  });
+
+  it("linux: unaffected by the darwin-only branch — no extra /tmp literal beyond the injected root", () => {
+    expect(allowedArtifactRoots("/ws", "/home/u", "/tmp", "linux")).toEqual(["/ws", "/home/u/.anycode", "/tmp"]);
+  });
+
+  it("win32: unaffected — a C:\\tmp-shaped path is not contained by any returned root", () => {
+    const roots = allowedArtifactRoots("C:\\ws", "C:\\Users\\u", "C:\\Users\\u\\AppData\\Local\\Temp", "win32");
+    expect(roots).toHaveLength(3); // no darwin-only literal appended
+    expect(roots).toEqual(["C:\\ws", join("C:\\Users\\u", ".anycode"), "C:\\Users\\u\\AppData\\Local\\Temp"]);
+    expect(roots.some((root) => isUnderRoot("C:\\tmp\\evil.exe", root, "win32"))).toBe(false);
+  });
+
+  it("darwin: the generic per-root realpath+isUnderRoot mechanism contains a file under a SYMLINKED root (mirrors macOS's real /tmp -> /private/tmp, via a scratch fixture — never the real OS tmpdir)", async () => {
+    const scratch = await tmpDir("tmp-root-fixture-");
+    const realTarget = join(scratch, "private-tmp-real");
+    const linkRoot = join(scratch, "tmp-link");
+    await mkdir(realTarget, { recursive: true });
+    await symlink(realTarget, linkRoot);
+    await seed(join(realTarget, "scratch/plot.png"), "png");
+    const resolvedFile = await realpath(join(linkRoot, "scratch/plot.png"));
+    const resolvedRoot = await realpath(linkRoot);
+    expect(isUnderRoot(resolvedFile, resolvedRoot, "darwin")).toBe(true);
   });
 });
 
@@ -205,6 +256,73 @@ describe("handleArtifactReadImage", () => {
     await seed(join(workspace, "huge.png"), Buffer.alloc(MAX_INLINE_IMAGE_BYTES + 1, 1));
     expect(await handleArtifactReadImage(deps, { tabId: TAB_ID, path: join(workspace, "huge.png") })).toEqual({ ok: false, reason: "too_large" });
   });
+
+  // TASK.77-A DoD: consent widens WHERE a preview may read from, per-path,
+  // per-tab; a default rig (no Allow ever called) reproduces the pre-77-A
+  // behavior exactly (the suite above already proves that with zero changes).
+  describe("TASK.77-A consent", () => {
+    it("without any Allow call, outside-roots is refused exactly as before (default unchanged)", async () => {
+      const { deps, home, consent } = await makeRig();
+      await seed(join(home, "outside.png"), "png");
+      expect(consent.isAllowed(TAB_ID, join(home, "outside.png"))).toBe(false);
+      expect(await handleArtifactReadImage(deps, { tabId: TAB_ID, path: join(home, "outside.png") })).toEqual({
+        ok: false,
+        reason: "outside_allowed_roots",
+      });
+    });
+
+    it("Allow unlocks preview for the granted realPath only — a DIFFERENT outside path stays refused", async () => {
+      const { deps, home, consent } = await makeRig();
+      await seed(join(home, "a.png"), "png");
+      await seed(join(home, "b.png"), "png");
+      const allowResult = await handleArtifactAllow(deps, { tabId: TAB_ID, path: join(home, "a.png") });
+      expect(allowResult).toEqual({ ok: true, realPath: await realpath(join(home, "a.png")) });
+      expect(await handleArtifactReadImage(deps, { tabId: TAB_ID, path: join(home, "a.png") })).toMatchObject({ ok: true });
+      expect(await handleArtifactReadImage(deps, { tabId: TAB_ID, path: join(home, "b.png") })).toEqual({
+        ok: false,
+        reason: "outside_allowed_roots",
+      });
+      expect(consent.isAllowed(TAB_ID, join(home, "b.png"))).toBe(false);
+    });
+
+    it("a grant is per-tab: a second tab never sees the first tab's consent for the SAME path", async () => {
+      const rig = await makeRig();
+      await seed(join(rig.home, "shared.png"), "png");
+      const TAB_2 = "tab-2";
+      const twoTabDeps: ArtifactsIpcDeps = {
+        ...rig.deps,
+        workspaceForTab: (tabId) => (tabId === TAB_ID || tabId === TAB_2 ? rig.workspace : undefined),
+      };
+      await handleArtifactAllow(twoTabDeps, { tabId: TAB_ID, path: join(rig.home, "shared.png") });
+      expect(await handleArtifactReadImage(twoTabDeps, { tabId: TAB_ID, path: join(rig.home, "shared.png") })).toMatchObject({ ok: true });
+      expect(await handleArtifactReadImage(twoTabDeps, { tabId: TAB_2, path: join(rig.home, "shared.png") })).toEqual({
+        ok: false,
+        reason: "outside_allowed_roots",
+      });
+    });
+
+    it("extension gates still apply post-consent: a consented PNG reads, a consented .command still can't inline-preview (not_previewable) or open (not_openable)", async () => {
+      const { deps, home } = await makeRig({ confirm: true });
+      await seed(join(home, "icon.png"), "png");
+      await seed(join(home, "run.command"), "#!/bin/sh\n");
+      await handleArtifactAllow(deps, { tabId: TAB_ID, path: join(home, "icon.png") });
+      await handleArtifactAllow(deps, { tabId: TAB_ID, path: join(home, "run.command") });
+      expect(await handleArtifactReadImage(deps, { tabId: TAB_ID, path: join(home, "icon.png") })).toMatchObject({ ok: true });
+      expect(await handleArtifactReadImage(deps, { tabId: TAB_ID, path: join(home, "run.command") })).toEqual({ ok: false, reason: "not_previewable" });
+      expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(home, "run.command") })).toEqual({ ok: false, reason: "not_openable" });
+    });
+
+    it("Allow on a missing file reports not_found (no consent recorded)", async () => {
+      const { deps, workspace, consent } = await makeRig();
+      expect(await handleArtifactAllow(deps, { tabId: TAB_ID, path: join(workspace, "gone.png") })).toEqual({ ok: false, reason: "not_found" });
+      expect(consent.isAllowed(TAB_ID, join(workspace, "gone.png"))).toBe(false);
+    });
+
+    it("Allow on an unknown tab reports no_workspace", async () => {
+      const { deps, workspace } = await makeRig({ noTab: true });
+      expect(await handleArtifactAllow(deps, { tabId: TAB_ID, path: join(workspace, "x.png") })).toEqual({ ok: false, reason: "no_workspace" });
+    });
+  });
 });
 
 describe("handleArtifactOpen", () => {
@@ -278,6 +396,24 @@ describe("handleArtifactOpen", () => {
     expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(workspace, "icon.png") })).toEqual({ ok: true, resolvedTo: "reveal" });
     expect(openPath).toHaveBeenCalledTimes(1);
     expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  // TASK.77-A DoD: an Allow grant skips the OS confirmation modal for the
+  // SAME consented path ONLY — every other outside-root path (and a fresh
+  // rig with no grant at all) keeps the unchanged modal behavior proven above.
+  it("skips confirmOpen ONLY for a consented path — a different outside path still prompts", async () => {
+    const { deps, home, openPath, confirmOpen } = await makeRig({ confirm: true });
+    await seed(join(home, "consented.png"), "png");
+    await seed(join(home, "not-consented.png"), "png");
+    await handleArtifactAllow(deps, { tabId: TAB_ID, path: join(home, "consented.png") });
+
+    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(home, "consented.png") })).toEqual({ ok: true });
+    expect(confirmOpen).not.toHaveBeenCalled();
+
+    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: join(home, "not-consented.png") })).toEqual({ ok: true });
+    expect(confirmOpen).toHaveBeenCalledTimes(1);
+    expect(confirmOpen).toHaveBeenCalledWith(await realpath(join(home, "not-consented.png")));
+    expect(openPath).toHaveBeenCalledTimes(2);
   });
 });
 
