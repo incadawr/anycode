@@ -103,6 +103,27 @@ interface ChildState {
   errorText?: string;
 }
 
+/**
+ * The prompt actually handed to the foreign CLI: an authoritative
+ * working-directory line ahead of the persona body + task text.
+ *
+ * A one-shot child inherits none of the parent's `<env>` block (an in-process
+ * child gets it through buildChildConfig; this branch never builds one), so any
+ * path the parent wrote into the task text is the child's only cwd fact — and a
+ * wrong one silently relocates the whole run. Observed live: a Codex child
+ * spawned in a worktree ran its shell with `workdir` set to the repo root named
+ * in the task text and reported the target directory as missing. The spawner
+ * knows the real cwd, so it states it and outranks the task text.
+ */
+function childPrompt(spec: EngineChildSpec, cwd: string): string {
+  return (
+    `Working directory: ${cwd}\n` +
+    "Run every command and resolve every relative path there. If the task below names a " +
+    "different absolute path, this line wins.\n\n" +
+    spec.prompt
+  );
+}
+
 interface EngineAdapter {
   label: string;
   binEnvVar: string;
@@ -118,7 +139,7 @@ function adapterFor(engine: EngineChildSpec["engine"]): EngineAdapter {
       return {
         label: "Claude Code",
         binEnvVar: ENV_CLAUDE_BIN,
-        buildArgs: (spec) => [
+        buildArgs: (spec, cwd) => [
           "-p",
           "--output-format",
           "stream-json",
@@ -130,7 +151,7 @@ function adapterFor(engine: EngineChildSpec["engine"]): EngineAdapter {
           "project,local",
           "--strict-mcp-config",
           ...(spec.model !== undefined ? ["--model", spec.model] : []),
-          spec.prompt,
+          childPrompt(spec, cwd),
         ],
         buildEnv: (source) => buildClaudeChildEnv(source, undefined),
         handleLine: handleClaudeLine,
@@ -150,7 +171,7 @@ function adapterFor(engine: EngineChildSpec["engine"]): EngineAdapter {
           "--cd",
           cwd,
           ...(spec.model !== undefined ? ["--model", spec.model] : []),
-          spec.prompt,
+          childPrompt(spec, cwd),
         ],
         buildEnv: (source) => buildCodexChildEnv(source),
         handleLine: handleCodexLine,
