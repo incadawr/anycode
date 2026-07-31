@@ -27,6 +27,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, MessageChannelMain, app, dialog, nativeImage, safeStorage, shell, utilityProcess } from "electron";
+import type { MessageBoxOptions } from "electron";
 // electron-updater is CJS and exposes `autoUpdater` via a dynamic getter that
 // Node's cjs-module-lexer cannot see as a named export; a named ESM import
 // (`import { autoUpdater }`) throws at module-link time and blocks boot. The
@@ -1682,6 +1683,26 @@ void app.whenReady().then(async () => {
     fs: new NodeArtifactsFs(),
     openPath: (path) => shell.openPath(path),
     reveal: (path) => shell.showItemInFolder(path),
+    // Opening OUTSIDE the allowed roots is permitted, but only through this
+    // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
+    // a dismissed sheet reads as "no". The full path is spelled out — the
+    // location is the whole reason we are asking.
+    confirmOpen: async (path) => {
+      const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const options: MessageBoxOptions = {
+        type: "warning",
+        buttons: ["Cancel", "Open"],
+        defaultId: 0,
+        cancelId: 0,
+        title: "Open file outside the workspace?",
+        message: "This file is outside the workspace, ~/.anycode and the temp dir.",
+        detail: `${path}\n\nIt will be opened with the system default application.`,
+      };
+      const { response } = parent === undefined
+        ? await dialog.showMessageBox(options)
+        : await dialog.showMessageBox(parent, options);
+      return response === 1;
+    },
   });
 
   // Profile-stats control plane (design/slice-P7.22-cut.md §2-D5 W2): mirrors
