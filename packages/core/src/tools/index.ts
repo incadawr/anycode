@@ -30,6 +30,13 @@ export {
   exitWorktreeTool,
 } from "./worktrees.js";
 export type { EnterWorktreeInput, ExitWorktreeInput } from "./worktrees.js";
+export {
+  browserOpenInputSchema,
+  browserOpenTool,
+  browserReadInputSchema,
+  browserReadTool,
+} from "./browser-preview.js";
+export type { BrowserOpenInput, BrowserReadInput } from "./browser-preview.js";
 export { InMemoryTodoStore } from "./todo-store.js";
 export type { TodoItem, TodoStore } from "./todo-store.js";
 export {

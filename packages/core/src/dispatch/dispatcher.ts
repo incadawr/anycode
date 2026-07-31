@@ -41,6 +41,7 @@ import type { BackgroundTaskPort } from "../ports/tasks.js";
 import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import type { WorktreeControlPort } from "../ports/worktrees.js";
+import type { PreviewPort } from "../ports/preview.js";
 import type { TurnCheckpointControl } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { DEFAULT_TOOL_RESULT_BUDGET, DISPATCH_TIMEOUT_GRACE_MS } from "../types/config.js";
@@ -109,6 +110,14 @@ export interface DispatchContext {
   planMode?: PlanModeControl;
   /** Host-owned terminal workspace relocation; absent in child/headless loops. */
   worktrees?: WorktreeControlPort;
+  /**
+   * Host-owned browser-preview control plane, threaded into every
+   * ToolContext. Optional: absent => BrowserOpen/BrowserRead/BrowserScreenshot
+   * fail closed as "unavailable" (a child loop's DispatchContext leaves it
+   * unset, so a child never reaches a preview window). The dispatch pipeline
+   * is unchanged — the port only rides along on the context.
+   */
+  preview?: PreviewPort;
   /**
    * Lazy per-turn workspace checkpoint control (design slice-4.7-cut.md §2.4).
    * Optional: absent => the auto-checkpoint arc sleeps (a child loop's
@@ -284,6 +293,7 @@ export async function executeToolCall(
         media: ctx.media,
         planMode: ctx.planMode,
         worktrees: ctx.worktrees,
+        preview: ctx.preview,
         emit,
       };
 

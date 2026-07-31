@@ -47,6 +47,7 @@ import type { BackgroundTaskPort } from "../ports/tasks.js";
 import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import type { WorktreeControlPort } from "../ports/worktrees.js";
+import type { PreviewPort } from "../ports/preview.js";
 import type { CheckpointCapturer, CheckpointCaptureResult } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { ConversationHistory } from "../context/history.js";
@@ -191,6 +192,13 @@ export interface AgentLoopConfig {
    * config builders, so only the owning session can relocate itself.
    */
   worktrees?: WorktreeControlPort;
+  /**
+   * Host-owned browser-preview control plane (night-track wave-1 cut §2.1).
+   * Deliberately omitted by child-loop config builders (buildChildConfig is
+   * an explicit object): a child's Browser* calls always fail closed, so
+   * window-focus/consent races between parallel children never arise.
+   */
+  preview?: PreviewPort;
   /**
    * Target mode an approved ExitPlanMode advances to (design slice-4.3-cut.md
    * §2.3). Set => the loop builds a PlanModeControl each turn and threads it
@@ -445,6 +453,7 @@ export class AgentLoop {
       lsp: this.config.lsp,
       media: this.config.media,
       worktrees: this.config.worktrees,
+      preview: this.config.preview,
     };
 
     // Plan-mode exit arc (design slice-4.3-cut.md §2.3): built ONLY when the
