@@ -1395,3 +1395,177 @@ describe("host Claude resume wiring (SLICE-CC D-min, cut §1.5)", () => {
     });
   });
 });
+
+// ── Slice 96-D: preview_console AgentEvent bridge (night-track wave-1 cut
+// §2.3/§2.4). index.ts is not importable (module-scope process.parentPort
+// access, same reason as every other describe block in this file) — these
+// mirror index.ts's `translatePreviewEvent` and its parentPort onEvent wiring
+// VERBATIM in shape, the same "reproduce the shape over doubles, don't
+// import the module" idiom used throughout this file. ──
+
+describe("host preview_console translation (slice 96-D, cut §2.3/§2.4)", () => {
+  type PreviewConsoleLevel = "log" | "warn" | "error" | "pageerror";
+
+  interface PreviewConsoleEntry {
+    level: PreviewConsoleLevel;
+    message: string;
+    at: string;
+  }
+
+  interface PreviewEventMessage {
+    type: "anycode:preview-event";
+    previewId: string;
+    /** Absent on a pure summary message (every entry this window was suppressed). */
+    entry?: PreviewConsoleEntry;
+    suppressed?: number;
+  }
+
+  interface PreviewConsoleAgentEvent {
+    type: "preview_console";
+    previewId: string;
+    level: PreviewConsoleLevel;
+    message: string;
+    suppressed?: number;
+  }
+
+  /** Mirrors index.ts's translatePreviewEvent verbatim. */
+  function translatePreviewEvent(message: PreviewEventMessage): PreviewConsoleAgentEvent {
+    if (message.entry) {
+      return {
+        type: "preview_console",
+        previewId: message.previewId,
+        level: message.entry.level,
+        message: message.entry.message,
+      };
+    }
+    const suppressed = message.suppressed ?? 0;
+    return {
+      type: "preview_console",
+      previewId: message.previewId,
+      level: "log",
+      message: `${suppressed} console message${suppressed === 1 ? "" : "s"} suppressed`,
+      suppressed,
+    };
+  }
+
+  it("a normal forwarded entry translates 1:1, with no suppressed field", () => {
+    const message: PreviewEventMessage = {
+      type: "anycode:preview-event",
+      previewId: "preview-1",
+      entry: { level: "warn", message: "deprecated API used", at: "2026-08-01T00:00:00.000Z" },
+    };
+
+    const event = translatePreviewEvent(message);
+
+    expect(event).toEqual({
+      type: "preview_console",
+      previewId: "preview-1",
+      level: "warn",
+      message: "deprecated API used",
+    });
+    expect("suppressed" in event).toBe(false);
+  });
+
+  it("an error/pageerror-level entry passes its level through unchanged", () => {
+    const message: PreviewEventMessage = {
+      type: "anycode:preview-event",
+      previewId: "preview-2",
+      entry: {
+        level: "pageerror",
+        message: "Uncaught TypeError: x is not a function",
+        at: "2026-08-01T00:00:01.000Z",
+      },
+    };
+
+    const event = translatePreviewEvent(message);
+
+    expect(event.level).toBe("pageerror");
+    expect(event.message).toBe("Uncaught TypeError: x is not a function");
+  });
+
+  it("an entry-absent summary reports the suppressed count honestly at 'log' level (no single real level to report for a rollup)", () => {
+    const message: PreviewEventMessage = {
+      type: "anycode:preview-event",
+      previewId: "preview-3",
+      suppressed: 7,
+    };
+
+    const event = translatePreviewEvent(message);
+
+    expect(event).toEqual({
+      type: "preview_console",
+      previewId: "preview-3",
+      level: "log",
+      message: "7 console messages suppressed",
+      suppressed: 7,
+    });
+  });
+
+  it("singular phrasing for exactly one suppressed message", () => {
+    const event = translatePreviewEvent({
+      type: "anycode:preview-event",
+      previewId: "preview-4",
+      suppressed: 1,
+    });
+
+    expect(event.message).toBe("1 console message suppressed");
+  });
+
+  it("an entry-absent summary with no suppressed count at all defaults to 0 rather than throwing (defensive — should not happen on the real wire)", () => {
+    const event = translatePreviewEvent({ type: "anycode:preview-event", previewId: "preview-5" });
+
+    expect(event.suppressed).toBe(0);
+    expect(event.message).toBe("0 console messages suppressed");
+  });
+});
+
+describe("host preview_console outbound wiring shape (slice 96-D, cut §2.4)", () => {
+  /**
+   * preview_console events are unsolicited and NOT turn-scoped (a preview
+   * window can emit console output long after its opening turn ended, or
+   * with no turn ever having run) — index.ts's parentPort onEvent handler
+   * emits straight onto the module-level `outbound` sink with a fixed
+   * sentinel turnId (PREVIEW_CONSOLE_TURN_ID), never a "current turn" value.
+   * This pins that wiring SHAPE: onEvent always produces one agent_event
+   * envelope carrying the sentinel + the translated event, mirroring the
+   * onResponse fan-out immediately above it in the real routePreviewMessage
+   * call site.
+   */
+  function onPreviewEventShape(
+    emit: (message: { type: "agent_event"; turnId: string; event: unknown }) => void,
+    translate: (message: unknown) => unknown,
+    turnIdSentinel: string,
+    message: unknown,
+  ): void {
+    emit({ type: "agent_event", turnId: turnIdSentinel, event: translate(message) });
+  }
+
+  it("always emits the sentinel turnId, never a null/current-turn value", () => {
+    const emitted: { type: string; turnId: string; event: unknown }[] = [];
+
+    onPreviewEventShape(
+      (message) => emitted.push(message),
+      (message) => ({ translated: message }),
+      "preview-console",
+      { previewId: "p1" },
+    );
+
+    expect(emitted).toEqual([
+      { type: "agent_event", turnId: "preview-console", event: { translated: { previewId: "p1" } } },
+    ]);
+  });
+
+  it("passes the translated event through untouched — the wiring never reshapes it", () => {
+    const emitted: { type: string; turnId: string; event: unknown }[] = [];
+    const translated = { type: "preview_console", previewId: "p2", level: "error", message: "boom" };
+
+    onPreviewEventShape(
+      (message) => emitted.push(message),
+      () => translated,
+      "preview-console",
+      { previewId: "p2", entry: { level: "error", message: "boom", at: "2026-08-01T00:00:02.000Z" } },
+    );
+
+    expect(emitted[0]?.event).toBe(translated);
+  });
+});
