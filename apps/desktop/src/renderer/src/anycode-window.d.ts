@@ -46,6 +46,17 @@ type ArtifactActionResult =
 type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
 
 import type { PreviewOpenSuccess, PreviewResult } from "../../shared/preview";
+// CUT.md §2.1/§3 96-P2: mirrors the SAME preview-panel wire types declared in
+// shared/preview-panel.ts (a frozen shared/** contract, imported directly —
+// unlike the Codex/Claude/etc. shapes above, which are DUPLICATED because
+// their source of truth lives in a main/**-only file this bundle can't import).
+import type {
+  PreviewChangedPayload,
+  PreviewContainerKind,
+  PreviewPanelBounds,
+  PreviewPanelStatePayload,
+  PreviewSetContainerResult,
+} from "../../shared/preview-panel";
 import type {
   AvailableEngines,
   CloseTabResult,
@@ -481,6 +492,21 @@ declare global {
         // Night-track wave-1: user click on a local .html/.htm/.md artifact
         // link opens/reopens it in the PreviewHost window.
         preview(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>>;
+      };
+      // CUT.md §2.1/§3 96-P2: the preview-panel control plane — NOT under
+      // `artifacts.preview` above (different plane: panel-gating/bounds/
+      // select/close/list/transfer, not the click-to-open window preview).
+      // `setBounds` is a deliberate one-way send (D9), not invoke — no reply.
+      // `setContainer` is exposed here but its main handler lands in 96-P3
+      // (CUT §3 96-P2 rule: no P2 renderer call site invokes it yet).
+      previewPanel: {
+        setState(payload: PreviewPanelStatePayload): Promise<void>;
+        setBounds(bounds: PreviewPanelBounds): void;
+        select(tabId: string, previewId: string): Promise<{ ok: boolean; error?: string }>;
+        close(tabId: string, previewId: string): Promise<{ ok: boolean; error?: string }>;
+        list(tabId: string): Promise<PreviewChangedPayload>;
+        setContainer(tabId: string, previewId: string, container: PreviewContainerKind): Promise<PreviewSetContainerResult>;
+        onChanged(callback: (payload: PreviewChangedPayload) => void): () => void;
       };
       window: {
         minimize(): Promise<void>;

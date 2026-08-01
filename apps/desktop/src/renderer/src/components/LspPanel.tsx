@@ -2,6 +2,7 @@ import { useContext, useEffect } from "react";
 import type { LspServerState, LspServerStatus } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { ServerStack, X } from "./icons.js";
 
 const STATE_LABELS: Record<LspServerState, string> = {
@@ -72,6 +73,9 @@ export function LspPanel() {
   const servers = useTabStore((state) => state.lspServers);
   const send = useTabSend();
   const open = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.lspPanelOpen ?? false);
+  // D8 overlay wiring: the preview WebContentsView must hide while this
+  // right-side drawer is up.
+  useOverlayFlag(open);
 
   useEffect(() => {
     if (open) {

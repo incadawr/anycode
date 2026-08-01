@@ -12,6 +12,7 @@ import type { SettingsSnapshot } from "../../shared/settings.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import {
   computeGitPanelOpen,
+  computeSessionContentColumns,
   dispatchTryAgain,
   selectMainPaneView,
   shouldShowWelcome,
@@ -137,6 +138,24 @@ describe("computeGitPanelOpen (design TASK.40 §2(f)) — shell-owned, not engin
 
   it("defaults to open when requested and shell is undefined — byte-identical to core's pre-TASK.40 behavior (no engine gating at all)", () => {
     expect(computeGitPanelOpen(true, undefined)).toBe(true);
+  });
+});
+
+describe("computeSessionContentColumns (design D10) — Preview is always the rightmost column", () => {
+  it("neither panel open: a single flexible column, no handles", () => {
+    expect(computeSessionContentColumns(false, 560, false, 640)).toBe("minmax(0, 1fr)");
+  });
+
+  it("only the Review (git) panel open", () => {
+    expect(computeSessionContentColumns(true, 560, false, 640)).toBe("minmax(0, 1fr) 8px 560px");
+  });
+
+  it("only the Preview panel open", () => {
+    expect(computeSessionContentColumns(false, 560, true, 640)).toBe("minmax(0, 1fr) 8px 640px");
+  });
+
+  it("both open: Review's column precedes Preview's — Preview stays rightmost", () => {
+    expect(computeSessionContentColumns(true, 560, true, 640)).toBe("minmax(0, 1fr) 8px 560px 8px 640px");
   });
 });
 
