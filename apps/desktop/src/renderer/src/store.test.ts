@@ -1437,7 +1437,15 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
     });
     block = findByToolCallId(store, "call-1");
     expect(block).toMatchObject({
-      subagent: { agentType: "explore", description: "survey the repo", turns: 0, toolCalls: 0, lastTool: null, final: null },
+      subagent: {
+        agentType: "explore",
+        description: "survey the repo",
+        engine: null,
+        turns: 0,
+        toolCalls: 0,
+        lastTool: null,
+        final: null,
+      },
     });
 
     store.getState().applyHostMessage({
@@ -1471,6 +1479,43 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
         final: { status: "completed", durationMs: 4200 },
       },
     });
+  });
+
+  it("TASK.97 R5: subagent_start with an engine field seeds SubagentSubStatus.engine; absent field defaults to null", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    // A second Agent tool_call in the SAME turn/session (no intervening
+    // host_ready, which would performReset() and wipe call-1's block).
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: "call-2", name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_start",
+        toolCallId: "call-1",
+        agentType: "codex-builder",
+        description: "run on codex",
+        engine: "codex",
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-2", agentType: "explore", description: "in-process, no engine" },
+    });
+
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { engine: "codex" } });
+    expect(findByToolCallId(store, "call-2")).toMatchObject({ subagent: { engine: null } });
   });
 
   it("ignores subagent_start/progress/end events carrying a foreign toolCallId (no matching tool_call block in the transcript)", () => {

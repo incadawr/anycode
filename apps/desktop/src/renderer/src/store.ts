@@ -147,19 +147,30 @@ export interface ToolCallSnapshot {
  * Sub-status of an Agent tool call's child subagent loop (design §3.3/§4.2,
  * task 3.1.4), keyed onto the Agent tool_call block by `toolCallId`.
  * `subagent_start` seeds it (turns/toolCalls at 0, `activity` empty,
- * `activityDropped` 0, `final` null — the card shows a spinner while `final`
- * is null); `subagent_progress` refreshes the counters; `subagent_activity`
- * appends a live per-child-tool row (slice P7.18/F16b, ring-capped — see
- * `SUBAGENT_ACTIVITY_RING`); `subagent_end` fills `final`, flipping the card
- * to the terminal status. The full child result/text is NOT here — it
- * arrives capped in the ordinary `tool_result` that settles this same
- * tool_call (design §3.3: no nested stream forwarding).
+ * `activityDropped` 0, `final` null, `engine` from the event or null — the
+ * card shows a spinner while `final` is null); `subagent_progress` refreshes
+ * the counters; `subagent_activity` appends a live per-child-tool row (slice
+ * P7.18/F16b, ring-capped — see `SUBAGENT_ACTIVITY_RING`); `subagent_end`
+ * fills `final`, flipping the card to the terminal status. The full child
+ * result/text is NOT here — it arrives capped in the ordinary `tool_result`
+ * that settles this same tool_call (design §3.3: no nested stream
+ * forwarding).
  */
 export interface SubagentSubStatus {
   agentType: string;
   description: string;
   /** Resolved child model id; null when the child inherited the parent's model. */
   model: string | null;
+  /**
+   * Set only for an engine persona (md-profile `engine:`) — a one-shot
+   * foreign CLI run (Codex or Claude Code) in place of an in-process child;
+   * null for an in-process child AND for a legacy transcript replayed from
+   * before `subagent_start` carried this field (TASK.97 R5, wave2-cut §1.4/
+   * §5.4 — never inferred from `agentType`). Read by
+   * `formatSubagentCounters` (ToolCallCard.tsx) to label/adjust the counter
+   * line per engine.
+   */
+  engine: "codex" | "claude" | null;
   turns: number;
   toolCalls: number;
   lastTool: string | null;
@@ -1279,6 +1290,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       agentType: string,
       description: string,
       model: string | null,
+      engine: "codex" | "claude" | null,
     ): void {
       flushDeltas();
       set((state) => ({
@@ -1290,6 +1302,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   agentType,
                   description,
                   model,
+                  engine,
                   turns: 0,
                   toolCalls: 0,
                   lastTool: null,
@@ -1847,6 +1860,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             event.agentType,
             event.description,
             event.model ?? null,
+            event.engine ?? null,
           );
           return;
         case "subagent_progress":
