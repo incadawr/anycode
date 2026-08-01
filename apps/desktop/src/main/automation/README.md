@@ -1347,9 +1347,15 @@ to open a remote origin). Every route degrades to an honest
 the console/list routes' own empty-shape equivalent) when no `PreviewHost`
 was wired into `AutomationServerDeps` — never a throw, never a 500.
 
+panel-track CUT.md §3 96-P4 gate fix: `GET /tabs/:tabId/previews`' items now
+carry `container` (`"panel"` \| `"window"`, `PreviewRecord.containerKind`
+verbatim) — the 96-E shape predates the panel container work and never
+exposed it, so a 96-P4 live smoke had no way to assert a preview opened into
+the panel. Purely additive; every other field is unchanged.
+
 | Method / path | Body | Returns |
 |---|---|---|
-| `GET /tabs/:tabId/previews` | — | `{previews:[{previewId, url, sourcePath?, status, title?, consoleCount, dropped}]}` |
+| `GET /tabs/:tabId/previews` | — | `{previews:[{previewId, url, sourcePath?, status, title?, consoleCount, dropped, container:"panel"\|"window"}]}` |
 | `GET /tabs/:tabId/previews/:previewId/console?tail=N` | — | `{entries:[{level, message, at}], dropped}` \| `{error}` |
 | `GET /tabs/:tabId/previews/:previewId/screenshot` | — | `{png:"<base64>"}` \| `PreviewResult` failure shape (`{ok:false, error, errorKind}`) |
 | `POST /tabs/:tabId/previews` | `{path?, url?}` | `PreviewResult<PreviewOpenSuccess>` — `{ok:true, value:{previewId, url, title?, kind, renderedFrom?}}` \| `{ok:false, error, errorKind}` |

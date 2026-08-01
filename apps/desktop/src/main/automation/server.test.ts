@@ -3137,14 +3137,23 @@ describe("preview probes/driver routes (night-track wave-1 cut §2.8, 96-E)", ()
 
   it("GET /tabs/:tabId/previews -> previewHost.listForTab, never the facade", async () => {
     const listForTab = vi.fn(() => [
-      { previewId: "pv-1", url: "file:///tmp/a.html", status: "ready" as const, consoleCount: 3, dropped: 0 },
+      {
+        previewId: "pv-1",
+        url: "file:///tmp/a.html",
+        status: "ready" as const,
+        consoleCount: 3,
+        dropped: 0,
+        container: "window" as const,
+      },
     ]);
     const { window, calls } = fakeWindowCapture();
     const h = await boot({ getWindow: () => window, previewHost: fakePreviewHost({ listForTab }) });
     const res = await fetch(url(h, "/tabs/tab-a/previews"), { headers: auth() });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      previews: [{ previewId: "pv-1", url: "file:///tmp/a.html", status: "ready", consoleCount: 3, dropped: 0 }],
+      previews: [
+        { previewId: "pv-1", url: "file:///tmp/a.html", status: "ready", consoleCount: 3, dropped: 0, container: "window" },
+      ],
     });
     expect(listForTab).toHaveBeenCalledWith("tab-a");
     expect(calls).toHaveLength(0); // never touches the renderer facade

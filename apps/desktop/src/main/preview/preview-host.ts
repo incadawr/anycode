@@ -250,6 +250,8 @@ export interface PreviewSummary {
   title?: string;
   consoleCount: number;
   dropped: number;
+  /** panel-track CUT.md §3 96-P4 gate fix: which container this preview lives in (panel vs window) — was missing from the 96-E automation probe shape, so a 96-P4 smoke could never assert on it. */
+  container: PreviewContainerKind;
 }
 
 export interface PreviewHostHandle {
@@ -943,6 +945,7 @@ class PreviewHost implements PreviewHostHandle {
         ...(record.title !== undefined ? { title: record.title } : {}),
         consoleCount: record.consoleRing.length,
         dropped: record.consoleDropped,
+        container: record.containerKind,
       });
     }
     return out;

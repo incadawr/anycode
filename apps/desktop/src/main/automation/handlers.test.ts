@@ -785,14 +785,23 @@ describe("preview probes/driver (night-track wave-1 cut §2.8, 96-E)", () => {
     it("forwards to previewHost.listForTab and wraps the result", () => {
       const previewHost = fakePreviewHost({
         listForTab: vi.fn(() => [
-          { previewId: "pv-1", url: "file:///tmp/a.html", status: "ready" as const, consoleCount: 0, dropped: 0 },
+          {
+            previewId: "pv-1",
+            url: "file:///tmp/a.html",
+            status: "ready" as const,
+            consoleCount: 0,
+            dropped: 0,
+            container: "window" as const,
+          },
         ]),
       });
       const deps = fakeDeps({ previewHost });
       const result = previewsForTab(deps, "tab-a");
       expect(previewHost.listForTab).toHaveBeenCalledWith("tab-a");
       expect(result).toEqual({
-        previews: [{ previewId: "pv-1", url: "file:///tmp/a.html", status: "ready", consoleCount: 0, dropped: 0 }],
+        previews: [
+          { previewId: "pv-1", url: "file:///tmp/a.html", status: "ready", consoleCount: 0, dropped: 0, container: "window" },
+        ],
       });
     });
 
