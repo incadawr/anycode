@@ -12,6 +12,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserWindowConstructorOptions } from "electron";
+import { RING_MAX_MSG_CHARS } from "./preview-host.js";
 
 interface FakeDebugger {
   attachCalls: string[];
@@ -46,10 +47,16 @@ function fakeDebugger(): FakeDebugger {
   };
 }
 
+type OnBeforeRequestListener = (
+  details: { url: string; resourceType: string },
+  callback: (response: { cancel?: boolean }) => void,
+) => void;
+
 class FakeWebContents extends EventEmitter {
   loadURLCalls: string[] = [];
   executeJavaScriptCalls: string[] = [];
   backgroundThrottlingCalls: boolean[] = [];
+  webRTCIPHandlingPolicyCalls: string[] = [];
   windowOpenHandler?: (details: { url: string }) => { action: string };
   permissionRequestHandler?: (wc: unknown, permission: string, callback: (granted: boolean) => void) => void;
   capturePageResult: { toPNG(): Buffer; getSize(): { width: number; height: number }; isEmpty(): boolean } = {
@@ -57,9 +64,17 @@ class FakeWebContents extends EventEmitter {
     getSize: () => ({ width: 42, height: 24 }),
     isEmpty: () => false,
   };
+  onBeforeRequestCalls: unknown[][] = [];
+  private onBeforeRequestListener?: OnBeforeRequestListener;
   session = {
     setPermissionRequestHandler: (handler: typeof this.permissionRequestHandler) => {
       this.permissionRequestHandler = handler;
+    },
+    webRequest: {
+      onBeforeRequest: (...args: unknown[]) => {
+        this.onBeforeRequestCalls.push(args);
+        this.onBeforeRequestListener = args[args.length - 1] as OnBeforeRequestListener;
+      },
     },
   };
   debugger = fakeDebugger();
@@ -84,6 +99,13 @@ class FakeWebContents extends EventEmitter {
   }
   setWindowOpenHandler(handler: (details: { url: string }) => { action: string }): void {
     this.windowOpenHandler = handler;
+  }
+  setWebRTCIPHandlingPolicy(policy: string): void {
+    this.webRTCIPHandlingPolicyCalls.push(policy);
+  }
+  /** Drives the LAST-registered `onBeforeRequest` listener (real Electron only ever expects one). */
+  fireBeforeRequest(details: { url: string; resourceType: string }, callback: (response: { cancel?: boolean }) => void): void {
+    this.onBeforeRequestListener?.(details, callback);
   }
 }
 
@@ -305,5 +327,105 @@ describe("createElectronPreviewWindow — passthrough methods", () => {
     expect(fake.destroyed).toBe(true);
     expect(win.isDestroyed()).toBe(true);
     expect(closedSpy).toHaveBeenCalled();
+  });
+});
+
+
+describe("createElectronPreviewWindow — request gate (cut §1.1/F2)", () => {
+  it("registers onBeforeRequest on the window's session webRequest with NO filter argument", () => {
+    const win = createElectronPreviewWindow({ previewId: "gate-a" });
+    const fake = latestWindow();
+    win.webContents.setRequestGate(async () => true);
+    expect(fake.webContents.onBeforeRequestCalls).toHaveLength(1);
+    // A single argument (the listener) — no WebRequestFilter object precedes it.
+    expect(fake.webContents.onBeforeRequestCalls[0]).toHaveLength(1);
+  });
+
+  it("deny path calls callback({cancel:true})", async () => {
+    const win = createElectronPreviewWindow({ previewId: "gate-b" });
+    const fake = latestWindow();
+    win.webContents.setRequestGate(async () => false);
+    const callback = vi.fn();
+    fake.webContents.fireBeforeRequest({ url: "https://evil.example/", resourceType: "xhr" }, callback);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callback).toHaveBeenCalledWith({ cancel: true });
+  });
+
+  it("allow path calls callback({cancel:false})", async () => {
+    const win = createElectronPreviewWindow({ previewId: "gate-c" });
+    const fake = latestWindow();
+    win.webContents.setRequestGate(async () => true);
+    const callback = vi.fn();
+    fake.webContents.fireBeforeRequest({ url: "https://a.tld/", resourceType: "mainFrame" }, callback);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callback).toHaveBeenCalledWith({ cancel: false });
+  });
+
+  it("gate rejection/throw cancels the request — the Electron callback is always answered", async () => {
+    const win = createElectronPreviewWindow({ previewId: "gate-d" });
+    const fake = latestWindow();
+    win.webContents.setRequestGate(() => Promise.reject(new Error("gate exploded")));
+    const callback = vi.fn();
+    fake.webContents.fireBeforeRequest({ url: "https://a.tld/", resourceType: "xhr" }, callback);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callback).toHaveBeenCalledWith({ cancel: true });
+  });
+});
+
+describe("createElectronPreviewWindow — redirect gate + WebRTC hardening (cut §1.2/F1, §1.1/F2)", () => {
+  it("subscribes to will-redirect and plumbs preventDefault through", () => {
+    const win = createElectronPreviewWindow({ previewId: "redir-a" });
+    const fake = latestWindow();
+    const redirectSpy = vi.fn();
+    win.webContents.onWillRedirect(redirectSpy);
+
+    let prevented = false;
+    fake.webContents.emit("will-redirect", {
+      url: "https://evil.example/",
+      preventDefault: () => (prevented = true),
+    });
+
+    expect(redirectSpy).toHaveBeenCalledWith("https://evil.example/", expect.any(Function));
+    const [, preventDefaultArg] = redirectSpy.mock.calls[0]!;
+    preventDefaultArg();
+    expect(prevented).toBe(true);
+  });
+
+  it("calls setWebRTCIPHandlingPolicy('disable_non_proxied_udp') at construction", () => {
+    createElectronPreviewWindow({ previewId: "webrtc-a" });
+    const fake = latestWindow();
+    expect(fake.webContents.webRTCIPHandlingPolicyCalls).toEqual(["disable_non_proxied_udp"]);
+  });
+});
+
+describe("createElectronPreviewWindow — console/CDP string slicing (cut §1.3/F3)", () => {
+  it("slices a console-message string to RING_MAX_MSG_CHARS before the listener", () => {
+    const win = createElectronPreviewWindow({ previewId: "slice-a" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+
+    fake.webContents.emit("console-message", { level: "info", message: "x".repeat(2000) });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toHaveLength(RING_MAX_MSG_CHARS);
+  });
+
+  it("slices a CDP exceptionDetails description to RING_MAX_MSG_CHARS before the listener", () => {
+    const win = createElectronPreviewWindow({ previewId: "slice-b" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((level, message) => {
+      if (level === "pageerror") messages.push(message);
+    });
+
+    for (const listener of fake.webContents.debugger.messageListeners) {
+      listener({}, "Runtime.exceptionThrown", {
+        exceptionDetails: { exception: { description: "E".repeat(2000) } },
+      });
+    }
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toHaveLength(RING_MAX_MSG_CHARS);
   });
 });
