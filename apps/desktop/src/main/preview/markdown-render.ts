@@ -110,8 +110,13 @@ const ALLOWED_TAGS = Array.from(
   ]),
 );
 
-const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+export const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: ALLOWED_TAGS,
+  // Protocol-relative `//host/path` values are otherwise permitted by
+  // sanitize-html's default and resolve against the file:// shell document as
+  // `file://host/path` (a UNC/NTLM egress on win32) — closed for both `img`
+  // and `a` scheme checks below (cut §1.7, F6).
+  allowProtocolRelative: false,
   allowedAttributes: {
     "*": ["title", "class"],
     a: ["href", "title", "class"],
