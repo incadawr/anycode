@@ -45,6 +45,7 @@ type ArtifactActionResult =
 // preload's own mirror of it) — same "duplicated on purpose" convention.
 type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
 
+import type { PreviewOpenSuccess, PreviewResult } from "../../shared/preview";
 import type {
   AvailableEngines,
   CloseTabResult,
@@ -477,6 +478,9 @@ declare global {
         // TASK.77-A: explicit per-path consent for a path outside the
         // allowed roots (main/artifacts-ipc.ts's ArtifactConsentStore).
         allow(tabId: string, path: string): Promise<ArtifactAllowResult>;
+        // Night-track wave-1: user click on a local .html/.htm/.md artifact
+        // link opens/reopens it in the PreviewHost window.
+        preview(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>>;
       };
       window: {
         minimize(): Promise<void>;

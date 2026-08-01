@@ -1202,6 +1202,17 @@ void app.whenReady().then(async () => {
     openPath: (path) => shell.openPath(path),
     reveal: (path) => shell.showItemInFolder(path),
     consent: artifactConsentStore,
+    // Night-track wave-1 (owner ask): routes a click-to-preview request into
+    // the SAME PreviewHost instance turn-end auto-open uses. `previewHost` is
+    // assigned just below (`registerPreviewHost`, still in this same boot()
+    // call) — a forward reference is safe here because this closure is never
+    // actually invoked until a renderer request arrives, long after boot()
+    // finishes (same precedent as `onProviderHealthEvent`'s `settingsIpcDeps`
+    // closure further down this function).
+    openPreview: (tabId, realPath) =>
+      previewHost !== null
+        ? previewHost.openForTab(tabId, { path: realPath })
+        : Promise.resolve({ ok: false, error: "preview host not ready", errorKind: "unavailable" }),
     // Opening OUTSIDE the allowed roots is permitted, but only through this
     // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
     // a dismissed sheet reads as "no". The full path is spelled out — the
