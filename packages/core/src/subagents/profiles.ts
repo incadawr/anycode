@@ -118,7 +118,8 @@ export type AgentProfileParseError =
   | { kind: "reserved_name"; name: string }
   | { kind: "missing_description"; name: string }
   | { kind: "bad_model"; name: string; model: string }
-  | { kind: "bad_engine"; name: string; engine: string };
+  | { kind: "bad_engine"; name: string; engine: string }
+  | { kind: "engine_tools_conflict"; name: string; engine: AgentProfileEngine };
 
 export type ParseAgentProfileResult =
   | { ok: ParsedAgentProfile }
@@ -203,6 +204,20 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
       return { error: { kind: "bad_engine", name, engine: rawEngine } };
     }
     engine = normalized;
+  }
+
+  // engine + tools: TASK.97 R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's
+  // `--allowedTools` is a permission allowlist, not a registry restriction (the
+  // complement-ban `--disallowedTools` is an open set across CLI versions), and
+  // codex has no per-tool surface at all, so honoring `tools:` on an engine
+  // profile would be asymmetric half-enforcement across engines: a lie with
+  // extra steps. Refuse instead. An ABSENT `tools:` line on an engine profile
+  // stays valid (the general-purpose baseline computed above is simply unused
+  // by the engine path); only an EXPLICIT `tools:` line combined with `engine:`
+  // is fatal. Claim semantics identical to bad_model/bad_engine (name claims;
+  // lower-precedence same-named file stays shadowed).
+  if (engine !== undefined && toolsExplicit) {
+    return { error: { kind: "engine_tools_conflict", name, engine } };
   }
 
   // File body = child systemPrompt (user content, capped UTF-8-safe); an empty
@@ -337,6 +352,18 @@ export async function discoverAgentProfiles(
             claimed.add(err.name);
             problems.push(
               `Agent profile ${path}: engine "${err.engine}" must be "codex" or "claude" — ignored`,
+            );
+            break;
+          case "engine_tools_conflict":
+            // Same claim semantics as bad_model/bad_engine: the name IS claimed
+            // (validation happens after the name resolves), so a lower-precedence
+            // same-named file stays shadowed rather than silently taking over.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "tools" cannot be combined with "engine: ${err.engine}" — an engine child's toolset belongs to that CLI; remove one of the two — ignored`,
             );
             break;
         }
