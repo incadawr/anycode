@@ -40,6 +40,7 @@ import type { CatalogSummary, ConnectionUpdateRequest, CustomProviderRecord } fr
 import { activeProviderView, connectionById } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useSettingsStore } from "../settings-store.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import type { DesktopState, TurnState } from "../store.js";
 // Reuse, not re-derive (design §2.1): the exact F15 guard predicate that
 // decides enqueue-vs-direct-send in Composer's own handleSend also decides
@@ -327,6 +328,9 @@ export function ModelPill() {
   );
 
   const [open, setOpen] = useState(false);
+  // D8 overlay wiring: the preview WebContentsView must hide while this
+  // composer dropdown is up.
+  useOverlayFlag(open);
   const [page, setPage] = useState<PillPage>("root");
   const [focusIndex, setFocusIndex] = useState(0);
   // Fixed-position anchor for the popover (viewport `left`/`bottom` px),

@@ -60,6 +60,11 @@ import { WelcomeScreen } from "./components/WelcomeScreen.js";
 import { StartScreen } from "./components/StartScreen.js";
 import { SettingsDialog } from "./components/SettingsScreen.js";
 import { TerminalPanel } from "./components/TerminalPanel.js";
+import { PreviewPanel } from "./components/PreviewPanel.js";
+import { useOverlayFlag } from "./preview/overlay-flag.js";
+import { usePanelMountState } from "./preview/panel-bridge.js";
+import { computePreviewPanelOpen, usePreviewStore } from "./preview/preview-store.js";
+import type { PreviewPanelInfo } from "../../shared/preview-panel.js";
 import "./settings.css";
 
 /** localStorage key for the renderer-only sidebar collapse flag (design §2.1). */
@@ -75,6 +80,26 @@ function readReviewWidth(): number {
     ? stored
     : REVIEW_WIDTH_DEFAULT;
 }
+
+// CUT.md §3 96-P2 item 3: the Preview panel's own width — same
+// storage-key/clamp/default shape as REVIEW_WIDTH_* above (D10), a fresh
+// localStorage key so the two panels' widths persist independently.
+const PREVIEW_WIDTH_STORAGE_KEY = "anycode.preview.width";
+const PREVIEW_WIDTH_DEFAULT = 640;
+const PREVIEW_WIDTH_MIN = 360;
+const PREVIEW_WIDTH_MAX = 1280;
+
+function readPreviewWidth(): number {
+  const stored = Number(window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY));
+  return Number.isFinite(stored) && stored >= PREVIEW_WIDTH_MIN && stored <= PREVIEW_WIDTH_MAX
+    ? stored
+    : PREVIEW_WIDTH_DEFAULT;
+}
+
+// Stable empty-array identity for the "no previews yet" selector default —
+// a fresh `[]` literal on every render would make zustand see a "changed"
+// value on every ActiveTabBody re-render even when nothing actually moved.
+const EMPTY_PREVIEWS: readonly PreviewPanelInfo[] = [];
 
 /**
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
@@ -136,6 +161,30 @@ export function shouldSuppressEscForDraft(draftActive: boolean): boolean {
  */
 export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolean | undefined): boolean {
   return panelOpen && (shellGitReadOnly ?? true);
+}
+
+/**
+ * Grid-column composer for `.session-content-split-open` (design D10): the
+ * conversation column is always `minmax(0, 1fr)`; an open Review (git) panel
+ * and/or an open Preview panel each add an `8px` resize-handle column
+ * followed by their own width column. Preview is always the RIGHTMOST
+ * column (both may be open at once) — exact copy of the git-panel pattern,
+ * generalized to a second panel. Exported for the unit gate.
+ */
+export function computeSessionContentColumns(
+  gitOpen: boolean,
+  gitWidth: number,
+  previewOpen: boolean,
+  previewWidth: number,
+): string {
+  const columns = ["minmax(0, 1fr)"];
+  if (gitOpen) {
+    columns.push("8px", `${gitWidth}px`);
+  }
+  if (previewOpen) {
+    columns.push("8px", `${previewWidth}px`);
+  }
+  return columns.join(" ");
 }
 
 /**
@@ -253,10 +302,53 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const tabTitle = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.title);
   const reviewRootRef = useRef<HTMLDivElement>(null);
   const [reviewWidth, setReviewWidth] = useState(readReviewWidth);
+  // CUT.md §3 96-P2 items 2/6: the Preview panel's own width + D12 gating —
+  // mounts iff the active tab has >=1 panel-container preview.
+  const [previewWidth, setPreviewWidth] = useState(readPreviewWidth);
+  const previews = usePreviewStore((state) => state.byTab[tabId]?.previews ?? EMPTY_PREVIEWS);
+  const previewPanelOpen = computePreviewPanelOpen(previews);
+  const splitOpen = gitPanelOpen || previewPanelOpen;
 
   // R8(c): OS notification on running→idle while hidden/blurred (active tab
   // only — cross-tab completion is R10).
   useTurnCompletionNotification(turn, notificationBody(tabTitle, workspace), tabId);
+
+  // D7: feeds panel-bridge's {activeTabId, panelMounted} half of the
+  // gating triple. `tabId` here IS the renderer's active tab — ActiveTabBody
+  // only ever renders for the currently active one (App.tsx's main-pane
+  // branch) — and `previewPanelOpen` mirrors exactly whether `<PreviewPanel>`
+  // is actually rendered below. The hook's own cleanup (on unmount OR any
+  // dependency change) republishes {null, false}, immediately superseded by
+  // the next render's fresh values when this is just a tab switch/toggle
+  // rather than a real unmount (D7's "never floats over a non-tab screen").
+  usePanelMountState(tabId, previewPanelOpen);
+
+  // Hydration read (CUT §3 96-P2 item 6): on mount AND every tab switch, pull
+  // the current preview list for this tab — `onChanged` (subscribed once at
+  // App mount) covers every LATER mutation, but a tab that already had
+  // previews open before this render needs an initial snapshot.
+  useEffect(() => {
+    let cancelled = false;
+    window.anycode.previewPanel
+      .list(tabId)
+      .then((payload) => {
+        if (!cancelled) {
+          usePreviewStore.getState().applyChanged(payload);
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("[ActiveTabBody] previewPanel.list failed", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tabId]);
+
+  // D11: publish the visible panel width + handle (else 0) so NoticeStack can
+  // offset the toast stack instead of letting it sit under the view.
+  useEffect(() => {
+    usePreviewStore.getState().setPanelInsetPx(previewPanelOpen ? previewWidth + 8 : 0);
+  }, [previewPanelOpen, previewWidth]);
 
   function beginReviewResize(event: ReactPointerEvent<HTMLDivElement>): void {
     event.preventDefault();
@@ -282,14 +374,42 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     window.addEventListener("pointerup", onUp, { once: true });
   }
 
+  // D10: exact mirror of beginReviewResize above, over previewWidth/PREVIEW_WIDTH_*.
+  function beginPreviewResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = previewWidth;
+    const rootWidth = reviewRootRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    const maxWidth = Math.max(PREVIEW_WIDTH_MIN, Math.min(PREVIEW_WIDTH_MAX, rootWidth - 320));
+    let nextWidth = startWidth;
+
+    function onMove(moveEvent: PointerEvent): void {
+      nextWidth = Math.min(maxWidth, Math.max(PREVIEW_WIDTH_MIN, startWidth + startX - moveEvent.clientX));
+      setPreviewWidth(nextWidth);
+    }
+
+    function onUp(): void {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(nextWidth));
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }
+
   return (
     <>
       <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />
 
       <div
         ref={reviewRootRef}
-        className={`session-content${gitPanelOpen ? " session-content-review-open" : ""}`}
-        style={gitPanelOpen ? { gridTemplateColumns: `minmax(0, 1fr) 8px ${reviewWidth}px` } : undefined}
+        className={`session-content${splitOpen ? " session-content-split-open" : ""}`}
+        style={
+          splitOpen
+            ? { gridTemplateColumns: computeSessionContentColumns(gitPanelOpen, reviewWidth, previewPanelOpen, previewWidth) }
+            : undefined
+        }
       >
         <div className="session-conversation">
           {connection === "host_exited" && (
@@ -330,6 +450,17 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
           />
         )}
         {gitPanelOpen && <GitPanel />}
+
+        {previewPanelOpen && (
+          <div
+            className="review-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize Preview panel"
+            onPointerDown={beginPreviewResize}
+          />
+        )}
+        {previewPanelOpen && <PreviewPanel />}
       </div>
 
       {/* Permission modal: self-connecting wrapper, renders only when the
@@ -376,6 +507,10 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<PaletteMode>("actions");
+  // D8: App's own overlay wiring — the command palette and Settings dialog
+  // both float above everything, so the preview WebContentsView must hide
+  // while either is open (folded into panel-bridge's setState via one flag).
+  useOverlayFlag(paletteOpen || settingsOpen);
   // R8 toast queue (slice-R8-cut §2): App owns the state, toasts.ts owns the
   // transitions. Ids are a monotonic per-mount counter (R7 nextPasteIdRef
   // precedent). Handlers are useCallback([]) — they close over only stable
@@ -410,6 +545,20 @@ export function App() {
   useEffect(() => {
     const stop = startConnectionManager(tabRegistry);
     return stop;
+  }, []);
+
+  // CUT.md §3 96-P2 item 6: the `onChanged` push subscription lives at App
+  // mount (once for the whole app lifetime) — every tab's preview-store
+  // entry is fed through this ONE listener, independent of which tab is
+  // active or whether its panel region happens to be mounted right now.
+  useEffect(() => {
+    const api = window.anycode?.previewPanel;
+    if (!api) {
+      return;
+    }
+    return api.onChanged((payload) => {
+      usePreviewStore.getState().applyChanged(payload);
+    });
   }, []);
 
   useEffect(() => {

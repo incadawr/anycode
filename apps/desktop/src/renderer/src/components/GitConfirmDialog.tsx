@@ -16,6 +16,7 @@
 import { useEffect, useRef } from "react";
 import { buildConfirmedGitCommand, type GitDestructiveIntent } from "../store.js";
 import { useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 
 export interface GitConfirmCopy {
   title: string;
@@ -79,6 +80,9 @@ export function GitConfirmDialog() {
   const send = useTabSend();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  // D8 overlay wiring: the preview WebContentsView must hide while a
+  // destructive-git confirm is up.
+  useOverlayFlag(intent !== null);
 
   // Mirrors PermissionModal's showModal effect: mounts+opens on a fresh
   // intent, unmounts wholesale (no "present but closed" state) once cleared.

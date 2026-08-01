@@ -264,7 +264,11 @@ body {
   flex-direction: column;
 }
 
-.session-content-review-open {
+/* Generalizes the old `.session-content-review-open` (design D10, TASK.96
+   stages 2+3): grid mode now covers EITHER the Review (git) panel or the
+   Preview panel or both, columns composed by App.tsx's
+   `computeSessionContentColumns` — Preview is always the rightmost column. */
+.session-content-split-open {
   display: grid;
 }
 
@@ -291,6 +295,82 @@ body {
   left: 2px;
   width: 3px;
   background: var(--text-3);
+}
+
+/* ── preview panel (working-docs/panel-track/CUT.md §2.4/D12, TASK.96
+   stages 2+3) ── Slim REAL header above a measured body div; the
+   WebContentsView paints over the body's screen rect main-side (D9) — this
+   file only ever draws the chrome AROUND the preview, never its content. */
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+}
+
+.preview-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-panel-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+}
+
+.preview-panel-picker {
+  max-width: 10rem;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+}
+
+.preview-panel-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.preview-panel-close:hover {
+  color: var(--text-1);
+}
+
+.preview-panel-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.preview-panel-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
 }
 
 /* ── sidebar (design §2.1/§2.3) ── */
@@ -4789,7 +4869,8 @@ body {
   border-left: 1px solid var(--border);
 }
 
-.session-content-review-open .git-panel {
+.session-content-split-open .git-panel,
+.session-content-split-open .preview-panel {
   min-width: 0;
 }
 
