@@ -109,7 +109,7 @@ export interface PreviewWebContentsLike {
   /** Always wired to deny every permission (camera/mic/geolocation/notifications/…). */
   setPermissionRequestHandler(handler: (permission: string, callback: (granted: boolean) => void) => void): void;
   onDidFinishLoad(listener: () => void): void;
-  onDidFailLoad(listener: (errorCode: number, errorDescription: string) => void): void;
+  onDidFailLoad(listener: (errorCode: number, errorDescription: string, isMainFrame: boolean) => void): void;
   onRenderProcessGone(listener: (reason: string) => void): void;
   /** Fires for in-page navigation only — NOT for the initial `loadURL` (risk §5.2). */
   onWillNavigate(listener: (url: string, preventDefault: () => void) => void): void;
@@ -904,8 +904,17 @@ class PreviewHost implements PreviewHostHandle {
     wc.onDidFinishLoad(() => {
       this.settle(record, "ready");
     });
-    wc.onDidFailLoad((errorCode, errorDescription) => {
+    wc.onDidFailLoad((errorCode, errorDescription, isMainFrame) => {
       if (errorCode === ERR_ABORTED) {
+        return;
+      }
+      // A subframe/subresource failure (e.g. the request gate blocking a
+      // remote iframe, or a 404 image) must NOT fail the whole preview: the
+      // main document loaded, the page renders degraded. Gate-blocked
+      // subresources already surface as a "blocked by security policy" console
+      // entry; other subresource failures are the page's own concern, visible
+      // via BrowserRead. Only a main-frame failure settles the record.
+      if (!isMainFrame) {
         return;
       }
       record.errorMessage = `${errorDescription} (${errorCode})`;
