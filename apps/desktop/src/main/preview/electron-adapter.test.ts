@@ -8,10 +8,21 @@
  * partition, and the CDP-debugger pageerror classification — none of which
  * preview-host.test.ts's Electron-free fakes can catch if this file's wiring
  * regresses.
+ *
+ * panel-track CUT.md §3 96-P1 extends this file with `panel-adapter.ts`'s
+ * `createElectronPanelView`: a `FakeWebContentsView`/`FakeContentView`/
+ * `FakeMainWindow` trio mock `electron.WebContentsView` + the `contentView`
+ * child-view surface, proving the frozen webPreferences/partition are
+ * byte-identical to the window adapter's AND that both adapters share the
+ * SAME `wrapWebContents` (D3) — importing `panel-adapter.js` re-imports
+ * "electron" under the SAME `vi.mock` factory below (the "factory does not
+ * re-run after resetModules" pitfall does not apply here: this file never
+ * calls `vi.resetModules()`, so the single static mock registration covers
+ * every module, real or dynamically imported, that imports "electron").
  */
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserWindowConstructorOptions } from "electron";
+import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
 import { RING_MAX_MSG_CHARS } from "./preview-host.js";
 
 interface FakeDebugger {
@@ -97,6 +108,10 @@ class FakeWebContents extends EventEmitter {
   setBackgroundThrottling(enabled: boolean): void {
     this.backgroundThrottlingCalls.push(enabled);
   }
+  closeCalls = 0;
+  close(): void {
+    this.closeCalls += 1;
+  }
   setWindowOpenHandler(handler: (details: { url: string }) => { action: string }): void {
     this.windowOpenHandler = handler;
   }
@@ -138,14 +153,68 @@ class FakeBrowserWindow extends EventEmitter {
   }
 }
 
+const { createdPanelViews } = vi.hoisted(() => ({
+  createdPanelViews: [] as FakeWebContentsView[],
+}));
+
+/** Mock `electron.WebContentsView` (panel-track CUT.md §3 96-P1): a `.webContents` + tracked setVisible/setBounds calls, no native "closed" event (the adapter synthesizes it). */
+class FakeWebContentsView {
+  readonly webContents = new FakeWebContents();
+  visibleCalls: boolean[] = [];
+  boundsCalls: Array<{ x: number; y: number; width: number; height: number }> = [];
+
+  constructor(public readonly opts: { webPreferences?: Record<string, unknown> }) {
+    createdPanelViews.push(this);
+  }
+  setVisible(visible: boolean): void {
+    this.visibleCalls.push(visible);
+  }
+  setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+    this.boundsCalls.push(bounds);
+  }
+}
+
+/** Mock `BaseWindow.contentView` (a `View`): the child-view surface `createElectronPanelView` attaches/detaches the panel view through. */
+class FakeContentView {
+  children: unknown[] = [];
+  addChildViewCalls: unknown[] = [];
+  removeChildViewCalls: unknown[] = [];
+  addChildView(view: unknown): void {
+    this.children.push(view);
+    this.addChildViewCalls.push(view);
+  }
+  removeChildView(view: unknown): void {
+    this.children = this.children.filter((v) => v !== view);
+    this.removeChildViewCalls.push(view);
+  }
+}
+
+/** Mock main `BrowserWindow` as seen through `PanelAdapterDeps.getWindow()` — only the `contentView`/`isDestroyed` surface `createElectronPanelView` actually touches. */
+class FakeMainWindow {
+  readonly contentView = new FakeContentView();
+  private destroyed = false;
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  destroy(): void {
+    this.destroyed = true;
+  }
+}
+
 vi.mock("electron", () => ({
   BrowserWindow: FakeBrowserWindow,
+  WebContentsView: FakeWebContentsView,
 }));
 
 const { createElectronPreviewWindow } = await import("./electron-adapter.js");
+const { createElectronPanelView } = await import("./panel-adapter.js");
 
 function latestWindow(): FakeBrowserWindow {
   return createdWindows.at(-1)!;
+}
+
+function latestPanelView(): FakeWebContentsView {
+  return createdPanelViews.at(-1)!;
 }
 
 describe("createElectronPreviewWindow — webPreferences literal (cut §2.5, non-negotiable)", () => {
@@ -430,5 +499,117 @@ describe("createElectronPreviewWindow — console/CDP string slicing (cut §1.3/
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toHaveLength(RING_MAX_MSG_CHARS);
+  });
+});
+
+describe("createElectronPanelView — WebContentsView construction (panel-track CUT.md §2.2/§3 96-P1)", () => {
+  it("constructs WebContentsView with the frozen webPreferences + a partition unique per previewId (byte-identical to the window adapter, D2)", () => {
+    const win = new FakeMainWindow();
+    createElectronPanelView({ previewId: "panel-a" }, { getWindow: () => win as unknown as BrowserWindow });
+    const view = latestPanelView();
+    expect(view.opts.webPreferences).toMatchObject({
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: "preview-panel-a",
+    });
+    expect(view.opts.webPreferences).not.toHaveProperty("preload");
+  });
+
+  it("gives every panel its own partition, keyed by previewId", () => {
+    const win = new FakeMainWindow();
+    createElectronPanelView({ previewId: "alpha" }, { getWindow: () => win as unknown as BrowserWindow });
+    createElectronPanelView({ previewId: "beta" }, { getWindow: () => win as unknown as BrowserWindow });
+    const [a, b] = createdPanelViews.slice(-2);
+    expect(a!.opts.webPreferences?.partition).toBe("preview-alpha");
+    expect(b!.opts.webPreferences?.partition).toBe("preview-beta");
+    expect(a!.opts.webPreferences?.partition).not.toBe(b!.opts.webPreferences?.partition);
+  });
+
+  it("addChildView on the main window's contentView", () => {
+    const win = new FakeMainWindow();
+    createElectronPanelView({ previewId: "panel-b" }, { getWindow: () => win as unknown as BrowserWindow });
+    const view = latestPanelView();
+    expect(win.contentView.addChildViewCalls).toEqual([view]);
+  });
+
+  it("is created hidden (D6 no-flash)", () => {
+    const win = new FakeMainWindow();
+    createElectronPanelView({ previewId: "panel-c" }, { getWindow: () => win as unknown as BrowserWindow });
+    const view = latestPanelView();
+    expect(view.visibleCalls).toEqual([false]);
+  });
+
+  it("show()/showInactive() both map to setVisible(true)", () => {
+    const win = new FakeMainWindow();
+    const panel = createElectronPanelView({ previewId: "panel-d" }, { getWindow: () => win as unknown as BrowserWindow });
+    panel.show();
+    panel.showInactive();
+    const view = latestPanelView();
+    expect(view.visibleCalls).toEqual([false, true, true]);
+  });
+
+  it("setBounds/setVisible delegate to the real view", () => {
+    const win = new FakeMainWindow();
+    const panel = createElectronPanelView({ previewId: "panel-e" }, { getWindow: () => win as unknown as BrowserWindow });
+    panel.setBounds({ x: 1, y: 2, width: 300, height: 400 });
+    panel.setVisible(true);
+    const view = latestPanelView();
+    expect(view.boundsCalls).toEqual([{ x: 1, y: 2, width: 300, height: 400 }]);
+    expect(view.visibleCalls).toEqual([false, true]);
+  });
+
+  it("shares the SAME wrapWebContents mapping as the window adapter — setWindowOpenHandler/setPermissionRequestHandler/setRequestGate all wired", () => {
+    const win = new FakeMainWindow();
+    const panel = createElectronPanelView({ previewId: "panel-f" }, { getWindow: () => win as unknown as BrowserWindow });
+    const view = latestPanelView();
+
+    const handler = (): { action: "deny" } => ({ action: "deny" });
+    panel.webContents.setWindowOpenHandler(handler);
+    expect(view.webContents.windowOpenHandler).toBe(handler);
+    expect(view.webContents.windowOpenHandler?.({ url: "https://evil.example" })).toEqual({ action: "deny" });
+
+    const permHandler = vi.fn((_permission: string, callback: (granted: boolean) => void) => callback(false));
+    panel.webContents.setPermissionRequestHandler(permHandler);
+    const granted = vi.fn();
+    view.webContents.permissionRequestHandler?.({}, "camera", granted);
+    expect(permHandler).toHaveBeenCalledWith("camera", expect.any(Function));
+    expect(granted).toHaveBeenCalledWith(false);
+
+    panel.webContents.setRequestGate(async () => true);
+    expect(view.webContents.onBeforeRequestCalls).toHaveLength(1);
+    // A single argument (the listener) — no WebRequestFilter object precedes it (cut §1.1/F2, same as the window adapter).
+    expect(view.webContents.onBeforeRequestCalls[0]).toHaveLength(1);
+  });
+
+  it("destroy() -> removeChildView + wc.close() + synthesized onClosed exactly once + CDP cleanup ran", () => {
+    const win = new FakeMainWindow();
+    const panel = createElectronPanelView({ previewId: "panel-g" }, { getWindow: () => win as unknown as BrowserWindow });
+    const view = latestPanelView();
+    const closedSpy = vi.fn();
+    panel.onClosed(closedSpy);
+
+    // CDP attached at construction time (shared wrapWebContents, D3).
+    expect(view.webContents.debugger.attachCalls).toEqual(["1.3"]);
+
+    panel.destroy();
+
+    expect(win.contentView.removeChildViewCalls).toEqual([view]);
+    expect(view.webContents.closeCalls).toBe(1);
+    expect(view.webContents.debugger.detachCalls).toBe(1); // CDP cleanup ran
+    expect(closedSpy).toHaveBeenCalledTimes(1);
+    expect(panel.isDestroyed()).toBe(true);
+
+    // Idempotent — a second destroy() must not double-fire onClosed/close/detach.
+    panel.destroy();
+    expect(closedSpy).toHaveBeenCalledTimes(1);
+    expect(view.webContents.closeCalls).toBe(1);
+    expect(view.webContents.debugger.detachCalls).toBe(1);
+  });
+
+  it("destroy() is safe when the main window is already gone (null)", () => {
+    const panel = createElectronPanelView({ previewId: "panel-h" }, { getWindow: () => null });
+    expect(() => panel.destroy()).not.toThrow();
+    expect(panel.isDestroyed()).toBe(true);
   });
 });

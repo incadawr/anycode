@@ -25,14 +25,17 @@ import {
 import {
   EXEC_JS_TIMEOUT_MS,
   READ_RESULT_MAX_CHARS,
+  clampPanelBounds,
   registerPreviewHost,
   type CreateWindowOpts,
   type PreviewCapturedImage,
   type PreviewHostDeps,
   type PreviewHostHandle,
+  type PreviewPanelViewLike,
   type PreviewWebContentsLike,
   type PreviewWindowLike,
 } from "./preview-host.js";
+import type { PreviewChangedPayload, PreviewPanelBounds, PreviewPanelStatePayload } from "../../shared/preview-panel.js";
 
 const TAB = "tab-1";
 const WORKSPACE_ROOT = "/workspace";
@@ -172,13 +175,67 @@ class FakeWindow implements PreviewWindowLike {
   }
 }
 
+/**
+ * Fake panel container (panel-track CUT.md §3 96-P1 test plan): records
+ * ORDERED `setBounds`/`setVisible` calls (a single combined log, `calls`) so
+ * the visibility-matrix tests can assert `setBounds` happens BEFORE
+ * `setVisible(true)`, plus the plain `PreviewWindowLike` surface `wireWindow`
+ * itself drives (webContents, destroy, onClosed) — reused unchanged from
+ * `FakeWindow`'s pattern so the "same wireWindow ran against it" proof is
+ * apples-to-apples with the window suite.
+ */
+class FakePanelView implements PreviewPanelViewLike {
+  readonly webContents = new FakeWebContents();
+  destroyed = false;
+  shown = false;
+  shownInactive = false;
+  calls: Array<{ kind: "setBounds"; bounds: PreviewPanelBounds } | { kind: "setVisible"; visible: boolean }> = [];
+  private closedListeners: Array<() => void> = [];
+
+  constructor(public readonly previewId: string) {}
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    for (const l of this.closedListeners) l();
+  }
+  show(): void {
+    this.shown = true;
+  }
+  showInactive(): void {
+    this.shownInactive = true;
+  }
+  onClosed(listener: () => void): void {
+    this.closedListeners.push(listener);
+  }
+  setBounds(bounds: PreviewPanelBounds): void {
+    this.calls.push({ kind: "setBounds", bounds });
+  }
+  setVisible(visible: boolean): void {
+    this.calls.push({ kind: "setVisible", visible });
+  }
+  get visible(): boolean {
+    const last = [...this.calls].reverse().find((c) => c.kind === "setVisible");
+    return last !== undefined && last.kind === "setVisible" ? last.visible : false;
+  }
+}
+
 /** Everything a test needs to drive a `registerPreviewHost` instance + inspect its side effects. */
 interface Rig {
   host: PreviewHostHandle;
   windows: FakeWindow[];
+  /** Panel-container views (panel-track CUT.md §3 96-P1) — parallel to `windows` for the window container. */
+  panelViews: FakePanelView[];
   posted: Array<{ tabId: string; message: PreviewResponseMessage | PreviewEventMessage }>;
+  /** Every `onPreviewsChanged` push, in order (D7's main -> renderer CHANGED contract). */
+  changed: PreviewChangedPayload[];
   clock: { time: number };
   autoOpen: { enabled: boolean };
+  /** Mutable so a test can flip container mode mid-scenario; default "window" keeps the entire stage-1 suite byte-untouched. */
+  displayModeValue: { value: "panel" | "window" };
   resolveArtifactImpl: (tabId: string, path: string) => Promise<{ realPath: string } | { failure: string }>;
   renderMarkdownImpl?: (realPath: string) => Promise<{ htmlPath: string } | { error: string }>;
 }
@@ -193,15 +250,24 @@ async function defaultResolveArtifact(_tabId: string, path: string): Promise<{ r
 
 function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
   const windows: FakeWindow[] = [];
+  const panelViews: FakePanelView[] = [];
   const posted: Array<{ tabId: string; message: PreviewResponseMessage | PreviewEventMessage }> = [];
+  const changed: PreviewChangedPayload[] = [];
   const clock = { time: 1_000_000 };
   const autoOpen = { enabled: true };
+  // Default "window" (cut §3 96-P1): every one of the 18 pre-existing
+  // describe blocks never touches this and stays the stage-1 window-mode
+  // regression suite, byte-untouched.
+  const displayModeValue: { value: "panel" | "window" } = { value: "window" };
   const rig: Rig = {
     host: undefined as unknown as PreviewHostHandle,
     windows,
+    panelViews,
     posted,
+    changed,
     clock,
     autoOpen,
+    displayModeValue,
     resolveArtifactImpl: defaultResolveArtifact,
   };
 
@@ -210,6 +276,15 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
       const win = new FakeWindow(opts.previewId);
       windows.push(win);
       return win;
+    },
+    createPanelView: (opts: CreateWindowOpts) => {
+      const view = new FakePanelView(opts.previewId);
+      panelViews.push(view);
+      return view;
+    },
+    displayMode: () => displayModeValue.value,
+    onPreviewsChanged: (payload) => {
+      changed.push(payload);
     },
     resolveArtifact: (tabId, path) => rig.resolveArtifactImpl(tabId, path),
     autoOpenEnabled: () => autoOpen.enabled,
@@ -1474,5 +1549,366 @@ describe("PreviewHost — IPv6 loopback normalize (cut §1.6)", () => {
     const wc = rig.windows[0]!.webContents;
     const prevented = wc.fireWillRedirect("http://[::1]:9000/");
     expect(prevented).toBe(false);
+  });
+});
+
+describe("PreviewHost — panel container: displayMode chooses the container (D4), wireWindow runs unchanged (D1)", () => {
+  it("displayMode 'panel' creates a panel view (not a window) for a new record", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    expect(rig.panelViews).toHaveLength(1);
+    expect(rig.windows).toHaveLength(0);
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    expect(result.ok).toBe(true);
+  });
+
+  it("wireWindow ran against the panel view — same security wiring surface as a window (no second copy)", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    expect(view.webContents.windowOpenHandler?.({ url: "https://evil.example/popup" })).toEqual({ action: "deny" });
+    const granted = await new Promise<boolean>((resolve) => {
+      view.webContents.permissionRequestHandler?.("camera", resolve);
+    });
+    expect(granted).toBe(false);
+    expect(view.webContents.requestGate).toBeDefined();
+    view.webContents.fireDidFinishLoad();
+    await opened;
+    const before = view.webContents.loadedUrls.length;
+    const prevented = view.webContents.fireWillNavigate("https://not-consented.example/");
+    expect(prevented).toBe(true); // Electron semantics: always preventDefault first, then decide
+    await flush();
+    expect(view.webContents.loadedUrls).toHaveLength(before); // denied — will-navigate matrix applies unchanged
+  });
+
+  it("the panel view stays hidden until every visibility gate is satisfied (D6, applyPanel's default)", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    expect(rig.panelViews[0]!.visible).toBe(false);
+  });
+});
+
+describe("PreviewHost — panel visibility reconciler (D6, applyPanel)", () => {
+  async function openPanelRecord(tabId = TAB): Promise<{ rig: Rig; previewId: string; view: FakePanelView }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(tabId, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+    return { rig, previewId, view };
+  }
+
+  const FULL_BOUNDS: PreviewPanelBounds = { x: 10, y: 20, width: 300, height: 400 };
+
+  it("each gate false independently forces setVisible(false)", async () => {
+    const cases: Array<{ label: string; apply: (rig: Rig, tabId: string) => void }> = [
+      {
+        label: "panelMounted=false",
+        apply: (rig, tabId) => {
+          rig.host.setPanelState({ activeTabId: tabId, panelMounted: false, overlayOpen: false });
+          rig.host.setPanelBounds(FULL_BOUNDS);
+        },
+      },
+      {
+        label: "overlayOpen=true",
+        apply: (rig, tabId) => {
+          rig.host.setPanelState({ activeTabId: tabId, panelMounted: true, overlayOpen: true });
+          rig.host.setPanelBounds(FULL_BOUNDS);
+        },
+      },
+      {
+        label: "wrong activeTabId",
+        apply: (rig) => {
+          rig.host.setPanelState({ activeTabId: "some-other-tab", panelMounted: true, overlayOpen: false });
+          rig.host.setPanelBounds(FULL_BOUNDS);
+        },
+      },
+      {
+        label: "bounds=null",
+        apply: (rig, tabId) => {
+          rig.host.setPanelState({ activeTabId: tabId, panelMounted: true, overlayOpen: false });
+          rig.host.setPanelBounds(null);
+        },
+      },
+      {
+        label: "zero-size bounds",
+        apply: (rig, tabId) => {
+          rig.host.setPanelState({ activeTabId: tabId, panelMounted: true, overlayOpen: false });
+          rig.host.setPanelBounds({ x: 0, y: 0, width: 0, height: 0 });
+        },
+      },
+    ];
+
+    for (const { apply } of cases) {
+      const { rig, view } = await openPanelRecord();
+      apply(rig, TAB);
+      expect(view.visible).toBe(false);
+    }
+  });
+
+  it("all-true shows exactly the visible-slot record; setBounds (rounded, clamped) is called BEFORE setVisible(true)", async () => {
+    const { rig, view } = await openPanelRecord();
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: false });
+    const rawBounds: PreviewPanelBounds = { x: 10.4, y: 20.6, width: 99_999, height: 400.2 };
+    rig.host.setPanelBounds(rawBounds);
+
+    expect(view.visible).toBe(true);
+    const setBoundsIdx = view.calls.findIndex((c) => c.kind === "setBounds");
+    const setVisibleTrueIdx = view.calls.findIndex((c) => c.kind === "setVisible" && c.visible === true);
+    expect(setBoundsIdx).toBeGreaterThanOrEqual(0);
+    expect(setVisibleTrueIdx).toBeGreaterThan(setBoundsIdx);
+    const boundsCall = view.calls[setBoundsIdx];
+    if (boundsCall !== undefined && boundsCall.kind === "setBounds") {
+      expect(boundsCall.bounds).toEqual(clampPanelBounds(rawBounds));
+    }
+  });
+});
+
+describe("PreviewHost — panel D5: one visible slot per tab", () => {
+  async function openTwoPanels(): Promise<{ rig: Rig; first: string; second: string }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const firstOpen = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await firstOpen;
+    const first = firstResult.ok ? firstResult.value.previewId : "";
+
+    rig.clock.time += 10;
+    const secondOpen = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    rig.panelViews[1]!.webContents.fireDidFinishLoad();
+    const secondResult = await secondOpen;
+    const second = secondResult.ok ? secondResult.value.previewId : "";
+
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: false });
+    rig.host.setPanelBounds({ x: 0, y: 0, width: 300, height: 400 });
+    return { rig, first, second };
+  }
+
+  it("first opened is hidden, second (most recent) is visible", async () => {
+    const { rig } = await openTwoPanels();
+    expect(rig.panelViews[0]!.visible).toBe(false);
+    expect(rig.panelViews[1]!.visible).toBe(true);
+  });
+
+  it("selectPanelPreview flips the visible slot", async () => {
+    const { rig, first } = await openTwoPanels();
+    const result = rig.host.selectPanelPreview(TAB, first);
+    expect(result).toEqual({ ok: true });
+    expect(rig.panelViews[0]!.visible).toBe(true);
+    expect(rig.panelViews[1]!.visible).toBe(false);
+  });
+
+  it("closing the visible one promotes the most-recently-opened survivor", async () => {
+    const { rig, second } = await openTwoPanels();
+    expect(rig.panelViews[1]!.visible).toBe(true); // second is visible before close
+
+    const result = rig.host.closePreview(TAB, second);
+    expect(result).toEqual({ ok: true });
+    expect(rig.panelViews[0]!.visible).toBe(true); // promoted survivor
+  });
+
+  it("PreviewChangedPayload is correct at each step (open/select/close)", async () => {
+    const { rig, first, second } = await openTwoPanels();
+    const afterOpen = rig.host.listForPanel(TAB);
+    expect(afterOpen.previews.map((p) => p.previewId).sort()).toEqual([first, second].sort());
+    expect(afterOpen.visiblePanelPreviewId).toBe(second);
+
+    rig.host.selectPanelPreview(TAB, first);
+    const afterSelect = rig.host.listForPanel(TAB);
+    expect(afterSelect.visiblePanelPreviewId).toBe(first);
+
+    rig.host.closePreview(TAB, first);
+    const afterClose = rig.host.listForPanel(TAB);
+    expect(afterClose.previews.map((p) => p.previewId)).toEqual([second]);
+    expect(afterClose.visiblePanelPreviewId).toBe(second);
+  });
+});
+
+describe("PreviewHost — panel D13: screenshot promotes a hidden panel preview", () => {
+  it("promotes the target to the visible slot", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+
+    // Not mounted — applyPanel keeps it hidden regardless of the promotion.
+    expect(view.visible).toBe(false);
+
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+    expect(shot.ok).toBe(true);
+    // The visible-slot map now points at this preview (the promotion itself
+    // happened) even though applyPanel still kept it hidden (panelMounted
+    // was never set) — the overlay/tab/mount gates are never bypassed.
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewId);
+  });
+
+  it("honest 'unavailable' when the capture is empty AND an overlay keeps it hidden — never bypasses the gate", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.capturePageImpl = async () => fakeImage({ empty: true });
+    view.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+
+    // Mounted + active tab, but an overlay is open — applyPanel keeps it hidden.
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: true });
+    rig.host.setPanelBounds({ x: 0, y: 0, width: 300, height: 400 });
+
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+    expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
+    expect(view.visible).toBe(false); // never forced visible to satisfy the capture
+    expect(view.shown).toBe(false); // show() must never be called for a panel container
+  });
+});
+
+describe("PreviewHost — panel lifecycle: closeForTab/closeAll destroy panel views; reload reset hides all", () => {
+  it("closeForTab destroys panel views for that tab only", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const a = rig.host.openForTab("tab-a", { path: `${WORKSPACE_ROOT}/a.html` });
+    const b = rig.host.openForTab("tab-b", { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    rig.panelViews[1]!.webContents.fireDidFinishLoad();
+    await Promise.all([a, b]);
+
+    rig.host.closeForTab("tab-a");
+
+    expect(rig.panelViews[0]!.destroyed).toBe(true);
+    expect(rig.panelViews[1]!.destroyed).toBe(false);
+  });
+
+  it("closeAll destroys every panel view across every tab", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const a = rig.host.openForTab("tab-a", { path: `${WORKSPACE_ROOT}/a.html` });
+    const b = rig.host.openForTab("tab-b", { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    rig.panelViews[1]!.webContents.fireDidFinishLoad();
+    await Promise.all([a, b]);
+
+    rig.host.closeAll();
+
+    expect(rig.panelViews.every((v) => v.destroyed)).toBe(true);
+  });
+
+  it("renderer-reload reset (setPanelState all-hidden + setPanelBounds(null)) hides every panel", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.fireDidFinishLoad();
+    await opened;
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: false });
+    rig.host.setPanelBounds({ x: 0, y: 0, width: 300, height: 400 });
+    expect(view.visible).toBe(true);
+
+    // main/index.ts's did-finish-load reset (D7).
+    rig.host.setPanelState({ activeTabId: null, panelMounted: false, overlayOpen: false });
+    rig.host.setPanelBounds(null);
+
+    expect(view.visible).toBe(false);
+  });
+});
+
+describe("PreviewHost — panel container: security regression (invariant 7, same policy as windows, zero assert changes)", () => {
+  async function openedPanelRig(
+    openReq: { path?: string; url?: string; allowRemote?: boolean } = { path: `${WORKSPACE_ROOT}/a.html` },
+  ): Promise<{ rig: Rig; view: FakePanelView }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const openPromise = rig.host.openForTab(TAB, openReq);
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.fireDidFinishLoad();
+    await openPromise;
+    return { rig, view };
+  }
+
+  it("wires setWindowOpenHandler to always deny", async () => {
+    const { view } = await openedPanelRig();
+    expect(view.webContents.windowOpenHandler?.({ url: "https://evil.example/popup" })).toEqual({ action: "deny" });
+  });
+
+  it("wires setPermissionRequestHandler to deny every permission", async () => {
+    const { view } = await openedPanelRig();
+    for (const permission of ["camera", "microphone", "geolocation", "notifications", "clipboard-read"]) {
+      const granted = await new Promise<boolean>((resolve) => {
+        view.webContents.permissionRequestHandler?.(permission, resolve);
+      });
+      expect(granted).toBe(false);
+    }
+  });
+
+  it("will-navigate: allows a file under an allowed root, denies one outside", async () => {
+    const { view } = await openedPanelRig();
+    const target = pathToFileURL(`${WORKSPACE_ROOT}/other.html`).href;
+    const prevented = view.webContents.fireWillNavigate(target);
+    expect(prevented).toBe(true);
+    await flush();
+    expect(view.webContents.loadedUrls.at(-1)).toBe(target);
+
+    const before = view.webContents.loadedUrls.length;
+    view.webContents.fireWillNavigate(pathToFileURL("/etc/passwd").href);
+    await flush();
+    expect(view.webContents.loadedUrls).toHaveLength(before);
+  });
+
+  it("will-navigate: allows localhost, denies an un-consented remote origin", async () => {
+    const { view } = await openedPanelRig();
+    view.webContents.fireWillNavigate("http://localhost:8080/page2");
+    await flush();
+    expect(view.webContents.loadedUrls.at(-1)).toBe("http://localhost:8080/page2");
+
+    const before = view.webContents.loadedUrls.length;
+    view.webContents.fireWillNavigate("https://not-consented.example/");
+    await flush();
+    expect(view.webContents.loadedUrls).toHaveLength(before);
+  });
+
+  it("request gate: file-kind panel denies an uncontained file: subresource, allows a contained one", async () => {
+    const { view } = await openedPanelRig();
+    const gate = view.webContents.requestGate!;
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(true);
+    await expect(gate({ url: pathToFileURL("/etc/passwd").href, resourceType: "image" })).resolves.toBe(false);
+  });
+
+  it("request gate: remote script/xhr denied with empty consentedOrigins", async () => {
+    const { view } = await openedPanelRig();
+    const gate = view.webContents.requestGate!;
+    await expect(gate({ url: "https://cdn.example/app.js", resourceType: "script" })).resolves.toBe(false);
+    await expect(gate({ url: "https://api.example/data", resourceType: "xhr" })).resolves.toBe(false);
+  });
+
+  it("open refuses a remote URL without allowRemote and destroys the fresh panel view", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const result = await rig.host.openForTab(TAB, { url: "https://example.com/dashboard" });
+    expect(result).toEqual({ ok: false, error: expect.any(String), errorKind: "invalid_input" });
+    expect(rig.panelViews[0]!.destroyed).toBe(true);
+    expect(rig.panelViews[0]!.webContents.loadedUrls).toEqual([]);
   });
 });
