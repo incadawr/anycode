@@ -42,6 +42,7 @@
  * deny simply means "keep planning", which is what its label now says.
  */
 import { useEffect, useRef, useState } from "react";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import type { KeyboardEvent } from "react";
 import type { RiskLevel } from "@anycode/core";
 import type { PermissionUiRequest } from "../store.js";
@@ -642,6 +643,9 @@ export function ConnectedPermissionModal() {
   const request = useTabStore((state) => state.permission);
   const engine = useTabStore((state) => state.engine);
   const sendToHost = useTabSend();
+  // D8 overlay wiring: the preview WebContentsView must hide while a
+  // permission ask is up.
+  useOverlayFlag(request !== null);
 
   if (!request) {
     return null;

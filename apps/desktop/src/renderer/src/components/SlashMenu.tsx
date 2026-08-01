@@ -21,6 +21,7 @@
 import { Fragment } from "react";
 import type { ComponentType, ReactNode, SVGProps } from "react";
 import type { SlashIconId, SlashMenuItem } from "../slash-menu.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Clipboard, Cube, FileIcon, Gear, GitBranch, Plus, ServerStack, Sliders, Stack, Terminal } from "./icons.js";
 
 const SLASH_ICONS: Record<SlashIconId, ComponentType<SVGProps<SVGSVGElement>>> = {
@@ -79,6 +80,12 @@ export interface SlashMenuProps {
 }
 
 export function SlashMenu({ items, selectedIndex, onSelect, onHover }: SlashMenuProps) {
+  // D8 overlay wiring: unlike the other three composer dropdowns, SlashMenu
+  // owns no boolean of its own — Composer.tsx conditionally MOUNTS this
+  // component exactly while its `slashOpen` is true, so presence in the tree
+  // already IS "open"; the flag is unconditionally true for as long as this
+  // instance exists.
+  useOverlayFlag(true);
   let skillsHeaderRendered = false;
 
   return (

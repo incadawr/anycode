@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
 import type { GitPendingRequest } from "../store.js";
 import { useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Ellipsis, Folder, GitBranch } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 
@@ -31,6 +32,9 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const branches = useTabStore((state) => state.git.branches);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
+  // D8 overlay wiring: the preview WebContentsView must hide while this
+  // header dropdown is up.
+  useOverlayFlag(open);
   const [branchesOpen, setBranchesOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
