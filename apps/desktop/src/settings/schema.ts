@@ -57,6 +57,13 @@ export const keybindingsSchema = z.object({
 });
 
 /**
+ * The `preview` settings section (night-track wave-1 cut §2.7, TASK.96
+ * 96-E). `autoOpen` absent = enabled (owner default ON) — main's
+ * `autoOpenEnabled()` applies that default, never this schema.
+ */
+export const previewSchema = z.object({ autoOpen: z.boolean().optional() }).optional();
+
+/**
  * Strict-shape validator for a settings object. `.passthrough()` at the top
  * level keeps unknown keys from a future version alive across a read-modify-write
  * (design §2) — a v1 binary must not silently drop fields a v2 binary added.
@@ -371,6 +378,12 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       })
       .optional()
       .catch(undefined),
+    // Browser-preview settings (night-track wave-1 cut §2.7, TASK.96 96-E,
+    // additive-optional; version NOT bumped, same forward-compat reasoning as
+    // `claude`/`codex`/`keybindings` above). Declared explicitly (not left to
+    // `.passthrough()`) so it validates and survives a read-modify-write
+    // cycle; absent on old files, parses to undefined.
+    preview: previewSchema,
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

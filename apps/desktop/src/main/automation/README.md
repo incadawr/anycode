@@ -1320,6 +1320,58 @@ See `apps/desktop/scripts/rewind-ui-smoke.mjs` for the reference wiring
 (checkpoint capture -> list -> rewind -> transcript-truncation proof ->
 rewind-then-continue).
 
+### Preview probes/driver (night-track wave-1 cut §2.8, TASK.96 96-E)
+
+Unlike every probe/driver above, these four routes do **not** go through the
+renderer facade at all — they call `PreviewHost` (`main/preview/preview-host.ts`,
+96-A) DIRECTLY, main-plane, the same posture as `GET /screenshot`'s direct
+`getWindow()` call. That makes them a **model-free** mechanical smoke of the
+whole preview stack: a caller can open/inspect/screenshot a preview window
+without ever driving a real agent turn, which is exactly what the mechanical
+fallback leg of `preview-live-smoke.mjs` uses when a live model run isn't
+available. `GET /tabs/:tabId/previews` lists every LIVE (non-destroyed)
+preview for the tab; `.../console` reads the console/pageerror ring
+(`?tail=N` slices it, same `parseTail` guard `GET /state` uses — a
+non-integer/negative value is `400 invalid_tail`); `.../screenshot` reuses
+PreviewHost's own screenshot op verbatim (the same macOS `showInactive`/
+`setBackgroundThrottling` dance the BrowserScreenshot tool gets). `POST
+/tabs/:tabId/previews` opens a preview the same way `BrowserOpen` does
+(`{path}` or `{url}`) — **remote http(s) is refused on this route**, not by a
+special case here but by construction: the body has no `allowRemote` field at
+all (`.strict()` rejects an extra one outright, `400`), so
+`PreviewHost.openForTab`'s own policy always sees `allowRemote` absent and
+refuses every non-localhost origin with its normal `invalid_input` (consent
+cannot be faked by automation — a real `BrowserOpen` approval is the only way
+to open a remote origin). Every route degrades to an honest
+`{ok:false, error:"preview host unavailable", errorKind:"unavailable"}` (or
+the console/list routes' own empty-shape equivalent) when no `PreviewHost`
+was wired into `AutomationServerDeps` — never a throw, never a 500.
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /tabs/:tabId/previews` | — | `{previews:[{previewId, url, sourcePath?, status, title?, consoleCount, dropped}]}` |
+| `GET /tabs/:tabId/previews/:previewId/console?tail=N` | — | `{entries:[{level, message, at}], dropped}` \| `{error}` |
+| `GET /tabs/:tabId/previews/:previewId/screenshot` | — | `{png:"<base64>"}` \| `PreviewResult` failure shape (`{ok:false, error, errorKind}`) |
+| `POST /tabs/:tabId/previews` | `{path?, url?}` | `PreviewResult<PreviewOpenSuccess>` — `{ok:true, value:{previewId, url, title?, kind, renderedFrom?}}` \| `{ok:false, error, errorKind}` |
+
+```bash
+PORT=$(jq -r .port ~/.anycode/automation.json)
+TOKEN=$(jq -r .token ~/.anycode/automation.json)
+A=(-s -H "Authorization: Bearer $TOKEN"); B=http://127.0.0.1:$PORT
+J=(-H 'content-type: application/json')
+TAB=$(curl "${A[@]}" "$B/state?tail=0" | jq -r '.tabs[0].tabId')
+
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/previews -d '{"path":"/tmp/anycode-preview-smoke.html"}'
+PV=$(curl "${A[@]}" "$B/tabs/$TAB/previews" | jq -r '.previews[0].previewId')
+curl "${A[@]}" "$B/tabs/$TAB/previews/$PV/console?tail=20"
+curl "${A[@]}" "$B/tabs/$TAB/previews/$PV/screenshot" | jq -r '.png' | base64 -d > preview.png
+```
+
+See `apps/desktop/scripts/preview-live-smoke.mjs` for the reference wiring
+(turn-driven auto-open + BrowserOpen/BrowserScreenshot alongside these
+mechanical probes; also the sole live exercise of the `preview.autoOpen`
+setting and the darwin `/tmp` artifact root, 77-B).
+
 ## Layout
 
 - `server.ts` — the `node:http` shell: bind, auth perimeter, body limits, zod

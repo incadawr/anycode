@@ -138,6 +138,10 @@ import {
   checkpointPanelState,
   rewindState,
   checkpointRewind,
+  previewsForTab,
+  previewConsole,
+  previewScreenshot,
+  previewOpen,
   FacadeThrewError,
   FacadeUnavailableError,
   type AppLike,
@@ -145,6 +149,7 @@ import {
   type HandlerDeps,
   type ManagerLike,
 } from "./handlers.js";
+import type { PreviewHostHandle } from "../preview/preview-host.js";
 
 /** 256 KB body cap (design §5): larger requests are refused before parsing. */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -162,6 +167,8 @@ export interface AutomationServerDeps {
   logger?: { log(...a: unknown[]): void; warn(...a: unknown[]): void; error(...a: unknown[]): void };
   /** Forwarded to `HandlerDeps.activeConnectionId` (TASK.45 W10, `createTabNew`'s pin). */
   activeConnectionId?: () => string | undefined;
+  /** Forwarded to `HandlerDeps.previewHost` (night-track wave-1 cut §2.8, 96-E preview probes/driver). */
+  previewHost?: PreviewHostHandle;
 }
 
 export interface AutomationServerHandle {
@@ -437,6 +444,24 @@ const shortcutsSlotBody = z.object({
 }).strict();
 const shortcutsActionBody = z.object({ action: z.string().min(1).max(64) }).strict();
 
+// ── Preview probe/driver body (night-track wave-1 cut §2.8, 96-E):
+// `/tabs/:tabId/previews` POST body — `path`/`url` mirror BrowserOpen's own
+// input shape (packages/core/src/tools/browser-preview.ts), capped the same
+// (4096 chars, matching every other free-text path/url field in this file:
+// `projectBody`/`startScreenWorkspaceBody`). Exactly-one-of is NOT enforced
+// here — `PreviewHost.openForTab` itself refuses both-or-neither with a
+// domain-level `invalid_input`, so this boundary stays a thin type gate,
+// same "let the handle own its own validation" posture as `gitCommandBody`
+// reusing the host's own zod instance above. `allowRemote` is deliberately
+// NOT a field here at all: the automation channel can never fake the
+// remote-URL consent a real BrowserOpen approval represents (cut §2.8).
+const previewOpenBody = z
+  .object({
+    path: z.string().min(1).max(4096).optional(),
+    url: z.string().min(1).max(4096).optional(),
+  })
+  .strict();
+
 // ── Codex probe bodies (W4-F0, findings S1-1) ──
 // Probe (b): ONE route, a union body — `{open}` toggles the chip popover,
 // `{pick}` clicks the Nth RENDERED option row (rows carry no stable id in the
@@ -642,6 +667,26 @@ async function route(
   // — same per-block-scoped GET shape as the agent-card probe above.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "try-again-button") {
     return tryAgainButtonState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // Preview probes (night-track wave-1 cut §2.8, 96-E): `/tabs/:tabId/previews`
+  // — same per-tab GET shape as the todo-panel/model-pill probes above, but
+  // backed DIRECTLY by PreviewHost (main-plane, no facade call at all — same
+  // posture as `GET /screenshot`'s direct `getWindow()` call).
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "previews") {
+    return previewsForTab(deps, decodeURIComponent(parts[1]!));
+  }
+  // `/tabs/:tabId/previews/:previewId/console` — one segment deeper than the
+  // agent-card/try-again-button GET probes above (a per-preview read, not a
+  // per-tab singleton), same decodeURIComponent-both-segments posture.
+  // `?tail=N` reuses the SAME `parseTail` helper `GET /state` validates with.
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "console") {
+    return previewConsole(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!), parseTail(searchParams));
+  }
+  // `/tabs/:tabId/previews/:previewId/screenshot` — reuses PreviewHost's own
+  // screenshot op (macOS show/throttling dance included), same per-preview
+  // depth as the console route above.
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "screenshot") {
+    return previewScreenshot(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
   if (method === "GET" && pathname === "/start-screen") {
     return startScreenState(deps);
@@ -1058,6 +1103,14 @@ async function route(
         const body = parseBody(rawBody, rewindBody);
         return checkpointRewind(deps, tabId, { checkpointId: body.checkpointId, index: body.index, scope: body.scope });
       }
+      // Preview open driver (night-track wave-1 cut §2.8, 96-E): opens via
+      // PreviewHost directly, a model-free smoke of 96-A's open op. Remote
+      // http(s) is refused by construction (previewOpenBody's own doc
+      // comment) — never by a special case here.
+      case "previews": {
+        const body = parseBody(rawBody, previewOpenBody);
+        return previewOpen(deps, tabId, body);
+      }
       default:
         throw new HttpError(404, { error: "not_found" });
     }
@@ -1303,6 +1356,7 @@ export function startAutomationServer(deps: AutomationServerDeps): Promise<Autom
     manager: deps.manager,
     app: deps.app,
     activeConnectionId: deps.activeConnectionId,
+    previewHost: deps.previewHost,
   };
 
   const server = createServer((req, res) => {
