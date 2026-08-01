@@ -64,7 +64,7 @@ function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle
     selectPanelPreview: vi.fn(() => ({ ok: true as const })),
     closePreview: vi.fn(() => ({ ok: true as const })),
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
-    setContainer: vi.fn(async () => ({ ok: false as const, error: "transfer lands in 96-P3" })),
+    setContainer: vi.fn(async () => ({ ok: true as const, reloaded: true })),
     ...overrides,
   };
 }
@@ -80,10 +80,57 @@ function register(host: PreviewHostHandle): { invoke: (channel: string, raw: unk
   };
 }
 
-describe("registerPreviewPanelIpc — SET_CONTAINER is NOT registered in 96-P1", () => {
-  it("no handler is registered for PREVIEW_SET_CONTAINER_CHANNEL (lands in 96-P3)", () => {
+describe("registerPreviewPanelIpc — SET_CONTAINER (invoke, 96-P3)", () => {
+  it("is registered (lands in 96-P3, unlike the 96-P1 checkpoint)", () => {
     register(fakeHost());
-    expect(mockHandlers.has(PREVIEW_SET_CONTAINER_CHANNEL)).toBe(false);
+    expect(mockHandlers.has(PREVIEW_SET_CONTAINER_CHANNEL)).toBe(true);
+  });
+
+  it("valid payload forwards to host.setContainer and returns its result verbatim", async () => {
+    const host = fakeHost({ setContainer: vi.fn(async () => ({ ok: true as const, reloaded: true })) });
+    const invoke = register(host);
+    const response = await invoke.invoke(PREVIEW_SET_CONTAINER_CHANNEL, {
+      tabId: "tab-a",
+      previewId: "p1",
+      container: "panel",
+    });
+    expect(host.setContainer).toHaveBeenCalledWith("tab-a", "p1", "panel");
+    expect(response).toEqual({ ok: true, reloaded: true });
+  });
+
+  it("forwards a 'window' container request the same way", async () => {
+    const host = fakeHost({ setContainer: vi.fn(async () => ({ ok: true as const, reloaded: false })) });
+    const invoke = register(host);
+    await invoke.invoke(PREVIEW_SET_CONTAINER_CHANNEL, { tabId: "tab-a", previewId: "p1", container: "window" });
+    expect(host.setContainer).toHaveBeenCalledWith("tab-a", "p1", "window");
+  });
+
+  it("malformed payload (bad container enum) refuses without calling the host", async () => {
+    const host = fakeHost();
+    const invoke = register(host);
+    const response = await invoke.invoke(PREVIEW_SET_CONTAINER_CHANNEL, {
+      tabId: "tab-a",
+      previewId: "p1",
+      container: "tab",
+    });
+    expect(host.setContainer).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, error: expect.any(String) });
+  });
+
+  it("malformed payload (missing field) refuses without calling the host", async () => {
+    const host = fakeHost();
+    const invoke = register(host);
+    const response = await invoke.invoke(PREVIEW_SET_CONTAINER_CHANNEL, { tabId: "tab-a", container: "panel" });
+    expect(host.setContainer).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, error: expect.any(String) });
+  });
+
+  it("non-object payload refuses without calling the host", async () => {
+    const host = fakeHost();
+    const invoke = register(host);
+    const response = await invoke.invoke(PREVIEW_SET_CONTAINER_CHANNEL, "not-an-object");
+    expect(host.setContainer).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, error: expect.any(String) });
   });
 });
 
@@ -239,6 +286,8 @@ function makeFakeWc(): FakeWc {
     onDidNavigate: () => {},
     onConsoleMessage: () => {},
     setRequestGate: () => {},
+    getNavigationHistory: () => ({ entries: [], index: 0 }),
+    restoreNavigationHistory: async () => {},
     fireDidFinishLoad: () => {
       for (const listener of finishListeners) listener();
     },

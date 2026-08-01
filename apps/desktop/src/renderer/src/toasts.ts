@@ -13,9 +13,10 @@
  */
 import type { NoticeKind } from "./store.js";
 
-/** Renderer-only kind extension: App-shell create/resume errors join the
+/** Renderer-only kind extension: App-shell create/resume errors, and the
+ *  panel-track (TASK.96 96-P3, D14) transfer state-loss notice, join the
  *  queue without touching the frozen store NoticeKind union. */
-export type ToastKind = NoticeKind | "shell_error";
+export type ToastKind = NoticeKind | "shell_error" | "preview_transferred";
 
 /** Color is state (design thesis): neutral = informational chrome,
  *  warning = degraded-but-self-healing or settled-without-you,
@@ -59,6 +60,10 @@ export const TOAST_AUTO_HIDE_MS = 5000;
  * refused state (same tint family as stream_retry/permission_settled).
  * TASK.56 W3-FIX: retry_blocked is danger — the user's Try-again click was
  * refused (same tint family as mode_change_rejected/image_attach_rejected).
+ * Panel-track TASK.96 96-P3 (D14): preview_transferred is neutral — a
+ * completed, user-initiated transfer (Open in window / the Previews menu),
+ * same tint family as rewind_restored/compaction_end; the state loss it
+ * reports is expected fallout of the user's own action, not a refusal.
  */
 const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   turn_rejected: "warning",
@@ -77,7 +82,11 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   worktree_notice: "warning",
   retry_blocked: "danger",
   shell_error: "danger",
+  preview_transferred: "neutral",
 };
+
+/** D14 (96-P3): exact copy shown once per completed panel<->window transfer. */
+export const PREVIEW_TRANSFERRED_TEXT = "Preview moved — the page reloaded, in-page state was reset";
 
 export function toastTone(kind: ToastKind): ToastTone {
   return TOAST_TONES[kind];

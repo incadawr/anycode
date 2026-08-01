@@ -8,10 +8,10 @@
  * trust-boundary posture as tab-ipc.ts) — main never trusts a shape/range a
  * compromised renderer could have sent.
  *
- * `PREVIEW_SET_CONTAINER_CHANNEL`'s handler is deliberately NOT registered
- * here — the constant is exported from shared/preview-panel.ts for both P1
- * and P2 to reference, but the transfer implementation (and this module's
- * one additional `ipcMain.handle` call) lands in 96-P3 (CUT.md §0/§3).
+ * `PREVIEW_SET_CONTAINER_CHANNEL`'s handler (96-P3, CUT.md §0/§3): the one
+ * additional `ipcMain.handle` call this module's P1 header used to defer —
+ * zod-validated the same way as SELECT/CLOSE (`tabId`/`previewId`, plus the
+ * container-kind enum), forwarding verbatim to `PreviewHostHandle.setContainer`.
  */
 import { ipcMain } from "electron";
 import { z } from "zod";
@@ -21,8 +21,10 @@ import {
   PREVIEW_PANEL_SELECT_CHANNEL,
   PREVIEW_PANEL_SET_BOUNDS_CHANNEL,
   PREVIEW_PANEL_SET_STATE_CHANNEL,
+  PREVIEW_SET_CONTAINER_CHANNEL,
   type PreviewChangedPayload,
   type PreviewPanelBounds,
+  type PreviewSetContainerResult,
 } from "../../shared/preview-panel.js";
 import { clampPanelBounds, type PreviewHostHandle } from "./preview-host.js";
 
@@ -50,6 +52,12 @@ const tabPreviewSchema = z.object({
 });
 
 const listSchema = z.object({ tabId: z.string().min(1) });
+
+const setContainerSchema = z.object({
+  tabId: z.string().min(1),
+  previewId: z.string().min(1),
+  container: z.enum(["panel", "window"]),
+});
 
 function emptyChangedPayload(tabId: string): PreviewChangedPayload {
   return { tabId, previews: [], visiblePanelPreviewId: null };
@@ -104,5 +112,15 @@ export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
       return emptyChangedPayload("");
     }
     return deps.host.listForPanel(parsed.data.tabId);
+  });
+
+  // 96-P3: the transfer handler — P1/P2 only ever exported/exposed the
+  // constant (CUT.md §0/§3); this is the module's one additional registration.
+  ipcMain.handle(PREVIEW_SET_CONTAINER_CHANNEL, (_event, raw: unknown): Promise<PreviewSetContainerResult> => {
+    const parsed = setContainerSchema.safeParse(raw);
+    if (!parsed.success) {
+      return Promise.resolve({ ok: false, error: "invalid request" });
+    }
+    return deps.host.setContainer(parsed.data.tabId, parsed.data.previewId, parsed.data.container);
   });
 }

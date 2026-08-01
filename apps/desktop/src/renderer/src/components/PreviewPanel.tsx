@@ -9,19 +9,28 @@
  * bounds publisher lives here, fed through panel-bridge.ts's
  * `reportPanelBounds`); the body shows a neutral placeholder while the view
  * itself is actually hidden (any overlay open, D6) or before any preview has
- * settled. "Open in window" lands in 96-P3 — this header does NOT call
- * `setContainer` (P2 rule: the main handler for it doesn't exist yet).
+ * settled. "Open in window" (96-P3, D14) calls `previewPanel.setContainer`
+ * and, on `{ok:true, reloaded:true}`, raises the state-loss toast through
+ * the caller-supplied `onToast` — App.tsx's existing onToast/toasts.ts
+ * pipeline, threaded down the same way `ActiveTabBody` already threads it
+ * to `TabNoticeCapture`.
  */
 import { useContext, useEffect, useRef } from "react";
 import { TabContext } from "../tab-context.js";
 import { reportPanelBounds } from "../preview/panel-bridge.js";
 import { usePreviewStore } from "../preview/preview-store.js";
 import { useOverlayOpenSnapshot } from "../preview/overlay-flag.js";
+import { PREVIEW_TRANSFERRED_TEXT, type ToastKind } from "../toasts.js";
 import { X } from "./icons.js";
 
 const EMPTY_PREVIEWS: never[] = [];
 
-export function PreviewPanel() {
+export interface PreviewPanelProps {
+  /** P3 D14: raises the transfer state-loss toast (kind → tone/glyph in toasts.ts). */
+  onToast(kind: ToastKind, text: string): void;
+}
+
+export function PreviewPanel({ onToast }: PreviewPanelProps) {
   const ctx = useContext(TabContext);
   if (!ctx) {
     throw new Error("PreviewPanel must be used within a <TabContext.Provider>");
@@ -88,6 +97,26 @@ export function PreviewPanel() {
     });
   }
 
+  // D14 (96-P3): transfer the visible panel preview out into a window.
+  // `reloaded:false` (a same-container no-op) never reaches here because the
+  // button only ever requests "window" from an already-panel preview.
+  function openInWindow(previewId: string): void {
+    window.anycode.previewPanel
+      .setContainer(tabId, previewId, "window")
+      .then((result) => {
+        if (!result.ok) {
+          console.warn("[PreviewPanel] setContainer failed", result.error);
+          return;
+        }
+        if (result.reloaded) {
+          onToast("preview_transferred", PREVIEW_TRANSFERRED_TEXT);
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("[PreviewPanel] setContainer failed", error);
+      });
+  }
+
   return (
     <div className="preview-panel">
       <div className="preview-panel-header">
@@ -105,6 +134,17 @@ export function PreviewPanel() {
               </option>
             ))}
           </select>
+        )}
+        {visible && (
+          <button
+            type="button"
+            className="preview-panel-open-window"
+            aria-label="Open in window"
+            title="Open this preview in a separate window"
+            onClick={() => openInWindow(visible.previewId)}
+          >
+            Open in window
+          </button>
         )}
         {visible && (
           <button

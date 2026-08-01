@@ -90,6 +90,18 @@ class FakeWebContents extends EventEmitter {
   };
   debugger = fakeDebugger();
   destroyedFlag = false;
+  /** D14 (96-P3): mock `Electron.WebContents.navigationHistory`. */
+  navigationHistory = {
+    entries: [] as Array<{ url: string; title: string }>,
+    activeIndex: 0,
+    restoreCalls: [] as Array<{ entries: Array<{ url: string; title: string }>; index?: number }>,
+    getAllEntries: (): Array<{ url: string; title: string }> => this.navigationHistory.entries,
+    getActiveIndex: (): number => this.navigationHistory.activeIndex,
+    restore: (options: { entries: Array<{ url: string; title: string }>; index?: number }): Promise<void> => {
+      this.navigationHistory.restoreCalls.push(options);
+      return Promise.resolve();
+    },
+  };
 
   loadURL(url: string): Promise<void> {
     this.loadURLCalls.push(url);
@@ -470,6 +482,36 @@ describe("createElectronPreviewWindow — redirect gate + WebRTC hardening (cut 
   });
 });
 
+describe("createElectronPreviewWindow — navigation history (D14, panel-track CUT.md §2.2/§3 96-P3)", () => {
+  it("getNavigationHistory maps to navigationHistory.getAllEntries()/getActiveIndex()", () => {
+    const win = createElectronPreviewWindow({ previewId: "nav-a" });
+    const fake = latestWindow();
+    fake.webContents.navigationHistory.entries = [
+      { url: "https://a.example/", title: "A" },
+      { url: "https://a.example/b", title: "B" },
+    ];
+    fake.webContents.navigationHistory.activeIndex = 1;
+
+    expect(win.webContents.getNavigationHistory()).toEqual({
+      entries: [
+        { url: "https://a.example/", title: "A" },
+        { url: "https://a.example/b", title: "B" },
+      ],
+      index: 1,
+    });
+  });
+
+  it("restoreNavigationHistory maps to navigationHistory.restore({entries, index})", async () => {
+    const win = createElectronPreviewWindow({ previewId: "nav-b" });
+    const fake = latestWindow();
+    const state = { entries: [{ url: "https://a.example/", title: "A" }], index: 0 };
+
+    await win.webContents.restoreNavigationHistory(state);
+
+    expect(fake.webContents.navigationHistory.restoreCalls).toEqual([state]);
+  });
+});
+
 describe("createElectronPreviewWindow — console/CDP string slicing (cut §1.3/F3)", () => {
   it("slices a console-message string to RING_MAX_MSG_CHARS before the listener", () => {
     const win = createElectronPreviewWindow({ previewId: "slice-a" });
@@ -611,5 +653,22 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
     const panel = createElectronPanelView({ previewId: "panel-h" }, { getWindow: () => null });
     expect(() => panel.destroy()).not.toThrow();
     expect(panel.isDestroyed()).toBe(true);
+  });
+
+  it("shares getNavigationHistory/restoreNavigationHistory via the SAME wrapWebContents mapping as the window adapter (D14, 96-P3)", async () => {
+    const win = new FakeMainWindow();
+    const panel = createElectronPanelView({ previewId: "panel-i" }, { getWindow: () => win as unknown as BrowserWindow });
+    const view = latestPanelView();
+    view.webContents.navigationHistory.entries = [{ url: "file:///a.html", title: "A" }];
+    view.webContents.navigationHistory.activeIndex = 0;
+
+    expect(panel.webContents.getNavigationHistory()).toEqual({
+      entries: [{ url: "file:///a.html", title: "A" }],
+      index: 0,
+    });
+
+    const state = { entries: [{ url: "file:///a.html", title: "A" }], index: 0 };
+    await panel.webContents.restoreNavigationHistory(state);
+    expect(view.webContents.navigationHistory.restoreCalls).toEqual([state]);
   });
 });

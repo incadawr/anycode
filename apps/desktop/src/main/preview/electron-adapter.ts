@@ -196,6 +196,14 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
         );
       });
     },
+    // D14 (96-P3): mapped verbatim to Electron 43's `navigationHistory` API —
+    // asserted at typecheck (this file only compiles against the real
+    // `electron.d.ts`), no runtime feature-sniff.
+    getNavigationHistory: () => ({
+      entries: wc.navigationHistory.getAllEntries().map((entry) => ({ url: entry.url, title: entry.title })),
+      index: wc.navigationHistory.getActiveIndex(),
+    }),
+    restoreNavigationHistory: (state) => wc.navigationHistory.restore({ entries: state.entries, index: state.index }),
   };
 }
 

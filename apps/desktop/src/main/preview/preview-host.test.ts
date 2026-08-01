@@ -59,6 +59,12 @@ class FakeWebContents implements PreviewWebContentsLike {
   capturePageImpl: () => Promise<PreviewCapturedImage> = () => Promise.resolve(fakeImage());
   /** Captured by `setRequestGate` — tests drive the F2 policy directly through this. */
   requestGate?: (req: { url: string; resourceType: string }) => Promise<boolean>;
+  /** D14 (96-P3): back/forward stack a test pre-loads before triggering a transfer. */
+  navigationHistoryEntries: Array<{ url: string; title: string }> = [];
+  navigationHistoryIndex = 0;
+  restoreNavigationHistoryCalls: Array<{ entries: Array<{ url: string; title: string }>; index: number }> = [];
+  restoreNavigationHistoryImpl: (state: { entries: Array<{ url: string; title: string }>; index: number }) => Promise<void> =
+    () => Promise.resolve();
 
   private didFinishLoad: Array<() => void> = [];
   private didFailLoad: Array<(code: number, desc: string, isMainFrame: boolean) => void> = [];
@@ -114,6 +120,13 @@ class FakeWebContents implements PreviewWebContentsLike {
   }
   setRequestGate(gate: (req: { url: string; resourceType: string }) => Promise<boolean>): void {
     this.requestGate = gate;
+  }
+  getNavigationHistory(): { entries: Array<{ url: string; title: string }>; index: number } {
+    return { entries: this.navigationHistoryEntries, index: this.navigationHistoryIndex };
+  }
+  restoreNavigationHistory(state: { entries: Array<{ url: string; title: string }>; index: number }): Promise<void> {
+    this.restoreNavigationHistoryCalls.push(state);
+    return this.restoreNavigationHistoryImpl(state);
   }
 
   // ── test drivers (simulate Electron firing these events) ──
@@ -238,6 +251,15 @@ interface Rig {
   displayModeValue: { value: "panel" | "window" };
   resolveArtifactImpl: (tabId: string, path: string) => Promise<{ realPath: string } | { failure: string }>;
   renderMarkdownImpl?: (realPath: string) => Promise<{ htmlPath: string } | { error: string }>;
+  /**
+   * D14 (96-P3) test hooks: `setContainer` creates the NEW container
+   * synchronously (before its first `await`), so a test that needs to
+   * pre-configure the fresh fake (e.g. make its `restoreNavigationHistory`
+   * reject) has no window to reach INTO before calling `setContainer` —
+   * these fire right after construction, closing that gap.
+   */
+  onWindowCreated?: (win: FakeWindow) => void;
+  onPanelViewCreated?: (view: FakePanelView) => void;
 }
 
 /** Default containment fake: anything under `/workspace` resolves; everything else is refused. */
@@ -275,11 +297,13 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
     createWindow: (opts: CreateWindowOpts) => {
       const win = new FakeWindow(opts.previewId);
       windows.push(win);
+      rig.onWindowCreated?.(win);
       return win;
     },
     createPanelView: (opts: CreateWindowOpts) => {
       const view = new FakePanelView(opts.previewId);
       panelViews.push(view);
+      rig.onPanelViewCreated?.(view);
       return view;
     },
     displayMode: () => displayModeValue.value,
@@ -1910,5 +1934,297 @@ describe("PreviewHost — panel container: security regression (invariant 7, sam
     expect(result).toEqual({ ok: false, error: expect.any(String), errorKind: "invalid_input" });
     expect(rig.panelViews[0]!.destroyed).toBe(true);
     expect(rig.panelViews[0]!.webContents.loadedUrls).toEqual([]);
+  });
+});
+
+describe("PreviewHost — setContainer: unknown preview (96-P3)", () => {
+  it("unknown previewId -> ok:false, no container churn", async () => {
+    const rig = makeRig();
+    const result = await rig.host.setContainer(TAB, "ghost", "panel");
+    expect(result).toEqual({ ok: false, error: expect.any(String) });
+    expect(rig.windows).toHaveLength(0);
+    expect(rig.panelViews).toHaveLength(0);
+  });
+
+  it("wrong tabId -> ok:false", async () => {
+    const rig = makeRig();
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+
+    const transfer = await rig.host.setContainer("some-other-tab", previewId, "panel");
+    expect(transfer).toEqual({ ok: false, error: expect.any(String) });
+  });
+});
+
+describe("PreviewHost — setContainer: same-container is a zero-churn no-op (96-P3)", () => {
+  it("window -> window is a pure no-op ({ok:true, reloaded:false}), zero create/destroy calls", async () => {
+    const rig = makeRig();
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+
+    const transfer = await rig.host.setContainer(TAB, previewId, "window");
+    expect(transfer).toEqual({ ok: true, reloaded: false });
+    expect(rig.windows).toHaveLength(1);
+    expect(rig.panelViews).toHaveLength(0);
+    expect(rig.windows[0]!.destroyed).toBe(false);
+  });
+
+  it("panel -> panel delegates to selectPanelPreview, zero create/destroy calls", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await first;
+    const firstId = firstResult.ok ? firstResult.value.previewId : "";
+
+    rig.clock.time += 10;
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    rig.panelViews[1]!.webContents.fireDidFinishLoad();
+    await second;
+    // second is the visible slot (most-recently-opened, D5).
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).not.toBe(firstId);
+
+    const transfer = await rig.host.setContainer(TAB, firstId, "panel");
+    expect(transfer).toEqual({ ok: true, reloaded: false });
+    expect(rig.panelViews).toHaveLength(2);
+    expect(rig.panelViews.every((v) => !v.destroyed)).toBe(true);
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(firstId);
+  });
+});
+
+describe("PreviewHost — setContainer: D14 transfer window -> panel (96-P3)", () => {
+  async function openedWindowRig(
+    openReq: { path?: string; url?: string; allowRemote?: boolean } = { path: `${WORKSPACE_ROOT}/a.html` },
+  ): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig(); // default displayMode "window" — untouched by this describe's setup
+    const opened = rig.host.openForTab(TAB, openReq);
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    return { rig, previewId: result.ok ? result.value.previewId : "" };
+  }
+
+  it("creates a panel view with the SAME previewId (partition continuity), destroys the old window, and the record SURVIVES", async () => {
+    const { rig, previewId } = await openedWindowRig();
+    const oldWindow = rig.windows[0]!;
+
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    expect(rig.panelViews).toHaveLength(1);
+    expect(rig.panelViews[0]!.previewId).toBe(previewId); // same previewId => same partition upstream (D2)
+    expect(oldWindow.destroyed).toBe(true); // old container torn down as part of the transfer
+
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const result = await transferPromise;
+
+    expect(result).toEqual({ ok: true, reloaded: true });
+    // Epoch-guarded onClosed proof: the OLD window's onClosed already fired
+    // (via destroy() above) yet the record is still in the map.
+    expect(rig.host.listForPanel(TAB).previews.map((p) => p.previewId)).toContain(previewId);
+  });
+
+  it("re-wires the new panel contents with the SAME security wiring (no second copy)", async () => {
+    const { rig, previewId } = await openedWindowRig();
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    const view = rig.panelViews[0]!;
+
+    expect(view.webContents.windowOpenHandler?.({ url: "https://evil.example/popup" })).toEqual({ action: "deny" });
+    const granted = await new Promise<boolean>((resolve) => {
+      view.webContents.permissionRequestHandler?.("camera", resolve);
+    });
+    expect(granted).toBe(false);
+    expect(view.webContents.requestGate).toBeDefined();
+
+    view.webContents.fireDidFinishLoad();
+    const result = await transferPromise;
+    expect(result.ok).toBe(true);
+  });
+
+  it("captures history from the OLD contents and calls restoreNavigationHistory with it on the NEW contents", async () => {
+    const { rig, previewId } = await openedWindowRig();
+    const history = {
+      entries: [
+        { url: pathToFileURL(`${WORKSPACE_ROOT}/a.html`).href, title: "A" },
+        { url: pathToFileURL(`${WORKSPACE_ROOT}/other.html`).href, title: "Other" },
+      ],
+      index: 1,
+    };
+    rig.windows[0]!.webContents.navigationHistoryEntries = history.entries;
+    rig.windows[0]!.webContents.navigationHistoryIndex = history.index;
+
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    expect(rig.panelViews[0]!.webContents.restoreNavigationHistoryCalls).toEqual([history]);
+
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    await transferPromise;
+  });
+
+  it("empty history falls back to loadURL(record.url), never calling restoreNavigationHistory", async () => {
+    const { rig, previewId } = await openedWindowRig();
+    // navigationHistoryEntries defaults to [] on the fake — no history captured for this preview.
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+
+    expect(rig.panelViews[0]!.webContents.restoreNavigationHistoryCalls).toEqual([]);
+    expect(rig.panelViews[0]!.webContents.loadedUrls).toContain(pathToFileURL(`${WORKSPACE_ROOT}/a.html`).href);
+
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const result = await transferPromise;
+    expect(result).toEqual({ ok: true, reloaded: true });
+  });
+
+  it("consoleRing and consentedOrigins survive the transfer, and the NEW contents' request gate honors prior consent (security continuity)", async () => {
+    const { rig, previewId } = await openedWindowRig({ url: "https://a.tld/app", allowRemote: true });
+    rig.windows[0]!.webContents.fireConsoleMessage("log", "hello-from-old-container");
+
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    await transferPromise;
+
+    const console_ = rig.host.getConsole(TAB, previewId);
+    const entries = "entries" in console_ ? console_.entries : [];
+    expect(entries.some((e) => e.message === "hello-from-old-container")).toBe(true);
+
+    const gate = rig.panelViews[0]!.webContents.requestGate!;
+    await expect(gate({ url: "https://a.tld/script.js", resourceType: "script" })).resolves.toBe(true);
+    await expect(gate({ url: "https://other-origin.example/", resourceType: "xhr" })).resolves.toBe(false);
+  });
+
+  it("late old-contents events after the swap (did-fail-load / render-process-gone) leave record status untouched", async () => {
+    const { rig, previewId } = await openedWindowRig();
+    const oldWindow = rig.windows[0]!;
+
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    await transferPromise;
+
+    expect(rig.host.listForPanel(TAB).previews.find((p) => p.previewId === previewId)?.status).toBe("ready");
+
+    // The old window is already destroyed, but its FakeWebContents can still
+    // fire late-arriving events synchronously — the epoch guard must no-op them.
+    oldWindow.webContents.fireDidFailLoad(-6, "ERR_FILE_NOT_FOUND");
+    oldWindow.webContents.fireRenderProcessGone("crashed");
+
+    expect(rig.host.listForPanel(TAB).previews.find((p) => p.previewId === previewId)?.status).toBe("ready");
+  });
+
+  it("restoreNavigationHistory rejecting -> honest {ok:false} + status 'failed'", async () => {
+    const rig = makeRig();
+    rig.onPanelViewCreated = (view) => {
+      view.webContents.restoreNavigationHistoryImpl = () => Promise.reject(new Error("restore exploded"));
+    };
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const openedResult = await opened;
+    const previewId = openedResult.ok ? openedResult.value.previewId : "";
+    rig.windows[0]!.webContents.navigationHistoryEntries = [{ url: "https://x.example/", title: "x" }];
+
+    const result = await rig.host.setContainer(TAB, previewId, "panel");
+    expect(result).toEqual({ ok: false, error: expect.any(String) });
+    expect(rig.host.listForPanel(TAB).previews.find((p) => p.previewId === previewId)?.status).toBe("failed");
+  });
+
+  it("a settle failure on the new container after a successful restore -> honest {ok:false} + status 'failed'", async () => {
+    const { rig, previewId } = await openedWindowRig();
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFailLoad(-6, "ERR_FILE_NOT_FOUND");
+    const result = await transferPromise;
+
+    expect(result).toEqual({ ok: false, error: expect.any(String) });
+    expect(rig.host.listForPanel(TAB).previews.find((p) => p.previewId === previewId)?.status).toBe("failed");
+  });
+});
+
+describe("PreviewHost — setContainer: D14 transfer panel -> window (96-P3)", () => {
+  async function openedPanelRig(): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    return { rig, previewId: result.ok ? result.value.previewId : "" };
+  }
+
+  it("creates a window, destroys the old panel view, clears the visible slot, and show()s the new window", async () => {
+    const { rig, previewId } = await openedPanelRig();
+    const oldView = rig.panelViews[0]!;
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewId);
+
+    const transferPromise = rig.host.setContainer(TAB, previewId, "window");
+    await flush();
+    expect(rig.windows).toHaveLength(1);
+    expect(oldView.destroyed).toBe(true);
+
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await transferPromise;
+
+    expect(result).toEqual({ ok: true, reloaded: true });
+    expect(rig.windows[0]!.shown).toBe(true);
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBeNull();
+  });
+
+  it("promotes the most-recently-opened surviving panel preview's visible slot when the transferred-out preview held it", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await first;
+    const firstId = firstResult.ok ? firstResult.value.previewId : "";
+
+    rig.clock.time += 10;
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    rig.panelViews[1]!.webContents.fireDidFinishLoad();
+    const secondResult = await second;
+    const secondId = secondResult.ok ? secondResult.value.previewId : "";
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(secondId);
+
+    const transferPromise = rig.host.setContainer(TAB, secondId, "window");
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await transferPromise;
+
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(firstId);
+  });
+
+  it("transferring a HIDDEN (non-visible-slot) panel preview out leaves the visible slot untouched", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await first;
+    const firstId = firstResult.ok ? firstResult.value.previewId : "";
+
+    rig.clock.time += 10;
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    rig.panelViews[1]!.webContents.fireDidFinishLoad();
+    const secondResult = await second;
+    const secondId = secondResult.ok ? secondResult.value.previewId : "";
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(secondId); // first is hidden
+
+    const transferPromise = rig.host.setContainer(TAB, firstId, "window");
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await transferPromise;
+
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(secondId); // untouched
   });
 });

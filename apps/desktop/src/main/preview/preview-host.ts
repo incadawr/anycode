@@ -142,6 +142,21 @@ export interface PreviewWebContentsLike {
    * callback exactly once.
    */
   setRequestGate(gate: (req: { url: string; resourceType: string }) => Promise<boolean>): void;
+  /**
+   * D14 transfer (96-P3): snapshot of the back/forward stack, captured from
+   * the OLD contents before it is torn down. Synchronous (mirrors Electron's
+   * own `navigationHistory.getAllEntries()`/`getActiveIndex()`, which never
+   * touch the network).
+   */
+  getNavigationHistory(): { entries: Array<{ url: string; title: string }>; index: number };
+  /**
+   * D14 transfer (96-P3): replays a captured history onto the NEW contents —
+   * Electron's `navigationHistory.restore()` also navigates to the active
+   * entry itself, so the caller never calls `loadURL` alongside this (empty
+   * history is the caller's cue to fall back to `loadURL(record.url)`
+   * instead of calling this at all).
+   */
+  restoreNavigationHistory(state: { entries: Array<{ url: string; title: string }>; index: number }): Promise<void>;
 }
 
 export interface PreviewWindowLike {
@@ -265,7 +280,7 @@ export interface PreviewHostHandle {
   closePreview(tabId: string, previewId: string): { ok: boolean; error?: string };
   /** Hydration read (P1): ALL of the tab's previews across both containers + the visible panel slot. */
   listForPanel(tabId: string): PreviewChangedPayload;
-  /** D14 transfer — declared here (frozen contract, §2.2) but implemented in 96-P3; this checkpoint always refuses honestly. */
+  /** D14: recreates the preview's container (panel<->window), preserving history/console/consent (96-P3). */
   setContainer(tabId: string, previewId: string, container: PreviewContainerKind): Promise<PreviewSetContainerResult>;
 }
 
@@ -368,6 +383,31 @@ function selectorReadScript(selector: string, format: "text" | "html"): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * D14 epoch guard (the ONE guard helper `wireWindow` uses for every listener
+ * it installs, not ten copies): wraps a listener body so it only ever runs
+ * while `container` — captured once, at the `wireWindow` call that wired
+ * it — is STILL the record's current container. A transfer
+ * (`PreviewHost.setContainer`) swaps `record.window` to a fresh container and
+ * re-runs `wireWindow` against it; every listener the OLD wiring installed
+ * then fails this check forever (the old container is destroyed right after
+ * the swap, but even a late in-flight event — did-fail-load,
+ * render-process-gone, onClosed — arriving before that teardown lands must
+ * not mutate or destroy a record that has already moved on).
+ */
+function guardContainerEpoch<A extends unknown[]>(
+  record: PreviewRecord,
+  container: PreviewWindowLike,
+  handler: (...args: A) => void,
+): (...args: A) => void {
+  return (...args: A) => {
+    if (record.window !== container) {
+      return;
+    }
+    handler(...args);
+  };
 }
 
 /** Distinguishes an `executeJavaScript` deadline from every other rejection reason (cut §1.3/F3). */
@@ -981,17 +1021,122 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * D14 transfer: declared on the handle (frozen contract, §2.2) but
-   * implemented in 96-P3. The renderer never calls this before P3 lands (P2
-   * rule) — this checkpoint always refuses honestly rather than silently
-   * no-opping or throwing.
+   * D14 transfer (96-P3): recreate-with-epoch-guard. Same-container requests
+   * are zero-churn no-ops (a "panel" one reuses D5's own select semantics; a
+   * "window" one has nothing to select). A real transfer captures the OLD
+   * contents' navigation history, creates the NEW container under the SAME
+   * previewId (D2 — same partition, cookies/localStorage survive), swaps
+   * `record.window`/`containerKind`/`panelView` to it, re-wires it (the
+   * epoch guard below is what makes this swap-before-destroy order safe),
+   * destroys the OLD container, then restores history (empty -> `loadURL`
+   * fallback) and waits for it to settle. Any failure past this point
+   * (restore/load rejects, or the new contents never reaches "ready") is
+   * honest: `{ok:false}` with the record left in status "failed" — never
+   * silently left "loading" — recoverable via another `BrowserOpen`.
    */
   async setContainer(
-    _tabId: string,
-    _previewId: string,
-    _container: PreviewContainerKind,
+    tabId: string,
+    previewId: string,
+    container: PreviewContainerKind,
   ): Promise<PreviewSetContainerResult> {
-    return { ok: false, error: "transfer lands in 96-P3" };
+    const record = this.previews.get(previewId);
+    if (record === undefined || record.destroyed || record.tabId !== tabId) {
+      return { ok: false, error: `no such preview: ${previewId}` };
+    }
+
+    if (record.containerKind === container) {
+      // Zero container churn (invariant — no create/destroy calls at all).
+      if (container === "panel") {
+        const result = this.selectPanelPreview(tabId, previewId);
+        return result.ok ? { ok: true, reloaded: false } : { ok: false, error: result.error ?? "failed to select preview" };
+      }
+      return { ok: true, reloaded: false };
+    }
+
+    const oldContainer = record.window;
+    const wasVisibleSlotHolder = record.containerKind === "panel" && this.visiblePanelPreviewId.get(tabId) === previewId;
+
+    let history: { entries: Array<{ url: string; title: string }>; index: number };
+    try {
+      history = oldContainer.webContents.getNavigationHistory();
+    } catch {
+      history = { entries: [], index: 0 };
+    }
+
+    let newWindow: PreviewWindowLike;
+    let newPanelView: PreviewPanelViewLike | undefined;
+    if (container === "panel") {
+      const view = this.deps.createPanelView({ previewId });
+      newWindow = view;
+      newPanelView = view;
+    } else {
+      // Cascade position is windows-only (D4) — mirrors openForTab's own new-window path.
+      const cascade = this.cascadePosition();
+      newWindow = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y });
+    }
+
+    // Swap BEFORE re-wiring: `wireWindow` captures its own epoch off
+    // `record.window`, so the new listeners must see the NEW container
+    // already in place — from this line on, every listener the OLD wiring
+    // installed stops matching `record.window` and becomes a no-op (D14).
+    record.window = newWindow;
+    record.containerKind = container;
+    record.panelView = newPanelView;
+    record.status = "loading";
+    this.wireWindow(record);
+
+    // The old container's death (and any of its late in-flight events —
+    // did-fail-load, render-process-gone, onClosed) is now safely a no-op
+    // for `record`: the epoch guard on every listener it registered no
+    // longer matches `record.window`.
+    if (!oldContainer.isDestroyed()) {
+      try {
+        oldContainer.destroy();
+      } catch (error) {
+        this.deps.logger.warn(`[preview] failed to destroy old container for ${previewId} during transfer`, error);
+      }
+    }
+
+    const newWc = record.window.webContents;
+    try {
+      if (history.entries.length > 0) {
+        await newWc.restoreNavigationHistory(history);
+      } else {
+        await newWc.loadURL(record.url);
+      }
+    } catch (error) {
+      record.status = "failed";
+      record.errorMessage = `transfer failed to restore preview: ${String(error)}`;
+      this.pushChanged(tabId);
+      return { ok: false, error: record.errorMessage };
+    }
+
+    const settled = await this.waitForSettle(record, OPEN_TIMEOUT_MS);
+    if (settled !== "ready") {
+      // Honest terminal state either way (timeout/load_failed/crashed) —
+      // never left dangling "loading"; recoverable via another BrowserOpen.
+      record.status = "failed";
+      record.errorMessage = record.errorMessage ?? "preview failed to load after transfer";
+      this.pushChanged(tabId);
+      return { ok: false, error: record.errorMessage };
+    }
+
+    if (container === "panel") {
+      // D5: a freshly transferred-in panel preview becomes the visible slot.
+      this.visiblePanelPreviewId.set(tabId, previewId);
+    } else if (wasVisibleSlotHolder) {
+      // This preview just left the panel while holding the visible slot —
+      // re-point it to the most-recently-opened survivor (D5's own close semantics).
+      this.promoteMostRecentPanelSurvivor(tabId);
+    }
+    this.applyPanel();
+
+    if (container === "window") {
+      record.window.show();
+    }
+
+    this.pushChanged(tabId);
+    return { ok: true, reloaded: true };
   }
 
   /** Broadcasts the tab's current preview set (main -> renderer push, D7's contract). */
@@ -1153,15 +1298,31 @@ class PreviewHost implements PreviewHostHandle {
 
   // ── window wiring (security invariants live here) ──
 
+  /**
+   * D14 (96-P3, the ONLY permitted modification to this method — it stays
+   * the single security-wiring copy, D1): every listener below is wrapped in
+   * `guardContainerEpoch`, closing over `container`/`wc` as captured AT THIS
+   * CALL — a transfer swaps `record.window` to a fresh container and calls
+   * this method again for it, which makes every listener from a PRIOR call
+   * (still attached to the now-superseded container) an early-return no-op
+   * forever after. `setWindowOpenHandler`/`setPermissionRequestHandler`/
+   * `setRequestGate` are deliberately NOT guarded: they are stateless
+   * deny-everything policy (or read live `record` fields shared across
+   * containers) with no "stale container" hazard to guard against.
+   */
   private wireWindow(record: PreviewRecord): void {
-    const wc = record.window.webContents;
+    const container = record.window;
+    const wc = container.webContents;
+    const guard = <A extends unknown[]>(handler: (...args: A) => void): ((...args: A) => void) =>
+      guardContainerEpoch(record, container, handler);
+
     wc.setWindowOpenHandler(() => ({ action: "deny" }));
     wc.setPermissionRequestHandler((_permission, callback) => callback(false));
 
-    wc.onDidFinishLoad(() => {
+    wc.onDidFinishLoad(guard(() => {
       this.settle(record, "ready");
-    });
-    wc.onDidFailLoad((errorCode, errorDescription, isMainFrame) => {
+    }));
+    wc.onDidFailLoad(guard((errorCode, errorDescription, isMainFrame) => {
       if (errorCode === ERR_ABORTED) {
         return;
       }
@@ -1176,30 +1337,30 @@ class PreviewHost implements PreviewHostHandle {
       }
       record.errorMessage = `${errorDescription} (${errorCode})`;
       this.settle(record, "failed");
-    });
-    wc.onRenderProcessGone((reason) => {
+    }));
+    wc.onRenderProcessGone(guard((reason) => {
       record.errorMessage = `renderer process gone: ${reason}`;
       this.settle(record, "crashed");
-    });
+    }));
     wc.onWillNavigate((navUrl, preventDefault) => {
       preventDefault();
-      void this.evaluateNavigation(record, navUrl).then((result) => {
+      void this.evaluateNavigation(record, navUrl).then(guard((result) => {
         if (result.allow) {
           // F8a (TOCTOU): load the REALPATH the policy check already resolved,
           // never the raw `navUrl` a symlink could have repointed since.
-          if (!record.window.isDestroyed() && !wc.isDestroyed()) {
+          if (!container.isDestroyed() && !wc.isDestroyed()) {
             void wc.loadURL(result.loadUrl);
           }
         } else {
           this.deps.logger.warn(`[preview] denied navigation for ${record.previewId}: ${navUrl}`);
         }
-      });
+      }));
     });
     // F1 belt-and-braces layer: the request gate below is the authoritative
     // net (every redirect leg re-enters it as a fresh mainFrame request), but
     // `preventDefault` here is SYNCHRONOUS and therefore the only thing that
     // can actually stop this specific redirect from completing.
-    wc.onWillRedirect((redirectUrl, preventDefault) => {
+    wc.onWillRedirect(guard((redirectUrl, preventDefault) => {
       if (this.evaluateRedirect(record, redirectUrl)) {
         return;
       }
@@ -1211,25 +1372,25 @@ class PreviewHost implements PreviewHostHandle {
         `[preview] blocked by security policy: redirect ${redirectUrl.slice(0, 200)}`,
         record.gateDeniedKeys,
       );
-    });
-    wc.onDidNavigate((navUrl) => {
+    }));
+    wc.onDidNavigate(guard((navUrl) => {
       record.url = navUrl;
-    });
-    wc.onConsoleMessage((level, message) => {
+    }));
+    wc.onConsoleMessage(guard((level, message) => {
       this.recordConsole(record, {
         level,
         message: message.slice(0, RING_MAX_MSG_CHARS),
         at: new Date(this.now()).toISOString(),
       });
-    });
+    }));
     // F2 keystone: per-partition request gate covering every resource type
     // (subframes, images, scripts, fetch/XHR, WebSocket) that will-navigate
     // never sees, and every redirect hop besides.
     wc.setRequestGate(this.makeRequestGate(record));
-    record.window.onClosed(() => {
+    container.onClosed(guard(() => {
       this.destroyRecord(record);
       this.previews.delete(record.previewId);
-    });
+    }));
   }
 
   /**
