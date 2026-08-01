@@ -24,6 +24,7 @@ import {
 } from "../../shared/preview.js";
 import {
   EXEC_JS_TIMEOUT_MS,
+  PANEL_SCREENSHOT_RETRY_DELAY_MS,
   READ_RESULT_MAX_CHARS,
   clampPanelBounds,
   registerPreviewHost,
@@ -57,6 +58,9 @@ class FakeWebContents implements PreviewWebContentsLike {
   windowOpenHandler?: (details: { url: string }) => { action: "deny" };
   permissionRequestHandler?: (permission: string, callback: (granted: boolean) => void) => void;
   capturePageImpl: () => Promise<PreviewCapturedImage> = () => Promise.resolve(fakeImage());
+  /** D18: consumed in order — each queued error rejects the NEXT `capturePage()` call instead of running `capturePageImpl`. */
+  captureRejections: Error[] = [];
+  captureCalls = 0;
   /** Captured by `setRequestGate` — tests drive the F2 policy directly through this. */
   requestGate?: (req: { url: string; resourceType: string }) => Promise<boolean>;
   /** D14 (96-P3): back/forward stack a test pre-loads before triggering a transfer. */
@@ -86,6 +90,11 @@ class FakeWebContents implements PreviewWebContentsLike {
     return this.executeJavaScriptImpl(script) as Promise<T>;
   }
   capturePage(): Promise<PreviewCapturedImage> {
+    this.captureCalls += 1;
+    const rejection = this.captureRejections.shift();
+    if (rejection !== undefined) {
+      return Promise.reject(rejection);
+    }
     return this.capturePageImpl();
   }
   setBackgroundThrottling(enabled: boolean): void {
@@ -1801,6 +1810,97 @@ describe("PreviewHost — panel D13: screenshot promotes a hidden panel preview"
     expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
     expect(view.visible).toBe(false); // never forced visible to satisfy the capture
     expect(view.shown).toBe(false); // show() must never be called for a panel container
+  });
+});
+
+describe("PreviewHost — panel D18: UnknownVizError retry on promote-then-capture (CUT.md §6)", () => {
+  async function readyPanelRecord(): Promise<{ rig: Rig; previewId: string; view: FakePanelView }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+    return { rig, previewId, view };
+  }
+
+  it("panel: one UnknownVizError then success ⇒ ok:true, and the retry actually waited for the paint delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rig, previewId, view } = await readyPanelRecord();
+      view.webContents.captureRejections = [new Error("UnknownVizError: not ready")];
+
+      const shotPromise = rig.host.screenshotFor(TAB, previewId);
+      await flush();
+      await flush();
+      // The first capturePage() has rejected and the retry is parked behind
+      // `sleep(PANEL_SCREENSHOT_RETRY_DELAY_MS)` — the second call must NOT
+      // have happened yet (proof the retry actually waited, not fired eagerly).
+      expect(view.webContents.captureCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+      const result = await shotPromise;
+
+      expect(result.ok).toBe(true);
+      expect(view.webContents.captureCalls).toBe(2); // exactly one retry
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("panel: two UnknownVizError rejections ⇒ honest 'unavailable' with the remediation hint", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rig, previewId, view } = await readyPanelRecord();
+      view.webContents.captureRejections = [
+        new Error("UnknownVizError: not ready"),
+        new Error("UnknownVizError: still not ready"),
+      ];
+
+      const shotPromise = rig.host.screenshotFor(TAB, previewId);
+      await flush();
+      await vi.advanceTimersByTimeAsync(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+      const result = await shotPromise;
+
+      expect(result).toMatchObject({ ok: false, errorKind: "unavailable" });
+      if (!result.ok) {
+        expect(result.error).toContain("switch to the tab or move the preview to a window");
+      }
+      expect(view.webContents.captureCalls).toBe(2); // retried exactly once, no further attempts
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("panel: a non-Viz rejection is NOT retried — existing generic load_failed catch, unchanged", async () => {
+    const { rig, previewId, view } = await readyPanelRecord();
+    view.webContents.captureRejections = [new Error("NS_BINDING_ABORTED: some other capture failure")];
+
+    const result = await rig.host.screenshotFor(TAB, previewId);
+
+    expect(result).toMatchObject({ ok: false, errorKind: "load_failed" });
+    if (!result.ok) {
+      expect(result.error).toContain("some other capture failure");
+    }
+    expect(view.webContents.captureCalls).toBe(1); // no retry for a non-Viz rejection
+  });
+
+  it("window: an UnknownVizError rejection is NOT retried — existing generic behavior, exactly one capturePage call", async () => {
+    const rig = makeRig(); // default displayMode "window" (byte-untouched stage-1 path)
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const win = rig.windows[0]!;
+    win.webContents.fireDidFinishLoad();
+    const openResult = await opened;
+    const previewId = openResult.ok ? openResult.value.previewId : "";
+
+    win.webContents.captureRejections = [new Error("UnknownVizError: not ready")];
+    const result = await rig.host.screenshotFor(TAB, previewId);
+
+    expect(result).toMatchObject({ ok: false, errorKind: "load_failed" });
+    expect(win.webContents.captureCalls).toBe(1); // no panel-only retry semantics on a window container
   });
 });
 
