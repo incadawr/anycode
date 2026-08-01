@@ -21,6 +21,7 @@ import {
 } from "./server.js";
 import type { AutomationWindow, ManagerLike } from "./handlers.js";
 import type { CreateTabResult, TabHost, TabSummary } from "../tabs.js";
+import type { PreviewHostHandle } from "../preview/preview-host.js";
 
 const TOKEN = "0".repeat(64); // deterministic 64-hex-char token for the tests
 
@@ -3097,5 +3098,169 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
       expect(await res.json()).toEqual({ ok: false, reason: "import_refused" });
       expect(calls[0]).toContain('"codexImportApply"');
     });
+  });
+});
+
+/** A fake PreviewHostHandle (night-track wave-1 cut §2.8, 96-E) — mirrors handlers.test.ts's own fake exactly. */
+function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle {
+  return {
+    openForTab: vi.fn(async () => ({ ok: true as const, value: { previewId: "pv-1", url: "file:///tmp/a.html", kind: "file" as const } })),
+    handleRequest: vi.fn(async () => {}),
+    handleArtifacts: vi.fn(),
+    closeForTab: vi.fn(),
+    closeAll: vi.fn(),
+    listForTab: vi.fn(() => []),
+    getConsole: vi.fn(() => ({ entries: [], dropped: 0 })),
+    screenshotFor: vi.fn(async () => ({
+      ok: true as const,
+      value: { previewId: "pv-1", url: "file:///tmp/a.html", mediaType: "image/png" as const, data: "UE5H", width: 10, height: 10 },
+    })),
+    ...overrides,
+  };
+}
+
+describe("preview probes/driver routes (night-track wave-1 cut §2.8, 96-E)", () => {
+  it("401s GET /tabs/:tabId/previews without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/previews"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /tabs/:tabId/previews -> previewHost.listForTab, never the facade", async () => {
+    const listForTab = vi.fn(() => [
+      { previewId: "pv-1", url: "file:///tmp/a.html", status: "ready" as const, consoleCount: 3, dropped: 0 },
+    ]);
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window, previewHost: fakePreviewHost({ listForTab }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      previews: [{ previewId: "pv-1", url: "file:///tmp/a.html", status: "ready", consoleCount: 3, dropped: 0 }],
+    });
+    expect(listForTab).toHaveBeenCalledWith("tab-a");
+    expect(calls).toHaveLength(0); // never touches the renderer facade
+  });
+
+  it("GET /tabs/:tabId/previews answers an empty list when no previewHost was wired (fixture/legacy deps)", async () => {
+    const h = await boot(); // default AutomationServerDeps carries no previewHost
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ previews: [] });
+  });
+
+  it("GET /tabs/:tabId/previews/:previewId/console?tail=N -> previewHost.getConsole with a parsed tail", async () => {
+    const getConsole = vi.fn(() => ({ entries: [{ level: "pageerror" as const, message: "boom", at: "2026-01-01T00:00:00.000Z" }], dropped: 1 }));
+    const h = await boot({ previewHost: fakePreviewHost({ getConsole }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews/pv-1/console?tail=5"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ entries: [{ level: "pageerror", message: "boom", at: "2026-01-01T00:00:00.000Z" }], dropped: 1 });
+    expect(getConsole).toHaveBeenCalledWith("tab-a", "pv-1", 5);
+  });
+
+  it("GET .../console with no ?tail -> tail is undefined", async () => {
+    const getConsole = vi.fn(() => ({ entries: [], dropped: 0 }));
+    const h = await boot({ previewHost: fakePreviewHost({ getConsole }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews/pv-1/console"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(getConsole).toHaveBeenCalledWith("tab-a", "pv-1", undefined);
+  });
+
+  it("GET .../console?tail=bogus -> 400 invalid_tail (same parseTail guard as GET /state)", async () => {
+    const h = await boot({ previewHost: fakePreviewHost() });
+    const res = await fetch(url(h, "/tabs/tab-a/previews/pv-1/console?tail=bogus"), { headers: auth() });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_tail" });
+  });
+
+  it("GET /tabs/:tabId/previews/:previewId/screenshot -> {png} on an ok PreviewResult", async () => {
+    const screenshotFor = vi.fn(async () => ({
+      ok: true as const,
+      value: { previewId: "pv-1", url: "file:///tmp/a.html", mediaType: "image/png" as const, data: "UE5HREATA", width: 3, height: 4 },
+    }));
+    const h = await boot({ previewHost: fakePreviewHost({ screenshotFor }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews/pv-1/screenshot"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ png: "UE5HREATA" });
+    expect(screenshotFor).toHaveBeenCalledWith("tab-a", "pv-1");
+  });
+
+  it("GET .../screenshot forwards a failed PreviewResult verbatim", async () => {
+    const screenshotFor = vi.fn(async () => ({ ok: false as const, error: "preview is not ready", errorKind: "timeout" as const }));
+    const h = await boot({ previewHost: fakePreviewHost({ screenshotFor }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews/pv-1/screenshot"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, error: "preview is not ready", errorKind: "timeout" });
+  });
+
+  it("POST /tabs/:tabId/previews {path} -> previewHost.openForTab, never the facade", async () => {
+    const openForTab = vi.fn(async () => ({
+      ok: true as const,
+      value: { previewId: "pv-1", url: "file:///tmp/a.html", kind: "file" as const },
+    }));
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window, previewHost: fakePreviewHost({ openForTab }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ path: "/tmp/a.html" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, value: { previewId: "pv-1", url: "file:///tmp/a.html", kind: "file" } });
+    expect(openForTab).toHaveBeenCalledWith("tab-a", { path: "/tmp/a.html", url: undefined });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POST /tabs/:tabId/previews {url} -> previewHost.openForTab", async () => {
+    const openForTab = vi.fn(async () => ({
+      ok: true as const,
+      value: { previewId: "pv-2", url: "http://localhost:3000", kind: "localhost" as const },
+    }));
+    const h = await boot({ previewHost: fakePreviewHost({ openForTab }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ url: "http://localhost:3000" }),
+    });
+    expect(res.status).toBe(200);
+    expect(openForTab).toHaveBeenCalledWith("tab-a", { path: undefined, url: "http://localhost:3000" });
+  });
+
+  it("POST /tabs/:tabId/previews never forwards an allowRemote field even if the caller sends one (strict zod body)", async () => {
+    const openForTab = vi.fn(async () => ({
+      ok: false as const,
+      error: "remote URL requires explicit approval (allowRemote)",
+      errorKind: "invalid_input" as const,
+    }));
+    const h = await boot({ previewHost: fakePreviewHost({ openForTab }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ url: "https://example.com", allowRemote: true }),
+    });
+    // `.strict()` on previewOpenBody rejects the unknown `allowRemote` key outright (400) —
+    // the caller cannot even TYPE it through the automation body, let alone have it forwarded.
+    expect(res.status).toBe(400);
+    expect(openForTab).not.toHaveBeenCalled();
+  });
+
+  it("POST /tabs/:tabId/previews rejects a body with neither path nor url at the domain level (PreviewHost's own invalid_input)", async () => {
+    const openForTab = vi.fn(async () => ({ ok: false as const, error: "exactly one of path or url is required", errorKind: "invalid_input" as const }));
+    const h = await boot({ previewHost: fakePreviewHost({ openForTab }) });
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+    expect(res.status).toBe(200); // reaches the handle — it is a DOMAIN result, not a transport error
+    expect(await res.json()).toEqual({ ok: false, error: "exactly one of path or url is required", errorKind: "invalid_input" });
+  });
+
+  it("POST /tabs/:tabId/previews answers unavailable when no previewHost was wired", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), { method: "POST", headers: auth(), body: JSON.stringify({ path: "/tmp/a.html" }) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, error: "preview host unavailable", errorKind: "unavailable" });
+  });
+
+  it("401s POST /tabs/:tabId/previews without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/previews"), { method: "POST", body: JSON.stringify({ path: "/tmp/a.html" }) });
+    expect(res.status).toBe(401);
   });
 });

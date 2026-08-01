@@ -80,6 +80,7 @@ import { uiToHostMessageSchema } from "../shared/protocol.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import type { IpcPermissionBroker } from "./permission-broker.js";
 import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-hook.js";
+import { PreviewArtifactCollector } from "./preview-artifacts.js";
 import { describeError, sanitizeAgentEvent } from "./serialize.js";
 import type { SessionEngine } from "./engines/session-engine.js";
 
@@ -509,6 +510,16 @@ export interface SessionOptions {
    * re-resolved effort state for the `model_changed` emit. Absent in legacy
    * tests -> `set_model` is a silent no-op (no switch factory available).
    */
+  /**
+   * Turn-end auto-open signal (night-track wave-1 cut §1(a)/§2.3, TASK.96
+   * 96-E): posts a `PreviewArtifactsMessage` over the host<->main control
+   * plane (`process.parentPort`, wired by host/index.ts mirroring
+   * `sendPreviewRequest`/`sendCredentialRequest`) once per turn teardown, iff
+   * the PreviewArtifactCollector captured at least one qualifying Write/Edit
+   * this turn. Absent in every legacy test -> the collector still runs (zero
+   * cost) but nothing is ever posted.
+   */
+  postPreviewArtifacts?: (paths: string[]) => void;
 }
 
 export class Session {
@@ -580,6 +591,11 @@ export class Session {
   /** Target file paths captured on tool_execution_start, consumed by the "after" snapshot. */
   private readonly snapshotPaths = new Map<string, string>();
 
+  /** Turn-scoped auto-open collector (cut §1(a), 96-E) — drained at every turn teardown. */
+  private readonly previewArtifacts = new PreviewArtifactCollector();
+  /** Injected turn-end poster; undefined in legacy tests -> the collector still runs, nothing is ever sent. */
+  private readonly sendPreviewArtifacts: SessionOptions["postPreviewArtifacts"];
+
   private busy = false;
   /** Permanent source-host latch once a durable relocation handoff begins. */
   private relocating = false;
@@ -631,6 +647,7 @@ export class Session {
     this.reasoningSupported = options.reasoningSupported ?? true;
     this.availableEffortLevels = options.availableEffortLevels;
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
+    this.sendPreviewArtifacts = options.postPreviewArtifacts;
     this.titleSet = options.hasTitle ?? false;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? []);
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
@@ -1250,6 +1267,7 @@ export class Session {
       this.abort = null;
       this.turnId = null;
       this.snapshotPaths.clear();
+      this.flushPreviewArtifacts();
       // Tier-2 title refinement (design §3): fired after the FIRST turn's
       // teardown only (maybeRefineTitle no-ops once pendingTitleRefineText has
       // been consumed) — fire-and-forget, never awaited here.
@@ -1334,6 +1352,7 @@ export class Session {
           continue;
         }
         this.captureSnapshotPath(event);
+        this.previewArtifacts.observeStart(event);
         this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
         if (event.type === "error") {
           // TASK.2 DoD-c: the raw provider failure reaches the process log
@@ -1351,6 +1370,7 @@ export class Session {
         }
         if (event.type === "tool_result") {
           await this.emitAfterSnapshot(event.outcome);
+          this.previewArtifacts.observeResult(event.outcome);
         }
       }
     } catch (error) {
@@ -1376,6 +1396,7 @@ export class Session {
       this.abort = null;
       this.turnId = null;
       this.snapshotPaths.clear();
+      this.flushPreviewArtifacts();
       this.currentTurn = null;
     }
   }
@@ -1386,6 +1407,21 @@ export class Session {
       if (path !== null) {
         this.snapshotPaths.set(event.toolCallId, path);
       }
+    }
+  }
+
+  /**
+   * Turn-end auto-open (cut §1(a)/§2.3, 96-E): drains the collector and posts
+   * `PREVIEW_ARTIFACTS` iff a qualifying Write/Edit landed this turn. Runs in
+   * EVERY teardown path (normal completion, provider error, AND
+   * cancellation/abort alike — both call sites sit beside `snapshotPaths.clear()`,
+   * which shares that exact "always runs" discipline) so a cancelled turn never
+   * leaks a dangling collected path into the next one.
+   */
+  private flushPreviewArtifacts(): void {
+    const paths = this.previewArtifacts.drain();
+    if (paths.length > 0) {
+      this.sendPreviewArtifacts?.(paths);
     }
   }
 
