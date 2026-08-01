@@ -479,3 +479,60 @@ describe("profile `engine:` frontmatter", () => {
     expect(profiles[0]?.engine).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// `engine:` + explicit `tools:` conflict (TASK.97 R4, wave2-cut.md §1.3/§2.3):
+// refused at the single parseAgentProfileMd oracle, so discovery sees it as
+// just another fatal-parse case — same claim semantics as bad_model/bad_engine
+// (a higher-precedence conflicted file still shadows a lower same-named one).
+
+describe("discoverAgentProfiles — engine + tools conflict (TASK.97 R4)", () => {
+  it("refuses a profile combining engine: and explicit tools:, naming both in the problem text", async () => {
+    const fs = new FakeFs({
+      [WS]: {
+        "scout.md": md(
+          { name: "scout", description: "Runs on Claude", engine: "claude", tools: "Read, Grep" },
+          "body",
+        ),
+      },
+    });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+    expect(profiles).toHaveLength(0);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("scout.md");
+    expect(problems[0]).toContain('"tools" cannot be combined with "engine: claude"');
+    expect(problems[0]).toContain("remove one of the two");
+  });
+
+  it("keeps an engine profile valid when tools: is entirely absent", async () => {
+    const fs = new FakeFs({
+      [WS]: { "scout.md": md({ name: "scout", description: "Runs on Codex", engine: "codex" }, "body") },
+    });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+    expect(problems).toEqual([]);
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]?.engine).toBe("codex");
+  });
+
+  it("a higher-precedence engine+tools-conflict file still shadows a valid lower-precedence same-named file", async () => {
+    const fs = new FakeFs({
+      [WS]: {
+        "scout.md": md(
+          { name: "scout", description: "project — conflicted", engine: "claude", tools: "Read" },
+          "PROJECT BODY",
+        ),
+      },
+      [HOME]: { "scout.md": md({ name: "scout", description: "user — valid" }, "USER BODY") },
+    });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+    // The name was claimed by the conflicted project file; the valid user file
+    // never surfaces (claim-set semantics identical to bad_model/bad_engine).
+    expect(profiles.some((p) => p.name === "scout")).toBe(false);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(join(WS, "scout.md"));
+    expect(problems[0]).toContain('"tools" cannot be combined with "engine: claude"');
+  });
+});

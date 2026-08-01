@@ -263,6 +263,17 @@ export async function scanAgentProfilesAdmin(
               `Agent profile ${path}: engine "${err.engine}" must be "codex" or "claude" — ignored`,
             );
             break;
+          case "engine_tools_conflict":
+            // Same claim semantics as bad_model/bad_engine (TASK.97 R4, mirrors
+            // discovery's switch verbatim — parseAgentProfileMd is the single oracle).
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "tools" cannot be combined with "engine: ${err.engine}" — an engine child's toolset belongs to that CLI; remove one of the two — ignored`,
+            );
+            break;
         }
         continue;
       }
