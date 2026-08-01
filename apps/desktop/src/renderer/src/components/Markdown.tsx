@@ -512,7 +512,11 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
       setActionError(artifactAllowFailureMessage(result.reason));
     }
   };
-  const label = alt || path;
+  // night-track wave-1 fix cut §1.8 (F7): a model-authored `alt` may only ever
+  // title a successfully rendered image — every other state names the raw
+  // path so a friendly `alt` can never mask what location is being asked
+  // about (consent legibility).
+  const label = state.status === "ready" ? alt || path : path;
   const openable = OPENABLE_IMAGE_EXTENSIONS.has(extensionOfHref(path));
   const chip = artifactChipState(state.status, state.status === "unavailable" ? state.reason : undefined, consentAttempt);
 
@@ -530,6 +534,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
       {state.status === "unavailable" && (
         <>
           <span className="md-artifact-error">{chip.label}</span>
+          {chip.showPath && <code className="md-artifact-path">{path}</code>}
           {chip.showAllow && (
             <button
               type="button"
