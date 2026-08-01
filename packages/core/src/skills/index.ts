@@ -13,7 +13,9 @@ export { buildSkillsPromptSection } from "./prompt-section.js";
 export { SKILL_NAME_RE } from "./discovery.js";
 export {
   BUILTIN_SKILL_SOURCE,
+  CREATING_SUBAGENTS_SKILL,
   PREVIEW_BUILTIN_SKILLS,
+  SUBAGENT_BUILTIN_SKILLS,
   USING_BROWSER_PREVIEW_SKILL,
   USING_GIT_WORKTREES_SKILL,
   WORKTREE_BUILTIN_SKILLS,
