@@ -118,6 +118,11 @@ vi.mock("electron", () => ({
     handle: (channel: string, listener: IpcHandler): void => {
       ipcHandlers.set(channel, listener);
     },
+    // panel-track CUT.md D9 (TASK.96 96-P1): registerPreviewPanelIpc's
+    // SET_BOUNDS channel is the first main-process user of `ipcMain.on`
+    // (one-way, no reply) — this file's real-index.ts boot reaches it too,
+    // so the mock needs a harmless no-op capture, not just `.handle`.
+    on: vi.fn(),
   },
 }));
 
