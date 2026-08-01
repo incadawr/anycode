@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   beginToastExit,
   enqueueToast,
+  PREVIEW_TRANSFERRED_TEXT,
   removeToast,
   rewriteToastText,
   TOAST_AUTO_HIDE_MS,
@@ -26,6 +27,7 @@ const ALL_KINDS: ToastKind[] = [
   "rewind_restored",
   "rewind_rejected",
   "shell_error",
+  "preview_transferred",
 ];
 
 describe("enqueueToast", () => {
@@ -172,6 +174,7 @@ describe("toastTone", () => {
     expect(toastTone("session_history_truncated")).toBe("neutral");
     expect(toastTone("rewind_restored")).toBe("neutral");
     expect(toastTone("rewind_rejected")).toBe("danger");
+    expect(toastTone("preview_transferred")).toBe("neutral");
   });
 });
 
@@ -215,6 +218,10 @@ describe("rewriteToastText", () => {
       "Failed to create a new task.",
     );
   });
+
+  it("passes through preview_transferred text verbatim (no rewrite rule)", () => {
+    expect(rewriteToastText("preview_transferred", PREVIEW_TRANSFERRED_TEXT)).toBe(PREVIEW_TRANSFERRED_TEXT);
+  });
 });
 
 describe("constants", () => {
@@ -224,5 +231,9 @@ describe("constants", () => {
 
   it("TOAST_AUTO_HIDE_MS is 5000", () => {
     expect(TOAST_AUTO_HIDE_MS).toBe(5000);
+  });
+
+  it("PREVIEW_TRANSFERRED_TEXT is the exact D14 state-loss copy", () => {
+    expect(PREVIEW_TRANSFERRED_TEXT).toBe("Preview moved — the page reloaded, in-page state was reset");
   });
 });

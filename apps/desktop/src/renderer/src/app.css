@@ -373,6 +373,98 @@ body {
   font-size: var(--fs-sm);
 }
 
+/* ── preview transfer controls (TASK.96 96-P3, D14/D15) ── */
+
+.preview-panel-open-window {
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.preview-panel-open-window:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+/* Anchor for the header "Previews" dropdown — environment-control precedent. */
+.session-header-previews {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+/* Right-anchored clone of .environment-menu (the button sits at the header's right edge). */
+.previews-menu {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  right: 0;
+  z-index: 22;
+  width: min(20rem, calc(100vw - 2 * var(--sp-4)));
+  padding: var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-menu);
+  animation: fade-slide-down var(--dur-2) var(--ease-out);
+}
+
+.previews-menu-title {
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.previews-menu-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 2.7rem;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-2);
+  text-align: left;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.previews-menu-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.previews-menu-row-active {
+  color: var(--text-1);
+}
+
+.previews-menu-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previews-menu-row-container {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
 /* ── sidebar (design §2.1/§2.3) ── */
 
 .sidebar {

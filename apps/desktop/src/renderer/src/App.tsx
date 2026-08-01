@@ -400,7 +400,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
 
   return (
     <>
-      <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />
+      <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} onToast={onToast} />
 
       <div
         ref={reviewRootRef}
@@ -460,7 +460,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
             onPointerDown={beginPreviewResize}
           />
         )}
-        {previewPanelOpen && <PreviewPanel />}
+        {previewPanelOpen && <PreviewPanel onToast={onToast} />}
       </div>
 
       {/* Permission modal: self-connecting wrapper, renders only when the
