@@ -308,6 +308,8 @@ const ERR_ABORTED = -3;
 export const READ_RESULT_MAX_CHARS = 200_000;
 /** A previewed page spinning in a loop must not hang a read/pollSelector op past the outer tool timeout (cut §1.3/F3). */
 export const EXEC_JS_TIMEOUT_MS = 10_000;
+/** D18: promote-then-capture race window — one short paint delay before the single retry. */
+export const PANEL_SCREENSHOT_RETRY_DELAY_MS = 150;
 
 /**
  * D9's main-side clamp (exported for panel-ipc.ts + tests, single source of
@@ -385,6 +387,21 @@ function selectorReadScript(selector: string, format: "text" | "html"): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * D18: a `capturePage()` rejection is UnknownVizError-class when Chromium's
+ * compositor hasn't produced a first frame yet for a view JUST promoted from
+ * hidden to visible (panel-track CUT.md §6) — a visibility race, not a real
+ * load failure. Matched on message content only (no error-class/name check:
+ * Electron surfaces this as a plain `Error`, and the exact constructor is not
+ * a documented contract).
+ */
+function isUnknownVizErrorLike(error: unknown): boolean {
+  if (error instanceof Error) {
+    return error.message.includes("UnknownVizError");
+  }
+  return typeof error === "string" && error.includes("UnknownVizError");
 }
 
 /**
@@ -786,7 +803,33 @@ class PreviewHost implements PreviewHostHandle {
     }
     wc.setBackgroundThrottling(false);
     try {
-      let image = await wc.capturePage();
+      let image: PreviewCapturedImage;
+      try {
+        image = await wc.capturePage();
+      } catch (error) {
+        // D18: on a PANEL container only, an UnknownVizError-class rejection
+        // means the view was JUST promoted (above) and Chromium hasn't
+        // composited its first frame yet — retry once after a short paint
+        // delay before treating this as a real failure. Any other rejection,
+        // and every window-container rejection, re-throws to the outer catch
+        // unchanged (a real load failure must never be masked as
+        // "unavailable").
+        if (record.containerKind !== "panel" || !isUnknownVizErrorLike(error)) {
+          throw error;
+        }
+        await sleep(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+        try {
+          image = await wc.capturePage();
+        } catch (retryError) {
+          if (!isUnknownVizErrorLike(retryError)) {
+            throw retryError;
+          }
+          return this.fail(
+            "unavailable",
+            "screenshot unavailable while the panel preview has not yet painted a frame — switch to the tab or move the preview to a window",
+          );
+        }
+      }
       if (image.isEmpty()) {
         if (record.containerKind === "panel") {
           // The reconciler still keeps it hidden (inactive tab / unmounted
