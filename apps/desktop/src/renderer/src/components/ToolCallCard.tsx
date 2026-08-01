@@ -59,18 +59,38 @@ const SUBAGENT_FINAL_LABELS: Record<NonNullable<SubagentSubStatus["final"]>["sta
 /**
  * Pure formatter for the sub-status counter line, exported for direct unit
  * testing (this package's renderer tests are pure-logic only — no jsdom, see
- * ToolCallCard.test.ts). While running (`final === null`): "turn N · M tool
- * call(s)[ · lastTool]". Once settled: "<label> · N turn(s) · D.Ds".
+ * ToolCallCard.test.ts).
+ *
+ * Engine-aware (TASK.97 R5, wave2-cut §1.4): `subagent.engine` is null for
+ * an in-process child AND for a legacy transcript replayed from before
+ * `subagent_start` carried the field — both render exactly as before this
+ * slice (byte-identical, no prefix, turns segment always present). While
+ * running, a named engine gets an `"<engine> · "` prefix and — because Codex
+ * reports no model-round marker (engine-children.ts header note) — its
+ * `turn N · ` segment is OMITTED rather than shown as a fabricated count.
+ * Once settled there is no engine prefix at all (only the `N turn(s) · `
+ * segment is omitted for codex); Claude's settled line is therefore
+ * byte-identical to the legacy/in-process one too.
+ *
+ * While running (`final === null`): `[<engine> · ]turn N · M tool
+ * call(s)[ · lastTool]`, turn segment omitted for codex. Once settled:
+ * `<label> · [N turn(s) · ]D.Ds`, turn segment omitted for codex.
  */
 export function formatSubagentCounters(subagent: SubagentSubStatus): string {
+  const prefix = subagent.engine ? `${subagent.engine} · ` : "";
   if (subagent.final === null) {
     const toolCalls = `${subagent.toolCalls} tool call${subagent.toolCalls === 1 ? "" : "s"}`;
     const lastTool = subagent.lastTool ? ` · ${subagent.lastTool}` : "";
-    return `turn ${subagent.turns} · ${toolCalls}${lastTool}`;
+    const turnSegment = subagent.engine === "codex" ? "" : `turn ${subagent.turns} · `;
+    return `${prefix}${turnSegment}${toolCalls}${lastTool}`;
+  }
+  const seconds = (subagent.final.durationMs / 1000).toFixed(1);
+  const label = SUBAGENT_FINAL_LABELS[subagent.final.status];
+  if (subagent.engine === "codex") {
+    return `${label} · ${seconds}s`;
   }
   const turns = `${subagent.turns} turn${subagent.turns === 1 ? "" : "s"}`;
-  const seconds = (subagent.final.durationMs / 1000).toFixed(1);
-  return `${SUBAGENT_FINAL_LABELS[subagent.final.status]} · ${turns} · ${seconds}s`;
+  return `${label} · ${turns} · ${seconds}s`;
 }
 
 const WORKFLOW_FINAL_LABELS: Record<NonNullable<WorkflowSubStatus["final"]>["status"], string> = {

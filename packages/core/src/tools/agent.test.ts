@@ -465,6 +465,43 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
     expect(emitted.some((e) => e.type === "subagent_progress")).toBe(true);
   });
 
+  it("forwards progress.engine onto the subagent_start event when the port reports one (TASK.97 R5)", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "start", agentType: "general-purpose", description: "d", engine: "codex" });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "general-purpose" },
+      makeCtx({ toolCallId: "call-engine", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const start = emitted.find((e) => e.type === "subagent_start");
+    expect(start).toMatchObject({ type: "subagent_start", engine: "codex" });
+  });
+
+  it("omits the engine key from subagent_start when the port's start progress carries none (in-process child, no silent default)", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-no-engine", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const start = emitted.find((e) => e.type === "subagent_start");
+    expect(start).toBeDefined();
+    expect(start && "engine" in start).toBe(false);
+  });
+
   it(
     "W1-FIX: caps an over-long toolName/summary at the bridge before it becomes " +
       "an AgentEvent (defense-in-depth — a hostile/buggy SubagentPort, not just the runner)",

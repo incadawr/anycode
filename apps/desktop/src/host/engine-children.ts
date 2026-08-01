@@ -94,6 +94,7 @@ export function createEngineChildRunner(
 }
 
 interface ChildState {
+  /** Model-round count. Only the Claude adapter increments this (per `assistant` line, overwritten by `result.num_turns`) — see the codex-section TURNS note below for why the Codex adapter deliberately leaves it at 0. */
   turns: number;
   toolCalls: number;
   finalText: string;
@@ -249,6 +250,16 @@ function summarizeClaudeTool(name: string, input: Record<string, unknown> | unde
 // {"type":"error","message":...}. `item.type` is "agent_message" for the
 // final reply text, "error" for an item-level failure, anything else
 // (command_execution, etc.) is a tool/action call.
+//
+// TURNS (TASK.97 R5, wave2-cut §1.4): Claude's `turns` counts model
+// (assistant) rounds — a real, comparable number. Codex `exec --json` exposes
+// NO model-round marker: `turn.started` fires exactly once per `exec` run
+// (verified live, codex-cli 0.145.0), so incrementing on it does not count
+// model rounds, it just relabels the run count as if it were the same
+// metric. Rather than show a fabricated number next to Claude's real one,
+// a codex child's `turns` stays 0 for its whole run — "not reported", not a
+// fake count. `turn.started` still drives the progress ping (toolCalls/UI
+// liveness), only the counter increment is gone.
 
 function handleCodexLine(
   line: Record<string, unknown>,
@@ -276,7 +287,9 @@ function handleCodexLine(
       return;
     }
     case "turn.started":
-      state.turns += 1;
+      // Progress ping only — see the module-header TURNS note above: codex
+      // reports no model rounds, so `state.turns` is deliberately NOT
+      // incremented here (it stays 0 for the whole run).
       onProgress?.({ kind: "progress", turns: state.turns, toolCalls: state.toolCalls });
       return;
     case "turn.completed":
