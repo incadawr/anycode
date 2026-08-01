@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { PermissionMode } from "@anycode/core";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Check, Chevron } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson, same fix ModelPill's own popover
 // already applies — see ModelPill.tsx's import comment): the chip lives in
@@ -97,6 +98,9 @@ export interface ModeMenuProps {
 
 export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
   const [open, setOpen] = useState(false);
+  // D8 overlay wiring: the preview WebContentsView must hide while this
+  // composer dropdown is up.
+  useOverlayFlag(open);
   const [focusIndex, setFocusIndex] = useState(0);
   // Fixed-position anchor for the popover (viewport `left`/`bottom` px),
   // computed from the chip's real screen position on open — null before the

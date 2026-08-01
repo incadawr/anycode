@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Notice } from "../store.js";
 import { useTabStore } from "../tab-context.js";
+import { usePreviewStore } from "../preview/preview-store.js";
 import { TOAST_AUTO_HIDE_MS, toastGlyph, toastTone, type Toast } from "../toasts.js";
 import { Info, Warning, X } from "./icons.js";
 
@@ -95,6 +96,10 @@ export function NoticeStack({ toasts, onHide, onExited, autoHideMs = TOAST_AUTO_
   // enter/leave fire from the items — crossing the gap between two toasts
   // blips resume for a few ms, which is harmless.
   const [paused, setPaused] = useState(false);
+  // D11: offset (never hide) the stack by the visible Preview panel's width +
+  // handle — a transfer's own state-loss toast must never land invisible
+  // underneath the panel it was just triggered from.
+  const panelInsetPx = usePreviewStore((state) => state.panelInsetPx);
 
   // A toast can be removed while hovered (X click) leaving `paused` latched
   // true with no mouseleave to clear it — the next toast would never expire.
@@ -110,6 +115,7 @@ export function NoticeStack({ toasts, onHide, onExited, autoHideMs = TOAST_AUTO_
   return (
     <div
       className="notice-stack"
+      style={panelInsetPx > 0 ? { right: `calc(var(--sp-4) + ${panelInsetPx}px)` } : undefined}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}

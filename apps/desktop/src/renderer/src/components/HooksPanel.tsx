@@ -2,6 +2,7 @@ import { useContext } from "react";
 import type { CommandHookDeclaration, HookEvent } from "@anycode/core";
 import { TabContext, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { HookIcon, Warning, X } from "./icons.js";
 
 const EVENT_LABELS: Record<HookEvent, string> = {
@@ -91,6 +92,9 @@ export function HooksPanel() {
   const hooks = useTabStore((state) => state.hookDeclarations);
   const configError = useTabStore((state) => state.hookConfigError);
   const open = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.hooksPanelOpen ?? false);
+  // D8 overlay wiring: the preview WebContentsView must hide while this
+  // right-side drawer is up.
+  useOverlayFlag(open);
 
   if (!open) {
     return null;
