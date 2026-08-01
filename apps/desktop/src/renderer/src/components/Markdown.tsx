@@ -65,6 +65,8 @@ const MarkdownTabContext = createContext<string | null>(null);
 
 const INLINE_PREVIEW_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const OPENABLE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".tiff", ".tif", ".heic"]);
+/** Night-track wave-1: local doc links the PreviewHost window can render (mirrors main/artifacts-ipc.ts's PREVIEWABLE_DOC_EXTENSIONS). */
+const PREVIEWABLE_ARTIFACT_EXTENSIONS = new Set([".html", ".htm", ".md"]);
 
 function extensionOfHref(href: string): string {
   const base = href.slice(href.lastIndexOf("/") + 1);
@@ -91,6 +93,16 @@ function isLocalFileHref(href: string): boolean {
 
 function isInlinePreviewHref(href: string): boolean {
   return isLocalFileHref(href) && INLINE_PREVIEW_EXTENSIONS.has(extensionOfHref(href));
+}
+
+/**
+ * Night-track wave-1 (owner ask): a local `.html`/`.htm`/`.md` link the click
+ * can open directly in the PreviewHost window, closing the "closed the
+ * preview, now stuck" gap — today the window is reachable only via an agent
+ * tool or turn-end auto-open.
+ */
+function isPreviewableArtifactHref(href: string): boolean {
+  return isLocalFileHref(href) && PREVIEWABLE_ARTIFACT_EXTENSIONS.has(extensionOfHref(href));
 }
 
 /** Writes to the clipboard if available, swallowing rejection (no error theater for a clipboard edge). Returns whether a write was attempted. */
@@ -373,29 +385,52 @@ function Table({ table }: { table: Tokens.Table }) {
 /**
  * Real anchor (keyboard-focusable, Enter fires click) whose click is guarded:
  * navigation is prevented (a naked anchor would navigate this frameless window
- * away), the href is copied instead, and a transient "Copied" hint renders
- * beside the link for 1.5 s. `title={href}` doubles as an honest destination
- * preview. Opening links in the browser is a parked main-side follow-up
- * (`setWindowOpenHandler` + `shell.openExternal`); copy-on-click stays correct
- * even after that lands.
+ * away). For a local `.html`/`.htm`/`.md` artifact the click opens/reopens it
+ * in the PreviewHost window instead (night-track wave-1, owner ask) — a
+ * dedicated copy-icon button next to the link keeps the old copy-on-click
+ * affordance reachable. Every other local/remote link keeps the original
+ * copy-href behavior, with a transient "Copied" hint beside it for 1.5 s.
+ * `title={href}` doubles as an honest destination preview. Opening remote
+ * links in the browser is a parked main-side follow-up (`setWindowOpenHandler`
+ * + `shell.openExternal`); this behavior stays correct even after that lands.
  */
 function MdLink({ href, children }: { href: string; children: ReactNode }) {
   const copy = useContext(CopyContext);
+  const tabId = useContext(MarkdownTabContext);
+  const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
   const copied = copy.linkTarget === href;
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewable = isPreviewableArtifactHref(href) && tabId !== null && api !== undefined;
+
+  const onClick = (event: { preventDefault: () => void }): void => {
+    event.preventDefault();
+    if (isPreviewableArtifactHref(href) && tabId !== null && api !== undefined) {
+      void api.preview(tabId, href).then((result) => {
+        setPreviewError(result.ok ? null : result.error);
+      });
+    } else {
+      copy.copyLink(href);
+    }
+  };
+
   return (
     <>
-      <a
-        className="md-link"
-        href={href}
-        title={href}
-        onClick={(event) => {
-          event.preventDefault();
-          copy.copyLink(href);
-        }}
-      >
+      <a className="md-link" href={href} title={href} onClick={onClick}>
         {children}
       </a>
+      {previewable && (
+        <button
+          type="button"
+          className="md-link-copy"
+          aria-label="Copy link"
+          title="Copy link"
+          onClick={() => copy.copyLink(href)}
+        >
+          {copied ? <Check /> : <Copy />}
+        </button>
+      )}
       {copied && <span className="md-copied-hint">Copied</span>}
+      {previewError !== null && <span className="md-artifact-error">{previewError}</span>}
       {isInlinePreviewHref(href) ? <ArtifactPreview path={href} /> : isLocalFileHref(href) ? <ArtifactReveal path={href} /> : null}
     </>
   );
@@ -566,7 +601,11 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   );
 }
 
-/** Local non-images are reveal-only. The original link remains copy-only. */
+/**
+ * Local non-images get a Reveal action; `.html`/`.htm`/`.md` also get a
+ * Preview action (night-track wave-1, owner ask) — the same call the link's
+ * own click makes, offered here too for discoverability.
+ */
 function ArtifactReveal({ path }: { path: string }) {
   const tabId = useContext(MarkdownTabContext);
   const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
@@ -576,8 +615,15 @@ function ArtifactReveal({ path }: { path: string }) {
     const result = await api.reveal(tabId, path);
     setFailure(result.ok ? null : artifactActionFailureMessage(result.reason));
   };
+  const preview = async (): Promise<void> => {
+    const result = await api.preview(tabId, path);
+    setFailure(result.ok ? null : result.error);
+  };
   return (
     <>
+      {PREVIEWABLE_ARTIFACT_EXTENSIONS.has(extensionOfHref(path)) && (
+        <button type="button" className="md-artifact-btn md-artifact-preview-link" onClick={() => void preview()}>Preview</button>
+      )}
       <button type="button" className="md-artifact-btn md-artifact-reveal-link" onClick={() => void reveal()}>Reveal in folder</button>
       {failure !== null && <span className="md-artifact-error">{failure}</span>}
     </>

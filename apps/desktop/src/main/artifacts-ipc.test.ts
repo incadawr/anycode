@@ -19,6 +19,7 @@ import {
   ArtifactConsentStore,
   handleArtifactAllow,
   handleArtifactOpen,
+  handleArtifactPreview,
   handleArtifactReadImage,
   handleArtifactReveal,
   isUnderRoot,
@@ -56,6 +57,7 @@ interface Rig {
   reveal: ReturnType<typeof vi.fn<(path: string) => void>>;
   confirmOpen: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
   consent: ArtifactConsentStore;
+  openPreview: ReturnType<typeof vi.fn<ArtifactsIpcDeps["openPreview"]>>;
 }
 
 /** workspace/home/tmp are three DISJOINT tmpdirs — the tmp root passed to deps is ours, not the OS one. */
@@ -77,6 +79,10 @@ async function makeRig(opts?: {
     return opts?.confirm ?? true;
   });
   const consent = new ArtifactConsentStore();
+  const openPreview = vi.fn<ArtifactsIpcDeps["openPreview"]>().mockResolvedValue({
+    ok: true,
+    value: { previewId: "preview-1", url: "file:///stub", kind: "file" },
+  });
   const deps: ArtifactsIpcDeps = {
     home: () => home,
     tmpdir: () => tmp,
@@ -86,8 +92,9 @@ async function makeRig(opts?: {
     reveal,
     confirmOpen,
     consent,
+    openPreview,
   };
-  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent };
+  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent, openPreview };
 }
 
 // ---------------------------------------------------------------------------
@@ -438,5 +445,60 @@ describe("handleArtifactReveal", () => {
     const { deps, workspace, reveal } = await makeRig();
     expect(await handleArtifactReveal(deps, { tabId: TAB_ID, path: join(workspace, "gone.png") })).toEqual({ ok: false, reason: "not_found" });
     expect(reveal).not.toHaveBeenCalled();
+  });
+});
+
+// Night-track wave-1 (owner ask): user click on a local .html/.htm/.md
+// artifact link opens/reopens it in PreviewHost. `openPreview` is a plain
+// mock here — the real PreviewHost wiring is main/index.ts's concern
+// (`openPreview: (tabId, realPath) => previewHost.openForTab(...)`); this
+// suite only proves the containment/extension gate ahead of it.
+describe("handleArtifactPreview", () => {
+  it("opens an in-root .md file — calls openPreview with the REALPATH, not the raw string", async () => {
+    const { deps, workspace, openPreview } = await makeRig();
+    await seed(join(workspace, "notes.md"), "# hi");
+    const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, "notes.md") });
+    expect(result).toEqual({ ok: true, value: { previewId: "preview-1", url: "file:///stub", kind: "file" } });
+    expect(openPreview).toHaveBeenCalledWith(TAB_ID, await realpath(join(workspace, "notes.md")));
+  });
+
+  it("opens an in-root .html/.htm file", async () => {
+    const { deps, workspace, openPreview } = await makeRig();
+    await seed(join(workspace, "report.html"), "<html></html>");
+    await seed(join(workspace, "legacy.htm"), "<html></html>");
+    expect(await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, "report.html") })).toMatchObject({ ok: true });
+    expect(await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, "legacy.htm") })).toMatchObject({ ok: true });
+    expect(openPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a path outside every allowed root — never calls openPreview", async () => {
+    const { deps, home, openPreview } = await makeRig();
+    await seed(join(home, "outside.md"), "# hi");
+    const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(home, "outside.md") });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ errorKind: "invalid_input" });
+    if (!result.ok) {
+      expect(result.error).toContain("outside_allowed_roots");
+    }
+    expect(openPreview).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unsupported extension even when in-root — never calls openPreview", async () => {
+    const { deps, workspace, openPreview } = await makeRig();
+    await seed(join(workspace, "icon.png"), "png");
+    await seed(join(workspace, "run.command"), "#!/bin/sh\n");
+    for (const name of ["icon.png", "run.command"]) {
+      const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, name) });
+      expect(result.ok).toBe(false);
+      expect(result).toMatchObject({ errorKind: "invalid_input" });
+    }
+    expect(openPreview).not.toHaveBeenCalled();
+  });
+
+  it("refuses a missing file and an invalid payload — never calls openPreview", async () => {
+    const { deps, workspace, openPreview } = await makeRig();
+    expect((await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, "gone.md") })).ok).toBe(false);
+    expect((await handleArtifactPreview(deps, { tabId: TAB_ID })).ok).toBe(false);
+    expect(openPreview).not.toHaveBeenCalled();
   });
 });
