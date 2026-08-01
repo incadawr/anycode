@@ -18,6 +18,7 @@
  * happen in settings-store.ts's `acceptWeakStorageConsent`, not here.
  */
 import { useEffect, useRef } from "react";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 
 export interface ConsentDialogProps {
   /** Show the dialog — mirrors settings-store's `pendingConsent !== null`. */
@@ -31,6 +32,9 @@ export interface ConsentDialogProps {
 export function ConsentDialog({ open, onAccept, onDecline }: ConsentDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const declineRef = useRef<HTMLButtonElement>(null);
+  // D8 overlay wiring: the preview WebContentsView must hide while this
+  // secret-storage consent modal is up.
+  useOverlayFlag(open);
 
   // R17 a11y: capture the pre-open focus when the dialog opens and restore it
   // when it closes. ProviderSettings renders this unconditionally (the instance

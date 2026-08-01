@@ -11,6 +11,7 @@ import { useContext, useEffect, useState } from "react";
 import type { UiToHostMessage, WireCheckpointMeta } from "../../../shared/protocol.js";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { formatAge } from "./Sidebar.js";
 import { History, X } from "./icons.js";
 
@@ -93,6 +94,9 @@ export function TimelinePanel() {
   const send = useTabSend();
   const open = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.timelinePanelOpen ?? false);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // D8 overlay wiring: the preview WebContentsView must hide while this
+  // right-side drawer is up.
+  useOverlayFlag(open);
 
   useEffect(() => {
     if (open) {
