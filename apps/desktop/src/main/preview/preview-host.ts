@@ -42,6 +42,32 @@
  *    true, nodeIntegration:false}` and NO preload; `setWindowOpenHandler`
  *    always denies (no `window.open` popups); the permission-request handler
  *    denies every browser permission (camera/mic/geolocation/notifications/…).
+ *
+ * WAVE-1 SECURITY FIX CUT (amends the invariants above, night-track
+ * wave1-security-fix-cut.md §1.1/§1.2): `will-navigate` only ever covered the
+ * top frame's OWN in-page navigation — never an `<iframe>`, an `<img>`, a
+ * `fetch`/XHR/WebSocket, a `<script src>`, or a server-redirect leg (which
+ * re-enters as a brand-new top-frame request, not a `will-navigate` event).
+ * A per-partition `session.webRequest.onBeforeRequest` gate (installed once
+ * at wiring time, adapter-mapped, NO url filter) is now the authoritative net
+ * for every resource type and every redirect hop; a synchronous `will-
+ * redirect` listener is a belt-and-braces second layer over the identical
+ * policy (`preventDefault` must fire inside that event turn — an async gate
+ * decision cannot arrive in time to stop the redirect from completing). A
+ * denied subresource is legible: one deduplicated ring-buffer entry per
+ * blocked origin/path, readable through `BrowserRead`'s console tail.
+ *
+ * R1 residual (recorded, owner sign-off pending — wave1-security-fix-cut.md
+ * §2 R1): `localhost`/`127.0.0.1`/`::1` opens stay `needsApproval:false` (a
+ * deliberate product choice — "the dev server the user just started") and
+ * diverge from `packages/core/src/tools/web-fetch.ts`'s WebFetch tool, which
+ * explicitly REFUSES loopback/RFC1918/link-local as an SSRF guard; the
+ * approval text for a `url`-form open never names the host:port either. This
+ * cut narrows, but does not close, that divergence: a REMOTE page can no
+ * longer pivot into loopback (the request gate's rule 4 denies a loopback
+ * subresource whenever `record.kind === "remote"`), so what remains is scoped
+ * to "the model asks BrowserOpen for a loopback URL directly" — not "any
+ * consented remote origin can reach loopback transitively".
  */
 
 import { randomUUID } from "node:crypto";
@@ -87,9 +113,27 @@ export interface PreviewWebContentsLike {
   onRenderProcessGone(listener: (reason: string) => void): void;
   /** Fires for in-page navigation only — NOT for the initial `loadURL` (risk §5.2). */
   onWillNavigate(listener: (url: string, preventDefault: () => void) => void): void;
+  /**
+   * Belt-and-braces layer for server redirects (cut §1.2/F1): the request
+   * gate below is the authoritative net (every redirect leg re-enters it as
+   * a fresh mainFrame request), but `preventDefault` on a redirect must run
+   * SYNCHRONOUSLY inside this event — an async gate decision cannot arrive
+   * back in time to stop the redirect from completing.
+   */
+  onWillRedirect(listener: (url: string, preventDefault: () => void) => void): void;
   onDidNavigate(listener: (url: string) => void): void;
   /** Pre-classified by the adapter (log/warn/error/pageerror) — this layer never parses Electron's raw event shape. */
   onConsoleMessage(listener: (level: PreviewConsoleEntry["level"], message: string) => void): void;
+  /**
+   * Installed once at wiring time (cut §1.1/F2, the keystone fix): the
+   * adapter maps this to a per-partition `session.webRequest.onBeforeRequest`
+   * registered with NO url filter, so it covers every resource type —
+   * subframes, images, scripts, fetch/XHR, WebSocket — that `will-navigate`
+   * never sees, including every hop of a server redirect. Answered `false`
+   * on throw/reject; the adapter always answers the underlying Electron
+   * callback exactly once.
+   */
+  setRequestGate(gate: (req: { url: string; resourceType: string }) => Promise<boolean>): void;
 }
 
 export interface PreviewWindowLike {
@@ -184,7 +228,8 @@ export interface PreviewHostHandle {
 // ── tunables ──
 
 const RING_MAX_ENTRIES = 200;
-const RING_MAX_MSG_CHARS = 500;
+/** Exported: electron-adapter.ts slices console-message/CDP-exception strings to this BEFORE they ever reach preview-host.ts (cut §1.3/F3). */
+export const RING_MAX_MSG_CHARS = 500;
 const EVENT_WINDOW_MS = 10_000;
 const EVENT_MAX_PER_WINDOW = 20;
 const OPEN_TIMEOUT_MS = 15_000;
@@ -198,6 +243,10 @@ const BASE_WINDOW_X = 96;
 const BASE_WINDOW_Y = 96;
 /** Chromium's `-3` `ERR_ABORTED`: superseded by a subsequent navigation (e.g. our own reuse-navigate) — never a real failure on its own. */
 const ERR_ABORTED = -3;
+/** Hard cap on any page-controlled string crossing into main (cut §1.3/F3): bounded BEFORE the structured clone leaves the page (in-script `.slice`), and re-enforced main-side in case a hostile page monkey-patches its own DOM getters to dodge that cap. */
+export const READ_RESULT_MAX_CHARS = 200_000;
+/** A previewed page spinning in a loop must not hang a read/pollSelector op past the outer tool timeout (cut §1.3/F3). */
+export const EXEC_JS_TIMEOUT_MS = 10_000;
 
 type PreviewErrorKind = NonNullable<Extract<PreviewResult<unknown>, { ok: false }>["errorKind"]>;
 type SettleStatus = "ready" | "failed" | "crashed";
@@ -217,6 +266,8 @@ interface PreviewRecord {
   renderedHtmlPath?: string;
   title?: string;
   consentedOrigins: Set<string>;
+  /** Per-record dedup for the request-gate/redirect-gate legibility ring entry (cut §1.1) — a retry loop cannot flood the ring. */
+  gateDeniedKeys: Set<string>;
   consoleRing: PreviewConsoleEntry[];
   consoleDropped: number;
   eventWindowStart: number;
@@ -229,8 +280,10 @@ interface PreviewRecord {
   destroyed: boolean;
 }
 
+/** Bracket/case-normalizing (cut §1.6/IPv6 fix): `URL.hostname` keeps IPv6 literals bracketed (`"[::1]"`), which a raw literal comparison never matches — the ONE helper every open/nav/redirect/gate check reuses. */
 function isLocalHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "127.0.0.1" || h === "::1";
 }
 
 function isMarkdownPath(path: string): boolean {
@@ -242,7 +295,7 @@ function selectorReadScript(selector: string, format: "text" | "html"): string {
   const prop = format === "html" ? "outerHTML" : "innerText";
   return `(() => {
     const nodes = Array.from(document.querySelectorAll(${sel}));
-    const text = nodes.map((el) => el.${prop} ?? "").join("\\n");
+    const text = nodes.map((el) => el.${prop} ?? "").join("\\n").slice(0, ${READ_RESULT_MAX_CHARS});
     return { text, matches: nodes.length };
   })()`;
 }
@@ -250,6 +303,9 @@ function selectorReadScript(selector: string, format: "text" | "html"): string {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/** Distinguishes an `executeJavaScript` deadline from every other rejection reason (cut §1.3/F3). */
+class ExecTimeoutError extends Error {}
 
 /** One outcome of resolving what an `open` op should actually load. */
 type OpenTarget =
@@ -276,6 +332,32 @@ class PreviewHost implements PreviewHostHandle {
 
   private fail<T>(errorKind: PreviewErrorKind, error: string): PreviewResult<T> {
     return { ok: false, error, errorKind };
+  }
+
+  /**
+   * Races an `executeJavaScript` call against `EXEC_JS_TIMEOUT_MS` (cut
+   * §1.3/F3) — a previewed page spinning in a loop must not hang a read/
+   * pollSelector op past the outer tool timeout. Rejects with
+   * `ExecTimeoutError` on the deadline; the underlying page-side call is left
+   * to resolve/reject on its own (Electron has no cancellation for it), its
+   * result simply discarded.
+   */
+  private execWithTimeout<T>(promise: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new ExecTimeoutError("executeJavaScript timed out"));
+      }, EXEC_JS_TIMEOUT_MS);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   // ── open ──
@@ -327,6 +409,14 @@ class PreviewHost implements PreviewHostHandle {
     record.sourcePath = target.sourcePath;
     record.realSourcePath = target.realSourcePath;
     record.renderedFrom = target.renderedFrom;
+    if (record.renderedHtmlPath !== undefined && record.renderedHtmlPath !== target.renderedHtmlPath) {
+      // Reuse-navigate away from a rendered markdown temp file (cut §1.5/F8b):
+      // unlink the ORPHANED previous render before this overwrite, same
+      // best-effort semantics as `destroyRecord`'s own cleanup below.
+      void unlink(record.renderedHtmlPath).catch(() => {
+        // Best-effort temp-file cleanup — a missing/already-removed file is not an error.
+      });
+    }
     record.renderedHtmlPath = target.renderedHtmlPath;
     record.title = basename(target.sourcePath ?? target.url);
     record.lastOpenedAt = this.now();
@@ -448,17 +538,40 @@ class PreviewHost implements PreviewHostHandle {
     let matches: number | undefined;
     try {
       if (op.selector !== undefined) {
-        const result = await record.window.webContents.executeJavaScript<{ text: string; matches: number }>(
-          selectorReadScript(op.selector, format),
+        const result = await this.execWithTimeout(
+          record.window.webContents.executeJavaScript<unknown>(selectorReadScript(op.selector, format)),
         );
-        text = result.text;
-        matches = result.matches;
+        // A hostile page can monkey-patch DOM getters to return an arbitrary
+        // clonable value (cut §1.3/F3) — a non-conforming shape is an honest
+        // load_failed, never a crash.
+        if (
+          typeof result !== "object" ||
+          result === null ||
+          typeof (result as { text: unknown }).text !== "string" ||
+          typeof (result as { matches: unknown }).matches !== "number"
+        ) {
+          return this.fail("load_failed", "preview page returned an unexpected result shape");
+        }
+        const shaped = result as { text: string; matches: number };
+        text = shaped.text.slice(0, READ_RESULT_MAX_CHARS);
+        matches = shaped.matches;
       } else {
-        text = await record.window.webContents.executeJavaScript<string>(
-          format === "html" ? "document.documentElement.outerHTML" : "(document.body ? document.body.innerText : '')",
+        const raw = await this.execWithTimeout(
+          record.window.webContents.executeJavaScript<unknown>(
+            format === "html"
+              ? `document.documentElement.outerHTML.slice(0, ${READ_RESULT_MAX_CHARS})`
+              : `(document.body ? document.body.innerText : '').slice(0, ${READ_RESULT_MAX_CHARS})`,
+          ),
         );
+        if (typeof raw !== "string") {
+          return this.fail("load_failed", "preview page returned an unexpected result shape");
+        }
+        text = raw.slice(0, READ_RESULT_MAX_CHARS);
       }
     } catch (error) {
+      if (error instanceof ExecTimeoutError) {
+        return this.fail("timeout", "reading preview timed out");
+      }
       return this.fail("load_failed", `failed to read preview: ${String(error)}`);
     }
 
@@ -487,8 +600,10 @@ class PreviewHost implements PreviewHostHandle {
     const maxAttempts = Math.max(1, Math.ceil(waitMs / SELECTOR_POLL_MS));
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const found = await record.window.webContents.executeJavaScript<boolean>(
-          `document.querySelector(${JSON.stringify(selector)}) !== null`,
+        const found = await this.execWithTimeout(
+          record.window.webContents.executeJavaScript<boolean>(
+            `document.querySelector(${JSON.stringify(selector)}) !== null`,
+          ),
         );
         if (found) {
           return true;
@@ -701,6 +816,7 @@ class PreviewHost implements PreviewHostHandle {
       url: "",
       kind: "file",
       consentedOrigins: new Set(),
+      gateDeniedKeys: new Set(),
       consoleRing: [],
       consoleDropped: 0,
       eventWindowStart: now,
@@ -801,15 +917,34 @@ class PreviewHost implements PreviewHostHandle {
     });
     wc.onWillNavigate((navUrl, preventDefault) => {
       preventDefault();
-      void this.evaluateNavigation(record, navUrl).then((allowed) => {
-        if (allowed) {
+      void this.evaluateNavigation(record, navUrl).then((result) => {
+        if (result.allow) {
+          // F8a (TOCTOU): load the REALPATH the policy check already resolved,
+          // never the raw `navUrl` a symlink could have repointed since.
           if (!record.window.isDestroyed() && !wc.isDestroyed()) {
-            void wc.loadURL(navUrl);
+            void wc.loadURL(result.loadUrl);
           }
         } else {
           this.deps.logger.warn(`[preview] denied navigation for ${record.previewId}: ${navUrl}`);
         }
       });
+    });
+    // F1 belt-and-braces layer: the request gate below is the authoritative
+    // net (every redirect leg re-enters it as a fresh mainFrame request), but
+    // `preventDefault` here is SYNCHRONOUS and therefore the only thing that
+    // can actually stop this specific redirect from completing.
+    wc.onWillRedirect((redirectUrl, preventDefault) => {
+      if (this.evaluateRedirect(record, redirectUrl)) {
+        return;
+      }
+      preventDefault();
+      this.deps.logger.warn(`[preview] denied redirect for ${record.previewId}: ${redirectUrl}`);
+      this.recordDeniedOnce(
+        record,
+        this.gateDedupeKeyForRedirect(redirectUrl),
+        `[preview] blocked by security policy: redirect ${redirectUrl.slice(0, 200)}`,
+        record.gateDeniedKeys,
+      );
     });
     wc.onDidNavigate((navUrl) => {
       record.url = navUrl;
@@ -821,37 +956,196 @@ class PreviewHost implements PreviewHostHandle {
         at: new Date(this.now()).toISOString(),
       });
     });
+    // F2 keystone: per-partition request gate covering every resource type
+    // (subframes, images, scripts, fetch/XHR, WebSocket) that will-navigate
+    // never sees, and every redirect hop besides.
+    wc.setRequestGate(this.makeRequestGate(record));
     record.window.onClosed(() => {
       this.destroyRecord(record);
       this.previews.delete(record.previewId);
     });
   }
 
-  /** Same policy as the open-time checks, applied to an in-page navigation target (risk §5.2). */
-  private async evaluateNavigation(record: PreviewRecord, navUrl: string): Promise<boolean> {
+  /**
+   * Same policy as the open-time checks, applied to an in-page navigation
+   * target (risk §5.2). Returns the URL to actually load rather than a bare
+   * boolean (cut §1.5/F8a): for a `file:` target this is the REALPATH this
+   * function already resolved via `deps.resolveArtifact` (mirrors
+   * `openForTab`'s own `pathToFileURL(realPath)`), closing the TOCTOU window
+   * a raw-`navUrl` load would leave between the containment check and the
+   * load itself (a symlink repointed in between would otherwise land an
+   * out-of-root file in the window).
+   */
+  private async evaluateNavigation(
+    record: PreviewRecord,
+    navUrl: string,
+  ): Promise<{ allow: false } | { allow: true; loadUrl: string }> {
     if (navUrl.startsWith("file:")) {
       let filePath: string;
       try {
         filePath = fileURLToPath(navUrl);
       } catch {
-        return false;
+        return { allow: false };
       }
       const resolved = await this.deps.resolveArtifact(record.tabId, filePath);
-      return "realPath" in resolved;
+      if (!("realPath" in resolved)) {
+        return { allow: false };
+      }
+      return { allow: true, loadUrl: pathToFileURL(resolved.realPath).href };
     }
     let parsed: URL;
     try {
       parsed = new URL(navUrl);
+    } catch {
+      return { allow: false };
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { allow: false };
+    }
+    if (isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin)) {
+      return { allow: true, loadUrl: parsed.toString() };
+    }
+    return { allow: false };
+  }
+
+  /**
+   * Synchronous, http(s)-only redirect check (cut §1.2/F1): Chromium already
+   * refuses unsafe schemes as a redirect target, so anything non-http(s) here
+   * denies outright; no `file:` resolution is ever needed for a redirect
+   * target. Synchronous is both required (`preventDefault` must run inside
+   * the `will-redirect` event turn) and sufficient for that reason.
+   */
+  private evaluateRedirect(record: PreviewRecord, url: string): boolean {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
     } catch {
       return false;
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    if (isLocalHost(parsed.hostname)) {
-      return true;
+    return isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin);
+  }
+
+  private gateDedupeKeyForRedirect(url: string): string {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return url;
     }
-    return record.consentedOrigins.has(parsed.origin);
+  }
+
+  /**
+   * ONE gate policy function (cut §1.1/F2, the keystone fix), closed over the
+   * LIVE `record` — `record.kind`/`record.consentedOrigins` are read at
+   * request time, so a reuse-navigate kind change is honored automatically.
+   * Exhaustive for every `(url, resourceType)`:
+   *   1. Unparseable URL => deny.
+   *   2. `about:`/`data:`/`blob:` => allow (no network egress).
+   *   3. `file:` => resolve via `deps.resolveArtifact`; not contained =>
+   *      deny; contained mainFrame => allow; contained subresource => allow
+   *      only if `record.kind === "file"`.
+   *   4. `http(s):`/`ws(s):` — normalize hostname (lowercase + de-bracket)
+   *      and the origin's scheme (ws->http, wss->https) before comparing:
+   *        - localhost (any port): mainFrame => allow; subresource => allow
+   *          iff `record.kind !== "remote"` (a consented remote page must
+   *          not be able to pivot into loopback).
+   *        - any other origin => allow iff the normalized origin is in
+   *          `record.consentedOrigins` — for BOTH mainFrame and subresource,
+   *          which is exactly what closes the redirect-to-unconsented-origin
+   *          hole (F1): a redirect leg re-enters here as a mainFrame request
+   *          for the new origin, and consent never widens to it.
+   *   5. Any other scheme (`devtools:`, `chrome:`, …) => deny.
+   */
+  private async classifyGateRequest(
+    record: PreviewRecord,
+    req: { url: string; resourceType: string },
+  ): Promise<{ allowed: boolean; dedupeKey: string }> {
+    let parsed: URL;
+    try {
+      parsed = new URL(req.url);
+    } catch {
+      return { allowed: false, dedupeKey: req.url };
+    }
+    const scheme = parsed.protocol;
+    if (scheme === "about:" || scheme === "data:" || scheme === "blob:") {
+      return { allowed: true, dedupeKey: req.url };
+    }
+    if (scheme === "file:") {
+      let filePath: string;
+      try {
+        filePath = fileURLToPath(parsed);
+      } catch {
+        return { allowed: false, dedupeKey: req.url };
+      }
+      const resolved = await this.deps.resolveArtifact(record.tabId, filePath);
+      if (!("realPath" in resolved)) {
+        return { allowed: false, dedupeKey: filePath };
+      }
+      if (req.resourceType === "mainFrame") {
+        return { allowed: true, dedupeKey: filePath };
+      }
+      return { allowed: record.kind === "file", dedupeKey: filePath };
+    }
+    if (scheme === "http:" || scheme === "https:" || scheme === "ws:" || scheme === "wss:") {
+      const normalizedScheme = scheme === "ws:" ? "http:" : scheme === "wss:" ? "https:" : scheme;
+      const origin = `${normalizedScheme}//${parsed.host}`;
+      if (isLocalHost(parsed.hostname)) {
+        if (req.resourceType === "mainFrame") {
+          return { allowed: true, dedupeKey: origin };
+        }
+        return { allowed: record.kind !== "remote", dedupeKey: origin };
+      }
+      return { allowed: record.consentedOrigins.has(origin), dedupeKey: origin };
+    }
+    return { allowed: false, dedupeKey: req.url };
+  }
+
+  /**
+   * Builds the closure `wireWindow` installs via `setRequestGate`. Legibility
+   * (non-negotiable, cut §1.1): a denied SUBRESOURCE records exactly one ring
+   * entry, deduplicated per (record, origin-or-file-path) via `warnedKeys` —
+   * a retry loop cannot flood the ring. A denied mainFrame request logs via
+   * `deps.logger.warn` instead (it already surfaces as a load failure to the
+   * model). Resolver rejection/throw is answered `deny`, never propagated —
+   * this function must never itself reject.
+   */
+  private makeRequestGate(record: PreviewRecord): (req: { url: string; resourceType: string }) => Promise<boolean> {
+    return async (req) => {
+      let outcome: { allowed: boolean; dedupeKey: string };
+      try {
+        outcome = await this.classifyGateRequest(record, req);
+      } catch {
+        outcome = { allowed: false, dedupeKey: req.url };
+      }
+      if (!outcome.allowed) {
+        if (req.resourceType === "mainFrame") {
+          this.deps.logger.warn(`[preview] denied request for ${record.previewId}: ${req.resourceType} ${req.url}`);
+        } else {
+          this.recordDeniedOnce(
+            record,
+            outcome.dedupeKey,
+            `[preview] blocked by security policy: ${req.resourceType} ${req.url.slice(0, 200)}`,
+            record.gateDeniedKeys,
+          );
+        }
+      }
+      return outcome.allowed;
+    };
+  }
+
+  /** Records ONE ring entry per (record, key) — a retry loop cannot flood the ring (cut §1.1 legibility requirement). */
+  private recordDeniedOnce(record: PreviewRecord, key: string, message: string, warnedKeys: Set<string>): void {
+    if (warnedKeys.has(key)) {
+      return;
+    }
+    warnedKeys.add(key);
+    this.recordConsole(record, {
+      level: "warn",
+      message,
+      at: new Date(this.now()).toISOString(),
+    });
   }
 
   // ── console ring + throttled forwarding ──

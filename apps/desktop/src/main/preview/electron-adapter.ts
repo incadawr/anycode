@@ -14,15 +14,26 @@
  * `Runtime.exceptionThrown` gets the real distinction the `PreviewConsoleEntry`
  * contract (`"pageerror"` as its own level) needs, WITHOUT a preload script —
  * the "no preload" security invariant (preview-host.ts's header) stays intact.
+ *
+ * Wave-1 security fix cut additions (night-track wave1-security-fix-cut.md
+ * §1.1/§1.2/§1.3): `setRequestGate` maps to `session.webRequest.onBeforeRequest`
+ * registered with NO url filter (the keystone F2 fix — it must see every
+ * resource type, not a pattern-matched subset); `onWillRedirect` maps to
+ * `will-redirect` (F1's belt-and-braces layer); `setWebRTCIPHandlingPolicy`
+ * closes the STUN/UDP exfil channel `onBeforeRequest` cannot see; both
+ * console-message and CDP exception strings are sliced to `RING_MAX_MSG_CHARS`
+ * BEFORE they ever reach preview-host.ts (F3) — the size bound this module
+ * enforces is defense-in-depth on top of preview-host.ts's own re-slice.
  */
 
 import { BrowserWindow, type NativeImage } from "electron";
 import type { PreviewConsoleEntry } from "../../shared/preview.js";
-import type {
-  CreateWindowOpts,
-  PreviewCapturedImage,
-  PreviewWebContentsLike,
-  PreviewWindowLike,
+import {
+  RING_MAX_MSG_CHARS,
+  type CreateWindowOpts,
+  type PreviewCapturedImage,
+  type PreviewWebContentsLike,
+  type PreviewWindowLike,
 } from "./preview-host.js";
 
 const DEFAULT_WIDTH = 1100;
@@ -59,7 +70,10 @@ function attachPageErrorCapture(win: BrowserWindow, onPageError: (message: strin
     }
     const details = (params as { exceptionDetails?: { exception?: { description?: string }; text?: string } })
       .exceptionDetails;
-    const message = details?.exception?.description ?? details?.text ?? "uncaught exception";
+    const message = (details?.exception?.description ?? details?.text ?? "uncaught exception").slice(
+      0,
+      RING_MAX_MSG_CHARS,
+    );
     onPageError(message);
   });
   wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
@@ -86,9 +100,18 @@ function wrapWebContents(win: BrowserWindow): PreviewWebContentsLike {
   const wc = win.webContents;
   let consoleListener: (level: PreviewConsoleEntry["level"], message: string) => void = () => {};
 
+  // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
+  // (cut §1.1/F2, "one cheap adapter hardening that IS in scope"); the
+  // TURN-over-TCP edge is a recorded residual (R2), not closed here.
+  wc.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+
   attachPageErrorCapture(win, (message) => consoleListener("pageerror", message));
   wc.on("console-message", (event) => {
-    consoleListener(classifyConsoleLevel(event.level), event.message);
+    // Sliced BEFORE the listener (cut §1.3/F3) — the giant string still
+    // arrives in main once (Chromium delivers it; unavoidable) but is never
+    // re-serialized host-ward at size. preview-host.ts's own slice at
+    // recordConsole-time stays as defense-in-depth.
+    consoleListener(classifyConsoleLevel(event.level), event.message.slice(0, RING_MAX_MSG_CHARS));
   });
 
   return {
@@ -122,6 +145,11 @@ function wrapWebContents(win: BrowserWindow): PreviewWebContentsLike {
         listener(event.url, () => event.preventDefault());
       });
     },
+    onWillRedirect: (listener) => {
+      wc.on("will-redirect", (event) => {
+        listener(event.url, () => event.preventDefault());
+      });
+    },
     onDidNavigate: (listener) => {
       wc.on("did-navigate", (_event, url) => {
         listener(url);
@@ -129,6 +157,17 @@ function wrapWebContents(win: BrowserWindow): PreviewWebContentsLike {
     },
     onConsoleMessage: (listener) => {
       consoleListener = listener;
+    },
+    setRequestGate: (gate) => {
+      // NO url filter (cut §1.1/F2): omitting it intercepts every scheme
+      // incl. `file:`/`ws:` — `<all_urls>` pattern-matching is not relied on.
+      wc.session.webRequest.onBeforeRequest((details, callback) => {
+        gate({ url: details.url, resourceType: details.resourceType }).then(
+          (allow) => callback({ cancel: !allow }),
+          // Deny on gate rejection/throw; the Electron callback is ALWAYS answered.
+          () => callback({ cancel: true }),
+        );
+      });
     },
   };
 }
