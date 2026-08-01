@@ -26,6 +26,8 @@
 
 import { randomUUID } from "node:crypto";
 import type { CreateTabResult, TabHost, TabSummary } from "../tabs.js";
+import type { PreviewHostHandle, PreviewSummary } from "../preview/preview-host.js";
+import type { PreviewConsoleEntry, PreviewOpenSuccess, PreviewResult } from "../../shared/preview.js";
 
 /** Structural view of `webContents` the channel needs (executeJavaScript for the facade, capturePage for evidence). */
 export interface CapturedImage {
@@ -87,6 +89,18 @@ export interface HandlerDeps {
    * this field existed.
    */
   activeConnectionId?: () => string | undefined;
+  /**
+   * PreviewHost handle (night-track wave-1 cut §2.8, 96-E): the preview
+   * probes/driver below call it DIRECTLY, main-plane, bypassing the renderer
+   * facade entirely — same posture as `screenshot()`'s direct `getWindow()`
+   * call above (PreviewHost owns every live preview window across every tab,
+   * independent of which page happens to be focused). Absent in a
+   * fixture/test HandlerDeps -> every preview route below answers
+   * `{ok:false, error:"preview host unavailable", errorKind:"unavailable"}`
+   * (or the console/list routes' own empty-shape equivalent) rather than
+   * throwing, so no pre-96-E test needs updating.
+   */
+  previewHost?: PreviewHostHandle;
 }
 
 /* */
@@ -222,6 +236,64 @@ export async function screenshot(deps: HandlerDeps): Promise<{ png: string }> {
   }
   const image = await win.webContents.capturePage();
   return { png: image.toPNG().toString("base64") };
+}
+
+// --- Preview probes/driver (night-track wave-1 cut §2.8, 96-E): a
+// model-free, mechanical smoke of 96-A's PreviewHost — direct main-plane
+// calls, no renderer facade involved (same posture as `screenshot()` above).
+// Every route degrades to an honest "unavailable" answer when
+// `deps.previewHost` is absent (a fixture/test HandlerDeps), never throws. ---
+
+const PREVIEW_HOST_UNAVAILABLE = { ok: false, error: "preview host unavailable", errorKind: "unavailable" } as const;
+
+/** `GET /tabs/:tabId/previews`: every LIVE preview window for this tab. */
+export function previewsForTab(deps: HandlerDeps, tabId: string): { previews: PreviewSummary[] } {
+  return { previews: deps.previewHost?.listForTab(tabId) ?? [] };
+}
+
+/** `GET /tabs/:tabId/previews/:previewId/console?tail=N`: the console/pageerror ring for one preview. */
+export function previewConsole(
+  deps: HandlerDeps,
+  tabId: string,
+  previewId: string,
+  tail: number | undefined,
+): { entries: PreviewConsoleEntry[]; dropped: number } | { error: string } {
+  if (deps.previewHost === undefined) {
+    return { error: "preview host unavailable" };
+  }
+  return deps.previewHost.getConsole(tabId, previewId, tail);
+}
+
+/** `GET /tabs/:tabId/previews/:previewId/screenshot`: reuses PreviewHost's own screenshot op (cut §2.8). */
+export async function previewScreenshot(
+  deps: HandlerDeps,
+  tabId: string,
+  previewId: string,
+): Promise<{ png: string } | PreviewResult<never>> {
+  if (deps.previewHost === undefined) {
+    return PREVIEW_HOST_UNAVAILABLE;
+  }
+  const result = await deps.previewHost.screenshotFor(tabId, previewId);
+  return result.ok ? { png: result.value.data } : result;
+}
+
+/**
+ * `POST /tabs/:tabId/previews {path?, url?}`: opens a preview via PreviewHost
+ * directly — a model-free smoke of 96-A's open op. Remote http(s) is REFUSED
+ * on this route by construction, not by any extra check here: `allowRemote`
+ * is never forwarded, and `PreviewHost.openForTab`'s own `resolveUrlTarget`
+ * refuses every non-localhost URL unless the caller passed `allowRemote:true`
+ * (cut §2.8 — "consent can't be faked by automation").
+ */
+export async function previewOpen(
+  deps: HandlerDeps,
+  tabId: string,
+  req: { path?: string; url?: string },
+): Promise<PreviewResult<PreviewOpenSuccess>> {
+  if (deps.previewHost === undefined) {
+    return PREVIEW_HOST_UNAVAILABLE;
+  }
+  return deps.previewHost.openForTab(tabId, { path: req.path, url: req.url });
 }
 
 // --- Action commands (§4.2) ---

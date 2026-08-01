@@ -1073,6 +1073,10 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
   const [stallTimeoutMs, setStallTimeoutMs] = useState("");
   const [maxTurns, setMaxTurns] = useState("");
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
+  // 96-E (cut §1(e)/§2.7): the ONE real persisted field in this pane besides
+  // theme — absent settings.preview.autoOpen reads as ON (owner default),
+  // mirroring main's own autoOpenEnabled() fallback exactly.
+  const [autoOpenPreview, setAutoOpenPreview] = useState(true);
   // R8(d): device-local preference — localStorage, NOT the settings vault
   // (no IPC, no snapshot field). Deliberately ignores readOnly: a locked
   // vault blocks vault WRITES; this key never touches the vault. Initializer
@@ -1140,6 +1144,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
       setStallTimeoutMs(snapshot.settings.tools.stallTimeoutMs?.toString() ?? "");
       setMaxTurns(snapshot.settings.tools.maxTurns?.toString() ?? "");
       setTheme(snapshot.settings.ui.theme);
+      setAutoOpenPreview(snapshot.settings.preview?.autoOpen ?? true);
       setInitialized(true);
     }
   }, [snapshot, initialized]);
@@ -1209,6 +1214,13 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
       // Storage unavailable — the attribute is already stamped, so the mode
       // still applies for this window; it resets to the compact default on reload.
     }
+  }
+
+  /** 96-E (cut §1(e)/§2.7): a REAL persisted setting, unlike the two localStorage toggles above — round-trips through setPatch, same posture as changeTheme. */
+  function toggleAutoOpenPreview(): void {
+    const next = !autoOpenPreview;
+    setAutoOpenPreview(next);
+    void store.getState().setPatch({ preview: { autoOpen: next } });
   }
 
   const activePaneRecord = SETTINGS_PANES.find((pane) => pane.id === activePane);
@@ -1449,6 +1461,25 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                     </button>
                     <span id="settings-notify-turn-caption" className="settings-switch-caption">
                       Notify when a turn finishes in the background
+                    </span>
+                  </div>
+                </div>
+                <div className="settings-field">
+                  <span className="settings-field-label">Preview</span>
+                  <div className="settings-field-row">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={autoOpenPreview}
+                      aria-labelledby="settings-auto-open-preview-caption"
+                      className={`settings-switch${autoOpenPreview ? " settings-switch-on" : ""}`}
+                      disabled={readOnly}
+                      onClick={toggleAutoOpenPreview}
+                    >
+                      <span className="settings-switch-thumb" />
+                    </button>
+                    <span id="settings-auto-open-preview-caption" className="settings-switch-caption">
+                      Automatically open a preview window for HTML/Markdown files the agent writes
                     </span>
                   </div>
                 </div>
