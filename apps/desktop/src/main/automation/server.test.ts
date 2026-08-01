@@ -3115,6 +3115,15 @@ function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHos
       ok: true as const,
       value: { previewId: "pv-1", url: "file:///tmp/a.html", mediaType: "image/png" as const, data: "UE5H", width: 10, height: 10 },
     })),
+    // panel-track CUT.md §2.2 (TASK.96 96-P1): panel-container additions to
+    // PreviewHostHandle — this automation-probe fake never drives the panel
+    // container, so plain no-op/empty defaults suffice.
+    setPanelState: vi.fn(),
+    setPanelBounds: vi.fn(),
+    selectPanelPreview: vi.fn(() => ({ ok: true as const })),
+    closePreview: vi.fn(() => ({ ok: true as const })),
+    listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
+    setContainer: vi.fn(async () => ({ ok: false as const, error: "transfer lands in 96-P3" })),
     ...overrides,
   };
 }

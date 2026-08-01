@@ -83,6 +83,9 @@ import {
 // preview-host.ts itself stays unit-testable off plain fakes.
 import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
 import { createElectronPreviewWindow } from "./preview/electron-adapter.js";
+import { createElectronPanelView } from "./preview/panel-adapter.js";
+import { registerPreviewPanelIpc } from "./preview/panel-ipc.js";
+import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
 import { renderMarkdownFile } from "./preview/markdown-render.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
@@ -584,6 +587,12 @@ function createWindow(): void {
   win.webContents.on("did-finish-load", () => {
     manager?.deliverAllTabPorts();
     win?.webContents.send(WINDOW_STATE_CHANNEL, readWindowState(win));
+    // panel-track CUT.md D7: a reloaded/crashed renderer boots with no panel
+    // state at all — reset every panel to hidden until the fresh renderer
+    // republishes its own setPanelState/setPanelBounds. A reloaded renderer
+    // can never sit under a stale floating view.
+    previewHost?.setPanelState({ activeTabId: null, panelMounted: false, overlayOpen: false });
+    previewHost?.setPanelBounds(null);
   });
 
   const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
@@ -1252,6 +1261,21 @@ void app.whenReady().then(async () => {
   // byte when the setting has never been touched.
   previewHost = registerPreviewHost({
     createWindow: (opts) => createElectronPreviewWindow(opts),
+    // panel-track CUT.md §2.2/§3 96-P1: the container abstraction's other
+    // half — a real WebContentsView attached to the SAME main window,
+    // byte-identical frozen webPreferences/partition scheme (D2/D3).
+    createPanelView: (opts) => createElectronPanelView(opts, { getWindow: () => win }),
+    // D4: live read of settings.preview.displayMode, consulted only when
+    // openForTab creates a NEW record. Absent -> "panel" (task decision),
+    // same absent-default posture as autoOpenEnabled below.
+    displayMode: () => settings?.preview?.displayMode ?? "panel",
+    // D7: pushes the tab's current preview set to the renderer on every
+    // record-set mutation (open-settle, status change, select, close, tab
+    // close). `win` may be torn down mid-teardown; a null/gone window is a
+    // safe no-op, mirroring every other `win?.webContents.send(...)` call site.
+    onPreviewsChanged: (payload) => {
+      win?.webContents.send(PREVIEW_CHANGED_CHANNEL, payload);
+    },
     resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
     autoOpenEnabled: () => settings?.preview?.autoOpen ?? true,
     postToHost: (tabId, message) => {
@@ -1275,6 +1299,12 @@ void app.whenReady().then(async () => {
     logger: console,
     now: () => Date.now(),
   });
+
+  // Panel-side preview IPC (panel-track CUT.md §3 96-P1 item 4): SET_STATE/
+  // SET_BOUNDS/SELECT/CLOSE/LIST. Registered right after previewHost so its
+  // handlers close over the SAME live handle every other preview wiring
+  // uses. SET_CONTAINER's handler is NOT registered until 96-P3.
+  registerPreviewPanelIpc({ host: previewHost });
 
   manager = new TabHostManager({
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),

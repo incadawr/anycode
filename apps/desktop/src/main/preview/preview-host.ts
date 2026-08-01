@@ -88,6 +88,14 @@ import {
   type PreviewResult,
   type PreviewScreenshotSuccess,
 } from "../../shared/preview.js";
+import type {
+  PreviewChangedPayload,
+  PreviewContainerKind,
+  PreviewPanelBounds,
+  PreviewPanelInfo,
+  PreviewPanelStatePayload,
+  PreviewSetContainerResult,
+} from "../../shared/preview-panel.js";
 
 // ── minimal Electron-free surfaces (prod impl: preview/electron-adapter.ts) ──
 
@@ -146,6 +154,20 @@ export interface PreviewWindowLike {
   onClosed(listener: () => void): void;
 }
 
+/**
+ * Panel extension over the existing seam (panel-track CUT.md §2.2, TASK.96
+ * 96-P1). `PreviewWindowLike` above is UNCHANGED; a panel container
+ * implements it plus this. `show()`/`showInactive()` map to `setVisible(true)`
+ * in the adapter (panel-adapter.ts) — the host's panel paths never call them
+ * (D13 handles the screenshot case explicitly via the visible-slot map +
+ * `applyPanel()`).
+ */
+export interface PreviewPanelViewLike extends PreviewWindowLike {
+  /** DIP ints; the caller (preview-host.ts's `applyPanel`) pre-clamps/rounds via `clampPanelBounds`. */
+  setBounds(bounds: PreviewPanelBounds): void;
+  setVisible(visible: boolean): void;
+}
+
 export interface CreateWindowOpts {
   previewId: string;
   /** Cascade position (undefined for the first window of the batch — the adapter picks its own default placement). */
@@ -191,6 +213,16 @@ export interface PreviewHostDeps {
    * `errorKind: "unavailable"` — the source is NEVER loaded as plaintext.
    */
   renderMarkdown?: (realPath: string) => Promise<{ htmlPath: string } | { error: string }>;
+  /** Real `WebContentsView`-backed container (panel-adapter.ts's `createElectronPanelView`), injected the same way `createWindow` is. */
+  createPanelView(opts: CreateWindowOpts): PreviewPanelViewLike;
+  /**
+   * Live read of `settings.preview?.displayMode ?? "panel"` (D4), sibling of
+   * `autoOpenEnabled` above: consulted ONLY when `openForTab` creates a NEW
+   * record — a reuse (`previewId` given) keeps its existing container.
+   */
+  displayMode(): "panel" | "window";
+  /** Main wires this to `win.webContents.send(PREVIEW_CHANGED_CHANNEL, payload)` (D7); absent is a safe no-op (e.g. in tests that never care). */
+  onPreviewsChanged?(payload: PreviewChangedPayload): void;
   logger: PreviewLogger;
   now: () => number;
 }
@@ -223,6 +255,18 @@ export interface PreviewHostHandle {
   getConsole(tabId: string, previewId: string, tail?: number): { entries: PreviewConsoleEntry[]; dropped: number } | { error: string };
   /** Direct callable used by the RPC dispatch and the 96-E automation screenshot route alike. */
   screenshotFor(tabId: string, previewId?: string): Promise<PreviewResult<PreviewScreenshotSuccess>>;
+  /** D7: renderer-published panel-gating state; triggers `applyPanel()`. */
+  setPanelState(state: PreviewPanelStatePayload): void;
+  /** D9: rAF-coalesced panel body rect (already clamped/rounded by the caller, re-clamped defensively here); `null` hides every panel (renderer-reload reset). Triggers `applyPanel()`. */
+  setPanelBounds(bounds: PreviewPanelBounds | null): void;
+  /** D5: makes a PANEL-container preview the visible slot occupant for its tab. */
+  selectPanelPreview(tabId: string, previewId: string): { ok: boolean; error?: string };
+  /** Destroys one preview (panel header ×), same semantics as a user-closed window. */
+  closePreview(tabId: string, previewId: string): { ok: boolean; error?: string };
+  /** Hydration read (P1): ALL of the tab's previews across both containers + the visible panel slot. */
+  listForPanel(tabId: string): PreviewChangedPayload;
+  /** D14 transfer — declared here (frozen contract, §2.2) but implemented in 96-P3; this checkpoint always refuses honestly. */
+  setContainer(tabId: string, previewId: string, container: PreviewContainerKind): Promise<PreviewSetContainerResult>;
 }
 
 // ── tunables ──
@@ -248,6 +292,25 @@ export const READ_RESULT_MAX_CHARS = 200_000;
 /** A previewed page spinning in a loop must not hang a read/pollSelector op past the outer tool timeout (cut §1.3/F3). */
 export const EXEC_JS_TIMEOUT_MS = 10_000;
 
+/**
+ * D9's main-side clamp (exported for panel-ipc.ts + tests, single source of
+ * truth shared by both the IPC boundary and `PreviewHost.setPanelBounds`
+ * itself, so a test driving either layer observes the identical result):
+ * `x`/`y` floored at 0 (no upper bound — a panel is always laid out inside
+ * the main window's own content area); `width`/`height` clamped to
+ * `0..32768`. All four rounded to the nearest integer (DIP ints, cut §2.2).
+ */
+export function clampPanelBounds(bounds: PreviewPanelBounds): PreviewPanelBounds {
+  const clampMin0 = (n: number): number => Math.max(0, Math.round(n));
+  const clampWidthHeight = (n: number): number => Math.min(32768, Math.max(0, Math.round(n)));
+  return {
+    x: clampMin0(bounds.x),
+    y: clampMin0(bounds.y),
+    width: clampWidthHeight(bounds.width),
+    height: clampWidthHeight(bounds.height),
+  };
+}
+
 type PreviewErrorKind = NonNullable<Extract<PreviewResult<unknown>, { ok: false }>["errorKind"]>;
 type SettleStatus = "ready" | "failed" | "crashed";
 
@@ -255,6 +318,9 @@ interface PreviewRecord {
   previewId: string;
   tabId: string;
   window: PreviewWindowLike;
+  containerKind: "window" | "panel";
+  /** SAME object as `window` when `containerKind === "panel"` — a narrower typed handle so `applyPanel()` can call `setBounds`/`setVisible` without a cast. Undefined for window-container records. */
+  panelView?: PreviewPanelViewLike;
   status: "loading" | SettleStatus;
   url: string;
   kind: "file" | "localhost" | "remote";
@@ -323,6 +389,12 @@ type OpenTarget =
 
 class PreviewHost implements PreviewHostHandle {
   private readonly previews = new Map<string, PreviewRecord>();
+  /** D5: one visible panel slot per tab — the previewId currently occupying it (absent = none). */
+  private readonly visiblePanelPreviewId = new Map<string, string>();
+  /** D7: renderer-published panel-gating state; all-hidden until the renderer's first setPanelState. */
+  private panelState: PreviewPanelStatePayload = { activeTabId: null, panelMounted: false, overlayOpen: false };
+  /** D9: last rAF-coalesced panel body rect, already clamped/rounded; null hides every panel. */
+  private panelBounds: PreviewPanelBounds | null = null;
 
   constructor(private readonly deps: PreviewHostDeps) {}
 
@@ -383,12 +455,31 @@ class PreviewHost implements PreviewHostHandle {
       isNewWindow = false;
     } else {
       const previewId = randomUUID();
-      const cascade = this.cascadePosition();
-      const window = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y });
-      record = this.newRecord(tabId, previewId, window);
+      // D4: displayMode is consulted ONLY here, on NEW-record creation — a
+      // reuse (the `if` branch above, previewId given) keeps its existing
+      // container regardless of a later settings change.
+      const containerKind: "window" | "panel" = this.deps.displayMode() === "panel" ? "panel" : "window";
+      let window: PreviewWindowLike;
+      let panelView: PreviewPanelViewLike | undefined;
+      if (containerKind === "panel") {
+        const view = this.deps.createPanelView({ previewId });
+        window = view;
+        panelView = view;
+      } else {
+        // Cascade position is windows-only (D4) — a panel has no free-floating position to cascade.
+        const cascade = this.cascadePosition();
+        window = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y });
+      }
+      record = this.newRecord(tabId, previewId, window, containerKind, panelView);
       this.previews.set(previewId, record);
       this.wireWindow(record);
       isNewWindow = true;
+      if (containerKind === "panel") {
+        // D5: the most-recently-opened panel preview of a tab is the visible
+        // slot occupant — a second panel open on the same tab hides the first.
+        this.visiblePanelPreviewId.set(tabId, previewId);
+        this.applyPanel();
+      }
     }
 
     const target = hasPath
@@ -637,14 +728,32 @@ class PreviewHost implements PreviewHostHandle {
     }
 
     const wc = record.window.webContents;
-    // macOS trap (risk §5.5): a backgrounded/occluded window can capture empty
-    // unless shown first; `showInactive` avoids stealing focus from the main
-    // window for what is otherwise an invisible, automatable operation.
-    record.window.showInactive();
+    if (record.containerKind === "panel") {
+      // D13: the container-agnostic `showInactive()` intent, mapped honestly
+      // for a panel — promote this preview to the visible slot instead of
+      // forcing container visibility; the overlay/tab/mount gates inside
+      // `applyPanel()` are NEVER bypassed for a capture.
+      this.visiblePanelPreviewId.set(record.tabId, record.previewId);
+      this.applyPanel();
+      this.pushChanged(record.tabId);
+    } else {
+      // macOS trap (risk §5.5): a backgrounded/occluded window can capture empty
+      // unless shown first; `showInactive` avoids stealing focus from the main
+      // window for what is otherwise an invisible, automatable operation.
+      record.window.showInactive();
+    }
     wc.setBackgroundThrottling(false);
     try {
       let image = await wc.capturePage();
       if (image.isEmpty()) {
+        if (record.containerKind === "panel") {
+          // The reconciler still keeps it hidden (inactive tab / unmounted
+          // region / overlay open) — an honest refusal, never a gate bypass.
+          return this.fail(
+            "unavailable",
+            "screenshot unavailable while the panel preview is hidden — switch to the tab or move the preview to a window",
+          );
+        }
         record.window.show();
         image = await wc.capturePage();
       }
@@ -768,6 +877,14 @@ class PreviewHost implements PreviewHostHandle {
         // Best-effort temp-file cleanup — a missing/already-removed file is not an error.
       });
     }
+    if (record.containerKind === "panel" && this.visiblePanelPreviewId.get(record.tabId) === record.previewId) {
+      // D5: the visible-slot occupant just died — re-point to the most-
+      // recently-opened SURVIVING panel preview of this tab (none left ->
+      // clear the slot).
+      this.promoteMostRecentPanelSurvivor(record.tabId);
+    }
+    this.applyPanel();
+    this.pushChanged(record.tabId);
   }
 
   // ── inspection (96-E automation probes) ──
@@ -804,14 +921,152 @@ class PreviewHost implements PreviewHostHandle {
     return { entries, dropped: record.consoleDropped };
   }
 
+  // ── panel container (D5/D6/D7/D9/D13, panel-track CUT.md §2.2/§3 96-P1) ──
+
+  setPanelState(state: PreviewPanelStatePayload): void {
+    this.panelState = state;
+    this.applyPanel();
+  }
+
+  setPanelBounds(bounds: PreviewPanelBounds | null): void {
+    this.panelBounds = bounds === null ? null : clampPanelBounds(bounds);
+    this.applyPanel();
+  }
+
+  selectPanelPreview(tabId: string, previewId: string): { ok: boolean; error?: string } {
+    const record = this.previews.get(previewId);
+    if (record === undefined || record.destroyed || record.tabId !== tabId) {
+      return { ok: false, error: `no such preview: ${previewId}` };
+    }
+    if (record.containerKind !== "panel") {
+      return { ok: false, error: "preview is not in the panel" };
+    }
+    this.visiblePanelPreviewId.set(tabId, previewId);
+    this.applyPanel();
+    this.pushChanged(tabId);
+    return { ok: true };
+  }
+
+  closePreview(tabId: string, previewId: string): { ok: boolean; error?: string } {
+    const record = this.previews.get(previewId);
+    if (record === undefined || record.destroyed || record.tabId !== tabId) {
+      return { ok: false, error: `no such preview: ${previewId}` };
+    }
+    this.destroyRecord(record);
+    this.previews.delete(previewId);
+    return { ok: true };
+  }
+
+  listForPanel(tabId: string): PreviewChangedPayload {
+    const previews: PreviewPanelInfo[] = [];
+    for (const record of this.previews.values()) {
+      if (record.destroyed || record.tabId !== tabId) {
+        continue;
+      }
+      previews.push({
+        previewId: record.previewId,
+        tabId: record.tabId,
+        url: record.url,
+        ...(record.title !== undefined ? { title: record.title } : {}),
+        ...(record.sourcePath !== undefined ? { sourcePath: record.sourcePath } : {}),
+        status: record.status,
+        container: record.containerKind,
+      });
+    }
+    return {
+      tabId,
+      previews,
+      visiblePanelPreviewId: this.visiblePanelPreviewId.get(tabId) ?? null,
+    };
+  }
+
+  /**
+   * D14 transfer: declared on the handle (frozen contract, §2.2) but
+   * implemented in 96-P3. The renderer never calls this before P3 lands (P2
+   * rule) — this checkpoint always refuses honestly rather than silently
+   * no-opping or throwing.
+   */
+  async setContainer(
+    _tabId: string,
+    _previewId: string,
+    _container: PreviewContainerKind,
+  ): Promise<PreviewSetContainerResult> {
+    return { ok: false, error: "transfer lands in 96-P3" };
+  }
+
+  /** Broadcasts the tab's current preview set (main -> renderer push, D7's contract). */
+  private pushChanged(tabId: string): void {
+    this.deps.onPreviewsChanged?.(this.listForPanel(tabId));
+  }
+
+  /**
+   * D6 — the single main-side reconciler for panel visibility, run after
+   * every mutation that could affect it (setPanelState, setPanelBounds,
+   * open-settle, select, close, closeForTab, closeAll — transfer joins this
+   * list in 96-P3). For every LIVE panel-container record, `visible` is
+   * exactly: panel mounted AND no overlay open AND this record's tab is the
+   * active tab AND this record is its tab's visible-slot occupant AND the
+   * last-published bounds are non-degenerate. `setBounds` is always applied
+   * BEFORE `setVisible(true)` — a view can never flash at stale/zero
+   * geometry; hidden is always plain `setVisible(false)` (D6 — chosen over
+   * zero-bounds).
+   */
+  private applyPanel(): void {
+    const boundsOk = this.panelBounds !== null && this.panelBounds.width > 0 && this.panelBounds.height > 0;
+    for (const record of this.previews.values()) {
+      if (record.destroyed || record.containerKind !== "panel" || record.panelView === undefined) {
+        continue;
+      }
+      const isVisibleSlot = this.visiblePanelPreviewId.get(record.tabId) === record.previewId;
+      const visible =
+        this.panelState.panelMounted &&
+        !this.panelState.overlayOpen &&
+        record.tabId === this.panelState.activeTabId &&
+        isVisibleSlot &&
+        boundsOk;
+      if (visible) {
+        record.panelView.setBounds(this.panelBounds!);
+        record.panelView.setVisible(true);
+      } else {
+        record.panelView.setVisible(false);
+      }
+    }
+  }
+
+  /** D5: on close of the visible-slot occupant, re-point to the most-recently-opened SURVIVING panel preview of the tab (none left -> clear the slot). */
+  private promoteMostRecentPanelSurvivor(tabId: string): void {
+    let best: PreviewRecord | undefined;
+    for (const record of this.previews.values()) {
+      if (record.destroyed || record.tabId !== tabId || record.containerKind !== "panel") {
+        continue;
+      }
+      if (best === undefined || record.lastOpenedAt > best.lastOpenedAt) {
+        best = record;
+      }
+    }
+    if (best === undefined) {
+      this.visiblePanelPreviewId.delete(tabId);
+    } else {
+      this.visiblePanelPreviewId.set(tabId, best.previewId);
+    }
+  }
+
   // ── internals ──
 
-  private newRecord(tabId: string, previewId: string, window: PreviewWindowLike): PreviewRecord {
+  private newRecord(
+    tabId: string,
+    previewId: string,
+    window: PreviewWindowLike,
+    containerKind: "window" | "panel",
+    panelView?: PreviewPanelViewLike,
+  ): PreviewRecord {
     const now = this.now();
     return {
       previewId,
       tabId,
       window,
+      containerKind,
+      panelView,
       status: "loading",
       url: "",
       kind: "file",
@@ -868,6 +1123,8 @@ class PreviewHost implements PreviewHostHandle {
     for (const waiter of waiters) {
       waiter();
     }
+    // "open-settle" / status-change record-set mutation (shared/preview-panel.ts's CHANGED doc comment).
+    this.pushChanged(record.tabId);
   }
 
   private waitForSettle(record: PreviewRecord, timeoutMs: number): Promise<SettleStatus | "timeout"> {

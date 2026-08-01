@@ -24,9 +24,21 @@
  * console-message and CDP exception strings are sliced to `RING_MAX_MSG_CHARS`
  * BEFORE they ever reach preview-host.ts (F3) — the size bound this module
  * enforces is defense-in-depth on top of preview-host.ts's own re-slice.
+ *
+ * panel-track CUT.md §1 D3 (TASK.96 96-P1): `wrapWebContents` takes a raw
+ * `Electron.WebContents` + a `registerCleanup` hook instead of owning a
+ * `BrowserWindow` directly, so the SAME adapter mapping (it only ever touches
+ * `webContents`, never the owning window) is shared by this file's window
+ * adapter AND `panel-adapter.ts`'s new `WebContentsView` adapter — one copy
+ * of the event-adaptation/security-mapping logic for both containers (D1's
+ * "one wiring copy" invariant lives in preview-host.ts; this is the matching
+ * "one adapter mapping" invariant). `attachPageErrorCapture` generalizes its
+ * `win.once("closed", ...)` detach to the same `registerCleanup` hook —
+ * `createElectronPreviewWindow` passes `(fn) => win.once("closed", fn)`, so
+ * window behavior is byte-identical to before this refactor.
  */
 
-import { BrowserWindow, type NativeImage } from "electron";
+import { BrowserWindow, type NativeImage, type WebContents } from "electron";
 import type { PreviewConsoleEntry } from "../../shared/preview.js";
 import {
   RING_MAX_MSG_CHARS,
@@ -55,9 +67,18 @@ function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
   };
 }
 
-/** Best-effort CDP attach for `Runtime.exceptionThrown` -> classified "pageerror". Never throws. */
-function attachPageErrorCapture(win: BrowserWindow, onPageError: (message: string) => void): void {
-  const wc = win.webContents;
+/**
+ * Best-effort CDP attach for `Runtime.exceptionThrown` -> classified
+ * "pageerror". Never throws. `registerCleanup` (D3) is the container-neutral
+ * teardown hook — the window adapter wires it to `win.once("closed", fn)`,
+ * the panel adapter (panel-adapter.ts) wires it to its own synthesized
+ * `destroy()` cleanup list.
+ */
+function attachPageErrorCapture(
+  wc: WebContents,
+  registerCleanup: (fn: () => void) => void,
+  onPageError: (message: string) => void,
+): void {
   try {
     wc.debugger.attach(DEBUGGER_PROTOCOL_VERSION);
   } catch (error) {
@@ -79,7 +100,7 @@ function attachPageErrorCapture(win: BrowserWindow, onPageError: (message: strin
   wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
     console.warn("[preview] failed to enable CDP Runtime domain", error);
   });
-  win.once("closed", () => {
+  registerCleanup(() => {
     try {
       wc.debugger.detach();
     } catch {
@@ -89,15 +110,18 @@ function attachPageErrorCapture(win: BrowserWindow, onPageError: (message: strin
 }
 
 /**
- * Adapts one real `BrowserWindow`'s `webContents` onto `PreviewWebContentsLike`.
- * `onConsoleMessage` is settable exactly once by `preview-host.ts`'s wiring
- * (right after construction) — a single mutable closure variable feeds BOTH
- * the CDP pageerror capture (attached here, before the caller ever calls
- * `onConsoleMessage`) and the ordinary `console-message` listener, so a
- * pageerror is never lost to a registration-order race.
+ * Adapts one real `Electron.WebContents` onto `PreviewWebContentsLike` (D3):
+ * shared verbatim by the window adapter (`createElectronPreviewWindow`,
+ * below) and the panel adapter (`panel-adapter.ts`'s `createElectronPanelView`)
+ * — the ONE place the security event wiring is mapped onto real Electron, for
+ * either container. `onConsoleMessage` is settable exactly once by
+ * `preview-host.ts`'s wiring (right after construction) — a single mutable
+ * closure variable feeds BOTH the CDP pageerror capture (attached here,
+ * before the caller ever calls `onConsoleMessage`) and the ordinary
+ * `console-message` listener, so a pageerror is never lost to a
+ * registration-order race.
  */
-function wrapWebContents(win: BrowserWindow): PreviewWebContentsLike {
-  const wc = win.webContents;
+export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => void) => void): PreviewWebContentsLike {
   let consoleListener: (level: PreviewConsoleEntry["level"], message: string) => void = () => {};
 
   // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
@@ -105,7 +129,7 @@ function wrapWebContents(win: BrowserWindow): PreviewWebContentsLike {
   // TURN-over-TCP edge is a recorded residual (R2), not closed here.
   wc.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
 
-  attachPageErrorCapture(win, (message) => consoleListener("pageerror", message));
+  attachPageErrorCapture(wc, registerCleanup, (message) => consoleListener("pageerror", message));
   wc.on("console-message", (event) => {
     // Sliced BEFORE the listener (cut §1.3/F3) — the giant string still
     // arrives in main once (Chromium delivers it; unavoidable) but is never
@@ -193,7 +217,7 @@ export function createElectronPreviewWindow(opts: CreateWindowOpts): PreviewWind
   });
 
   return {
-    webContents: wrapWebContents(win),
+    webContents: wrapWebContents(win.webContents, (fn) => win.once("closed", fn)),
     isDestroyed: () => win.isDestroyed(),
     destroy: () => win.destroy(),
     show: () => win.show(),
