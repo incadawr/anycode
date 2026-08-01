@@ -164,6 +164,29 @@ import type { DesktopPlatform, WindowState } from "../shared/window.js";
 // safe to import directly here rather than duplicating, same as every other
 // `shared/**` type this file imports above.
 import type { PreviewOpenSuccess, PreviewResult } from "../shared/preview.js";
+// CUT.md §2.1/§3 96-P2: the preview-panel control plane (renderer split +
+// panel header UI). `setBounds` is the ONE deliberate `ipcRenderer.send` in
+// this file (not invoke) — D9's rAF-coalesced high-frequency bounds updates
+// are fire-and-forget by design, no reply needed. `setContainer`'s constant
+// is exported by shared/preview-panel.ts for both P1 and P2 to reference, but
+// its main handler lands in 96-P3 — no renderer call site in THIS slice
+// invokes it (PreviewPanel.tsx's header has no "Open in window" button yet).
+import {
+  PREVIEW_CHANGED_CHANNEL,
+  PREVIEW_CLOSE_CHANNEL,
+  PREVIEW_LIST_CHANNEL,
+  PREVIEW_PANEL_SELECT_CHANNEL,
+  PREVIEW_PANEL_SET_BOUNDS_CHANNEL,
+  PREVIEW_PANEL_SET_STATE_CHANNEL,
+  PREVIEW_SET_CONTAINER_CHANNEL,
+} from "../shared/preview-panel.js";
+import type {
+  PreviewChangedPayload,
+  PreviewContainerKind,
+  PreviewPanelBounds,
+  PreviewPanelStatePayload,
+  PreviewSetContainerResult,
+} from "../shared/preview-panel.js";
 
 // TASK.41 (design/slice-codex-fixes-cut.md §2(g)/§3.8): Codex onboarding
 // invoke/push channels. Duplicated literals, not `shared/**` exports — every
@@ -836,6 +859,40 @@ contextBridge.exposeInMainWorld("anycode", {
     // way back in once the user has closed it, short of an agent turn.
     preview: (tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>> =>
       ipcRenderer.invoke(ARTIFACT_PREVIEW_CHANNEL, { tabId, path }) as Promise<PreviewResult<PreviewOpenSuccess>>,
+  },
+  // CUT.md §2.1/§3 96-P2: `window.anycode.previewPanel` — NOT under the
+  // existing `artifacts.preview` click-to-open method above (different
+  // plane: that one opens/reopens a click-to-open window preview; this group
+  // is the panel-gating/bounds/select/close/list/transfer control plane).
+  previewPanel: {
+    setState: (payload: PreviewPanelStatePayload): Promise<void> =>
+      ipcRenderer.invoke(PREVIEW_PANEL_SET_STATE_CHANNEL, payload) as Promise<void>,
+    // Deliberate one-way send (D9) — no invoke round trip for a
+    // high-frequency, fire-and-forget bounds report.
+    setBounds: (bounds: PreviewPanelBounds): void => {
+      ipcRenderer.send(PREVIEW_PANEL_SET_BOUNDS_CHANNEL, bounds);
+    },
+    select: (tabId: string, previewId: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(PREVIEW_PANEL_SELECT_CHANNEL, { tabId, previewId }) as Promise<{ ok: boolean; error?: string }>,
+    close: (tabId: string, previewId: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(PREVIEW_CLOSE_CHANNEL, { tabId, previewId }) as Promise<{ ok: boolean; error?: string }>,
+    list: (tabId: string): Promise<PreviewChangedPayload> =>
+      ipcRenderer.invoke(PREVIEW_LIST_CHANNEL, { tabId }) as Promise<PreviewChangedPayload>,
+    // Exposed here (P2); the main handler lands in 96-P3 (CUT §2.1/§3) — no
+    // caller in this slice's renderer UI invokes it yet.
+    setContainer: (
+      tabId: string,
+      previewId: string,
+      container: PreviewContainerKind,
+    ): Promise<PreviewSetContainerResult> =>
+      ipcRenderer.invoke(PREVIEW_SET_CONTAINER_CHANNEL, { tabId, previewId, container }) as Promise<PreviewSetContainerResult>,
+    onChanged: (callback: (payload: PreviewChangedPayload) => void): (() => void) => {
+      function listener(_event: unknown, payload: PreviewChangedPayload): void {
+        callback(payload);
+      }
+      ipcRenderer.on(PREVIEW_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(PREVIEW_CHANGED_CHANNEL, listener);
+    },
   },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL) as Promise<void>,
