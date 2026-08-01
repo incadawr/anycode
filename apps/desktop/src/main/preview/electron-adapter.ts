@@ -131,8 +131,11 @@ function wrapWebContents(win: BrowserWindow): PreviewWebContentsLike {
       wc.on("did-finish-load", () => listener());
     },
     onDidFailLoad: (listener) => {
-      wc.on("did-fail-load", (_event, errorCode, errorDescription) => {
-        listener(errorCode, errorDescription);
+      // Electron's did-fail-load fires for subframe/subresource failures too
+      // (isMainFrame=false); forward it so the host can ignore non-main-frame
+      // failures instead of failing the whole preview.
+      wc.on("did-fail-load", (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+        listener(errorCode, errorDescription, isMainFrame);
       });
     },
     onRenderProcessGone: (listener) => {
