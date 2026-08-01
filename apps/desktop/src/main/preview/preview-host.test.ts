@@ -58,7 +58,7 @@ class FakeWebContents implements PreviewWebContentsLike {
   requestGate?: (req: { url: string; resourceType: string }) => Promise<boolean>;
 
   private didFinishLoad: Array<() => void> = [];
-  private didFailLoad: Array<(code: number, desc: string) => void> = [];
+  private didFailLoad: Array<(code: number, desc: string, isMainFrame: boolean) => void> = [];
   private renderProcessGone: Array<(reason: string) => void> = [];
   private willNavigate: Array<(url: string, preventDefault: () => void) => void> = [];
   private willRedirect: Array<(url: string, preventDefault: () => void) => void> = [];
@@ -91,7 +91,7 @@ class FakeWebContents implements PreviewWebContentsLike {
   onDidFinishLoad(listener: () => void): void {
     this.didFinishLoad.push(listener);
   }
-  onDidFailLoad(listener: (errorCode: number, errorDescription: string) => void): void {
+  onDidFailLoad(listener: (errorCode: number, errorDescription: string, isMainFrame: boolean) => void): void {
     this.didFailLoad.push(listener);
   }
   onRenderProcessGone(listener: (reason: string) => void): void {
@@ -117,8 +117,8 @@ class FakeWebContents implements PreviewWebContentsLike {
   fireDidFinishLoad(): void {
     for (const l of this.didFinishLoad) l();
   }
-  fireDidFailLoad(errorCode: number, errorDescription: string): void {
-    for (const l of this.didFailLoad) l(errorCode, errorDescription);
+  fireDidFailLoad(errorCode: number, errorDescription: string, isMainFrame = true): void {
+    for (const l of this.didFailLoad) l(errorCode, errorDescription, isMainFrame);
   }
   fireRenderProcessGone(reason: string): void {
     for (const l of this.renderProcessGone) l(reason);
@@ -497,6 +497,18 @@ describe("PreviewHost — open timeout / did-fail-load / render-process-gone -> 
       expect(result.errorKind).toBe("load_failed");
       expect(result.error).toContain("ERR_FILE_NOT_FOUND");
     }
+  });
+
+  it("ignores a SUBFRAME did-fail-load — a blocked/failed subresource degrades the page, does not fail the preview", async () => {
+    const rig = makeRig();
+    const resultPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    // The request gate blocking a remote iframe surfaces as ERR_BLOCKED_BY_CLIENT
+    // with isMainFrame=false; the main document still loaded.
+    rig.windows[0]!.webContents.fireDidFailLoad(-20, "ERR_BLOCKED_BY_CLIENT", false);
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await resultPromise;
+    expect(result.ok).toBe(true);
   });
 
   it("ignores ERR_ABORTED (-3) — a superseded navigation is not a failure", async () => {

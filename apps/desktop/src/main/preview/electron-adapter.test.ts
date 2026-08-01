@@ -213,7 +213,10 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     const failSpy = vi.fn();
     win.webContents.onDidFailLoad(failSpy);
     fake.webContents.emit("did-fail-load", {}, -6, "ERR_FILE_NOT_FOUND", "file:///x", true);
-    expect(failSpy).toHaveBeenCalledWith(-6, "ERR_FILE_NOT_FOUND");
+    expect(failSpy).toHaveBeenCalledWith(-6, "ERR_FILE_NOT_FOUND", true);
+    // A subframe failure forwards isMainFrame=false so the host can ignore it.
+    fake.webContents.emit("did-fail-load", {}, -20, "ERR_BLOCKED_BY_CLIENT", "https://evil.tld/x", false);
+    expect(failSpy).toHaveBeenCalledWith(-20, "ERR_BLOCKED_BY_CLIENT", false);
 
     const goneSpy = vi.fn();
     win.webContents.onRenderProcessGone(goneSpy);
