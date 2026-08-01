@@ -58,10 +58,18 @@ export const keybindingsSchema = z.object({
 
 /**
  * The `preview` settings section (night-track wave-1 cut §2.7, TASK.96
- * 96-E). `autoOpen` absent = enabled (owner default ON) — main's
- * `autoOpenEnabled()` applies that default, never this schema.
+ * 96-E; extended 96-P0, panel-track CUT.md §2.3). `autoOpen` absent =
+ * enabled (owner default ON) — main's `autoOpenEnabled()` applies that
+ * default, never this schema. `displayMode` absent = "panel" (task
+ * decision) — main's `displayMode()` dep (96-P1) applies that default the
+ * same way, never this schema.
  */
-export const previewSchema = z.object({ autoOpen: z.boolean().optional() }).optional();
+export const previewSchema = z
+  .object({
+    autoOpen: z.boolean().optional(),
+    displayMode: z.enum(["panel", "window"]).optional(),
+  })
+  .optional();
 
 /**
  * Strict-shape validator for a settings object. `.passthrough()` at the top

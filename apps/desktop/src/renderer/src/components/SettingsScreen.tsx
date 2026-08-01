@@ -1077,6 +1077,10 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
   // theme — absent settings.preview.autoOpen reads as ON (owner default),
   // mirroring main's own autoOpenEnabled() fallback exactly.
   const [autoOpenPreview, setAutoOpenPreview] = useState(true);
+  // 96-P0 (panel-track CUT.md §2.3): sibling persisted field — absent
+  // settings.preview.displayMode reads as "panel" (task default), mirroring
+  // main's own displayMode() dep fallback (96-P1) exactly.
+  const [previewDisplayMode, setPreviewDisplayMode] = useState<"panel" | "window">("panel");
   // R8(d): device-local preference — localStorage, NOT the settings vault
   // (no IPC, no snapshot field). Deliberately ignores readOnly: a locked
   // vault blocks vault WRITES; this key never touches the vault. Initializer
@@ -1145,6 +1149,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
       setMaxTurns(snapshot.settings.tools.maxTurns?.toString() ?? "");
       setTheme(snapshot.settings.ui.theme);
       setAutoOpenPreview(snapshot.settings.preview?.autoOpen ?? true);
+      setPreviewDisplayMode(snapshot.settings.preview?.displayMode ?? "panel");
       setInitialized(true);
     }
   }, [snapshot, initialized]);
@@ -1221,6 +1226,12 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
     const next = !autoOpenPreview;
     setAutoOpenPreview(next);
     void store.getState().setPatch({ preview: { autoOpen: next } });
+  }
+
+  /** 96-P0 (panel-track CUT.md §2.3): sibling of autoOpen above — same setPatch pattern, deep-merged so autoOpen is left untouched. */
+  function changePreviewDisplayMode(next: "panel" | "window"): void {
+    setPreviewDisplayMode(next);
+    void store.getState().setPatch({ preview: { displayMode: next } });
   }
 
   const activePaneRecord = SETTINGS_PANES.find((pane) => pane.id === activePane);
@@ -1481,6 +1492,39 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                     <span id="settings-auto-open-preview-caption" className="settings-switch-caption">
                       Automatically open a preview window for HTML/Markdown files the agent writes
                     </span>
+                  </div>
+                </div>
+                {/* 96-P0 (panel-track CUT.md §2.3): two-option segmented control, same
+                    role="group" + aria-pressed + "-selected" modifier idiom as
+                    StartScreen's engine picker (start-engine-switch/start-engine-choice) —
+                    reused as-is rather than adding a new CSS class for this slice. */}
+                <div className="settings-field">
+                  <span id="settings-preview-display-mode-label" className="settings-field-label">
+                    Preview location
+                  </span>
+                  <div
+                    className="start-engine-switch"
+                    role="group"
+                    aria-labelledby="settings-preview-display-mode-label"
+                  >
+                    <button
+                      type="button"
+                      className={`start-engine-choice${previewDisplayMode === "panel" ? " start-engine-choice-selected" : ""}`}
+                      aria-pressed={previewDisplayMode === "panel"}
+                      disabled={readOnly}
+                      onClick={() => changePreviewDisplayMode("panel")}
+                    >
+                      In the side panel
+                    </button>
+                    <button
+                      type="button"
+                      className={`start-engine-choice${previewDisplayMode === "window" ? " start-engine-choice-selected" : ""}`}
+                      aria-pressed={previewDisplayMode === "window"}
+                      disabled={readOnly}
+                      onClick={() => changePreviewDisplayMode("window")}
+                    >
+                      In a separate window
+                    </button>
                   </div>
                 </div>
               </section>

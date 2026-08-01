@@ -340,6 +340,75 @@ describe("preview (night-track wave-1 cut §2.7, TASK.96 96-E, additive-optional
   });
 });
 
+describe("preview.displayMode (96-P0, panel-track CUT.md §2.3, additive-optional)", () => {
+  it("parses {preview:{displayMode:\"window\"}}", () => {
+    const withMode: AnycodeSettings = { ...cloneDefaults(), preview: { displayMode: "window" } };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withMode)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.preview?.displayMode).toBe("window");
+    }
+  });
+
+  it("parses {preview:{displayMode:\"panel\"}}", () => {
+    const withMode: AnycodeSettings = { ...cloneDefaults(), preview: { displayMode: "panel" } };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withMode)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.preview?.displayMode).toBe("panel");
+    }
+  });
+
+  it("previewSchema accepts an empty preview object (displayMode absent)", () => {
+    const parsed = previewSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data?.displayMode).toBeUndefined();
+    }
+  });
+
+  it("parses a fully absent preview section (displayMode reads as undefined, never a default here)", () => {
+    const result = parseSettings(JSON.parse(JSON.stringify(cloneDefaults())));
+    expect(result.status).toBe("ok");
+    expect(result.settings.preview?.displayMode).toBeUndefined();
+  });
+
+  it("rejects an unrecognized displayMode value (junk enum, same failure posture as an invalid transport/reasoningEffort)", () => {
+    const bad = { ...cloneDefaults(), preview: { displayMode: "floating" } };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+    expect(previewSchema.safeParse({ displayMode: "floating" }).success).toBe(false);
+  });
+
+  it("existing preview.autoOpen fixtures still round-trip unchanged (additive-optional invariant)", () => {
+    for (const autoOpen of [true, false]) {
+      const withPreview: AnycodeSettings = { ...cloneDefaults(), preview: { autoOpen } };
+      const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withPreview)));
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.preview?.autoOpen).toBe(autoOpen);
+        expect(parsed.data.preview?.displayMode).toBeUndefined();
+      }
+    }
+  });
+
+  it("autoOpen and displayMode co-exist without disturbing each other", () => {
+    const both: AnycodeSettings = { ...cloneDefaults(), preview: { autoOpen: false, displayMode: "window" } };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(both)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.preview?.autoOpen).toBe(false);
+      expect(parsed.data.preview?.displayMode).toBe("window");
+    }
+  });
+
+  it("survives a read-modify-write cycle (displayMode not stripped on reparse)", () => {
+    const written = mergeSettings(cloneDefaults(), { preview: { displayMode: "window" } });
+    const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
+    expect(reloaded.status).toBe("ok");
+    expect(reloaded.settings.preview?.displayMode).toBe("window");
+  });
+});
+
 describe("codex (TASK.41, cut §3.5, additive-optional)", () => {
   it("reads a file with no codex field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();

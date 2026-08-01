@@ -280,9 +280,15 @@ export interface AnycodeSettings {
    * settings.json with no `preview` field round-trips byte-identically).
    * `autoOpen` absent means ON (owner default) — main's `autoOpenEnabled()`
    * reads `settings.preview?.autoOpen ?? true`, never the other way around.
+   *
+   * `displayMode` (added 96-P0, panel-track CUT.md §2.3): which container a
+   * NEW preview opens in. Absent means "panel" (task decision) — main's
+   * `displayMode()` dep (96-P1) reads `settings.preview?.displayMode ??
+   * "panel"`, same absent-default posture as `autoOpen`.
    */
   preview?: {
     autoOpen?: boolean;
+    displayMode?: "panel" | "window";
   };
 }
 
