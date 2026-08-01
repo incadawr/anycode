@@ -91,6 +91,14 @@ export interface ArtifactChipState {
   showReveal: boolean;
   /** Row text for the idle/unavailable states; "" when the caller renders its own content (loading spinner, ready image). */
   label: string;
+  /**
+   * night-track wave-1 fix cut §1.8 (F7): render the raw path as its own line —
+   * true for EVERY "unavailable" state (the path is the subject of the
+   * question in all blocked/error variants, not only outside_allowed_roots),
+   * false otherwise (idle/loading/ready never need it: ready already names the
+   * path in its meta label when there is no model-authored alt).
+   */
+  showPath: boolean;
 }
 
 /**
@@ -110,7 +118,7 @@ export function artifactChipState(
   consentAttempt: ConsentAttemptStatus,
 ): ArtifactChipState {
   if (status !== "unavailable") {
-    return { showAllow: false, showOpen: true, showReveal: true, label: "" };
+    return { showAllow: false, showOpen: true, showReveal: true, label: "", showPath: false };
   }
   const blockedByRoots = reason === "outside_allowed_roots";
   const baseLabel = artifactFailureMessage(reason ?? "");
@@ -118,5 +126,5 @@ export function artifactChipState(
     blockedByRoots && consentAttempt === "failed"
       ? `${baseLabel} — allow failed, try again`
       : baseLabel;
-  return { showAllow: blockedByRoots, showOpen: true, showReveal: true, label };
+  return { showAllow: blockedByRoots, showOpen: true, showReveal: true, label, showPath: true };
 }

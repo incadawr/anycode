@@ -63,6 +63,10 @@ describe("BrowserOpen", () => {
     });
   });
 
+  it("description warns pages cannot load remote subresources (night-track wave-1 fix cut §1.4, F5)", () => {
+    expect(browserOpenTool.metadata.description).toContain("self-contained");
+  });
+
   describe("resolveMetadata (security invariant owned by this slice)", () => {
     it("a remote non-localhost http(s) url escalates to high-risk/network/needsApproval", () => {
       const resolved = browserOpenTool.resolveMetadata?.({ url: "https://example.com/app" } as never);
@@ -184,6 +188,10 @@ describe("BrowserRead", () => {
       timeoutMs: 20_000,
       resultBudget: { maxModelBytes: 60_000, previewDirection: "head" },
     });
+  });
+
+  it("description warns page text/console output is untrusted (night-track wave-1 fix cut §1.4, F5)", () => {
+    expect(browserReadTool.metadata.description).toContain("untrusted");
   });
 
   it("defaults format to text and include_console to true", () => {
