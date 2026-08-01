@@ -73,6 +73,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, resolve as pathResolve, sep } from "node:path";
 import { z } from "zod";
+import type { PreviewOpenSuccess, PreviewResult } from "../shared/preview.js";
 
 // ── channels (preload duplicates these literals — shared/** convention is frozen per-track) ──
 
@@ -81,6 +82,13 @@ export const ARTIFACT_OPEN_CHANNEL = "anycode:artifact-open";
 export const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
 /** TASK.77-A: per-tab, per-path consent grant for a previously-blocked path. */
 export const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
+/**
+ * Night-track wave-1 (owner ask): user-initiated open/reopen of a local
+ * HTML/markdown artifact link in the PreviewHost window — the click surface
+ * for a window the user can otherwise only reach via an agent tool or
+ * turn-end auto-open, with no way back once closed.
+ */
+export const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
 
 // ── shared result shapes (duplicated on purpose in preload/index.ts + renderer) ──
 
@@ -140,6 +148,14 @@ const PREVIEWABLE_MIME: Record<string, string> = {
  * `shell.openPath`.
  */
 const OPENABLE_EXTENSIONS = new Set([...Object.keys(PREVIEWABLE_MIME), ".bmp", ".ico", ".avif", ".tiff", ".tif", ".heic"]);
+
+/**
+ * Extensions the artifact-preview channel may load into a PreviewHost window.
+ * Deliberately disjoint from `OPENABLE_EXTENSIONS`/`PREVIEWABLE_MIME` above —
+ * this is a document format PreviewHost RENDERS (a `.md` goes through
+ * `renderMarkdown` first), never a raster image and never `shell.openPath`.
+ */
+const PREVIEWABLE_DOC_EXTENSIONS = new Set([".html", ".htm", ".md"]);
 
 /** Inline-read byte cap — anything bigger stays a link + open/reveal actions. */
 export const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -228,6 +244,15 @@ export interface ArtifactsIpcDeps {
   confirmOpen(realPath: string): Promise<boolean>;
   /** TASK.77-A: per-tab consent grants; main injects one process-lifetime singleton (main/index.ts). */
   consent: ArtifactConsentStore;
+  /**
+   * Night-track wave-1: opens `realPath` (already containment-and-extension
+   * checked by `handleArtifactPreview`) in the tab's PreviewHost window.
+   * Bound at the wiring site (main/index.ts) to `PreviewHostHandle.openForTab`
+   * — the SAME call turn-end auto-open and the host-process BrowserOpen tool
+   * use, so a `.md` click gets the identical render+sanitize pipe, never the
+   * raw source. Never given a raw model-authored path.
+   */
+  openPreview(tabId: string, realPath: string): Promise<PreviewResult<PreviewOpenSuccess>>;
 }
 
 // ── payload schemas ──
@@ -511,10 +536,41 @@ export async function handleArtifactAllow(deps: ArtifactsIpcDeps, raw: unknown):
   return { ok: true, realPath: resolved.realPath };
 }
 
-/** Wires the four channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
+/**
+ * artifact-preview (night-track wave-1, owner ask): user click on a local
+ * `.html`/`.htm`/`.md` artifact link opens/reopens it in the PreviewHost
+ * window — today that window is reachable only via an agent tool or turn-end
+ * auto-open, with no way back once the user closes it. Containment is
+ * STRICT, with NO consent overlay: `preview/preview-host.ts`'s own threat
+ * model treats a live, script-running window as a different risk class than
+ * the read-only bytes `handleArtifactReadImage`/`handleArtifactOpen` hand the
+ * renderer, and deliberately never honors an outside-roots Allow grant for
+ * that reason — `deps.openPreview` (bound to `PreviewHostHandle.openForTab`)
+ * re-resolves and re-refuses outside-roots paths regardless, so this gate
+ * simply fails the same request honestly and earlier. The extension gate is
+ * disjoint from `OPENABLE_EXTENSIONS` (raster images, `shell.openPath`) —
+ * this channel never touches `shell.openPath`.
+ */
+export async function handleArtifactPreview(deps: ArtifactsIpcDeps, raw: unknown): Promise<PreviewResult<PreviewOpenSuccess>> {
+  const parsed = pathSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" };
+  }
+  const resolved = await resolveContainedPath(deps, parsed.data.tabId, parsed.data.path);
+  if ("failure" in resolved) {
+    return { ok: false, error: `cannot preview ${parsed.data.path}: ${resolved.failure}`, errorKind: "invalid_input" };
+  }
+  if (!PREVIEWABLE_DOC_EXTENSIONS.has(extensionOf(resolved.realPath))) {
+    return { ok: false, error: `cannot preview ${parsed.data.path}: unsupported extension`, errorKind: "invalid_input" };
+  }
+  return deps.openPreview(parsed.data.tabId, resolved.realPath);
+}
+
+/** Wires the five channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
 export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
   ipcMain.handle(ARTIFACT_READ_IMAGE_CHANNEL, (_event, raw: unknown) => handleArtifactReadImage(deps, raw));
   ipcMain.handle(ARTIFACT_OPEN_CHANNEL, (_event, raw: unknown) => handleArtifactOpen(deps, raw));
   ipcMain.handle(ARTIFACT_REVEAL_CHANNEL, (_event, raw: unknown) => handleArtifactReveal(deps, raw));
   ipcMain.handle(ARTIFACT_ALLOW_CHANNEL, (_event, raw: unknown) => handleArtifactAllow(deps, raw));
+  ipcMain.handle(ARTIFACT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleArtifactPreview(deps, raw));
 }

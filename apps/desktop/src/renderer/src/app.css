@@ -2303,6 +2303,29 @@ body {
   color: var(--success);
   margin-inline-start: var(--sp-1);
 }
+/* Night-track wave-1: click-to-copy affordance next to a previewable
+   (.html/.htm/.md) link, whose own click now opens the PreviewHost window. */
+.md-link-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  padding: 1px;
+  margin-inline-start: var(--sp-1);
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  vertical-align: -2px;
+}
+.md-link-copy svg {
+  width: 12px;
+  height: 12px;
+}
+.md-link-copy:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
 
 .md-image-alt {
   font-size: var(--fs-xs);
@@ -2385,6 +2408,7 @@ body {
   color: var(--accent-hover);
 }
 .md-artifact-reveal-link { margin-inline-start: var(--sp-1); }
+.md-artifact-preview-link { margin-inline-start: var(--sp-1); }
 
 /* ── reasoning ── */
 

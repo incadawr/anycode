@@ -159,6 +159,11 @@ import {
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
 } from "../shared/window.js";
 import type { DesktopPlatform, WindowState } from "../shared/window.js";
+// Night-track wave-1: `PreviewResult`/`PreviewOpenSuccess` are a pure,
+// zero-import `shared/**` contract (see shared/preview.ts's own header) —
+// safe to import directly here rather than duplicating, same as every other
+// `shared/**` type this file imports above.
+import type { PreviewOpenSuccess, PreviewResult } from "../shared/preview.js";
 
 // TASK.41 (design/slice-codex-fixes-cut.md §2(g)/§3.8): Codex onboarding
 // invoke/push channels. Duplicated literals, not `shared/**` exports — every
@@ -231,6 +236,8 @@ const ARTIFACT_OPEN_CHANNEL = "anycode:artifact-open";
 const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
 /** TASK.77-A: per-tab, per-path consent grant for a previously-blocked path. */
 const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
+/** Night-track wave-1: user click on a local .html/.htm/.md artifact link opens/reopens it in PreviewHost. */
+const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
@@ -824,6 +831,11 @@ contextBridge.exposeInMainWorld("anycode", {
     // path outside the allowed roots. Never widens the extension/size gates.
     allow: (tabId: string, path: string): Promise<ArtifactAllowResult> =>
       ipcRenderer.invoke(ARTIFACT_ALLOW_CHANNEL, { tabId, path }) as Promise<ArtifactAllowResult>,
+    // Night-track wave-1 (owner ask): user click on a local .html/.htm/.md
+    // artifact link opens/reopens it in the PreviewHost window — the only
+    // way back in once the user has closed it, short of an agent turn.
+    preview: (tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>> =>
+      ipcRenderer.invoke(ARTIFACT_PREVIEW_CHANNEL, { tabId, path }) as Promise<PreviewResult<PreviewOpenSuccess>>,
   },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL) as Promise<void>,
