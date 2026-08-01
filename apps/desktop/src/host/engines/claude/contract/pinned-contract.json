@@ -142,5 +142,9 @@
   "custody": {
     "neverPersisted": ["account.email", "account.organization", "total_cost_usd (raw, beyond in-memory session aggregate)", "CLAUDE_CODE_OAUTH_TOKEN / setup-token output"],
     "redactedAtParseLayer": ["memoryFiles[].path (both /Users/<user> literal AND -Users-<user> dash-slug encodings)"]
+  },
+  "spawnArgv": {
+    "alwaysOn": ["-p", "--input-format stream-json", "--output-format stream-json", "--verbose", "--include-partial-messages", "--replay-user-messages", "--permission-prompt-tool stdio", "--disable-slash-commands", "--setting-sources project,local", "--strict-mcp-config", "--append-system-prompt <CLAUDE_GUI_SURFACE_PROMPT>"],
+    "note": "TASK.90: --append-system-prompt rides EVERY spawn incl. --resume (no native truth to clobber; static, cacheable). Codex parity checked 01.08 on codex-cli 0.145.0: its base instructions carry the same terminal claim, but the only seams are full-replacement (prohibited class) or custody-violating AGENTS.md-in-home — recorded, codex untouched."
   }
 }
