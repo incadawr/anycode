@@ -57,6 +57,9 @@ import type {
   PreviewPanelStatePayload,
   PreviewSetContainerResult,
 } from "../../shared/preview-panel";
+// TASK.99 M1: native DOM markdown preview's doc-read contract — a frozen
+// shared/** contract, imported directly (same convention as preview-panel above).
+import type { MdDocReadResult } from "../../shared/md-preview";
 import type {
   AvailableEngines,
   CloseTabResult,
@@ -507,6 +510,12 @@ declare global {
         list(tabId: string): Promise<PreviewChangedPayload>;
         setContainer(tabId: string, previewId: string, container: PreviewContainerKind): Promise<PreviewSetContainerResult>;
         onChanged(callback: (payload: PreviewChangedPayload) => void): () => void;
+      };
+      // TASK.99 M1: the native DOM markdown preview's doc-read control plane
+      // (CUT.md CONTRACTS). `read` is also what a Reload click re-invokes —
+      // main never caches, so there is no separate "reload" method.
+      mdPreview: {
+        read(tabId: string, previewId: string): Promise<MdDocReadResult>;
       };
       window: {
         minimize(): Promise<void>;

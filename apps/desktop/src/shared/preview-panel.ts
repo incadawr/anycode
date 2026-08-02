@@ -66,6 +66,10 @@ export interface PreviewPanelInfo {
   sourcePath?: string;
   status: "loading" | "ready" | "failed" | "crashed";
   container: PreviewContainerKind;
+  /** M1 (TASK.99 native md preview): which record kind this is — additive, old asserts (pre-dating this field) stay valid. */
+  viewKind?: "web" | "dom-md";
+  /** M1 (TASK.99): dom-md refetch key (absent for "web") — bumps on navigate (M2); the renderer re-invokes MD_PREVIEW_READ when it changes. */
+  docVersion?: number;
 }
 export interface PreviewChangedPayload {
   tabId: string;

@@ -22,6 +22,11 @@ import { usePreviewStore } from "../preview/preview-store.js";
 import { useOverlayOpenSnapshot } from "../preview/overlay-flag.js";
 import { PREVIEW_TRANSFERRED_TEXT, type ToastKind } from "../toasts.js";
 import { X } from "./icons.js";
+// TASK.99 M1: the native DOM markdown preview view — rendered inside this
+// panel's body slot when the visible preview's viewKind is "dom-md" (CUT.md
+// CONTRACTS); bounds publisher below stays untouched, main just never
+// positions a WebContentsView for that record.
+import { MarkdownPreviewView } from "./MarkdownPreviewView.js";
 
 const EMPTY_PREVIEWS: never[] = [];
 
@@ -105,7 +110,12 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
       .setContainer(tabId, previewId, "window")
       .then((result) => {
         if (!result.ok) {
+          // M1 interim (TASK.99 CUT.md Gap 3): a dom-md preview's "Open in
+          // window" honestly refuses until M3 wires the second renderer
+          // window — surfaced here (not just console) so the refusal is not
+          // silent to the user.
           console.warn("[PreviewPanel] setContainer failed", result.error);
+          onToast("shell_error", result.error);
           return;
         }
         if (result.reloaded) {
@@ -162,6 +172,16 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
           <div className="preview-panel-empty">Preview hidden</div>
         ) : !visible ? (
           <div className="preview-panel-empty">No preview open.</div>
+        ) : visible.viewKind === "dom-md" ? (
+          <MarkdownPreviewView
+            tabId={tabId}
+            previewId={visible.previewId}
+            container={visible.container}
+            sourcePath={visible.sourcePath ?? ""}
+            docVersion={visible.docVersion ?? 0}
+            onClose={() => closePreview(visible.previewId)}
+            onTransfer={() => openInWindow(visible.previewId)}
+          />
         ) : null}
       </div>
     </div>

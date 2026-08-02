@@ -22,7 +22,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { access, realpath as fsRealpath } from "node:fs/promises";
+import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +74,7 @@ import {
   ArtifactConsentStore,
   NodeArtifactsFs,
   registerArtifactsIpc,
+  resolveArtifactPath,
   resolveContainedPath,
   type ArtifactsIpcDeps,
 } from "./artifacts-ipc.js";
@@ -87,6 +88,10 @@ import { createElectronPanelView } from "./preview/panel-adapter.js";
 import { registerPreviewPanelIpc } from "./preview/panel-ipc.js";
 import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
 import { renderMarkdownFile } from "./preview/markdown-render.js";
+// TASK.99 M1: native DOM markdown preview's doc-read IPC (CUT.md CONTRACTS) —
+// registered right next to registerPreviewPanelIpc, closing over the SAME
+// live `previewHost` handle via `getMdDocRef`.
+import { registerMdDocIpc } from "./preview/md-doc-ipc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import {
@@ -1305,6 +1310,30 @@ void app.whenReady().then(async () => {
   // handlers close over the SAME live handle every other preview wiring
   // uses. SET_CONTAINER's handler is NOT registered until 96-P3.
   registerPreviewPanelIpc({ host: previewHost });
+
+  // TASK.99 M1: native DOM markdown preview's MD_PREVIEW_READ handler
+  // (CUT.md CONTRACTS) — `getRecordRef` closes over the SAME live
+  // `previewHost`; `resolveArtifact` re-runs the exact allowed-roots
+  // containment policy every other preview/artifact surface uses, mapped to
+  // md-doc.ts's narrower typed refusal (`not_found`/`outside_roots`) via
+  // `resolveArtifactPath`'s own richer `{realPath, contained}` shape;
+  // `stat`/`readFileNoFollow` reuse the SAME O_NOFOLLOW read primitive
+  // artifacts-ipc.ts's `NodeArtifactsFs` uses for chat-artifact images.
+  registerMdDocIpc({
+    getRecordRef: (tabId, previewId) => previewHost?.getMdDocRef(tabId, previewId),
+    resolveArtifact: async (tabId, path) => {
+      const resolved = await resolveArtifactPath(artifactsIpcDeps, tabId, path);
+      if ("failure" in resolved) {
+        return { failure: "not_found" };
+      }
+      return resolved.contained ? { realPath: resolved.realPath } : { failure: "outside_roots" };
+    },
+    stat: async (path) => {
+      const s = await fsStat(path);
+      return { size: s.size, isFile: s.isFile(), mtimeMs: s.mtimeMs };
+    },
+    readFileNoFollow: (path) => artifactsIpcDeps.fs.readFileNoFollow(path),
+  });
 
   manager = new TabHostManager({
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),

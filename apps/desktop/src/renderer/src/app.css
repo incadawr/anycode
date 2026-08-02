@@ -392,6 +392,133 @@ body {
   background: var(--bg-hover);
 }
 
+/* ── native DOM markdown preview (TASK.99 M1, CUT.md CONTRACTS) ──
+   Renders inside .preview-panel-body when the visible preview's
+   viewKind is "dom-md" — minimal chrome consistent with the panel's own
+   header styles above; the document body scrolls independently. */
+.md-preview-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.md-preview-view-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.md-preview-view-mode-toggle {
+  display: inline-flex;
+  gap: 1px;
+  padding: 1px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.md-preview-mode-btn {
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--r-sm) - 1px);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.md-preview-mode-btn.active {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.md-preview-action-btn {
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.md-preview-action-btn:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.md-preview-view-close {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.md-preview-view-close:hover {
+  color: var(--text-1);
+}
+
+.md-preview-view-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-4);
+}
+
+.md-preview-view-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: var(--sp-4);
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+.md-preview-view-error {
+  color: var(--danger);
+}
+
+.md-preview-view-error-banner {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--danger);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+}
+
+.md-preview-view-rendered {
+  max-width: 72ch;
+}
+
+.md-preview-view-source {
+  margin: 0;
+  padding: var(--sp-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
 /* Anchor for the header "Previews" dropdown — environment-control precedent. */
 .session-header-previews {
   position: relative;

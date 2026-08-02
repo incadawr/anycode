@@ -776,6 +776,7 @@ function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHos
     closePreview: vi.fn(() => ({ ok: true as const })),
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
     setContainer: vi.fn(async () => ({ ok: false as const, error: "transfer lands in 96-P3" })),
+    getMdDocRef: vi.fn(() => undefined),
     ...overrides,
   };
 }
@@ -792,6 +793,7 @@ describe("preview probes/driver (night-track wave-1 cut §2.8, 96-E)", () => {
             consoleCount: 0,
             dropped: 0,
             container: "window" as const,
+            viewKind: "web" as const,
           },
         ]),
       });
@@ -800,7 +802,15 @@ describe("preview probes/driver (night-track wave-1 cut §2.8, 96-E)", () => {
       expect(previewHost.listForTab).toHaveBeenCalledWith("tab-a");
       expect(result).toEqual({
         previews: [
-          { previewId: "pv-1", url: "file:///tmp/a.html", status: "ready", consoleCount: 0, dropped: 0, container: "window" },
+          {
+            previewId: "pv-1",
+            url: "file:///tmp/a.html",
+            status: "ready",
+            consoleCount: 0,
+            dropped: 0,
+            container: "window",
+            viewKind: "web",
+          },
         ],
       });
     });
