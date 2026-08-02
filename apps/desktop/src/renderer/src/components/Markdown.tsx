@@ -30,6 +30,7 @@ import {
 import type { ReactNode } from "react";
 import type { Token, Tokens } from "marked";
 import { decodeMarkedText, fenceLabel, lexMarkdown } from "../markdown/lex.js";
+import { isLocalMdHref, resolveDocRelative } from "../markdown/doc-links.js";
 import {
   fontStyleToCss,
   highlightCode,
@@ -62,6 +63,23 @@ const CopyContext = createContext<CopyState>({ linkTarget: null, copyLink: () =>
  * every artifact surface degrades to the plain copy-link in that case.
  */
 const MarkdownTabContext = createContext<string | null>(null);
+
+/**
+ * TASK.99 M2 (CUT.md CONTRACTS): parameterizes `Markdown` for the native
+ * md-doc preview WITHOUT forking the component. Default `null` IS the chat
+ * path and is a HARD invariant (risk register #6): every read of this
+ * context below is additive-only, gated behind `!== null`, and never changes
+ * what renders when it is null — chat rendering stays byte-identical.
+ * Set ONLY by `MarkdownPreviewView.tsx`.
+ */
+export interface MdDocContextValue {
+  /** Absolute directory the CURRENT document lives in — the resolver anchor for a doc-relative image href (mirrors `MdDomPreviewRecord.docDir`, preview-host.ts). */
+  docDir: string;
+  /** A local `.md` link was clicked — the preview replaces its content in place (MD_PREVIEW_NAVIGATE), never opens a second preview. */
+  onOpenMdLink(href: string): void;
+}
+
+export const MdDocContext = createContext<MdDocContextValue | null>(null);
 
 const INLINE_PREVIEW_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const OPENABLE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".tiff", ".tif", ".heic"]);
@@ -393,10 +411,19 @@ function Table({ table }: { table: Tokens.Table }) {
  * `title={href}` doubles as an honest destination preview. Opening remote
  * links in the browser is a parked main-side follow-up (`setWindowOpenHandler`
  * + `shell.openExternal`); this behavior stays correct even after that lands.
+ *
+ * TASK.99 M2: inside a native md-doc preview (`MdDocContext` set), a LOCAL
+ * `.md` link REPLACES this preview's content in place (MD_PREVIEW_NAVIGATE)
+ * instead of opening a NEW preview via `artifacts.preview` — every other
+ * link (remote, `.html`/`.htm`, non-md local) keeps the exact chat behavior
+ * below unchanged, context or not (CUT.md CONTRACTS: "other local links keep
+ * chat behavior"). `mdDoc === null` (chat) makes this branch dead code, byte-
+ * identical to pre-M2.
  */
 function MdLink({ href, children }: { href: string; children: ReactNode }) {
   const copy = useContext(CopyContext);
   const tabId = useContext(MarkdownTabContext);
+  const mdDoc = useContext(MdDocContext);
   const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
   const copied = copy.linkTarget === href;
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -404,6 +431,10 @@ function MdLink({ href, children }: { href: string; children: ReactNode }) {
 
   const onClick = (event: { preventDefault: () => void }): void => {
     event.preventDefault();
+    if (mdDoc !== null && isLocalMdHref(href)) {
+      mdDoc.onOpenMdLink(href);
+      return;
+    }
     if (isPreviewableArtifactHref(href) && tabId !== null && api !== undefined) {
       void api.preview(tabId, href).then((result) => {
         setPreviewError(result.ok ? null : result.error);
@@ -466,9 +497,18 @@ function formatBytes(bytes: number): string {
  * so this component never holds a `file://` URL (CSP) and never triggers an
  * execution-capable open itself. Without a tab context (or without the
  * preload API in a test mount) it renders nothing — the link alone stays.
+ *
+ * TASK.99 M2: inside a native md-doc preview, `path` (the AUTHORED href) is
+ * resolved against `MdDocContext.docDir` BEFORE it reaches any IPC call
+ * below — the existing containment/size-cap/data:-URI custody chain
+ * (`api.readImage` et al.) is reused completely unchanged, only the STRING
+ * handed to it differs. `mdDoc === null` (chat) makes `resolvedPath === path`
+ * unconditionally, so chat rendering is byte-identical to pre-M2.
  */
 function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   const tabId = useContext(MarkdownTabContext);
+  const mdDoc = useContext(MdDocContext);
+  const resolvedPath = mdDoc !== null ? (resolveDocRelative(mdDoc.docDir, path) ?? path) : path;
   const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
   const rootRef = useRef<HTMLSpanElement>(null);
   const [shouldLoad, setShouldLoad] = useState(false);
@@ -505,7 +545,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
     }
     let cancelled = false;
     setState({ status: "loading" });
-    void api.readImage(tabId, path).then((result) => {
+    void api.readImage(tabId, resolvedPath).then((result) => {
       if (cancelled) {
         return;
       }
@@ -520,14 +560,14 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
     };
     // `attempt` is a deliberate re-fetch trigger (TASK.77-A's Allow retry) —
     // its value is never read, only its change matters.
-  }, [tabId, api, path, shouldLoad, attempt]);
+  }, [tabId, api, resolvedPath, shouldLoad, attempt]);
 
   if (!tabId || !api) {
     return null;
   }
 
   const runAction = async (action: "open" | "reveal"): Promise<void> => {
-    const result = action === "open" ? await api.open(tabId, path) : await api.reveal(tabId, path);
+    const result = action === "open" ? await api.open(tabId, resolvedPath) : await api.reveal(tabId, resolvedPath);
     setActionError(result.ok ? null : artifactActionFailureMessage(result.reason));
   };
   const open = () => void runAction("open");
@@ -538,7 +578,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   // then the read is retried so a successful grant renders the real preview.
   const allowPreview = async (): Promise<void> => {
     setConsentAttempt("pending");
-    const result = await api.allow(tabId, path);
+    const result = await api.allow(tabId, resolvedPath);
     if (result.ok) {
       setConsentAttempt("idle");
       setAttempt((n) => n + 1);
@@ -548,11 +588,12 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
     }
   };
   // night-track wave-1 fix cut §1.8 (F7): a model-authored `alt` may only ever
-  // title a successfully rendered image — every other state names the raw
-  // path so a friendly `alt` can never mask what location is being asked
-  // about (consent legibility).
-  const label = state.status === "ready" ? alt || path : path;
-  const openable = OPENABLE_IMAGE_EXTENSIONS.has(extensionOfHref(path));
+  // title a successfully rendered image — every other state names the
+  // resolved path so a friendly `alt` can never mask what location is being
+  // asked about (consent legibility; TASK.99 M2 — the RESOLVED path is the
+  // actual location, more informative than the authored doc-relative href).
+  const label = state.status === "ready" ? alt || resolvedPath : resolvedPath;
+  const openable = OPENABLE_IMAGE_EXTENSIONS.has(extensionOfHref(resolvedPath));
   const chip = artifactChipState(state.status, state.status === "unavailable" ? state.reason : undefined, consentAttempt);
 
   return (
@@ -564,12 +605,12 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
           onLoad={(event) => {
             const { naturalHeight, naturalWidth } = event.currentTarget;
             setState((current) => current.status === "ready" ? { ...current, dimensions: `${naturalWidth}×${naturalHeight}` } : current);
-          }} title={openable ? `${path} — click to open` : path} />
+          }} title={openable ? `${resolvedPath} — click to open` : resolvedPath} />
       )}
       {state.status === "unavailable" && (
         <>
           <span className="md-artifact-error">{chip.label}</span>
-          {chip.showPath && <code className="md-artifact-path">{path}</code>}
+          {chip.showPath && <code className="md-artifact-path">{resolvedPath}</code>}
           {chip.showAllow && (
             <button
               type="button"
@@ -583,7 +624,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
         </>
       )}
       <span className="md-artifact-meta">
-        <span className="md-artifact-name" title={path}>
+        <span className="md-artifact-name" title={resolvedPath}>
           {label}
           {state.status === "ready" ? ` — ${state.dimensions ? `${state.dimensions} ` : ""}${formatBytes(state.sizeBytes)}` : ""}
         </span>

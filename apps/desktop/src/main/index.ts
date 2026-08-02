@@ -1333,6 +1333,9 @@ void app.whenReady().then(async () => {
       return { size: s.size, isFile: s.isFile(), mtimeMs: s.mtimeMs };
     },
     readFileNoFollow: (path) => artifactsIpcDeps.fs.readFileNoFollow(path),
+    // TASK.99 M2: NAVIGATE's record-mutation half — closes over the SAME
+    // live `previewHost` the READ lookup above does.
+    commitNavigate: (tabId, previewId, fields) => previewHost?.commitMdNavigate(tabId, previewId, fields),
   });
 
   manager = new TabHostManager({

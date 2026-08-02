@@ -1188,6 +1188,142 @@ describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md G
   });
 });
 
+/**
+ * TASK.99 M2 (CUT.md CONTRACTS): `commitMdNavigate` is the record-mutation
+ * half of MD_PREVIEW_NAVIGATE — `md-doc.ts`'s `navigateMdDoc` closes over it
+ * (main/index.ts wiring) and calls it ONLY after its own fresh containment/
+ * read already succeeded. These tests exercise the REAL `PreviewHost`
+ * implementation directly (md-doc.test.ts's own suite stubs this dep as a
+ * plain fake, proving `navigateMdDoc`'s call shape but not this method's own
+ * mutation/refusal logic).
+ */
+describe("PreviewHost — commitMdNavigate (TASK.99 M2, CUT.md CONTRACTS)", () => {
+  async function openedMdRig(): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig();
+    const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const previewId = opened.ok ? opened.value.previewId : "";
+    return { rig, previewId };
+  }
+
+  it("mutates sourcePath/realSourcePath/docDir/title in place, derives url, and bumps docVersion by exactly one", async () => {
+    const { rig, previewId } = await openedMdRig();
+    const before = rig.host.listForPanel(TAB).previews[0]!;
+    expect(before.docVersion).toBe(0);
+
+    const newDocVersion = rig.host.commitMdNavigate(TAB, previewId, {
+      sourcePath: `${WORKSPACE_ROOT}/docs/other.md`,
+      realSourcePath: `${WORKSPACE_ROOT}/docs/other.md`,
+      docDir: `${WORKSPACE_ROOT}/docs`,
+      title: "other.md",
+    });
+
+    expect(newDocVersion).toBe(1);
+    const listed = rig.host.listForPanel(TAB).previews;
+    expect(listed).toHaveLength(1); // same record, no second preview created (no recursive preview trees)
+    expect(listed[0]).toMatchObject({
+      previewId,
+      sourcePath: `${WORKSPACE_ROOT}/docs/other.md`,
+      title: "other.md",
+      docVersion: 1,
+      url: pathToFileURL(`${WORKSPACE_ROOT}/docs/other.md`).href,
+    });
+  });
+
+  it("bumps lastOpenedAt to the current clock time", async () => {
+    // lastOpenedAt is not surfaced on PreviewSummary; assert indirectly via
+    // promoteMostRecentPanelSurvivor's own ordering (D5), which picks the
+    // surviving panel record with the HIGHEST lastOpenedAt: A is opened
+    // first (oldest), B and C after it, then A alone is navigated (bumping
+    // ONLY its own lastOpenedAt to the newest timestamp) before the current
+    // visible-slot occupant (C) is closed. If the bump had NOT happened, B
+    // (opened after A, before the navigate) would win the promoted slot
+    // instead of A — this discriminates the bump from a no-op.
+    const rig = makeRig();
+    const a = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.md` });
+    const previewIdA = a.ok ? a.value.previewId : "";
+    rig.clock.time += 100;
+    await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.md` });
+    rig.clock.time += 100;
+    const c = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/c.md` });
+    const previewIdC = c.ok ? c.value.previewId : "";
+
+    rig.clock.time += 100;
+    rig.host.commitMdNavigate(TAB, previewIdA, {
+      sourcePath: `${WORKSPACE_ROOT}/a2.md`,
+      realSourcePath: `${WORKSPACE_ROOT}/a2.md`,
+      docDir: WORKSPACE_ROOT,
+      title: "a2.md",
+    });
+
+    rig.host.closePreview(TAB, previewIdC); // C was the visible slot occupant (D5: newest wins on open)
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewIdA);
+  });
+
+  it("pushes the change (D7) after committing", async () => {
+    const { rig, previewId } = await openedMdRig();
+    const changedBefore = rig.changed.length;
+    rig.host.commitMdNavigate(TAB, previewId, {
+      sourcePath: `${WORKSPACE_ROOT}/other.md`,
+      realSourcePath: `${WORKSPACE_ROOT}/other.md`,
+      docDir: WORKSPACE_ROOT,
+      title: "other.md",
+    });
+    expect(rig.changed.length).toBe(changedBefore + 1);
+    expect(rig.changed[rig.changed.length - 1]!.previews[0]).toMatchObject({ previewId, docVersion: 1 });
+  });
+
+  it("returns undefined for no such preview", async () => {
+    const rig = makeRig();
+    const result = rig.host.commitMdNavigate(TAB, "no-such-preview", {
+      sourcePath: "x.md",
+      realSourcePath: "/workspace/x.md",
+      docDir: "/workspace",
+      title: "x.md",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined for the wrong tab", async () => {
+    const { rig, previewId } = await openedMdRig();
+    const result = rig.host.commitMdNavigate("other-tab", previewId, {
+      sourcePath: "x.md",
+      realSourcePath: "/workspace/x.md",
+      docDir: "/workspace",
+      title: "x.md",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined for a destroyed record", async () => {
+    const { rig, previewId } = await openedMdRig();
+    rig.host.closePreview(TAB, previewId);
+    const result = rig.host.commitMdNavigate(TAB, previewId, {
+      sourcePath: "x.md",
+      realSourcePath: "/workspace/x.md",
+      docDir: "/workspace",
+      title: "x.md",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined for a 'web' record (md-only channel)", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const openHtml = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const opened = await openHtml;
+    const previewId = opened.ok ? opened.value.previewId : "";
+
+    const result = rig.host.commitMdNavigate(TAB, previewId, {
+      sourcePath: "x.md",
+      realSourcePath: "/workspace/x.md",
+      docDir: "/workspace",
+      title: "x.md",
+    });
+    expect(result).toBeUndefined();
+  });
+});
 
 describe("PreviewHost — request gate (cut §1.1/F2, GATE-MATRIX)", () => {
   async function openedRig(openReq: { path?: string; url?: string; allowRemote?: boolean }): Promise<Rig> {

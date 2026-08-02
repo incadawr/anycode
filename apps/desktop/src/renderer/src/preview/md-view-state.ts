@@ -1,15 +1,18 @@
 /**
- * Pure state machine for MarkdownPreviewView (TASK.99 CUT.md CONTRACTS, M1) —
- * ALL view logic lives here (RISK REGISTER §5: vitest collects only
- * `*.test.ts`, node env, no jsdom, so a React component must stay a
- * logic-free shell). Mirrors overlay-flag.ts / panel-bridge.ts's own
- * "pure module, `.test.ts` only" pattern.
+ * Pure state machine for MarkdownPreviewView (TASK.99 CUT.md CONTRACTS — M1
+ * shipped READ, M2 adds NAVIGATE) — ALL view logic lives here (RISK
+ * REGISTER §5: vitest collects only `*.test.ts`, node env, no jsdom, so a
+ * React component must stay a logic-free shell). Mirrors overlay-flag.ts /
+ * panel-bridge.ts's own "pure module, `.test.ts` only" pattern.
  *
  * Two independent axes: `phase` (loading/ready/error — has a fetch settled,
  * and how) and `mode` (rendered/source — a pure UI toggle, orthogonal to
- * phase and never reset by a fetch). `NAVIGATE_OK` (M2) will join
- * `FETCH_OK` as a second "we have a fresh doc" event once md->md link
- * following lands; M1 ships only FETCH_OK/FETCH_FAIL/RELOAD/TOGGLE.
+ * phase and never reset by a fetch). `NAVIGATE_OK` (M2) joins `FETCH_OK` as
+ * a second "we have a fresh doc" event for md->md link following: it mirrors
+ * `FETCH_OK` exactly (mode is preserved — the SAME orthogonal-axis rule, not
+ * a special case) so a reader browsing the previous document in Source mode
+ * keeps that same mode after following a link, now showing the NEW
+ * document's source.
  */
 import type { MdDocPayload, MdDocReadResult } from "../../../shared/md-preview.js";
 
@@ -29,7 +32,8 @@ export type MdViewEvent =
   | { type: "FETCH_OK"; doc: MdDocPayload }
   | { type: "FETCH_FAIL"; error: string }
   | { type: "RELOAD" }
-  | { type: "TOGGLE" };
+  | { type: "TOGGLE" }
+  | { type: "NAVIGATE_OK"; doc: MdDocPayload };
 
 export const initialMdViewState: MdViewState = {
   phase: "loading",
@@ -51,6 +55,10 @@ export function mdViewReducer(state: MdViewState, event: MdViewEvent): MdViewSta
       return { ...state, phase: "loading", error: null };
     case "TOGGLE":
       return { ...state, mode: state.mode === "rendered" ? "source" : "rendered" };
+    case "NAVIGATE_OK":
+      // Mirrors FETCH_OK exactly (see module doc): `mode` is the orthogonal
+      // UI-toggle axis and is never reset by a fetch/navigate event.
+      return { ...state, phase: "ready", doc: event.doc, error: null };
   }
 }
 
@@ -75,4 +83,30 @@ export function mdReadFailureMessage(reason: Extract<MdDocReadResult, { ok: fals
 /** Pure projection of an IPC result onto the reducer's own event shape — the component dispatches whatever this returns, never branches on `MdDocReadResult` itself. */
 export function eventForReadResult(result: MdDocReadResult): MdViewEvent {
   return result.ok ? { type: "FETCH_OK", doc: result.doc } : { type: "FETCH_FAIL", error: mdReadFailureMessage(result.reason) };
+}
+
+/**
+ * Same projection as `eventForReadResult`, for a NAVIGATE result (M2): a
+ * refusal reuses the identical `mdReadFailureMessage` mapping and surfaces
+ * on the SAME inline error banner a failed read/reload already uses — no
+ * separate toast/error surface was introduced for navigate.
+ */
+export function eventForNavigateResult(result: MdDocReadResult): MdViewEvent {
+  return result.ok ? { type: "NAVIGATE_OK", doc: result.doc } : { type: "FETCH_FAIL", error: mdReadFailureMessage(result.reason) };
+}
+
+/**
+ * M2 docVersion reconciliation: a NAVIGATE_OK dispatch already updates
+ * `state.doc` with the fresh doc (and its NEW docVersion) directly from the
+ * navigate call's own return value. Main's subsequent `pushChanged` (after
+ * `commitMdNavigate`) republishes that SAME docVersion moments later through
+ * `PreviewPanelInfo.docVersion` — refetching on receipt of our OWN
+ * just-applied bump would be redundant (an extra round trip, not a
+ * correctness bug). Refetch only when the PUSHED version is a genuine
+ * ADVANCE over what the view already has: an external mutation this view
+ * did not itself just apply (e.g. an agent's `BrowserOpen` reusing this same
+ * `previewId` while the view is open) still needs a fetch.
+ */
+export function shouldRefetchOnDocVersionChange(localDocVersion: number, pushedDocVersion: number): boolean {
+  return pushedDocVersion > localDocVersion;
 }
