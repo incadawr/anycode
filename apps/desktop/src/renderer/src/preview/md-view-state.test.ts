@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  eventForNavigateResult,
   eventForReadResult,
   initialMdViewState,
   mdReadFailureMessage,
   mdViewReducer,
+  shouldRefetchOnDocVersionChange,
   type MdViewState,
 } from "./md-view-state.js";
 import type { MdDocPayload, MdDocReadResult } from "../../../shared/md-preview.js";
@@ -99,5 +101,45 @@ describe("eventForReadResult", () => {
   it("ok:false -> FETCH_FAIL carrying the mapped message", () => {
     const result: MdDocReadResult = { ok: false, reason: "too_large" };
     expect(eventForReadResult(result)).toEqual({ type: "FETCH_FAIL", error: mdReadFailureMessage("too_large") });
+  });
+});
+
+describe("mdViewReducer — NAVIGATE_OK", () => {
+  it("moves to ready, stores the NEW doc, clears any error", () => {
+    const state: MdViewState = { phase: "error", mode: "rendered", doc: doc(), error: "boom" };
+    const next = mdViewReducer(state, { type: "NAVIGATE_OK", doc: doc({ sourcePath: "other.md", docVersion: 1 }) });
+    expect(next).toEqual({ phase: "ready", mode: "rendered", doc: doc({ sourcePath: "other.md", docVersion: 1 }), error: null });
+  });
+
+  it("preserves the current mode — a reader in Source mode stays in Source mode for the newly-navigated doc", () => {
+    const state: MdViewState = { phase: "ready", mode: "source", doc: doc(), error: null };
+    const next = mdViewReducer(state, { type: "NAVIGATE_OK", doc: doc({ sourcePath: "other.md", docVersion: 1 }) });
+    expect(next.mode).toBe("source");
+  });
+});
+
+describe("eventForNavigateResult", () => {
+  it("ok:true -> NAVIGATE_OK carrying the doc", () => {
+    const result: MdDocReadResult = { ok: true, doc: doc() };
+    expect(eventForNavigateResult(result)).toEqual({ type: "NAVIGATE_OK", doc: doc() });
+  });
+
+  it("ok:false -> FETCH_FAIL carrying the mapped message (same inline error surface as a failed read)", () => {
+    const result: MdDocReadResult = { ok: false, reason: "not_md" };
+    expect(eventForNavigateResult(result)).toEqual({ type: "FETCH_FAIL", error: mdReadFailureMessage("not_md") });
+  });
+});
+
+describe("shouldRefetchOnDocVersionChange", () => {
+  it("refetches when the pushed version is strictly newer than local", () => {
+    expect(shouldRefetchOnDocVersionChange(1, 2)).toBe(true);
+  });
+
+  it("does not refetch when the pushed version equals local (our own just-applied navigate)", () => {
+    expect(shouldRefetchOnDocVersionChange(2, 2)).toBe(false);
+  });
+
+  it("does not refetch when the pushed version is older/stale", () => {
+    expect(shouldRefetchOnDocVersionChange(2, 1)).toBe(false);
   });
 });

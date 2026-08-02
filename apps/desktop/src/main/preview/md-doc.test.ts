@@ -1,9 +1,11 @@
 /**
- * Unit tests for md-doc.ts's `readMdDoc` (TASK.99 CUT.md CONTRACTS, M1) —
- * exercised against a REAL node fs in scratch tmpdirs (no Electron), mirroring
- * artifacts-ipc.test.ts's own "real fs, fake containment resolver" pattern.
- * `getRecordRef`/`resolveArtifact` are hand-written fakes (the record/
- * containment lookups are PreviewHost's concern, not this module's); `stat`/
+ * Unit tests for md-doc.ts's `readMdDoc`/`navigateMdDoc` (TASK.99 CUT.md
+ * CONTRACTS — M1 READ, M2 NAVIGATE) — exercised against a REAL node fs in
+ * scratch tmpdirs (no Electron), mirroring artifacts-ipc.test.ts's own "real
+ * fs, fake containment resolver" pattern. `getRecordRef`/`resolveArtifact`/
+ * `commitNavigate` are hand-written fakes (the record lookup/mutation is
+ * PreviewHost's concern, not this module's — see preview-host.test.ts's own
+ * "commitMdNavigate" suite for the REAL implementation); `stat`/
  * `readFileNoFollow` are the REAL O_NOFOLLOW read path so the cap/missing/
  * not-a-file/symlink-swap gates are proven against real fs behavior, not a
  * fake that could silently drift from it.
@@ -13,7 +15,7 @@ import { mkdir, mkdtemp, open, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MD_PREVIEW_MAX_SOURCE_BYTES, readMdDoc, type MdDocDeps, type MdDocRecordRef } from "./md-doc.js";
+import { MD_PREVIEW_MAX_SOURCE_BYTES, navigateMdDoc, readMdDoc, type MdDocDeps, type MdDocRecordRef } from "./md-doc.js";
 
 const TAB = "tab-1";
 const PREVIEW = "preview-1";
@@ -62,6 +64,11 @@ function makeDeps(overrides: Partial<MdDocDeps> & { ref?: MdDocRecordRef | undef
     resolveArtifact: overrides.resolveArtifact ?? makeResolveArtifact(root),
     stat: overrides.stat ?? realStat,
     readFileNoFollow: overrides.readFileNoFollow ?? realReadFileNoFollow,
+    // Default fake mirrors PreviewHost.commitMdNavigate's own contract
+    // (bumps the record's CURRENT docVersion by one) without exercising the
+    // real PreviewHost — that class's OWN commitMdNavigate logic is covered
+    // by preview-host.test.ts's dedicated suite.
+    commitNavigate: overrides.commitNavigate ?? vi.fn(() => (overrides.ref?.docVersion ?? 0) + 1),
   };
 }
 
@@ -206,5 +213,191 @@ describe("readMdDoc — success", () => {
     await writeFile(file, "second, edited on disk");
     const second = await readMdDoc(deps, TAB, PREVIEW);
     expect(second.ok && second.doc.sourceText).toBe("second, edited on disk");
+  });
+});
+
+describe("navigateMdDoc — no_preview", () => {
+  it("refuses when getRecordRef finds nothing (no such preview / wrong tab / not a dom-md record)", async () => {
+    const deps = makeDeps({ ref: undefined });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(result).toEqual({ ok: false, reason: "no_preview" });
+  });
+
+  it("refuses no_preview when commitNavigate reports the record vanished mid-call (race)", async () => {
+    const dir = await tmpDir();
+    const file = join(dir, "other.md");
+    await writeFile(file, "hi");
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 0 };
+    const deps = makeDeps({
+      ref,
+      resolveArtifact: vi.fn(async () => ({ realPath: file })),
+      commitNavigate: vi.fn(() => undefined),
+    });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(result).toEqual({ ok: false, reason: "no_preview" });
+  });
+});
+
+describe("navigateMdDoc — doc-relative join", () => {
+  it("joins a bare relative href against the record's CURRENT docDir, not sourcePath's dirname", async () => {
+    const dir = await tmpDir();
+    const sub = join(dir, "sub");
+    await mkdir(sub);
+    const file = join(sub, "other.md");
+    await writeFile(file, "hi");
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: sub, docVersion: 0 };
+    const resolveArtifact = vi.fn(async () => ({ realPath: file }));
+    const deps = makeDeps({ ref, resolveArtifact });
+    await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(resolveArtifact).toHaveBeenCalledWith(TAB, file);
+  });
+
+  it("joins a ../-prefixed relative href, walking up from docDir", async () => {
+    const dir = await tmpDir();
+    const sub = join(dir, "sub");
+    await mkdir(sub);
+    const target = join(dir, "sibling.md");
+    await writeFile(target, "hi");
+    const ref: MdDocRecordRef = { sourcePath: join(sub, "doc.md"), realSourcePath: join(sub, "doc.md"), docDir: sub, docVersion: 0 };
+    const resolveArtifact = vi.fn(async () => ({ realPath: target }));
+    const deps = makeDeps({ ref, resolveArtifact });
+    await navigateMdDoc(deps, TAB, PREVIEW, "../sibling.md");
+    expect(resolveArtifact).toHaveBeenCalledWith(TAB, target);
+  });
+
+  it("passes an absolute href straight to resolveArtifact, without joining against docDir", async () => {
+    const dir = await tmpDir();
+    const target = join(dir, "elsewhere.md");
+    await writeFile(target, "hi");
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 0 };
+    const resolveArtifact = vi.fn(async () => ({ realPath: target }));
+    const deps = makeDeps({ ref, resolveArtifact });
+    await navigateMdDoc(deps, TAB, PREVIEW, target);
+    expect(resolveArtifact).toHaveBeenCalledWith(TAB, target);
+  });
+
+  it("strips a trailing fragment/query before joining", async () => {
+    const dir = await tmpDir();
+    const target = join(dir, "other.md");
+    await writeFile(target, "hi");
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 0 };
+    const resolveArtifact = vi.fn(async () => ({ realPath: target }));
+    const deps = makeDeps({ ref, resolveArtifact });
+    await navigateMdDoc(deps, TAB, PREVIEW, "other.md?x=1#section");
+    expect(resolveArtifact).toHaveBeenCalledWith(TAB, target);
+  });
+
+  it("refuses not_md when the href is nothing but a fragment/query (no path portion)", async () => {
+    const ref: MdDocRecordRef = { sourcePath: "/workspace/doc.md", realSourcePath: "/workspace/doc.md", docDir: "/workspace", docVersion: 0 };
+    const deps = makeDeps({ ref });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "#section");
+    expect(result).toEqual({ ok: false, reason: "not_md" });
+  });
+});
+
+describe("navigateMdDoc — containment refusal", () => {
+  it("refuses outside_roots when the joined target is not contained", async () => {
+    const ref: MdDocRecordRef = { sourcePath: "/workspace/doc.md", realSourcePath: "/workspace/doc.md", docDir: "/workspace", docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ failure: "outside_roots" as const })) });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "../../../etc/passwd.md");
+    expect(result).toEqual({ ok: false, reason: "outside_roots" });
+  });
+
+  it("refuses not_found when the joined target does not exist", async () => {
+    const ref: MdDocRecordRef = { sourcePath: "/workspace/doc.md", realSourcePath: "/workspace/doc.md", docDir: "/workspace", docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ failure: "not_found" as const })) });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "gone.md");
+    expect(result).toEqual({ ok: false, reason: "not_found" });
+  });
+});
+
+describe("navigateMdDoc — not_md", () => {
+  it("refuses when the resolved realPath does not end in .md, even though the href did", async () => {
+    // A symlink/rename edge: the href SAID .md but the resolved realpath
+    // does not — the extension check runs against the REALPATH (matching
+    // readMdDoc), never trusting the raw href.
+    const ref: MdDocRecordRef = { sourcePath: "/workspace/doc.md", realSourcePath: "/workspace/doc.md", docDir: "/workspace", docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ realPath: "/workspace/other.txt" })) });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(result).toEqual({ ok: false, reason: "not_md" });
+  });
+});
+
+describe("navigateMdDoc — size cap / symlink-swap", () => {
+  it("refuses too_large when the target exceeds MD_PREVIEW_MAX_SOURCE_BYTES", async () => {
+    const dir = await tmpDir();
+    const file = join(dir, "other.md");
+    await writeFile(file, Buffer.alloc(MD_PREVIEW_MAX_SOURCE_BYTES + 1, "a"));
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ realPath: file })) });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(result).toEqual({ ok: false, reason: "too_large" });
+  });
+
+  it("refuses io_error when the final path component is a symlink at read time (O_NOFOLLOW)", async () => {
+    const dir = await tmpDir();
+    const target = join(dir, "real.md");
+    await writeFile(target, "hi");
+    const link = join(dir, "other.md");
+    await symlink(target, link);
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ realPath: link })) });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(result).toEqual({ ok: false, reason: "io_error" });
+  });
+});
+
+describe("navigateMdDoc — replace semantics / commit wiring", () => {
+  it("commits sourcePath (the JOINED path)/realSourcePath/docDir/title to the SAME previewId, no history stack", async () => {
+    const dir = await tmpDir();
+    const sub = join(dir, "sub");
+    await mkdir(sub);
+    const target = join(sub, "other.md");
+    await writeFile(target, "# Other\n");
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 5 };
+    const commitNavigate = vi.fn(() => 6);
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ realPath: target })), commitNavigate });
+
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "sub/other.md");
+
+    expect(commitNavigate).toHaveBeenCalledWith(TAB, PREVIEW, {
+      sourcePath: join(dir, "sub/other.md"),
+      realSourcePath: target,
+      docDir: sub,
+      title: "other.md",
+    });
+    expect(result).toEqual({
+      ok: true,
+      doc: {
+        previewId: PREVIEW,
+        sourcePath: join(dir, "sub/other.md"),
+        realSourcePath: target,
+        docDir: sub,
+        sourceText: "# Other\n",
+        sizeBytes: 8,
+        mtimeMs: expect.any(Number),
+        docVersion: 6,
+      },
+    });
+  });
+
+  it("returns the record's docVersion from commitNavigate's own return value, not a local increment", async () => {
+    const dir = await tmpDir();
+    const target = join(dir, "other.md");
+    await writeFile(target, "hi");
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ realPath: target })), commitNavigate: vi.fn(() => 42) });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(result.ok && result.doc.docVersion).toBe(42);
+  });
+
+  it("reads the NEW target's fresh content, not the record's previous doc", async () => {
+    const dir = await tmpDir();
+    const target = join(dir, "other.md");
+    await writeFile(target, "brand new content");
+    const ref: MdDocRecordRef = { sourcePath: join(dir, "doc.md"), realSourcePath: join(dir, "doc.md"), docDir: dir, docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ realPath: target })) });
+    const result = await navigateMdDoc(deps, TAB, PREVIEW, "other.md");
+    expect(result.ok && result.doc.sourceText).toBe("brand new content");
   });
 });

@@ -1,9 +1,10 @@
 /**
- * Unit tests for md-doc-ipc.ts (TASK.99 CUT.md CONTRACTS, M1): mirrors
- * panel-ipc.test.ts's own pattern — `electron`'s `ipcMain` is mocked with a
- * handler-capturing fake (no Electron runtime under vitest), zod-refusal
- * shapes are tested against a stubbed `MdDocDeps` (fast, isolates this
- * module's own boundary logic from `readMdDoc`'s).
+ * Unit tests for md-doc-ipc.ts (TASK.99 CUT.md CONTRACTS — M1 READ, M2
+ * NAVIGATE): mirrors panel-ipc.test.ts's own pattern — `electron`'s
+ * `ipcMain` is mocked with a handler-capturing fake (no Electron runtime
+ * under vitest), zod-refusal shapes are tested against a stubbed
+ * `MdDocDeps` (fast, isolates this module's own boundary logic from
+ * `readMdDoc`'s/`navigateMdDoc`'s).
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,7 +20,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { MD_PREVIEW_READ_CHANNEL } from "../../shared/md-preview.js";
+import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL } from "../../shared/md-preview.js";
 import { registerMdDocIpc } from "./md-doc-ipc.js";
 import type { MdDocDeps } from "./md-doc.js";
 
@@ -29,6 +30,7 @@ function fakeDeps(overrides: Partial<MdDocDeps> = {}): MdDocDeps {
     resolveArtifact: vi.fn(async () => ({ failure: "not_found" as const })),
     stat: vi.fn(async () => ({ size: 0, isFile: true, mtimeMs: 0 })),
     readFileNoFollow: vi.fn(async () => Buffer.from("")),
+    commitNavigate: vi.fn(() => 1),
     ...overrides,
   };
 }
@@ -95,6 +97,78 @@ describe("registerMdDocIpc — MD_PREVIEW_READ", () => {
     const getRecordRef = vi.fn();
     const { invoke } = register(fakeDeps({ getRecordRef }));
     const response = await invoke(MD_PREVIEW_READ_CHANNEL, "not-an-object");
+    expect(getRecordRef).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+});
+
+describe("registerMdDocIpc — MD_PREVIEW_NAVIGATE (TASK.99 M2)", () => {
+  it("is registered", () => {
+    register(fakeDeps());
+    expect(mockHandlers.has(MD_PREVIEW_NAVIGATE_CHANNEL)).toBe(true);
+  });
+
+  it("valid payload calls getRecordRef with tabId/previewId and forwards a successful navigate verbatim", async () => {
+    const getRecordRef = vi.fn(() => ({ sourcePath: "doc.md", realSourcePath: "/workspace/doc.md", docDir: "/workspace", docVersion: 0 }));
+    const resolveArtifact = vi.fn(async () => ({ realPath: "/workspace/other.md" }));
+    const stat = vi.fn(async () => ({ size: 5, isFile: true, mtimeMs: 123 }));
+    const readFileNoFollow = vi.fn(async () => Buffer.from("hello"));
+    const commitNavigate = vi.fn(() => 1);
+    const { invoke } = register(fakeDeps({ getRecordRef, resolveArtifact, stat, readFileNoFollow, commitNavigate }));
+
+    const response = await invoke(MD_PREVIEW_NAVIGATE_CHANNEL, { tabId: "tab-a", previewId: "p1", href: "other.md" });
+    expect(getRecordRef).toHaveBeenCalledWith("tab-a", "p1");
+    expect(response).toEqual({
+      ok: true,
+      doc: {
+        previewId: "p1",
+        sourcePath: "/workspace/other.md",
+        realSourcePath: "/workspace/other.md",
+        docDir: "/workspace",
+        sourceText: "hello",
+        sizeBytes: 5,
+        mtimeMs: 123,
+        docVersion: 1,
+      },
+    });
+  });
+
+  it("forwards an honest refusal verbatim (not_md when the resolved realPath doesn't end in .md)", async () => {
+    const getRecordRef = vi.fn(() => ({ sourcePath: "doc.md", realSourcePath: "/workspace/doc.md", docDir: "/workspace", docVersion: 0 }));
+    const resolveArtifact = vi.fn(async () => ({ realPath: "/workspace/other.txt" }));
+    const { invoke } = register(fakeDeps({ getRecordRef, resolveArtifact }));
+    const response = await invoke(MD_PREVIEW_NAVIGATE_CHANNEL, { tabId: "tab-a", previewId: "p1", href: "other.md" });
+    expect(response).toEqual({ ok: false, reason: "not_md" });
+  });
+
+  it("malformed payload (missing href) refuses no_preview without calling getRecordRef", async () => {
+    const getRecordRef = vi.fn();
+    const { invoke } = register(fakeDeps({ getRecordRef }));
+    const response = await invoke(MD_PREVIEW_NAVIGATE_CHANNEL, { tabId: "tab-a", previewId: "p1" });
+    expect(getRecordRef).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+
+  it("malformed payload (href exceeding 4096 chars) refuses no_preview without calling getRecordRef", async () => {
+    const getRecordRef = vi.fn();
+    const { invoke } = register(fakeDeps({ getRecordRef }));
+    const response = await invoke(MD_PREVIEW_NAVIGATE_CHANNEL, { tabId: "tab-a", previewId: "p1", href: "a".repeat(4097) });
+    expect(getRecordRef).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+
+  it("malformed payload (empty href) refuses no_preview without calling getRecordRef", async () => {
+    const getRecordRef = vi.fn();
+    const { invoke } = register(fakeDeps({ getRecordRef }));
+    const response = await invoke(MD_PREVIEW_NAVIGATE_CHANNEL, { tabId: "tab-a", previewId: "p1", href: "" });
+    expect(getRecordRef).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+
+  it("non-object payload refuses no_preview without calling getRecordRef", async () => {
+    const getRecordRef = vi.fn();
+    const { invoke } = register(fakeDeps({ getRecordRef }));
+    const response = await invoke(MD_PREVIEW_NAVIGATE_CHANNEL, "not-an-object");
     expect(getRecordRef).not.toHaveBeenCalled();
     expect(response).toEqual({ ok: false, reason: "no_preview" });
   });

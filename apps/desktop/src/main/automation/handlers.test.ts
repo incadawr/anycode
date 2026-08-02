@@ -777,6 +777,10 @@ function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHos
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
     setContainer: vi.fn(async () => ({ ok: false as const, error: "transfer lands in 96-P3" })),
     getMdDocRef: vi.fn(() => undefined),
+    // TASK.99 M2: type-level fake addition only — this suite exercises the
+    // automation server/handlers, not md-doc navigate (covered by
+    // preview-host.test.ts's own "commitMdNavigate" suite).
+    commitMdNavigate: vi.fn(() => undefined),
     ...overrides,
   };
 }

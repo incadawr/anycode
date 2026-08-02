@@ -187,10 +187,11 @@ import type {
   PreviewPanelStatePayload,
   PreviewSetContainerResult,
 } from "../shared/preview-panel.js";
-// TASK.99 M1: native DOM markdown preview's doc-read channel (CUT.md
-// CONTRACTS) — mirrors the `previewPanel.setContainer` style just above:
-// shared constant, typed invoke wrapper, zero logic in this file.
-import { MD_PREVIEW_READ_CHANNEL } from "../shared/md-preview.js";
+// TASK.99: native DOM markdown preview's doc-read (M1) + navigate (M2)
+// channels (CUT.md CONTRACTS) — mirrors the `previewPanel.setContainer`
+// style just above: shared constant, typed invoke wrapper, zero logic in
+// this file.
+import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL } from "../shared/md-preview.js";
 import type { MdDocReadResult } from "../shared/md-preview.js";
 
 // TASK.41 (design/slice-codex-fixes-cut.md §2(g)/§3.8): Codex onboarding
@@ -899,13 +900,16 @@ contextBridge.exposeInMainWorld("anycode", {
       return () => ipcRenderer.removeListener(PREVIEW_CHANGED_CHANNEL, listener);
     },
   },
-  // TASK.99 M1: `window.anycode.mdPreview` — the native DOM markdown
-  // preview's doc-read control plane (CUT.md CONTRACTS). `read` is also what
-  // a Reload click re-invokes — main never caches, so there is no separate
-  // "reload" method.
+  // TASK.99: `window.anycode.mdPreview` — the native DOM markdown preview's
+  // doc control plane (CUT.md CONTRACTS). `read` (M1) is also what a Reload
+  // click re-invokes — main never caches, so there is no separate "reload"
+  // method. `navigate` (M2) follows a local `.md` link, replacing the
+  // preview's content in place (same `previewId`, no history stack).
   mdPreview: {
     read: (tabId: string, previewId: string): Promise<MdDocReadResult> =>
       ipcRenderer.invoke(MD_PREVIEW_READ_CHANNEL, { tabId, previewId }) as Promise<MdDocReadResult>,
+    navigate: (tabId: string, previewId: string, href: string): Promise<MdDocReadResult> =>
+      ipcRenderer.invoke(MD_PREVIEW_NAVIGATE_CHANNEL, { tabId, previewId, href }) as Promise<MdDocReadResult>,
   },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL) as Promise<void>,
