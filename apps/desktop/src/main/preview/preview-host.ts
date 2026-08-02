@@ -313,6 +313,24 @@ export interface PreviewHostHandle {
    * "web" record (this channel is md-only — see shared/md-preview.ts).
    */
   getMdDocRef(tabId: string, previewId: string): { sourcePath: string; realSourcePath: string; docDir: string; docVersion: number } | undefined;
+  /**
+   * M2 (TASK.99): commits a NAVIGATE mutation to a LIVE dom-md record —
+   * `md-doc.ts`'s `navigateMdDoc` closes over this (main/index.ts wiring)
+   * after its own fresh containment/read succeeds, so the record is never
+   * mutated on a refused navigate. Updates `sourcePath`/`realSourcePath`/
+   * `docDir`/`title` from `fields`, derives `url` from `realSourcePath`
+   * (same `pathToFileURL` mapping every other record mutation site uses),
+   * bumps `docVersion`/`lastOpenedAt`, and pushes the change (D7). Returns
+   * the record's fresh `docVersion`, or `undefined` for no-such-preview/
+   * wrong-tab/a destroyed record/a "web" record — mirrors `getMdDocRef`'s
+   * own refusal set exactly, so `navigateMdDoc` can reuse the identical
+   * `no_preview` mapping for both.
+   */
+  commitMdNavigate(
+    tabId: string,
+    previewId: string,
+    fields: { sourcePath: string; realSourcePath: string; docDir: string; title: string },
+  ): number | undefined;
 }
 
 // ── tunables ──
@@ -1532,6 +1550,37 @@ class PreviewHost implements PreviewHostHandle {
       docDir: record.docDir,
       docVersion: record.docVersion,
     };
+  }
+
+  // ── md doc navigate commit (M2: md-doc.ts's navigate handler closes over this) ──
+
+  /**
+   * M2 (TASK.99 CUT.md CONTRACTS): mutates a LIVE dom-md record in place —
+   * replace semantics, no history stack. Called ONLY after `navigateMdDoc`'s
+   * own fresh containment/read has already succeeded, so this method itself
+   * does no validation beyond re-confirming the record is still the SAME
+   * live dom-md record `getRecordRef`/`getMdDocRef` saw a moment earlier (a
+   * close/destroy racing the in-flight navigate is the only way this can
+   * fail here).
+   */
+  commitMdNavigate(
+    tabId: string,
+    previewId: string,
+    fields: { sourcePath: string; realSourcePath: string; docDir: string; title: string },
+  ): number | undefined {
+    const record = this.previews.get(previewId);
+    if (record === undefined || record.destroyed || record.tabId !== tabId || record.viewKind !== "dom-md") {
+      return undefined;
+    }
+    record.sourcePath = fields.sourcePath;
+    record.realSourcePath = fields.realSourcePath;
+    record.docDir = fields.docDir;
+    record.title = fields.title;
+    record.url = pathToFileURL(fields.realSourcePath).href;
+    record.docVersion += 1;
+    record.lastOpenedAt = this.now();
+    this.pushChanged(tabId);
+    return record.docVersion;
   }
 
   /** Every live (non-destroyed) preview count, across all tabs — cascade is a global visual offset, not per-tab. */

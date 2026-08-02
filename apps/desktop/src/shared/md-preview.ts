@@ -1,6 +1,6 @@
 /**
  * Native DOM markdown-preview contract between main and renderer (TASK.99
- * CUT.md CONTRACTS, M1: READ only — NAVIGATE lands in M2). Same value-only
+ * CUT.md CONTRACTS — M1 shipped READ, M2 adds NAVIGATE). Same value-only
  * shape as shared/preview-panel.ts / shared/window.ts: channel-name constants
  * + wire types only, ZERO runtime imports, so it is safe to import from
  * preload (sandboxed CJS), the renderer web bundle, AND main alike without
@@ -15,9 +15,11 @@ export const MD_PREVIEW_READ_CHANNEL = "anycode:md-preview-read";
 
 /**
  * invoke (renderer→main): follow a doc-relative or absolute `.md` link,
- * replacing the preview's current document in place (M2 — the constant is
- * declared here now so the frozen contract file only changes once; no
- * preload method, zod schema, or main handler exists for it until M2).
+ * replacing the preview's current document in place (M2 — `MdLink`'s click
+ * handler for a local `.md` href, gated behind `MdDocContext` being set).
+ * Replace semantics, no history stack: the SAME `previewId` is mutated, its
+ * `docVersion` bumps by one, and the fresh `MdDocPayload` is returned (or an
+ * honest `MdDocReadResult` refusal, reusing the exact reasons READ uses).
  */
 export const MD_PREVIEW_NAVIGATE_CHANNEL = "anycode:md-preview-navigate";
 // zod: { tabId, previewId, href: z.string().min(1).max(4096) }   href = doc-relative or absolute .md target

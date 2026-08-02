@@ -511,11 +511,14 @@ declare global {
         setContainer(tabId: string, previewId: string, container: PreviewContainerKind): Promise<PreviewSetContainerResult>;
         onChanged(callback: (payload: PreviewChangedPayload) => void): () => void;
       };
-      // TASK.99 M1: the native DOM markdown preview's doc-read control plane
-      // (CUT.md CONTRACTS). `read` is also what a Reload click re-invokes —
-      // main never caches, so there is no separate "reload" method.
+      // TASK.99: the native DOM markdown preview's doc control plane
+      // (CUT.md CONTRACTS). `read` (M1) is also what a Reload click
+      // re-invokes — main never caches, so there is no separate "reload"
+      // method. `navigate` (M2) follows a local `.md` link, replacing the
+      // preview's content in place (same `previewId`, no history stack).
       mdPreview: {
         read(tabId: string, previewId: string): Promise<MdDocReadResult>;
+        navigate(tabId: string, previewId: string, href: string): Promise<MdDocReadResult>;
       };
       window: {
         minimize(): Promise<void>;
