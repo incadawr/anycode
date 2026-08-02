@@ -956,11 +956,17 @@ class PreviewHost implements PreviewHostHandle {
     }
 
     const wc = record.window.webContents;
+    // F1: true when THIS call is the one moving the visible slot onto
+    // `record` (the slot was empty or held by a different preview) — used
+    // below to gate the isEmpty() retry onto the D18 race class specifically,
+    // never a genuine hidden-panel refusal.
+    let promoted = false;
     if (record.containerKind === "panel") {
       // D13: the container-agnostic `showInactive()` intent, mapped honestly
       // for a panel — promote this preview to the visible slot instead of
       // forcing container visibility; the overlay/tab/mount gates inside
       // `applyPanel()` are NEVER bypassed for a capture.
+      promoted = this.visiblePanelPreviewId.get(record.tabId) !== record.previewId;
       this.visiblePanelPreviewId.set(record.tabId, record.previewId);
       this.applyPanel();
       this.pushChanged(record.tabId);
@@ -1001,15 +1007,48 @@ class PreviewHost implements PreviewHostHandle {
       }
       if (image.isEmpty()) {
         if (record.containerKind === "panel") {
-          // The reconciler still keeps it hidden (inactive tab / unmounted
-          // region / overlay open) — an honest refusal, never a gate bypass.
-          return this.fail(
-            "unavailable",
-            "screenshot unavailable while the panel preview is hidden — switch to the tab or move the preview to a window",
-          );
+          if (!promoted) {
+            // The slot was already held by this preview, so an empty frame
+            // is NOT the D18 race — the reconciler still keeps it hidden
+            // (inactive tab / unmounted region / overlay open). An honest
+            // refusal, never a gate bypass, zero retry.
+            return this.fail(
+              "unavailable",
+              "screenshot unavailable while the panel preview is hidden — switch to the tab or move the preview to a window",
+            );
+          }
+          // F1: the D18 promote-then-capture race (above) can also manifest
+          // as an EMPTY first frame instead of an UnknownVizError rejection —
+          // notably when the slot's previous holder was a dom-md record,
+          // which composites no WebContentsView at all, so nothing was ever
+          // painted before this promote. Retry once, mirroring the
+          // exception-path retry's semantics exactly: a still-UVE-class
+          // rejection on the retry becomes the same honest "hasn't painted a
+          // frame yet" refusal, any other rejection propagates unchanged, and
+          // a still-empty (but non-rejecting) retry falls back to today's
+          // "hidden" refusal.
+          await sleep(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+          try {
+            image = await wc.capturePage();
+          } catch (retryError) {
+            if (!isUnknownVizErrorLike(retryError)) {
+              throw retryError;
+            }
+            return this.fail(
+              "unavailable",
+              "screenshot unavailable while the panel preview has not yet painted a frame — switch to the tab or move the preview to a window",
+            );
+          }
+          if (image.isEmpty()) {
+            return this.fail(
+              "unavailable",
+              "screenshot unavailable while the panel preview is hidden — switch to the tab or move the preview to a window",
+            );
+          }
+        } else {
+          record.window.show();
+          image = await wc.capturePage();
         }
-        record.window.show();
-        image = await wc.capturePage();
       }
       const { width, height } = image.getSize();
       return {

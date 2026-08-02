@@ -1901,6 +1901,95 @@ describe("PreviewHost — panel D18: UnknownVizError retry on promote-then-captu
   });
 });
 
+describe("PreviewHost — panel F1: empty-first-capture retry gated on `promoted` (D18 race class, TASK.99 M1 dom-md slot handoff)", () => {
+  /** Two panel previews on one tab (D5): opening `second` moves the visible slot off `first`, so screenshotting `first` afterwards is a `promoted` call; screenshotting `second` is not. */
+  async function openTwoPanelRecords(): Promise<{
+    rig: Rig;
+    first: string;
+    second: string;
+    firstView: FakePanelView;
+    secondView: FakePanelView;
+  }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const firstOpen = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const firstView = rig.panelViews[0]!;
+    firstView.webContents.fireDidFinishLoad();
+    const firstResult = await firstOpen;
+    const first = firstResult.ok ? firstResult.value.previewId : "";
+
+    const secondOpen = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    const secondView = rig.panelViews[1]!;
+    secondView.webContents.fireDidFinishLoad();
+    const secondResult = await secondOpen;
+    const second = secondResult.ok ? secondResult.value.previewId : "";
+
+    return { rig, first, second, firstView, secondView };
+  }
+
+  it("promoted + empty first capture ⇒ retries once after the paint delay and succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rig, first, firstView } = await openTwoPanelRecords();
+      // `first` is currently hidden (second holds the slot) — screenshotting it re-promotes it.
+      firstView.webContents.capturePageImpl = async () =>
+        fakeImage({ empty: firstView.webContents.captureCalls === 1 });
+
+      const shotPromise = rig.host.screenshotFor(TAB, first);
+      await flush();
+      await flush();
+      // First capturePage() has resolved empty and the retry is parked behind
+      // sleep(PANEL_SCREENSHOT_RETRY_DELAY_MS) — proof it actually waited.
+      expect(firstView.webContents.captureCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+      const result = await shotPromise;
+
+      expect(result.ok).toBe(true);
+      expect(firstView.webContents.captureCalls).toBe(2); // exactly one retry
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("NOT promoted (slot already held by the target) + empty capture ⇒ honest refusal, zero retry", async () => {
+    const { rig, second, secondView } = await openTwoPanelRecords();
+    // `second` already holds the visible slot from its own open — screenshotting it promotes nothing.
+    secondView.webContents.capturePageImpl = async () => fakeImage({ empty: true });
+
+    const result = await rig.host.screenshotFor(TAB, second);
+
+    expect(result).toMatchObject({ ok: false, errorKind: "unavailable" });
+    if (!result.ok) {
+      expect(result.error).toContain("screenshot unavailable while the panel preview is hidden");
+    }
+    expect(secondView.webContents.captureCalls).toBe(1); // zero retry — no promote happened
+  });
+
+  it("promoted + the retry is ALSO empty ⇒ honest refusal, exactly 2 capturePage calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rig, first, firstView } = await openTwoPanelRecords();
+      firstView.webContents.capturePageImpl = async () => fakeImage({ empty: true });
+
+      const shotPromise = rig.host.screenshotFor(TAB, first);
+      await flush();
+      await vi.advanceTimersByTimeAsync(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+      const result = await shotPromise;
+
+      expect(result).toMatchObject({ ok: false, errorKind: "unavailable" });
+      if (!result.ok) {
+        expect(result.error).toContain("screenshot unavailable while the panel preview is hidden");
+      }
+      expect(firstView.webContents.captureCalls).toBe(2); // retried exactly once, no further attempts
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("PreviewHost — panel lifecycle: closeForTab/closeAll destroy panel views; reload reset hides all", () => {
   it("closeForTab destroys panel views for that tab only", async () => {
     const rig = makeRig();
