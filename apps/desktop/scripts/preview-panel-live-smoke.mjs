@@ -261,14 +261,6 @@ async function step4PositiveSmoke(ctx) {
   assert(4, mdOpen?.ok === true, `md open failed: ${JSON.stringify(mdOpen)}`);
   ctx.mdPreviewId = mdOpen.value.previewId;
 
-  const mdRenderedFromMatches = mdOpen.value.renderedFrom === mdPath;
-  const mdUrlIsRenderedTemp = typeof mdOpen.value.url === "string" && mdOpen.value.url !== `file://${mdPath}` && mdOpen.value.url.endsWith(".html");
-  if (mdRenderedFromMatches && mdUrlIsRenderedTemp) {
-    record("md artifact rendered (not plaintext)", "PASS", `renderedFrom=${mdOpen.value.renderedFrom} url=${mdOpen.value.url}`);
-  } else {
-    record("md artifact rendered (not plaintext)", "FAIL", `open value=${JSON.stringify(mdOpen.value)}`);
-  }
-
   // Poll the list until both settle out of "loading".
   let previews = null;
   for (let i = 0; i < 40; i++) {
@@ -279,6 +271,38 @@ async function step4PositiveSmoke(ctx) {
     await sleep(250);
   }
   ctx.positivePreviews = previews ?? [];
+
+  // M1 (TASK.99 CUT.md CONTRACTS): a `.md` artifact opens as a native dom-md
+  // record — no WebContentsView, no rendered-HTML temp file (that pipeline
+  // is dead code from M1 on, removed in M5). `renderedFrom` stays the
+  // ORIGINAL .md path (tool-contract continuity across viewKinds) and `url`
+  // is the .md file's OWN `file://` URL, never a rendered-.html temp.
+  // Compared with `.startsWith`/`.endsWith` rather than strict equality
+  // against `pathToFileURL(mdPath)`: a realpath divergence (e.g. macOS
+  // /tmp -> /private/tmp) would make a strict string compare
+  // environment-brittle without asserting anything security-meaningful.
+  const mdListEntry = (previews ?? []).find((p) => p.previewId === ctx.mdPreviewId);
+  const mdRenderedFromMatches = mdOpen.value.renderedFrom === mdPath;
+  const mdUrlIsMdFile =
+    typeof mdOpen.value.url === "string" &&
+    mdOpen.value.url.startsWith("file://") &&
+    mdOpen.value.url.endsWith(".md") &&
+    !mdOpen.value.url.endsWith(".html");
+  const mdListShapeOk =
+    mdListEntry !== undefined && mdListEntry.viewKind === "dom-md" && mdListEntry.container === "panel" && mdListEntry.status === "ready";
+  if (mdRenderedFromMatches && mdUrlIsMdFile && mdListShapeOk) {
+    record(
+      "md artifact opens as native dom-md record",
+      "PASS",
+      `renderedFrom=${mdOpen.value.renderedFrom} url=${mdOpen.value.url} list=${JSON.stringify(mdListEntry)}`,
+    );
+  } else {
+    record(
+      "md artifact opens as native dom-md record",
+      "FAIL",
+      `open value=${JSON.stringify(mdOpen.value)} listEntry=${JSON.stringify(mdListEntry)}`,
+    );
+  }
 
   const bothReady = (previews ?? []).length === 2 && previews.every((p) => p.status === "ready");
   const bothPanel = (previews ?? []).every((p) => p.container === "panel");
@@ -306,6 +330,32 @@ async function step5Screenshot(ctx) {
     record("screenshot returns a non-empty PNG", "PASS", `${buf.length} bytes, PNG magic verified`);
   } else {
     record("screenshot returns a non-empty PNG", "FAIL", `magicOk=${magicOk} sizeOk=${sizeOk} bytes=${buf.length}`);
+  }
+
+  // M1-M4 interim (TASK.99 CUT.md Gap 2): a dom-md preview has no
+  // WebContentsView/capturePage surface yet, so BrowserScreenshot honestly
+  // refuses rather than returning a blank/wrong image. Asserted on the
+  // discriminant + a stable substring only, never full prose. M4 replaces
+  // this leg with a real PNG assertion once capturePage(rect) of the main
+  // window lands for a dom-md record.
+  const mdResp = await apiOk(ctx, 5, "GET", `/tabs/${ctx.tabId}/previews/${encodeURIComponent(ctx.mdPreviewId)}/screenshot`);
+  const mdRefusalOk =
+    mdResp?.ok === false &&
+    mdResp?.errorKind === "unavailable" &&
+    typeof mdResp?.error === "string" &&
+    mdResp.error.includes("markdown");
+  if (mdRefusalOk) {
+    record(
+      "md screenshot honestly refused — no capture surface yet (M1-M4 interim; M4 flips this to a real PNG)",
+      "PASS",
+      `errorKind=${mdResp.errorKind} error=${mdResp.error}`,
+    );
+  } else {
+    record(
+      "md screenshot honestly refused — no capture surface yet (M1-M4 interim; M4 flips this to a real PNG)",
+      "FAIL",
+      `response=${JSON.stringify(mdResp).slice(0, 300)}`,
+    );
   }
 }
 
