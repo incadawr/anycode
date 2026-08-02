@@ -72,7 +72,7 @@
 
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   PREVIEW_EVENT_TYPE,
@@ -183,6 +183,25 @@ export interface PreviewPanelViewLike extends PreviewWindowLike {
   setVisible(visible: boolean): void;
 }
 
+/**
+ * M1 (TASK.99 CUT.md CONTRACTS): the slim window-like surface a dom-md
+ * "Open in window" container will need — declared now so `MdDomPreviewRecord`
+ * can carry a typed `mdWindow?` field, but nothing constructs one until M3
+ * wires `PreviewHostDeps.createMdWindow` (`md-window-adapter.ts`). Deliberately
+ * NOT `PreviewWindowLike`: a dom-md window has no `webContents` to secure —
+ * it loads the SAME trusted renderer bundle the main window does, under a
+ * `?view=md-preview` query route, not an arbitrary page.
+ */
+export interface MdPreviewWindowLike {
+  isDestroyed(): boolean;
+  destroy(): void;
+  show(): void;
+  showInactive(): void;
+  onClosed(listener: () => void): void;
+  capturePage(): Promise<PreviewCapturedImage>;
+  setBackgroundThrottling(enabled: boolean): void;
+}
+
 export interface CreateWindowOpts {
   previewId: string;
   /** Cascade position (undefined for the first window of the batch — the adapter picks its own default placement). */
@@ -252,6 +271,8 @@ export interface PreviewSummary {
   dropped: number;
   /** panel-track CUT.md §3 96-P4 gate fix: which container this preview lives in (panel vs window) — was missing from the 96-E automation probe shape, so a 96-P4 smoke could never assert on it. */
   container: PreviewContainerKind;
+  /** M1 (TASK.99 CUT.md CONTRACTS): which record kind this is — 96-E probes assert on it. */
+  viewKind: "web" | "dom-md";
 }
 
 export interface PreviewHostHandle {
@@ -284,6 +305,14 @@ export interface PreviewHostHandle {
   listForPanel(tabId: string): PreviewChangedPayload;
   /** D14: recreates the preview's container (panel<->window), preserving history/console/consent (96-P3). */
   setContainer(tabId: string, previewId: string, container: PreviewContainerKind): Promise<PreviewSetContainerResult>;
+  /**
+   * M1 (TASK.99): current doc identity for a LIVE dom-md record — the lookup
+   * `md-doc.ts`'s read handler closes over (main/index.ts wiring) so it can
+   * re-stat/re-read the source fresh on every invoke, never caching here.
+   * `undefined` for no-such-preview, wrong tab, a destroyed record, or a
+   * "web" record (this channel is md-only — see shared/md-preview.ts).
+   */
+  getMdDocRef(tabId: string, previewId: string): { sourcePath: string; realSourcePath: string; docDir: string; docVersion: number } | undefined;
 }
 
 // ── tunables ──
@@ -333,7 +362,9 @@ export function clampPanelBounds(bounds: PreviewPanelBounds): PreviewPanelBounds
 type PreviewErrorKind = NonNullable<Extract<PreviewResult<unknown>, { ok: false }>["errorKind"]>;
 type SettleStatus = "ready" | "failed" | "crashed";
 
-interface PreviewRecord {
+/** Today's preview shape (window/panel WebContentsView, executeJavaScript/capturePage-backed) — unchanged except the added discriminant. */
+interface WebPreviewRecord {
+  viewKind: "web";
   previewId: string;
   tabId: string;
   window: PreviewWindowLike;
@@ -347,7 +378,7 @@ interface PreviewRecord {
   /** realpath of `sourcePath` — used for auto-open dedup, independent of the raw string the model wrote. */
   realSourcePath?: string;
   renderedFrom?: string;
-  /** Temp HTML path from `renderMarkdown`; unlinked (best-effort) when this preview is destroyed. */
+  /** Temp HTML path from `renderMarkdown`; unlinked (best-effort) when this preview is destroyed. Dead field from M1 on (the md open path no longer produces one) — removed in M5 alongside the pipeline (CUT.md Gap 3). */
   renderedHtmlPath?: string;
   title?: string;
   consentedOrigins: Set<string>;
@@ -364,6 +395,42 @@ interface PreviewRecord {
   settleWaiters: Array<() => void>;
   destroyed: boolean;
 }
+
+/**
+ * M1 (TASK.99 CUT.md CONTRACTS): a `.md` preview rendered natively in the
+ * renderer's own DOM (chat's `Markdown.tsx`, reused) — owns no `PreviewWindowLike`/
+ * `PreviewWebContentsLike` at all in a panel container (nothing to secure:
+ * there is no executeJavaScript/capturePage surface, no `webContents`,
+ * because there is no embedded page). `status` settles SYNCHRONOUSLY at
+ * open/navigate (no load to await) — never "loading"/"crashed", so there are
+ * no `settleWaiters` either. M1 forces `containerKind` to "panel" always
+ * (Gap 3 interim); `mdWindow` stays permanently undefined until M3.
+ */
+interface MdDomPreviewRecord {
+  viewKind: "dom-md";
+  previewId: string;
+  tabId: string;
+  containerKind: "panel" | "window";
+  /** Window container only (M3) — NEVER a `PreviewWindowLike`. Always undefined in M1. */
+  mdWindow?: MdPreviewWindowLike;
+  status: "ready" | "failed";
+  /** `pathToFileURL(realSourcePath).href` — kept so `PreviewOpenSuccess`/tool shapes stay unchanged across viewKinds. */
+  url: string;
+  sourcePath: string;
+  realSourcePath: string;
+  /** `dirname(realSourcePath)` — the resolver anchor for M2's doc-relative image/link joins. */
+  docDir: string;
+  /** = `sourcePath` (tool-contract continuity with the web record's own `renderedFrom`). */
+  renderedFrom: string;
+  title: string;
+  /** Bumps on navigate (M2) — the renderer's MD_PREVIEW_READ refetch key. */
+  docVersion: number;
+  createdAt: number;
+  lastOpenedAt: number;
+  destroyed: boolean;
+}
+
+type PreviewRecord = WebPreviewRecord | MdDomPreviewRecord;
 
 /** Bracket/case-normalizing (cut §1.6/IPv6 fix): `URL.hostname` keeps IPv6 literals bracketed (`"[::1]"`), which a raw literal comparison never matches — the ONE helper every open/nav/redirect/gate check reuses. */
 function isLocalHost(hostname: string): boolean {
@@ -417,7 +484,7 @@ function isUnknownVizErrorLike(error: unknown): boolean {
  * not mutate or destroy a record that has already moved on).
  */
 function guardContainerEpoch<A extends unknown[]>(
-  record: PreviewRecord,
+  record: WebPreviewRecord,
   container: PreviewWindowLike,
   handler: (...args: A) => void,
 ): (...args: A) => void {
@@ -503,21 +570,54 @@ class PreviewHost implements PreviewHostHandle {
       return this.fail("invalid_input", "exactly one of path or url is required");
     }
 
-    let record: PreviewRecord;
-    let isNewWindow: boolean;
+    let existing: PreviewRecord | undefined;
     if (req.previewId !== undefined) {
-      const existing = this.previews.get(req.previewId);
-      if (existing === undefined || existing.tabId !== tabId || existing.destroyed) {
+      const found = this.previews.get(req.previewId);
+      if (found === undefined || found.tabId !== tabId || found.destroyed) {
         return this.fail("invalid_input", `no such preview: ${req.previewId}`);
       }
+      existing = found;
+    }
+
+    if (hasPath && isMarkdownPath(req.path!)) {
+      return this.openMarkdownTarget(tabId, req.path!, existing);
+    }
+    return this.openWebTarget(tabId, req, existing);
+  }
+
+  /**
+   * The pre-M1 open flow, generalized to also accept a cross-viewKind flip
+   * (CUT.md CONTRACTS "Cross-viewKind reuse-navigate"): `existing` may be a
+   * `WebPreviewRecord` (ordinary reuse-navigate, byte-identical to the
+   * pre-M1 behavior), a `MdDomPreviewRecord` (a BrowserOpen with the SAME
+   * previewId whose target flipped from markdown to web — dom-md owns no
+   * Electron container in M1, so there is nothing to tear down; a fresh
+   * container is created under the SAME previewId/containerKind), or
+   * undefined (brand-new preview, unchanged).
+   */
+  private async openWebTarget(
+    tabId: string,
+    req: { path?: string; url?: string; previewId?: string; allowRemote?: boolean },
+    existing: PreviewRecord | undefined,
+  ): Promise<PreviewResult<PreviewOpenSuccess>> {
+    const hasPath = req.path !== undefined && req.path !== "";
+
+    let record: WebPreviewRecord;
+    let isNewWindow: boolean;
+    if (existing !== undefined && existing.viewKind === "web") {
       record = existing;
       isNewWindow = false;
     } else {
-      const previewId = randomUUID();
-      // D4: displayMode is consulted ONLY here, on NEW-record creation — a
-      // reuse (the `if` branch above, previewId given) keeps its existing
-      // container regardless of a later settings change.
-      const containerKind: "window" | "panel" = this.deps.displayMode() === "panel" ? "panel" : "window";
+      // Brand-new previewId, OR a dom-md->web flip landing on an existing
+      // previewId — either way a fresh Electron container is created; a
+      // flip reuses the OLD record's previewId/containerKind (CONTRACTS'
+      // "previewId stays valid for the model"), a brand-new one mints both.
+      const previewId = existing?.previewId ?? randomUUID();
+      // D4: displayMode is consulted ONLY for a genuinely brand-new record —
+      // a reuse/flip keeps its existing container regardless of a later
+      // settings change.
+      const containerKind: "window" | "panel" =
+        existing?.containerKind ?? (this.deps.displayMode() === "panel" ? "panel" : "window");
       let window: PreviewWindowLike;
       let panelView: PreviewPanelViewLike | undefined;
       if (containerKind === "panel") {
@@ -529,7 +629,7 @@ class PreviewHost implements PreviewHostHandle {
         const cascade = this.cascadePosition();
         window = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y });
       }
-      record = this.newRecord(tabId, previewId, window, containerKind, panelView);
+      record = this.newWebRecord(tabId, previewId, window, containerKind, panelView);
       this.previews.set(previewId, record);
       this.wireWindow(record);
       isNewWindow = true;
@@ -604,31 +704,90 @@ class PreviewHost implements PreviewHostHandle {
     };
   }
 
+  /**
+   * M1 (TASK.99 CUT.md Gap 3 + CONTRACTS): a `.md` open/reuse-navigate never
+   * touches `deps.renderMarkdown` or a `PreviewWindowLike` — it settles
+   * SYNCHRONOUSLY once containment resolves, tolerating a cross-viewKind
+   * flip (an existing "web" record gets its Electron container torn down;
+   * an existing "dom-md" record is mutated in place, `docVersion` bumped).
+   * `containerKind` is unconditionally "panel" in M1 (the window container
+   * lands in M3) — a reuse/flip that previously lived in a window, or a
+   * brand-new open under `displayMode:"window"`, is silently pulled into the
+   * panel with a logged note (the honest M1-interim narrowing, not a silent
+   * setting override).
+   */
+  private async openMarkdownTarget(
+    tabId: string,
+    path: string,
+    existing: PreviewRecord | undefined,
+  ): Promise<PreviewResult<PreviewOpenSuccess>> {
+    const resolved = await this.deps.resolveArtifact(tabId, path);
+    if ("failure" in resolved) {
+      return this.fail("invalid_input", `cannot open ${path}: ${resolved.failure}`);
+    }
+    const realPath = resolved.realPath;
+
+    let record: MdDomPreviewRecord;
+    if (existing !== undefined && existing.viewKind === "dom-md") {
+      record = existing;
+      record.sourcePath = path;
+      record.realSourcePath = realPath;
+      record.docDir = dirname(realPath);
+      record.renderedFrom = path;
+      record.title = basename(path);
+      record.url = pathToFileURL(realPath).href;
+      record.docVersion += 1;
+      record.status = "ready";
+      record.lastOpenedAt = this.now();
+    } else {
+      if (existing !== undefined && existing.viewKind === "web") {
+        // dom-md owns no Electron container to swap in-place (D14-style) —
+        // the OLD web container is simply torn down; the record entry itself
+        // is replaced below, same previewId/containerKind.
+        if (!existing.window.isDestroyed()) {
+          try {
+            existing.window.destroy();
+          } catch (error) {
+            this.deps.logger.warn(`[preview] failed to destroy old container for ${existing.previewId} during md flip`, error);
+          }
+        }
+      }
+      const previewId = existing?.previewId ?? randomUUID();
+      const requestedContainerKind: "window" | "panel" =
+        existing?.containerKind ?? (this.deps.displayMode() === "panel" ? "panel" : "window");
+      if (requestedContainerKind === "window") {
+        this.deps.logger.warn(
+          `[preview] markdown preview ${previewId} forced to the panel container — the window container lands in M3`,
+        );
+      }
+      record = this.newMdRecord(tabId, previewId, path, realPath);
+      this.previews.set(previewId, record);
+    }
+
+    // M1: every dom-md record lives in the panel — bring it to the front the
+    // same way a fresh panel web-open does (D5).
+    this.visiblePanelPreviewId.set(tabId, record.previewId);
+    this.applyPanel();
+    this.pushChanged(tabId);
+
+    return {
+      ok: true,
+      value: {
+        previewId: record.previewId,
+        url: record.url,
+        title: record.title,
+        kind: "file",
+        renderedFrom: record.renderedFrom,
+      },
+    };
+  }
+
   private async resolveFileTarget(tabId: string, path: string): Promise<OpenTarget> {
     const resolved = await this.deps.resolveArtifact(tabId, path);
     if ("failure" in resolved) {
       return { ok: false, errorKind: "invalid_input", error: `cannot open ${path}: ${resolved.failure}` };
     }
     const realPath = resolved.realPath;
-    if (isMarkdownPath(path)) {
-      if (this.deps.renderMarkdown === undefined) {
-        // Never load the raw markdown as plaintext HTML — refuse honestly instead (cut §1(g)).
-        return { ok: false, errorKind: "unavailable", error: "markdown preview not available yet" };
-      }
-      const rendered = await this.deps.renderMarkdown(realPath);
-      if ("error" in rendered) {
-        return { ok: false, errorKind: "load_failed", error: rendered.error };
-      }
-      return {
-        ok: true,
-        kind: "file",
-        url: pathToFileURL(rendered.htmlPath).href,
-        sourcePath: path,
-        realSourcePath: realPath,
-        renderedFrom: path,
-        renderedHtmlPath: rendered.htmlPath,
-      };
-    }
     return {
       ok: true,
       kind: "file",
@@ -666,6 +825,11 @@ class PreviewHost implements PreviewHostHandle {
         "unavailable",
         op.previewId !== undefined ? `no such preview: ${op.previewId}` : "no preview open — use BrowserOpen",
       );
+    }
+    if (record.viewKind === "dom-md") {
+      // M1 interim: full BrowserRead support for a dom-md preview (raw
+      // source, honest selector refusal — CUT.md Gap 2) lands in M4.
+      return this.fail("unavailable", "reading a markdown preview is not supported yet");
     }
     const settled = await this.waitForSettle(record, READY_WAIT_MS);
     if (settled === "timeout") {
@@ -746,7 +910,7 @@ class PreviewHost implements PreviewHostHandle {
    * never trip in a test that does not also hand-advance `now()` in lockstep
    * with wall-clock time.
    */
-  private async pollSelector(record: PreviewRecord, selector: string, waitMs: number): Promise<boolean> {
+  private async pollSelector(record: WebPreviewRecord, selector: string, waitMs: number): Promise<boolean> {
     const maxAttempts = Math.max(1, Math.ceil(waitMs / SELECTOR_POLL_MS));
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
@@ -777,6 +941,11 @@ class PreviewHost implements PreviewHostHandle {
         "unavailable",
         previewId !== undefined ? `no such preview: ${previewId}` : "no preview open — use BrowserOpen",
       );
+    }
+    if (record.viewKind === "dom-md") {
+      // M1 interim: full BrowserScreenshot support for a dom-md preview
+      // (capturePage(rect) of the main window — CUT.md Gap 2) lands in M4.
+      return this.fail("unavailable", "screenshotting a markdown preview is not supported yet");
     }
     const settled = await this.waitForSettle(record, READY_WAIT_MS);
     if (settled === "timeout") {
@@ -940,27 +1109,37 @@ class PreviewHost implements PreviewHostHandle {
       return;
     }
     record.destroyed = true;
-    this.flushEventSummary(record);
-    if (record.status === "loading") {
-      record.errorMessage = "preview was closed before it finished loading";
-      record.status = "failed";
-    }
-    const waiters = record.settleWaiters;
-    record.settleWaiters = [];
-    for (const waiter of waiters) {
-      waiter();
-    }
-    if (!record.window.isDestroyed()) {
-      try {
-        record.window.destroy();
-      } catch (error) {
-        this.deps.logger.warn(`[preview] failed to destroy window for ${record.previewId}`, error);
+    if (record.viewKind === "web") {
+      this.flushEventSummary(record);
+      if (record.status === "loading") {
+        record.errorMessage = "preview was closed before it finished loading";
+        record.status = "failed";
       }
-    }
-    if (record.renderedHtmlPath !== undefined) {
-      void unlink(record.renderedHtmlPath).catch(() => {
-        // Best-effort temp-file cleanup — a missing/already-removed file is not an error.
-      });
+      const waiters = record.settleWaiters;
+      record.settleWaiters = [];
+      for (const waiter of waiters) {
+        waiter();
+      }
+      if (!record.window.isDestroyed()) {
+        try {
+          record.window.destroy();
+        } catch (error) {
+          this.deps.logger.warn(`[preview] failed to destroy window for ${record.previewId}`, error);
+        }
+      }
+      if (record.renderedHtmlPath !== undefined) {
+        void unlink(record.renderedHtmlPath).catch(() => {
+          // Best-effort temp-file cleanup — a missing/already-removed file is not an error.
+        });
+      }
+    } else if (record.mdWindow !== undefined && !record.mdWindow.isDestroyed()) {
+      // M1: always undefined (the window container lands in M3) — this
+      // branch exists so a future `mdWindow` never leaks past M3's wiring.
+      try {
+        record.mdWindow.destroy();
+      } catch (error) {
+        this.deps.logger.warn(`[preview] failed to destroy md window for ${record.previewId}`, error);
+      }
     }
     if (record.containerKind === "panel" && this.visiblePanelPreviewId.get(record.tabId) === record.previewId) {
       // D5: the visible-slot occupant just died — re-point to the most-
@@ -980,6 +1159,21 @@ class PreviewHost implements PreviewHostHandle {
       if (record.destroyed || record.tabId !== tabId) {
         continue;
       }
+      if (record.viewKind === "dom-md") {
+        // dom-md keeps no console ring in M1 (nothing runs script) — empty, honest.
+        out.push({
+          previewId: record.previewId,
+          url: record.url,
+          sourcePath: record.sourcePath,
+          status: record.status,
+          title: record.title,
+          consoleCount: 0,
+          dropped: 0,
+          container: record.containerKind,
+          viewKind: "dom-md",
+        });
+        continue;
+      }
       out.push({
         previewId: record.previewId,
         url: record.url,
@@ -989,6 +1183,7 @@ class PreviewHost implements PreviewHostHandle {
         consoleCount: record.consoleRing.length,
         dropped: record.consoleDropped,
         container: record.containerKind,
+        viewKind: "web",
       });
     }
     return out;
@@ -1002,6 +1197,10 @@ class PreviewHost implements PreviewHostHandle {
     const record = this.previews.get(previewId);
     if (record === undefined || record.destroyed || record.tabId !== tabId) {
       return { error: `no such preview: ${previewId}` };
+    }
+    if (record.viewKind === "dom-md") {
+      // Nothing runs script in a dom-md preview — an honest empty console, not a refusal.
+      return { entries: [], dropped: 0 };
     }
     const entries = tail !== undefined && tail > 0 ? record.consoleRing.slice(-tail) : [...record.consoleRing];
     return { entries, dropped: record.consoleDropped };
@@ -1057,6 +1256,8 @@ class PreviewHost implements PreviewHostHandle {
         ...(record.sourcePath !== undefined ? { sourcePath: record.sourcePath } : {}),
         status: record.status,
         container: record.containerKind,
+        viewKind: record.viewKind,
+        ...(record.viewKind === "dom-md" ? { docVersion: record.docVersion } : {}),
       });
     }
     return {
@@ -1088,6 +1289,19 @@ class PreviewHost implements PreviewHostHandle {
     const record = this.previews.get(previewId);
     if (record === undefined || record.destroyed || record.tabId !== tabId) {
       return { ok: false, error: `no such preview: ${previewId}` };
+    }
+
+    if (record.viewKind === "dom-md") {
+      // M1 interim (CUT.md Gap 3): every dom-md record already lives in the
+      // panel (forced at open time) — "panel" is always the current
+      // container (zero-churn select, mirrors the web branch below);
+      // "window" is honestly refused until M3 wires the second renderer
+      // window, rather than silently no-opping or crashing.
+      if (container === "window") {
+        return { ok: false, error: "markdown window container lands in M3" };
+      }
+      const result = this.selectPanelPreview(tabId, previewId);
+      return result.ok ? { ok: true, reloaded: false } : { ok: false, error: result.error ?? "failed to select preview" };
     }
 
     if (record.containerKind === container) {
@@ -1205,7 +1419,11 @@ class PreviewHost implements PreviewHostHandle {
   private applyPanel(): void {
     const boundsOk = this.panelBounds !== null && this.panelBounds.width > 0 && this.panelBounds.height > 0;
     for (const record of this.previews.values()) {
-      if (record.destroyed || record.containerKind !== "panel" || record.panelView === undefined) {
+      // dom-md panel records have NO panelView (CUT.md CONTRACTS) — the
+      // `viewKind !== "web"` clause is what makes that true for the type
+      // checker too (TS narrows `record.panelView` through it); the
+      // reconciler logic itself is otherwise untouched from pre-M1.
+      if (record.destroyed || record.containerKind !== "panel" || record.viewKind !== "web" || record.panelView === undefined) {
         continue;
       }
       const isVisibleSlot = this.visiblePanelPreviewId.get(record.tabId) === record.previewId;
@@ -1244,15 +1462,16 @@ class PreviewHost implements PreviewHostHandle {
 
   // ── internals ──
 
-  private newRecord(
+  private newWebRecord(
     tabId: string,
     previewId: string,
     window: PreviewWindowLike,
     containerKind: "window" | "panel",
     panelView?: PreviewPanelViewLike,
-  ): PreviewRecord {
+  ): WebPreviewRecord {
     const now = this.now();
     return {
+      viewKind: "web",
       previewId,
       tabId,
       window,
@@ -1272,6 +1491,46 @@ class PreviewHost implements PreviewHostHandle {
       lastOpenedAt: now,
       settleWaiters: [],
       destroyed: false,
+    };
+  }
+
+  /** M1 (TASK.99): brand-new dom-md record — always `containerKind:"panel"` (Gap 3 interim), `status:"ready"` (resolution already succeeded by the time this is called). */
+  private newMdRecord(tabId: string, previewId: string, sourcePath: string, realSourcePath: string): MdDomPreviewRecord {
+    const now = this.now();
+    return {
+      viewKind: "dom-md",
+      previewId,
+      tabId,
+      containerKind: "panel",
+      status: "ready",
+      url: pathToFileURL(realSourcePath).href,
+      sourcePath,
+      realSourcePath,
+      docDir: dirname(realSourcePath),
+      renderedFrom: sourcePath,
+      title: basename(sourcePath),
+      docVersion: 0,
+      createdAt: now,
+      lastOpenedAt: now,
+      destroyed: false,
+    };
+  }
+
+  // ── md doc identity lookup (M1: md-doc.ts's read handler closes over this) ──
+
+  getMdDocRef(
+    tabId: string,
+    previewId: string,
+  ): { sourcePath: string; realSourcePath: string; docDir: string; docVersion: number } | undefined {
+    const record = this.previews.get(previewId);
+    if (record === undefined || record.destroyed || record.tabId !== tabId || record.viewKind !== "dom-md") {
+      return undefined;
+    }
+    return {
+      sourcePath: record.sourcePath,
+      realSourcePath: record.realSourcePath,
+      docDir: record.docDir,
+      docVersion: record.docVersion,
     };
   }
 
@@ -1304,7 +1563,7 @@ class PreviewHost implements PreviewHostHandle {
     return best;
   }
 
-  private settle(record: PreviewRecord, status: SettleStatus): void {
+  private settle(record: WebPreviewRecord, status: SettleStatus): void {
     if (record.status !== "loading") {
       return; // already settled (e.g. a late did-fail-load after we already marked ready)
     }
@@ -1318,7 +1577,7 @@ class PreviewHost implements PreviewHostHandle {
     this.pushChanged(record.tabId);
   }
 
-  private waitForSettle(record: PreviewRecord, timeoutMs: number): Promise<SettleStatus | "timeout"> {
+  private waitForSettle(record: WebPreviewRecord, timeoutMs: number): Promise<SettleStatus | "timeout"> {
     if (record.status !== "loading") {
       return Promise.resolve(record.status);
     }
@@ -1356,7 +1615,7 @@ class PreviewHost implements PreviewHostHandle {
    * deny-everything policy (or read live `record` fields shared across
    * containers) with no "stale container" hazard to guard against.
    */
-  private wireWindow(record: PreviewRecord): void {
+  private wireWindow(record: WebPreviewRecord): void {
     const container = record.window;
     const wc = container.webContents;
     const guard = <A extends unknown[]>(handler: (...args: A) => void): ((...args: A) => void) =>
@@ -1450,7 +1709,7 @@ class PreviewHost implements PreviewHostHandle {
    * out-of-root file in the window).
    */
   private async evaluateNavigation(
-    record: PreviewRecord,
+    record: WebPreviewRecord,
     navUrl: string,
   ): Promise<{ allow: false } | { allow: true; loadUrl: string }> {
     if (navUrl.startsWith("file:")) {
@@ -1488,7 +1747,7 @@ class PreviewHost implements PreviewHostHandle {
    * target. Synchronous is both required (`preventDefault` must run inside
    * the `will-redirect` event turn) and sufficient for that reason.
    */
-  private evaluateRedirect(record: PreviewRecord, url: string): boolean {
+  private evaluateRedirect(record: WebPreviewRecord, url: string): boolean {
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -1532,7 +1791,7 @@ class PreviewHost implements PreviewHostHandle {
    *   5. Any other scheme (`devtools:`, `chrome:`, …) => deny.
    */
   private async classifyGateRequest(
-    record: PreviewRecord,
+    record: WebPreviewRecord,
     req: { url: string; resourceType: string },
   ): Promise<{ allowed: boolean; dedupeKey: string }> {
     let parsed: URL;
@@ -1584,7 +1843,7 @@ class PreviewHost implements PreviewHostHandle {
    * model). Resolver rejection/throw is answered `deny`, never propagated —
    * this function must never itself reject.
    */
-  private makeRequestGate(record: PreviewRecord): (req: { url: string; resourceType: string }) => Promise<boolean> {
+  private makeRequestGate(record: WebPreviewRecord): (req: { url: string; resourceType: string }) => Promise<boolean> {
     return async (req) => {
       let outcome: { allowed: boolean; dedupeKey: string };
       try {
@@ -1609,7 +1868,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /** Records ONE ring entry per (record, key) — a retry loop cannot flood the ring (cut §1.1 legibility requirement). */
-  private recordDeniedOnce(record: PreviewRecord, key: string, message: string, warnedKeys: Set<string>): void {
+  private recordDeniedOnce(record: WebPreviewRecord, key: string, message: string, warnedKeys: Set<string>): void {
     if (warnedKeys.has(key)) {
       return;
     }
@@ -1623,7 +1882,7 @@ class PreviewHost implements PreviewHostHandle {
 
   // ── console ring + throttled forwarding ──
 
-  private recordConsole(record: PreviewRecord, entry: PreviewConsoleEntry): void {
+  private recordConsole(record: WebPreviewRecord, entry: PreviewConsoleEntry): void {
     record.consoleRing.push(entry);
     if (record.consoleRing.length > RING_MAX_ENTRIES) {
       record.consoleRing.shift();
@@ -1632,7 +1891,7 @@ class PreviewHost implements PreviewHostHandle {
     this.forwardEvent(record, entry);
   }
 
-  private forwardEvent(record: PreviewRecord, entry: PreviewConsoleEntry): void {
+  private forwardEvent(record: WebPreviewRecord, entry: PreviewConsoleEntry): void {
     const now = this.now();
     if (now - record.eventWindowStart >= EVENT_WINDOW_MS) {
       this.flushEventSummary(record);
@@ -1647,7 +1906,7 @@ class PreviewHost implements PreviewHostHandle {
     }
   }
 
-  private flushEventSummary(record: PreviewRecord): void {
+  private flushEventSummary(record: WebPreviewRecord): void {
     if (record.eventSuppressedInWindow > 0) {
       this.deps.postToHost(record.tabId, {
         type: PREVIEW_EVENT_TYPE,

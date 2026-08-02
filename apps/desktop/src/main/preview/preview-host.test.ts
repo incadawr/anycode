@@ -10,9 +10,6 @@
  * the injected clock.
  */
 
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1075,61 +1072,119 @@ describe("PreviewHost — screenshot op", () => {
   });
 });
 
-describe("PreviewHost — markdown: never load plaintext (cut §1(g))", () => {
-  it("refuses honestly when renderMarkdown is absent, without ever calling loadURL", async () => {
+/**
+ * TASK.99 M1 (CUT.md Gap 3 + CONTRACTS): opening a `.md` path no longer runs
+ * the tmpdir renderMarkdown pipeline at all — it creates a `viewKind:"dom-md"`
+ * record synchronously (no window/panelView, no loadURL, no settle wait).
+ * These tests REPLACE the pre-M1 "markdown: never load plaintext" and
+ * "reuse-navigate temp file cleanup" describe blocks (removed below): those
+ * exercised the OLD `.md` -> `renderMarkdown` -> tmpdir-HTML -> loadURL path,
+ * which CUT.md Gap 3 makes UNREACHABLE from M1 on (the pipeline itself is
+ * only deleted in M5 — see markdown-render.ts, untouched). This is a
+ * deliberate, CUT-mandated behavioral change, not a forced-green edit.
+ */
+describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md Gap 3 + CONTRACTS)", () => {
+  it("creates a ready dom-md record synchronously — no window/panelView, no loadURL", async () => {
     const rig = makeRig();
     const result = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
-    expect(result).toEqual({
-      ok: false,
-      error: "markdown preview not available yet",
-      errorKind: "unavailable",
-    });
-    expect(rig.windows[0]!.webContents.loadedUrls).toEqual([]);
-    expect(rig.windows[0]!.destroyed).toBe(true);
-  });
-
-  it("renders via renderMarkdown and loads the returned HTML, tracking renderedFrom", async () => {
-    const rig = makeRig({
-      renderMarkdown: async (realPath) => ({ htmlPath: `${realPath}.rendered.html` }),
-    });
-    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
-    await flush();
-    rig.windows[0]!.webContents.fireDidFinishLoad();
-    const result = await openPromise;
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.renderedFrom).toBe(`${WORKSPACE_ROOT}/doc.md`);
+      expect(result.value.url).toBe(pathToFileURL(`${WORKSPACE_ROOT}/doc.md`).href);
     }
-    expect(rig.windows[0]!.webContents.loadedUrls[0]).toContain(".rendered.html");
+    expect(rig.windows).toHaveLength(0);
+    expect(rig.panelViews).toHaveLength(0);
+    const listed = rig.host.listForPanel(TAB).previews;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ viewKind: "dom-md", status: "ready", container: "panel", docVersion: 0 });
   });
 
-  it("renderMarkdown returning {error} resolves load_failed", async () => {
-    const rig = makeRig({
-      renderMarkdown: async () => ({ error: "sanitize failed" }),
-    });
+  it("never calls renderMarkdown even when the dep is provided (the pipeline is unreachable, not deleted)", async () => {
+    const renderMarkdown = vi.fn(async () => ({ htmlPath: "/tmp/should-not-be-used.html" }));
+    const rig = makeRig({ renderMarkdown });
     const result = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
-    expect(result).toEqual({ ok: false, error: "sanitize failed", errorKind: "load_failed" });
+    expect(result.ok).toBe(true);
+    expect(renderMarkdown).not.toHaveBeenCalled();
   });
 
-  it("unlinks the rendered temp file (best-effort) when the preview is destroyed", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "preview-host-test-"));
-    const htmlPath = join(dir, "rendered.html");
-    await writeFile(htmlPath, "<html></html>");
-
-    const rig = makeRig({
-      renderMarkdown: async () => ({ htmlPath }),
+  it("refuses honestly on containment failure, without creating any record", async () => {
+    const rig = makeRig();
+    const result = await rig.host.openForTab(TAB, { path: "/etc/passwd.md" });
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringContaining("outside_allowed_roots"),
+      errorKind: "invalid_input",
     });
-    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    expect(rig.host.listForPanel(TAB).previews).toHaveLength(0);
+  });
+
+  it("M1 interim (Gap 3): displayMode 'window' is forced to the panel container, with a logged note", async () => {
+    const warn = vi.fn();
+    const rig = makeRig({ logger: { log: vi.fn(), warn, error: vi.fn() } });
+    rig.displayModeValue.value = "window";
+    const result = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    expect(result.ok).toBe(true);
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ container: "panel", viewKind: "dom-md" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("window container lands in M3"));
+  });
+
+  it("reuse-navigate .md -> .md mutates the SAME record in place and bumps docVersion", async () => {
+    const rig = makeRig();
+    const first = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const previewId = first.ok ? first.value.previewId : "";
+
+    const second = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc2.md`, previewId });
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.value.previewId).toBe(previewId);
+      expect(second.value.renderedFrom).toBe(`${WORKSPACE_ROOT}/doc2.md`);
+    }
+    const listed = rig.host.listForPanel(TAB).previews;
+    expect(listed).toHaveLength(1); // same record, not a second one
+    expect(listed[0]).toMatchObject({ previewId, docVersion: 1, sourcePath: `${WORKSPACE_ROOT}/doc2.md` });
+  });
+
+  it("cross-viewKind flip .html -> .md (reuse-navigate): destroys the OLD web container, previewId stays valid", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const openHtml = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
     await flush();
-    rig.windows[0]!.webContents.fireDidFinishLoad();
-    await openPromise;
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const first = await openHtml;
+    const previewId = first.ok ? first.value.previewId : "";
+    expect(rig.panelViews[0]!.destroyed).toBe(false);
 
-    rig.host.closeForTab(TAB);
-    // Cleanup is deliberately fire-and-forget (best-effort) in production —
-    // give the real fs unlink a beat to land instead of only flushing microtasks.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md`, previewId });
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.value.previewId).toBe(previewId);
+    }
+    expect(rig.panelViews[0]!.destroyed).toBe(true); // the old web container is torn down
+    expect(rig.panelViews).toHaveLength(1); // dom-md never creates a container of its own
+    const listed = rig.host.listForPanel(TAB).previews;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ previewId, viewKind: "dom-md" });
+  });
 
-    await expect(readFile(htmlPath)).rejects.toThrow();
+  it("cross-viewKind flip .md -> .html (reuse-navigate): creates a FRESH web container under the SAME previewId", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const first = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const previewId = first.ok ? first.value.previewId : "";
+    expect(rig.panelViews).toHaveLength(0); // dom-md owned no container
+
+    const openHtml = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html`, previewId });
+    await flush();
+    expect(rig.panelViews).toHaveLength(1); // a fresh container was created for the flip
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const second = await openHtml;
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.value.previewId).toBe(previewId);
+    }
+    const listed = rig.host.listForPanel(TAB).previews;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ previewId, viewKind: "web", container: "panel" });
   });
 });
 
@@ -1477,64 +1532,6 @@ describe("PreviewHost — TOCTOU realpath load on navigate (cut §1.5/F8a)", () 
     const expectedLoadUrl = pathToFileURL(realPath).href;
     expect(wc.loadedUrls).toContain(expectedLoadUrl);
     expect(wc.loadedUrls).not.toContain(navUrl);
-  });
-});
-
-describe("PreviewHost — reuse-navigate temp file cleanup (cut §1.5/F8b)", () => {
-  it("reuse-open .md -> .md unlinks the FIRST rendered file, keeps the second alive", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "preview-host-test-"));
-    const firstHtml = join(dir, "first.html");
-    const secondHtml = join(dir, "second.html");
-    await writeFile(firstHtml, "<html>first</html>");
-    await writeFile(secondHtml, "<html>second</html>");
-
-    let call = 0;
-    const rig = makeRig({
-      renderMarkdown: async () => {
-        call += 1;
-        return { htmlPath: call === 1 ? firstHtml : secondHtml };
-      },
-    });
-
-    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
-    await flush();
-    rig.windows[0]!.webContents.fireDidFinishLoad();
-    const opened = await first;
-    const previewId = opened.ok ? opened.value.previewId : "";
-
-    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc2.md`, previewId });
-    await flush();
-    rig.windows[0]!.webContents.fireDidFinishLoad();
-    await second;
-    // Cleanup is fire-and-forget best-effort — give the real fs unlink a beat to land.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    await expect(readFile(firstHtml)).rejects.toThrow();
-    await expect(readFile(secondHtml)).resolves.toBeDefined();
-  });
-
-  it("reuse-open .md -> .html unlinks the rendered file", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "preview-host-test-"));
-    const renderedHtml = join(dir, "rendered.html");
-    await writeFile(renderedHtml, "<html>rendered</html>");
-
-    const rig = makeRig({
-      renderMarkdown: async () => ({ htmlPath: renderedHtml }),
-    });
-
-    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
-    await flush();
-    rig.windows[0]!.webContents.fireDidFinishLoad();
-    const opened = await first;
-    const previewId = opened.ok ? opened.value.previewId : "";
-
-    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/plain.html`, previewId });
-    await flush();
-    rig.windows[0]!.webContents.fireDidFinishLoad();
-    await second;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    await expect(readFile(renderedHtml)).rejects.toThrow();
   });
 });
 
