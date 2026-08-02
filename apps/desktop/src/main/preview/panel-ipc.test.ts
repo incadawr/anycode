@@ -66,6 +66,10 @@ function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
     setContainer: vi.fn(async () => ({ ok: true as const, reloaded: true })),
     getMdDocRef: vi.fn(() => undefined),
+    // TASK.99 M2: type-level fake addition only — this suite exercises the
+    // panel IPC, not md-doc navigate (covered by preview-host.test.ts's own
+    // "commitMdNavigate" suite).
+    commitMdNavigate: vi.fn(() => undefined),
     ...overrides,
   };
 }
