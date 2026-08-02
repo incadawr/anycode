@@ -65,6 +65,7 @@ function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle
     closePreview: vi.fn(() => ({ ok: true as const })),
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
     setContainer: vi.fn(async () => ({ ok: true as const, reloaded: true })),
+    getMdDocRef: vi.fn(() => undefined),
     ...overrides,
   };
 }
