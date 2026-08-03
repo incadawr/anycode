@@ -131,6 +131,16 @@ export function Gear(props: IconProps) {
   );
 }
 
+/** Refresh — circular arrow, reload/refetch affordance (arc + arrowhead, History's shape without the clock hands — same circular-motion visual language). */
+export function Refresh(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M13.25 8A5.25 5.25 0 1 1 8.75 2.77" />
+      <path d="M13.25 4.25v2.5h-2.5" />
+    </Icon>
+  );
+}
+
 /** X — close. */
 export function X(props: IconProps) {
   return (
