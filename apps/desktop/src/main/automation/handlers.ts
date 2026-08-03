@@ -102,19 +102,6 @@ export interface HandlerDeps {
    * throwing, so no pre-96-E test needs updating.
    */
   previewHost?: PreviewHostHandle;
-  /**
-   * TASK.99 M3 SPIKE-ONLY (removed once this slice's real container-transfer
-   * route supersedes it): mechanical proof that a second BrowserWindow
-   * loading the SAME renderer bundle under `?view=md-preview` actually boots
-   * — main/index.ts's `spikeVerifyMdPreviewWindow`.
-   */
-  mdPreviewSpikeVerify?: (opts: { previewId: string; tabId: string }) => Promise<{
-    textContent: string;
-    theme: string;
-    capturedWidth: number;
-    capturedHeight: number;
-    capturedEmpty: boolean;
-  }>;
 }
 
 /* */
@@ -308,18 +295,6 @@ export async function previewOpen(
     return PREVIEW_HOST_UNAVAILABLE;
   }
   return deps.previewHost.openForTab(tabId, { path: req.path, url: req.url });
-}
-
-/** `POST /dev/md-preview-spike {previewId, tabId}`: TASK.99 M3 SPIKE-ONLY verification route — see `HandlerDeps.mdPreviewSpikeVerify`'s own doc comment. */
-export async function previewMdSpikeVerify(
-  deps: HandlerDeps,
-  req: { previewId: string; tabId: string },
-): Promise<{ ok: true; textContent: string; theme: string; capturedWidth: number; capturedHeight: number; capturedEmpty: boolean } | { ok: false; error: string }> {
-  if (deps.mdPreviewSpikeVerify === undefined) {
-    return { ok: false, error: "spike verify unavailable" };
-  }
-  const result = await deps.mdPreviewSpikeVerify(req);
-  return { ok: true, ...result };
 }
 
 /**

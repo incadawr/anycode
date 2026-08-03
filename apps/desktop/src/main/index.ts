@@ -21,7 +21,7 @@
  *  - Tab control plane: registerTabIpc (main/tab-ipc.ts) wires create/close/list.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -499,53 +499,6 @@ function loadMdPreviewWindow(win: BrowserWindow, opts: { previewId: string; tabI
   } else {
     void win.loadFile(resolveRendererIndex(), { query });
   }
-}
-
-/**
- * TASK.99 M3 SPIKE-ONLY (CUT.md M3 scope item 1 — removed once this slice's
- * real live round-trip verification via the container-transfer automation
- * route supersedes it): mechanical, dev-only proof that a second
- * BrowserWindow loading the SAME renderer bundle under `?view=md-preview`
- * actually boots — the spike's own risk register concern (preload under a
- * second window, packaged loadFile+query, theme boot). Bypasses
- * createMdPreviewWindow/PreviewHostDeps entirely (this predates "transfer
- * wiring") — builds a raw BrowserWindow with the SAME webPreferences GAP 1
- * mandates, awaits did-finish-load, then reads back proof of a correct boot
- * via `executeJavaScript` (the mounted MdPreviewWindowApp's placeholder text
- * + the resolved `data-theme`) and a non-empty `capturePage`.
- */
-async function spikeVerifyMdPreviewWindow(opts: {
-  previewId: string;
-  tabId: string;
-}): Promise<{ textContent: string; theme: string; capturedWidth: number; capturedHeight: number; capturedEmpty: boolean }> {
-  const win = new BrowserWindow({
-    width: 640,
-    height: 480,
-    show: false,
-    webPreferences: {
-      preload: resolvePreloadPath(),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-    },
-  });
-  await new Promise<void>((resolve) => {
-    win.webContents.once("did-finish-load", () => resolve());
-    loadMdPreviewWindow(win, opts);
-  });
-  const textContent = String(await win.webContents.executeJavaScript("document.body.textContent"));
-  const theme = String(await win.webContents.executeJavaScript("document.documentElement.getAttribute('data-theme')"));
-  const image = await win.webContents.capturePage();
-  const size = image.getSize();
-  const result = {
-    textContent,
-    theme,
-    capturedWidth: size.width,
-    capturedHeight: size.height,
-    capturedEmpty: image.isEmpty(),
-  };
-  win.destroy();
-  return result;
 }
 
 /** DB path: ANYCODE_DB_PATH env -> ~/.anycode/anycode.sqlite (same default as host/CLI). */
@@ -1181,28 +1134,6 @@ void app.whenReady().then(async () => {
     if (!devIcon.isEmpty()) app.dock?.setIcon(devIcon);
   }
 
-  // TASK.99 M3 SPIKE-ONLY, PACKAGED-VERIFICATION HARNESS (removed before this
-  // slice's main commit): runs FIRST, before vault/provider boot (which can
-  // block on an interactive macOS Keychain trust prompt for a freshly
-  // ad-hoc-signed binary, unrelated to this feature) — writes the JSON
-  // result to `ANYCODE_MD_SPIKE_VERIFY_OUT` when set, then quits. Inert
-  // (this whole block never runs) unless that env var is explicitly set.
-  if (process.env.ANYCODE_MD_SPIKE_VERIFY_OUT) {
-    const outPath = process.env.ANYCODE_MD_SPIKE_VERIFY_OUT;
-    spikeVerifyMdPreviewWindow({ previewId: "packaged-spike-preview", tabId: "packaged-spike-tab" })
-      .then((result) => {
-        writeFileSync(outPath, JSON.stringify(result));
-      })
-      .catch((error: unknown) => {
-        writeFileSync(outPath, JSON.stringify({ error: String(error) }));
-      })
-      .finally(() => {
-        app.quit();
-      });
-    return;
-  }
-
-
   // boot-env snapshot BEFORE anything spawns, then scrub the secret keys from the
 
   // respawn key-rotation are preserved, but a Bash child spawned by main can no
@@ -1367,6 +1298,10 @@ void app.whenReady().then(async () => {
     // half — a real WebContentsView attached to the SAME main window,
     // byte-identical frozen webPreferences/partition scheme (D2/D3).
     createPanelView: (opts) => createElectronPanelView(opts, { getWindow: () => win }),
+    // TASK.99 M3 (CUT.md GAP 1/CONTRACTS): the md-preview window container —
+    // SAME preload path as the main window (resolvePreloadPath()), dev/
+    // packaged URL construction closed over via loadMdPreviewWindow above.
+    createMdWindow: (opts) => createMdPreviewWindow(opts, { preloadPath: resolvePreloadPath(), loadRenderer: loadMdPreviewWindow }),
     // D4: live read of settings.preview.displayMode, consulted only when
     // openForTab creates a NEW record. Absent -> "panel" (task decision),
     // same absent-default posture as autoOpenEnabled below.
@@ -2032,8 +1967,6 @@ void app.whenReady().then(async () => {
         // PreviewHost handle constructed above — a model-free smoke of 96-A's
         // open/console/screenshot ops over the automation channel.
         previewHost,
-        // TASK.99 M3 SPIKE-ONLY: see spikeVerifyMdPreviewWindow's own doc comment.
-        mdPreviewSpikeVerify: spikeVerifyMdPreviewWindow,
       });
     } catch (error) {
       console.error("[main] automation server failed to start", error);

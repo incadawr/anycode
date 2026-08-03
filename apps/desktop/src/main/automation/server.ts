@@ -142,7 +142,7 @@ import {
   previewConsole,
   previewScreenshot,
   previewOpen,
-  previewMdSpikeVerify,
+  previewSetContainer,
   FacadeThrewError,
   FacadeUnavailableError,
   type AppLike,
@@ -170,8 +170,6 @@ export interface AutomationServerDeps {
   activeConnectionId?: () => string | undefined;
   /** Forwarded to `HandlerDeps.previewHost` (night-track wave-1 cut §2.8, 96-E preview probes/driver). */
   previewHost?: PreviewHostHandle;
-  /** TASK.99 M3 SPIKE-ONLY: forwarded to `HandlerDeps.mdPreviewSpikeVerify` — see its own doc comment (handlers.ts). */
-  mdPreviewSpikeVerify?: HandlerDeps["mdPreviewSpikeVerify"];
 }
 
 export interface AutomationServerHandle {
@@ -465,9 +463,10 @@ const previewOpenBody = z
   })
   .strict();
 
-// TASK.99 M3 SPIKE-ONLY (removed once the main commit's real container route
-// supersedes it): `/dev/md-preview-spike` POST body.
-const mdPreviewSpikeBody = z.object({ previewId: z.string().min(1).max(256), tabId: z.string().min(1).max(256) }).strict();
+// TASK.99 M3 (CUT.md M3 scope item 7): `/tabs/:tabId/previews/:previewId/container`
+// POST body — a model-free driver for D14 transfer, mirroring
+// PREVIEW_SET_CONTAINER_CHANNEL's own zod enum (panel-ipc.ts) verbatim.
+const previewContainerBody = z.object({ target: z.enum(["panel", "window"]) }).strict();
 
 // ── Codex probe bodies (W4-F0, findings S1-1) ──
 // Probe (b): ONE route, a union body — `{open}` toggles the chip popover,
@@ -695,13 +694,13 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "screenshot") {
     return previewScreenshot(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
-  // `POST /dev/md-preview-spike {previewId, tabId}` (TASK.99 M3 SPIKE-ONLY,
-  // removed once the main commit's real container-transfer route supersedes
-  // it): mechanical proof that a second BrowserWindow loading the SAME
-  // renderer bundle under `?view=md-preview` actually boots.
-  if (method === "POST" && pathname === "/dev/md-preview-spike") {
-    const body = parseBody(rawBody, mdPreviewSpikeBody);
-    return previewMdSpikeVerify(deps, body);
+  // `POST /tabs/:tabId/previews/:previewId/container {target}` (TASK.99 M3,
+  // CUT.md M3 scope item 7): D14 transfer driver, same `parts.length === 5`
+  // depth as the console/screenshot GET probes above, needed by M5's smoke
+  // DoD ("open in window -> back") and this slice's own live verification.
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "container") {
+    const body = parseBody(rawBody, previewContainerBody);
+    return previewSetContainer(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!), body.target);
   }
   if (method === "GET" && pathname === "/start-screen") {
     return startScreenState(deps);
@@ -1372,7 +1371,6 @@ export function startAutomationServer(deps: AutomationServerDeps): Promise<Autom
     app: deps.app,
     activeConnectionId: deps.activeConnectionId,
     previewHost: deps.previewHost,
-    mdPreviewSpikeVerify: deps.mdPreviewSpikeVerify,
   };
 
   const server = createServer((req, res) => {

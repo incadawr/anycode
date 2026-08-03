@@ -250,6 +250,15 @@ export interface PreviewHostDeps {
   /** Real `WebContentsView`-backed container (panel-adapter.ts's `createElectronPanelView`), injected the same way `createWindow` is. */
   createPanelView(opts: CreateWindowOpts): PreviewPanelViewLike;
   /**
+   * M3 (TASK.99 CUT.md CONTRACTS): a second real `BrowserWindow` loading the
+   * SAME trusted renderer bundle under a `?view=md-preview` query route
+   * (`main/preview/md-window-adapter.ts`'s `createMdPreviewWindow`) —
+   * renderer-URL/query construction is closed over at the wiring site
+   * (main/index.ts), never here. Used both for a fresh `displayMode:"window"`
+   * open and for a panel->window `setContainer` transfer.
+   */
+  createMdWindow(opts: { previewId: string; tabId: string }): MdPreviewWindowLike;
+  /**
    * Live read of `settings.preview?.displayMode ?? "panel"` (D4), sibling of
    * `autoOpenEnabled` above: consulted ONLY when `openForTab` creates a NEW
    * record — a reuse (`previewId` given) keeps its existing container.
@@ -415,21 +424,22 @@ interface WebPreviewRecord {
 }
 
 /**
- * M1 (TASK.99 CUT.md CONTRACTS): a `.md` preview rendered natively in the
+ * M1/M3 (TASK.99 CUT.md CONTRACTS): a `.md` preview rendered natively in the
  * renderer's own DOM (chat's `Markdown.tsx`, reused) — owns no `PreviewWindowLike`/
  * `PreviewWebContentsLike` at all in a panel container (nothing to secure:
  * there is no executeJavaScript/capturePage surface, no `webContents`,
  * because there is no embedded page). `status` settles SYNCHRONOUSLY at
  * open/navigate (no load to await) — never "loading"/"crashed", so there are
- * no `settleWaiters` either. M1 forces `containerKind` to "panel" always
- * (Gap 3 interim); `mdWindow` stays permanently undefined until M3.
+ * no `settleWaiters` either. M3: `displayMode()` is honored for a fresh
+ * dom-md open exactly like the web path, and `setContainer` transfers both
+ * directions — `mdWindow` is defined iff `containerKind === "window"`.
  */
 interface MdDomPreviewRecord {
   viewKind: "dom-md";
   previewId: string;
   tabId: string;
   containerKind: "panel" | "window";
-  /** Window container only (M3) — NEVER a `PreviewWindowLike`. Always undefined in M1. */
+  /** Window container only (M3) — NEVER a `PreviewWindowLike`. Undefined for a panel-container record. */
   mdWindow?: MdPreviewWindowLike;
   status: "ready" | "failed";
   /** `pathToFileURL(realSourcePath).href` — kept so `PreviewOpenSuccess`/tool shapes stay unchanged across viewKinds. */
@@ -630,6 +640,18 @@ class PreviewHost implements PreviewHostHandle {
       // previewId — either way a fresh Electron container is created; a
       // flip reuses the OLD record's previewId/containerKind (CONTRACTS'
       // "previewId stays valid for the model"), a brand-new one mints both.
+      if (existing !== undefined && existing.viewKind === "dom-md" && existing.mdWindow !== undefined && !existing.mdWindow.isDestroyed()) {
+        // M3: a dom-md record can now own a live mdWindow (it could not in
+        // M1) — tear it down before this flip overwrites the map entry with
+        // a fresh web record below, mirroring openMarkdownTarget's own
+        // symmetric web->md teardown (no orphan windows survive a
+        // cross-viewKind flip either direction).
+        try {
+          existing.mdWindow.destroy();
+        } catch (error) {
+          this.deps.logger.warn(`[preview] failed to destroy old md window for ${existing.previewId} during flip`, error);
+        }
+      }
       const previewId = existing?.previewId ?? randomUUID();
       // D4: displayMode is consulted ONLY for a genuinely brand-new record —
       // a reuse/flip keeps its existing container regardless of a later
@@ -723,16 +745,15 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * M1 (TASK.99 CUT.md Gap 3 + CONTRACTS): a `.md` open/reuse-navigate never
-   * touches `deps.renderMarkdown` or a `PreviewWindowLike` — it settles
-   * SYNCHRONOUSLY once containment resolves, tolerating a cross-viewKind
-   * flip (an existing "web" record gets its Electron container torn down;
-   * an existing "dom-md" record is mutated in place, `docVersion` bumped).
-   * `containerKind` is unconditionally "panel" in M1 (the window container
-   * lands in M3) — a reuse/flip that previously lived in a window, or a
-   * brand-new open under `displayMode:"window"`, is silently pulled into the
-   * panel with a logged note (the honest M1-interim narrowing, not a silent
-   * setting override).
+   * M1/M3 (TASK.99 CUT.md Gap 3 + CONTRACTS): a `.md` open/reuse-navigate
+   * never touches `deps.renderMarkdown` or a `PreviewWindowLike` — it
+   * settles SYNCHRONOUSLY once containment resolves, tolerating a
+   * cross-viewKind flip (an existing "web" record gets its Electron
+   * container torn down; an existing "dom-md" record is mutated in place,
+   * `docVersion` bumped). M3: `displayMode()` is consulted for a brand-new
+   * record exactly like the web path (D4) — a `"window"` pick creates a live
+   * `MdPreviewWindowLike` via `deps.createMdWindow` up front, no forced
+   * panel narrowing.
    */
   private async openMarkdownTarget(
     tabId: string,
@@ -771,21 +792,24 @@ class PreviewHost implements PreviewHostHandle {
         }
       }
       const previewId = existing?.previewId ?? randomUUID();
-      const requestedContainerKind: "window" | "panel" =
+      const containerKind: "window" | "panel" =
         existing?.containerKind ?? (this.deps.displayMode() === "panel" ? "panel" : "window");
-      if (requestedContainerKind === "window") {
-        this.deps.logger.warn(
-          `[preview] markdown preview ${previewId} forced to the panel container — the window container lands in M3`,
-        );
-      }
-      record = this.newMdRecord(tabId, previewId, path, realPath);
+      record = this.newMdRecord(tabId, previewId, path, realPath, containerKind);
       this.previews.set(previewId, record);
+      if (containerKind === "window") {
+        record.mdWindow = this.deps.createMdWindow({ previewId, tabId });
+        this.wireMdWindow(record);
+        record.mdWindow.show();
+      }
     }
 
-    // M1: every dom-md record lives in the panel — bring it to the front the
-    // same way a fresh panel web-open does (D5).
-    this.visiblePanelPreviewId.set(tabId, record.previewId);
-    this.applyPanel();
+    if (record.containerKind === "panel") {
+      // A panel dom-md record is brought to the front the same way a fresh
+      // panel web-open does (D5). A window-container record has no panel
+      // slot to reconcile — its own window already showed itself above.
+      this.visiblePanelPreviewId.set(tabId, record.previewId);
+      this.applyPanel();
+    }
     this.pushChanged(tabId);
 
     return {
@@ -1190,8 +1214,9 @@ class PreviewHost implements PreviewHostHandle {
         });
       }
     } else if (record.mdWindow !== undefined && !record.mdWindow.isDestroyed()) {
-      // M1: always undefined (the window container lands in M3) — this
-      // branch exists so a future `mdWindow` never leaks past M3's wiring.
+      // M3: a window-container dom-md record owns a live mdWindow — torn
+      // down here on every path that reaches destroyRecord (closeForTab,
+      // closeAll, closePreview, and the mdWindow's own guarded onClosed).
       try {
         record.mdWindow.destroy();
       } catch (error) {
@@ -1349,16 +1374,20 @@ class PreviewHost implements PreviewHostHandle {
     }
 
     if (record.viewKind === "dom-md") {
-      // M1 interim (CUT.md Gap 3): every dom-md record already lives in the
-      // panel (forced at open time) — "panel" is always the current
-      // container (zero-churn select, mirrors the web branch below);
-      // "window" is honestly refused until M3 wires the second renderer
-      // window, rather than silently no-opping or crashing.
-      if (container === "window") {
-        return { ok: false, error: "markdown window container lands in M3" };
+      // M3 (CUT.md CONTRACTS): a same-container request is a zero-churn
+      // no-op, byte-mirroring the web record's own same-container branch
+      // below (a "panel" one reuses D5's own select semantics; a "window"
+      // one has nothing to select). A genuine transfer creates/destroys the
+      // `MdPreviewWindowLike` — no navigation-history dance (the window
+      // re-reads on boot), so it settles synchronously, unlike the web path.
+      if (record.containerKind === container) {
+        if (container === "panel") {
+          const result = this.selectPanelPreview(tabId, previewId);
+          return result.ok ? { ok: true, reloaded: false } : { ok: false, error: result.error ?? "failed to select preview" };
+        }
+        return { ok: true, reloaded: false };
       }
-      const result = this.selectPanelPreview(tabId, previewId);
-      return result.ok ? { ok: true, reloaded: false } : { ok: false, error: result.error ?? "failed to select preview" };
+      return this.transferMdContainer(tabId, record, container);
     }
 
     if (record.containerKind === container) {
@@ -1452,6 +1481,61 @@ class PreviewHost implements PreviewHostHandle {
       record.window.show();
     }
 
+    this.pushChanged(tabId);
+    return { ok: true, reloaded: true };
+  }
+
+  /**
+   * M3 (TASK.99 CUT.md CONTRACTS, GAP 1): the dom-md half of D14 transfer —
+   * simpler than the web path's `setContainer` body because a dom-md record
+   * has no `webContents`/navigation history to capture-and-restore and
+   * settles synchronously (no `waitForSettle`). `panel->window` creates the
+   * `MdPreviewWindowLike` up front (mirrors `openMarkdownTarget`'s own
+   * window-open branch) and, if this record held the visible panel slot,
+   * promotes the survivor (D5, mirrors the web path's `wasVisibleSlotHolder`
+   * handling). `window->panel` clears `record.mdWindow` BEFORE destroying
+   * the old window — `wireMdWindow` installs exactly one `onClosed` guard,
+   * and clearing the field first is what makes that guard a no-op for this
+   * expected teardown (mirrors the web path's own swap-before-destroy
+   * order) — then takes the visible panel slot (D5).
+   */
+  private async transferMdContainer(
+    tabId: string,
+    record: MdDomPreviewRecord,
+    container: PreviewContainerKind,
+  ): Promise<PreviewSetContainerResult> {
+    if (container === "window") {
+      const wasVisibleSlotHolder = this.visiblePanelPreviewId.get(tabId) === record.previewId;
+      record.mdWindow = this.deps.createMdWindow({ previewId: record.previewId, tabId });
+      record.containerKind = "window";
+      this.wireMdWindow(record);
+      if (wasVisibleSlotHolder) {
+        this.promoteMostRecentPanelSurvivor(tabId);
+      }
+      this.applyPanel();
+      record.mdWindow.show();
+      this.pushChanged(tabId);
+      return { ok: true, reloaded: true };
+    }
+
+    // window -> panel: clear the field BEFORE destroying the old window so
+    // its guarded onClosed (wireMdWindow) sees a mismatched container and
+    // no-ops instead of re-entering destroyRecord for a record that is very
+    // much still alive (mirrors the web path's swap-before-destroy order).
+    const oldWindow = record.mdWindow;
+    record.mdWindow = undefined;
+    record.containerKind = "panel";
+    if (oldWindow !== undefined && !oldWindow.isDestroyed()) {
+      try {
+        oldWindow.destroy();
+      } catch (error) {
+        this.deps.logger.warn(`[preview] failed to destroy md window for ${record.previewId} during transfer`, error);
+      }
+    }
+    // D5: a freshly transferred-in panel preview becomes the visible slot
+    // (mirrors the web path's own container === "panel" branch).
+    this.visiblePanelPreviewId.set(tabId, record.previewId);
+    this.applyPanel();
     this.pushChanged(tabId);
     return { ok: true, reloaded: true };
   }
@@ -1551,14 +1635,20 @@ class PreviewHost implements PreviewHostHandle {
     };
   }
 
-  /** M1 (TASK.99): brand-new dom-md record — always `containerKind:"panel"` (Gap 3 interim), `status:"ready"` (resolution already succeeded by the time this is called). */
-  private newMdRecord(tabId: string, previewId: string, sourcePath: string, realSourcePath: string): MdDomPreviewRecord {
+  /** M1/M3 (TASK.99): brand-new dom-md record, `status:"ready"` (resolution already succeeded by the time this is called). `mdWindow` is set by the caller right after construction when `containerKind === "window"` (mirrors `newWebRecord`'s caller-populates-the-container-handle shape). */
+  private newMdRecord(
+    tabId: string,
+    previewId: string,
+    sourcePath: string,
+    realSourcePath: string,
+    containerKind: "panel" | "window",
+  ): MdDomPreviewRecord {
     const now = this.now();
     return {
       viewKind: "dom-md",
       previewId,
       tabId,
-      containerKind: "panel",
+      containerKind,
       status: "ready",
       url: pathToFileURL(realSourcePath).href,
       sourcePath,
@@ -1781,6 +1871,45 @@ class PreviewHost implements PreviewHostHandle {
     // never sees, and every redirect hop besides.
     wc.setRequestGate(this.makeRequestGate(record));
     container.onClosed(guard(() => {
+      this.destroyRecord(record);
+      this.previews.delete(record.previewId);
+    }));
+  }
+
+  /**
+   * M3 (TASK.99): the dom-md analogue of `guardContainerEpoch` — same
+   * "only run while this container is still the record's current one"
+   * semantics, narrowed to `MdDomPreviewRecord`/`MdPreviewWindowLike` (a
+   * dom-md record has exactly one listener to guard, `onClosed`, so this
+   * stays its own small helper rather than a generic shared with the web
+   * path's wider listener set).
+   */
+  private guardMdWindowEpoch(record: MdDomPreviewRecord, container: MdPreviewWindowLike, handler: () => void): () => void {
+    return () => {
+      if (record.mdWindow !== container) {
+        return;
+      }
+      handler();
+    };
+  }
+
+  /**
+   * M3 (TASK.99 CUT.md CONTRACTS): wires a freshly-created `mdWindow`'s ONE
+   * listener — a native/user-initiated close (red-x, Cmd+W, `window.close()`
+   * from the renderer's own header Close button) destroys the record,
+   * mirroring `wireWindow`'s own `onClosed`-driven cleanup for a web record
+   * exactly (CUT.md M3 scope item 6: "close destroys the preview, matching
+   * the web window path's onClosed semantics"). Epoch-guarded so a transfer
+   * (`transferMdContainer`) that has already swapped/cleared `record.mdWindow`
+   * never lets a late close event from the OLD window re-enter destroyRecord
+   * for a record that has moved on.
+   */
+  private wireMdWindow(record: MdDomPreviewRecord): void {
+    const container = record.mdWindow;
+    if (container === undefined) {
+      return;
+    }
+    container.onClosed(this.guardMdWindowEpoch(record, container, () => {
       this.destroyRecord(record);
       this.previews.delete(record.previewId);
     }));
