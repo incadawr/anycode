@@ -394,8 +394,14 @@ body {
 
 /* ── native DOM markdown preview (TASK.99 M1, CUT.md CONTRACTS) ──
    Renders inside .preview-panel-body when the visible preview's
-   viewKind is "dom-md" — minimal chrome consistent with the panel's own
-   header styles above; the document body scrolls independently. */
+   viewKind is "dom-md", AND as the whole content of the standalone
+   md-preview window (M3). Owner smoke-test fix (two-header defect + window
+   titlebar polish): this is the ONE header row for BOTH containers now —
+   `.md-preview-view-title` (panel: PreviewPanel's own title; window:
+   `mdWindowTitle(sourcePath)`) carries `flex:1`, so it grows to fill the
+   row and clusters the picker/mode-toggle/icon-button actions together at
+   the right edge instead of stranding Close alone out past a big gap (the
+   owner's "group the actions coherently" note). */
 .md-preview-view {
   position: absolute;
   inset: 0;
@@ -413,6 +419,17 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.md-preview-view-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+}
+
 .md-preview-view-mode-toggle {
   display: inline-flex;
   gap: 1px;
@@ -420,6 +437,7 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
+  flex-shrink: 0;
 }
 
 .md-preview-mode-btn {
@@ -437,37 +455,27 @@ body {
   background: var(--bg-hover);
 }
 
-.md-preview-action-btn {
+/* Reload / Reveal in folder / the transfer action (Open in window <->
+   Move to panel) / Close — all four are plain icon buttons (owner
+   smoke-test fix: text pills read as duplicated, noisy chrome once this
+   row also carries the title/picker folded down from PreviewPanel.tsx),
+   same visual language as .git-panel-close/.lsp-panel-close. */
+.md-preview-icon-btn {
   flex-shrink: 0;
-  padding: var(--sp-1) var(--sp-2);
-  color: var(--text-2);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.md-preview-action-btn:hover {
-  color: var(--text-1);
-  background: var(--bg-hover);
-}
-
-.md-preview-view-close {
-  flex-shrink: 0;
-  margin-left: auto;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: var(--sp-1);
   color: var(--text-2);
   background: transparent;
   border: none;
+  border-radius: var(--r-sm);
   cursor: pointer;
 }
 
-.md-preview-view-close:hover {
+.md-preview-icon-btn:hover {
   color: var(--text-1);
+  background: var(--bg-hover);
 }
 
 .md-preview-view-body {

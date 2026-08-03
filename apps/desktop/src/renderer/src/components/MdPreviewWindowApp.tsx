@@ -42,6 +42,18 @@
  * instantly — `onOpenMdLink` dispatches `NAVIGATE_OK` directly from the
  * NAVIGATE invoke's own return value, independent of any push (see
  * MarkdownPreviewView.tsx's own doc comment).
+ *
+ * Owner smoke-test fix (window titlebar showing generic "AnyCode"): the
+ * native titlebar was reading index.html's static `<title>AnyCode</title>` —
+ * Electron syncs a `BrowserWindow`'s title to `document.title` on page load,
+ * overriding the adapter's initial `"Markdown Preview"` option
+ * (main/preview/md-window-adapter.ts, a main-process file this fix does not
+ * touch) — and this window never set `document.title` itself. The effect
+ * below does, keyed on `sourcePath` once it resolves (`mdWindowTitle`,
+ * md-view-state.ts, a pure basename derivation with a generic fallback
+ * before `sourcePath` has hydrated); the SAME string is also handed to
+ * `MarkdownPreviewView` as `title` so its own in-header title span and the
+ * OS titlebar always agree.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
@@ -49,7 +61,7 @@ import { createDesktopStore } from "../store.js";
 import { TabContext } from "../tab-context.js";
 import { useSettingsStore } from "../settings-store.js";
 import { applyThemePreference } from "../theme.js";
-import { findPreviewSourcePath, parseMdWindowTarget } from "../preview/md-view-state.js";
+import { findPreviewSourcePath, mdWindowTitle, parseMdWindowTarget } from "../preview/md-view-state.js";
 import { MarkdownPreviewView } from "./MarkdownPreviewView.js";
 
 /** Constant refetch key (see module doc's PREVIEW_CHANGED-push decision) — this window never receives a pushed docVersion bump, so `MarkdownPreviewView`'s fetch effect runs once, at mount. */
@@ -90,6 +102,13 @@ export function MdPreviewWindowApp() {
     };
   }, [target]);
 
+  // Owner smoke-test fix: keeps the OS titlebar in sync with `sourcePath` as
+  // it hydrates (boot-time "Markdown Preview" fallback -> the real file
+  // name) — see this module's own doc comment for why this is needed at all.
+  useEffect(() => {
+    document.title = mdWindowTitle(sourcePath);
+  }, [sourcePath]);
+
   if (target === null) {
     return <div className="md-preview-window-empty">No preview target — this window was opened without a valid tabId/previewId.</div>;
   }
@@ -117,6 +136,7 @@ export function MdPreviewWindowApp() {
         docVersion={WINDOW_DOC_VERSION}
         onClose={handleClose}
         onTransfer={handleTransfer}
+        title={mdWindowTitle(sourcePath)}
       />
     </TabContext.Provider>
   );

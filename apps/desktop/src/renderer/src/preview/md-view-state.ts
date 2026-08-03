@@ -118,6 +118,53 @@ export function findPreviewSourcePath(previews: readonly { previewId: string; so
 }
 
 /**
+ * Owner smoke-test fix (two-header defect, panel + window unification): the
+ * one control whose label/icon genuinely depends on WHICH container this
+ * view is mounted in — panel pops the doc OUT into its own window, window
+ * docks it back IN to the panel, so the action is always the opposite of the
+ * current container. Pulled out as a pure function per this module's own
+ * "decision logic lives here, not in the component" discipline — the
+ * component only picks an icon (Maximize for "window", Restore for "panel")
+ * off `target`, never re-derives the container-dependent copy itself.
+ */
+export type MdViewContainer = "panel" | "window";
+
+export interface MdViewTransferControl {
+  /** The container the action would move the preview INTO. */
+  target: MdViewContainer;
+  label: string;
+}
+
+export function transferControlForContainer(container: MdViewContainer): MdViewTransferControl {
+  return container === "panel" ? { target: "window", label: "Open in window" } : { target: "panel", label: "Move to panel" };
+}
+
+/**
+ * Owner smoke-test fix (md-preview WINDOW titlebar): the window's native
+ * titlebar was reading the generic static `<title>AnyCode</title>` from
+ * index.html (Electron syncs a `BrowserWindow`'s title to `document.title`
+ * on page load, overriding the adapter's initial `"Markdown Preview"` option
+ * — main/preview/md-window-adapter.ts, not touched by this fix) — the
+ * window never SET `document.title` itself. `MdPreviewWindowApp.tsx` calls
+ * this in an effect keyed on `sourcePath` and assigns the result straight to
+ * `document.title`; the SAME string also fills this component's own
+ * in-header title span so the titlebar and the header row always agree.
+ * Same basename rule as Sidebar.tsx/SessionHeader.tsx/MessageList.tsx's own
+ * private `basename` twins (design §2.3/§2.4) — duplicated here rather than
+ * imported since none of those modules export it, and this one additionally
+ * needs a non-empty fallback for the boot window before `previewPanel.list`
+ * has resolved `sourcePath` (MdPreviewWindowApp.tsx starts it at `""`).
+ */
+export function mdWindowTitle(sourcePath: string): string {
+  if (sourcePath === "") {
+    return "Markdown Preview";
+  }
+  const trimmed = sourcePath.replace(/[/\\]+$/, "");
+  const segments = trimmed.split(/[/\\]/);
+  return segments[segments.length - 1] || sourcePath;
+}
+
+/**
  * Same projection as `eventForReadResult`, for a NAVIGATE result (M2): a
  * refusal reuses the identical `mdReadFailureMessage` mapping and surfaces
  * on the SAME inline error banner a failed read/reload already uses — no

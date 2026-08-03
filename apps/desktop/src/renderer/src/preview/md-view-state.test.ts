@@ -6,9 +6,11 @@ import {
   initialMdViewState,
   mdReadFailureMessage,
   mdViewReducer,
+  mdWindowTitle,
   parseMdWindowTarget,
   shouldRefetchOnDocVersionChange,
   stripLeadingFrontmatter,
+  transferControlForContainer,
   type MdViewState,
 } from "./md-view-state.js";
 import type { MdDocPayload, MdDocReadResult } from "../../../shared/md-preview.js";
@@ -195,6 +197,38 @@ describe("findPreviewSourcePath (TASK.99 M3)", () => {
   });
 });
 
+
+describe("transferControlForContainer (owner smoke-test fix: unified header)", () => {
+  it("panel -> targets window, labeled \"Open in window\"", () => {
+    expect(transferControlForContainer("panel")).toEqual({ target: "window", label: "Open in window" });
+  });
+
+  it("window -> targets panel, labeled \"Move to panel\"", () => {
+    expect(transferControlForContainer("window")).toEqual({ target: "panel", label: "Move to panel" });
+  });
+});
+
+describe("mdWindowTitle (owner smoke-test fix: window titlebar)", () => {
+  it("empty sourcePath (boot, before previewPanel.list resolves) -> generic fallback", () => {
+    expect(mdWindowTitle("")).toBe("Markdown Preview");
+  });
+
+  it("plain filename -> itself", () => {
+    expect(mdWindowTitle("presentation.md")).toBe("presentation.md");
+  });
+
+  it("forward-slash path -> basename only", () => {
+    expect(mdWindowTitle("/workspace/docs/presentation.md")).toBe("presentation.md");
+  });
+
+  it("backslash (Windows) path -> basename only", () => {
+    expect(mdWindowTitle("C:\\workspace\\docs\\presentation.md")).toBe("presentation.md");
+  });
+
+  it("trailing slash tolerated (falls back to the segment before it)", () => {
+    expect(mdWindowTitle("/workspace/docs/")).toBe("docs");
+  });
+});
 
 describe("stripLeadingFrontmatter", () => {
   it("removes a Marp/Jekyll frontmatter block with a multi-line `style: |` value, body intact", () => {

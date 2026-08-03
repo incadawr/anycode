@@ -2,23 +2,36 @@
  * Native DOM markdown preview view (TASK.99 CUT.md CONTRACTS — M1 shipped
  * READ/panel chrome, M2 adds md->md link navigation + doc-relative images,
  * M3 adds the window container) — a THIN, logic-free shell: every stateful
- * decision (phase/mode transitions, failure copy, docVersion reconciliation)
- * lives in the pure `md-view-state.ts` reducer/helpers (RISK REGISTER §5 —
- * vitest collects only `*.test.ts`, node env, no jsdom, so this component
- * itself is untested and MUST stay simple enough not to need it). Reuses the
- * chat `Markdown` component without a fork: `MdDocContext` is provided ONLY
- * around the rendered doc below, docDir-scoped to the CURRENT doc — chat call
- * sites (ToolCallCard.tsx, PermissionModal.tsx, MessageList.tsx) never see
- * it, so their rendering stays byte-identical (risk register #6).
+ * decision (phase/mode transitions, failure copy, docVersion reconciliation,
+ * the container-dependent transfer control) lives in the pure
+ * `md-view-state.ts` reducer/helpers (RISK REGISTER §5 — vitest collects
+ * only `*.test.ts`, node env, no jsdom, so this component itself is untested
+ * and MUST stay simple enough not to need it). Reuses the chat `Markdown`
+ * component without a fork: `MdDocContext` is provided ONLY around the
+ * rendered doc below, docDir-scoped to the CURRENT doc — chat call sites
+ * (ToolCallCard.tsx, PermissionModal.tsx, MessageList.tsx) never see it, so
+ * their rendering stays byte-identical (risk register #6).
  *
  * ONE implementation, container-independent (CUT.md GAP 1's stated UX
  * constraint): rendered inside PreviewPanel.tsx's `preview-panel-body` slot
  * when the visible panel preview has `viewKind === "dom-md"`, AND as the
- * whole content of the md-preview WINDOW (MdPreviewWindowApp.tsx, M3) — this
- * component owns its OWN header for markdown-specific actions (Rendered/
- * Source, Reload, Reveal, Open in window / Move to panel) that the panel's
- * generic outer chrome (title/picker/close) has no room for, and the window
- * has none of at all.
+ * whole content of the md-preview WINDOW (MdPreviewWindowApp.tsx, M3).
+ *
+ * Owner smoke-test fix (two-header defect): this component now owns the
+ * ONE AND ONLY header row for BOTH containers — PreviewPanel.tsx no longer
+ * renders its own `.preview-panel-header` for a `dom-md` visible preview
+ * (it still does for a web preview, unchanged). The panel folds its title
+ * text and preview-picker `<select>` (still built/owned by PreviewPanel —
+ * `selectPreview`/`panelPreviews` never move here) down through the
+ * optional `title`/`picker` props below; the window computes its own
+ * `title` from `sourcePath` (`mdWindowTitle`, md-view-state.ts) and has no
+ * picker (a window is always exactly one preview). Every action past the
+ * `Rendered | Source` text toggle — Reload, Reveal in folder, the transfer
+ * action, Close — renders as an icon button (`title`+`aria-label` carry the
+ * same wording the old text button used, so nothing becomes
+ * undiscoverable); `automation.ts` was grepped for all four labels and the
+ * transfer copy and has no probe keyed on any of them, so none needed
+ * updating.
  *
  * Owner smoke-test fix: the Rendered branch below runs the doc's source text
  * through `stripLeadingFrontmatter` (md-view-state.ts) before handing it to
@@ -27,9 +40,9 @@
  * text. Source mode intentionally does NOT strip it — it shows
  * `state.doc.sourceText` completely raw, unedited file content.
  */
-import { useCallback, useEffect, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, type ReactNode } from "react";
 import { Markdown, MdDocContext } from "./Markdown.js";
-import { X } from "./icons.js";
+import { Folder, Maximize, Refresh, Restore, X } from "./icons.js";
 import {
   eventForNavigateResult,
   eventForReadResult,
@@ -37,6 +50,7 @@ import {
   mdViewReducer,
   shouldRefetchOnDocVersionChange,
   stripLeadingFrontmatter,
+  transferControlForContainer,
 } from "../preview/md-view-state.js";
 
 export interface MarkdownPreviewViewProps {
@@ -47,11 +61,15 @@ export interface MarkdownPreviewViewProps {
   /** M1: the READ refetch key. M2: also bumps on a `commitMdNavigate` push — reconciled against the LOCAL doc's own `docVersion` below (see the effect's doc comment) so our own just-applied NAVIGATE_OK is never redundantly re-fetched. */
   docVersion: number;
   onClose(): void;
-  /** "Open in window" — the PARENT owns the actual `previewPanel.setContainer` call and any resulting toast (mirrors the existing web-preview "Open in window" button). */
+  /** "Open in window" / "Move to panel" — the PARENT owns the actual `previewPanel.setContainer` call and any resulting toast (mirrors the existing web-preview "Open in window" button). */
   onTransfer(): void;
+  /** Owner smoke-test fix: the title this component's unified header shows — PreviewPanel.tsx's own preview title in the panel container, `mdWindowTitle(sourcePath)` in the window container (MdPreviewWindowApp.tsx). Always provided by both callers; there is no untitled state. */
+  title: string;
+  /** Owner smoke-test fix, PANEL ONLY: the preview picker `<select>` PreviewPanel.tsx renders when the tab has more than one panel preview — passed through pre-built so `selectPreview`/`panelPreviews` stay owned there. `undefined` with a single panel preview, or in the window container (a window is always exactly one preview, never offers a picker). */
+  picker?: ReactNode;
 }
 
-export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, docVersion, onClose, onTransfer }: MarkdownPreviewViewProps) {
+export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, docVersion, onClose, onTransfer, title, picker }: MarkdownPreviewViewProps) {
   const [state, dispatch] = useReducer(mdViewReducer, initialMdViewState);
 
   useEffect(() => {
@@ -128,9 +146,19 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
     [state.doc?.docDir, onOpenMdLink],
   );
 
+  // Owner smoke-test fix: the ONLY control whose icon/label genuinely
+  // depends on which container this view is mounted in — derived by the
+  // pure `transferControlForContainer` (md-view-state.ts) so this component
+  // stays a thin shell (it just picks an icon off `.target`).
+  const transferControl = transferControlForContainer(container);
+
   return (
     <div className="md-preview-view">
       <div className="md-preview-view-header">
+        <span className="md-preview-view-title" title={title}>
+          {title}
+        </span>
+        {picker}
         <div className="md-preview-view-mode-toggle" role="group" aria-label="View mode">
           <button
             type="button"
@@ -149,26 +177,22 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
             Source
           </button>
         </div>
-        <button type="button" className="md-preview-action-btn" onClick={reload}>
-          Reload
+        <button type="button" className="md-preview-icon-btn" title="Reload" aria-label="Reload" onClick={reload}>
+          <Refresh />
         </button>
-        <button type="button" className="md-preview-action-btn" onClick={reveal}>
-          Reveal in folder
+        <button type="button" className="md-preview-icon-btn" title="Reveal in folder" aria-label="Reveal in folder" onClick={reveal}>
+          <Folder />
         </button>
-        {container === "panel" ? (
-          <button type="button" className="md-preview-action-btn" onClick={onTransfer}>
-            Open in window
-          </button>
-        ) : (
-          // TASK.99 M3 (CUT.md CONTRACTS): the window-container mirror of
-          // "Open in window" above — same `onTransfer` prop, the PARENT
-          // (MdPreviewWindowApp) owns the actual `previewPanel.setContainer`
-          // call, target "panel" this time.
-          <button type="button" className="md-preview-action-btn" onClick={onTransfer}>
-            Move to panel
-          </button>
-        )}
-        <button type="button" className="md-preview-view-close" aria-label="Close preview" onClick={onClose}>
+        <button
+          type="button"
+          className="md-preview-icon-btn"
+          title={transferControl.label}
+          aria-label={transferControl.label}
+          onClick={onTransfer}
+        >
+          {transferControl.target === "window" ? <Maximize /> : <Restore />}
+        </button>
+        <button type="button" className="md-preview-icon-btn" title="Close preview" aria-label="Close preview" onClick={onClose}>
           <X />
         </button>
       </div>
