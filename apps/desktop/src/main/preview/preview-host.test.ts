@@ -17,6 +17,7 @@ import {
   PREVIEW_RESPONSE_TYPE,
   type PreviewConsoleEntry,
   type PreviewEventMessage,
+  type PreviewOp,
   type PreviewResponseMessage,
 } from "../../shared/preview.js";
 import {
@@ -34,6 +35,10 @@ import {
   type PreviewWebContentsLike,
   type PreviewWindowLike,
 } from "./preview-host.js";
+// M4: the single source of truth for the dom-md read cap — imported here so
+// the "too_large" test derives its fixture size from the SAME constant
+// preview-host.ts's `readMarkdownSource` enforces, never a hand-copied number.
+import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
 import type { PreviewChangedPayload, PreviewPanelBounds, PreviewPanelStatePayload } from "../../shared/preview-panel.js";
 
 const TAB = "tab-1";
@@ -321,6 +326,17 @@ interface Rig {
   onPanelViewCreated?: (view: FakePanelView) => void;
   /** Same "fires right after construction" rationale as `onWindowCreated`/`onPanelViewCreated`. */
   onMdWindowCreated?: (win: FakeMdWindow) => void;
+  /**
+   * TASK.99 M4: in-memory dom-md source filesystem, keyed by REALPATH —
+   * `statMdSource`/`readMdSourceNoFollow` read from this map; an absent key
+   * is an honest stat failure (mirrors a deleted/missing file). `sizeOverride`
+   * lets a test simulate `too_large` without allocating a real >2MB buffer.
+   */
+  mdSourceFiles: Map<string, { bytes: Buffer; sizeOverride?: number }>;
+  /** M4: every `captureMainWindowRect` call, in order — asserts the EXACT rect the host passed. */
+  captureMainWindowRectCalls: PreviewPanelBounds[];
+  /** M4: mutable so a test can flip this to `async () => null` (no main window) or a custom image. */
+  captureMainWindowRectImpl: (rect: PreviewPanelBounds) => Promise<PreviewCapturedImage | null>;
 }
 
 /** Default containment fake: anything under `/workspace` resolves; everything else is refused. */
@@ -343,6 +359,8 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
   // describe blocks never touches this and stays the stage-1 window-mode
   // regression suite, byte-untouched.
   const displayModeValue: { value: "panel" | "window" } = { value: "window" };
+  const mdSourceFiles = new Map<string, { bytes: Buffer; sizeOverride?: number }>();
+  const captureMainWindowRectCalls: PreviewPanelBounds[] = [];
   const rig: Rig = {
     host: undefined as unknown as PreviewHostHandle,
     windows,
@@ -354,6 +372,9 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
     autoOpen,
     displayModeValue,
     resolveArtifactImpl: defaultResolveArtifact,
+    mdSourceFiles,
+    captureMainWindowRectCalls,
+    captureMainWindowRectImpl: async () => fakeImage(),
   };
 
   const deps: PreviewHostDeps = {
@@ -380,6 +401,24 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
       changed.push(payload);
     },
     resolveArtifact: (tabId, path) => rig.resolveArtifactImpl(tabId, path),
+    statMdSource: async (realPath) => {
+      const file = mdSourceFiles.get(realPath);
+      if (file === undefined) {
+        return undefined;
+      }
+      return { size: file.sizeOverride ?? file.bytes.length, isFile: true };
+    },
+    readMdSourceNoFollow: async (realPath) => {
+      const file = mdSourceFiles.get(realPath);
+      if (file === undefined) {
+        throw new Error(`ENOENT: ${realPath}`);
+      }
+      return file.bytes;
+    },
+    captureMainWindowRect: async (rect) => {
+      captureMainWindowRectCalls.push(rect);
+      return rig.captureMainWindowRectImpl(rect);
+    },
     autoOpenEnabled: () => autoOpen.enabled,
     postToHost: (tabId, message) => {
       posted.push({ tabId, message });
@@ -1464,10 +1503,12 @@ describe("PreviewHost — commitMdNavigate (TASK.99 M2, CUT.md CONTRACTS)", () =
     return { rig, previewId };
   }
 
-  it("mutates sourcePath/realSourcePath/docDir/title in place, derives url, and bumps docVersion by exactly one", async () => {
+  it("mutates sourcePath/realSourcePath/docDir/title in place, derives url, syncs renderedFrom, and bumps docVersion by exactly one", async () => {
     const { rig, previewId } = await openedMdRig();
     const before = rig.host.listForPanel(TAB).previews[0]!;
     expect(before.docVersion).toBe(0);
+    // Pre-navigate: renderedFrom is still the OPEN-time source (CUT invariant "renderedFrom = sourcePath").
+    expect(rig.host.getMdDocRef(TAB, previewId)).toMatchObject({ renderedFrom: `${WORKSPACE_ROOT}/doc.md` });
 
     const newDocVersion = rig.host.commitMdNavigate(TAB, previewId, {
       sourcePath: `${WORKSPACE_ROOT}/docs/other.md`,
@@ -1486,6 +1527,9 @@ describe("PreviewHost — commitMdNavigate (TASK.99 M2, CUT.md CONTRACTS)", () =
       docVersion: 1,
       url: pathToFileURL(`${WORKSPACE_ROOT}/docs/other.md`).href,
     });
+    // M4 residual: navigate previously left renderedFrom stale at its
+    // open-time value — it must now track the CURRENT source.
+    expect(rig.host.getMdDocRef(TAB, previewId)).toMatchObject({ renderedFrom: `${WORKSPACE_ROOT}/docs/other.md` });
   });
 
   it("bumps lastOpenedAt to the current clock time", async () => {
@@ -2814,5 +2858,305 @@ describe("PreviewHost — setContainer: D14 transfer panel -> window (96-P3)", (
     await transferPromise;
 
     expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(secondId); // untouched
+  });
+});
+
+/**
+ * TASK.99 M4 (CUT.md GAP 2): BrowserRead for a dom-md preview — raw markdown
+ * source (no rendering machinery), honest selector refusal, custody mirrors
+ * md-doc.ts's own MD_PREVIEW_READ handler (fresh containment + size cap +
+ * O_NOFOLLOW read) via the SAME `resolveArtifact`/`statMdSource`/
+ * `readMdSourceNoFollow` deps `main/index.ts` binds to the identical
+ * underlying primitives. Web-record read behavior is UNCHANGED — covered by
+ * the pre-existing "PreviewHost — read op" describe block above, untouched.
+ */
+describe("PreviewHost — markdown: BrowserRead (TASK.99 M4, CUT.md GAP 2)", () => {
+  async function openedMdPanelRig(sourceText = "# Hello\n\nSome *markdown*.\n"): Promise<{ rig: Rig; previewId: string; realPath: string }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const realPath = `${WORKSPACE_ROOT}/doc.md`;
+    rig.mdSourceFiles.set(realPath, { bytes: Buffer.from(sourceText, "utf8") });
+    const opened = await rig.host.openForTab(TAB, { path: realPath });
+    const previewId = opened.ok ? opened.value.previewId : "";
+    return { rig, previewId, realPath };
+  }
+
+  async function readMd(
+    rig: Rig,
+    previewId: string,
+    op: Omit<Extract<PreviewOp, { kind: "read" }>, "kind" | "previewId">,
+  ): Promise<unknown> {
+    await rig.host.handleRequest(TAB, {
+      type: "anycode:preview-request" as const,
+      requestId: "r",
+      op: { kind: "read", previewId, ...op },
+    });
+    const posted = rig.posted.at(-1)!;
+    return posted.message.type === PREVIEW_RESPONSE_TYPE ? posted.message.result : undefined;
+  }
+
+  it("plain read returns the raw markdown source, console:[] consoleDropped:0", async () => {
+    const { rig, previewId } = await openedMdPanelRig("# Hello\n\nSome *markdown*.\n");
+    const result = await readMd(rig, previewId, {});
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        previewId,
+        text: "# Hello\n\nSome *markdown*.\n",
+        console: [],
+        consoleDropped: 0,
+      },
+    });
+  });
+
+  it('format:"html" ALSO returns the raw source (no server-rendered HTML exists for a dom-md preview)', async () => {
+    const { rig, previewId } = await openedMdPanelRig("# H\n");
+    const result = await readMd(rig, previewId, { format: "html" });
+    expect(result).toMatchObject({ ok: true, value: { text: "# H\n" } });
+  });
+
+  it("includeConsole:false omits console fields (same convention as the web branch)", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    const result = await readMd(rig, previewId, { includeConsole: false });
+    expect(result).toMatchObject({ ok: true });
+    const value = (result as { ok: true; value: { console?: unknown } }).value;
+    expect(value.console).toBeUndefined();
+  });
+
+  it("selector present -> invalid_input with the mandated refusal wording, verbatim", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    const result = await readMd(rig, previewId, { selector: ".item" });
+    expect(result).toEqual({
+      ok: false,
+      errorKind: "invalid_input",
+      error: "this is a markdown preview rendered natively; selectors are not supported — read returns the markdown source",
+    });
+  });
+
+  it("waitForSelector present -> the SAME mandated refusal wording, verbatim", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    const result = await readMd(rig, previewId, { waitForSelector: "#ready" });
+    expect(result).toEqual({
+      ok: false,
+      errorKind: "invalid_input",
+      error: "this is a markdown preview rendered natively; selectors are not supported — read returns the markdown source",
+    });
+  });
+
+  it("too-large (over MD_PREVIEW_MAX_SOURCE_BYTES) -> honest 'unavailable' refusal", async () => {
+    const { rig, previewId, realPath } = await openedMdPanelRig();
+    rig.mdSourceFiles.get(realPath)!.sizeOverride = MD_PREVIEW_MAX_SOURCE_BYTES + 1;
+    const result = await readMd(rig, previewId, {});
+    expect(result).toMatchObject({ ok: false, errorKind: "unavailable" });
+  });
+
+  it("deleted file (stat fails since open) -> honest 'load_failed' refusal", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    rig.mdSourceFiles.clear(); // statMdSource now returns undefined — simulates deletion
+    const result = await readMd(rig, previewId, {});
+    expect(result).toMatchObject({ ok: false, errorKind: "load_failed" });
+  });
+
+  it("outside allowed roots since open (moved workspace / symlink swap) -> honest 'invalid_input' refusal", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    rig.resolveArtifactImpl = async () => ({ failure: "outside_allowed_roots" });
+    const result = await readMd(rig, previewId, {});
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+  });
+
+  it("truncates the returned text at READ_RESULT_MAX_CHARS (oversized-but-under-cap source)", async () => {
+    const longText = "x".repeat(READ_RESULT_MAX_CHARS + 50_000);
+    const { rig, previewId } = await openedMdPanelRig(longText);
+    const result = await readMd(rig, previewId, {});
+    expect(result).toMatchObject({ ok: true });
+    const text = (result as { ok: true; value: { text: string } }).value.text;
+    expect(text).toHaveLength(READ_RESULT_MAX_CHARS);
+    expect(text).toBe(longText.slice(0, READ_RESULT_MAX_CHARS));
+  });
+
+  it("re-reads from disk on every call — no cache (mirrors a renderer Reload)", async () => {
+    const { rig, previewId, realPath } = await openedMdPanelRig("version 1");
+    const first = await readMd(rig, previewId, {});
+    expect(first).toMatchObject({ ok: true, value: { text: "version 1" } });
+
+    rig.mdSourceFiles.set(realPath, { bytes: Buffer.from("version 2", "utf8") });
+    const second = await readMd(rig, previewId, {});
+    expect(second).toMatchObject({ ok: true, value: { text: "version 2" } });
+  });
+});
+
+/**
+ * TASK.99 M4 (CUT.md GAP 2): BrowserScreenshot for a dom-md preview.
+ * PANEL leg: `deps.captureMainWindowRect(rect)` gated EXACTLY like
+ * `applyPanel()`'s own visibility predicate, promote-then-unconditional-delay
+ * on a slot handoff (never retry-driven, unlike D18's web-only UVE retry).
+ * WINDOW leg: the record's own `MdPreviewWindowLike` — showInactive +
+ * throttling-off + capturePage, mirroring the web window branch's own
+ * empty-image show()+recapture fallback. Web-record screenshot behavior is
+ * UNCHANGED — covered by the pre-existing "PreviewHost — screenshot op" /
+ * D13 / D18 / F1 describe blocks above, untouched.
+ */
+describe("PreviewHost — markdown: BrowserScreenshot (TASK.99 M4, CUT.md GAP 2)", () => {
+  const MD_FULL_BOUNDS: PreviewPanelBounds = { x: 10, y: 20, width: 300, height: 400 };
+
+  async function openedMdPanelRig(): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const realPath = `${WORKSPACE_ROOT}/doc.md`;
+    rig.mdSourceFiles.set(realPath, { bytes: Buffer.from("# doc", "utf8") });
+    const opened = await rig.host.openForTab(TAB, { path: realPath });
+    const previewId = opened.ok ? opened.value.previewId : "";
+    return { rig, previewId };
+  }
+
+  /** Same record, but the panel gates are all satisfied (mounted, no overlay, active tab, real bounds). */
+  async function openedMdPanelRigVisible(): Promise<{ rig: Rig; previewId: string }> {
+    const { rig, previewId } = await openedMdPanelRig();
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: false });
+    rig.host.setPanelBounds(MD_FULL_BOUNDS);
+    return { rig, previewId };
+  }
+
+  it("visible-slot: captureMainWindowRect called with EXACTLY the host's panelBounds, no delay (no slot change)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rig, previewId } = await openedMdPanelRigVisible();
+      // openForTab already made this record the visible slot occupant (D5) — no promotion needed.
+      const shotPromise = rig.host.screenshotFor(TAB, previewId);
+      await flush();
+      // Proof of "no delay": captureMainWindowRect already ran after mere
+      // microtask flushes, with ZERO fake-timer advance — a promote-driven
+      // sleep(PANEL_SCREENSHOT_RETRY_DELAY_MS) would still be pending here.
+      expect(rig.captureMainWindowRectCalls).toEqual([MD_FULL_BOUNDS]);
+      const shot = await shotPromise;
+      expect(shot).toMatchObject({ ok: true, value: { previewId, mediaType: "image/png" } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hidden-but-promotable: slot change -> unconditional delay observed -> capture", async () => {
+    vi.useFakeTimers();
+    try {
+      const rig = makeRig();
+      rig.displayModeValue.value = "panel";
+      rig.mdSourceFiles.set(`${WORKSPACE_ROOT}/a.md`, { bytes: Buffer.from("a", "utf8") });
+      rig.mdSourceFiles.set(`${WORKSPACE_ROOT}/b.md`, { bytes: Buffer.from("b", "utf8") });
+      const first = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.md` });
+      const firstId = first.ok ? first.value.previewId : "";
+      rig.clock.time += 10;
+      await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.md` }); // D5: second now holds the visible slot
+      rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: false });
+      rig.host.setPanelBounds(MD_FULL_BOUNDS);
+      expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).not.toBe(firstId);
+
+      const shotPromise = rig.host.screenshotFor(TAB, firstId);
+      await flush();
+      // Promoted already (slot-map + pushChanged happen synchronously before
+      // the delay), but the capture itself is parked behind the sleep.
+      expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(firstId);
+      expect(rig.captureMainWindowRectCalls).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+      const shot = await shotPromise;
+
+      expect(shot).toMatchObject({ ok: true });
+      expect(rig.captureMainWindowRectCalls).toEqual([MD_FULL_BOUNDS]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("overlay open -> honest refusal, captureMainWindowRect NOT called", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: true });
+    rig.host.setPanelBounds(MD_FULL_BOUNDS);
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+    expect(shot).toMatchObject({
+      ok: false,
+      errorKind: "unavailable",
+      error: expect.stringContaining("switch to the tab or move the preview to a window"),
+    });
+    expect(rig.captureMainWindowRectCalls).toEqual([]);
+  });
+
+  it("inactive tab (wrong activeTabId) -> honest refusal, captureMainWindowRect NOT called", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    rig.host.setPanelState({ activeTabId: "some-other-tab", panelMounted: true, overlayOpen: false });
+    rig.host.setPanelBounds(MD_FULL_BOUNDS);
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+    expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
+    expect(rig.captureMainWindowRectCalls).toEqual([]);
+  });
+
+  it("panel not mounted -> honest refusal, captureMainWindowRect NOT called", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: false, overlayOpen: false });
+    rig.host.setPanelBounds(MD_FULL_BOUNDS);
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+    expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
+    expect(rig.captureMainWindowRectCalls).toEqual([]);
+  });
+
+  it("no panel bounds (null / zero-size) -> honest refusal, captureMainWindowRect NOT called", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: false });
+    rig.host.setPanelBounds(null);
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+    expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
+    expect(rig.captureMainWindowRectCalls).toEqual([]);
+  });
+
+  it("captureMainWindowRect returns null (no live main window) -> honest refusal", async () => {
+    const { rig, previewId } = await openedMdPanelRigVisible();
+    rig.captureMainWindowRectImpl = async () => null;
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+    expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
+  });
+
+  it("window-container: showInactive + throttling off during capture (restored after) + capturePage called, real PNG shape", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "window";
+    rig.mdSourceFiles.set(`${WORKSPACE_ROOT}/doc.md`, { bytes: Buffer.from("# doc", "utf8") });
+    const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const previewId = opened.ok ? opened.value.previewId : "";
+    const mdWindow = rig.mdWindows[0]!;
+
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+
+    expect(shot).toMatchObject({ ok: true, value: { previewId, mediaType: "image/png" } });
+    expect(mdWindow.shownInactive).toBe(true);
+    expect(mdWindow.backgroundThrottlingCalls).toEqual([false, true]); // off during capture, restored in `finally`
+  });
+
+  it("window-container: empty first capture -> show() + recapture fallback (mirrors the web window branch)", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "window";
+    const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const previewId = opened.ok ? opened.value.previewId : "";
+    const mdWindow = rig.mdWindows[0]!;
+    let calls = 0;
+    mdWindow.capturePageImpl = async () => {
+      calls += 1;
+      return fakeImage({ empty: calls === 1 });
+    };
+
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+
+    expect(shot).toMatchObject({ ok: true });
+    expect(mdWindow.shown).toBe(true); // forced-visible fallback
+    expect(calls).toBe(2);
+  });
+
+  it("window-container: destroyed mdWindow -> honest refusal", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "window";
+    const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const previewId = opened.ok ? opened.value.previewId : "";
+    rig.mdWindows[0]!.destroy();
+
+    const shot = await rig.host.screenshotFor(TAB, previewId);
+
+    expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
   });
 });

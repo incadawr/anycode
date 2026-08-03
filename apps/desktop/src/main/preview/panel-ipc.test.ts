@@ -354,6 +354,12 @@ function makeRealHost(): { host: PreviewHostHandle; panelViews: FakePanel[] } {
     }),
     displayMode: () => "panel",
     resolveArtifact: async (_tabId, path) => ({ realPath: path }),
+    // TASK.99 M4: this suite never exercises dom-md read/screenshot either —
+    // minimal fakes satisfying PreviewHostDeps' shape, same posture as
+    // `createMdWindow` above.
+    statMdSource: async () => undefined,
+    readMdSourceNoFollow: async () => Buffer.alloc(0),
+    captureMainWindowRect: async () => null,
     autoOpenEnabled: () => true,
     postToHost: () => true,
     logger: { log: () => {}, warn: () => {}, error: () => {} },

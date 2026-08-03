@@ -74,6 +74,13 @@ import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// M4 (TASK.99 CUT.md GAP 2): the single source of truth for the dom-md
+// read cap — reused, not re-declared, so `readForTab`'s dom-md branch and
+// md-doc.ts's own MD_PREVIEW_READ handler (the renderer's Reload channel)
+// can never drift apart. md-doc.ts is itself Electron-free (node:path
+// only), so this import does not compromise this module's own Electron-free
+// discipline.
+import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
 import {
   PREVIEW_EVENT_TYPE,
   PREVIEW_RESPONSE_TYPE,
@@ -259,6 +266,36 @@ export interface PreviewHostDeps {
    */
   createMdWindow(opts: { previewId: string; tabId: string }): MdPreviewWindowLike;
   /**
+   * M4 (TASK.99 CUT.md GAP 2): stats a dom-md preview's freshly-resolved
+   * REALPATH for BrowserRead's re-read — bound (main/index.ts) to the SAME
+   * `fsStat` primitive md-doc.ts's own `MdDocDeps.stat` uses for the
+   * renderer's MD_PREVIEW_READ channel (one fs implementation, two binding
+   * sites — this module never re-implements the stat syscall itself).
+   * `undefined` on any stat failure (ENOENT, EACCES, …); `readForTab` maps
+   * that to an honest `load_failed` refusal, never a crash.
+   */
+  statMdSource(realPath: string): Promise<{ size: number; isFile: boolean } | undefined>;
+  /**
+   * M4: O_NOFOLLOW read of a dom-md preview's freshly-resolved REALPATH —
+   * bound (main/index.ts) to the SAME `NodeArtifactsFs.readFileNoFollow`
+   * primitive md-doc.ts's own deps bag uses (artifacts-ipc.ts's shared
+   * O_NOFOLLOW implementation). This module only orchestrates the
+   * surrounding containment/cap/extension checks around it — see
+   * `readMarkdownSource` below.
+   */
+  readMdSourceNoFollow(realPath: string): Promise<Buffer>;
+  /**
+   * M4 (TASK.99 CUT.md GAP 2): `capturePage(rect)` of the MAIN window — NOT a
+   * preview's own container — for a panel-container dom-md screenshot. A
+   * dom-md record owns no `webContents`/container of its own in a panel
+   * (CUT.md CONTRACTS: "no panelView"), so the only way to capture its
+   * rendered pixels is a rect-scoped capture of the window that hosts the
+   * panel; `rect` is always the host's OWN current `panelBounds` (CSS px ==
+   * DIP, same units both sides). `null` = no live main window — mirrors
+   * every other `win?.…` optional-main-window call site in main/index.ts.
+   */
+  captureMainWindowRect(rect: PreviewPanelBounds): Promise<PreviewCapturedImage | null>;
+  /**
    * Live read of `settings.preview?.displayMode ?? "panel"` (D4), sibling of
    * `autoOpenEnabled` above: consulted ONLY when `openForTab` creates a NEW
    * record — a reuse (`previewId` given) keeps its existing container.
@@ -320,8 +357,16 @@ export interface PreviewHostHandle {
    * re-stat/re-read the source fresh on every invoke, never caching here.
    * `undefined` for no-such-preview, wrong tab, a destroyed record, or a
    * "web" record (this channel is md-only — see shared/md-preview.ts).
+   * M4 addendum: `renderedFrom` is included as part of "current doc
+   * identity" too (`md-doc.ts`'s `MdDocRecordRef` simply ignores the extra
+   * field it doesn't declare) — the ONLY observable seam for asserting
+   * `commitMdNavigate`'s own `renderedFrom` sync in tests, short of widening
+   * a shared/** wire shape this slice does not otherwise touch.
    */
-  getMdDocRef(tabId: string, previewId: string): { sourcePath: string; realSourcePath: string; docDir: string; docVersion: number } | undefined;
+  getMdDocRef(
+    tabId: string,
+    previewId: string,
+  ): { sourcePath: string; realSourcePath: string; docDir: string; docVersion: number; renderedFrom: string } | undefined;
   /**
    * M2 (TASK.99): commits a NAVIGATE mutation to a LIVE dom-md record —
    * `md-doc.ts`'s `navigateMdDoc` closes over this (main/index.ts wiring)
@@ -329,7 +374,11 @@ export interface PreviewHostHandle {
    * mutated on a refused navigate. Updates `sourcePath`/`realSourcePath`/
    * `docDir`/`title` from `fields`, derives `url` from `realSourcePath`
    * (same `pathToFileURL` mapping every other record mutation site uses),
-   * bumps `docVersion`/`lastOpenedAt`, and pushes the change (D7). Returns
+   * syncs `renderedFrom` to the new `sourcePath` (M4 residual — CUT
+   * invariant "renderedFrom = sourcePath": M4's BrowserRead/BrowserScreenshot
+   * results surface it, so a navigated preview must report its CURRENT
+   * source, not the one it was opened with), bumps `docVersion`/
+   * `lastOpenedAt`, and pushes the change (D7). Returns
    * the record's fresh `docVersion`, or `undefined` for no-such-preview/
    * wrong-tab/a destroyed record/a "web" record — mirrors `getMdDocRef`'s
    * own refusal set exactly, so `navigateMdDoc` can reuse the identical
@@ -869,9 +918,17 @@ class PreviewHost implements PreviewHostHandle {
       );
     }
     if (record.viewKind === "dom-md") {
-      // M1 interim: full BrowserRead support for a dom-md preview (raw
-      // source, honest selector refusal — CUT.md Gap 2) lands in M4.
-      return this.fail("unavailable", "reading a markdown preview is not supported yet");
+      // M4 (TASK.99 CUT.md GAP 2): a dom-md preview has no page to run
+      // `executeJavaScript` against, so a selector op can never be
+      // fulfilled — an honest, explicit refusal rather than a silent
+      // no-match. Wording is CUT-mandated verbatim.
+      if (op.selector !== undefined || op.waitForSelector !== undefined) {
+        return this.fail(
+          "invalid_input",
+          "this is a markdown preview rendered natively; selectors are not supported — read returns the markdown source",
+        );
+      }
+      return this.readMarkdownSource(tabId, record, op.includeConsole ?? true);
     }
     const settled = await this.waitForSettle(record, READY_WAIT_MS);
     if (settled === "timeout") {
@@ -945,6 +1002,90 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
+   * M4 (TASK.99 CUT.md GAP 2): re-reads a LIVE dom-md record's CURRENT
+   * source for BrowserRead — SAME custody as md-doc.ts's own MD_PREVIEW_READ
+   * handler (fresh containment via `deps.resolveArtifact` — the identical
+   * dep `resolveFileTarget`/`openMarkdownTarget` already use for the web/md
+   * open paths — a `MD_PREVIEW_MAX_SOURCE_BYTES` cap, an O_NOFOLLOW read via
+   * `deps.readMdSourceNoFollow`). No cache: every call re-resolves, re-stats,
+   * and re-reads from disk, exactly like a renderer Reload. `format` is
+   * intentionally never consulted here — a dom-md preview renders natively
+   * (Markdown.tsx/React), so there is no server-produced HTML string to hand
+   * back; both `"text"` and `"html"` return the identical raw source
+   * (honest, documented — CUT.md GAP 2), sliced to `READ_RESULT_MAX_CHARS`
+   * exactly like the web branch's own text/html reads above.
+   *
+   * errorKind mapping (closest existing analogue, since a dom-md preview has
+   * no live page to fail/crash/time out):
+   *  - containment failure (moved workspace, symlink swap since open,
+   *    outside roots) -> `invalid_input`, mirroring `resolveFileTarget`'s own
+   *    OPEN-time containment refusal (same errorKind either way).
+   *  - source no longer a `.md` file at the resolved realpath ->
+   *    `invalid_input`, same family as the containment case above (the
+   *    read target itself is no longer a valid one).
+   *  - stat failure / not a regular file (deleted, replaced by a directory)
+   *    -> `load_failed`, mirroring the web branch's "preview failed to
+   *    load"/"unexpected result shape" refusals — the content this preview
+   *    represents is simply gone.
+   *  - over the `MD_PREVIEW_MAX_SOURCE_BYTES` cap -> `unavailable`; a live
+   *    page has no size cap, so there is no direct web analogue — this is
+   *    the same "cannot fulfill this request right now" family as the
+   *    "no such preview"/paint-race screenshot refusals elsewhere in this
+   *    file.
+   *  - O_NOFOLLOW read failure (symlink swapped in at the last instant,
+   *    permission error) -> `load_failed`, same family as the stat-failure
+   *    case above.
+   */
+  private async readMarkdownSource(
+    tabId: string,
+    record: MdDomPreviewRecord,
+    includeConsole: boolean,
+  ): Promise<PreviewResult<PreviewReadSuccess>> {
+    const resolved = await this.deps.resolveArtifact(tabId, record.sourcePath);
+    if ("failure" in resolved) {
+      return this.fail("invalid_input", `cannot read ${record.sourcePath}: ${resolved.failure}`);
+    }
+    const realPath = resolved.realPath;
+    if (!isMarkdownPath(realPath)) {
+      return this.fail("invalid_input", `source is no longer a markdown file: ${record.sourcePath}`);
+    }
+
+    let stat: { size: number; isFile: boolean } | undefined;
+    try {
+      stat = await this.deps.statMdSource(realPath);
+    } catch {
+      stat = undefined;
+    }
+    if (stat === undefined || !stat.isFile) {
+      return this.fail("load_failed", `markdown source file no longer exists: ${record.sourcePath}`);
+    }
+    if (stat.size > MD_PREVIEW_MAX_SOURCE_BYTES) {
+      return this.fail(
+        "unavailable",
+        `markdown source exceeds the ${MD_PREVIEW_MAX_SOURCE_BYTES}-byte read cap: ${record.sourcePath}`,
+      );
+    }
+
+    let bytes: Buffer;
+    try {
+      bytes = await this.deps.readMdSourceNoFollow(realPath);
+    } catch (error) {
+      return this.fail("load_failed", `failed to read markdown source: ${String(error)}`);
+    }
+
+    const text = bytes.toString("utf8").slice(0, READ_RESULT_MAX_CHARS);
+    return {
+      ok: true,
+      value: {
+        previewId: record.previewId,
+        url: record.url,
+        text,
+        ...(includeConsole ? { console: [], consoleDropped: 0 } : {}),
+      },
+    };
+  }
+
+  /**
    * Polls by ATTEMPT COUNT, not the injected clock: `deps.now()` is a
    * bookkeeping clock for event-throttle windowing/ordering (test-controlled,
    * does not advance with real time), while this poll paces itself with a
@@ -985,9 +1126,9 @@ class PreviewHost implements PreviewHostHandle {
       );
     }
     if (record.viewKind === "dom-md") {
-      // M1 interim: full BrowserScreenshot support for a dom-md preview
-      // (capturePage(rect) of the main window — CUT.md Gap 2) lands in M4.
-      return this.fail("unavailable", "screenshotting a markdown preview is not supported yet");
+      return record.containerKind === "window"
+        ? this.screenshotMdWindow(record)
+        : this.screenshotMdPanel(record);
     }
     const settled = await this.waitForSettle(record, READY_WAIT_MS);
     if (settled === "timeout") {
@@ -1109,6 +1250,117 @@ class PreviewHost implements PreviewHostHandle {
     } finally {
       wc.setBackgroundThrottling(true);
     }
+  }
+
+  /**
+   * M4 (TASK.99 CUT.md GAP 2), window-container leg: the md window's own
+   * `MdPreviewWindowLike` IS a real captureable surface (unlike the panel
+   * leg below) — `showInactive()` + `setBackgroundThrottling(false)` +
+   * `capturePage()`, mirroring the web window branch's semantics above
+   * (macOS occlusion trap, background-throttling dance) exactly, including
+   * its own empty-image fallback: a backgrounded/occluded window can still
+   * capture empty on the FIRST attempt even after `showInactive()` — force a
+   * visible `show()` and recapture once before giving up, same as the web
+   * window branch's `else` leg above.
+   */
+  private async screenshotMdWindow(record: MdDomPreviewRecord): Promise<PreviewResult<PreviewScreenshotSuccess>> {
+    const win = record.mdWindow;
+    if (win === undefined || win.isDestroyed()) {
+      return this.fail("unavailable", "markdown preview window is not available");
+    }
+    win.showInactive();
+    win.setBackgroundThrottling(false);
+    try {
+      let image = await win.capturePage();
+      if (image.isEmpty()) {
+        win.show();
+        image = await win.capturePage();
+      }
+      const { width, height } = image.getSize();
+      return {
+        ok: true,
+        value: {
+          previewId: record.previewId,
+          url: record.url,
+          mediaType: "image/png",
+          data: image.toPNG().toString("base64"),
+          width,
+          height,
+        },
+      };
+    } catch (error) {
+      return this.fail("load_failed", `screenshot failed: ${String(error)}`);
+    } finally {
+      win.setBackgroundThrottling(true);
+    }
+  }
+
+  /**
+   * M4 (TASK.99 CUT.md GAP 2), panel-container leg: a dom-md panel record
+   * owns no `webContents`/`panelView` of its own (CUT.md CONTRACTS) — the
+   * only capture surface is `deps.captureMainWindowRect(rect)`, a rect-scoped
+   * capture of the MAIN window over the host's own current `panelBounds`.
+   * Preconditions mirror `applyPanel()`'s visibility predicate EXACTLY
+   * (panel mounted, no overlay, active-tab match, boundsOk) — unlike the web
+   * leg above, these gates are checked BEFORE ever attempting a capture,
+   * because a main-window capture of the wrong rect state would happily
+   * return a non-empty but WRONG image (whatever else occupies that rect)
+   * rather than an empty one — `isEmpty()` is not a usable signal here.
+   *
+   * If the record is not the current visible-slot occupant, this call
+   * promotes it (D13's own semantics, `visiblePanelPreviewId.set` +
+   * `applyPanel()` + `pushChanged`) — `applyPanel()` only ever positions WEB
+   * `panelView`s (a dom-md record carries none), so its ONLY effect here is
+   * hiding whatever WEB panel view previously held the slot; the RENDERER is
+   * what actually swaps the panel body to this preview once it observes the
+   * slot change via `pushChanged`. A slot change is ALWAYS followed by an
+   * unconditional `PANEL_SCREENSHOT_RETRY_DELAY_MS` sleep before capturing:
+   * React commit+paint is async, and a main-window capture carries no
+   * UnknownVizError/emptiness signal tied to THIS panel's content the way a
+   * WebContentsView capture does (D18) — so the delay here is
+   * promote-driven, never retry-driven.
+   */
+  private async screenshotMdPanel(record: MdDomPreviewRecord): Promise<PreviewResult<PreviewScreenshotSuccess>> {
+    const HIDDEN_REFUSAL = "screenshot unavailable while the panel preview is hidden — switch to the tab or move the preview to a window";
+    const bounds = this.panelBounds;
+    const gatesOk =
+      this.panelState.panelMounted &&
+      !this.panelState.overlayOpen &&
+      record.tabId === this.panelState.activeTabId &&
+      bounds !== null &&
+      bounds.width > 0 &&
+      bounds.height > 0;
+    if (!gatesOk || bounds === null) {
+      return this.fail("unavailable", HIDDEN_REFUSAL);
+    }
+
+    const wasVisibleSlot = this.visiblePanelPreviewId.get(record.tabId) === record.previewId;
+    if (!wasVisibleSlot) {
+      // D13 promote semantics, applied to a dom-md slot handoff (mirrors
+      // `openMarkdownTarget`'s own "make this record the visible panel slot
+      // occupant" triple exactly).
+      this.visiblePanelPreviewId.set(record.tabId, record.previewId);
+      this.applyPanel();
+      this.pushChanged(record.tabId);
+      await sleep(PANEL_SCREENSHOT_RETRY_DELAY_MS);
+    }
+
+    const image = await this.deps.captureMainWindowRect(bounds);
+    if (image === null) {
+      return this.fail("unavailable", HIDDEN_REFUSAL);
+    }
+    const { width, height } = image.getSize();
+    return {
+      ok: true,
+      value: {
+        previewId: record.previewId,
+        url: record.url,
+        mediaType: "image/png",
+        data: image.toPNG().toString("base64"),
+        width,
+        height,
+      },
+    };
   }
 
   // ── RPC dispatch ──
@@ -1668,7 +1920,7 @@ class PreviewHost implements PreviewHostHandle {
   getMdDocRef(
     tabId: string,
     previewId: string,
-  ): { sourcePath: string; realSourcePath: string; docDir: string; docVersion: number } | undefined {
+  ): { sourcePath: string; realSourcePath: string; docDir: string; docVersion: number; renderedFrom: string } | undefined {
     const record = this.previews.get(previewId);
     if (record === undefined || record.destroyed || record.tabId !== tabId || record.viewKind !== "dom-md") {
       return undefined;
@@ -1678,6 +1930,7 @@ class PreviewHost implements PreviewHostHandle {
       realSourcePath: record.realSourcePath,
       docDir: record.docDir,
       docVersion: record.docVersion,
+      renderedFrom: record.renderedFrom,
     };
   }
 
@@ -1706,6 +1959,11 @@ class PreviewHost implements PreviewHostHandle {
     record.docDir = fields.docDir;
     record.title = fields.title;
     record.url = pathToFileURL(fields.realSourcePath).href;
+    // M4 residual (CUT invariant "renderedFrom = sourcePath"): navigate
+    // previously left `renderedFrom` stale at its open-time value — M4's own
+    // read/screenshot results surface it (tool-contract continuity across
+    // viewKinds), so a navigated preview must report the CURRENT source.
+    record.renderedFrom = fields.sourcePath;
     record.docVersion += 1;
     record.lastOpenedAt = this.now();
     this.pushChanged(tabId);
