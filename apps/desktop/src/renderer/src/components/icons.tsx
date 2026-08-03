@@ -141,6 +141,15 @@ export function Refresh(props: IconProps) {
   );
 }
 
+/** Code — angle brackets, markdown SOURCE view (md-preview mode toggle: Rendered/Source moved from a text pair to icons, owner smoke-test follow-up). */
+export function Code(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6 4.5L2.5 8l3.5 3.5M10 4.5L13.5 8l-3.5 3.5" />
+    </Icon>
+  );
+}
+
 /** X — close. */
 export function X(props: IconProps) {
   return (
