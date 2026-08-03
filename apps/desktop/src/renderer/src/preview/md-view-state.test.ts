@@ -8,6 +8,7 @@ import {
   mdViewReducer,
   parseMdWindowTarget,
   shouldRefetchOnDocVersionChange,
+  stripLeadingFrontmatter,
   type MdViewState,
 } from "./md-view-state.js";
 import type { MdDocPayload, MdDocReadResult } from "../../../shared/md-preview.js";
@@ -191,5 +192,78 @@ describe("findPreviewSourcePath (TASK.99 M3)", () => {
 
   it("empty list -> empty string", () => {
     expect(findPreviewSourcePath([], "p1")).toBe("");
+  });
+});
+
+
+describe("stripLeadingFrontmatter", () => {
+  it("removes a Marp/Jekyll frontmatter block with a multi-line `style: |` value, body intact", () => {
+    const input =
+      "---\n" +
+      "marp: true\n" +
+      "theme: default\n" +
+      "style: |\n" +
+      "  section {\n" +
+      "    color: red;\n" +
+      "  }\n" +
+      "---\n" +
+      "\n" +
+      "# Slide 1\n" +
+      "\n" +
+      "Body text.\n";
+    expect(stripLeadingFrontmatter(input)).toBe("\n# Slide 1\n\nBody text.\n");
+  });
+
+  it("no closing delimiter anywhere -> input returned unchanged", () => {
+    const input = "---\nmarp: true\ntheme: default\n\n# Not actually frontmatter\n";
+    expect(stripLeadingFrontmatter(input)).toBe(input);
+  });
+
+  it("a later `---` (Marp slide separator) is left untouched — only the leading block is stripped", () => {
+    const input = "---\nmarp: true\n---\n\n# Slide 1\n\n---\n\n# Slide 2\n";
+    expect(stripLeadingFrontmatter(input)).toBe("\n# Slide 1\n\n---\n\n# Slide 2\n");
+  });
+
+  it("first line is not `---` -> identity", () => {
+    const input = "# Just a heading\n\nSome body text with a --- dash later.\n";
+    expect(stripLeadingFrontmatter(input)).toBe(input);
+  });
+
+  it("`...` as the closing delimiter works", () => {
+    const input = "---\ntitle: Doc\n...\nBody after the ellipsis close.\n";
+    expect(stripLeadingFrontmatter(input)).toBe("Body after the ellipsis close.\n");
+  });
+
+  it("CRLF input works, preserving CRLF in the surviving body", () => {
+    const input = "---\r\nmarp: true\r\n---\r\n# Body\r\n";
+    expect(stripLeadingFrontmatter(input)).toBe("# Body\r\n");
+  });
+
+  it("empty frontmatter (`---\\n---\\n`) works", () => {
+    expect(stripLeadingFrontmatter("---\n---\n")).toBe("");
+  });
+
+  it("identity on plain text with no frontmatter at all", () => {
+    const input = "Just a plain paragraph.\n\nAnother one.\n";
+    expect(stripLeadingFrontmatter(input)).toBe(input);
+  });
+
+  it("tolerates a leading UTF-8 BOM on the opening delimiter line", () => {
+    const input = "\uFEFF---\ntitle: Doc\n---\nBody.\n";
+    expect(stripLeadingFrontmatter(input)).toBe("Body.\n");
+  });
+
+  it("tolerates trailing whitespace on the opening and closing delimiter lines", () => {
+    const input = "---   \ntitle: Doc\n---\t\nBody.\n";
+    expect(stripLeadingFrontmatter(input)).toBe("Body.\n");
+  });
+
+  it("bare leading `---` with no close anywhere (a horizontal rule, not frontmatter) -> unchanged", () => {
+    const input = "---\n\nJust a horizontal rule at the top, not frontmatter.\n";
+    expect(stripLeadingFrontmatter(input)).toBe(input);
+  });
+
+  it("document that is only the opening `---` with nothing after -> unchanged (no close found)", () => {
+    expect(stripLeadingFrontmatter("---")).toBe("---");
   });
 });

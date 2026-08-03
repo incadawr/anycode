@@ -19,6 +19,13 @@
  * Source, Reload, Reveal, Open in window / Move to panel) that the panel's
  * generic outer chrome (title/picker/close) has no room for, and the window
  * has none of at all.
+ *
+ * Owner smoke-test fix: the Rendered branch below runs the doc's source text
+ * through `stripLeadingFrontmatter` (md-view-state.ts) before handing it to
+ * `Markdown` — a leading YAML frontmatter block (Marp/Jekyll `---`...`---`)
+ * has no CommonMark meaning and would otherwise render as literal paragraph
+ * text. Source mode intentionally does NOT strip it — it shows
+ * `state.doc.sourceText` completely raw, unedited file content.
  */
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 import { Markdown, MdDocContext } from "./Markdown.js";
@@ -29,6 +36,7 @@ import {
   initialMdViewState,
   mdViewReducer,
   shouldRefetchOnDocVersionChange,
+  stripLeadingFrontmatter,
 } from "../preview/md-view-state.js";
 
 export interface MarkdownPreviewViewProps {
@@ -177,7 +185,7 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
             {state.mode === "rendered" ? (
               <div className="md-preview-view-rendered">
                 <MdDocContext.Provider value={mdDocContextValue}>
-                  <Markdown text={state.doc.sourceText} />
+                  <Markdown text={stripLeadingFrontmatter(state.doc.sourceText)} />
                 </MdDocContext.Provider>
               </div>
             ) : (
