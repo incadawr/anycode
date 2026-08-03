@@ -5,6 +5,7 @@ import {
   findPreviewSourcePath,
   initialMdViewState,
   mdReadFailureMessage,
+  mdViewModeLabel,
   mdViewReducer,
   mdWindowTitle,
   parseMdWindowTarget,
@@ -205,6 +206,16 @@ describe("transferControlForContainer (owner smoke-test fix: unified header)", (
 
   it("window -> targets panel, labeled \"Move to panel\"", () => {
     expect(transferControlForContainer("window")).toEqual({ target: "panel", label: "Move to panel" });
+  });
+});
+
+describe("mdViewModeLabel (owner smoke-test follow-up: mode toggle -> icons)", () => {
+  it("rendered -> \"Rendered\"", () => {
+    expect(mdViewModeLabel("rendered")).toBe("Rendered");
+  });
+
+  it("source -> \"Source\"", () => {
+    expect(mdViewModeLabel("source")).toBe("Source");
   });
 });
 

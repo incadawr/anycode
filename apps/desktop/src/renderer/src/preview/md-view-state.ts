@@ -140,6 +140,19 @@ export function transferControlForContainer(container: MdViewContainer): MdViewT
 }
 
 /**
+ * Owner smoke-test follow-up (mode toggle -> icons): the `Rendered`/`Source`
+ * pair used to BE its own accessible name (plain button text) — now that
+ * each half renders an icon instead, this is the one place that still spells
+ * out the word each icon replaces, so `MarkdownPreviewView.tsx` can hand the
+ * identical string to both `title` and `aria-label` without duplicating the
+ * literal at each of the two call sites (same "the mapping lives here, the
+ * component just applies it" split as `transferControlForContainer` above).
+ */
+export function mdViewModeLabel(mode: MdViewMode): string {
+  return mode === "rendered" ? "Rendered" : "Source";
+}
+
+/**
  * Owner smoke-test fix (md-preview WINDOW titlebar): the window's native
  * titlebar was reading the generic static `<title>AnyCode</title>` from
  * index.html (Electron syncs a `BrowserWindow`'s title to `document.title`
