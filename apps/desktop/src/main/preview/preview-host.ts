@@ -71,7 +71,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { unlink } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // M4 (TASK.99 CUT.md GAP 2): the single source of truth for the dom-md
@@ -248,12 +247,6 @@ export interface PreviewHostDeps {
    * Returns false when there is no live proc to post to (message dropped).
    */
   postToHost(tabId: string, message: PreviewResponseMessage | PreviewEventMessage): boolean;
-  /**
-   * `.md` -> sanitized static HTML render (96-F). Absent (this checkpoint,
-   * before 96-F merges) makes every `.md` open refuse honestly with
-   * `errorKind: "unavailable"` — the source is NEVER loaded as plaintext.
-   */
-  renderMarkdown?: (realPath: string) => Promise<{ htmlPath: string } | { error: string }>;
   /** Real `WebContentsView`-backed container (panel-adapter.ts's `createElectronPanelView`), injected the same way `createWindow` is. */
   createPanelView(opts: CreateWindowOpts): PreviewPanelViewLike;
   /**
@@ -454,8 +447,6 @@ interface WebPreviewRecord {
   /** realpath of `sourcePath` — used for auto-open dedup, independent of the raw string the model wrote. */
   realSourcePath?: string;
   renderedFrom?: string;
-  /** Temp HTML path from `renderMarkdown`; unlinked (best-effort) when this preview is destroyed. Dead field from M1 on (the md open path no longer produces one) — removed in M5 alongside the pipeline (CUT.md Gap 3). */
-  renderedHtmlPath?: string;
   title?: string;
   consentedOrigins: Set<string>;
   /** Per-record dedup for the request-gate/redirect-gate legibility ring entry (cut §1.1) — a retry loop cannot flood the ring. */
@@ -586,7 +577,6 @@ type OpenTarget =
       sourcePath?: string;
       realSourcePath?: string;
       renderedFrom?: string;
-      renderedHtmlPath?: string;
     }
   | { ok: false; errorKind: PreviewErrorKind; error: string };
 
@@ -748,15 +738,6 @@ class PreviewHost implements PreviewHostHandle {
     record.sourcePath = target.sourcePath;
     record.realSourcePath = target.realSourcePath;
     record.renderedFrom = target.renderedFrom;
-    if (record.renderedHtmlPath !== undefined && record.renderedHtmlPath !== target.renderedHtmlPath) {
-      // Reuse-navigate away from a rendered markdown temp file (cut §1.5/F8b):
-      // unlink the ORPHANED previous render before this overwrite, same
-      // best-effort semantics as `destroyRecord`'s own cleanup below.
-      void unlink(record.renderedHtmlPath).catch(() => {
-        // Best-effort temp-file cleanup — a missing/already-removed file is not an error.
-      });
-    }
-    record.renderedHtmlPath = target.renderedHtmlPath;
     record.title = basename(target.sourcePath ?? target.url);
     record.lastOpenedAt = this.now();
     if (target.kind === "remote" && target.origin !== undefined) {
@@ -795,7 +776,8 @@ class PreviewHost implements PreviewHostHandle {
 
   /**
    * M1/M3 (TASK.99 CUT.md Gap 3 + CONTRACTS): a `.md` open/reuse-navigate
-   * never touches `deps.renderMarkdown` or a `PreviewWindowLike` — it
+   * never touches a `PreviewWindowLike` (the old tmpdir HTML-render pipeline
+   * was deleted outright in M5 — CUT.md Gap 3) — it
    * settles SYNCHRONOUSLY once containment resolves, tolerating a
    * cross-viewKind flip (an existing "web" record gets its Electron
    * container torn down; an existing "dom-md" record is mutated in place,
@@ -1459,11 +1441,6 @@ class PreviewHost implements PreviewHostHandle {
         } catch (error) {
           this.deps.logger.warn(`[preview] failed to destroy window for ${record.previewId}`, error);
         }
-      }
-      if (record.renderedHtmlPath !== undefined) {
-        void unlink(record.renderedHtmlPath).catch(() => {
-          // Best-effort temp-file cleanup — a missing/already-removed file is not an error.
-        });
       }
     } else if (record.mdWindow !== undefined && !record.mdWindow.isDestroyed()) {
       // M3: a window-container dom-md record owns a live mdWindow — torn

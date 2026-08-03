@@ -93,7 +93,6 @@ import { createElectronPanelView } from "./preview/panel-adapter.js";
 import { createMdPreviewWindow } from "./preview/md-window-adapter.js";
 import { registerPreviewPanelIpc } from "./preview/panel-ipc.js";
 import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
-import { renderMarkdownFile } from "./preview/markdown-render.js";
 // TASK.99 M1: native DOM markdown preview's doc-read IPC (CUT.md CONTRACTS) —
 // registered right next to registerPreviewPanelIpc, closing over the SAME
 // live `previewHost` handle via `getMdDocRef`.
@@ -1353,11 +1352,6 @@ void app.whenReady().then(async () => {
         return false;
       }
     },
-    // 96-F: markdown -> sanitized-HTML render (markdown-render.ts). `realPath`
-    // here is already containment-checked by `resolveArtifact` above — this
-    // module trusts the path it is given and never loads the raw source as
-    // plaintext HTML on any failure (cut §1(g)).
-    renderMarkdown: (realPath) => renderMarkdownFile(realPath),
     logger: console,
     now: () => Date.now(),
   });
