@@ -322,6 +322,26 @@ export interface PreviewHostHandle {
     tabId: string,
     req: { path?: string; url?: string; previewId?: string; allowRemote?: boolean },
   ): Promise<PreviewResult<PreviewOpenSuccess>>;
+  /**
+   * User-click open (owner smoke-test defect fix): the ONE entrypoint for a
+   * click on a chat-artifact link (`artifacts-ipc.ts`'s `handleArtifactPreview`
+   * binds here, never to `openForTab` directly). A click on a path that
+   * already has a LIVE (non-destroyed) preview for this tab reuses that
+   * record instead of minting a new one — via `openForTab`'s own
+   * `previewId`-reuse path, the SAME mechanism an agent's explicit-previewId
+   * reuse-navigate already uses, so this adds no second reuse code path —
+   * then brings it to the front: a panel record becomes the visible slot
+   * occupant (D5), a window record is focused/raised. No live match (first
+   * click, or the earlier preview for this path was closed/destroyed) falls
+   * through to an ordinary brand-new `openForTab` call, unchanged. Matching
+   * is by REALPATH (`findLiveByRealPath`, the identical lookup
+   * `handleArtifacts`'s turn-end auto-open dedup already performs), never the
+   * raw string a link's href happens to spell the path as. Deliberately its
+   * own entrypoint rather than a branch inside `openForTab`: the agent-facing
+   * BrowserOpen tool's own "no previewId -> always a new preview" contract
+   * (RPC "open" op) is left completely untouched by this method's existence.
+   */
+  openForPathClick(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>>;
   /** The RPC entrypoint: dispatches `message.op`, then posts the correlated response itself. Never rejects. */
   handleRequest(tabId: string, message: PreviewRequestMessage): Promise<void>;
   /** Turn-end auto-open (cut §1(a)): fire-and-forget, setting-gated, dedup'd by realpath. */
@@ -652,6 +672,53 @@ class PreviewHost implements PreviewHostHandle {
       return this.openMarkdownTarget(tabId, req.path!, existing);
     }
     return this.openWebTarget(tabId, req, existing);
+  }
+
+  /**
+   * User-click open (owner smoke-test defect fix, see the interface doc
+   * comment above for the full rationale). Looks up a LIVE match for this
+   * tab+realpath BEFORE calling `openForTab`, so the reuse-navigate goes
+   * through `openForTab`'s existing `previewId` path unchanged (byte-
+   * identical to an agent's own explicit-previewId reuse); the only NEW
+   * behavior here is finding that previewId automatically for a click
+   * (which never supplies one itself) and focusing the result afterward.
+   * `resolveArtifact` failing here (bad path, outside roots) simply leaves
+   * `existing` undefined — `openForTab` re-resolves the SAME path itself
+   * and reports the identical honest failure, so there is no separate
+   * error path to keep in sync.
+   */
+  async openForPathClick(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>> {
+    const resolved = await this.deps.resolveArtifact(tabId, path);
+    const existing = "realPath" in resolved ? this.findLiveByRealPath(tabId, resolved.realPath) : undefined;
+    const result = await this.openForTab(tabId, { path, previewId: existing?.previewId });
+    if (result.ok && existing !== undefined) {
+      this.focusExistingPreview(existing);
+    }
+    return result;
+  }
+
+  /**
+   * Brings an already-open preview to the front for the click path above:
+   * a panel record becomes its tab's visible slot occupant (D5's own
+   * `selectPanelPreview`, reused rather than reimplemented); a window
+   * record (web OR dom-md) is focused/raised via its own container's
+   * `show()` — Electron's documented semantics for `show()` on an existing
+   * window are "shows AND gives focus", so no separate focus call is
+   * needed. A destroyed container is left alone (nothing to show) — dead by
+   * the time this runs only if a close raced the reuse-navigate above.
+   */
+  private focusExistingPreview(record: PreviewRecord): void {
+    if (record.containerKind === "panel") {
+      this.selectPanelPreview(record.tabId, record.previewId);
+      return;
+    }
+    if (record.viewKind === "web") {
+      if (!record.window.isDestroyed()) {
+        record.window.show();
+      }
+    } else if (record.mdWindow !== undefined && !record.mdWindow.isDestroyed()) {
+      record.mdWindow.show();
+    }
   }
 
   /**
@@ -1392,15 +1459,31 @@ class PreviewHost implements PreviewHostHandle {
     if ("failure" in resolved) {
       return; // unresolvable/uncontained — silently skip, auto-open is best-effort
     }
-    for (const record of this.previews.values()) {
-      if (!record.destroyed && record.tabId === tabId && record.realSourcePath === resolved.realPath) {
-        return; // already open in an existing preview — never stack a second window on the same file
-      }
+    if (this.findLiveByRealPath(tabId, resolved.realPath) !== undefined) {
+      return; // already open in an existing preview — never stack a second window on the same file
     }
     const result = await this.openForTab(tabId, { path });
     if (!result.ok) {
       this.deps.logger.warn(`[preview] auto-open failed for ${path}: ${result.error}`);
     }
+  }
+
+  /**
+   * The ONE realpath-dedup lookup shared by turn-end auto-open
+   * (`autoOpenOne`) and the user-click path (`openForPathClick`) — a LIVE
+   * (non-destroyed) record of THIS tab whose `realSourcePath` matches, or
+   * undefined. Matches by realpath, never the raw string a caller spelled
+   * the path as, so `./out.html` and `out.html` (or a symlink resolving to
+   * the same target) agree on "already open" — the SAME property both
+   * callers need for the SAME reason.
+   */
+  private findLiveByRealPath(tabId: string, realPath: string): PreviewRecord | undefined {
+    for (const record of this.previews.values()) {
+      if (!record.destroyed && record.tabId === tabId && record.realSourcePath === realPath) {
+        return record;
+      }
+    }
+    return undefined;
   }
 
   // ── lifecycle ──
