@@ -248,10 +248,13 @@ export interface ArtifactsIpcDeps {
   /**
    * Night-track wave-1: opens `realPath` (already containment-and-extension
    * checked by `handleArtifactPreview`) in the tab's PreviewHost window.
-   * Bound at the wiring site (main/index.ts) to `PreviewHostHandle.openForTab`
-   * — the SAME call turn-end auto-open and the host-process BrowserOpen tool
-   * use, so a `.md` click gets the identical render+sanitize pipe, never the
-   * raw source. Never given a raw model-authored path.
+   * Bound at the wiring site (main/index.ts) to
+   * `PreviewHostHandle.openForPathClick` — the user-click entrypoint that
+   * reuses/refreshes/focuses an already-open preview for this SAME realpath
+   * instead of stacking a new one on every click (owner smoke-test defect
+   * fix), falling through to the SAME render+sanitize pipe turn-end
+   * auto-open and the host-process BrowserOpen tool use for a brand-new
+   * preview. Never given a raw model-authored path.
    */
   openPreview(tabId: string, realPath: string): Promise<PreviewResult<PreviewOpenSuccess>>;
 }
@@ -541,16 +544,20 @@ export async function handleArtifactAllow(deps: ArtifactsIpcDeps, raw: unknown):
  * artifact-preview (night-track wave-1, owner ask): user click on a local
  * `.html`/`.htm`/`.md` artifact link opens/reopens it in the PreviewHost
  * window — today that window is reachable only via an agent tool or turn-end
- * auto-open, with no way back once the user closes it. Containment is
- * STRICT, with NO consent overlay: `preview/preview-host.ts`'s own threat
- * model treats a live, script-running window as a different risk class than
- * the read-only bytes `handleArtifactReadImage`/`handleArtifactOpen` hand the
- * renderer, and deliberately never honors an outside-roots Allow grant for
- * that reason — `deps.openPreview` (bound to `PreviewHostHandle.openForTab`)
- * re-resolves and re-refuses outside-roots paths regardless, so this gate
- * simply fails the same request honestly and earlier. The extension gate is
- * disjoint from `OPENABLE_EXTENSIONS` (raster images, `shell.openPath`) —
- * this channel never touches `shell.openPath`.
+ * auto-open, with no way back once the user closes it. A repeat click on the
+ * SAME path reuses/refreshes/focuses that one live preview rather than
+ * stacking a new one (owner smoke-test defect fix) — `deps.openPreview` is
+ * bound to `PreviewHostHandle.openForPathClick`, not `openForTab` directly,
+ * so that reuse-by-realpath is PreviewHost's own concern, not duplicated
+ * here. Containment is STRICT, with NO consent overlay:
+ * `preview/preview-host.ts`'s own threat model treats a live, script-running
+ * window as a different risk class than the read-only bytes
+ * `handleArtifactReadImage`/`handleArtifactOpen` hand the renderer, and
+ * deliberately never honors an outside-roots Allow grant for that reason —
+ * `openForPathClick` re-resolves and re-refuses outside-roots paths
+ * regardless, so this gate simply fails the same request honestly and
+ * earlier. The extension gate is disjoint from `OPENABLE_EXTENSIONS` (raster
+ * images, `shell.openPath`) — this channel never touches `shell.openPath`.
  */
 export async function handleArtifactPreview(deps: ArtifactsIpcDeps, raw: unknown): Promise<PreviewResult<PreviewOpenSuccess>> {
   const parsed = pathSchema.safeParse(raw);

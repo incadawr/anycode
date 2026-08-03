@@ -914,6 +914,196 @@ describe("PreviewHost — auto-open (turn-end artifacts, cut §1(a))", () => {
   });
 });
 
+describe("PreviewHost — openForPathClick (owner smoke-test defect fix: repeated clicks stack duplicate previews)", () => {
+  it("reuses a live WINDOW preview on a second click of the SAME path: one record, refreshed, focused/raised", async () => {
+    const rig = makeRig(); // default container mode is "window"
+    const first = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/doc.html`);
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await first;
+    expect(firstResult.ok).toBe(true);
+    const previewId = firstResult.ok ? firstResult.value.previewId : "";
+    expect(rig.windows).toHaveLength(1);
+
+    // Reset the focus flag so the SECOND click is what proves the re-focus, not a stale true from open.
+    rig.windows[0]!.shown = false;
+
+    const second = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/doc.html`);
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const secondResult = await second;
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.value.previewId).toBe(previewId); // SAME record — no second one minted
+    }
+    expect(rig.windows).toHaveLength(1); // no second window created
+    expect(rig.windows[0]!.shown).toBe(true); // focused/raised on the reuse
+    expect(rig.windows[0]!.webContents.loadedUrls).toHaveLength(2); // refreshed — reloaded on the second click
+  });
+
+  it("reuses a live PANEL preview on a second click and re-selects it as the visible slot", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+
+    const a = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/a.html`);
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const aResult = await a;
+    const aId = aResult.ok ? aResult.value.previewId : "";
+
+    const b = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/b.html`);
+    await flush();
+    rig.panelViews[1]!.webContents.fireDidFinishLoad();
+    await b;
+
+    // "b" is the most-recently-opened panel preview — the visible slot occupant (D5).
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(rig.panelViews[1]!.previewId);
+
+    // Clicking "a"'s path again must reclaim the visible slot for "a", without creating a third panel view.
+    const aAgain = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/a.html`);
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const aAgainResult = await aAgain;
+
+    expect(aAgainResult.ok).toBe(true);
+    if (aAgainResult.ok) {
+      expect(aAgainResult.value.previewId).toBe(aId);
+    }
+    expect(rig.panelViews).toHaveLength(2); // no third panel view minted
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(aId);
+  });
+
+  it("two clicks on DIFFERENT paths still yield two separate previews", async () => {
+    const rig = makeRig();
+    const a = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/a.html`);
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await a;
+
+    const b = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/b.html`);
+    await flush();
+    rig.windows[1]!.webContents.fireDidFinishLoad();
+    const bResult = await b;
+
+    expect(bResult.ok).toBe(true);
+    expect(rig.windows).toHaveLength(2);
+  });
+
+  it("creates a fresh preview when the earlier one for this path was closed/destroyed", async () => {
+    const rig = makeRig();
+    const first = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/doc.html`);
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await first;
+    const previewId = firstResult.ok ? firstResult.value.previewId : "";
+
+    const closed = rig.host.closePreview(TAB, previewId);
+    expect(closed.ok).toBe(true);
+
+    const second = rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/doc.html`);
+    await flush();
+    rig.windows[1]!.webContents.fireDidFinishLoad();
+    const secondResult = await second;
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.value.previewId).not.toBe(previewId); // a genuinely FRESH record
+    }
+    expect(rig.windows).toHaveLength(2); // the old (destroyed) window plus the new one
+  });
+
+  it("dedups by REALPATH, not the raw spelling: './out.html' and 'out.html' (mirrors a symlink resolving to the same target) reuse ONE record", async () => {
+    const rig = makeRig();
+    const rawA = `${WORKSPACE_ROOT}/out.html`;
+    const rawB = `${WORKSPACE_ROOT}/./out.html`;
+    const realPath = `${WORKSPACE_ROOT}/out.html`;
+    rig.resolveArtifactImpl = async (_tabId, path) => {
+      if (path === rawA || path === rawB) {
+        return { realPath };
+      }
+      return { failure: "outside_allowed_roots" };
+    };
+
+    const first = rig.host.openForPathClick(TAB, rawA);
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await first;
+    const previewId = firstResult.ok ? firstResult.value.previewId : "";
+
+    const second = rig.host.openForPathClick(TAB, rawB);
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const secondResult = await second;
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.value.previewId).toBe(previewId);
+    }
+    expect(rig.windows).toHaveLength(1); // one underlying file, one preview, regardless of spelling
+  });
+
+  it(".md click-dedup: reuses & refreshes the SAME dom-md record (docVersion bumps), never a new one — the exact repro from the owner report", async () => {
+    const rig = makeRig();
+    const first = await rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/doc.md`);
+    expect(first.ok).toBe(true);
+    const previewId = first.ok ? first.value.previewId : "";
+    expect(rig.host.listForPanel(TAB).previews).toHaveLength(1);
+    expect(rig.mdWindows).toHaveLength(1);
+
+    const second = await rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/doc.md`);
+    const third = await rig.host.openForPathClick(TAB, `${WORKSPACE_ROOT}/doc.md`);
+
+    for (const result of [second, third]) {
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.previewId).toBe(previewId);
+      }
+    }
+    const listed = rig.host.listForPanel(TAB).previews;
+    expect(listed).toHaveLength(1); // three clicks, ONE record
+    expect(listed[0]).toMatchObject({ previewId, docVersion: 2 }); // refreshed on each reuse
+    expect(rig.mdWindows).toHaveLength(1); // no extra mdWindow minted
+  });
+
+  it("openForTab (the agent-facing BrowserOpen path) is UNTOUCHED: two opens of the SAME path with no previewId still mint two separate previews", async () => {
+    const rig = makeRig();
+    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await first;
+
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.html` });
+    await flush();
+    rig.windows[1]!.webContents.fireDidFinishLoad();
+    const secondResult = await second;
+
+    expect(secondResult.ok).toBe(true);
+    expect(rig.windows).toHaveLength(2); // openForTab itself never dedups — only openForPathClick's caller does
+  });
+
+  it("an explicit previewId (the agent-facing BrowserOpen reuse-navigate contract) still reuses the SAME window unchanged", async () => {
+    const rig = makeRig();
+    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const firstResult = await first;
+    const previewId = firstResult.ok ? firstResult.value.previewId : "";
+
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html`, previewId });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const secondResult = await second;
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.value.previewId).toBe(previewId);
+    }
+    expect(rig.windows).toHaveLength(1);
+    expect(rig.windows[0]!.webContents.loadedUrls).toHaveLength(2);
+  });
+});
+
 describe("PreviewHost — read op", () => {
   async function readyRig(): Promise<{ rig: Rig; previewId: string }> {
     const rig = makeRig();

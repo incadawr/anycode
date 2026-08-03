@@ -451,8 +451,9 @@ describe("handleArtifactReveal", () => {
 // Night-track wave-1 (owner ask): user click on a local .html/.htm/.md
 // artifact link opens/reopens it in PreviewHost. `openPreview` is a plain
 // mock here — the real PreviewHost wiring is main/index.ts's concern
-// (`openPreview: (tabId, realPath) => previewHost.openForTab(...)`); this
-// suite only proves the containment/extension gate ahead of it.
+// (`openPreview: (tabId, realPath) => previewHost.openForPathClick(tabId,
+// realPath)`, the click-dedup entrypoint — owner smoke-test defect fix);
+// this suite only proves the containment/extension gate ahead of it.
 describe("handleArtifactPreview", () => {
   it("opens an in-root .md file — calls openPreview with the REALPATH, not the raw string", async () => {
     const { deps, workspace, openPreview } = await makeRig();
