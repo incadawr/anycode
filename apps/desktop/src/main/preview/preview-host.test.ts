@@ -314,7 +314,6 @@ interface Rig {
   /** Mutable so a test can flip container mode mid-scenario; default "window" keeps the entire stage-1 suite byte-untouched. */
   displayModeValue: { value: "panel" | "window" };
   resolveArtifactImpl: (tabId: string, path: string) => Promise<{ realPath: string } | { failure: string }>;
-  renderMarkdownImpl?: (realPath: string) => Promise<{ htmlPath: string } | { error: string }>;
   /**
    * D14 (96-P3) test hooks: `setContainer` creates the NEW container
    * synchronously (before its first `await`), so a test that needs to
@@ -1176,14 +1175,19 @@ describe("PreviewHost — screenshot op", () => {
 
 /**
  * TASK.99 M1 (CUT.md Gap 3 + CONTRACTS): opening a `.md` path no longer runs
- * the tmpdir renderMarkdown pipeline at all — it creates a `viewKind:"dom-md"`
- * record synchronously (no window/panelView, no loadURL, no settle wait).
- * These tests REPLACE the pre-M1 "markdown: never load plaintext" and
- * "reuse-navigate temp file cleanup" describe blocks (removed below): those
- * exercised the OLD `.md` -> `renderMarkdown` -> tmpdir-HTML -> loadURL path,
- * which CUT.md Gap 3 makes UNREACHABLE from M1 on (the pipeline itself is
- * only deleted in M5 — see markdown-render.ts, untouched). This is a
- * deliberate, CUT-mandated behavioral change, not a forced-green edit.
+ * the old tmpdir HTML-render pipeline at all — it creates a
+ * `viewKind:"dom-md"` record synchronously (no window/panelView, no
+ * loadURL, no settle wait). These tests REPLACE the pre-M1 "markdown: never
+ * load plaintext" and "reuse-navigate temp file cleanup" describe blocks
+ * (removed below): those exercised the OLD `.md` -> render-to-HTML ->
+ * tmpdir -> loadURL path, which CUT.md Gap 3 made UNREACHABLE from M1 on,
+ * and which M5 deletes outright (the render module + the `PreviewHostDeps`
+ * dep that drove it are gone — grep-gated, CUT.md Gap 3). The M1-era test
+ * asserting that dep was never invoked even when provided is REMOVED (not
+ * repointed) in M5: its whole premise — a dep that exists but is
+ * deliberately unreachable — no longer has a subject once the dep itself is
+ * deleted from `PreviewHostDeps`; `makeRig`'s deps object contains no such
+ * field to (not) pass anymore.
  */
 describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md Gap 3 + CONTRACTS)", () => {
   it("creates a ready dom-md record synchronously — no window/panelView, no loadURL", async () => {
@@ -1207,14 +1211,6 @@ describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md G
     const listed = rig.host.listForPanel(TAB).previews;
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ viewKind: "dom-md", status: "ready", container: "panel", docVersion: 0 });
-  });
-
-  it("never calls renderMarkdown even when the dep is provided (the pipeline is unreachable, not deleted)", async () => {
-    const renderMarkdown = vi.fn(async () => ({ htmlPath: "/tmp/should-not-be-used.html" }));
-    const rig = makeRig({ renderMarkdown });
-    const result = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
-    expect(result.ok).toBe(true);
-    expect(renderMarkdown).not.toHaveBeenCalled();
   });
 
   it("refuses honestly on containment failure, without creating any record", async () => {

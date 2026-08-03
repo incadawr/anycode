@@ -152,8 +152,9 @@ const OPENABLE_EXTENSIONS = new Set([...Object.keys(PREVIEWABLE_MIME), ".bmp", "
 /**
  * Extensions the artifact-preview channel may load into a PreviewHost window.
  * Deliberately disjoint from `OPENABLE_EXTENSIONS`/`PREVIEWABLE_MIME` above —
- * this is a document format PreviewHost RENDERS (a `.md` goes through
- * `renderMarkdown` first), never a raster image and never `shell.openPath`.
+ * this is a document format PreviewHost RENDERS (a `.md` becomes a native
+ * `dom-md` record — TASK.99 CUT.md CONTRACTS), never a raster image and
+ * never `shell.openPath`.
  */
 const PREVIEWABLE_DOC_EXTENSIONS = new Set([".html", ".htm", ".md"]);
 
