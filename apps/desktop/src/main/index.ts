@@ -83,7 +83,7 @@ import {
 // electron-adapter is the ONLY file that touches real Electron primitives, so
 // preview-host.ts itself stays unit-testable off plain fakes.
 import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
-import { createElectronPreviewWindow } from "./preview/electron-adapter.js";
+import { createElectronPreviewWindow, wrapCapturedImage } from "./preview/electron-adapter.js";
 import { createElectronPanelView } from "./preview/panel-adapter.js";
 // TASK.99 M3 (CUT.md GAP 1): the md-preview WINDOW container adapter — a
 // second real BrowserWindow loading the SAME trusted renderer bundle under a
@@ -1314,6 +1314,31 @@ void app.whenReady().then(async () => {
       win?.webContents.send(PREVIEW_CHANGED_CHANNEL, payload);
     },
     resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
+    // TASK.99 M4 (CUT.md GAP 2): the SAME `fsStat`/`NodeArtifactsFs.readFileNoFollow`
+    // primitives registerMdDocIpc's own `MdDocDeps` below binds for the
+    // renderer's MD_PREVIEW_READ/Reload channel — one fs implementation, two
+    // binding sites, so BrowserRead's dom-md branch (preview-host.ts's
+    // `readMarkdownSource`) never re-implements the O_NOFOLLOW read itself.
+    statMdSource: async (realPath) => {
+      try {
+        const s = await fsStat(realPath);
+        return { size: s.size, isFile: s.isFile() };
+      } catch {
+        return undefined;
+      }
+    },
+    readMdSourceNoFollow: (realPath) => artifactsIpcDeps.fs.readFileNoFollow(realPath),
+    // TASK.99 M4 (CUT.md GAP 2): a panel-container dom-md screenshot has no
+    // `webContents` of its own to capture — `capturePage(rect)` of the MAIN
+    // window over the host's own `panelBounds` is the only capture surface.
+    // `null` (no live main window) mirrors every other `win?.…` optional-
+    // main-window call site in this file.
+    captureMainWindowRect: async (rect) => {
+      if (win === null || win.isDestroyed()) {
+        return null;
+      }
+      return wrapCapturedImage(await win.webContents.capturePage(rect));
+    },
     autoOpenEnabled: () => settings?.preview?.autoOpen ?? true,
     postToHost: (tabId, message) => {
       const proc = manager?.getTab(tabId)?.proc;

@@ -315,6 +315,41 @@ async function step4PositiveSmoke(ctx) {
 
 // ── step 5: screenshot ──
 
+/**
+ * TASK.99 M4: polls `GET .../screenshot` for `ctx.mdPreviewId` until it
+ * returns a `png`, then asserts real PNG bytes (magic + a non-trivial size —
+ * same thresholds as the html leg's own check below). Polling (not a single
+ * shot) accounts for the WINDOW leg specifically: right after a panel->window
+ * transfer, the md window is a brand-new `BrowserWindow` that still has to
+ * boot the renderer bundle before its FIRST paint — the host's own one-shot
+ * empty-image fallback (show()+recapture) is not meant to cover a boot delay
+ * that long, so this loop is the smoke's job, not the host's.
+ */
+async function assertMdScreenshotPng(ctx, containerLabel, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  for (;;) {
+    last = await apiOk(ctx, 5, "GET", `/tabs/${ctx.tabId}/previews/${encodeURIComponent(ctx.mdPreviewId)}/screenshot`);
+    if (typeof last?.png === "string" && last.png.length > 0) break;
+    if (Date.now() >= deadline) break;
+    await sleep(300);
+  }
+  const png = last?.png;
+  if (typeof png !== "string" || png.length === 0) {
+    record(`md screenshot (${containerLabel}) returns a non-empty PNG`, "FAIL", `response=${JSON.stringify(last).slice(0, 300)}`);
+    return;
+  }
+  const buf = Buffer.from(png, "base64");
+  const magic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const magicOk = buf.subarray(0, 8).equals(magic);
+  const sizeOk = buf.length > 1000; // a trivial/empty capture is far smaller than a real render
+  if (magicOk && sizeOk) {
+    record(`md screenshot (${containerLabel}) returns a non-empty PNG`, "PASS", `${buf.length} bytes, PNG magic verified`);
+  } else {
+    record(`md screenshot (${containerLabel}) returns a non-empty PNG`, "FAIL", `magicOk=${magicOk} sizeOk=${sizeOk} bytes=${buf.length}`);
+  }
+}
+
 async function step5Screenshot(ctx) {
   const resp = await apiOk(ctx, 5, "GET", `/tabs/${ctx.tabId}/previews/${encodeURIComponent(ctx.htmlPreviewId)}/screenshot`);
   const png = resp?.png;
@@ -332,30 +367,31 @@ async function step5Screenshot(ctx) {
     record("screenshot returns a non-empty PNG", "FAIL", `magicOk=${magicOk} sizeOk=${sizeOk} bytes=${buf.length}`);
   }
 
-  // M1-M4 interim (TASK.99 CUT.md Gap 2): a dom-md preview has no
-  // WebContentsView/capturePage surface yet, so BrowserScreenshot honestly
-  // refuses rather than returning a blank/wrong image. Asserted on the
-  // discriminant + a stable substring only, never full prose. M4 replaces
-  // this leg with a real PNG assertion once capturePage(rect) of the main
-  // window lands for a dom-md record.
-  const mdResp = await apiOk(ctx, 5, "GET", `/tabs/${ctx.tabId}/previews/${encodeURIComponent(ctx.mdPreviewId)}/screenshot`);
-  const mdRefusalOk =
-    mdResp?.ok === false &&
-    mdResp?.errorKind === "unavailable" &&
-    typeof mdResp?.error === "string" &&
-    mdResp.error.includes("markdown");
-  if (mdRefusalOk) {
-    record(
-      "md screenshot honestly refused — no capture surface yet (M1-M4 interim; M4 flips this to a real PNG)",
-      "PASS",
-      `errorKind=${mdResp.errorKind} error=${mdResp.error}`,
-    );
+  // TASK.99 M4 (CUT.md GAP 2): a dom-md preview now has a REAL capture
+  // surface in BOTH containers — PANEL via capturePage(rect) of the main
+  // window, WINDOW via the md preview's own MdPreviewWindowLike. Assert a
+  // real PNG in the panel, transfer to a window via the M3 automation route
+  // and assert a real PNG there too, then transfer back to the panel so this
+  // run ends in the same container state step4 left it in.
+  await assertMdScreenshotPng(ctx, "panel");
+
+  const toWindow = await apiOk(ctx, 5, "POST", `/tabs/${ctx.tabId}/previews/${encodeURIComponent(ctx.mdPreviewId)}/container`, {
+    target: "window",
+  });
+  if (toWindow?.ok !== true) {
+    record("md preview transfers to a window container", "FAIL", `response=${JSON.stringify(toWindow)}`);
   } else {
-    record(
-      "md screenshot honestly refused — no capture surface yet (M1-M4 interim; M4 flips this to a real PNG)",
-      "FAIL",
-      `response=${JSON.stringify(mdResp).slice(0, 300)}`,
-    );
+    record("md preview transfers to a window container", "PASS", JSON.stringify(toWindow));
+    await assertMdScreenshotPng(ctx, "window");
+  }
+
+  const toPanel = await apiOk(ctx, 5, "POST", `/tabs/${ctx.tabId}/previews/${encodeURIComponent(ctx.mdPreviewId)}/container`, {
+    target: "panel",
+  });
+  if (toPanel?.ok === true) {
+    record("md preview transfers back to the panel container (tidy end state)", "PASS", JSON.stringify(toPanel));
+  } else {
+    record("md preview transfers back to the panel container (tidy end state)", "FAIL", `response=${JSON.stringify(toPanel)}`);
   }
 }
 
