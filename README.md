@@ -32,6 +32,13 @@ can pin its children to the Codex or the Claude Code CLI, so a Native session
 can hand a task to a different agent and receive the result in the same
 transcript.
 
+What a session produces can be looked at without leaving the workspace. A local
+markdown or HTML file opens in a preview — a panel beside the transcript or a
+window of its own — and the agent can drive that preview itself: open a page,
+read back its text and console, take a screenshot of it. Previews are sandboxed,
+fetch nothing from the network on their own, and obey the same consent model as
+every other file action.
+
 Both CLI profiles are pinned against recorded protocol fixtures: the adapters
 have to stay in sync with the recorded streams, so a change on our side that
 drops or invents a wire message fails the build rather than surfacing as a
@@ -40,7 +47,7 @@ opt-in run against the real binary, not part of the default suite.
 
 ## Status
 
-AnyCode is **0.0.8, alpha**. Storage, APIs, and UI may change without
+AnyCode is **0.0.9, alpha**. Storage, APIs, and UI may change without
 backward-compatibility guarantees, and alpha builds are unsigned — signing
 arrives with the beta.
 
