@@ -48,8 +48,9 @@ import {
   type PreviewWindowLike,
 } from "./preview-host.js";
 
-const DEFAULT_WIDTH = 1100;
-const DEFAULT_HEIGHT = 800;
+/** Exported: md-window-adapter.ts (TASK.99 M3) reuses the SAME default preview-window sizing for the md-preview window (CUT.md M3 scope: "match electron-adapter.ts's preview-window conventions"). */
+export const DEFAULT_WIDTH = 1100;
+export const DEFAULT_HEIGHT = 800;
 /** CDP protocol version for `webContents.debugger.attach` (pageerror capture). */
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
 
@@ -59,7 +60,8 @@ function classifyConsoleLevel(level: "info" | "warning" | "error" | "debug"): Pr
   return "log"; // "info" | "debug"
 }
 
-function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
+/** Exported: md-window-adapter.ts (TASK.99 M3) reuses this for the md-preview window's own `capturePage()` — same `PreviewCapturedImage` wrapping, zero duplication. */
+export function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
   return {
     toPNG: () => image.toPNG(),
     getSize: () => image.getSize(),
