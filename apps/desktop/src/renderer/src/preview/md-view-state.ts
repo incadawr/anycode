@@ -142,3 +142,61 @@ export function eventForNavigateResult(result: MdDocReadResult): MdViewEvent {
 export function shouldRefetchOnDocVersionChange(localDocVersion: number, pushedDocVersion: number): boolean {
   return pushedDocVersion > localDocVersion;
 }
+
+const UTF8_BOM = "\uFEFF";
+/** Matches the frontmatter OPEN line only: exactly `---`, optional trailing spaces/tabs, then a line terminator (LF/CRLF) or end of string. */
+const FRONTMATTER_OPEN_RE = /^---[ \t]*(?:\r\n|\n|$)/;
+
+/**
+ * Owner smoke-test fix: strips a single leading YAML frontmatter block
+ * (Marp/Jekyll style — opens with `---`, closes with `---` or `...`) from a
+ * markdown document before it reaches the RENDERED view only. `marked`'s
+ * lexer (lex.ts, `lexMarkdown`) has no CommonMark/GFM concept of frontmatter,
+ * so without this the block's raw lines (e.g. a Marp `style: |` CSS blob)
+ * render as plain paragraph text.
+ *
+ * Conservative by construction — never loses document content:
+ *  - Only fires when the very first line of `text` is exactly `---`
+ *    (trailing whitespace tolerated, a leading UTF-8 BOM tolerated, LF/CRLF
+ *    both handled).
+ *  - The block closes at the first later line that is exactly `---` or
+ *    exactly `...` (trailing whitespace tolerated) — a `---` further down in
+ *    the body (Marp SLIDE separators!) is never touched, since the scan
+ *    starts strictly after the opening line and stops at the first close.
+ *  - No closing delimiter anywhere ⇒ returns `text` unchanged: a document
+ *    that merely STARTS with a horizontal rule must not lose its body.
+ *  - Everything after the closing delimiter line is returned unchanged, byte
+ *    for byte, apart from dropping at most the single line-terminator that
+ *    immediately follows the closing delimiter line itself.
+ *  - Does not start with `---` (after an optional BOM) ⇒ identity.
+ *
+ * Sole call site: `MarkdownPreviewView.tsx`'s rendered-mode branch, applied
+ * to the text handed to `<Markdown>`. Source mode keeps showing
+ * `state.doc.sourceText` raw and untouched, and `Markdown.tsx`'s chat call
+ * sites (ToolCallCard.tsx, PermissionModal.tsx, MessageList.tsx) never call
+ * this at all — chat rendering is unaffected (risk register #6).
+ */
+export function stripLeadingFrontmatter(text: string): string {
+  const offset = text.startsWith(UTF8_BOM) ? UTF8_BOM.length : 0;
+  const openMatch = FRONTMATTER_OPEN_RE.exec(text.slice(offset));
+  if (!openMatch) {
+    return text;
+  }
+  let pos = offset + openMatch[0].length;
+  while (pos <= text.length) {
+    const nlIndex = text.indexOf("\n", pos);
+    const lineEnd = nlIndex === -1 ? text.length : nlIndex + 1;
+    const rawLine = text.slice(pos, nlIndex === -1 ? text.length : nlIndex);
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    const trimmed = line.replace(/[ \t]+$/, "");
+    if (trimmed === "---" || trimmed === "...") {
+      return text.slice(lineEnd);
+    }
+    if (nlIndex === -1) {
+      // Reached end of document without finding a closing delimiter line.
+      break;
+    }
+    pos = lineEnd;
+  }
+  return text;
+}
