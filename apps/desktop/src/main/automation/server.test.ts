@@ -3105,6 +3105,9 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
 function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle {
   return {
     openForTab: vi.fn(async () => ({ ok: true as const, value: { previewId: "pv-1", url: "file:///tmp/a.html", kind: "file" as const } })),
+    // Owner smoke-test defect fix (click-dedup): type-level fake addition
+    // only — this suite never drives the click-to-preview path directly.
+    openForPathClick: vi.fn(async () => ({ ok: true as const, value: { previewId: "pv-1", url: "file:///tmp/a.html", kind: "file" as const } })),
     handleRequest: vi.fn(async () => {}),
     handleArtifacts: vi.fn(),
     closeForTab: vi.fn(),

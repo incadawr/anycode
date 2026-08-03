@@ -682,9 +682,12 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
 }
 
 /**
- * Local non-images get a Reveal action; `.html`/`.htm`/`.md` also get a
- * Preview action (night-track wave-1, owner ask) — the same call the link's
- * own click makes, offered here too for discoverability.
+ * Local non-images get a Reveal action. `.html`/`.htm`/`.md` links used to
+ * also render a Preview button here (night-track wave-1, owner ask), but it
+ * made the exact same `api.preview` call the artifact link's own click
+ * handler (`MdLink.onClick` above) already makes — once that click started
+ * opening previews itself, this button was a redundant second control for
+ * an identical action, so it was removed (owner smoke-test defect fix).
  */
 function ArtifactReveal({ path }: { path: string }) {
   const tabId = useContext(MarkdownTabContext);
@@ -695,15 +698,8 @@ function ArtifactReveal({ path }: { path: string }) {
     const result = await api.reveal(tabId, path);
     setFailure(result.ok ? null : artifactActionFailureMessage(result.reason));
   };
-  const preview = async (): Promise<void> => {
-    const result = await api.preview(tabId, path);
-    setFailure(result.ok ? null : result.error);
-  };
   return (
     <>
-      {PREVIEWABLE_ARTIFACT_EXTENSIONS.has(extensionOfHref(path)) && (
-        <button type="button" className="md-artifact-btn md-artifact-preview-link" onClick={() => void preview()}>Preview</button>
-      )}
       <button type="button" className="md-artifact-btn md-artifact-reveal-link" onClick={() => void reveal()}>Reveal in folder</button>
       {failure !== null && <span className="md-artifact-error">{failure}</span>}
     </>
