@@ -14,6 +14,16 @@
  * the caller-supplied `onToast` — App.tsx's existing onToast/toasts.ts
  * pipeline, threaded down the same way `ActiveTabBody` already threads it
  * to `TabNoticeCapture`.
+ *
+ * Owner smoke-test fix (two-header defect): the header row above is drawn
+ * here ONLY for a web (WebContentsView-backed) visible preview, exactly as
+ * before. A `dom-md` visible preview instead folds its title text and the
+ * preview-picker `<select>` DOWN into `MarkdownPreviewView`'s own single
+ * unified header (title/picker/`Rendered | Source`/Reload/Reveal/transfer/
+ * close, all in one row) — this component keeps owning `selectPreview`/
+ * `panelPreviews` (the picker is built here, just rendered there) and the
+ * `closePreview`/`openInWindow` handlers, only the JSX for the row itself
+ * moves. See MarkdownPreviewView.tsx's own doc comment for the full seam.
  */
 import { useContext, useEffect, useRef } from "react";
 import { TabContext } from "../tab-context.js";
@@ -127,46 +137,61 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
       });
   }
 
+  const isMdPreview = visible?.viewKind === "dom-md";
+  const title = visible?.title ?? visible?.sourcePath ?? visible?.url ?? "Preview";
+  // Owner smoke-test fix: built once, handed to MarkdownPreviewView's own
+  // header for a dom-md visible preview (below) instead of this component's
+  // now dom-md-skipped `.preview-panel-header` — `selectPreview`/
+  // `panelPreviews` stay owned here either way.
+  const picker =
+    panelPreviews.length > 1 ? (
+      <select
+        className="preview-panel-picker"
+        aria-label="Select preview"
+        value={visible?.previewId ?? ""}
+        onChange={(event) => selectPreview(event.target.value)}
+      >
+        {panelPreviews.map((preview) => (
+          <option key={preview.previewId} value={preview.previewId}>
+            {preview.title ?? preview.sourcePath ?? preview.url}
+          </option>
+        ))}
+      </select>
+    ) : undefined;
+
   return (
     <div className="preview-panel">
-      <div className="preview-panel-header">
-        <span className="preview-panel-title">{visible?.title ?? visible?.sourcePath ?? visible?.url ?? "Preview"}</span>
-        {panelPreviews.length > 1 && (
-          <select
-            className="preview-panel-picker"
-            aria-label="Select preview"
-            value={visible?.previewId ?? ""}
-            onChange={(event) => selectPreview(event.target.value)}
-          >
-            {panelPreviews.map((preview) => (
-              <option key={preview.previewId} value={preview.previewId}>
-                {preview.title ?? preview.sourcePath ?? preview.url}
-              </option>
-            ))}
-          </select>
-        )}
-        {visible && (
-          <button
-            type="button"
-            className="preview-panel-open-window"
-            aria-label="Open in window"
-            title="Open this preview in a separate window"
-            onClick={() => openInWindow(visible.previewId)}
-          >
-            Open in window
-          </button>
-        )}
-        {visible && (
-          <button
-            type="button"
-            className="preview-panel-close"
-            aria-label="Close preview"
-            onClick={() => closePreview(visible.previewId)}
-          >
-            <X />
-          </button>
-        )}
-      </div>
+      {/* Owner smoke-test fix (two-header defect): a dom-md visible preview
+          gets its title/picker/close/transfer folded into
+          MarkdownPreviewView's own unified header below instead — web
+          previews keep exactly this header, unchanged. */}
+      {!isMdPreview && (
+        <div className="preview-panel-header">
+          <span className="preview-panel-title">{title}</span>
+          {picker}
+          {visible && (
+            <button
+              type="button"
+              className="preview-panel-open-window"
+              aria-label="Open in window"
+              title="Open this preview in a separate window"
+              onClick={() => openInWindow(visible.previewId)}
+            >
+              Open in window
+            </button>
+          )}
+          {visible && (
+            <button
+              type="button"
+              className="preview-panel-close"
+              aria-label="Close preview"
+              onClick={() => closePreview(visible.previewId)}
+            >
+              <X />
+            </button>
+          )}
+        </div>
+      )}
       <div ref={bodyRef} className="preview-panel-body">
         {overlayOpen ? (
           <div className="preview-panel-empty">Preview hidden</div>
@@ -181,6 +206,8 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
             docVersion={visible.docVersion ?? 0}
             onClose={() => closePreview(visible.previewId)}
             onTransfer={() => openInWindow(visible.previewId)}
+            title={title}
+            picker={picker}
           />
         ) : null}
       </div>
