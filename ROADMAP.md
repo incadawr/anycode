@@ -79,15 +79,17 @@ separate task or research item._
 
 ### Preview & media
 
-- **Universal preview pane.** One surface next to the chat that renders what
-  a session produces, right inside AnyCode: markdown, file diffs, images, and
-  a live local dev-server page in an embedded browser view. File mentions in
-  the transcript open there with the right renderer. Rendering is sandboxed
-  and honors the workspace-roots consent model.
-- **Agent-facing browser loop.** A second stage on top of the embedded
-  browser view: the agent captures screenshots and reads console or network
-  logs from the previewed page to verify its own web work (requires a
-  vision-capable model for screenshots).
+- **Universal preview pane.** _Markdown and HTML available now._ One surface
+  that renders what a session produces, right inside AnyCode — a panel next to
+  the chat or a window of its own. Markdown is rendered natively; a local HTML
+  file or a live local dev-server page loads in an embedded browser view.
+  Rendering is sandboxed and honors the workspace-roots consent model. Still
+  ahead: file diffs and images in the same surface, and file mentions in the
+  transcript opening there with the right renderer.
+- **Agent-facing browser loop.** _Available now._ A second stage on top of the
+  embedded browser view: the agent opens a page, reads its rendered text and
+  console output, and captures screenshots to verify its own web work
+  (screenshots require a vision-capable model). Still ahead: network logs.
 
 ### Distribution
 

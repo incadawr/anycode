@@ -5,6 +5,70 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.9] — 2026-08-03
+
+### Added
+
+- Previews for the files an agent produces. A local HTML or Markdown file can
+  now be opened inside AnyCode itself: click it in the transcript and it shows
+  up either in a resizable panel next to the conversation or in a window of its
+  own, whichever you choose in Settings, and it can be moved from one to the
+  other while it stays open. Before this the only thing to do with such a file
+  was to reveal it in Finder and open it in some other application. A preview
+  is sandboxed and fetches nothing from the network by itself, so an HTML file
+  that pulls a script or a font from a CDN renders without it rather than
+  reaching out; a remote address loads only after you allow it.
+- Markdown is drawn by AnyCode directly instead of being converted into a web
+  page first. The renderer is the one chat messages already use, so a
+  document's relative images resolve against the folder it lives in, and a link
+  to another Markdown file beside it replaces the current view in place. The
+  header carries the document's name, a Rendered/Source switch, reload, and
+  reveal in folder. Nothing is written to disk to produce a preview, and page
+  scripts never come into it, because there is no page.
+- A preview opens on its own at the end of a turn in which the model wrote or
+  edited an HTML or Markdown file, and refreshes when one is already open for
+  that file. This is on by default and can be switched off in Settings.
+- The model can use previews as an instrument: it can open a local artifact or
+  a development server on localhost, read back the rendered text and the tail
+  of the console, and take a screenshot — so it can look at what it built
+  instead of only reasoning about the source it wrote. Everything a page says
+  reaches the model marked as untrusted, and a remote address needs your
+  approval before it loads.
+- What an open preview writes to its console, page errors included, now appears
+  in the session transcript, rate-limited with an honest count of what was
+  dropped.
+- A file that resolves outside the locations a session may read can now be
+  previewed once you allow it. The permission covers that one file in that one
+  tab, is forgotten when the tab closes, and widens nothing else about what may
+  be previewed. On macOS `/tmp` also counts as an allowed location now: models
+  write there constantly, and it is not the directory macOS reports as the
+  system temporary one.
+- The list of subagent profiles offered to the model now states the engine and
+  the model each profile runs on. Without that, a profile pinned to Codex or to
+  a particular model looked like every other one, and the model had no reason
+  to prefer it for the work it was written for.
+- A builtin skill for writing subagent profiles, so the model can create one in
+  `.anycode/agents` and use it on the next turn.
+
+### Changed
+
+- The Claude Code engine is now told that it runs inside a desktop application
+  and not a terminal: that its answer is rendered as markdown, that control
+  codes do nothing, that you cannot see raw tool output, and that its own CLI's
+  subagents, skills and slash commands are not AnyCode's. It used to write "see
+  the output above" about output nobody could see.
+- A subagent profile that names an engine and also lists tools is now refused
+  when it is read, and says why. The toolset of a child running on another CLI
+  belongs to that CLI, so the two lines together never had a meaning.
+
+### Fixed
+
+- The turn count of a subagent running on Codex was not the number it looked
+  like. Codex reports one start per run rather than one per model round, so the
+  count stayed at one however much work the child did, while the same label
+  next to a Claude child meant model rounds. Codex children now show no turn
+  count instead of one that reads like the other engine's and is not.
+
 ## [0.0.8] — 2026-07-31
 
 ### Added
