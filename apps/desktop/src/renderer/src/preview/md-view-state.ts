@@ -86,6 +86,38 @@ export function eventForReadResult(result: MdDocReadResult): MdViewEvent {
 }
 
 /**
+ * TASK.99 M3 (CUT.md GAP 1/CONTRACTS): the md-preview WINDOW's own bootstrap
+ * target — `location.search` carries `tabId`/`previewId` (main's
+ * `loadMdPreviewWindow` query, main/index.ts), never the whole record (the
+ * window fetches its own doc via `mdPreview.read`, custody-preserving).
+ * Pulled out as a pure function (not inlined in MdPreviewWindowApp.tsx) so
+ * the "logic-free shell" invariant (RISK REGISTER §5) holds for that
+ * component too, mirroring MarkdownPreviewView's own split with this module.
+ * `null` for a missing/empty tabId or previewId — an honest "nothing to
+ * render" the component turns into its own empty-state copy.
+ */
+export function parseMdWindowTarget(search: string): { tabId: string; previewId: string } | null {
+  const params = new URLSearchParams(search);
+  const tabId = params.get("tabId") ?? "";
+  const previewId = params.get("previewId") ?? "";
+  return tabId !== "" && previewId !== "" ? { tabId, previewId } : null;
+}
+
+/**
+ * TASK.99 M3: the md-preview window has no reactive `preview-store` feed (no
+ * `PREVIEW_CHANGED` push reaches a second `BrowserWindow` — see
+ * MdPreviewWindowApp.tsx's own doc comment) — it hydrates `sourcePath` ONCE
+ * from a `previewPanel.list` snapshot at mount, the same boot-time-read
+ * posture as the doc fetch itself. Pure lookup so the component stays a thin
+ * shell: find this window's own `previewId` in the tab's preview list, or
+ * `""` if it isn't there (yet, or anymore) — `MarkdownPreviewView`'s `reveal()`
+ * already tolerates an empty `sourcePath` as a plain refusal, never a crash.
+ */
+export function findPreviewSourcePath(previews: readonly { previewId: string; sourcePath?: string }[], previewId: string): string {
+  return previews.find((preview) => preview.previewId === previewId)?.sourcePath ?? "";
+}
+
+/**
  * Same projection as `eventForReadResult`, for a NAVIGATE result (M2): a
  * refusal reuses the identical `mdReadFailureMessage` mapping and surfaces
  * on the SAME inline error banner a failed read/reload already uses — no

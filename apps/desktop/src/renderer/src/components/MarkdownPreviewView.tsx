@@ -1,21 +1,24 @@
 /**
  * Native DOM markdown preview view (TASK.99 CUT.md CONTRACTS — M1 shipped
- * READ/panel chrome, M2 adds md->md link navigation + doc-relative images) —
- * a THIN, logic-free shell: every stateful decision (phase/mode transitions,
- * failure copy, docVersion reconciliation) lives in the pure
- * `md-view-state.ts` reducer/helpers (RISK REGISTER §5 — vitest collects
- * only `*.test.ts`, node env, no jsdom, so this component itself is untested
- * and MUST stay simple enough not to need it). Reuses the chat `Markdown`
- * component without a fork: `MdDocContext` is provided ONLY around the
- * rendered doc below, docDir-scoped to the CURRENT doc — chat call sites
- * (ToolCallCard.tsx, PermissionModal.tsx, MessageList.tsx) never see it,
- * so their rendering stays byte-identical (risk register #6).
+ * READ/panel chrome, M2 adds md->md link navigation + doc-relative images,
+ * M3 adds the window container) — a THIN, logic-free shell: every stateful
+ * decision (phase/mode transitions, failure copy, docVersion reconciliation)
+ * lives in the pure `md-view-state.ts` reducer/helpers (RISK REGISTER §5 —
+ * vitest collects only `*.test.ts`, node env, no jsdom, so this component
+ * itself is untested and MUST stay simple enough not to need it). Reuses the
+ * chat `Markdown` component without a fork: `MdDocContext` is provided ONLY
+ * around the rendered doc below, docDir-scoped to the CURRENT doc — chat call
+ * sites (ToolCallCard.tsx, PermissionModal.tsx, MessageList.tsx) never see
+ * it, so their rendering stays byte-identical (risk register #6).
  *
- * Rendered inside PreviewPanel.tsx's `preview-panel-body` slot when the
- * visible preview has `viewKind === "dom-md"` — the panel's own outer header
- * (title/picker/close) stays untouched; this component owns its OWN header
- * for markdown-specific actions (Rendered/Source, Reload, Reveal, Open in
- * window) that the generic panel chrome has no room for.
+ * ONE implementation, container-independent (CUT.md GAP 1's stated UX
+ * constraint): rendered inside PreviewPanel.tsx's `preview-panel-body` slot
+ * when the visible panel preview has `viewKind === "dom-md"`, AND as the
+ * whole content of the md-preview WINDOW (MdPreviewWindowApp.tsx, M3) — this
+ * component owns its OWN header for markdown-specific actions (Rendered/
+ * Source, Reload, Reveal, Open in window / Move to panel) that the panel's
+ * generic outer chrome (title/picker/close) has no room for, and the window
+ * has none of at all.
  */
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 import { Markdown, MdDocContext } from "./Markdown.js";
@@ -144,9 +147,17 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
         <button type="button" className="md-preview-action-btn" onClick={reveal}>
           Reveal in folder
         </button>
-        {container === "panel" && (
+        {container === "panel" ? (
           <button type="button" className="md-preview-action-btn" onClick={onTransfer}>
             Open in window
+          </button>
+        ) : (
+          // TASK.99 M3 (CUT.md CONTRACTS): the window-container mirror of
+          // "Open in window" above — same `onTransfer` prop, the PARENT
+          // (MdPreviewWindowApp) owns the actual `previewPanel.setContainer`
+          // call, target "panel" this time.
+          <button type="button" className="md-preview-action-btn" onClick={onTransfer}>
+            Move to panel
           </button>
         )}
         <button type="button" className="md-preview-view-close" aria-label="Close preview" onClick={onClose}>

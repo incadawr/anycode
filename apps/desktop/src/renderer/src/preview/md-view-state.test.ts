@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   eventForNavigateResult,
   eventForReadResult,
+  findPreviewSourcePath,
   initialMdViewState,
   mdReadFailureMessage,
   mdViewReducer,
+  parseMdWindowTarget,
   shouldRefetchOnDocVersionChange,
   type MdViewState,
 } from "./md-view-state.js";
@@ -141,5 +143,53 @@ describe("shouldRefetchOnDocVersionChange", () => {
 
   it("does not refetch when the pushed version is older/stale", () => {
     expect(shouldRefetchOnDocVersionChange(2, 1)).toBe(false);
+  });
+});
+
+describe("parseMdWindowTarget (TASK.99 M3)", () => {
+  it("parses both tabId and previewId out of the query string", () => {
+    expect(parseMdWindowTarget("?view=md-preview&tabId=t1&previewId=p1")).toEqual({ tabId: "t1", previewId: "p1" });
+  });
+
+  it("order-independent and tolerates extra params", () => {
+    expect(parseMdWindowTarget("?previewId=p1&extra=1&tabId=t1&view=md-preview")).toEqual({ tabId: "t1", previewId: "p1" });
+  });
+
+  it("missing tabId -> null", () => {
+    expect(parseMdWindowTarget("?view=md-preview&previewId=p1")).toBeNull();
+  });
+
+  it("missing previewId -> null", () => {
+    expect(parseMdWindowTarget("?view=md-preview&tabId=t1")).toBeNull();
+  });
+
+  it("empty tabId/previewId values -> null (not treated as present)", () => {
+    expect(parseMdWindowTarget("?tabId=&previewId=")).toBeNull();
+  });
+
+  it("empty search string -> null", () => {
+    expect(parseMdWindowTarget("")).toBeNull();
+  });
+});
+
+describe("findPreviewSourcePath (TASK.99 M3)", () => {
+  it("finds the matching preview's sourcePath", () => {
+    const previews = [
+      { previewId: "p1", sourcePath: "a.md" },
+      { previewId: "p2", sourcePath: "b.md" },
+    ];
+    expect(findPreviewSourcePath(previews, "p2")).toBe("b.md");
+  });
+
+  it("no match -> empty string", () => {
+    expect(findPreviewSourcePath([{ previewId: "p1", sourcePath: "a.md" }], "ghost")).toBe("");
+  });
+
+  it("match with no sourcePath field -> empty string", () => {
+    expect(findPreviewSourcePath([{ previewId: "p1" }], "p1")).toBe("");
+  });
+
+  it("empty list -> empty string", () => {
+    expect(findPreviewSourcePath([], "p1")).toBe("");
   });
 });

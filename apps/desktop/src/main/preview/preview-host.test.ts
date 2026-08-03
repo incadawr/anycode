@@ -26,6 +26,7 @@ import {
   clampPanelBounds,
   registerPreviewHost,
   type CreateWindowOpts,
+  type MdPreviewWindowLike,
   type PreviewCapturedImage,
   type PreviewHostDeps,
   type PreviewHostHandle,
@@ -242,12 +243,64 @@ class FakePanelView implements PreviewPanelViewLike {
   }
 }
 
+/**
+ * TASK.99 M3: fake `MdPreviewWindowLike` — deliberately much slimmer than
+ * `FakeWindow`/`FakePanelView` above (no `webContents` at all, mirroring the
+ * real contract: preview-host.ts never runs `wireWindow`'s security wiring
+ * against a dom-md window, since it is typed with nothing for that to wire
+ * against). `onClosed`/`simulateExternalClose` mirror `FakeWindow`'s own
+ * shape exactly, for the "native window close destroys the record" tests.
+ */
+class FakeMdWindow implements MdPreviewWindowLike {
+  destroyed = false;
+  shown = false;
+  shownInactive = false;
+  backgroundThrottlingCalls: boolean[] = [];
+  capturePageImpl: () => Promise<PreviewCapturedImage> = () => Promise.resolve(fakeImage());
+  private closedListeners: Array<() => void> = [];
+
+  constructor(
+    public readonly previewId: string,
+    public readonly tabId: string,
+  ) {}
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    for (const l of this.closedListeners) l();
+  }
+  show(): void {
+    this.shown = true;
+  }
+  showInactive(): void {
+    this.shownInactive = true;
+  }
+  onClosed(listener: () => void): void {
+    this.closedListeners.push(listener);
+  }
+  capturePage(): Promise<PreviewCapturedImage> {
+    return this.capturePageImpl();
+  }
+  setBackgroundThrottling(enabled: boolean): void {
+    this.backgroundThrottlingCalls.push(enabled);
+  }
+  /** The user closes the window via native chrome — same observable effect as `destroy()`. */
+  simulateExternalClose(): void {
+    this.destroy();
+  }
+}
+
 /** Everything a test needs to drive a `registerPreviewHost` instance + inspect its side effects. */
 interface Rig {
   host: PreviewHostHandle;
   windows: FakeWindow[];
   /** Panel-container views (panel-track CUT.md §3 96-P1) — parallel to `windows` for the window container. */
   panelViews: FakePanelView[];
+  /** TASK.99 M3: md-preview windows, parallel to `windows`/`panelViews` for `createMdWindow`. */
+  mdWindows: FakeMdWindow[];
   posted: Array<{ tabId: string; message: PreviewResponseMessage | PreviewEventMessage }>;
   /** Every `onPreviewsChanged` push, in order (D7's main -> renderer CHANGED contract). */
   changed: PreviewChangedPayload[];
@@ -266,6 +319,8 @@ interface Rig {
    */
   onWindowCreated?: (win: FakeWindow) => void;
   onPanelViewCreated?: (view: FakePanelView) => void;
+  /** Same "fires right after construction" rationale as `onWindowCreated`/`onPanelViewCreated`. */
+  onMdWindowCreated?: (win: FakeMdWindow) => void;
 }
 
 /** Default containment fake: anything under `/workspace` resolves; everything else is refused. */
@@ -279,6 +334,7 @@ async function defaultResolveArtifact(_tabId: string, path: string): Promise<{ r
 function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
   const windows: FakeWindow[] = [];
   const panelViews: FakePanelView[] = [];
+  const mdWindows: FakeMdWindow[] = [];
   const posted: Array<{ tabId: string; message: PreviewResponseMessage | PreviewEventMessage }> = [];
   const changed: PreviewChangedPayload[] = [];
   const clock = { time: 1_000_000 };
@@ -291,6 +347,7 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
     host: undefined as unknown as PreviewHostHandle,
     windows,
     panelViews,
+    mdWindows,
     posted,
     changed,
     clock,
@@ -311,6 +368,12 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
       panelViews.push(view);
       rig.onPanelViewCreated?.(view);
       return view;
+    },
+    createMdWindow: (opts: { previewId: string; tabId: string }) => {
+      const win = new FakeMdWindow(opts.previewId, opts.tabId);
+      mdWindows.push(win);
+      rig.onMdWindowCreated?.(win);
+      return win;
     },
     displayMode: () => displayModeValue.value,
     onPreviewsChanged: (payload) => {
@@ -1086,6 +1149,13 @@ describe("PreviewHost — screenshot op", () => {
 describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md Gap 3 + CONTRACTS)", () => {
   it("creates a ready dom-md record synchronously — no window/panelView, no loadURL", async () => {
     const rig = makeRig();
+    // TASK.99 M3 (CUT-mandated flip): this test's intent is the OPEN
+    // mechanics (synchronous, no Electron container of the web kind), not
+    // the displayMode/container relationship — pinned explicitly to "panel"
+    // now that M3 honors displayMode for md too (rig defaults to "window",
+    // which would otherwise put this record straight into a live mdWindow;
+    // that path is covered by its own describe block below).
+    rig.displayModeValue.value = "panel";
     const result = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1094,6 +1164,7 @@ describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md G
     }
     expect(rig.windows).toHaveLength(0);
     expect(rig.panelViews).toHaveLength(0);
+    expect(rig.mdWindows).toHaveLength(0);
     const listed = rig.host.listForPanel(TAB).previews;
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ viewKind: "dom-md", status: "ready", container: "panel", docVersion: 0 });
@@ -1118,14 +1189,18 @@ describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md G
     expect(rig.host.listForPanel(TAB).previews).toHaveLength(0);
   });
 
-  it("M1 interim (Gap 3): displayMode 'window' is forced to the panel container, with a logged note", async () => {
+  it("TASK.99 M3 (CUT-mandated flip of the M1 interim): displayMode 'window' opens DIRECTLY into a live window container, no forcing, no warning", async () => {
     const warn = vi.fn();
     const rig = makeRig({ logger: { log: vi.fn(), warn, error: vi.fn() } });
     rig.displayModeValue.value = "window";
     const result = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
     expect(result.ok).toBe(true);
-    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ container: "panel", viewKind: "dom-md" });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("window container lands in M3"));
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ container: "window", viewKind: "dom-md" });
+    expect(rig.mdWindows).toHaveLength(1);
+    expect(rig.mdWindows[0]!.shown).toBe(true);
+    // A window-container dom-md record never touches the panel visible slot.
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("reuse-navigate .md -> .md mutates the SAME record in place and bumps docVersion", async () => {
@@ -1186,6 +1261,190 @@ describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md G
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ previewId, viewKind: "web", container: "panel" });
   });
+
+  it("cross-viewKind flip .md -> .html while the md record owns a live window: destroys the OLD mdWindow (no orphan)", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "window";
+    const first = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const previewId = first.ok ? first.value.previewId : "";
+    const oldMdWindow = rig.mdWindows[0]!;
+    expect(oldMdWindow.destroyed).toBe(false);
+
+    const openHtml = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html`, previewId });
+    await flush();
+    expect(oldMdWindow.destroyed).toBe(true); // no orphan window left behind by the flip
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const second = await openHtml;
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.value.previewId).toBe(previewId);
+    }
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, viewKind: "web" });
+  });
+});
+
+/**
+ * TASK.99 M3 (CUT.md GAP 1 + CONTRACTS): the window container itself —
+ * displayMode-honored direct opens, setContainer transfer both directions,
+ * teardown (closeForTab/closeAll/native onClosed), and the epoch guard on a
+ * dom-md record's `mdWindow`. Fake `MdPreviewWindowLike` throughout
+ * (`FakeMdWindow`) — no Electron runtime, same discipline as the rest of
+ * this suite.
+ */
+describe("PreviewHost — markdown: window container (TASK.99 M3, CUT.md GAP 1 + CONTRACTS)", () => {
+  async function openedMdWindowRig(): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "window";
+    const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    return { rig, previewId: opened.ok ? opened.value.previewId : "" };
+  }
+
+  async function openedMdPanelRig(): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    return { rig, previewId: opened.ok ? opened.value.previewId : "" };
+  }
+
+  it("setContainer panel->window: creates a live mdWindow, flips containerKind, clears the panel slot, reloaded:true", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewId);
+
+    const result = await rig.host.setContainer(TAB, previewId, "window");
+    expect(result).toEqual({ ok: true, reloaded: true });
+    expect(rig.mdWindows).toHaveLength(1);
+    expect(rig.mdWindows[0]!.previewId).toBe(previewId);
+    expect(rig.mdWindows[0]!.shown).toBe(true);
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, container: "window" });
+    // The record held the visible slot (it was the only panel preview) -> the slot clears (no survivor).
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBeNull();
+  });
+
+  it("setContainer panel->window: promotes the most-recently-opened surviving panel preview's visible slot", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const a = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.md` });
+    const previewIdA = a.ok ? a.value.previewId : "";
+    rig.clock.time += 10;
+    const b = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.md` });
+    const previewIdB = b.ok ? b.value.previewId : "";
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewIdB); // D5: newest wins
+
+    const result = await rig.host.setContainer(TAB, previewIdB, "window");
+    expect(result).toEqual({ ok: true, reloaded: true });
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewIdA); // survivor promoted
+  });
+
+  it("setContainer window->panel: destroys the old mdWindow, flips containerKind, takes the visible slot, reloaded:true", async () => {
+    const { rig, previewId } = await openedMdWindowRig();
+    const oldMdWindow = rig.mdWindows[0]!;
+
+    const result = await rig.host.setContainer(TAB, previewId, "panel");
+    expect(result).toEqual({ ok: true, reloaded: true });
+    expect(oldMdWindow.destroyed).toBe(true);
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, container: "panel" });
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewId);
+  });
+
+  it("setContainer same-container (window->window / panel->panel) is a zero-churn no-op for dom-md", async () => {
+    const { rig: winRig, previewId: winId } = await openedMdWindowRig();
+    const sameWindow = await winRig.host.setContainer(TAB, winId, "window");
+    expect(sameWindow).toEqual({ ok: true, reloaded: false });
+    expect(winRig.mdWindows).toHaveLength(1); // no second window created
+
+    const { rig: panelRig, previewId: panelId } = await openedMdPanelRig();
+    const samePanel = await panelRig.host.setContainer(TAB, panelId, "panel");
+    expect(samePanel).toEqual({ ok: true, reloaded: false }); // delegates to selectPanelPreview
+    expect(panelRig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(panelId);
+  });
+
+  it("round trip panel->window->panel: record fields and container kind settle back to the original panel state", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+
+    const toWindow = await rig.host.setContainer(TAB, previewId, "window");
+    expect(toWindow).toEqual({ ok: true, reloaded: true });
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, container: "window", viewKind: "dom-md" });
+    const mdWindow = rig.mdWindows[0]!;
+    expect(mdWindow.destroyed).toBe(false);
+
+    const toPanel = await rig.host.setContainer(TAB, previewId, "panel");
+    expect(toPanel).toEqual({ ok: true, reloaded: true });
+    expect(mdWindow.destroyed).toBe(true); // the window-leg container is torn down
+    expect(rig.host.listForPanel(TAB).previews).toHaveLength(1); // same record survives, not a second one
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, container: "panel", viewKind: "dom-md" });
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(previewId);
+  });
+
+  it("no orphans: closeForTab destroys a live mdWindow", async () => {
+    const { rig, previewId } = await openedMdWindowRig();
+    const mdWindow = rig.mdWindows[0]!;
+    rig.host.closeForTab(TAB);
+    expect(mdWindow.destroyed).toBe(true);
+    expect(rig.host.listForTab(TAB)).toEqual([]);
+    void previewId;
+  });
+
+  it("no orphans: closeAll destroys a live mdWindow across every tab", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "window";
+    await rig.host.openForTab("tab-a", { path: `${WORKSPACE_ROOT}/a.md` });
+    await rig.host.openForTab("tab-b", { path: `${WORKSPACE_ROOT}/b.md` });
+    expect(rig.mdWindows).toHaveLength(2);
+
+    rig.host.closeAll();
+    expect(rig.mdWindows.every((w) => w.destroyed)).toBe(true);
+    expect(rig.host.listForTab("tab-a")).toEqual([]);
+    expect(rig.host.listForTab("tab-b")).toEqual([]);
+  });
+
+  it("a preview closed externally (native window close) is removed from listForTab", async () => {
+    const { rig, previewId } = await openedMdWindowRig();
+    expect(rig.host.listForTab(TAB)).toHaveLength(1);
+
+    rig.mdWindows[0]!.simulateExternalClose();
+
+    expect(rig.host.listForTab(TAB)).toEqual([]);
+    void previewId;
+  });
+
+  it("epoch guard: a late close from the OLD mdWindow after a window->panel transfer does not corrupt the surviving record", async () => {
+    const { rig, previewId } = await openedMdWindowRig();
+    const oldMdWindow = rig.mdWindows[0]!;
+
+    const result = await rig.host.setContainer(TAB, previewId, "panel");
+    expect(result).toEqual({ ok: true, reloaded: true });
+    expect(rig.host.listForPanel(TAB).previews.map((p) => p.previewId)).toContain(previewId);
+
+    // The old window is already destroyed (setContainer did it), but its
+    // onClosed listener can still fire late — the epoch guard (record.mdWindow
+    // no longer === oldMdWindow, it's undefined now) must no-op this, not
+    // re-enter destroyRecord for a record that is still very much alive.
+    oldMdWindow.destroy(); // idempotent — already destroyed; fires listeners again if not guarded
+
+    expect(rig.host.listForPanel(TAB).previews.map((p) => p.previewId)).toContain(previewId);
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, container: "panel" });
+  });
+
+  it("epoch guard: a late close from the OLD mdWindow after a panel->window transfer does not corrupt the surviving record", async () => {
+    const { rig, previewId } = await openedMdPanelRig();
+    const toWindow = await rig.host.setContainer(TAB, previewId, "window");
+    expect(toWindow.ok).toBe(true);
+    const firstMdWindow = rig.mdWindows[0]!;
+
+    // Transfer straight back out to a SECOND window (panel->window->panel is
+    // covered above; this exercises window->window's own churn instead, to
+    // get a second live mdWindow whose predecessor's stale close must no-op).
+    await rig.host.setContainer(TAB, previewId, "panel");
+    await rig.host.setContainer(TAB, previewId, "window");
+    const secondMdWindow = rig.mdWindows[1]!;
+    expect(secondMdWindow).not.toBe(firstMdWindow);
+
+    firstMdWindow.destroy(); // already-destroyed predecessor fires late
+
+    expect(rig.host.listForPanel(TAB).previews.map((p) => p.previewId)).toContain(previewId);
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, container: "window" });
+    expect(secondMdWindow.destroyed).toBe(false);
+  });
 });
 
 /**
@@ -1238,7 +1497,14 @@ describe("PreviewHost — commitMdNavigate (TASK.99 M2, CUT.md CONTRACTS)", () =
     // visible-slot occupant (C) is closed. If the bump had NOT happened, B
     // (opened after A, before the navigate) would win the promoted slot
     // instead of A — this discriminates the bump from a no-op.
+    // TASK.99 M3 (CUT-mandated flip): pinned to "panel" — this test's D5
+    // panel-slot-promotion assertions require a panel container, which the
+    // rig's default displayMode no longer guarantees for md now that M3
+    // honors it (a "window" default would put every one of these three
+    // opens into its own live mdWindow instead, never touching the panel
+    // visible slot at all).
     const rig = makeRig();
+    rig.displayModeValue.value = "panel";
     const a = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.md` });
     const previewIdA = a.ok ? a.value.previewId : "";
     rig.clock.time += 100;

@@ -341,6 +341,17 @@ function makeRealHost(): { host: PreviewHostHandle; panelViews: FakePanel[] } {
       panelViews.push(view);
       return view;
     },
+    // TASK.99 M3: this suite never opens a dom-md preview, so no test here
+    // exercises this dep — a minimal fake satisfies PreviewHostDeps' shape.
+    createMdWindow: () => ({
+      isDestroyed: () => false,
+      destroy: () => {},
+      show: () => {},
+      showInactive: () => {},
+      onClosed: () => {},
+      capturePage: () => Promise.resolve({ toPNG: () => Buffer.alloc(0), getSize: () => ({ width: 0, height: 0 }), isEmpty: () => true }),
+      setBackgroundThrottling: () => {},
+    }),
     displayMode: () => "panel",
     resolveArtifact: async (_tabId, path) => ({ realPath: path }),
     autoOpenEnabled: () => true,
