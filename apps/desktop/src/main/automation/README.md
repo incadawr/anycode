@@ -1355,10 +1355,12 @@ the panel. Purely additive; every other field is unchanged.
 
 | Method / path | Body | Returns |
 |---|---|---|
-| `GET /tabs/:tabId/previews` | — | `{previews:[{previewId, url, sourcePath?, status, title?, consoleCount, dropped, container:"panel"\|"window"}]}` |
+| `GET /tabs/:tabId/previews` | — | `{previews:[{previewId, url, sourcePath?, status, title?, consoleCount, dropped, container:"panel"\|"window", viewKind:"web"\|"dom-md", docVersion?}]}` |
 | `GET /tabs/:tabId/previews/:previewId/console?tail=N` | — | `{entries:[{level, message, at}], dropped}` \| `{error}` |
 | `GET /tabs/:tabId/previews/:previewId/screenshot` | — | `{png:"<base64>"}` \| `PreviewResult` failure shape (`{ok:false, error, errorKind}`) |
 | `POST /tabs/:tabId/previews` | `{path?, url?}` | `PreviewResult<PreviewOpenSuccess>` — `{ok:true, value:{previewId, url, title?, kind, renderedFrom?}}` \| `{ok:false, error, errorKind}` |
+| `POST /tabs/:tabId/previews/:previewId/container` | `{target:"panel"\|"window"}` | `PreviewSetContainerResult` — `{ok:true, reloaded:boolean}` \| `{ok:false, error}` (TASK.99 M3: D14 transfer driver, viewKind-agnostic — works for both `web` and `dom-md` records) |
+| `POST /tabs/:tabId/previews/:previewId/navigate` | `{href:string}` | `MdDocReadResult` — `{ok:true, doc:{previewId, sourcePath, realSourcePath, docDir, sourceText, sizeBytes, mtimeMs, docVersion}}` \| `{ok:false, reason:"no_preview"\|"not_md"\|"not_found"\|"outside_roots"\|"too_large"\|"io_error"}` (TASK.99 M5: dev-only driver for `MD_PREVIEW_NAVIGATE` over a `dom-md` record — the SAME `navigateMdDoc` chain a real `.md` link click uses; `dom-md`-only — a `web`-kind previewId (or none) is the honest `no_preview` refusal) |
 
 ```bash
 PORT=$(jq -r .port ~/.anycode/automation.json)

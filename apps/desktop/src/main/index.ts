@@ -97,6 +97,7 @@ import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
 // registered right next to registerPreviewPanelIpc, closing over the SAME
 // live `previewHost` handle via `getMdDocRef`.
 import { registerMdDocIpc } from "./preview/md-doc-ipc.js";
+import type { MdDocDeps } from "./preview/md-doc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import {
@@ -1370,7 +1371,12 @@ void app.whenReady().then(async () => {
   // `resolveArtifactPath`'s own richer `{realPath, contained}` shape;
   // `stat`/`readFileNoFollow` reuse the SAME O_NOFOLLOW read primitive
   // artifacts-ipc.ts's `NodeArtifactsFs` uses for chat-artifact images.
-  registerMdDocIpc({
+  // TASK.99 M5: pulled into a NAMED variable (not inlined into the
+  // `registerMdDocIpc` call below) so the automation-only navigate route
+  // (main/automation/server.ts + handlers.ts, dev-gated) can drive the
+  // EXACT SAME `navigateMdDoc` chain the renderer's MdLink click uses,
+  // rather than re-declaring a second copy of this deps bag.
+  const mdDocDeps: MdDocDeps = {
     getRecordRef: (tabId, previewId) => previewHost?.getMdDocRef(tabId, previewId),
     resolveArtifact: async (tabId, path) => {
       const resolved = await resolveArtifactPath(artifactsIpcDeps, tabId, path);
@@ -1387,7 +1393,8 @@ void app.whenReady().then(async () => {
     // TASK.99 M2: NAVIGATE's record-mutation half — closes over the SAME
     // live `previewHost` the READ lookup above does.
     commitNavigate: (tabId, previewId, fields) => previewHost?.commitMdNavigate(tabId, previewId, fields),
-  });
+  };
+  registerMdDocIpc(mdDocDeps);
 
   manager = new TabHostManager({
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
@@ -1986,6 +1993,11 @@ void app.whenReady().then(async () => {
         // PreviewHost handle constructed above — a model-free smoke of 96-A's
         // open/console/screenshot ops over the automation channel.
         previewHost,
+        // TASK.99 M5 (CUT.md M5 scope item 3): the SAME `MdDocDeps` bag
+        // `registerMdDocIpc` above uses — the dev-only navigate route drives
+        // `navigateMdDoc` directly over it (main-side chain only; the
+        // renderer-side MdLink click behavior stays unit-covered).
+        mdDocDeps,
       });
     } catch (error) {
       console.error("[main] automation server failed to start", error);

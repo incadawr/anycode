@@ -29,6 +29,8 @@ import type { CreateTabResult, TabHost, TabSummary } from "../tabs.js";
 import type { PreviewHostHandle, PreviewSummary } from "../preview/preview-host.js";
 import type { PreviewConsoleEntry, PreviewOpenSuccess, PreviewResult } from "../../shared/preview.js";
 import type { PreviewContainerKind, PreviewSetContainerResult } from "../../shared/preview-panel.js";
+import { navigateMdDoc, type MdDocDeps } from "../preview/md-doc.js";
+import type { MdDocReadResult } from "../../shared/md-preview.js";
 
 /** Structural view of `webContents` the channel needs (executeJavaScript for the facade, capturePage for evidence). */
 export interface CapturedImage {
@@ -102,6 +104,17 @@ export interface HandlerDeps {
    * throwing, so no pre-96-E test needs updating.
    */
   previewHost?: PreviewHostHandle;
+  /**
+   * TASK.99 M5 (CUT.md M5 scope item 3): the SAME `MdDocDeps` bag
+   * `main/index.ts` binds `registerMdDocIpc` with — `previewNavigateMdDoc`
+   * below calls `navigateMdDoc` (md-doc.ts) directly over it, driving the
+   * identical main-side resolve+read+replace chain the renderer's MdLink
+   * click uses (MD_PREVIEW_NAVIGATE), main-plane, no renderer facade
+   * involved. Absent in a fixture/test HandlerDeps -> the route answers the
+   * same honest `{ok:false, reason:"no_preview"}` md-doc-ipc.ts's own
+   * malformed-payload branch uses, never throws.
+   */
+  mdDocDeps?: MdDocDeps;
 }
 
 /* */
@@ -315,6 +328,28 @@ export async function previewSetContainer(
     return { ok: false, error: "preview host unavailable" };
   }
   return deps.previewHost.setContainer(tabId, previewId, target);
+}
+
+/**
+ * `POST /tabs/:tabId/previews/:previewId/navigate {href}` (TASK.99 M5,
+ * CUT.md M5 scope item 3): a model-free driver for `MD_PREVIEW_NAVIGATE`,
+ * needed by the M5 smoke DoD's md->md link-replace leg — forwards verbatim
+ * to `navigateMdDoc` (md-doc.ts) over `deps.mdDocDeps`, the EXACT SAME
+ * chain the renderer's `MdLink` click invokes via IPC. `deps.mdDocDeps`
+ * absent -> the same honest "bucket under the closest reason" posture
+ * md-doc-ipc.ts's own malformed-payload branch uses (no identifiable
+ * preview to navigate without a live deps bag).
+ */
+export async function previewNavigateMdDoc(
+  deps: HandlerDeps,
+  tabId: string,
+  previewId: string,
+  href: string,
+): Promise<MdDocReadResult> {
+  if (deps.mdDocDeps === undefined) {
+    return { ok: false, reason: "no_preview" };
+  }
+  return navigateMdDoc(deps.mdDocDeps, tabId, previewId, href);
 }
 
 // --- Action commands (§4.2) ---
