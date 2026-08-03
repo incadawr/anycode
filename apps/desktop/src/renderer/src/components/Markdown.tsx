@@ -31,6 +31,7 @@ import type { ReactNode } from "react";
 import type { Token, Tokens } from "marked";
 import { decodeMarkedText, fenceLabel, lexMarkdown } from "../markdown/lex.js";
 import { isLocalMdHref, resolveDocRelative } from "../markdown/doc-links.js";
+import { classifyHtmlToken } from "../markdown/html-token.js";
 import {
   fontStyleToCss,
   highlightCode,
@@ -170,6 +171,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
 
 /** Block-token array → elements. `default:` renders raw text in a `.md-p` — unknown/future kinds never throw. */
 function BlockTokens({ tokens }: { tokens: Token[] }) {
+  const mdDoc = useContext(MdDocContext);
   return (
     <>
       {tokens.map((token, index) => {
@@ -224,14 +226,33 @@ function BlockTokens({ tokens }: { tokens: Token[] }) {
             return <Table key={index} table={token as Tokens.Table} />;
           case "hr":
             return <hr key={index} className="md-hr" />;
-          case "html":
-            // Raw block HTML is never interpreted (CSP/XSS law): render the
-            // literal source as a plain text node inside a paragraph.
+          case "html": {
+            // Raw block HTML is never interpreted as an HTML string (CSP/XSS
+            // law, guardrail §6.5 — this never changes, no
+            // `dangerouslySetInnerHTML`). The DOCUMENT path (`mdDoc !== null`,
+            // owner smoke-test fix #2) additionally asks the pure classifier
+            // for a verdict: a comment renders as nothing, an allowlisted
+            // inert tag's OWN markup renders as nothing (its content, if any,
+            // is a separate sibling token already rendering normally — `br`
+            // renders as a line break instead). Anything else, and the chat
+            // path (`mdDoc === null`) unconditionally, keeps the literal
+            // source text — byte-identical to before this fix.
+            const t = token as Tokens.HTML;
+            if (mdDoc !== null) {
+              const verdict = classifyHtmlToken(t.raw);
+              if (verdict.kind === "hidden") {
+                return null;
+              }
+              if (verdict.kind === "unwrap") {
+                return verdict.tag === "br" ? <br key={index} /> : null;
+              }
+            }
             return (
               <p key={index} className="md-p">
-                {(token as Tokens.HTML).raw}
+                {t.raw}
               </p>
             );
+          }
           case "text": {
             const t = token as Tokens.Text;
             return <InlineTokens key={index} tokens={t.tokens ?? [t]} />;
@@ -250,6 +271,7 @@ function BlockTokens({ tokens }: { tokens: Token[] }) {
 
 /** Inline-token array → elements. `default:` renders decoded raw text — unknown/future kinds never throw. */
 function InlineTokens({ tokens }: { tokens: Token[] }) {
+  const mdDoc = useContext(MdDocContext);
   return (
     <>
       {tokens.map((token, index) => {
@@ -332,9 +354,26 @@ function InlineTokens({ tokens }: { tokens: Token[] }) {
               </span>
             );
           }
-          case "html":
-            // Inline raw HTML (e.g. `<span>`) rendered as a literal text node.
-            return <Fragment key={index}>{(token as Tokens.HTML).raw}</Fragment>;
+          case "html": {
+            // Inline raw HTML (e.g. `<span>`) is never interpreted as an HTML
+            // string (CSP/XSS law, guardrail §6.5 — unchanged). The DOCUMENT
+            // path (`mdDoc !== null`, owner smoke-test fix #2) asks the same
+            // pure classifier as the block arm above for a verdict — see its
+            // comment for the hidden/unwrap/literal rundown. The chat path
+            // (`mdDoc === null`) always falls through to the original literal
+            // text node, byte-identical to before this fix.
+            const t = token as Tokens.HTML;
+            if (mdDoc !== null) {
+              const verdict = classifyHtmlToken(t.raw);
+              if (verdict.kind === "hidden") {
+                return null;
+              }
+              if (verdict.kind === "unwrap") {
+                return verdict.tag === "br" ? <br key={index} /> : null;
+              }
+            }
+            return <Fragment key={index}>{t.raw}</Fragment>;
+          }
           default:
             return <Fragment key={index}>{decodeMarkedText(token.raw)}</Fragment>;
         }
