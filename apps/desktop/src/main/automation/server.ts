@@ -143,6 +143,7 @@ import {
   previewScreenshot,
   previewOpen,
   previewSetContainer,
+  previewNavigateMdDoc,
   FacadeThrewError,
   FacadeUnavailableError,
   type AppLike,
@@ -151,6 +152,7 @@ import {
   type ManagerLike,
 } from "./handlers.js";
 import type { PreviewHostHandle } from "../preview/preview-host.js";
+import type { MdDocDeps } from "../preview/md-doc.js";
 
 /** 256 KB body cap (design §5): larger requests are refused before parsing. */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -170,6 +172,13 @@ export interface AutomationServerDeps {
   activeConnectionId?: () => string | undefined;
   /** Forwarded to `HandlerDeps.previewHost` (night-track wave-1 cut §2.8, 96-E preview probes/driver). */
   previewHost?: PreviewHostHandle;
+  /**
+   * TASK.99 M5 (CUT.md M5 scope item 3): forwarded to `HandlerDeps.mdDocDeps`
+   * — the SAME deps bag `main/index.ts` binds `registerMdDocIpc` with, so the
+   * dev-only navigate route below drives `navigateMdDoc` (md-doc.ts) over the
+   * identical live `previewHost`, not a second copy of the wiring.
+   */
+  mdDocDeps?: MdDocDeps;
 }
 
 export interface AutomationServerHandle {
@@ -468,6 +477,12 @@ const previewOpenBody = z
 // PREVIEW_SET_CONTAINER_CHANNEL's own zod enum (panel-ipc.ts) verbatim.
 const previewContainerBody = z.object({ target: z.enum(["panel", "window"]) }).strict();
 
+// TASK.99 M5 (CUT.md M5 scope item 3): `/tabs/:tabId/previews/:previewId/navigate`
+// POST body — a model-free driver for MD_PREVIEW_NAVIGATE, mirroring
+// md-doc-ipc.ts's own `navigateSchema.shape.href` bound verbatim (same 4096
+// cap), needed by the M5 smoke DoD's md->md link-replace leg.
+const previewNavigateBody = z.object({ href: z.string().min(1).max(4096) }).strict();
+
 // ── Codex probe bodies (W4-F0, findings S1-1) ──
 // Probe (b): ONE route, a union body — `{open}` toggles the chip popover,
 // `{pick}` clicks the Nth RENDERED option row (rows carry no stable id in the
@@ -701,6 +716,14 @@ async function route(
   if (method === "POST" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "container") {
     const body = parseBody(rawBody, previewContainerBody);
     return previewSetContainer(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!), body.target);
+  }
+  // `POST /tabs/:tabId/previews/:previewId/navigate {href}` (TASK.99 M5,
+  // CUT.md M5 scope item 3): dev-only driver for MD_PREVIEW_NAVIGATE, same
+  // `parts.length === 5` depth as the container route above, needed by M5's
+  // smoke DoD ("md->md link replaces").
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "navigate") {
+    const body = parseBody(rawBody, previewNavigateBody);
+    return previewNavigateMdDoc(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!), body.href);
   }
   if (method === "GET" && pathname === "/start-screen") {
     return startScreenState(deps);
@@ -1371,6 +1394,7 @@ export function startAutomationServer(deps: AutomationServerDeps): Promise<Autom
     app: deps.app,
     activeConnectionId: deps.activeConnectionId,
     previewHost: deps.previewHost,
+    mdDocDeps: deps.mdDocDeps,
   };
 
   const server = createServer((req, res) => {

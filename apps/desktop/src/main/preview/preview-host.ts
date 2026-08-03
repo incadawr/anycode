@@ -312,6 +312,8 @@ export interface PreviewSummary {
   container: PreviewContainerKind;
   /** M1 (TASK.99 CUT.md CONTRACTS): which record kind this is — 96-E probes assert on it. */
   viewKind: "web" | "dom-md";
+  /** M5 (TASK.99 CUT.md M5 smoke DoD): dom-md refetch key, absent for "web" — lets an automation probe assert a NAVIGATE mutation actually propagated to the live record, not just echoed back by the navigate call itself. */
+  docVersion?: number;
 }
 
 export interface PreviewHostHandle {
@@ -1482,6 +1484,7 @@ class PreviewHost implements PreviewHostHandle {
           dropped: 0,
           container: record.containerKind,
           viewKind: "dom-md",
+          docVersion: record.docVersion,
         });
         continue;
       }
