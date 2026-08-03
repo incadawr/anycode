@@ -142,6 +142,7 @@ import {
   previewConsole,
   previewScreenshot,
   previewOpen,
+  previewMdSpikeVerify,
   FacadeThrewError,
   FacadeUnavailableError,
   type AppLike,
@@ -169,6 +170,8 @@ export interface AutomationServerDeps {
   activeConnectionId?: () => string | undefined;
   /** Forwarded to `HandlerDeps.previewHost` (night-track wave-1 cut §2.8, 96-E preview probes/driver). */
   previewHost?: PreviewHostHandle;
+  /** TASK.99 M3 SPIKE-ONLY: forwarded to `HandlerDeps.mdPreviewSpikeVerify` — see its own doc comment (handlers.ts). */
+  mdPreviewSpikeVerify?: HandlerDeps["mdPreviewSpikeVerify"];
 }
 
 export interface AutomationServerHandle {
@@ -462,6 +465,10 @@ const previewOpenBody = z
   })
   .strict();
 
+// TASK.99 M3 SPIKE-ONLY (removed once the main commit's real container route
+// supersedes it): `/dev/md-preview-spike` POST body.
+const mdPreviewSpikeBody = z.object({ previewId: z.string().min(1).max(256), tabId: z.string().min(1).max(256) }).strict();
+
 // ── Codex probe bodies (W4-F0, findings S1-1) ──
 // Probe (b): ONE route, a union body — `{open}` toggles the chip popover,
 // `{pick}` clicks the Nth RENDERED option row (rows carry no stable id in the
@@ -687,6 +694,14 @@ async function route(
   // depth as the console route above.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "screenshot") {
     return previewScreenshot(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // `POST /dev/md-preview-spike {previewId, tabId}` (TASK.99 M3 SPIKE-ONLY,
+  // removed once the main commit's real container-transfer route supersedes
+  // it): mechanical proof that a second BrowserWindow loading the SAME
+  // renderer bundle under `?view=md-preview` actually boots.
+  if (method === "POST" && pathname === "/dev/md-preview-spike") {
+    const body = parseBody(rawBody, mdPreviewSpikeBody);
+    return previewMdSpikeVerify(deps, body);
   }
   if (method === "GET" && pathname === "/start-screen") {
     return startScreenState(deps);
@@ -1357,6 +1372,7 @@ export function startAutomationServer(deps: AutomationServerDeps): Promise<Autom
     app: deps.app,
     activeConnectionId: deps.activeConnectionId,
     previewHost: deps.previewHost,
+    mdPreviewSpikeVerify: deps.mdPreviewSpikeVerify,
   };
 
   const server = createServer((req, res) => {

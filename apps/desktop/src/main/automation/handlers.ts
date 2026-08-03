@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import type { CreateTabResult, TabHost, TabSummary } from "../tabs.js";
 import type { PreviewHostHandle, PreviewSummary } from "../preview/preview-host.js";
 import type { PreviewConsoleEntry, PreviewOpenSuccess, PreviewResult } from "../../shared/preview.js";
+import type { PreviewContainerKind, PreviewSetContainerResult } from "../../shared/preview-panel.js";
 
 /** Structural view of `webContents` the channel needs (executeJavaScript for the facade, capturePage for evidence). */
 export interface CapturedImage {
@@ -101,6 +102,19 @@ export interface HandlerDeps {
    * throwing, so no pre-96-E test needs updating.
    */
   previewHost?: PreviewHostHandle;
+  /**
+   * TASK.99 M3 SPIKE-ONLY (removed once this slice's real container-transfer
+   * route supersedes it): mechanical proof that a second BrowserWindow
+   * loading the SAME renderer bundle under `?view=md-preview` actually boots
+   * — main/index.ts's `spikeVerifyMdPreviewWindow`.
+   */
+  mdPreviewSpikeVerify?: (opts: { previewId: string; tabId: string }) => Promise<{
+    textContent: string;
+    theme: string;
+    capturedWidth: number;
+    capturedHeight: number;
+    capturedEmpty: boolean;
+  }>;
 }
 
 /* */
@@ -294,6 +308,38 @@ export async function previewOpen(
     return PREVIEW_HOST_UNAVAILABLE;
   }
   return deps.previewHost.openForTab(tabId, { path: req.path, url: req.url });
+}
+
+/** `POST /dev/md-preview-spike {previewId, tabId}`: TASK.99 M3 SPIKE-ONLY verification route — see `HandlerDeps.mdPreviewSpikeVerify`'s own doc comment. */
+export async function previewMdSpikeVerify(
+  deps: HandlerDeps,
+  req: { previewId: string; tabId: string },
+): Promise<{ ok: true; textContent: string; theme: string; capturedWidth: number; capturedHeight: number; capturedEmpty: boolean } | { ok: false; error: string }> {
+  if (deps.mdPreviewSpikeVerify === undefined) {
+    return { ok: false, error: "spike verify unavailable" };
+  }
+  const result = await deps.mdPreviewSpikeVerify(req);
+  return { ok: true, ...result };
+}
+
+/**
+ * `POST /tabs/:tabId/previews/:previewId/container {target}` (TASK.99 M3,
+ * CUT.md M3 scope item 7): a model-free driver for D14 transfer, needed by
+ * M5's smoke DoD ("open in window -> back") and used by THIS slice's own
+ * live round-trip verification — forwards verbatim to
+ * `PreviewHostHandle.setContainer`, same "let the handle own its own
+ * validation" posture as `previewOpen` above.
+ */
+export async function previewSetContainer(
+  deps: HandlerDeps,
+  tabId: string,
+  previewId: string,
+  target: PreviewContainerKind,
+): Promise<PreviewSetContainerResult> {
+  if (deps.previewHost === undefined) {
+    return { ok: false, error: "preview host unavailable" };
+  }
+  return deps.previewHost.setContainer(tabId, previewId, target);
 }
 
 // --- Action commands (§4.2) ---

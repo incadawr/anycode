@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import { MdPreviewWindowApp } from "./components/MdPreviewWindowApp.js";
 import { applyDensity, readDensity } from "./density.js";
 
 // Claude-smoke automation facade (design/phase-2-smoke-channel.md §2.2/§5):
@@ -28,8 +29,13 @@ if (!container) {
   throw new Error("#root element not found");
 }
 
+// TASK.99 M3 (CUT.md GAP 1): the md-preview WINDOW loads this SAME entry
+// under `?view=md-preview&tabId=...&previewId=...` (main/index.ts's
+// `loadMdPreviewWindow`) — branched BEFORE mounting `<App/>` so that window
+// never pulls in the whole chat shell (Sidebar, connection manager, etc.).
+// electron.vite.config.ts stays single-entry either way (the LAW of GAP 1).
+const view = new URLSearchParams(location.search).get("view");
+
 createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+  <StrictMode>{view === "md-preview" ? <MdPreviewWindowApp /> : <App />}</StrictMode>,
 );
