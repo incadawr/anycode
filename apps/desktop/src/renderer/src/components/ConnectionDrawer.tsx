@@ -175,6 +175,39 @@ export function liveModelSuggestions(
 }
 
 /**
+ * Model value after a catalog connection's model list becomes available with
+ * the field still blank (TASK.108-A, owner 08.08): the curated list's FIRST
+ * entry is the default. A connection persisted with an empty model looks
+ * configured in the drawer yet fails `computeProviderReady`'s model gate at
+ * tab-open time, with a toast that blames the API key. An explicit value is
+ * never overridden; no suggestions leaves the field untouched (arbitrary-model
+ * endpoints keep their blank). Exported for direct testing (no jsdom in this
+ * package's vitest config, see file docstring).
+ */
+export function modelAfterCatalogPrefill(current: string, suggestions: readonly { id: string }[]): string {
+  if (current.trim() !== "") {
+    return current;
+  }
+  return suggestions[0]?.id ?? current;
+}
+
+/**
+ * Whether Save must refuse a catalog connection's empty model (TASK.108-A):
+ * the readiness gate requires a model on the active connection, so an empty
+ * save manufactures the false "Configure a provider (API key + model)" toast
+ * later. Only a catalog connection with a known model list is held to this —
+ * custom records/endpoints legitimately run arbitrary or implicit models.
+ * Exported for direct testing (no jsdom).
+ */
+export function modelSaveBlocked(
+  model: string,
+  catalogModelChoices: boolean,
+  suggestions: readonly { id: string }[],
+): boolean {
+  return catalogModelChoices && suggestions.length > 0 && model.trim() === "";
+}
+
+/**
  * Cap on the click-to-fill model chips rendered under the Model field — a
  * huge live list (OpenRouter serves hundreds) stays reachable through the
  * datalist's type-ahead instead of flooding the drawer.
@@ -259,7 +292,17 @@ export function ConnectionDrawerFields({
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
   const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? "");
   const [label, setLabel] = useState(editConnection?.label ?? "");
-  const [model, setModel] = useState(editConnection?.model ?? "");
+  // TASK.108-A: an existing catalog connection persisted with a blank model
+  // (the live trap — readiness fails on it with a key-blaming toast) opens
+  // with the curated default prefilled, so the very next Save heals it.
+  const [model, setModel] = useState(() => {
+    const persisted = editConnection?.model ?? "";
+    if (editConnection === undefined || isCustomRecordProviderId(editConnection.providerId)) {
+      return persisted;
+    }
+    const entry = selectProviderEntry(catalog, editConnection.providerId || undefined);
+    return modelAfterCatalogPrefill(persisted, liveModelSuggestions(null, editConnection.models, entry?.models ?? []));
+  });
   const [baseUrl, setBaseUrl] = useState(editConnection?.baseUrl ?? "");
   const [transport, setTransport] = useState<ProviderTransportId | "">(editConnection?.transport ?? "");
   const [noAuth, setNoAuth] = useState(editConnection?.authOptional === true);
@@ -411,6 +454,12 @@ export function ConnectionDrawerFields({
         return;
       }
       setCreatedConnectionId(createdId);
+      // TASK.108-A: the just-revealed Model field opens on the catalog default
+      // instead of blank, so the follow-up Save can't persist the empty-model
+      // trap.
+      if (!isCustomRecordProviderId(providerId)) {
+        setModel((m) => modelAfterCatalogPrefill(m, selectedEntry?.models ?? []));
+      }
       // Item 3: fold the key's secret-set into Create for a keyed catalog
       // provider — a separate IPC channel, so custody stays intact and the
       // metadata schema never carries a credential.
@@ -434,6 +483,13 @@ export function ConnectionDrawerFields({
    */
   async function save(): Promise<void> {
     if (readOnly || createdConnectionId === null) {
+      return;
+    }
+    // TASK.108-A: refuse to persist the empty-model trap on a catalog
+    // connection — an empty model fails readiness later with a toast that
+    // blames the API key.
+    if (modelSaveBlocked(model, !isCustomRecordConnection && !isNewCustomEndpoint, modelSuggestions)) {
+      setError("Pick a model before saving — without one this connection can't open a tab.");
       return;
     }
     setSaving(true);
@@ -505,6 +561,8 @@ export function ConnectionDrawerFields({
       }
       setFetchedModels(outcome.models);
       if (!isCustomRecordConnection) {
+        // TASK.108-A: a fetch landing on a still-blank field picks the default.
+        setModel((m) => modelAfterCatalogPrefill(m, outcome.models));
         await reloadSnapshot();
       }
     } finally {

@@ -10,6 +10,8 @@ import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } 
 import {
   buildConnectionUpdatePayload,
   liveModelSuggestions,
+  modelAfterCatalogPrefill,
+  modelSaveBlocked,
   providerSelectDisplayValue,
   resolveCreatedConnectionId,
   resolveCreatedCustomProviderId,
@@ -239,5 +241,45 @@ describe("liveModelSuggestions (live-over-static, mirrors providerModelsFor's pr
 
   it("an EMPTY fetch result yields an empty list (the endpoint's answer is authoritative once given)", () => {
     expect(liveModelSuggestions([], ["persisted"], HINTS)).toEqual([]);
+  });
+});
+
+describe("modelAfterCatalogPrefill (TASK.108-A: default model instead of a silent empty save)", () => {
+  const suggestions = [{ id: "glm-5.2" }, { id: "glm-5.1" }];
+
+  it("keeps an explicitly chosen model untouched", () => {
+    expect(modelAfterCatalogPrefill("glm-5.1", suggestions)).toBe("glm-5.1");
+  });
+
+  // The live trap (owner repro 08.08): a catalog connection saved with "" —
+  // the drawer must offer the curated default, not leave the field blank.
+  it("prefills the first suggestion when the model is blank", () => {
+    expect(modelAfterCatalogPrefill("", suggestions)).toBe("glm-5.2");
+    expect(modelAfterCatalogPrefill("   ", suggestions)).toBe("glm-5.2");
+  });
+
+  it("stays blank when there are no suggestions to offer (arbitrary-model endpoints)", () => {
+    expect(modelAfterCatalogPrefill("", [])).toBe("");
+  });
+});
+
+describe("modelSaveBlocked (TASK.108-A: a catalog connection cannot save an empty model)", () => {
+  const suggestions = [{ id: "glm-5.2" }];
+
+  it("blocks a blank model on a catalog connection with known models", () => {
+    expect(modelSaveBlocked("", true, suggestions)).toBe(true);
+    expect(modelSaveBlocked("   ", true, suggestions)).toBe(true);
+  });
+
+  it("passes once a model is picked", () => {
+    expect(modelSaveBlocked("glm-5.2", true, suggestions)).toBe(false);
+  });
+
+  it("never blocks custom-record connections (arbitrary model stays legal)", () => {
+    expect(modelSaveBlocked("", false, suggestions)).toBe(false);
+  });
+
+  it("never blocks a provider that offers no model list", () => {
+    expect(modelSaveBlocked("", true, [])).toBe(false);
   });
 });
