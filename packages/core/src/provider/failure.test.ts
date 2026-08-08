@@ -140,6 +140,37 @@ describe("classifyProviderFailure", () => {
     expect(isRetryableStreamError(error)).toBe(false);
   });
 
+  it("classifies a kimi-style 403 usage-limit as quota, not forbidden (subscription exhaustion rides a 403)", () => {
+    const error = apiCallError({
+      message:
+        "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing",
+      statusCode: 403,
+    });
+
+    const result = classifyProviderFailure(error);
+
+    expect(result).toMatchObject({ code: "quota", retryable: false });
+    // safe.message stays the whitelisted per-code string — the raw text (and its
+    // pricing URL) never reaches the redacted descriptor.
+    expect(result.safe).toEqual({ code: "quota", message: "quota exhausted", statusCode: 403 });
+  });
+
+  it("classifies a 403 usage-limit carried only in structured `data` as quota", () => {
+    const error = apiCallError({
+      message: "request failed",
+      statusCode: 403,
+      data: { error: { message: "You've reached your usage limit for this billing cycle." } },
+    });
+
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "quota", retryable: false });
+  });
+
+  it("classifies a 403 that merely mentions quota (no usage-limit phrase) as forbidden (M3 boundary holds)", () => {
+    const error = apiCallError({ message: "quota policy denies this key", statusCode: 403 });
+
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "forbidden", retryable: false });
+  });
+
   it("classifies a 400 schema-validation error as unknown, non-retryable — consistent with isRetryableStreamError", () => {
     const error = apiCallError({ message: "invalid request: schema validation failed", statusCode: 400 });
 
