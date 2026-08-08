@@ -156,6 +156,12 @@ export function buildChildConfig(
     history: new ConversationHistory({ tokenizer }),
     tokenizer,
     context: parent.context,
+    // Artifact store INHERITED (TASK.94) — one of the few parent facilities a
+    // child gets, because it is not a capability the child can act with: it
+    // only decides whether the child's own oversized tool output is recoverable
+    // or destroyed. Artifacts land in the parent session's directory, which the
+    // parent's own cleanup then collects.
+    artifacts: parent.artifacts,
     // toolConcurrency: default (omitted).
     // subagents/workflows/tasks/lsp/media: intentionally UNSET (undefined) — lock
     // #2, defense in depth. tasks stays unset so a child never opens a background

@@ -19,7 +19,7 @@
  */
 
 import type { ToolDefinition } from "../types/tools.js";
-import { bashTool } from "./bash.js";
+import { bashTool, formatPersistedBashOutput } from "./bash.js";
 import {
   backgroundBashInputSchema,
   type BackgroundBashInput,
@@ -35,6 +35,12 @@ export const backgroundCapableBashTool: ToolDefinition<
   // copy — a copy would still gate the same today, but sharing the reference
   // makes the "byte-identical permission path" invariant structural.
   metadata: bashTool.metadata,
+  // Shared for the same reason as `metadata`: this tool is what the CLI
+  // actually registers as "Bash", so an artifact spill on its sync delegation
+  // path must render the SAME envelope the sync tool renders, structurally
+  // rather than by a copy that can drift. A background start returns a tiny
+  // {taskId} payload that never reaches the spill branch (TASK.94).
+  formatPersistedModelContent: formatPersistedBashOutput,
   inputSchema: backgroundBashInputSchema,
   handler: async (input, ctx) => {
     if (input.run_in_background !== true) {
