@@ -65,7 +65,11 @@ export type SubagentProgress =
   // tool call for the renderer's live feed. `summary` is a pre-capped, sanitized
   // subject (never raw child input); bridged as a subagent_activity AgentEvent.
   | { kind: "tool"; toolName: string; summary: string }
-  | { kind: "end"; status: SubagentOutcome["status"]; turns: number; durationMs: number };
+  // `activitySuppressed` (slice S1 W2, CUT-S1 §0.5): count of tool-kind
+  // progress events this run withheld past SUBAGENT_ACTIVITY_MAX_EVENTS.
+  // Absent when the run never crossed the cap; feeds the persisted card's
+  // honest dropped-activity count.
+  | { kind: "end"; status: SubagentOutcome["status"]; turns: number; durationMs: number; activitySuppressed?: number };
 
 export interface SubagentRunOptions {
   /** Linked to the Agent tool call's abort so parent-stop cascades into the child. */

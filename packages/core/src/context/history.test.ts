@@ -154,6 +154,50 @@ describe("estimateMessageTokens (design §2-C3/R13/L4)", () => {
     expect(estimateMessageTokens(tokenizer, tool)).toBe(textOnly + 3 * IMAGE_TOKEN_ESTIMATE);
   });
 
+  it(
+    "presentation contributes NOTHING to the token estimate (TASK.102 slice S1 W3, " +
+      "CUT-S1 §3 W3 item 6 — outside the model's token budget)",
+    () => {
+      const withoutPresentation: ChatMessage = {
+        role: "tool",
+        content: [{ type: "tool_result", toolCallId: "c1", toolName: "Agent", text: "child result", status: "success" }],
+      };
+      const withPresentation: ChatMessage = {
+        role: "tool",
+        content: [
+          {
+            type: "tool_result",
+            toolCallId: "c1",
+            toolName: "Agent",
+            text: "child result",
+            status: "success",
+            presentation: {
+              subagent: {
+                kind: "subagent",
+                version: 1,
+                target: { kind: "inline" },
+                identity: { agentType: "explore", description: "d", model: "glm-4.6", engine: "codex" },
+                counters: { turns: 3, toolCalls: 5, lastTool: "Bash" },
+                activity: {
+                  entries: [
+                    { toolName: "Bash", summary: "echo hi" },
+                    { toolName: "Read", summary: "/a.ts" },
+                  ],
+                  dropped: 12,
+                },
+                final: { status: "completed", durationMs: 4321 },
+              },
+            },
+          },
+        ],
+      };
+      expect(messageTokenText(withPresentation)).toBe(messageTokenText(withoutPresentation));
+      expect(estimateMessageTokens(tokenizer, withPresentation)).toBe(
+        estimateMessageTokens(tokenizer, withoutPresentation),
+      );
+    },
+  );
+
   it("append caches the image-inclusive estimate", () => {
     const history = new ConversationHistory({ tokenizer: new HeuristicTokenizer() });
     const plain = history.append({ role: "user", content: "same text" });

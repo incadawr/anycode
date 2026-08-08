@@ -1282,6 +1282,108 @@ describe("subagent activity feed (slice P7.18/F16b)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Honest activitySuppressed count (TASK.102 slice S1 W2, CUT-S1 §0.5/§3 W2).
+// The activity feed silently stopped emitting past SUBAGENT_ACTIVITY_MAX_EVENTS
+// (P7.18/F16b); S1 makes the withheld count observable on subagent_end so the
+// persisted card's "+N earlier" is never a lie relative to what actually ran.
+
+describe("subagent activitySuppressed (TASK.102 slice S1 W2)", () => {
+  it("emits exactly SUBAGENT_ACTIVITY_MAX_EVENTS activity rows and reports the EXACT suppressed count on end", async () => {
+    const overflow = SUBAGENT_ACTIVITY_MAX_EVENTS + 37;
+    let step = 0;
+    const model = new ScriptedModelPort(() => {
+      step += 1;
+      return step === 1
+        ? multiToolStep(
+            Array.from({ length: overflow }, (_unused, i) => ({
+              id: `t${i}`,
+              name: "TodoRead",
+              input: {},
+            })),
+          )
+        : textStep("child done");
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    const activity = progress.filter((p) => p.kind === "tool");
+    expect(activity).toHaveLength(SUBAGENT_ACTIVITY_MAX_EVENTS);
+    const endEvents = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    expect(endEvents).toHaveLength(1);
+    expect(endEvents[0]!.activitySuppressed).toBe(overflow - SUBAGENT_ACTIVITY_MAX_EVENTS);
+  });
+
+  it("a child that never crosses the cap carries no activitySuppressed key on end (no silent zero)", async () => {
+    const model = new ScriptedModelPort(() => textStep("no tools needed"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    const endEvents = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    expect(endEvents).toHaveLength(1);
+    expect(endEvents[0] && "activitySuppressed" in endEvents[0]).toBe(false);
+  });
+
+  it("invalid_input child tool calls count toward NEITHER emitted activity NOR activitySuppressed", async () => {
+    // Fill the activity cap exactly with valid calls, THEN propose more calls
+    // that are invalid (SDK-level parse failure, ProposedToolCall.invalid) —
+    // if invalid_input calls counted as suppressed, activitySuppressed would
+    // include them; they must not, since they never actually ran.
+    const validCount = SUBAGENT_ACTIVITY_MAX_EVENTS;
+    const invalidCount = 4;
+    let step = 0;
+    const model = new ScriptedModelPort(() => {
+      step += 1;
+      if (step !== 1) {
+        return textStep("child done");
+      }
+      const validCalls = Array.from({ length: validCount }, (_unused, i) => ({
+        type: "tool_call" as const,
+        toolCall: { id: `valid-${i}`, name: "TodoRead", input: {} },
+      }));
+      const invalidCalls = Array.from({ length: invalidCount }, (_unused, i) => ({
+        type: "tool_call" as const,
+        toolCall: {
+          id: `invalid-${i}`,
+          name: "Bash",
+          input: {},
+          invalid: { reason: "unparseable arguments" },
+        },
+      }));
+      return [
+        { type: "start" as const },
+        ...validCalls,
+        ...invalidCalls,
+        { type: "finish" as const, finishReason: "tool_calls" as const, usage: {} },
+      ];
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    const activity = progress.filter((p) => p.kind === "tool");
+    expect(activity).toHaveLength(validCount);
+    const endEvents = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    // The valid calls exactly filled the cap; the invalid ones never reached
+    // dispatch, so they must not push activitySuppressed above zero.
+    expect(endEvents[0] && "activitySuppressed" in endEvents[0]).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Profile-declared model (`model:` frontmatter). Precedence is request >
 // profile > inherit-parent; a host with no resolver refuses honestly rather
 // than running the child on a model its author did not ask for.

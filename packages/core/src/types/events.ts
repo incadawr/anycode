@@ -164,6 +164,16 @@ export type AgentEvent =
       status: "completed" | "max_turns" | "cancelled" | "error";
       turns: number;
       durationMs: number;
+      /**
+       * Count of subagent_activity events the runner withheld past
+       * SUBAGENT_ACTIVITY_MAX_EVENTS this run (TASK.102 slice S1 W2, CUT-S1
+       * §0.5). Additive-optional: absent on a replay from before this field
+       * existed (falls back to the pre-S1 "silently bounded" behavior), and
+       * absent whenever the run never actually crossed the cap. Feeds the
+       * persisted card's honest `activity.dropped` count alongside the
+       * reducer's own ring/byte-cap evictions (card-snapshot.ts).
+       */
+      activitySuppressed?: number;
     }
   // Per-child-tool activity (Phase 7 slice P7.18/F16b). Additive: rides the same
   // agent_event envelope on the desktop wire with no protocol change (protocol.ts
