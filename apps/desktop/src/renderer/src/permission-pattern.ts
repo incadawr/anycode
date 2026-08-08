@@ -22,6 +22,17 @@
  * The secure consequence: a stored `node *` rule matches bare `node …` but an
  * env-prefixed invocation (`OUT=x node …`, `NODE_OPTIONS=… node …`) does NOT
  * match — it re-asks, and the human sees the full prefix before deciding.
+ *
+ * **TASK.104 (compound commands):** `commandBinary` used to hand back the
+ * first surviving token of a whole COMMAND LINE, so the modal offered
+ * `export *` — a near-all-Bash rule wearing a narrow-looking face — for
+ * `export PATH=…; cd apps/desktop && pnpm exec vitest run … | tail -20`. A
+ * single binary does not describe a pipeline, so no suggestion is born for any
+ * command carrying a top-level operator (see `hasTopLevelOperator`); the user
+ * can still pick the explicit tool-level rule in the modal. Separately,
+ * `export FOO=1` is an assignment by meaning and is now walked like `env`/
+ * `FOO=1` — but only while its value is provably inert, so
+ * `export PATH="$PATH:/x" node y` keeps `export` as the binary (fail closed).
  */
 
 /**
@@ -127,8 +138,9 @@ function isInertAssignment(token: string): boolean {
 }
 
 /**
- * Index of the first token that is neither a provably-inert env-assignment
- * nor a single leading bare `env`. Shared walk used by both `commandBinary`
+ * Index of the first token that is neither a provably-inert env-assignment,
+ * nor a single leading bare `env`, nor a single leading `export` introducing
+ * such an assignment (TASK.104). Shared walk used by both `commandBinary`
  * and `sanitizeBashPattern` (design §4.2: "commandBinary/sanitizeBashPattern
  * share the token walk"). Returns `tokens.length` when every token was
  * consumed (the command is nothing but assignments, e.g. `FOO=1`) — callers
@@ -136,11 +148,13 @@ function isInertAssignment(token: string): boolean {
  * return an empty rule". A leading `env` is skipped only when a next token
  * exists and does not start with `-` (blocks `env -S`/`env -i`/`env -u`/
  * `env --`, which change semantics) — otherwise `env` itself becomes the
- * binary (fail closed).
+ * binary (fail closed). `export` follows the same fail-closed shape: it is
+ * skipped only when the very next token is a provably-inert assignment.
  */
 function firstSurvivingIndex(tokens: readonly string[]): number {
   let i = 0;
   let envSkipped = false;
+  let exportSkipped = false;
   while (i < tokens.length) {
     const token = tokens[i];
     if (token === undefined) {
@@ -158,27 +172,117 @@ function firstSurvivingIndex(tokens: readonly string[]): number {
         continue;
       }
     }
+    if (!exportSkipped && token === "export") {
+      // `export FOO=1 …` is an assignment by meaning (TASK.104): skipped only
+      // when the very next token is a provably-inert assignment, so `export`
+      // with a flag, a bare name, or an expanding value (`export PATH="$PATH:/x"`)
+      // stays the binary — fail closed, same shape as the `env` rule above.
+      const next = tokens[i + 1];
+      if (next !== undefined && ASSIGNMENT_RE.test(next) && isInertAssignment(next)) {
+        exportSkipped = true;
+        i++;
+        continue;
+      }
+    }
     break;
   }
   return i;
 }
 
 /**
+ * True when a command carries a shell operator that makes it COMPOUND —
+ * `;`, `&&`, `||`, `|`, a control `&`, or a newline — outside quotes and
+ * unescaped (TASK.104). Deliberately blunt: even `git fetch && git status`,
+ * whose segments do share one binary, counts as compound, because a suggested
+ * `git *` would be a rule the user never actually reviewed as such. Quoted or
+ * backslash-escaped operators are literal text (`echo "a;b"` is one command),
+ * and a `&` belonging to a redirection (`2>&1`, `>&2`, `&>log`) is not a
+ * separator.
+ */
+function hasTopLevelOperator(command: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === undefined) {
+      continue;
+    }
+    const next = command[i + 1];
+
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      }
+      continue;
+    }
+    if (inDouble) {
+      if (ch === "\\" && next !== undefined) {
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n") {
+      return true;
+    }
+    if (ch === "&") {
+      const prev = command[i - 1];
+      if (prev === ">" || prev === "<" || next === ">") {
+        continue;
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * First non-env-assignment token of a Bash command: skips leading tokens
- * matching `/^[A-Za-z_][A-Za-z0-9_]*=/` (assignment) and one leading bare
- * `env`. Returns `undefined` when the command tokenizes to nothing.
+ * matching `/^[A-Za-z_][A-Za-z0-9_]*=/` (assignment), one leading bare `env`,
+ * and one leading `export` whose value is inert. Returns `undefined` when the
+ * command tokenizes to nothing.
+ * **No suggestion for a compound command (TASK.104):** a command line holding
+ * a top-level `;`/`&&`/`||`/`|`/`&`/newline is several commands, which no
+ * single binary describes — returning `undefined` means the modal offers no
+ * pre-filled pattern at all rather than one scoped to the first binary while
+ * silently vouching for the rest.
  * **Never-widen fallback:** when every token is an assignment (`FOO=1`),
  * returns the raw first token rather than `undefined` — a degenerate command
  * must still seed a narrow (if odd-looking) suggestion, not silently
- * disappear into a bare all-uses rule downstream.
+ * disappear into a bare all-uses rule downstream. A pure `export FOO=1` is
+ * exempt: it is an assignment by meaning, and `export *` is the near-all-Bash
+ * pattern this task exists to stop suggesting.
  */
 export function commandBinary(command: string): string | undefined {
+  if (hasTopLevelOperator(command)) {
+    return undefined;
+  }
   const tokens = tokenizeCommand(command);
   if (tokens.length === 0) {
     return undefined;
   }
   const i = firstSurvivingIndex(tokens);
-  return i < tokens.length ? tokens[i] : tokens[0];
+  if (i < tokens.length) {
+    return tokens[i];
+  }
+  return tokens[0] === "export" ? undefined : tokens[0];
 }
 
 /** Matches a pattern that is empty or consists solely of wildcard tokens (`""`, `"*"`, `"**"`, any run of `*`/whitespace) — the P1 guard's "would this auto-produce a match-everything rule?" check. */

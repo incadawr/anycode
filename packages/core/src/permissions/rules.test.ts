@@ -276,6 +276,90 @@ describe("RuleAwarePermissionEngine", () => {
     expect(ruling.decision).toBe("allow");
   });
 
+  it("TASK.104: rule 'git *' does NOT allow 'git status; rm -rf /tmp/x' (every ; segment must match)", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Bash", pattern: "git *" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: { command: "git status; rm -rf /tmp/x" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("TASK.104: rule 'git *' does NOT allow 'git status && rm -rf /tmp/x' (&& segment)", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Bash", pattern: "git *" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: { command: "git status && rm -rf /tmp/x" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("TASK.104: rule 'git *' does NOT allow 'git log | head -5' (pipe segment does not match)", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Bash", pattern: "git *" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: { command: "git log | head -5" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("TASK.104: rule 'git *' does NOT allow 'git log $(touch /tmp/x)' (command substitution is fail-closed)", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Bash", pattern: "git *" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: { command: "git log $(touch /tmp/x)" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("TASK.104: rule 'git *' still allows a compound command when EVERY segment matches ('git fetch && git status')", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Bash", pattern: "git *" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: { command: "git fetch && git status" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("allow");
+  });
+
+  it("TASK.104: a quoted ';' is not an operator -- rule 'echo *' still allows 'echo \"a;b\"'", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Bash", pattern: "echo *" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: { command: 'echo "a;b"' },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("allow");
+  });
+
   it("never overrides a plan-mode deny even when a matching rule exists", () => {
     const rules = new SessionPermissionRules();
     rules.add({ toolName: "Write" });
