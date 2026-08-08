@@ -20,6 +20,7 @@ import type { WorkspaceTransition, WorktreeControlPort } from "../ports/worktree
 import type { PreviewPort } from "../ports/preview.js";
 import type { ArtifactContext, ArtifactRetention } from "../ports/artifacts.js";
 import type { ResultPreviewDirection } from "../util/result-budget.js";
+import type { ToolResultPresentation } from "./subagent-card.js";
 
 export type RiskLevel = "low" | "medium" | "high";
 
@@ -236,6 +237,14 @@ export interface ToolResult<Out = unknown> {
    * all proposed calls in history.
    */
   control?: { type: "workspace_transition"; transition: WorkspaceTransition };
+  /**
+   * Renderer-facing card presentation (TASK.102 slice S1, CUT-S1 §2.3).
+   * NEVER model-visible: formatResultForModel/stringifyOutput never see this
+   * field — it rides ToolCallOutcome.result straight into the ToolResultPart
+   * via buildToolResultMessage (loop/agent-loop.ts), for persistence/hydration
+   * only.
+   */
+  presentation?: ToolResultPresentation;
 }
 
 /**

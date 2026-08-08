@@ -1056,6 +1056,7 @@ function buildToolResultMessage(call: ProposedToolCall, outcome: ToolCallOutcome
         text: outcome.modelText,
         status: outcome.status,
         ...(outcome.result?.images?.length ? { images: outcome.result.images } : {}),
+        ...(outcome.result?.presentation !== undefined ? { presentation: outcome.result.presentation } : {}),
       },
     ],
   };

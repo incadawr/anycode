@@ -22,7 +22,7 @@
  * lock, and keeps the run() seam clean.
  */
 
-import type { ToolDefinition, ToolEmittedEvent, ToolMetadata } from "../types/tools.js";
+import type { ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
 import type { SubagentProgress } from "../ports/subagent.js";
 import { SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS, SUBAGENT_OUTPUT_MAX_BYTES } from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
@@ -30,6 +30,13 @@ import {
   sanitizeAndCap,
   SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS,
 } from "../subagents/summarize-tool.js";
+import {
+  createSubagentCardAccumulator,
+  finalizeSubagentCard,
+  reduceSubagentCardEvent,
+  type SubagentCardEvent,
+} from "../subagents/card-snapshot.js";
+import type { ToolResultPresentation } from "../types/subagent-card.js";
 import { agentInputSchema, type AgentInput, type AgentOutput } from "./schemas.js";
 
 /** Persona used when the model omits agent_type. */
@@ -85,6 +92,14 @@ export const agentTool: ToolDefinition<AgentInput, AgentOutput> = {
     // parent's stream as subagent_* events via ctx.emit (design §3.2/§3.3), each
     // carrying THIS Agent call's toolCallId so the desktop card correlates them.
     // The dispatcher turns any throw into an error-outcome, so the loop stays sound.
+    //
+    // Presentation accumulation (TASK.102 slice S1 W3, CUT-S1 §3 W3): the
+    // accumulator is fed from every progress callback UNCONDITIONALLY — it
+    // must survive even when ctx.emit is absent (a handler running outside
+    // the batch runner still needs a persisted card). Feeding it the SAME
+    // mapped event ctx.emit receives keeps the persisted activity entries
+    // byte-identical to what the live renderer saw.
+    let acc = createSubagentCardAccumulator();
     const outcome = await ctx.subagents.run(
       {
         agentType,
@@ -94,12 +109,24 @@ export const agentTool: ToolDefinition<AgentInput, AgentOutput> = {
       },
       {
         signal: ctx.abortSignal,
-        onProgress: (progress) => ctx.emit?.(mapProgressToEvent(progress, ctx.toolCallId)),
+        onProgress: (progress) => {
+          const event = mapProgressToEvent(progress, ctx.toolCallId);
+          acc = reduceSubagentCardEvent(acc, event);
+          ctx.emit?.(event);
+        },
       },
     );
+    // Terminal snapshot, or null when the child never reached subagent_start
+    // (an early failure before the first progress callback — the card is
+    // never fabricated from nothing, CUT-S1 §3 W1). The fallback status/
+    // durationMs cover the case where the port settled without ever sending
+    // an end-progress (e.g. a throw in the runner).
+    const snapshot = finalizeSubagentCard(acc, { status: outcome.status, durationMs: outcome.durationMs });
+    const presentation: { presentation?: ToolResultPresentation } =
+      snapshot !== null ? { presentation: { subagent: snapshot } } : {};
 
     if (outcome.status === "error") {
-      return { ok: false, error: outcome.finalText || "Agent: the subagent failed." };
+      return { ok: false, error: outcome.finalText || "Agent: the subagent failed.", ...presentation };
     }
     // max_turns (TASK.44): the child hit its turn budget — this is NOT a
     // success. Return an explicit incomplete errorKind so the dispatcher maps
@@ -114,7 +141,7 @@ export const agentTool: ToolDefinition<AgentInput, AgentOutput> = {
       const error = partial
         ? `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing. Partial result:\n\n${partial}`
         : `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing and produced no partial result. The task was not completed — refine the prompt, narrow the scope, or raise maxTurns.`;
-      return { ok: false, errorKind: "max_turns", error, output: { ...outcome } };
+      return { ok: false, errorKind: "max_turns", error, output: { ...outcome }, ...presentation };
     }
     // cancelled (TASK.44): preserve cancellation semantics — never success.
     // The dispatcher maps errorKind "cancelled" to status "cancelled", so the
@@ -125,11 +152,12 @@ export const agentTool: ToolDefinition<AgentInput, AgentOutput> = {
         errorKind: "cancelled",
         error: "Agent: the subagent was cancelled.",
         output: { ...outcome },
+        ...presentation,
       };
     }
     // The runner already capped finalText and set truncated; forward the outcome
     // verbatim (finalText/truncated/status/counters) as the tool payload.
-    return { ok: true, output: { ...outcome } };
+    return { ok: true, output: { ...outcome }, ...presentation };
   },
   formatResultForModel: (result) => {
     if (!result.ok) {
@@ -142,9 +170,14 @@ export const agentTool: ToolDefinition<AgentInput, AgentOutput> = {
 /**
  * Projects a coarse SubagentProgress onto the matching subagent_* AgentEvent,
  * stamping the Agent tool call's id (design §3.3). The three variants map 1:1;
- * the status/counter unions already align with the event shapes.
+ * the status/counter unions already align with the event shapes. Typed as
+ * SubagentCardEvent (a strict subset of ToolEmittedEvent — the subagent_*
+ * variants only) rather than the broader ToolEmittedEvent: this lets the
+ * result feed directly into reduceSubagentCardEvent (card-snapshot.ts,
+ * TASK.102 slice S1 W3) without a cast, while remaining assignable wherever
+ * ToolEmittedEvent is expected (ctx.emit below).
  */
-function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): ToolEmittedEvent {
+function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): SubagentCardEvent {
   switch (progress.kind) {
     case "start":
       return {
@@ -183,6 +216,7 @@ function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): Too
         status: progress.status,
         turns: progress.turns,
         durationMs: progress.durationMs,
+        ...(progress.activitySuppressed !== undefined ? { activitySuppressed: progress.activitySuppressed } : {}),
       };
   }
 }

@@ -358,6 +358,72 @@ describe("ContextManager.maybeMicrocompact", () => {
     }
   });
 
+  it(
+    "microcompact clears text and images but leaves `presentation` untouched " +
+      "(TASK.102 slice S1 W3, CUT-S1 §3 W3 item 4)",
+    () => {
+      const img = (): ImageAttachment => ({ mediaType: "image/png", data: "AAAA", sourcePath: "/x.png" });
+      const presentation = {
+        subagent: {
+          kind: "subagent" as const,
+          version: 1 as const,
+          target: { kind: "inline" as const },
+          identity: { agentType: "explore", description: "d", model: null, engine: null },
+          counters: { turns: 1, toolCalls: 1, lastTool: "Bash" },
+          activity: { entries: [{ toolName: "Bash", summary: "echo hi" }], dropped: 0 },
+          final: { status: "completed" as const, durationMs: 5 },
+        },
+      };
+      const presentationToolResult = (id: string, text: string): ChatMessage => ({
+        role: "tool",
+        content: [
+          {
+            type: "tool_result",
+            toolCallId: id,
+            toolName: "Agent",
+            text,
+            status: "success",
+            images: [img()],
+            presentation,
+          },
+        ],
+      });
+      const messages: ChatMessage[] = [userMsg("go")];
+      for (let i = 0; i < 8; i += 1) {
+        messages.push(assistantToolCall(`c${i}`));
+        messages.push(presentationToolResult(`c${i}`, LONG_TEXT));
+      }
+      const history = buildHistory(messages);
+      const manager = makeManager(history, new ScriptedModelPort([]), {
+        microcompactKeepRecentToolResults: 5,
+        microcompactMinSavingsTokens: 256,
+      });
+      manager.noteUsage({ inputTokens: 150_000 });
+
+      const result = manager.maybeMicrocompact();
+      expect(result).not.toBeNull();
+      expect(result!.clearedToolResults).toBe(3);
+
+      const toolItems = history.items.filter((i) => i.message.role === "tool");
+      const cleared = toolItems.slice(0, 3);
+      const kept = toolItems.slice(3);
+      for (const item of cleared) {
+        const part = (item.message as unknown as { content: Array<Record<string, unknown>> }).content[0]!;
+        expect(part.text).toBe(MICROCOMPACT_CLEARED_TEXT);
+        expect("images" in part).toBe(false);
+        // presentation is NOT cleared alongside text/images — the persisted
+        // card survives a microcompact of its own paired tool_result.
+        expect(part.presentation).toEqual(presentation);
+        expect(item.kind).toBe("microcompact_cleared");
+      }
+      for (const item of kept) {
+        const part = (item.message as unknown as { content: Array<Record<string, unknown>> }).content[0]!;
+        expect(part.text).toBe(LONG_TEXT);
+        expect(part.presentation).toEqual(presentation);
+      }
+    },
+  );
+
   it("fires at the threshold and stays idle one token below it", () => {
     const messages: ChatMessage[] = [userMsg("go")];
     for (let i = 0; i < 8; i += 1) {

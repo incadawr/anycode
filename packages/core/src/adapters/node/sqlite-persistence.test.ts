@@ -879,6 +879,68 @@ describe("SqlitePersistenceAdapter", () => {
     await reopened.close();
   });
 
+  it(
+    "round-trips a ToolResultPart.presentation (subagent card) exactly through " +
+      "appendHistory/loadHistory AND replaceHistory/loadHistory (TASK.102 slice S1 W3, " +
+      "CUT-S1 §3 W3 item 5 — the REAL adapter, not a mock sink)",
+    async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+      const presentation = {
+        subagent: {
+          kind: "subagent" as const,
+          version: 1 as const,
+          target: { kind: "inline" as const },
+          identity: { agentType: "explore", description: "look around", model: "glm-4.6", engine: "codex" as const },
+          counters: { turns: 3, toolCalls: 5, lastTool: "Bash" },
+          activity: {
+            entries: [
+              { toolName: "Bash", summary: "echo hi" },
+              { toolName: "Read", summary: "/a.ts" },
+            ],
+            dropped: 12,
+          },
+          final: { status: "max_turns" as const, durationMs: 4321 },
+        },
+      };
+
+      const items: HistoryItem[] = [
+        makeItem({
+          id: "t1",
+          createdAt: 12,
+          message: {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                toolCallId: "call-agent-1",
+                toolName: "Agent",
+                text: "child result text",
+                status: "max_turns",
+                presentation,
+              },
+            ],
+          },
+        }),
+      ];
+
+      await adapter.appendHistory(session.id, items);
+      const appended = await adapter.loadHistory(session.id);
+      expect(appended).toEqual(items);
+      expect(
+        (appended[0]!.message as { content: Array<{ presentation?: unknown }> }).content[0]!.presentation,
+      ).toEqual(presentation);
+
+      // replaceHistory (compaction path) round-trips the same shape.
+      await adapter.replaceHistory(session.id, items);
+      const replaced = await adapter.loadHistory(session.id);
+      expect(replaced).toEqual(items);
+
+      await adapter.close();
+    },
+  );
+
   it("preserves append order across multiple calls", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });

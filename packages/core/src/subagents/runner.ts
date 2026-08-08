@@ -454,6 +454,12 @@ export function createSubagentRunner(
         // bounded — tool-activity stops emitting past SUBAGENT_ACTIVITY_MAX_EVENTS,
         // while counters (subagent_progress) and start/end continue unaffected.
         let activityEmitted = 0;
+        // Count of tool_result-eligible child calls withheld past the cap
+        // (TASK.102 slice S1 W2, CUT-S1 §0.5): reported on end-progress so the
+        // persisted card's dropped-activity count is honest, not silently
+        // bounded. invalid_input calls are excluded — same eligibility test as
+        // emission below, they never actually ran.
+        let activitySuppressed = 0;
         // Buffers a validated call's name+input from tool_execution_start until its
         // paired tool_result arrives (W1-FIX, see the tool_result case below); a
         // batch can interleave multiple starts before any result, so this is keyed
@@ -509,17 +515,17 @@ export function createSubagentRunner(
                 // carries raw child input verbatim.
                 const pending = pendingChildCalls.get(event.outcome.toolCallId);
                 pendingChildCalls.delete(event.outcome.toolCallId);
-                if (
-                  pending &&
-                  event.outcome.status !== "invalid_input" &&
-                  activityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS
-                ) {
-                  activityEmitted += 1;
-                  onProgress?.({
-                    kind: "tool",
-                    toolName: pending.toolName,
-                    summary: summarizeChildToolCall(pending.toolName, pending.input),
-                  });
+                if (pending && event.outcome.status !== "invalid_input") {
+                  if (activityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS) {
+                    activityEmitted += 1;
+                    onProgress?.({
+                      kind: "tool",
+                      toolName: pending.toolName,
+                      summary: summarizeChildToolCall(pending.toolName, pending.input),
+                    });
+                  } else {
+                    activitySuppressed += 1;
+                  }
                 }
                 break;
               }
@@ -559,7 +565,13 @@ export function createSubagentRunner(
           durationMs: Date.now() - startedAt,
         };
 
-        onProgress?.({ kind: "end", status, turns, durationMs: outcome.durationMs });
+        onProgress?.({
+          kind: "end",
+          status,
+          turns,
+          durationMs: outcome.durationMs,
+          ...(activitySuppressed > 0 ? { activitySuppressed } : {}),
+        });
 
         // Fire SubagentStop observers INSIDE the permit (semaphore still held,
         // released by the finally below) and BEFORE returning: a bounded,
