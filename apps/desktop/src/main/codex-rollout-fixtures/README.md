@@ -158,7 +158,7 @@ instruction ("synthetic MINIMAL fixture ... if none is found in the existing cor
   not exhaustive, and importer code must not `switch`-exhaust on it without a `default: skip`.
   Also carries one `custom_tool_call{name:"exec"}`/`custom_tool_call_output` pair and a
   `world_state`/`turn_context` pair. This is one of our own multi-agent orchestration sessions
-  (`cwd` under `/Users/incadawr/projects/tools/anycode` — scrubbed).
+  (`cwd` under `/Users/<user>/projects/tools/anycode` — scrubbed).
 
 ### `malformed-json-line.jsonl`
 - **Source:** same file as `basic-chat-developer-reasoning.jsonl` (04/08 session), reused because

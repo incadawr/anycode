@@ -51,7 +51,7 @@ function entry(overrides: Partial<McpConfigEntryView> = {}): McpConfigEntryView 
     source: "project",
     enabled: true,
     transport: "stdio",
-    commandLine: "node /Users/incadawr/mcp/index.js --flag",
+    commandLine: "node /Users/<user>/mcp/index.js --flag",
     envKeys: [],
     ...overrides,
   };
