@@ -39,6 +39,9 @@ import { ShadowGitCheckpoints } from "../checkpoints/shadow-git.js";
 // owning module (not through the adapters/node barrel), same pattern as the
 // sqlite adapter and ShadowGitCheckpoints above.
 import { JsonlTelemetrySink } from "../adapters/node/node-telemetry.js";
+// Artifact store (TASK.94): same direct-import pattern as the sinks above —
+// the adapters/node barrel is frozen.
+import { NodeArtifactStore } from "../adapters/node/node-artifacts.js";
 import { ConversationHistory } from "../context/history.js";
 import { deriveSessionTitle, generateSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
 import { createDefaultTokenizer } from "../context/tokenizer.js";
@@ -96,6 +99,7 @@ import {
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import {
+  ARTIFACT_MAX_AGE_MS,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   IMAGE_MAX_PER_MESSAGE,
   REPO_MAP_MAX_TOKENS,
@@ -1025,6 +1029,21 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
       })
     : null;
 
+  // Artifact store for oversized tool results (TASK.94), rooted beside the
+  // sqlite DB by the SAME conditional as checkpointsRoot above — deliberately
+  // OUTSIDE the workspace, so a spilled Bash log can never appear in the user's
+  // `git status` and never needs write permission on the working tree.
+  const artifactsRoot =
+    dbPath === ":memory:"
+      ? join(home, ".anycode", "artifacts")
+      : join(dirname(dbPath), "artifacts");
+  const artifactStore = new NodeArtifactStore(artifactsRoot);
+  // Age-based GC, fire-and-forget at boot: this — not the exit-path
+  // removeSession below — is the collector that actually holds, because a
+  // crashed or force-quit session never reaches an exit path at all. Detached
+  // from the boot sequence so a slow disk can never delay the first prompt.
+  void artifactStore.sweepExpired(ARTIFACT_MAX_AGE_MS).catch(() => {});
+
   // GitPort over the workspace's REAL `.git` (design slice-5.4-cut.md §2.6):
   // powers /status, /diff, /commit. Deliberately the env-opposite of the
   // shadow-git checkpoint service above — NodeGitAdapter never sets the GIT_DIR
@@ -1114,6 +1133,13 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         // already covered by the parent checkpoint taken BEFORE the Agent/Workflow
 
         ...(checkpointService !== null ? { checkpoints: checkpointService } : {}),
+
+        // Artifact spill (TASK.94): with this present, a Bash result over
+        // BASH_RESULT_MAX_MODEL_BYTES is written in full and the model gets a
+        // path plus a preview instead of a truncated tail. Every other tool
+        // keeps its declared strategy ("truncate" by default), so this changes
+        // nothing for them.
+        artifacts: { store: artifactStore, sessionId: session.id },
 
 
         // ctx.tasks undefined, so BashOutput/BashKill's fail-closed idiom
@@ -1213,6 +1239,11 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
       telemetry.record({ v: 1, ts: Date.now(), session: session.id, t: "session_end" });
       await telemetry.dispose();
     }
+    // Second line of artifact cleanup (TASK.94): "session" retention gets its
+    // literal reading wherever a clean exit point exists. Never throws by
+    // contract, so it cannot hold up the exit; the boot sweep covers the exits
+    // that never happen.
+    await artifactStore.removeSession(session.id);
     return printExit;
   }
 
@@ -1658,6 +1689,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     await titleWork;
   }
   await persistence.close();
+  // Second line of artifact cleanup (TASK.94) — see the print-mode exit above.
+  // Last, because a spilled artifact is only worth anything while the session
+  // that produced it can still be talked to.
+  await artifactStore.removeSession(session.id);
 
   return exitCode;
 }

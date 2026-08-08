@@ -18,6 +18,7 @@ import type { PlanModeControl } from "./permissions.js";
 import type { AgentEvent } from "./events.js";
 import type { WorkspaceTransition, WorktreeControlPort } from "../ports/worktrees.js";
 import type { PreviewPort } from "../ports/preview.js";
+import type { ArtifactContext, ArtifactRetention } from "../ports/artifacts.js";
 import type { ResultPreviewDirection } from "../util/result-budget.js";
 
 export type RiskLevel = "low" | "medium" | "high";
@@ -63,6 +64,43 @@ export interface ToolResultBudget {
   maxModelBytes: number;
   /** Which end of an oversized payload survives. Default "head". */
   previewDirection?: ResultPreviewDirection;
+  /**
+   * What happens to the bytes that do not fit (TASK.94). "truncate" (the
+   * default, and what every tool got before this field existed) destroys them.
+   * "artifact" writes the full rendered text to the artifact store and hands
+   * the model an envelope with the path plus a preview, so the remainder is
+   * recoverable with Read/Grep instead of by re-running the tool.
+   *
+   * Opting in is not a promise: with no ArtifactStorePort in the dispatch
+   * context, or on any store failure, the result falls back to "truncate".
+   */
+  strategy?: "truncate" | "artifact";
+  /**
+   * Retention class for the spilled artifact. Semantically required when
+   * strategy === "artifact"; ignored otherwise.
+   */
+  artifact?: { retention: ArtifactRetention };
+}
+
+/**
+ * What a tool sees when its oversized result was spilled to an artifact and it
+ * gets to author the envelope itself (`formatPersistedModelContent`).
+ */
+export interface PersistedRenderContext<Out = unknown> {
+  /** The handler result, so the formatter can speak about exit codes and status. */
+  result: ToolResult<Out>;
+  /** Absolute path of the written artifact — the whole point of the envelope. */
+  path: string;
+  /** Size of the persisted text in UTF-8 bytes. */
+  originalBytes: number;
+  /**
+   * Preview already cut to ARTIFACT_PREVIEW_BYTES on a line boundary, taken
+   * from the end the tool's previewDirection asked for. The formatter embeds
+   * it; it must not re-cut it.
+   */
+  preview: string;
+  /** Which end `preview` was taken from, so the envelope can say so honestly. */
+  previewDirection: ResultPreviewDirection;
 }
 
 /**
@@ -162,6 +200,15 @@ export interface ToolContext {
    * children (wave1-cut.md §1(f)).
    */
   preview?: PreviewPort;
+  /**
+   * Artifact store plus the session to write under (TASK.94). Present here for
+   * symmetry with DispatchContext and for future handler-side use; the SPILL
+   * itself is performed by the dispatcher, not by handlers — a handler that
+   * wrote artifacts on its own would bypass the budget layer that decides
+   * whether a spill is warranted at all. Optional by design: its absence makes
+   * `strategy: "artifact"` degrade to truncation.
+   */
+  artifacts?: ArtifactContext;
 }
 
 /** Handler-level result. Dispatcher-level failures (denied/timeout/...) live on ToolCallOutcome. */
@@ -242,6 +289,18 @@ export interface ToolDefinition<In = unknown, Out = unknown> {
   handler(input: In, ctx: ToolContext): Promise<ToolResult<Out>>;
   /** Renders the result payload into model-visible text. Default: JSON serialization with size cap. */
   formatResultForModel?(result: ToolResult<Out>): string;
+  /**
+   * Renders the envelope shown to the model when this tool's oversized result
+   * was spilled to an artifact (TASK.94 §2). Optional: without it the
+   * dispatcher emits a generic `<persisted-output>` envelope. A tool overrides
+   * it when the generic one would be actively unhelpful — Bash's persisted text
+   * is a JSON BashOutput, and a raw JSON stump tells the model nothing about
+   * the exit code it actually cares about.
+   *
+   * The result is still passed through the tool's result budget afterwards, so
+   * a formatter cannot use this hook to escape its cap.
+   */
+  formatPersistedModelContent?(ctx: PersistedRenderContext<Out>): string;
 }
 
 /** Existential wrapper for heterogeneous registry storage. */

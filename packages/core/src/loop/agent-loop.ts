@@ -48,6 +48,7 @@ import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import type { WorktreeControlPort } from "../ports/worktrees.js";
 import type { PreviewPort } from "../ports/preview.js";
+import type { ArtifactContext } from "../ports/artifacts.js";
 import type { CheckpointCapturer, CheckpointCaptureResult } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { ConversationHistory } from "../context/history.js";
@@ -199,6 +200,15 @@ export interface AgentLoopConfig {
    * window-focus/consent races between parallel children never arise.
    */
   preview?: PreviewPort;
+  /**
+   * Artifact store + owning session for oversized tool results (TASK.94).
+   * Supplied by the host wiring; absence keeps every result truncated exactly
+   * as before. UNLIKE the fail-closed ports above, children DO inherit this one
+   * (buildChildConfig copies it): a subagent's oversized Bash run is as
+   * unrecoverable as the parent's without it, and writing under the parent's
+   * session directory is safe because tool-call ids are globally unique.
+   */
+  artifacts?: ArtifactContext;
   /**
    * Target mode an approved ExitPlanMode advances to (design slice-4.3-cut.md
    * §2.3). Set => the loop builds a PlanModeControl each turn and threads it
@@ -454,6 +464,7 @@ export class AgentLoop {
       media: this.config.media,
       worktrees: this.config.worktrees,
       preview: this.config.preview,
+      artifacts: this.config.artifacts,
     };
 
     // Plan-mode exit arc (design slice-4.3-cut.md §2.3): built ONLY when the

@@ -72,6 +72,12 @@ export type {
 } from "./mcp.js";
 export type { MediaCapabilityPort } from "./media.js";
 export type {
+  ArtifactContext,
+  ArtifactRetention,
+  ArtifactStorePort,
+  ArtifactWriteRequest,
+} from "./artifacts.js";
+export type {
   PreviewConsoleEntry,
   PreviewOpenRequest,
   PreviewOpenSuccess,

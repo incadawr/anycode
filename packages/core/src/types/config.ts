@@ -109,6 +109,32 @@ export const READ_CONTENT_MAX_BYTES = 90_000;
 export const MCP_RESULT_MAX_MODEL_BYTES = 50_000;
 
 // ---------------------------------------------------------------------------
+// TASK.94 constants (artifact spill)
+
+/**
+ * Age ceiling on a session's artifact directory, enforced by the start-up
+ * sweep. It is the only GUARANTEED collector: "session ended" has no single
+ * point in this codebase, so an unswept root would otherwise grow without
+ * bound across crashes and long-lived hosts.
+ */
+export const ARTIFACT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Per-write cap on one persisted tool artifact. The strategy is declared by the
+ * tool's own metadata, so a buggy or hostile tool could otherwise make the HOST
+ * write unbounded bytes; over this cap the store refuses and the dispatcher
+ * falls back to truncation.
+ */
+export const ARTIFACT_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Byte ceiling on the preview embedded in the persisted-output envelope. Small
+ * on purpose: the envelope must fit inside the tool's model budget by
+ * construction, not by being cut a second time.
+ */
+export const ARTIFACT_PREVIEW_BYTES = 2_000;
+
+// ---------------------------------------------------------------------------
 // Phase 1 constants (design §2.13)
 
 /** B(2): dispatcher grace on top of the handler timeout; ≥ SIGKILL_GRACE_MS + close/flush. */

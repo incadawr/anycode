@@ -83,3 +83,37 @@ export function applyResultBudget(
 
   return `${fitUtf8(text, remaining, direction).text}${notice}`;
 }
+
+/**
+ * Preview of `text` for the artifact envelope (TASK.94): at most `maxBytes`
+ * UTF-8 bytes taken from the requested end, snapped to a line boundary.
+ *
+ * Two cuts, in this order. The byte cut comes from applyResultBudget's own
+ * helpers, so a preview can never split a code point. The line snap is then
+ * cosmetic-but-load-bearing: a preview that begins or ends mid-line reads as
+ * corrupted data rather than as an excerpt, and the model has no way to tell
+ * the difference. The snap is SKIPPED when the nearest boundary would cost more
+ * than half the preview — a payload with very long lines (a minified bundle,
+ * one-line JSON) would otherwise snap away to nothing, and half a line of real
+ * content beats an empty preview.
+ *
+ * Text that already fits is returned byte-identical, boundary or not: there is
+ * nothing to signal, because nothing was cut.
+ */
+export function previewFirstChars(
+  text: string,
+  maxBytes: number,
+  direction: ResultPreviewDirection = "head",
+): string {
+  const fitted = fitUtf8(text, maxBytes, direction);
+  if (!fitted.truncated) return fitted.text;
+
+  const kept = fitted.text;
+  if (direction === "tail") {
+    // A tail preview was cut at its START, so the first line is the partial one.
+    const boundary = kept.indexOf("\n");
+    return boundary >= 0 && boundary <= kept.length / 2 ? kept.slice(boundary + 1) : kept;
+  }
+  const boundary = kept.lastIndexOf("\n");
+  return boundary >= kept.length / 2 ? kept.slice(0, boundary) : kept;
+}

@@ -32,6 +32,7 @@ import type {
   ToolEmittedEvent,
   ToolMetadata,
   ToolResult,
+  ToolResultBudget,
 } from "../types/tools.js";
 import type { CorePorts } from "../ports/index.js";
 import type { SubagentPort } from "../ports/subagent.js";
@@ -43,10 +44,19 @@ import type { MediaCapabilityPort } from "../ports/media.js";
 import type { WorktreeControlPort } from "../ports/worktrees.js";
 import type { PreviewPort } from "../ports/preview.js";
 import type { TurnCheckpointControl } from "../ports/checkpoints.js";
+import type { ArtifactContext } from "../ports/artifacts.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { DEFAULT_TOOL_RESULT_BUDGET, DISPATCH_TIMEOUT_GRACE_MS } from "../types/config.js";
+import {
+  ARTIFACT_PREVIEW_BYTES,
+  DEFAULT_TOOL_RESULT_BUDGET,
+  DISPATCH_TIMEOUT_GRACE_MS,
+} from "../types/config.js";
 import { linkAbortSignal, raceWithTimeout } from "../util/abort.js";
-import { applyResultBudget, type ResultPreviewDirection } from "../util/result-budget.js";
+import {
+  applyResultBudget,
+  previewFirstChars,
+  type ResultPreviewDirection,
+} from "../util/result-budget.js";
 
 export interface DispatchContext {
   registry: ToolRegistry;
@@ -126,6 +136,30 @@ export interface DispatchContext {
    * called before the FIRST write-effect tool of the turn (post-permission).
    */
   checkpoint?: TurnCheckpointControl;
+  /**
+   * Artifact store + owning session for oversized tool results (TASK.94).
+   * Optional: absent => a tool declaring `strategy: "artifact"` is budgeted by
+   * plain truncation, byte-identical to TASK.93. Child loops DO inherit it
+   * (buildChildConfig copies it), so a subagent's oversized Bash output is
+   * recoverable too; a child writes under the parent's session directory,
+   * which is correct because tool-call ids are globally unique.
+   */
+  artifacts?: ArtifactContext;
+}
+
+/**
+ * Envelope markers for a spilled result. ZCode keys its
+ * `isPersistedOutputContent` off the same pair so hook context can be appended
+ * to an envelope without corrupting it; we have no such consumer yet, but the
+ * markers are what makes one possible later, and a self-describing envelope is
+ * cheap.
+ */
+export const PERSISTED_OUTPUT_OPEN_TAG = "<persisted-output>";
+export const PERSISTED_OUTPUT_CLOSE_TAG = "</persisted-output>";
+
+/** True when `text` is a persisted-output envelope rather than a tool's own result text. */
+export function isPersistedOutputContent(text: string): boolean {
+  return text.startsWith(PERSISTED_OUTPUT_OPEN_TAG) && text.trimEnd().endsWith(PERSISTED_OUTPUT_CLOSE_TAG);
 }
 
 /** deny > ask > allow: higher rank is the more restrictive decision. */
@@ -294,6 +328,7 @@ export async function executeToolCall(
         planMode: ctx.planMode,
         worktrees: ctx.worktrees,
         preview: ctx.preview,
+        artifacts: ctx.artifacts,
         emit,
       };
 
@@ -330,7 +365,11 @@ export async function executeToolCall(
 
         if (metadata.terminalControl === true) {
           if (result.ok) {
-            return outcome("success", formatModelText(tool, metadata, result), result);
+            return outcome(
+              "success",
+              await formatModelText(ctx, tool, metadata, result, toolCallId),
+              result,
+            );
           }
           if (parentSignal?.aborted) {
             return outcome("cancelled", `Tool ${toolName} was cancelled.`, result);
@@ -342,7 +381,11 @@ export async function executeToolCall(
         // B(2): the handler's own failure classification wins deterministically, so
         // a Bash timeout/cancel keeps its captured stdout/stderr on the outcome.
         const status: ToolCallStatus = result.ok ? "success" : (result.errorKind ?? "error");
-        return outcome(status, formatModelText(tool, metadata, result), result);
+        return outcome(
+          status,
+          await formatModelText(ctx, tool, metadata, result, toolCallId),
+          result,
+        );
       } catch (error) {
         if (parentSignal?.aborted) {
           return outcome("cancelled", `Tool ${toolName} was cancelled.`);
@@ -420,18 +463,128 @@ function resolveTimeoutMs(metadata: ToolMetadata, input: unknown): number {
  * after every rendering branch — a tool's own formatResultForModel and the
  * error text are subject to it exactly like the default JSON rendering, because
  * an unbounded string is unbounded whoever produced it (TASK.93).
+ *
+ * Async since TASK.94: an over-budget result from a tool that opted into
+ * `strategy: "artifact"` is written to disk before it is rendered. The spill is
+ * the ONLY awaiting branch; every other path resolves without touching I/O, and
+ * ToolCallOutcome is unchanged.
  */
-function formatModelText(
+async function formatModelText(
+  ctx: DispatchContext,
   tool: AnyToolDefinition,
   metadata: ToolMetadata,
   result: ToolResult,
-): string {
+  toolCallId: string,
+): Promise<string> {
   const budget = resolveResultBudget(metadata);
-  return applyResultBudget(
-    renderModelText(tool, metadata, result),
-    budget.maxModelBytes,
-    budget.previewDirection,
-  );
+  const rendered = renderModelText(tool, metadata, result);
+
+  if (
+    budget.strategy === "artifact" &&
+    ctx.artifacts !== undefined &&
+    Buffer.byteLength(rendered, "utf8") > budget.maxModelBytes
+  ) {
+    const envelope = await spillToArtifact(
+      ctx.artifacts,
+      tool,
+      metadata,
+      result,
+      rendered,
+      budget.previewDirection,
+      toolCallId,
+    );
+    // The envelope is small by construction (path + a 2 KB preview), so this
+    // pass is a guard against a formatPersistedModelContent that misbehaves,
+    // not the mechanism.
+    if (envelope !== null) {
+      return applyResultBudget(envelope, budget.maxModelBytes, "head");
+    }
+  }
+
+  return applyResultBudget(rendered, budget.maxModelBytes, budget.previewDirection);
+}
+
+/**
+ * Persists the full rendered text and returns the envelope that replaces it, or
+ * null when the store refused (unsafe id, over the per-write cap, I/O failure).
+ *
+ * A null return means the caller truncates — exactly the TASK.93 outcome, and
+ * exactly what the model would have received had the tool never opted in. There
+ * is deliberately no error branch and no diagnostic in the model text: the
+ * envelope must never claim a path that does not exist, and a failed spill is
+ * not something the model can act on. (The dispatcher holds no telemetry port,
+ * so the failure is silent by construction rather than by choice.)
+ */
+async function spillToArtifact(
+  artifacts: ArtifactContext,
+  tool: AnyToolDefinition,
+  metadata: ToolMetadata,
+  result: ToolResult,
+  rendered: string,
+  previewDirection: ResultPreviewDirection,
+  toolCallId: string,
+): Promise<string | null> {
+  let written: { path: string; bytes: number };
+  try {
+    written = await artifacts.store.writeToolResultArtifact({
+      sessionId: artifacts.sessionId,
+      toolCallId,
+      toolName: metadata.name,
+      content: rendered,
+      contentType: "text/plain",
+      retention: metadata.resultBudget?.artifact?.retention ?? "session",
+    });
+  } catch {
+    return null;
+  }
+
+  const preview = previewFirstChars(rendered, ARTIFACT_PREVIEW_BYTES, previewDirection);
+  if (tool.formatPersistedModelContent) {
+    try {
+      return tool.formatPersistedModelContent({
+        result,
+        path: written.path,
+        originalBytes: written.bytes,
+        preview,
+        previewDirection,
+      });
+    } catch {
+      // fall through to the generic envelope on formatter failure, mirroring
+      // renderModelText's treatment of formatResultForModel.
+    }
+  }
+  return formatPersistedOutput({
+    path: written.path,
+    originalBytes: written.bytes,
+    preview,
+    previewDirection,
+  });
+}
+
+/**
+ * The generic persisted-output envelope. It has to carry three things or the
+ * spill is worse than a truncation: WHERE the data is, HOW MUCH of it there is,
+ * and HOW to get at it. The last one is not decoration — a path alone leaves
+ * the model to guess at whole-file reads of a multi-megabyte log, so the
+ * envelope names Read's offset/limit and Grep explicitly.
+ */
+export function formatPersistedOutput(args: {
+  path: string;
+  originalBytes: number;
+  preview: string;
+  previewDirection: ResultPreviewDirection;
+}): string {
+  const end = args.previewDirection === "tail" ? "last" : "first";
+  return [
+    PERSISTED_OUTPUT_OPEN_TAG,
+    `Output too large (${args.originalBytes} bytes). Full output saved to: ${args.path}`,
+    "Read it with the Read tool (use offset/limit for large files) or search it with Grep.",
+    "",
+    `Preview (${end} ${ARTIFACT_PREVIEW_BYTES} bytes):`,
+    args.preview,
+    "...",
+    PERSISTED_OUTPUT_CLOSE_TAG,
+  ].join("\n");
 }
 
 /**
@@ -477,11 +630,16 @@ function renderModelText(
 function resolveResultBudget(metadata: ToolMetadata): {
   maxModelBytes: number;
   previewDirection: ResultPreviewDirection;
+  strategy: "truncate" | "artifact";
 } {
-  const declared = metadata.resultBudget ?? DEFAULT_TOOL_RESULT_BUDGET;
+  const declared: ToolResultBudget = metadata.resultBudget ?? DEFAULT_TOOL_RESULT_BUDGET;
   return {
     maxModelBytes: declared.maxModelBytes,
     previewDirection: declared.previewDirection ?? "head",
+    // "truncate" is the default for the same reason the whole budget has one:
+    // a tool that declared nothing must land on the pre-TASK.94 behaviour, not
+    // on the newest one (TASK.94 DoD-3).
+    strategy: declared.strategy ?? "truncate",
   };
 }
 
