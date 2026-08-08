@@ -48,7 +48,7 @@ import { useStore } from "zustand";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import type { ProviderConnection } from "../../../shared/settings.js";
 import { ConnectionDrawerFields } from "./ConnectionDrawer.js";
-import { customProviderCatalogEntries, selectProviderEntry } from "./SettingsScreen.js";
+import { customProviderCatalogEntries, selectProviderEntry, shouldShowAppVersion } from "./SettingsScreen.js";
 import { connectionCredentialKey, connectionDisplayName, connectionHealthStatus, describeConnectionHealth } from "./ConnectionTile.js";
 import { BrandMark, Plus } from "./icons.js";
 import "../settings.css";
@@ -156,6 +156,15 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
           <p className="welcome-promise">
             A coding agent for any provider — every step legible, every permission yours.
           </p>
+          {/* The running app's version, same source and same gate as the About
+              pane (`snapshot.appVersion`, never hardcoded here). Setup is the
+              one screen a fresh or broken install has, and the read-only
+              banner right below it says "upgrade" — naming the version the
+              user is actually running is what makes that instruction
+              actionable. Absent whenever main supplies no getAppVersion. */}
+          {snapshot && shouldShowAppVersion(snapshot) && (
+            <span className="welcome-version">Version {snapshot.appVersion}</span>
+          )}
         </header>
 
         {snapshot?.readOnly && (
