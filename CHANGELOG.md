@@ -5,6 +5,41 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.10] — 2026-08-08
+
+### Added
+
+- A tool's full output is no longer lost when it is too large for the
+  conversation. The part over the budget used to be cut off, recoverable only
+  by re-running the tool; now the complete output is written to a file under
+  AnyCode's own data directory and the model receives the beginning together
+  with the file's path, so it can read or search the rest on demand. The files
+  live per session and are swept on startup.
+- The Welcome screen names the version that is running. It is the one surface
+  a fresh or broken install has, and its banner already suggests upgrading —
+  now it is possible to tell whether an upgrade is actually needed.
+
+### Fixed
+
+- A subscription provider that reports an exhausted usage limit as HTTP 403 —
+  kimi.com does — was shown as a generic "forbidden" error, which reads like a
+  broken key. It is now recognized as the quota condition it is.
+- A connection created from the catalog could be saved with an empty model and
+  then fail on first use with a message blaming the API key. The connection
+  drawer now prefills the curated default model and refuses to save a catalog
+  connection whose model is still blank.
+
+### Security
+
+- An always-allow rule for terminal commands now vouches for every command in
+  the line, not for the line's first word. `git *` used to auto-approve
+  `git --version; curl … | sh` because the line started with `git`; now each
+  segment of a compound command must match a rule on its own, and anything the
+  parser cannot see through — command substitution, unterminated quotes —
+  asks again instead of passing. The permission dialog also no longer offers a
+  pre-filled binary pattern for a compound command, which is exactly how an
+  overly broad rule used to get created.
+
 ## [0.0.9] — 2026-08-03
 
 ### Added
