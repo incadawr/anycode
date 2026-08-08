@@ -27,8 +27,10 @@ monorepo (`apps/desktop`, `packages/core`), smoke-channel
 - XSS-закон рендерера: никакого `dangerouslySetInnerHTML`/HTML-строк.
 - Renderer-тесты: только `*.test.ts` чистыми функциями (vitest не собирает
   `.test.tsx`, env node, jsdom нет).
-- Зону `packages/core/src/permissions/` (always-allow matching) НЕ трогать:
-  в основном чекауте несмержен фикс TASK.104. Конфликт → STATE.md, не чинить.
+- Зону `packages/core/src/permissions/` (always-allow matching) НЕ трогать —
+  скоуп-дисциплина: там строится permissions-кластер волны 2
+  (TASK.35/103/37/32). Конфликт → STATE.md, не чинить. База трека — `next`
+  (включает фикс TASK.104 `3ae9cc8`).
 - Инвариант TabHostManager «один таб — один utilityProcess» сохраняется.
 - Дефолты спеки §2 п.5 (каскадная отмена, ошибка в карточку, permission в
   поверхности ребёнка + бейдж, наследование режима) — решения владельца,
