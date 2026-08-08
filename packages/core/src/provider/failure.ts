@@ -124,6 +124,14 @@ const CONNECT_TIMEOUT_PATTERN = /connect timeout error|cannot connect to api/i;
 /** Matches a quota-exhaustion message, or the z.ai-class numeric quota error code (TASK.33 §W7b). */
 const QUOTA_PATTERN = /\bquota\b|\b1308\b/i;
 
+/**
+ * Kimi-class subscription exhaustion rides as a 403 whose message explicitly
+ * names a usage limit ("You've reached your usage limit for this billing
+ * cycle"). The phrase is deliberately narrower than QUOTA_PATTERN so a policy
+ * denial that merely mentions "quota" still classifies as forbidden (M3).
+ */
+const USAGE_LIMIT_PATTERN = /usage limit|billing cycle/i;
+
 function extractMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -155,17 +163,21 @@ function isNetworkFailure(error: unknown, message: string): boolean {
   );
 }
 
-/** Quota exhaustion rides as a 429 on some providers (z.ai code 1308), or arrives with no status code at all. */
-function isQuotaFailure(error: unknown, message: string): boolean {
-  if (QUOTA_PATTERN.test(message)) return true;
+function matchesFailureText(error: unknown, message: string, pattern: RegExp): boolean {
+  if (pattern.test(message)) return true;
   if (APICallError.isInstance(error) && error.data !== undefined) {
     try {
-      return QUOTA_PATTERN.test(JSON.stringify(error.data));
+      return pattern.test(JSON.stringify(error.data));
     } catch {
       return false;
     }
   }
   return false;
+}
+
+/** Quota exhaustion rides as a 429 on some providers (z.ai code 1308), or arrives with no status code at all. */
+function isQuotaFailure(error: unknown, message: string): boolean {
+  return matchesFailureText(error, message, QUOTA_PATTERN);
 }
 
 /**
@@ -207,6 +219,12 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
   // riding as a 429, and a status-less quota message — while a 401/403/5xx
   // whose message happens to mention "quota" classifies on its actual status.
   if ((statusCode === undefined || statusCode === 429) && isQuotaFailure(error, message)) {
+    return build("quota", false);
+  }
+  // The one 403 carve-out from M3: a kimi-class subscription reports REAL quota
+  // exhaustion as a 403 with an explicit usage-limit message. The narrow phrase
+  // keeps policy denials that merely mention "quota" in the forbidden bucket.
+  if (statusCode === 403 && matchesFailureText(error, message, USAGE_LIMIT_PATTERN)) {
     return build("quota", false);
   }
   if (CONNECT_TIMEOUT_PATTERN.test(message)) {

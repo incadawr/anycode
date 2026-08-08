@@ -112,6 +112,13 @@
   line-height: var(--lh-body);
 }
 
+/* Running version under the promise — quiet by design (same size/ink as the
+   About pane's `.settings-about-version`): identifying, not part of the pitch. */
+.welcome-version {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
 /* ── R11 setup progress: an honest two-beat (configure → ready) ── */
 
 .welcome-steps {

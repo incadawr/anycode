@@ -13,6 +13,11 @@
  * dispatcher's own hook-vs-engine DECISION_RANK merge (deny > ask > allow)
  * still applies unchanged on top, so a PreToolUse hook can still ask/deny
  * regardless of a session rule.
+ *
+ * Bash subjects are matched PER COMMAND, not per command line (TASK.104): the
+ * command is split on the shell's separators and the pattern must match every
+ * segment — see `splitBashSegments` for the rationale and the fail-closed
+ * cases. All other tools keep raw whole-string matching.
  */
 
 import picomatch from "picomatch";
@@ -93,6 +98,149 @@ function extractSubject(toolName: string, input: unknown): string | undefined {
  */
 const PAREN_RE = /[()]/;
 
+/**
+ * Splits a Bash command into the individual commands a shell would run
+ * (TASK.104). Returns `undefined` when the command must be treated as
+ * unsegmentable — the caller then refuses the match (fail closed).
+ *
+ * **Why (TASK.104):** the pattern used to be matched against the WHOLE raw
+ * command string, so a stored `git *` rule auto-allowed
+ * `git --version; curl … | sh` — everything appended after `;`/`&&`/`||`/`|`
+ * rode along on the prefix. The P7.16 series closed the neighbouring class
+ * (pattern SHAPE: wildcard-only, globstar, parens, extglob); this one is about
+ * the SUBJECT: one rule was being asked to vouch for a whole pipeline. Every
+ * segment must now match the pattern independently, which also removes any
+ * need to special-case `export` (`export X=1; rm -rf ~` fails on segment two).
+ *
+ * Splitting is quote-aware: `;`/`&`/`|` inside `'…'` or `"…"`, or escaped with
+ * a backslash, are literal text and never split (`echo "a;b"` stays one
+ * segment). A `&` that belongs to a redirection (`2>&1`, `>&2`, `&>log`) is
+ * likewise kept, but a control `&` (background) does split — it separates two
+ * commands exactly like `;` does.
+ *
+ * **Fail-closed cases** (return `undefined`, i.e. never auto-allow):
+ * - command/process substitution — `$(…)`, backticks, `<(…)`, `>(…)`: the
+ *   substituted text is an arbitrary command the pattern never sees, and it
+ *   can itself contain operators, so there is no safe way to segment "around"
+ *   it. `git log $(touch /tmp/x)` re-asks even under `git *`.
+ * - an unterminated quote: the command is malformed for our purposes and its
+ *   segmentation is undecidable.
+ */
+function splitBashSegments(command: string): string[] | undefined {
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === undefined) {
+      continue;
+    }
+    const next = command[i + 1];
+
+    if (inSingle) {
+      // Single quotes suppress every expansion, backslash included.
+      current += ch;
+      if (ch === "'") {
+        inSingle = false;
+      }
+      continue;
+    }
+
+    if (inDouble) {
+      if (ch === "\\" && next !== undefined) {
+        current += ch + next;
+        i++;
+        continue;
+      }
+      // `$(…)` and backticks still expand inside double quotes.
+      if (ch === "`" || (ch === "$" && next === "(")) {
+        return undefined;
+      }
+      current += ch;
+      if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (ch === "\\") {
+      if (next !== undefined) {
+        current += ch + next;
+        i++;
+        continue;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      current += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      current += ch;
+      continue;
+    }
+    if (ch === "`" || ((ch === "$" || ch === "<" || ch === ">") && next === "(")) {
+      return undefined;
+    }
+    if (ch === ";" || ch === "\n") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    if (ch === "|") {
+      if (next === "|") {
+        i++;
+      }
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    if (ch === "&") {
+      const prev = command[i - 1];
+      // `2>&1` / `>&2` / `&>log` are redirections, not command separators.
+      if (prev === ">" || prev === "<" || next === ">") {
+        current += ch;
+        continue;
+      }
+      if (next === "&") {
+        i++;
+      }
+      segments.push(current);
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (inSingle || inDouble) {
+    return undefined;
+  }
+  segments.push(current);
+  return segments;
+}
+
+/**
+ * The list of strings a Bash rule's pattern must match — ALL of them, not the
+ * raw command as a whole (TASK.104, see `splitBashSegments`). Blank segments
+ * (a trailing `;`, `a || b ||`) carry no command and are dropped; when nothing
+ * but blanks remains the raw subject is used, so a degenerate command still
+ * has to face the pattern instead of vacuously satisfying "every segment".
+ */
+function bashMatchSubjects(command: string): string[] | undefined {
+  const segments = splitBashSegments(command);
+  if (segments === undefined) {
+    return undefined;
+  }
+  const commands = segments.map((segment) => segment.trim()).filter((segment) => segment !== "");
+  return commands.length > 0 ? commands : [command];
+}
+
 function ruleMatches(rule: PermissionRule, toolName: string, input: unknown): boolean {
   if (rule.toolName !== toolName) {
     return false;
@@ -109,7 +257,14 @@ function ruleMatches(rule: PermissionRule, toolName: string, input: unknown): bo
     // a patterned rule has nothing to compare against, so it cannot match.
     return false;
   }
-  return picomatch(rule.pattern, { nonegate: true, noext: true })(subject);
+  const isMatch = picomatch(rule.pattern, { nonegate: true, noext: true });
+  if (toolName !== "Bash") {
+    // Path/URL subjects (Read/Edit/Write/Glob/Grep/WebFetch) are single values,
+    // not command lines: they keep whole-string matching untouched.
+    return isMatch(subject);
+  }
+  const subjects = bashMatchSubjects(subject);
+  return subjects !== undefined && subjects.every((segment) => isMatch(segment));
 }
 
 /** In-memory store of always-allow rules; persistence is a client concern (see module doc above). */
