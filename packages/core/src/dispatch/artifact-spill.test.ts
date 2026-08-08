@@ -76,6 +76,7 @@ function fakeExec(stdout: string, exitCode = 0): ExecutionPort {
   const result: ExecResult = {
     status: "completed",
     exitCode,
+    signal: null,
     stdout,
     stderr: "",
     stdoutTruncated: false,
@@ -187,7 +188,8 @@ describe("executeToolCall — artifact spill (TASK.94)", () => {
     expect(outcome.modelText).toContain("Preview (last");
     const m = outcome.modelText.match(/Preview \(last \d+ bytes of the saved file\):\n([\s\S]*?)\n\.\.\./);
     expect(m).not.toBeNull();
-    expect(Buffer.byteLength(m![1], "utf8")).toBeLessThanOrEqual(ARTIFACT_PREVIEW_BYTES);
+    const previewText = m![1] ?? "";
+    expect(Buffer.byteLength(previewText, "utf8")).toBeLessThanOrEqual(ARTIFACT_PREVIEW_BYTES);
   });
 
   // DoD-2 (the load-bearing one): real dispatch -> real Read of the spilled file.
@@ -426,7 +428,7 @@ describe("executeToolCall — artifact spill (TASK.94)", () => {
     // The preview is between "Preview (last N bytes of the saved file):" and "\n...".
     const m = outcome.modelText.match(/Preview \(last \d+ bytes of the saved file\):\n([\s\S]*?)\n\.\.\./);
     expect(m).not.toBeNull();
-    const preview = m![1];
+    const preview = m![1] ?? "";
     expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(ARTIFACT_PREVIEW_BYTES);
   });
 
