@@ -67,6 +67,40 @@ describe("commandBinary — input → binary table (slice-P7.16-cut.md §4.2)", 
     expect(commandBinary("")).toBeUndefined();
     expect(commandBinary("   ")).toBeUndefined();
   });
+
+  it("TASK.104: returns undefined for a compound command (no single binary describes it, no suggestion born)", () => {
+    expect(commandBinary("git status; rm -rf /tmp/x")).toBeUndefined();
+    expect(commandBinary("git status && rm -rf /tmp/x")).toBeUndefined();
+    expect(commandBinary("git status || rm -rf /tmp/x")).toBeUndefined();
+    expect(commandBinary("git log | head -5")).toBeUndefined();
+    expect(commandBinary("cd apps/desktop && pnpm exec vitest run | tail -20")).toBeUndefined();
+  });
+
+  it("TASK.104: returns undefined for a compound command even when every segment shares one binary (conservative)", () => {
+    expect(commandBinary("git fetch && git status")).toBeUndefined();
+  });
+
+  it("TASK.104: a quoted ';' is not an operator -- single command still yields its binary", () => {
+    expect(commandBinary('echo "a;b"')).toBe("echo");
+  });
+
+  it("TASK.104: 'export FOO=1' is assignment-by-meaning -- no suggestion born", () => {
+    expect(commandBinary("export FOO=1")).toBeUndefined();
+  });
+
+  it("TASK.104: owner case -- 'export PATH=…; cd … && pnpm exec … | tail -20' yields NO suggestion", () => {
+    expect(
+      commandBinary("export PATH=\"/usr/local/bin:$PATH\"; cd apps/desktop && pnpm exec vitest run | tail -20"),
+    ).toBeUndefined();
+  });
+
+  it("TASK.104: 'export FOO=1 node x.mjs' walks past the export-assignment to the real binary", () => {
+    expect(commandBinary("export FOO=1 node x.mjs")).toBe("node");
+  });
+
+  it("TASK.104: an expanded export value ($PATH) is NOT walked -- fail closed, 'export' stays the binary", () => {
+    expect(commandBinary('export PATH="$PATH:/usr/local/bin" node x.mjs')).toBe("export");
+  });
 });
 
 describe("sanitizeBashPattern — input → stored pattern table (slice-P7.16-cut.md §4.2)", () => {
