@@ -52,9 +52,10 @@ const SIGTERM_GRACE_MS = 750;
 
 const SKILL_NAME = "dark-mode-notes"; // collides with the "/mod" filter (design §7 step 1)
 
-// -- fixed screenshot destinations (orchestrator-specified, design §7 W4) --
-const FULL_MENU_SCREENSHOT = "/Users/incadawr/.claude/jobs/d551192e/tmp/w4-slash-full.png";
-const FILTERED_MENU_SCREENSHOT = "/Users/incadawr/.claude/jobs/d551192e/tmp/w4-slash-filtered.png";
+// -- fixed screenshot destinations (design §7 W4), under the OS temp dir --
+const EVIDENCE_DIR = join(tmpdir(), "anycode-slash-menu-ui-smoke-evidence");
+const FULL_MENU_SCREENSHOT = join(EVIDENCE_DIR, "w4-slash-full.png");
+const FILTERED_MENU_SCREENSHOT = join(EVIDENCE_DIR, "w4-slash-filtered.png");
 
 // -- the exact §2 command-table order (registry order = rank-tie order) --
 const REGISTRY_NAMES = [

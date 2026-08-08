@@ -60,9 +60,10 @@ const PANE_SETTLE_TIMEOUT_MS = 15_000;
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;
 
-// -- fixed screenshot destinations (orchestrator-specified, design §4 W4) --
-const POPULATED_SCREENSHOT = "/Users/incadawr/.claude/jobs/acfddfb7/tmp/profile-populated.png";
-const EMPTY_SCREENSHOT = "/Users/incadawr/.claude/jobs/acfddfb7/tmp/profile-empty.png";
+// -- fixed screenshot destinations (design §4 W4), under the OS temp dir --
+const EVIDENCE_DIR = join(tmpdir(), "anycode-profile-ui-smoke-evidence");
+const POPULATED_SCREENSHOT = join(EVIDENCE_DIR, "profile-populated.png");
+const EMPTY_SCREENSHOT = join(EVIDENCE_DIR, "profile-empty.png");
 
 // -- CLI flags --
 
