@@ -47,7 +47,7 @@ import {
 import type { FileIoLogger } from "../settings/files.js";
 import { defaultSecretsPath, defaultSettingsPath, loadSettings } from "../settings/files.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
-import { activeConnection, activeProviderView, connectionById } from "../shared/settings.js";
+import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
 import {
   applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
@@ -1426,6 +1426,13 @@ void app.whenReady().then(async () => {
       const connection = connectionById(settings, connectionId);
       return connection === undefined ? undefined : { providerId: connection.providerId };
     },
+    // TASK.102 CUT-S2 §10.9.3 (F4): an EXPLICIT `Agent(tier:"session",
+    // provider:…)` request's provider-id -> connection-id resolution, wired
+    // to the pure policy in shared/settings.ts. This dep was previously
+    // ABSENT here, so every explicit cross-connection child spawn was
+    // rejected with `not_ready` in the built app regardless of policy.
+    resolveProviderConnection: (provider) =>
+      settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
     providerReady: () => providerReady,
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible

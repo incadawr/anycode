@@ -24,16 +24,27 @@
  *
  * Everything downstream of the fake channel is production code, unmodified.
  *
- * Registry/config construction (`buildConfig` below) mirrors — by design,
- * not by import — the two host/index.ts wiring points this slice added:
- *   - the registry ternary (index.ts, "TASK.102 CUT-S2 §2.6.1/§2.6.2 ...
- *     non-recursion lock #1" comment, right above `const registry = ...`);
- *   - the `config.sessionSubagents` mutate-in-place block right after the
- *     `AgentLoopConfig` object literal ("... non-recursion lock #2").
- * A reviewer diffing this file's `buildConfig` against those two index.ts
- * spots can verify the shapes still agree (the same discipline
- * `index.test.ts`'s `handleShutdownShape` helper already established for
- * this codebase).
+ * Registry/config construction (`buildConfig` below) touches the two
+ * host/index.ts wiring points this slice added — non-recursion locks #1
+ * and #2 — under the trek's zеркало law (TASK.102 CUT-S2 §10.9.3 A3, first
+ * applied right here): a mirror may reproduce TRANSPORT shape, but a
+ * DECISION belongs to production code, imported, never re-typed as a copy:
+ *   - lock #1 (the registry ternary) stays a BY-DESIGN mirror of a single
+ *     field check on the imported `HostArgs` type (`args.child ===
+ *     undefined`, index.ts's own "non-recursion lock #1" comment) — CUT-S2
+ *     §10.9.2 p.4 keeps lock #1 argv-only on purpose, so there is no
+ *     production predicate to import here; a reviewer diffing this ternary
+ *     against index.ts's can still verify the shapes agree (the same
+ *     discipline `index.test.ts`'s `handleShutdownShape` helper
+ *     established for this codebase);
+ *   - lock #2 (the `config.sessionSubagents` mutate-in-place block) is NO
+ *     LONGER a hand-copied ternary: `buildConfig` calls the REAL, imported
+ *     `isChildSessionBoot` (`./boot.js`) over fixture `args`/`meta`, byte-
+ *     identical to index.ts's own `!isChildSessionBoot(args, sessionMeta)`
+ *     condition — a divergent-args/meta case below (root argv + child meta)
+ *     is provable ONLY because this is a real import, not a copy: the old
+ *     single-boolean `sessionTier` flag had no "meta" input to diverge from
+ *     "args" at all.
  */
 import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
@@ -54,6 +65,7 @@ import type {
   HistoryItem,
   MediaCapabilityPort,
   ModelStreamEvent,
+  SessionMeta,
   SessionSubagentOutcome,
   SessionSubagentPort,
 } from "@anycode/core";
@@ -65,6 +77,7 @@ import {
   type ChildRunEvent,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
+import { isChildSessionBoot, type HostArgs } from "./boot.js";
 import { createChildSessionPort } from "./child-session-port.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
@@ -129,18 +142,46 @@ function wireScriptedMain(channel: FakeParentPort, onSpawn: (spawn: ChildSpawnRe
   return { spawns, cancels };
 }
 
+// ── fixture args/meta, feeding buildConfig's two locks (CUT-S2 §10.9.2) ──
+
+/** Non-child boot argv: `args.child` absent. */
+const ROOT_ARGS: HostArgs = { resume: false };
+/** Child-mode boot argv: the full `--child-*` triple present. */
+const CHILD_ARGS: HostArgs = {
+  resume: false,
+  child: { parentSessionId: "argv-parent", spawnToolCallId: "argv-call", initialMode: "build" },
+};
+
+/** A root session's persisted meta: no `parentSessionId`. */
+function rootMeta(id = "root-session"): SessionMeta {
+  return { id, workspace: "/workspace", model: "m", mode: "build", createdAt: 0, updatedAt: 0 };
+}
+/** A child session's persisted meta: `parentSessionId` set (durable authority). */
+function childMeta(id = "child-session", parentSessionId = "meta-parent"): SessionMeta {
+  return { ...rootMeta(id), parentSessionId };
+}
+
 // ── minimal AgentLoopConfig, byte-shape-mirroring host boot's own minimal set ──
 
 function buildConfig(opts: {
-  /** Mirrors index.ts's registry ternary: true = non-child (full schema), false = child-mode (restricted). */
-  sessionTier: boolean;
-  sessionSubagents?: SessionSubagentPort;
+  /** Boot argv — feeds lock #1 (registry ternary, argv-only mirror, CUT-S2 §10.9.2 p.4) directly. */
+  args: HostArgs;
+  /** This session's persisted meta — together with `args`, feeds lock #2 via the REAL `isChildSessionBoot`. */
+  meta: SessionMeta;
+  sessionSubagentsPort?: SessionSubagentPort;
   steps: ModelStreamEvent[][];
 }): AgentLoopConfig {
-  const registry = opts.sessionTier
-    ? createDefaultToolRegistry({ agent: { sessionTier: true } })
-    : createDefaultToolRegistry();
+  const registry =
+    opts.args.child === undefined
+      ? createDefaultToolRegistry({ agent: { sessionTier: true } })
+      : createDefaultToolRegistry();
   const media: MediaCapabilityPort = { imageInputEnabled: () => true };
+  // Lock #2: byte-identical to index.ts's `!isChildSessionBoot(args, sessionMeta)`
+  // gate on `config.sessionSubagents` — imported, not re-typed.
+  const sessionSubagents =
+    !isChildSessionBoot(opts.args, opts.meta) && opts.sessionSubagentsPort !== undefined
+      ? opts.sessionSubagentsPort
+      : undefined;
   return {
     modelPort: new ScriptedModelPort(opts.steps),
     registry,
@@ -156,7 +197,7 @@ function buildConfig(opts: {
     },
     cwd: "/workspace",
     media,
-    ...(opts.sessionSubagents !== undefined ? { sessionSubagents: opts.sessionSubagents } : {}),
+    ...(sessionSubagents !== undefined ? { sessionSubagents } : {}),
   };
 }
 
@@ -223,8 +264,9 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
     });
 
     const config = buildConfig({
-      sessionTier: true,
-      sessionSubagents: port,
+      args: ROOT_ARGS,
+      meta: rootMeta(),
+      sessionSubagentsPort: port,
       steps: [toolStep("call-1", "Agent", { description: "delegate build", prompt: "build X", tier: "session" }), finishStep()],
     });
     const loop = new AgentLoop(config);
@@ -303,8 +345,9 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
     });
 
     const config = buildConfig({
-      sessionTier: true,
-      sessionSubagents: port,
+      args: ROOT_ARGS,
+      meta: rootMeta(),
+      sessionSubagentsPort: port,
       steps: [toolStep("call-2", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
     });
     const loop = new AgentLoop(config);
@@ -348,8 +391,9 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
     });
 
     const config = buildConfig({
-      sessionTier: true,
-      sessionSubagents: port,
+      args: ROOT_ARGS,
+      meta: rootMeta(),
+      sessionSubagentsPort: port,
       steps: [toolStep("call-3", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
     });
     const loop = new AgentLoop(config);
@@ -422,8 +466,9 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
   it("lock #1 (registry): the RESTRICTED registry (mirrors index.ts's child-mode branch — createDefaultToolRegistry() with no {agent:{sessionTier:true}}) makes tier:\"session\" schema-invalid BEFORE the handler ever runs — even with a working sessionSubagents port wired, the port is never called", async () => {
     const { port, run } = fakeSessionPort();
     const config = buildConfig({
-      sessionTier: false,
-      sessionSubagents: port,
+      args: CHILD_ARGS,
+      meta: childMeta(),
+      sessionSubagentsPort: port,
       steps: [toolStep("call-r", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
     });
     const loop = new AgentLoop(config);
@@ -438,9 +483,10 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("lock #2 (wiring): the FULL (sessionTier:true) registry with sessionSubagents ABSENT (mirrors an accidentally-unwired root host) reaches the real handler, which fails closed with its own \"unavailable in this host\" message — proves lock #2 holds independently of lock #1", async () => {
+  it("lock #2 (wiring): the FULL (root argv/meta) registry with sessionSubagents ABSENT (mirrors an accidentally-unwired root host) reaches the real handler, which fails closed with its own \"unavailable in this host\" message — proves lock #2 holds independently of lock #1", async () => {
     const config = buildConfig({
-      sessionTier: true,
+      args: ROOT_ARGS,
+      meta: rootMeta(),
       steps: [toolStep("call-w", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
     });
     const loop = new AgentLoop(config);
@@ -453,6 +499,27 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
     const toolResult = events.find(isToolResult("call-w"))!;
     expect(toolResult.outcome.status).toBe("error");
     expect(toolResult.outcome.result?.error).toBe("Agent: session-tier subagents are unavailable in this host.");
+  });
+
+  it("CUT-S2 §10.9.2 divergent-boot: argv says root (lock #1 opens the FULL schema) but the durable meta says child (`parentSessionId` set) — the real imported `isChildSessionBoot` withholds sessionSubagents anyway, even with a WORKING port available to wire; the handler fails closed with the exact \"unavailable in this host\" string and the port is never called. Unexpressible by the old single-boolean `sessionTier` mirror, which had no `meta` input to diverge from `args` at all.", async () => {
+    const { port, run } = fakeSessionPort();
+    const config = buildConfig({
+      args: ROOT_ARGS,
+      meta: childMeta("session-x", "meta-parent-x"),
+      sessionSubagentsPort: port,
+      steps: [toolStep("call-div", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
+    });
+    const loop = new AgentLoop(config);
+
+    const events: AgentEvent[] = [];
+    for await (const event of loop.runTurn("go")) {
+      events.push(event);
+    }
+
+    const toolResult = events.find(isToolResult("call-div"))!;
+    expect(toolResult.outcome.status).toBe("error");
+    expect(toolResult.outcome.result?.error).toBe("Agent: session-tier subagents are unavailable in this host.");
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("both locks open together (mirrors a real non-child root boot): tier:\"session\" reaches a wired port and succeeds — the positive control for the two negative locks above", async () => {
@@ -475,8 +542,9 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
       channel.sendToHost(terminalEvent(spawn.requestId, { finalText: "ok", childSessionId: "child-5" }));
     });
     const config = buildConfig({
-      sessionTier: true,
-      sessionSubagents: port,
+      args: ROOT_ARGS,
+      meta: rootMeta(),
+      sessionSubagentsPort: port,
       steps: [toolStep("call-both", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
     });
     const loop = new AgentLoop(config);
@@ -493,7 +561,7 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
 
 describe("one handshake, one session_history (CUT-S1 §9.2 / CUT-S2 §10.4, B5's share of the invariant)", () => {
   it("a single ui_ready on a freshly bound child-mode Session port yields exactly ONE session_history message", async () => {
-    const config = buildConfig({ sessionTier: false, steps: [] });
+    const config = buildConfig({ args: CHILD_ARGS, meta: childMeta(), steps: [] });
     const loop = new AgentLoop(config);
     const engine = new CoreEngine({ loop, config });
 
