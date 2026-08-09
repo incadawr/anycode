@@ -895,6 +895,20 @@ export class Session {
     });
   }
 
+  /**
+   * TASK.102 CUT-S2 §10.14.3 BLOCKER-1: arms the admission funnel BEFORE the
+   * rest of host teardown runs, closing the window between `handleShutdown`'s
+   * first step and its eventual `shutdown()` call during which the funnel
+   * (route()'s `this.shuttingDown` check) was ungated — a `rewind_request` or
+   * `user_message` arriving mid-teardown was still admitted against managers
+   * already being torn down. Idempotent with `shutdown()`'s own assignment
+   * below: no code path early-returns on the flag, so the real teardown still
+   * runs in full.
+   */
+  closeAdmissions(): void {
+    this.shuttingDown = true;
+  }
+
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
   async shutdown(): Promise<void> {
     // TASK.102 CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
@@ -1227,7 +1241,16 @@ export class Session {
         // engine that hasn't wired one) defaults to `true`, byte-identical
         // to the pre-TASK.40 unconditional-for-core routing (CoreEngine's
         // supportsGitMutations was always `true`).
-        if (!isGitMutation(message.command) || (this.shell?.gitUserMutations ?? true)) {
+        // TASK.102 CUT-S2 §10.14.3 BLOCKER-2(b): a MUTATION admitted after the
+        // handoff has begun would write to the ABANDONED workspace main is
+        // about to `git worktree remove` — gated the same way as the
+        // gitUserMutations permission above (mutation branch only; read-only
+        // ops stay admitted, they are harmless and the renderer is leaving
+        // this workspace anyway). No git_result refusal reply exists at this
+        // gate (git_result is only ever emitted deep inside GitBridge after a
+        // command actually runs) — a silent drop mirrors the existing
+        // gitUserMutations refusal on this exact line.
+        if (!isGitMutation(message.command) || ((this.shell?.gitUserMutations ?? true) && !this.relocating)) {
           this.git?.handleCommand(message);
         }
         break;
@@ -1369,6 +1392,21 @@ export class Session {
    */
   private async onRewind(message: Extract<UiToHostMessage, { type: "rewind_request" }>): Promise<void> {
     const { requestId, checkpointId, scope } = message;
+    // TASK.102 CUT-S2 §10.14.3 BLOCKER-2(a): a rewind after the handoff has
+    // begun would restore the ABANDONED workspace main is about to `git
+    // worktree remove` — `busy` alone does not catch this window (relocating
+    // outlives the turn that set it; see onUserMessage's own gate above).
+    if (this.relocating) {
+      this.outbound.sendDirect({
+        type: "rewind_result",
+        requestId,
+        ok: false,
+        reason: "workspace transition in progress",
+        conversationRestored: false,
+        restoredPaths: null,
+      });
+      return;
+    }
     if (this.busy) {
       this.outbound.sendDirect({
         type: "rewind_result",

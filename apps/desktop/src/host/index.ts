@@ -2261,6 +2261,12 @@ const ready = boot();
 async function handleShutdown(): Promise<void> {
   await ready;
 
+  // TASK.102 CUT-S2 §10.14.3 BLOCKER-1: arm the admission funnel before any
+  // teardown step below runs — the whole teardown window was previously
+  // ungated, admitting exit_worktree/rewind_request/user_message against
+  // managers this function is about to tear down.
+  session?.closeAdmissions();
+
   // first teardown step — synchronous and cheap. A turn-end refresh could have a
   // git spawn running at shutdown; the adapter received `gitAbort.signal`, so
   // this aborts it through the proven runBinary abort path (SIGTERM->SIGKILL,
