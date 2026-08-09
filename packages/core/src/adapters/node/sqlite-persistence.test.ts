@@ -736,7 +736,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -802,7 +802,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -850,7 +850,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -860,7 +860,74 @@ describe("SqlitePersistenceAdapter", () => {
     migrated.close();
   });
 
-  it("migrates a pre-child-session (v12) database to v13 adding parent_session_id/spawn_tool_call_id and is idempotent across opens (TASK.102 S2a A1, REAL adapter not a mock)", async () => {
+  // TASK.102, found by the owner's live run on a real development database.
+  // A migration version is a claim on a namespace shared by every branch that
+  // ever opened this database, and the runner skips anything <= the recorded
+  // MAX. A database carrying a HIGHER max than our own migration therefore
+  // skips it silently and forever: the columns never appear and the host dies
+  // on first insert with "table sessions has no column named
+  // parent_session_id". Every other migration test above seeds a max BELOW
+  // ours, so none of them can observe this — which is precisely why it reached
+  // a real machine. Seeds the shape a real dev database had: v12 columns, but
+  // 13/14/15 already recorded by an unmerged branch's own migrations.
+  it("applies the child-session migration on a database whose recorded max version is HIGHER than v12 (foreign branch took 13-15)", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-foreign-max-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const old = new DatabaseSync(dbPath);
+    old.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at)
+        VALUES (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        engine_id TEXT, external_session_ref TEXT, project_root TEXT,
+        worktree_id TEXT, worktree_path TEXT, worktree_branch TEXT, worktree_base_ref TEXT,
+        worktree_owned_by_anycode INTEGER, continuation_pending INTEGER NOT NULL DEFAULT 0,
+        continuation_mode TEXT, worktree_exit_notice_pending INTEGER NOT NULL DEFAULT 0,
+        worktree_cleanup_path TEXT, worktree_cleanup_mode TEXT,
+        worktree_cleanup_owned_by_anycode INTEGER, worktree_cleanup_branch TEXT, worktree_transition_json TEXT,
+        connection_id TEXT, codex_profile_id TEXT
+      );
+      CREATE TABLE claude_transcript_items (
+        session_ref TEXT NOT NULL, turn_ordinal INTEGER NOT NULL, position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_ref, item_id)
+      );
+      INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
+        VALUES ('root-foreign', '/repo', 'm', 'build', 1, 2, '/repo');
+    `);
+    old.close();
+
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    // The load-bearing assertion: creating a CHILD session is the exact
+    // operation that died on the owner's machine. It exercises the columns
+    // through the production write path, so it fails if the migration was
+    // skipped — a PRAGMA check alone would only prove the DDL, not that the
+    // adapter can use it.
+    await adapter.createSession({
+      id: "child-foreign",
+      workspace: "/repo",
+      model: "m",
+      mode: "build",
+      parentSessionId: "root-foreign",
+      spawnToolCallId: "call-foreign",
+    });
+    const child = await adapter.getChildSession("root-foreign", "call-foreign");
+    expect(child?.id).toBe("child-foreign");
+    expect(child?.parentSessionId).toBe("root-foreign");
+    await adapter.close();
+
+    const migrated = new DatabaseSync(dbPath);
+    expect(
+      (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
+        ({ version }) => version,
+      ),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    migrated.close();
+  });
+
+  it("migrates a pre-child-session (v12) database to v16 adding parent_session_id/spawn_tool_call_id and is idempotent across opens (TASK.102 S2a A1, REAL adapter not a mock)", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v12-child-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const old = new DatabaseSync(dbPath);
@@ -888,7 +955,7 @@ describe("SqlitePersistenceAdapter", () => {
     `);
     old.close();
 
-    // Opening the pre-migration DB must not crash, must migrate to v13, and a
+    // Opening the pre-migration DB must not crash, must migrate to v16, and a
     // legacy row (NULL parent_session_id) reads back as a ROOT session — no
     // parentSessionId/spawnToolCallId field at all (the same "absence, not a
     // false flag" discipline every other additive column above follows).
@@ -906,7 +973,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
