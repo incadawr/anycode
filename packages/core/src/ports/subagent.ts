@@ -86,6 +86,9 @@ export interface SubagentRunOptions {
   onProgress?: (progress: SubagentProgress) => void;
 }
 
+/** Return shape of `SubagentPort.engineProfile` (TASK.102 CUT-S4 §2.1). */
+export type EngineProfileInfo = { engine: "claude" | "codex"; systemPrompt: string };
+
 export interface SubagentPort {
   run(req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome>;
   /**
@@ -95,4 +98,12 @@ export interface SubagentPort {
    * agentInputSchema is untouched (agent_type is already a plain string).
    */
   listAgentTypes?(): string[];
+  /**
+   * Resolves an md-profile agent type that declares `engine:` frontmatter.
+   * null for built-ins and non-engine profiles. Optional: a fake/legacy port
+   * without it simply has no engine profiles to offer (TASK.102 CUT-S4 §2.1 —
+   * `tools/agent.ts` routes such a type to a child session BEFORE the tier
+   * branch instead of the deprecated one-shot path in `subagents/runner.ts`).
+   */
+  engineProfile?(agentType: string): EngineProfileInfo | null;
 }

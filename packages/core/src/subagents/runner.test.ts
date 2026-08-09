@@ -1612,6 +1612,19 @@ describe("engine persona (one-shot foreign CLI run)", () => {
     expect(parentModel.calls).toBe(0);
   });
 
+  it("TASK.102 CUT-S4 §2.4: without runEngineChild, the error text names the S4 migration (deprecated-live workflow path) verbatim, not the pre-S4 'not supported' wording", async () => {
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [enginePersona], // no runEngineChild
+    });
+
+    const outcome = await runner.run({ agentType: "codex-worker", description: "d", prompt: "p" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(
+      'Agent: agent type "codex-worker" runs on the "codex" engine. Engine agents now run as child sessions via the Agent tool; this caller (workflow step or non-desktop host) cannot spawn one.',
+    );
+  });
+
   it("an engine persona without a host resolver fails BEFORE the semaphore — it never queues behind running children", async () => {
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -1670,5 +1683,55 @@ describe("engine persona (one-shot foreign CLI run)", () => {
     const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {});
     expect(outcome.status).toBe("completed");
     expect(outcome.finalText).toBe("built-in child report");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// engineProfile() port method (TASK.102 CUT-S4 §2.1): tools/agent.ts's new
+// routing branch resolves an md-profile's `engine:` frontmatter through this
+// method BEFORE the tier branch. Realized through the SAME thunk mechanism as
+// listAgentTypes (currentProfiles()) — no second list/cache. Built-in personas
+// always resolve to null (they never have an `engine`).
+
+describe("engineProfile() (TASK.102 CUT-S4 §2.1)", () => {
+  const codexPersona: PersonaDefinition = {
+    name: "codex-worker",
+    description: "runs on the codex engine",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    engine: "codex",
+  };
+
+  it("resolves an engine profile to {engine, systemPrompt}", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    expect(runner.engineProfile?.("codex-worker")).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
+  });
+
+  it("returns null for a built-in persona (never an engine profile)", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    expect(runner.engineProfile?.("general-purpose")).toBeNull();
+    expect(runner.engineProfile?.("explore")).toBeNull();
+  });
+
+  it("returns null for a non-engine md-profile", async () => {
+    const persona = await makeProfile("reviewer", { body: "P" });
+    const runner = createSubagentRunner(makeParent(), { profiles: [persona] });
+    expect(runner.engineProfile?.("reviewer")).toBeNull();
+  });
+
+  it("returns null for an unknown agent type", () => {
+    const runner = createSubagentRunner(makeParent());
+    expect(runner.engineProfile?.("no-such-type")).toBeNull();
+  });
+
+  it("live rescan: a profile added to the thunk's result AFTER construction becomes visible (same mechanism as listAgentTypes)", () => {
+    let live: PersonaDefinition[] = [];
+    const runner = createSubagentRunner(makeParent(), { profiles: () => live });
+
+    expect(runner.engineProfile?.("codex-worker")).toBeNull();
+
+    live = [codexPersona];
+
+    expect(runner.engineProfile?.("codex-worker")).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
   });
 });

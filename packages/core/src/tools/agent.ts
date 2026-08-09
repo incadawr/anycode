@@ -38,7 +38,7 @@
  */
 
 import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
-import type { SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
+import type { EngineProfileInfo, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
 import { SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS, SUBAGENT_OUTPUT_MAX_BYTES } from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
@@ -217,6 +217,40 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
+      // Engine-profile routing (TASK.102 CUT-S4 §2.2), BEFORE the tier branch:
+      // an md-profile declaring `engine:` frontmatter no longer runs as a
+      // bare one-shot foreign CLI call (the permission-gate hole S4 closes) —
+      // it always runs as a child SESSION instead, through the exact same
+      // SessionSubagentPort contract as an explicit `tier:"session"` call.
+      const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
+      if (engineProfile !== null) {
+        // provider is a core-connect concept; a foreign-engine child runs on
+        // its own CLI account, so the field is meaningless here — even though
+        // it is only reachable when the earlier tier==="session" check above
+        // let it through.
+        if (input.provider !== undefined) {
+          return {
+            ok: false,
+            errorKind: "invalid_input",
+            error: 'Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account.',
+          };
+        }
+        // Fail-closed: without a SessionSubagentPort an engine profile cannot
+        // run at all — the one-shot in-process fallback no longer exists.
+        if (!ctx.sessionSubagents) {
+          return {
+            ok: false,
+            error:
+              `Agent: agent type "${agentType}" runs on the "${engineProfile.engine}" engine; engine agents run ` +
+              `as child sessions and are unavailable in this host.`,
+          };
+        }
+        // tier is IGNORED for an engine profile: it always runs as a session,
+        // a silent inline->session upgrade rather than a tier:"inline" refusal
+        // — the migration this slice performs.
+        return runSessionTier(input, ctx, agentType, engineProfile);
+      }
+
       if (tier === "session") {
         return runSessionTier(input, ctx, agentType);
       }
@@ -290,11 +324,19 @@ async function runInlineTier(
  * (buildChildConfig never copies `sessionSubagents`, so every child session
  * lands here even though its restricted SCHEMA already made "session"
  * unreachable — belt and suspenders, CUT-S2 §0.2).
+ *
+ * `engineProfile` (TASK.102 CUT-S4 §2.2), when present, is the caller's proof
+ * the routing branch above already resolved agentType to a foreign-engine
+ * md-profile: the request's prompt becomes the persona body + the caller's
+ * own prompt (byte-identical to the one-shot composition subagents/runner.ts
+ * built for EngineChildSpec.prompt — I3) and `engine` is stamped onto the
+ * request. Every other field/behavior below is unchanged.
  */
 async function runSessionTier(
   input: AgentInput,
   ctx: ToolContext,
   agentType: string,
+  engineProfile?: EngineProfileInfo,
 ): Promise<ToolResult<AgentOutput>> {
   if (!ctx.sessionSubagents) {
     return {
@@ -310,10 +352,12 @@ async function runSessionTier(
   const request: SessionSubagentRequest = {
     agentType,
     description: input.description,
-    prompt: input.prompt,
+    prompt:
+      engineProfile !== undefined ? `${engineProfile.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
     spawnToolCallId: ctx.toolCallId,
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(engineProfile !== undefined ? { engine: engineProfile.engine } : {}),
   };
 
   // Same accumulation/bridge discipline as the inline tier above — the
