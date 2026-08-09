@@ -2982,3 +2982,351 @@ describe("TabHostManager — a self-reported ChildTerminal racing a cancel does 
     await flush(); // let the queued auto-exit settle before the test ends
   });
 });
+
+/**
+ * Review T1 (post-F1): F1 fixed the `state === "closing"` branch of
+ * `cancelChildRun` to yield a real macrotask instead of a bare
+ * `Promise.resolve()`, but left its sibling branch — `childTab === undefined`
+ * — untouched. If a childTabId is ever present in `childrenByParentTab`
+ * while absent from `tabs` (every current `tabs.delete` site happens to also
+ * clear the sibling set, so this is latent, not live), `drainChildren`'s
+ * `for(;;)` loop would revisit that ghost id forever, once per bare
+ * microtask, starving the main-process event loop exactly like F1's original
+ * bug — on the one branch the fix never touched.
+ */
+describe("TabHostManager — cancelChildRun's unknown-tab branch (review T1a)", () => {
+  it("a childTabId present in childrenByParentTab but absent from tabs resolves only via a REAL macrotask, and self-heals by dropping the id from the sibling set", async () => {
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws-t1a", sessionId: "root-t1a", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = root.ok ? root.tab.tabId : "";
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1a-req" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "t1a-req" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+
+    // Manufacture the state the finding describes: `childrenByParentTab`
+    // still lists this id, but `tabs` no longer has it. Every real deletion
+    // site removes both together (which is why this is latent in
+    // production) — reaching here directly is the only safe way to exercise
+    // the branch without depending on a second, hypothetical bug.
+    const raw = manager as unknown as {
+      tabs: Map<string, unknown>;
+      childrenByParentTab: Map<string, Set<string>>;
+      cancelChildRun(id: string): Promise<void>;
+    };
+    raw.tabs.delete(childTabId);
+    expect(raw.childrenByParentTab.get(rootTabId)?.has(childTabId)).toBe(true);
+
+    let resolved = false;
+    raw.cancelChildRun(childTabId).then(() => {
+      resolved = true;
+    });
+
+    // Drain a large but FINITE number of microtask turns — bounded by the
+    // TEST, never by the code under test (mirrors F1's own test, which
+    // documents why nothing else can safely bound an unfixed microtask
+    // chain). A bare `Promise.resolve()` (the bug) flips `resolved` after
+    // the very first one of these.
+    for (let i = 0; i < 2000; i++) {
+      await Promise.resolve();
+    }
+    expect(resolved).toBe(false);
+
+    // Give it exactly one real macrotask turn — the fix must resolve here.
+    await new Promise<void>((r) => setImmediate(r));
+    expect(resolved).toBe(true);
+
+    // And the ghost id must not survive: a child with no tab can never
+    // finalize, so leaving it in the sibling set would just recreate the
+    // same starvation for the NEXT drainChildren revisit.
+    expect(raw.childrenByParentTab.get(rootTabId)?.has(childTabId)).toBeFalsy();
+  });
+});
+
+/**
+ * Review T1 (bounded drain): `drainChildren`'s `for(;;)` loop has no
+ * iteration cap or deadline. If a force-killed child's process never
+ * actually emits "exit" (so `finalizeChildRun` never runs and the sibling
+ * set never empties), the loop revisits it forever, one real macrotask at a
+ * time, and `closeTab`/`relocateTab` (both `await drainChildren`) never
+ * resolve. The manager's injectable `now()` lets the test control the
+ * deadline check deterministically without needing thousands of real
+ * macrotask turns to elapse.
+ */
+describe("TabHostManager — drainChildren is bounded, not an infinite cascade (review T1b)", () => {
+  it("gives up (with an honest, logged outcome) instead of looping forever when a child never actually finalizes", async () => {
+    const { fork, hosts } = liveForkRig(); // never auto-responds to shutdown, never exits
+    const { window } = windowRig();
+    const errors: string[] = [];
+    // A `now()` that reads 0 until the test flips `jumped` — deterministic
+    // control over the deadline without needing thousands of real macrotask
+    // turns to elapse for a wall-clock check to observe genuine elapsed
+    // time. (spawnTabHost's own unrelated `now()` calls during setup below
+    // just read 0 too, harmlessly.)
+    let jumped = false;
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      now: () => (jumped ? Number.MAX_SAFE_INTEGER : 0),
+      logger: { log() {}, warn() {}, error: (msg: string) => errors.push(msg) },
+      limits: { exitDeadlineMs: 1000 },
+    });
+    const root = manager.createTab({ workspace: "/ws-t1b", sessionId: "root-t1b", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = root.ok ? root.tab.tabId : "";
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1b-req" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "t1b-req" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+
+    // An explicit cancel flips the child to "closing" synchronously, without
+    // waiting on its own exitDeadlineMs timer — from here on every
+    // `cancelChildRun` revisit takes the already-fixed (F1/T1a) "yield a
+    // real macrotask" branches, never a real exit, since this fork rig never
+    // emits one.
+    rootHost.emit("message", runCancel("t1b-req"));
+    expect(manager.getTab(childTabId)?.state).toBe("closing");
+
+    // Invoke drainChildren: its synchronous prefix (up to the loop's first
+    // `await`) computes the deadline immediately, reading `now()` while
+    // `jumped` is still false — THEN the test jumps the clock, so every
+    // trip-check from here on reports a deadline that has already elapsed.
+    // The loop's per-iteration wait is still a REAL setImmediate (F1),
+    // decoupled from this injected clock, so even a correctly-bounded drain
+    // needs at least one real macrotask turn to observe the trip and
+    // return. Racing against a short real timeout is what discriminates an
+    // unbounded loop (unfixed: spins for the full 250ms) from a bounded one
+    // (fixed: resolves within a couple of macrotasks).
+    const raw = manager as unknown as { drainChildren(tab: unknown): Promise<void> };
+    const rootTab = manager.getTab(rootTabId);
+    const drainPromise = raw.drainChildren(rootTab);
+    jumped = true;
+    const result = await Promise.race([
+      drainPromise.then(() => "resolved" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 250)),
+    ]);
+
+    expect(result).toBe("resolved");
+    // Honest outcome, not a silent continue: something was logged about the
+    // still-unreaped child rather than drainChildren just quietly returning
+    // as if the cascade had actually finished.
+    expect(errors.some((m) => m.includes(rootTabId))).toBe(true);
+    // The sibling is legitimately still there — cancelChildRun already
+    // signaled its shutdown; a LATER drain (the next close/relocate/exit
+    // cascade) gets to retry it. Giving up must not fabricate a reap.
+    expect(manager.getTab(childTabId)).toBeDefined();
+  });
+});
+
+/**
+ * Review T2: two `shutdownTabHost` calls can be in flight against the same
+ * child with staggered deadlines — `cancelChildRun`'s explicit-cancel path
+ * (A) and `finalizeChildRun`'s own reap call when a self-reported
+ * `ChildTerminal` lands while `proc` is still non-null (B) — both capturing
+ * `child = tab.proc` before either nulls it.
+ *
+ * NOTE ON SCOPE: the original finding described this as a PERMANENT leak of
+ * `forceKilledExits` (the Set growing by one dead process per occurrence,
+ * for the life of the main process). Direct TDD investigation of that claim
+ * did NOT reproduce it in either relative ordering of "the real exit" vs
+ * "the loser's own deadline": `forceKilledExits` is a `Set` (identity-keyed,
+ * so a redundant `.add()` is a no-op) and `handleExit`'s single,
+ * spawn-time-registered `.once("exit")` listener unconditionally removes
+ * whatever entry exists the one time a real exit is ever observed —
+ * regardless of how many times `shutdownTabHost` raced to add one. What IS
+ * real and reproduces cleanly: the LOSING call has no guard against doing
+ * its own force-kill bookkeeping — a second, fully redundant `child.kill()`
+ * — after the WINNING call has already nulled `tab.proc` out from under it.
+ * The fix below is exactly the one the finding proposed (guard the
+ * force-kill bookkeeping on `tab.proc === child`); only the discriminating
+ * test targets the redundant-kill defect that's actually there, not the
+ * Set-leak that empirically isn't.
+ */
+describe("TabHostManager — an overlapping second shutdownTabHost call does not redundantly force-kill (review T2)", () => {
+  it("a cancel-triggered shutdown racing a self-reported-terminal-triggered shutdown on the SAME child force-kills the underlying process EXACTLY once, even when the loser's own deadline elapses with no exit ever observed", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fork, hosts } = liveForkRig(); // never auto-responds to shutdown, never exits on its own
+      const { window } = windowRig();
+      const manager = childManager(fork, window, { limits: { exitDeadlineMs: 1000 } });
+      const root = manager.createTab({ workspace: "/ws-t2", sessionId: "root-t2", resume: false });
+      expect(root.ok).toBe(true);
+      const rootHost = hosts[0]!;
+      rootHost.emit("message", spawnRequest({ requestId: "t2-req" }));
+      const childHost = hosts[1]!;
+      const accepted = childRunEvents(rootHost).find((e) => e.requestId === "t2-req" && e.kind === "accepted");
+      const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+      expect(childTabId).not.toBe("");
+
+      // Call A: an explicit parent cancel starts the first shutdownTabHost,
+      // arming its own deadline at t=1000.
+      rootHost.emit("message", runCancel("t2-req"));
+      expect(manager.getTab(childTabId)?.state).toBe("closing");
+
+      // At t=200, the child's own (already in-flight) ChildTerminal lands —
+      // finalizeChildRun sees `proc !== null` (A hasn't hit its deadline
+      // yet) and starts a SECOND, overlapping shutdownTabHost call B, with
+      // its OWN deadline armed at t=1200.
+      await vi.advanceTimersByTimeAsync(200);
+      childHost.emit("message", childTerminalMsg({ status: "completed" }));
+
+      // t=1000: A's deadline elapses first. Force-kill #1; tab.proc -> null.
+      await vi.advanceTimersByTimeAsync(800);
+      expect(childHost.kill).toHaveBeenCalledTimes(1);
+
+      // The process never actually reports an exit in this test (the
+      // pathological "force-killed but never reaped" case review T1's
+      // drainChildren cap and T3's engine-reap fix both exist to handle) —
+      // so B's own "exited" listener has nothing to observe, and B's
+      // deadline at t=1200 elapses too, on a tab whose `proc` A already
+      // nulled out from under it.
+      await vi.advanceTimersByTimeAsync(300);
+
+      // Unfixed: B has no guard, so it redundantly re-adds to
+      // forceKilledExits (a harmless no-op, since the Set is identity-keyed)
+      // AND calls `child.kill()` a second time on the same corpse. Fixed: B
+      // recognizes `tab.proc` is no longer the process it captured and
+      // skips its own force-kill bookkeeping entirely.
+      expect(childHost.kill).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * Review T3: on the force-kill path, `shutdownTabHost` nulls `tab.proc`
+ * before the real "exit" ever arrives. When that late exit lands,
+ * `handleExit` calls `reapEngineProcess(tab, child)`, whose guard requires
+ * `tab.proc === child` — always false for a force-killed process, since
+ * `tab.proc` was already nulled. The external engine process group
+ * (`tab.engineProcess`) is therefore never reaped and outlives the app. This
+ * affects ROOT sessions specifically (only a root can carry an
+ * `engineProcess` registration — a child's host has no such control-plane
+ * message wired).
+ */
+describe("TabHostManager — a force-killed ROOT's external engine process is still reaped when its late exit lands (review T3)", () => {
+  it("reapEngineProcess uses the registration captured at force-kill time, not tab.proc===child (which is always false for a force-killed process by the time the exit lands)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fork, hosts } = liveForkRig(); // never auto-responds to shutdown, never exits on its own
+      const reaped: number[] = [];
+      const { window } = windowRig();
+      const manager = new TabHostManager({
+        fork,
+        hostEntry: "/fake/host.js",
+        createChannel: fakeChannel,
+        getWindow: () => window,
+        engineReady: () => true,
+        reapEngineProcess: (registration) => reaped.push(registration.enginePid),
+        logger: silentLogger,
+        limits: { exitDeadlineMs: 1000 },
+      });
+      // A second root so closing the first is not refused as last_tab.
+      const rootA = manager.createTab({ workspace: "/ws-t3-a", sessionId: "root-t3-a", resume: false, engine: "codex" });
+      expect(rootA.ok).toBe(true);
+      const rootB = manager.createTab({ workspace: "/ws-t3-b", sessionId: "root-t3-b", resume: false, engine: "codex" });
+      expect(rootB.ok).toBe(true);
+      const rootBTabId = rootB.ok ? rootB.tab.tabId : "";
+      const rootBHost = hosts[1]!;
+
+      rootBHost.emit("message", {
+        type: "anycode:engine-process",
+        hostPid: rootBHost.pid,
+        generation: 1,
+        enginePid: 777,
+        pgid: 777,
+      });
+      expect(manager.getTab(rootBTabId)?.engineProcess?.enginePid).toBe(777);
+
+      // closeTab's own shutdownTabHost races the deadline; the host never
+      // responds, so it force-kills — `reapEngineProcess`'s ordinary
+      // `tab.proc === child` guard has nothing to match against from here
+      // on (`tab.proc` is about to be nulled by the force-kill branch).
+      const closePromise = manager.closeTab(rootBTabId);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(rootBHost.kill).toHaveBeenCalled();
+      expect(reaped).toEqual([]); // not yet — the real exit hasn't landed
+
+      // The real exit finally lands, late.
+      rootBHost.emit("exit", 137);
+      await closePromise;
+
+      expect(reaped).toEqual([777]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT reap a newer (respawned) generation's engine using a stale force-killed exit (relocateTab's respawn-after-force-kill case)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fork, hosts } = liveForkRig();
+      const reaped: number[] = [];
+      const { window } = windowRig();
+      const manager = new TabHostManager({
+        fork,
+        hostEntry: "/fake/host.js",
+        createChannel: fakeChannel,
+        getWindow: () => window,
+        engineReady: () => true,
+        reapEngineProcess: (registration) => reaped.push(registration.enginePid),
+        logger: silentLogger,
+        limits: { exitDeadlineMs: 1000 },
+      });
+      const root = manager.createTab({ workspace: "/ws-t3c", sessionId: "root-t3c", resume: false, engine: "codex" });
+      expect(root.ok).toBe(true);
+      const rootTabId = root.ok ? root.tab.tabId : "";
+      const oldHost = hosts[0]!;
+
+      oldHost.emit("message", {
+        type: "anycode:engine-process",
+        hostPid: oldHost.pid,
+        generation: 1,
+        enginePid: 111,
+        pgid: 111,
+      });
+
+      const raw = manager as unknown as { shutdownTabHost(tab: unknown): Promise<void> };
+      const tab = manager.getTab(rootTabId);
+      const shutdownPromise = raw.shutdownTabHost(tab);
+      await vi.advanceTimersByTimeAsync(1000); // force-kills the OLD host
+      await shutdownPromise;
+      expect(reaped).toEqual([]); // still not yet — no exit landed
+
+      // Simulate what relocateTab does next: respawn a NEW generation on
+      // the SAME tab BEFORE the old host's late exit ever arrives.
+      tab!.state = "running";
+      (manager as unknown as { spawnTabHost(tab: unknown, opts: { firstSpawn: boolean }): void }).spawnTabHost(tab, {
+        firstSpawn: false,
+      });
+      const newHost = hosts[1]!;
+      newHost.emit("message", {
+        type: "anycode:engine-process",
+        hostPid: newHost.pid,
+        generation: 2,
+        enginePid: 222,
+        pgid: 222,
+      });
+      expect(manager.getTab(rootTabId)?.engineProcess?.enginePid).toBe(222);
+
+      // NOW the OLD (force-killed) host's late exit finally lands.
+      oldHost.emit("exit", 137);
+
+      // Only the OLD engine (captured at ITS OWN force-kill) was reaped —
+      // the NEW generation's live engine must survive this stale exit.
+      expect(reaped).toEqual([111]);
+      expect(manager.getTab(rootTabId)?.engineProcess?.enginePid).toBe(222);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
