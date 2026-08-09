@@ -68,6 +68,7 @@ import { computePreviewPanelOpen, usePreviewStore } from "./preview/preview-stor
 import type { PreviewPanelInfo } from "../../shared/preview-panel.js";
 import { buildChildBreadcrumb, childLayoutStore } from "./child-layout.js";
 import { childRelationStore, type ChildRelation } from "./child-sessions.js";
+import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import "./settings.css";
 
 /** localStorage key for the renderer-only sidebar collapse flag (design §2.1). */
@@ -379,19 +380,13 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       ? state.getRelation(parentSessionId, childView.spawnToolCallId)
       : undefined,
   );
-  // Only a LIVE relation has a surface to show yet (§0's "reap immediately"
-  // verdict — a completed child's read-only branch is C4, not this slice).
-  // Self-heals the layout store the instant the shown child stops being
-  // live/known, mirroring `onChildGone`'s own designed use (the pure
-  // reducer's doc comment names exactly this trigger): a background child
-  // going away is untouched (childGone no-ops unless THIS tab was showing
-  // exactly that one), so this never yanks the user out of a DIFFERENT
-  // child or out of master.
-  useEffect(() => {
-    if (childView.kind === "child" && (childRelation === undefined || !childRelation.live)) {
-      childLayoutStore.getState().childGone(tabId, childView.spawnToolCallId);
-    }
-  }, [tabId, childView, childRelation]);
+  // TASK.102 CUT-S2 §10.8.1 point 3: a NON-live child (relation.live===false,
+  // OR no relation at all — the restart-Open case) is no longer a transient
+  // error state to self-heal out of. C4's read-only branch (`ChildHistoryPane`
+  // below) is its permanent home: the pre-C4 self-heal effect that used to
+  // bounce this tab back to master the instant `childRelation` stopped being
+  // live is GONE — the child-view branch below now falls through from the
+  // live surface to the read-only one on the exact same render instead.
 
   const reviewRootRef = useRef<HTMLDivElement>(null);
   const [reviewWidth, setReviewWidth] = useState(readReviewWidth);
@@ -491,22 +486,36 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     window.addEventListener("pointerup", onUp, { once: true });
   }
 
-  // TASK.102 CUT-S2 §2.5 (C3): layout B's child branch — a breadcrumb bar in
-  // place of SessionHeader, above the SAME SessionSurface re-scoped to the
-  // child's own TabContext (ChildSessionPane below). Every hook above this
-  // point keeps running for the MASTER tab regardless (background-completion
-  // notifications, preview-panel bookkeeping, etc.) — only the JSX choice
-  // changes here, so switching back to master via the breadcrumb never lost
-  // any of that state to begin with.
-  if (childView.kind === "child" && childRelation !== undefined && childRelation.live) {
+  // TASK.102 CUT-S2 §2.5 (C3) / §10.8.1 (C4): layout B's child branch — a
+  // breadcrumb bar in place of SessionHeader, above either the LIVE
+  // SessionSurface re-scoped to the child's own TabContext (ChildSessionPane,
+  // relation still live) or C4's read-only completed transcript
+  // (ChildHistoryPane, everything else: no relation yet seen this renderer
+  // session — the restart-Open case — or a relation that has flipped
+  // live:false). Every hook above this point keeps running for the MASTER tab
+  // regardless (background-completion notifications, preview-panel
+  // bookkeeping, etc.) — only the JSX choice changes here, so switching back
+  // to master via the breadcrumb never lost any of that state to begin with.
+  if (childView.kind === "child") {
+    if (childRelation !== undefined && childRelation.live) {
+      return (
+        <ChildSessionPane
+          parentTabId={tabId}
+          spawnToolCallId={childView.spawnToolCallId}
+          relation={childRelation}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={onToggleSidebar}
+          onToast={onToast}
+        />
+      );
+    }
     return (
-      <ChildSessionPane
+      <ChildHistoryPane
         parentTabId={tabId}
+        parentSessionId={parentSessionId}
         spawnToolCallId={childView.spawnToolCallId}
-        relation={childRelation}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={onToggleSidebar}
-        onToast={onToast}
       />
     );
   }
@@ -636,6 +645,126 @@ function ChildSessionPane({
           </TabContext.Provider>
         ) : (
           <div className="main-empty">This child session is no longer available.</div>
+        )}
+      </div>
+    </>
+  );
+}
+
+interface ChildHistoryPaneProps {
+  parentTabId: string;
+  /** The master's own sessionId (ambient — NEVER a card-payload id, CUT-S2 §2.3's identity discipline mirrored renderer-side). Null/undefined only if this tab's own session row hasn't hydrated yet — treated as unavailable rather than crashing. */
+  parentSessionId: string | null | undefined;
+  spawnToolCallId: string;
+  sidebarCollapsed: boolean;
+  onToggleSidebar(): void;
+}
+
+/** Placeholder view-state before the channel round-trip resolves — distinct from `ChildHistoryViewState`'s three settled states (that type has no "loading" member: a channel response is always eventually one of ok+items/ok+empty/refused, never "still waiting" — this is purely a pre-response UI moment). */
+const CHILD_HISTORY_LOADING = { kind: "loading" as const };
+
+/**
+ * TASK.102 CUT-S2 §10.8.1 (slice S2c C4): layout B's READ-ONLY child view —
+ * the home for a child this tab's relation-store does NOT show as live
+ * (never seen live in this renderer process at all — the restart-Open case —
+ * or seen live and since exited). Fetches the completed transcript over
+ * `CHILD_HISTORY_CHANNEL`, keyed ONLY by the ambient `(parentSessionId,
+ * spawnToolCallId)` pair this component's own props carry — NEVER by any id
+ * riding a card's persisted `target` payload (the renderer mirror of §2.3's
+ * "identity from the actual sender, not the payload": a forged/stale blob
+ * gets main's honest authorization refusal, never someone else's history).
+ *
+ * Deliberately NOT `SessionSurface`: that component resolves entirely off a
+ * LIVE `TabContext` (a real per-tab zustand store from `tabRegistry`), which
+ * a completed child does not have (main reaps its host on the terminal
+ * transition, CUT-S2 §0). This pane instead feeds the SAME `MessageList` the
+ * live surface uses (identical React/Markdown rendering tract — XSS law, no
+ * second renderer) with a one-shot fetched block array, and never mounts
+ * `Composer` at all — "composer disabled" per §10.8.1 point 3's normative
+ * §2.5 rule, since there is no live connection to send a composer draft on.
+ */
+function ChildHistoryPane({ parentTabId, parentSessionId, spawnToolCallId, sidebarCollapsed, onToggleSidebar }: ChildHistoryPaneProps) {
+  const masterTitle =
+    useTabsStore((state) => state.tabs.find((tab) => tab.tabId === parentTabId)?.title) ?? "Untitled task";
+  const card = useTabStore((state) => {
+    const block = state.transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === spawnToolCallId);
+    return block && block.kind === "tool_call" ? block.subagent : null;
+  });
+  const breadcrumb = buildChildBreadcrumb(masterTitle, card ?? { agentType: "Subagent", description: "" });
+
+  const [state, setState] = useState<ChildHistoryViewState | typeof CHILD_HISTORY_LOADING>(CHILD_HISTORY_LOADING);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState(CHILD_HISTORY_LOADING);
+    if (parentSessionId === undefined || parentSessionId === null) {
+      setState({ kind: "unavailable" });
+      return;
+    }
+    window.anycode
+      .childHistory(parentSessionId, spawnToolCallId)
+      .then((result: ChildHistoryResult) => {
+        if (!cancelled) {
+          setState(projectChildHistoryResult(result));
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("[ChildHistoryPane] childHistory failed", error);
+        if (!cancelled) {
+          setState({ kind: "unavailable" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [parentSessionId, spawnToolCallId]);
+
+  return (
+    <>
+      <header className="session-header child-session-breadcrumb">
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="session-header-expand"
+            aria-label="Expand sidebar"
+            onClick={onToggleSidebar}
+          >
+            <CollapseIcon />
+          </button>
+        )}
+        <button
+          type="button"
+          className="child-breadcrumb-master"
+          onClick={() => childLayoutStore.getState().close(parentTabId)}
+        >
+          {breadcrumb.masterTitle}
+        </button>
+        <span className="child-breadcrumb-sep" aria-hidden="true">
+          ›
+        </span>
+        <span className="child-breadcrumb-current" title={breadcrumb.description || undefined}>
+          {breadcrumb.agentType}
+        </span>
+        <span className="child-breadcrumb-readonly" title="This child session has ended — its transcript is read-only.">
+          Read-only
+        </span>
+      </header>
+
+      <div className="session-content">
+        {state.kind === "loading" && <div className="main-empty">Loading transcript…</div>}
+        {state.kind === "unavailable" && <div className="main-empty">This child session's transcript is unavailable.</div>}
+        {state.kind === "empty" && <div className="main-empty">This child session has no transcript yet.</div>}
+        {state.kind === "blocks" && (
+          <div className="session-conversation">
+            <MessageList
+              blocks={state.blocks}
+              turn={{ status: "idle", turnId: null, requestId: null }}
+              workspace={null}
+              connection="host_exited"
+              retry={null}
+              onTryAgain={() => {}}
+            />
+          </div>
         )}
       </div>
     </>

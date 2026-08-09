@@ -210,6 +210,16 @@ function childAttentionMsg(waiting: boolean) {
   return { type: CHILD_PROGRESS_TYPE, kind: "attention", waiting } as const;
 }
 
+function childProgressMsg(overrides: { turns?: number; toolCalls?: number; lastTool?: string } = {}) {
+  return {
+    type: CHILD_PROGRESS_TYPE,
+    kind: "progress",
+    turns: 3,
+    toolCalls: 2,
+    ...overrides,
+  } as const;
+}
+
 /** Every ChildRunEvent posted to a fake host, in call order. */
 function childRunEvents(host: FakeHost): ChildRunEvent[] {
   return host.postMessage.mock.calls
@@ -2225,6 +2235,150 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
   });
 });
 
+/**
+ * The B3 relay-test matrix §10.7 п.6d asks for (a fix-job filling a gap the
+ * cut itself flags — §10.7 п.0 — the B3 test list originally shipped with
+ * ZERO relay tests): each ChildProgress kind relays to exactly the run's OWN
+ * requestId; a sender WITHOUT childOf is ignored; a message arriving after
+ * the run's terminal transition is dropped; and ChildTerminal.
+ * activitySuppressed is copied verbatim into the terminal ChildRunEvent.
+ */
+describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 CUT-S2 §10.7 п.6d)", () => {
+  it("a `progress` message from a live child with childOf relays EXACTLY one ChildRunEvent{kind:\"progress\"} carrying the run's requestId", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-progress", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-progress" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childProgressMsg({ turns: 3, toolCalls: 2, lastTool: "Bash" }));
+
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "progress")).toEqual([
+      { type: CHILD_RUN_EVENT_TYPE, requestId: "relay-progress", kind: "progress", turns: 3, toolCalls: 2, lastTool: "Bash" },
+    ]);
+  });
+
+  it("an `activity` message from a live child with childOf relays EXACTLY one ChildRunEvent{kind:\"activity\"} carrying the run's requestId", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-activity", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-activity" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childActivityMsg("Bash", "ran a command"));
+
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "activity")).toEqual([
+      { type: CHILD_RUN_EVENT_TYPE, requestId: "relay-activity", kind: "activity", toolName: "Bash", summary: "ran a command" },
+    ]);
+  });
+
+  it("an `attention` message from a live child with childOf relays EXACTLY one ChildRunEvent{kind:\"attention\"} carrying the run's requestId", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-attention", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-attention" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childAttentionMsg(true));
+
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "attention")).toEqual([
+      { type: CHILD_RUN_EVENT_TYPE, requestId: "relay-attention", kind: "attention", waiting: true },
+    ]);
+  });
+
+  it("a ChildProgress message from a tab WITHOUT childOf (the root tab itself) is silently ignored — no relay, no crash, even while a SIBLING child run is genuinely live", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-no-childof", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    // A real child run IS live on `childRuns` at the same moment — this is
+    // what makes the case discriminating: without the `childOf === undefined`
+    // guard, any correlation strategy that falls back to "the one live run"
+    // (rather than genuinely finding nothing to correlate against) would
+    // wrongly relay the root's OWN message under the sibling child's requestId.
+    rootHost.emit("message", spawnRequest({ requestId: "sibling-live" }));
+    const eventsBeforeSelfMessage = childRunEvents(rootHost);
+
+    // The ROOT tab is not itself a child — it carries no `childOf` — so a
+    // ChildProgress message arriving on its OWN process must be dropped,
+    // not relayed to itself or misattributed to the sibling run above.
+    rootHost.emit("message", childProgressMsg());
+    rootHost.emit("message", childActivityMsg("Bash", "should never relay"));
+    rootHost.emit("message", childAttentionMsg(true));
+
+    expect(childRunEvents(rootHost)).toEqual(eventsBeforeSelfMessage); // byte-identical: nothing new was relayed
+  });
+
+  it("ChildProgress arriving AFTER the run's terminal transition (removed from the ledger) is dropped for all three kinds", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-after-terminal", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-after-terminal" }));
+    const childHost = hosts[1]!;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+    const eventsAfterTerminal = childRunEvents(rootHost);
+    expect(eventsAfterTerminal.some((e) => e.kind === "terminal")).toBe(true);
+
+    // The run is gone from the ledger now (finalizeChildRun already ran) —
+    // any further progress from the same (stale) child process must land
+    // on the dropped branch, not resurrect a relay for a finished run.
+    childHost.emit("message", childProgressMsg());
+    childHost.emit("message", childActivityMsg("Bash", "late activity"));
+    childHost.emit("message", childAttentionMsg(true));
+
+    expect(childRunEvents(rootHost)).toEqual(eventsAfterTerminal); // byte-identical: nothing new was relayed
+  });
+
+  it("ChildTerminal.activitySuppressed is copied VERBATIM into the terminal ChildRunEvent", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-suppressed", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-suppressed" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childTerminalMsg({ activitySuppressed: 7 }));
+
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "relay-suppressed" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ activitySuppressed: 7 });
+  });
+
+  it("a ChildTerminal WITHOUT activitySuppressed relays a terminal event carrying NO such key (presence-encoded, not a stray 0/undefined)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-no-suppressed", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-no-suppressed" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childTerminalMsg()); // no activitySuppressed override
+
+    const terminal = childRunEvents(rootHost).find(
+      (e) => e.requestId === "relay-no-suppressed" && e.kind === "terminal",
+    );
+    expect(terminal).toBeDefined();
+    expect(terminal && "activitySuppressed" in terminal).toBe(false);
+  });
+});
+
 describe("TabHostManager — children are invisible outside the manager (TASK.102 CUT-S2 §2.6.4)", () => {
   it("count() and atCapacity() never see children, only roots", () => {
     const { fork, hosts } = shutdownableForkRig();
@@ -2441,5 +2595,121 @@ describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup 
 
     expect(childRunEvents(hostA!).find((e) => e.requestId === "from-a")).toMatchObject({ kind: "accepted" });
     expect(childRunEvents(hostB!).find((e) => e.requestId === "from-b")).toMatchObject({ kind: "accepted" });
+  });
+});
+
+/**
+ * TASK.102 CUT-S2 §10.8.2 п.5: four model-visible texts are now VERBATIM-
+ * frozen cut members. These pins exist to catch a single wrong character —
+ * each asserts the FULL string (`toEqual`/exact `finalText`), not
+ * `expect.any(String)` or a substring match, so any drift from the ratified
+ * wording (including the two the architect REPLACED, §10.8.2 п.1/п.2) fails
+ * loudly rather than silently degrading to a fact-only, actionless message.
+ */
+describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
+  it("a `not_ready` rejection WITHOUT an explicit provider carries EXACTLY the §10.8.2 п.1 ratified text", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let ready = true;
+    const manager = childManager(fork, window, { engineReady: (engine) => engine === "core" && ready });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-pin-notready", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    ready = false; // flip AFTER root creation so only the child spawn hits not_ready
+    rootHost.emit("message", spawnRequest({ requestId: "pin-notready" }));
+
+    const rejected = childRunEvents(rootHost).find((e) => e.requestId === "pin-notready" && e.kind === "rejected");
+    expect(rejected).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "pin-notready",
+      kind: "rejected",
+      reason: "not_ready",
+      message:
+        'Agent: the core engine is not available in this host, so a child session could not be started. Use tier "inline".',
+    });
+  });
+
+  it("a start-deadline miss's terminal carries EXACTLY the §10.8.2 п.2 ratified text", () => {
+    vi.useFakeTimers();
+    try {
+      const { fork, hosts } = shutdownableForkRig();
+      const { window } = windowRig();
+      const manager = childManager(fork, window);
+      const root = manager.createTab({ workspace: "/ws", sessionId: "root-pin-deadline", resume: false });
+      expect(root.ok).toBe(true);
+      const rootHost = hosts[0]!;
+      rootHost.emit("message", spawnRequest({ requestId: "pin-deadline" }));
+
+      vi.advanceTimersByTime(CHILD_START_DEADLINE_MS);
+
+      const terminal = childRunEvents(rootHost).find((e) => e.requestId === "pin-deadline" && e.kind === "terminal");
+      expect(terminal).toMatchObject({
+        status: "error",
+        finalText:
+          'Agent: the child session did not become ready in time and was shut down; it never started on the task. Retry, or use tier "inline".',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a cancelled terminal carries EXACTLY the §10.8.2 п.3 text for BOTH an explicit child-run-cancel AND the drain-cascade path", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const CANCELLED_TEXT = "Agent: the child session was cancelled.";
+
+    // Path A: explicit child-run-cancel from the parent, reaped by an exit.
+    // hosts[0] = rootA, hosts[1] = its child (spawned next, in order).
+    const rootA = manager.createTab({ workspace: "/a", sessionId: "root-pin-cancel-explicit", resume: false });
+    expect(rootA.ok).toBe(true);
+    const rootAHost = hosts[0]!;
+    rootAHost.emit("message", spawnRequest({ requestId: "pin-cancel-explicit" }));
+    const childAHost = hosts[1]!;
+    rootAHost.emit("message", runCancel("pin-cancel-explicit"));
+    childAHost.emit("exit", 0); // the real reap that flips cancelling -> cancelled
+
+    const explicitTerminal = childRunEvents(rootAHost).find(
+      (e) => e.requestId === "pin-cancel-explicit" && e.kind === "terminal",
+    );
+    expect(explicitTerminal).toMatchObject({ status: "cancelled", finalText: CANCELLED_TEXT });
+
+    // Path B: the parent's own graceful close cascades a cancel to its child.
+    // rootA is still alive as a second root, so closing rootB is not a
+    // last_tab refusal. hosts[2] = rootB (3rd fork overall), hosts[3] = its child.
+    const rootB = manager.createTab({ workspace: "/c", sessionId: "root-pin-cancel-cascade", resume: false });
+    expect(rootB.ok).toBe(true);
+    const rootBTabId = rootB.ok ? rootB.tab.tabId : "";
+    const rootBHost = hosts[2]!;
+    rootBHost.emit("message", spawnRequest({ requestId: "pin-cancel-cascade" }));
+
+    await manager.closeTab(rootBTabId);
+
+    const cascadeTerminal = childRunEvents(rootBHost).find(
+      (e) => e.requestId === "pin-cancel-cascade" && e.kind === "terminal",
+    );
+    expect(cascadeTerminal).toMatchObject({ status: "cancelled", finalText: CANCELLED_TEXT });
+  });
+
+  it("an in-flight duplicate (parentSessionId, spawnToolCallId) spawn is rejected with EXACTLY the §10.8.2 п.4 ratified text", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-pin-duplicate", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "pin-dup-1", spawnToolCallId: "pin-dup-call" }));
+    rootHost.emit("message", spawnRequest({ requestId: "pin-dup-2", spawnToolCallId: "pin-dup-call" }));
+
+    const rejected = childRunEvents(rootHost).find((e) => e.requestId === "pin-dup-2" && e.kind === "rejected");
+    expect(rejected).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "pin-dup-2",
+      kind: "rejected",
+      reason: "spawn_failed",
+      message:
+        "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.",
+    });
   });
 });

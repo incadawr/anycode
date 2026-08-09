@@ -84,17 +84,17 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
 
 /**
  * Model-visible rejection/terminal texts for the child-session admission path
- * (TASK.102 CUT-S2 §2.6.4/§2.7). The reject-reason texts below (limit_parent,
- * limit_global, recursion, the provider-not-ready template, closing,
- * spawn_failed) and the crash text are VERBATIM from §2.7 — the model reads
- * these through `tools/agent.ts`'s outcome mapping, so their wording is
- * frozen by the cut, not a main-side style choice. Three texts have NO §2.7
- * script (flagged in the S2b build report rather than guessed silently):
- * the generic "core engine not ready" case (§2.7 only scripts the
- * EXPLICIT-`provider` not_ready variant), the start-deadline miss (§2.3
- * only specifies the effect — terminal `error` + reap — not a text), and the
- * in-flight spawn-pair duplicate (§10.5 п.3 specifies only the reason,
- * `spawn_failed`, and "внятным model-visible текстом" — an explicit text).
+ * (TASK.102 CUT-S2 §2.6.4/§2.7/§10.8.2). Every text below is now VERBATIM-
+ * frozen by a cut authority — review checks byte-for-byte equality, not
+ * paraphrase: limit_parent/limit_global/recursion/the provider-not-ready
+ * template/closing/spawn_failed/the crash text are §2.7's own wording (the
+ * model reads them through `tools/agent.ts`'s outcome mapping);
+ * CHILD_ENGINE_NOT_READY_MESSAGE and CHILD_START_TIMEOUT_MESSAGE are
+ * §10.8.2 п.1/п.2's ratified REPLACEMENTS of the original S2b build-report
+ * wording (that wording stated a fact with no actionable next step); and
+ * CHILD_CANCELLED_MESSAGE and CHILD_DUPLICATE_SPAWN_MESSAGE are §10.8.2
+ * п.3/п.4's ratifications of the S2b wording AS-IS. None of these four is a
+ * main-side style choice.
  */
 const CHILD_LIMIT_PARENT_MESSAGE =
   'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".';
@@ -104,17 +104,30 @@ const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own chi
 const CHILD_CLOSING_MESSAGE = "Agent: the child session could not be started (host is closing).";
 const CHILD_SPAWN_FAILED_MESSAGE = "Agent: the child session failed to start.";
 const CHILD_HOST_EXITED_MESSAGE = "Agent: the child session host exited before completing.";
-/** Not scripted by §2.7 (only the explicit-`provider` variant is) — see the block comment above. */
-const CHILD_ENGINE_NOT_READY_MESSAGE = "Agent: the core engine is not available in this host.";
-/** Not scripted by §2.3/§2.7 — see the block comment above. */
-const CHILD_START_TIMEOUT_MESSAGE = "Agent: the child session did not become ready in time.";
-/** Not scripted by §2.7 — reused for both the drain-cascade and the explicit `child-run-cancel` path. */
+/**
+ * §10.8.2 п.1 — ratified verbatim replacement for the builder's fact-only
+ * draft: the model gets an explicit next step (only the EXPLICIT-`provider`
+ * not_ready variant, `childProviderNotReadyMessage` below, had its own
+ * §2.7 template before this ratification).
+ */
+const CHILD_ENGINE_NOT_READY_MESSAGE =
+  'Agent: the core engine is not available in this host, so a child session could not be started. Use tier "inline".';
+/**
+ * §10.8.2 п.2 — ratified verbatim replacement: names the load-bearing fact
+ * that the builder's draft lost — the prompt only ships to the child on
+ * `child-ready` (§2.6.4, held in the ledger until then), so a deadline-miss
+ * means the task GUARANTEED never started, and retrying is therefore safe.
+ */
+const CHILD_START_TIMEOUT_MESSAGE =
+  'Agent: the child session did not become ready in time and was shut down; it never started on the task. Retry, or use tier "inline".';
+/** §10.8.2 п.3 — ratified verbatim as-is; reused for both the drain-cascade and the explicit `child-run-cancel` path. */
 const CHILD_CANCELLED_MESSAGE = "Agent: the child session was cancelled.";
 /**
- * Not scripted by §2.7 — TASK.102 CUT-S2 §10.5 п.3's in-flight admission-time
- * dedup of a `(parentSessionId, spawnToolCallId)` pair (see `childSpawnKeys`
- * below). Reuses the existing `spawn_failed` reason (§10.5 п.3 names it
- * explicitly) rather than minting a new `ChildRunRejectReason` member.
+ * §10.8.2 п.4 — ratified verbatim as-is. TASK.102 CUT-S2 §10.5 п.3's
+ * in-flight admission-time dedup of a `(parentSessionId, spawnToolCallId)`
+ * pair (see `childSpawnKeys` below). Reuses the existing `spawn_failed`
+ * reason (§10.5 п.3 names it explicitly) rather than minting a new
+ * `ChildRunRejectReason` member.
  */
 const CHILD_DUPLICATE_SPAWN_MESSAGE =
   "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.";
@@ -1276,6 +1289,8 @@ export class TabHostManager {
       turns: number;
       toolCalls: number;
       durationMs: number;
+      /** Additive (CUT-S2 §10.7 п.4/§10.8.2); present only when the caller relays one (>0 at the source). */
+      activitySuppressed?: number;
     },
   ): void {
     const entry = this.childRuns.get(requestId);
@@ -1419,6 +1434,10 @@ export class TabHostManager {
       turns: msg.turns,
       toolCalls: msg.toolCalls,
       durationMs: msg.durationMs,
+      // Verbatim passthrough (CUT-S2 §10.7 п.4/§10.8.2's §3 B3 relay matrix):
+      // main never recomputes or reinterprets the count, it only relays what
+      // the child itself reported.
+      ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed } : {}),
     });
   }
 

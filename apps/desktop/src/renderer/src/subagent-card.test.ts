@@ -269,6 +269,45 @@ describe("projectSubagentCard", () => {
   });
 });
 
+describe("projectSubagentCard — sessionChild discriminant (TASK.102 CUT-S2 §10.8.1)", () => {
+  const SESSION_SNAPSHOT: SubagentCardSnapshotV1 = {
+    ...VALID_SNAPSHOT,
+    target: { kind: "session", childSessionId: "child-1", parentSessionId: "parent-1", spawnToolCallId: CTX.toolCallId },
+  };
+
+  it("1. a session-target snapshot projects sessionChild: true", () => {
+    expect(projectSubagentCard(SESSION_SNAPSHOT).sessionChild).toBe(true);
+  });
+
+  it("2. an inline-target snapshot has NO sessionChild key at all (not sessionChild: false) — deep-equal pin against S1's byte-identical inline projection", () => {
+    const projected = projectSubagentCard(VALID_SNAPSHOT);
+    expect("sessionChild" in projected).toBe(false);
+    expect(projected).toEqual({
+      agentType: "explore",
+      description: "survey the repo",
+      model: "claude-sonnet",
+      engine: "claude",
+      turns: 3,
+      toolCalls: 4,
+      lastTool: "Grep",
+      activity: [
+        { toolName: "Read", summary: "src/index.ts" },
+        { toolName: "Bash", summary: "npm test" },
+      ],
+      activityDropped: 1,
+      final: { status: "completed", durationMs: 4200 },
+    });
+  });
+
+  it("3. anti-plaiting pin: the three target ids never cross the projection, session-target snapshot included", () => {
+    const projected = projectSubagentCard(SESSION_SNAPSHOT);
+    const keys = Object.keys(projected);
+    expect(keys).not.toContain("childSessionId");
+    expect(keys).not.toContain("parentSessionId");
+    expect(keys).not.toContain("spawnToolCallId");
+  });
+});
+
 describe("constant parity (CUT-S1 §5 anti-facade #2: a silent renderer/core cap drift would shorten the post-reload ring)", () => {
   it("subagent-card.ts's local mirrors equal the real @anycode/core exports", () => {
     expect(ACTIVITY_RING).toBe(SUBAGENT_CARD_ACTIVITY_RING);

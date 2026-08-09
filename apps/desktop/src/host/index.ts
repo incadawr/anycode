@@ -318,18 +318,23 @@ import { createEngineChildRunner } from "./engine-children.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
 import { Outbound, Session, tapChildPermissions } from "./session.js";
-// TASK.102 CUT-S2 §2.6.2/§2.6.3 (slice S2b B4): child-mode wire — the
-// CHILD side only (child-ready on first ui_ready, child-start dispatch,
-// permission-tap attention, terminal report). The PARENT side (RPC client
-// wiring, ChildRunEvent routing, sessionTier:true registry) is slice B5's
-// job (child-session-port.ts), not touched here.
+// TASK.102 CUT-S2 §2.6.2/§2.6.3 (slice S2b B4) built the CHILD side of this
+// wire (child-ready on first ui_ready, child-start dispatch, permission-tap
+// attention, terminal report). Slice S2b B5 (below) adds the PARENT side: the
+// RPC-client wiring (createChildSessionPort), the ChildRunEvent dispatch
+// table, and the sessionTier:true/sessionSubagents non-recursion locks.
+import { createChildSessionPort } from "./child-session-port.js";
 import {
   CHILD_PROGRESS_TYPE,
   CHILD_READY_TYPE,
   CHILD_TERMINAL_TYPE,
+  parseChildRunEvent,
   parseChildStart,
   type ChildProgress,
   type ChildReady,
+  type ChildRunCancel,
+  type ChildRunEvent,
+  type ChildSpawnRequest,
   type ChildTerminal,
 } from "../shared/child-sessions.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
@@ -370,6 +375,30 @@ function subscribeCredentialResponses(listener: (response: CredentialResponse) =
 
 function sendCredentialRequest(request: CredentialRequest): void {
   process.parentPort.postMessage(request);
+}
+
+// Session-subagent RPC broker (TASK.102 CUT-S2 §2.6.1, slice S2b B5):
+// ChildRunEvent messages (main -> this parent host) arrive on the SAME
+// parentPort "message" event as every other control-plane channel above;
+// createChildSessionPort's per-run() waiter subscribes here and correlates by
+// requestId internally (its own `Map<requestId, waiter>`) — this dispatch
+// table only fans a parsed event out to every current subscriber, mirroring
+// the credential/preview broker pattern immediately above. Exactly one
+// subscriber exists for the life of a non-child boot (createChildSessionPort
+// calls `options.subscribe` once, at construction), but the Set (rather than
+// a single slot) keeps this table byte-identical in shape to its two
+// siblings above.
+const childRunEventListeners = new Set<(event: ChildRunEvent) => void>();
+
+function subscribeChildRunEvents(listener: (event: ChildRunEvent) => void): () => void {
+  childRunEventListeners.add(listener);
+  return () => {
+    childRunEventListeners.delete(listener);
+  };
+}
+
+function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel): void {
+  process.parentPort.postMessage(message);
 }
 
 // Preview RPC broker (night-track wave-1 cut §2.3): PreviewResponseMessage
@@ -1079,16 +1108,21 @@ async function boot(): Promise<void> {
     // model and back restores the tier. `set_reasoning_effort` writes it; the
     // model switch re-resolves the effective effort from it per the new model.
     let selectedEffort: ReasoningEffort = envConfig.reasoningEffort ?? "off";
-    // TASK.102 CUT-S2 §2.6.2 lock #2: a child-mode boot MUST build the plain
-    // default registry (no `{agent:{sessionTier:true}}`) so `Agent` never
-    // advertises tier "session" to a child's own model — a child structurally
-    // cannot spawn its own child session. This is already the unconditional
-    // case below (no branch reads `args.child` here): `sessionTier:true` is
-    // wired ONLY for a non-child root host, by slice B5, which has not landed
-    // yet — until it does, EVERY boot (root and child alike) gets this same
-    // inline-only registry, so the child invariant holds by construction with
-    // nothing left for this branch to opt out of.
-    const registry = createDefaultToolRegistry();
+    // TASK.102 CUT-S2 §2.6.1/§2.6.2 (slice S2b B5): non-recursion lock #1. A
+    // non-child (root) boot builds the FULL registry — `sessionTier:true`
+    // makes `tier:"session"` reachable in the Agent tool's SERIALIZED schema
+    // (tools/schemas.ts's `agentInputSchema`) — because it is the only kind
+    // of host that wires a `SessionSubagentPort` below (lock #2, right after
+    // `config` is built) to back it. A child-mode boot keeps the plain
+    // default registry (`restrictedAgentInputSchema` — `tier` is a
+    // single-value `"inline"` enum, `provider` is absent from `properties`
+    // entirely): a model talking to a child cannot even DISCOVER the session
+    // tier exists, let alone reach it — a child structurally cannot spawn its
+    // own child session.
+    const registry =
+      args.child === undefined
+        ? createDefaultToolRegistry({ agent: { sessionTier: true } })
+        : createDefaultToolRegistry();
     const fsAdapter = new NodeFileSystemAdapter();
     const execAdapter = new NodeExecutionAdapter();
 
@@ -1770,6 +1804,28 @@ async function boot(): Promise<void> {
         ? { context: { contextWindowTokens: bootContextWindow } }
         : {}),
     };
+    // TASK.102 CUT-S2 §2.6.1 (slice S2b B5): non-recursion lock #2. Mutates
+    // `config` in place AFTER the object literal above (mirrors
+    // `withSubagents`'s own mutate-in-place pattern just below) so
+    // `getPermissionMode`'s closure can read `config.mode` — the SAME field
+    // `CoreEngine.setMode` (engines/core-engine.ts) and the loop's own
+    // plan-exit transition (`agent-loop.ts`, ExitPlanMode's `onModeChange`)
+    // both mutate in place — LIVE, at the moment each `run()` call actually
+    // fires, rather than a boot-time snapshot of the `mode` const above (cut
+    // §0.8: "a snapshot of the parent's mode at the moment Agent was
+    // invoked"). Built ONLY for a non-child boot: a child-mode boot leaves
+    // `config.sessionSubagents` absent, so `tools/agent.ts`'s
+    // `runSessionTier` fail-closes with its own "unavailable in this host"
+    // error even in the hypothetical case where lock #1's restricted schema
+    // (above) were ever bypassed — belt and suspenders, cut §0.2.
+    if (args.child === undefined) {
+      config.sessionSubagents = createChildSessionPort({
+        parentSessionId: sessionMeta.id,
+        getPermissionMode: () => config.mode,
+        send: sendChildSessionMessage,
+        subscribe: subscribeChildRunEvents,
+      });
+    }
     // Subagent wiring (design §4.2, task 3.1.4; md-profile personas as of
     // slice-3.3-cut.md §6): withSubagents attaches a SubagentPort derived from
     // this same config to config.subagents BEFORE construction, so the Agent
@@ -2147,7 +2203,19 @@ async function boot(): Promise<void> {
                   turns: report.turns,
                   toolCalls: report.toolCalls,
                   durationMs: report.durationMs,
+                  ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
                 } satisfies ChildTerminal);
+              },
+              // TASK.102 CUT-S2 §10.7 п.7: zero-transform relay, the exact
+              // same shape as the attention-tap posting above (:1673-1683) —
+              // Session's child-mode turn loop already produces a report
+              // shaped exactly like `ChildProgress` minus `type`, so this
+              // never re-derives or re-validates anything, only stamps it.
+              onProgress: (report) => {
+                process.parentPort.postMessage({
+                  type: CHILD_PROGRESS_TYPE,
+                  ...report,
+                } satisfies ChildProgress);
               },
             },
           }
@@ -2293,6 +2361,21 @@ process.parentPort.on("message", (event) => {
     const response = data as CredentialResponse;
     for (const listener of credentialResponseListeners) {
       listener(response);
+    }
+    return;
+  }
+  // TASK.102 CUT-S2 §2.6.1 (slice S2b B5): main -> this parent host, a
+  // ChildRunEvent for a session-tier Agent call this host's own RPC client
+  // (createChildSessionPort) started. parseChildRunEvent is fail-closed
+  // (malformed/unrecognized `kind` -> null, never thrown) — a stray or
+  // corrupted message is silently dropped rather than fanned out. Fan-out
+  // (not a single-listener call) mirrors the credential broker above; the
+  // client's own `Map<requestId, waiter>` (child-session-port.ts) is what
+  // actually correlates the event to the ONE `run()` call it belongs to.
+  const childRunEvent = parseChildRunEvent(data);
+  if (childRunEvent) {
+    for (const listener of childRunEventListeners) {
+      listener(childRunEvent);
     }
     return;
   }

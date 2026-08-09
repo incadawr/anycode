@@ -112,6 +112,16 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       toolCalls: number;
       durationMs: number;
       childSessionId: string;
+      /**
+       * Additive field (TASK.102 CUT-S2 §10.7 п.4, authorized amendment to
+       * this otherwise-frozen S2a type): mirrors `ChildTerminal
+       * .activitySuppressed` through to the parent-host wire — main relays it
+       * verbatim from the child's own `ChildTerminal` (§2.6.4). Present only
+       * when >0 (parity with `runner.ts:573`'s inline `activitySuppressed`
+       * and `ChildTerminal`'s own doc comment: without this the honest count
+       * dies in main, contradicting `ChildTerminal`'s "S1 parity" promise).
+       */
+      activitySuppressed?: number;
     }
 );
 
@@ -370,6 +380,8 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "toolCalls",
   "durationMs",
   "childSessionId",
+  // TASK.102 CUT-S2 §10.7 п.4: additive key, authorized amendment.
+  "activitySuppressed",
 ] as const;
 
 export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
@@ -476,6 +488,9 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       ) {
         return null;
       }
+      if (msg.activitySuppressed !== undefined && !isCounter(msg.activitySuppressed)) {
+        return null;
+      }
       return {
         type: CHILD_RUN_EVENT_TYPE,
         requestId,
@@ -487,6 +502,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         toolCalls: msg.toolCalls,
         durationMs: msg.durationMs,
         childSessionId: msg.childSessionId,
+        ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
       };
     }
     default:
