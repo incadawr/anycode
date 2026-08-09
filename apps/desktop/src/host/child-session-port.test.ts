@@ -523,6 +523,49 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // S4 blocker (found independently by two reviewers): `model` is a
+  // model-authored field that reaches the child host's argv unsanitized
+  // (main/tabs.ts pushes `["--engine-model", value]`) and `host/boot.ts`'s
+  // `parseHostArgs` has no `--engine-model` branch, so a value starting with
+  // `-` gets re-read as a FLAG. This pre-flight must refuse a flag-shaped
+  // model BEFORE it ever reaches `options.send` — a bad model must never be
+  // silently forwarded and left to hang the tool call on the dispatcher's
+  // 600s timeout.
+
+  it("a flag-shaped model (e.g. '--session=x') resolves an IMMEDIATE MALFORMED_MODEL_MESSAGE error outcome and sends NOTHING (S4 blocker fix)", async () => {
+    const MALFORMED_MODEL_MESSAGE = "Agent: the child session failed to start (malformed model).";
+    const sendSpy = vi.fn();
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: sendSpy,
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+    });
+    void listener;
+
+    const outcome = await port.run(
+      {
+        agentType: "general-purpose",
+        description: "d",
+        prompt: "p",
+        spawnToolCallId: "spawn-s4",
+        model: "--session=x",
+      },
+      {},
+    );
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(MALFORMED_MODEL_MESSAGE);
+    expect(outcome.parentSessionId).toBe(PARENT_SESSION_ID);
+    expect(outcome.spawnToolCallId).toBe("spawn-s4");
+  });
+
+  // ---------------------------------------------------------------------------
   // F9 (review finding, MEDIUM, found independently by all three reviewers): a
   // signal that is ALREADY aborted when run() is called. onAbort() fires
   // SYNCHRONOUSLY, sending ChildRunCancel BEFORE the spawn request — main has
