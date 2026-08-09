@@ -2633,6 +2633,90 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     ]);
   });
 
+  /** A valid persisted v1 snapshot (CUT-S1 §2.1) with an overridable `target` — mirrors the S1 W5 describe block's own `presentation()` helper, kept local here since that one is scoped to its own describe. */
+  function subagentPresentation(target: { kind: "inline" } | { kind: "session"; childSessionId: string; parentSessionId: string; spawnToolCallId: string }) {
+    return {
+      kind: "subagent" as const,
+      version: 1 as const,
+      target,
+      identity: { agentType: "explore", description: "survey the repo", model: null, engine: null },
+      counters: { turns: 1, toolCalls: 1, lastTool: "Read" },
+      activity: { entries: [], dropped: 0 },
+      final: { status: "completed" as const, durationMs: 100 },
+    };
+  }
+
+  it("projectHistoryToBlocks discriminates sessionChild PER CARD (TASK.102 CUT-S2 §10.8.1 b): a session-target Agent card gets sessionChild:true, a sibling inline-target Agent card in the SAME history has no such key — not a global flag", () => {
+    const items: WireHistoryItem[] = [
+      {
+        id: "s1",
+        createdAt: 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "call-session", toolName: "Agent", input: {} }],
+        },
+      },
+      {
+        id: "s2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-session",
+              toolName: "Agent",
+              text: "done",
+              status: "success",
+              presentation: {
+                subagent: subagentPresentation({
+                  kind: "session",
+                  childSessionId: "child-1",
+                  parentSessionId: "parent-1",
+                  spawnToolCallId: "call-session",
+                }),
+              },
+            },
+          ],
+        },
+      },
+      {
+        id: "s3",
+        createdAt: 3,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "call-inline", toolName: "Agent", input: {} }],
+        },
+      },
+      {
+        id: "s4",
+        createdAt: 4,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-inline",
+              toolName: "Agent",
+              text: "done",
+              status: "success",
+              presentation: { subagent: subagentPresentation({ kind: "inline" }) },
+            },
+          ],
+        },
+      },
+    ];
+
+    const blocks = projectHistoryToBlocks(items);
+    const sessionCard = blocks.find((b) => b.kind === "tool_call" && b.toolCallId === "call-session");
+    const inlineCard = blocks.find((b) => b.kind === "tool_call" && b.toolCallId === "call-inline");
+    if (sessionCard?.kind !== "tool_call" || inlineCard?.kind !== "tool_call") {
+      throw new Error("expected both Agent cards to hydrate as tool_call blocks");
+    }
+    expect(sessionCard.subagent?.sessionChild).toBe(true);
+    expect(inlineCard.subagent && "sessionChild" in inlineCard.subagent).toBe(false);
+  });
+
   it("pairs multiple tool_call parts of one assistant item against the run of tool-role items that follow it, by toolCallId", () => {
     const items: WireHistoryItem[] = [
       {

@@ -211,6 +211,48 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     });
   });
 
+  // TASK.102 CUT-S2 §10.7 п.6c (B2-micro): a terminal event's `activitySuppressed`
+  // is passed through onto the "end" progress report — mirrors the inline
+  // runner's own `kind:"end"` SubagentProgress (runner.ts:573).
+  describe("terminal activitySuppressed passthrough (CUT-S2 §10.7 п.6c)", () => {
+    it("a terminal event carrying activitySuppressed puts it on the end-progress report", async () => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-suppressed" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-s", childTabId: "tab-s", model: "m" });
+      onProgress.mockClear();
+
+      emit(terminalEvent(requestId, { childSessionId: "child-s", activitySuppressed: 7 }));
+
+      const expectedEnd: SubagentProgress = { kind: "end", status: "completed", turns: 0, durationMs: 0, activitySuppressed: 7 };
+      expect(onProgress).toHaveBeenCalledWith(expectedEnd);
+      await pending;
+    });
+
+    it("a terminal event with NO activitySuppressed carries no such key on the end-progress report (parity with inline's absent-when-zero form)", async () => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-unsuppressed" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-u", childTabId: "tab-u", model: "m" });
+      onProgress.mockClear();
+
+      emit(terminalEvent(requestId, { childSessionId: "child-u" }));
+
+      expect(onProgress).toHaveBeenCalledTimes(1);
+      const report = onProgress.mock.calls[0]?.[0] as SubagentProgress;
+      expect(report && "activitySuppressed" in report).toBe(false);
+      await pending;
+    });
+  });
+
   it("abort sends EXACTLY ONE ChildRunCancel; a terminal arriving after abort still resolves (never throws) and does not provoke a second cancel", async () => {
     const { port, sent, emit } = harness();
     const controller = new AbortController();

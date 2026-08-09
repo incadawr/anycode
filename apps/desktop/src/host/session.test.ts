@@ -43,11 +43,13 @@ import {
   ModePermissionEngine,
   NodeHttpAdapter,
   RuleAwarePermissionEngine,
+  SUBAGENT_ACTIVITY_MAX_EVENTS,
   SessionPermissionRules,
   createDefaultToolRegistry,
   matchCatalogEntryByBaseUrl,
   resolveEffortLevels,
   resolveReasoningEffort,
+  summarizeChildToolCall,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
@@ -71,7 +73,7 @@ import type {
 } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
-import { CHILD_STEER_QUEUE_MAX } from "../shared/child-sessions.js";
+import { CHILD_PROGRESS_TYPE, CHILD_STEER_QUEUE_MAX, parseChildProgress } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
@@ -79,6 +81,7 @@ import {
   Outbound,
   Session,
   tapChildPermissions,
+  type ChildProgressReport,
   type ChildTerminalReport,
   type SessionOptions,
   type SessionPersistence,
@@ -2173,6 +2176,8 @@ interface ChildHarness {
   onReady: ReturnType<typeof vi.fn<() => void>>;
   onTerminal: ReturnType<typeof vi.fn<(report: ChildTerminalReport) => void>>;
   flushHistory: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  /** Every report Session handed to `child.onProgress` (CUT-S2 §10.7), in order. */
+  onProgress: ReturnType<typeof vi.fn<(report: ChildProgressReport) => void>>;
   close(): void;
 }
 
@@ -2183,12 +2188,20 @@ interface ChildHarness {
  * with Session's `child` option populated by inspectable `vi.fn()` mocks —
  * mirrors `createHarness`'s own construction closely enough that every
  * existing predicate/step-builder helper in this file works unchanged.
+ *
+ * `now` (CUT-S2 §10.7 п.3 DI clock) defaults to a strictly-increasing fake
+ * clock (2000ms apart per call) rather than `Date.now` — every progress
+ * boundary in a test that doesn't care about the throttle is then always
+ * >=1000ms after the last, so it always emits; this keeps the throttle
+ * itself from silently swallowing assertions in tests that aren't ABOUT the
+ * throttle. Only the dedicated throttle test overrides it.
  */
 function createChildHarness(opts: {
   steps: ModelStreamEvent[][];
   mode?: PermissionMode;
   bootHistory?: HistoryItem[];
   flushHistoryImpl?: () => Promise<void>;
+  now?: () => number;
 }): ChildHarness {
   const channel = new MessageChannel();
   const uiPort = channel.port1;
@@ -2242,6 +2255,9 @@ function createChildHarness(opts: {
   const onReady = vi.fn<() => void>();
   const onTerminal = vi.fn<(report: ChildTerminalReport) => void>();
   const flushHistory = vi.fn<() => Promise<void>>(opts.flushHistoryImpl ?? (() => Promise.resolve()));
+  const onProgress = vi.fn<(report: ChildProgressReport) => void>();
+  let defaultNowCalls = 0;
+  const now = opts.now ?? ((): number => (defaultNowCalls++) * 2_000);
 
   const session = new Session({
     outbound,
@@ -2255,7 +2271,7 @@ function createChildHarness(opts: {
     bootHistory: opts.bootHistory,
     rules: new SessionPermissionRules(),
     persistence,
-    child: { onReady, flushHistory, onTerminal },
+    child: { onReady, flushHistory, onTerminal, onProgress, now },
   });
   session.bindPort(nodeWirePort(hostPort));
 
@@ -2294,6 +2310,7 @@ function createChildHarness(opts: {
     onReady,
     onTerminal,
     flushHistory,
+    onProgress,
     send(message: UiToHostMessage): void {
       uiPort.postMessage(message);
     },
@@ -2493,6 +2510,309 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
     } finally {
       h.close();
     }
+  });
+});
+
+// ── activity/progress bridge test helpers (CUT-S2 §10.7) ───────────────────
+
+/**
+ * One model STEP proposing MANY parallel tool calls (mirrors core's
+ * `runner.test.ts`'s own `multiToolStep` builder) — how the
+ * SUBAGENT_ACTIVITY_MAX_EVENTS cap boundary is crossed within a single round
+ * in the tests below.
+ */
+function multiToolStep(calls: ReadonlyArray<{ id: string; name: string; input: unknown }>): ModelStreamEvent[] {
+  return [
+    { type: "start" },
+    ...calls.map((c) => ({ type: "tool_call" as const, toolCall: { id: c.id, name: c.name, input: c.input } })),
+    { type: "finish", finishReason: "tool_calls" as const, usage: {} },
+  ];
+}
+
+/**
+ * Narrow test-only escape hatch onto Session's private `observeChildEvent`
+ * (CUT-S2 §10.7), used ONLY for scenarios that cannot be driven through a
+ * real turn:
+ *  - a `tool_result` with no matching `tool_execution_start` — on the real
+ *    wire this shape only arises from the scheduler's post-
+ *    `workspace_transition` cascade-cancel path (dispatch/scheduler.ts:198-
+ *    209), which a child config can never reach (CUT-S2 §2.6.3: it never
+ *    receives a WorktreeControlPort) — so the defensive guard can only be
+ *    proven by feeding the shape directly.
+ *  - the leading-edge 1000ms progress throttle, which needs synchronous,
+ *    exact-timestamp control over boundary crossings that a real dispatcher
+ *    round-trip cannot offer deterministically.
+ * Every OTHER activity/progress assertion in this file drives the REAL
+ * AgentLoop + dispatcher via `createChildHarness`'s ScriptedModelPort —
+ * calling the real (unmocked) method here still exercises Session's actual
+ * production code, not a stub.
+ */
+function observeChildEventDirect(session: Session, event: AgentEvent): void {
+  (session as unknown as { observeChildEvent(e: AgentEvent): void }).observeChildEvent(event);
+}
+
+function toolResultEvent(toolCallId: string, toolName = "TodoRead"): AgentEvent {
+  return {
+    type: "tool_result",
+    outcome: { toolCallId, toolName, status: "success", modelText: "", durationMs: 0 },
+  };
+}
+
+type ActivityReport = Extract<ChildProgressReport, { kind: "activity" }>;
+type ProgressReport = Extract<ChildProgressReport, { kind: "progress" }>;
+
+const isActivityReport = (r: ChildProgressReport): r is ActivityReport => r.kind === "activity";
+const isProgressReport = (r: ChildProgressReport): r is ProgressReport => r.kind === "progress";
+
+describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.7)", () => {
+  describe("activity: 1:1 with the inline eligibility rule (§10.7 п.6a.1)", () => {
+    it("a tool_execution_start+tool_result pair produces exactly one activity report, via summarizeChildToolCall", async () => {
+      const h = createChildHarness({ steps: [toolStep("w1", "Write", WRITE_INPUT), finishStep()] });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        h.session.startProgrammaticTurn("write it");
+        const req = await h.waitFor(isPermissionRequest);
+        h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+        await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+        const activity = h.onProgress.mock.calls.map((c) => c[0]).filter(isActivityReport);
+        expect(activity).toHaveLength(1);
+        expect(activity[0]).toEqual({
+          kind: "activity",
+          toolName: "Write",
+          summary: summarizeChildToolCall("Write", WRITE_INPUT),
+        });
+      } finally {
+        h.close();
+      }
+    });
+
+    it("an invalid_input result produces NEITHER an activity report NOR a suppressed-count increment", async () => {
+      const h = createChildHarness({ steps: [toolStep("bad1", "Bash", {}), finishStep()] });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        h.session.startProgrammaticTurn("do it");
+        await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+        const activity = h.onProgress.mock.calls.map((c) => c[0]).filter(isActivityReport);
+        expect(activity).toHaveLength(0);
+        const report = h.onTerminal.mock.calls[0]?.[0];
+        expect(report && "activitySuppressed" in report).toBe(false);
+      } finally {
+        h.close();
+      }
+    });
+
+    it("a tool_result with no matching tool_execution_start produces nothing — the defensive guard mirroring runner.ts's own pending-call check", async () => {
+      const h = createChildHarness({ steps: [finishStep()] });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+
+        observeChildEventDirect(h.session, toolResultEvent("orphan-1"));
+
+        const activity = h.onProgress.mock.calls.map((c) => c[0]).filter(isActivityReport);
+        expect(activity).toHaveLength(0);
+      } finally {
+        h.close();
+      }
+    });
+  });
+
+  describe("activity cap: SUBAGENT_ACTIVITY_MAX_EVENTS is a whole-session total, not per-turn (§10.7 п.6a.2)", () => {
+    it(
+      "caps activity at SUBAGENT_ACTIVITY_MAX_EVENTS across the WHOLE turn chain (initial turn + a later steer turn) and reports the honest suppressed count on the terminal",
+      async () => {
+        const half = SUBAGENT_ACTIVITY_MAX_EVENTS / 2;
+        const initialCalls = [
+          { id: "gate", name: "Write", input: WRITE_INPUT },
+          ...Array.from({ length: half }, (_unused, i) => ({ id: `i${i}`, name: "TodoRead", input: {} })),
+        ];
+        const steerCalls = Array.from({ length: half }, (_unused, i) => ({ id: `s${i}`, name: "TodoRead", input: {} }));
+        const h = createChildHarness({
+          steps: [multiToolStep(initialCalls), finishStep(), multiToolStep(steerCalls), finishStep()],
+        });
+        try {
+          h.send({ type: "ui_ready" });
+          await h.waitFor(isHostReady);
+
+          h.session.startProgrammaticTurn("go");
+          const req = await h.waitFor(isPermissionRequest, 5_000);
+
+          // Queued while turn 1 (the "gate" Write call) is still busy — proves
+          // the cap counter is a SESSION-level field carried across the steer
+          // turn, not reset between the initial and the later turn.
+          h.send({ type: "user_message", requestId: "steer-1", text: "and the rest" });
+          h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+
+          await h.waitUntil(() => h.onTerminal.mock.calls.length > 0, 10_000);
+
+          const activity = h.onProgress.mock.calls.map((c) => c[0]).filter(isActivityReport);
+          expect(activity).toHaveLength(SUBAGENT_ACTIVITY_MAX_EVENTS);
+          const report = h.onTerminal.mock.calls[0]?.[0];
+          expect(report?.activitySuppressed).toBe(1);
+        } finally {
+          h.close();
+        }
+      },
+      15_000,
+    );
+
+    it(
+      "landing EXACTLY at the cap carries NO activitySuppressed key on the terminal (not a silent zero)",
+      async () => {
+        const calls = Array.from({ length: SUBAGENT_ACTIVITY_MAX_EVENTS }, (_unused, i) => ({
+          id: `t${i}`,
+          name: "TodoRead",
+          input: {},
+        }));
+        const h = createChildHarness({ steps: [multiToolStep(calls), finishStep()] });
+        try {
+          h.send({ type: "ui_ready" });
+          await h.waitFor(isHostReady);
+          h.session.startProgrammaticTurn("go");
+          await h.waitUntil(() => h.onTerminal.mock.calls.length > 0, 10_000);
+
+          const activity = h.onProgress.mock.calls.map((c) => c[0]).filter(isActivityReport);
+          expect(activity).toHaveLength(SUBAGENT_ACTIVITY_MAX_EVENTS);
+          const report = h.onTerminal.mock.calls[0]?.[0];
+          expect(report && "activitySuppressed" in report).toBe(false);
+        } finally {
+          h.close();
+        }
+      },
+      15_000,
+    );
+  });
+
+  describe("progress: leading-edge 1000ms throttle, NO trailing timer (§10.7 п.6a.3)", () => {
+    it("boundaries at t=0/500/1100 emit at t=0 and t=1100 with CUMULATIVE totals; advancing fake timers with no NEW boundary crossed emits nothing", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        vi.useFakeTimers();
+        try {
+          currentTime = 0;
+          observeChildEventDirect(h.session, toolResultEvent("r1", "A"));
+          currentTime = 500;
+          observeChildEventDirect(h.session, toolResultEvent("r2", "B"));
+          currentTime = 1100;
+          observeChildEventDirect(h.session, toolResultEvent("r3", "C"));
+
+          const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+          // Exactly two emissions: t=0 (leading edge) and t=1100 (>=1000ms
+          // after t=0); t=500 is within the 1000ms window and is skipped.
+          expect(progress).toHaveLength(2);
+          expect(progress[0]).toEqual({ kind: "progress", turns: 0, toolCalls: 1, lastTool: "A" });
+          // The skipped t=500 boundary's increment is NOT lost — the second
+          // emission carries the cumulative total through all three results.
+          expect(progress[1]).toEqual({ kind: "progress", turns: 0, toolCalls: 3, lastTool: "C" });
+
+          const countBefore = h.onProgress.mock.calls.length;
+          // No new boundary crossed here — a trailing-timer implementation
+          // would register a setTimeout during one of the calls above, which
+          // fake timers (armed BEFORE those calls) would intercept; advancing
+          // them proves no such timer exists (this is a red test the moment
+          // one is added).
+          vi.advanceTimersByTime(10_000);
+          expect(h.onProgress.mock.calls.length).toBe(countBefore);
+        } finally {
+          vi.useRealTimers();
+        }
+      } finally {
+        h.close();
+      }
+    });
+  });
+
+  describe("progress counters (§10.7 п.6a.4)", () => {
+    it("`turns` is the turn_end COUNT across the whole chain (mirrors runner.ts's turnEndCount — NOT the loop_end-summed childTurns); a steer turn keeps counting; `lastTool` updates on an invalid_input result too", async () => {
+      const h = createChildHarness({
+        steps: [
+          toolStep("gateA", "Write", WRITE_INPUT), // turn A round 1 (permission gate)
+          finishStep(), // turn A round 2
+          toolStep("bad1", "Bash", {}), // turn B (steer) round 1 — invalid_input
+          finishStep(), // turn B round 2
+        ],
+      });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+
+        h.session.startProgrammaticTurn("go");
+        const req = await h.waitFor(isPermissionRequest);
+
+        h.send({ type: "user_message", requestId: "steer-1", text: "and more" });
+        h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+
+        await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress.length).toBeGreaterThan(0);
+        const last = progress.at(-1)!;
+        // 4 turn_end events total (2 per turn) across BOTH turns: a facade
+        // reading loop_end-summed childTurns (which hasn't advanced past
+        // turn A's 2 at this point — turn B's own loop_end fires AFTER this
+        // boundary) would show 2, not 4; a per-turn-reset facade would show
+        // 2 as well.
+        expect(last.turns).toBe(4);
+        // lastTool tracks the LAST tool_result unconditionally — the final
+        // one (Bash, invalid_input) never produced an activity report, but
+        // still updated lastTool (mirrors runner.ts:502).
+        expect(last.lastTool).toBe("Bash");
+
+        const activity = h.onProgress.mock.calls.map((c) => c[0]).filter(isActivityReport);
+        expect(activity.map((a) => a.toolName)).toEqual(["Write"]);
+      } finally {
+        h.close();
+      }
+    });
+  });
+
+  describe("ordering: onTerminal is always LAST (§10.7 п.6a.5)", () => {
+    it("no onProgress call is ever observed after onTerminal", async () => {
+      const h = createChildHarness({ steps: [toolStep("w1", "Write", WRITE_INPUT), finishStep()] });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        h.session.startProgrammaticTurn("go");
+        const req = await h.waitFor(isPermissionRequest);
+        h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+        await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+        expect(h.onProgress.mock.calls.length).toBeGreaterThan(0);
+        expect(h.onTerminal.mock.invocationCallOrder.length).toBeGreaterThan(0);
+        const lastProgressOrder = Math.max(...h.onProgress.mock.invocationCallOrder);
+        const terminalOrder = h.onTerminal.mock.invocationCallOrder[0]!;
+        expect(terminalOrder).toBeGreaterThan(lastProgressOrder);
+      } finally {
+        h.close();
+      }
+    });
+  });
+
+  describe("wire contract: every report round-trips through the REAL parseChildProgress (§10.7 п.6a.6)", () => {
+    it("every report handed to onProgress, wrapped as {type: CHILD_PROGRESS_TYPE, ...report}, parses non-null — the producer and the frozen parser can never silently diverge", async () => {
+      const h = createChildHarness({ steps: [toolStep("w1", "Write", WRITE_INPUT), finishStep()] });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        h.session.startProgrammaticTurn("go");
+        const req = await h.waitFor(isPermissionRequest);
+        h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+        await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+        expect(h.onProgress.mock.calls.length).toBeGreaterThan(0);
+        for (const [report] of h.onProgress.mock.calls) {
+          const wire = { type: CHILD_PROGRESS_TYPE, ...report };
+          expect(parseChildProgress(wire)).not.toBeNull();
+        }
+      } finally {
+        h.close();
+      }
+    });
   });
 });
 

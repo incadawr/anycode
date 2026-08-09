@@ -456,6 +456,47 @@ describe("parseChildRunEvent", () => {
     expect(parseChildRunEvent(msg)).toBeNull();
   });
 
+  // TASK.102 CUT-S2 §10.7 п.4: additive amendment to this otherwise-frozen
+  // terminal variant — `activitySuppressed` mirrors `ChildTerminal`'s own
+  // field through to the parent-host wire.
+  describe("terminal event activitySuppressed (CUT-S2 §10.7 п.4, additive)", () => {
+    const validTerminal = {
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "terminal" as const,
+      status: "completed" as const,
+      finalText: "done",
+      truncated: false,
+      turns: 3,
+      toolCalls: 9,
+      durationMs: 1200,
+      childSessionId: "sess-1",
+    };
+
+    it("parses and carries a valid activitySuppressed", () => {
+      const msg = { ...validTerminal, activitySuppressed: 3 };
+      expect(parseChildRunEvent(msg)).toEqual(msg);
+    });
+
+    it("is valid, with no activitySuppressed key on the parsed result, when the field is absent", () => {
+      const parsed = parseChildRunEvent(validTerminal);
+      expect(parsed).toEqual(validTerminal);
+      expect(parsed && "activitySuppressed" in parsed).toBe(false);
+    });
+
+    it("rejects a negative activitySuppressed", () => {
+      expect(parseChildRunEvent({ ...validTerminal, activitySuppressed: -1 })).toBeNull();
+    });
+
+    it("rejects a fractional activitySuppressed", () => {
+      expect(parseChildRunEvent({ ...validTerminal, activitySuppressed: 1.5 })).toBeNull();
+    });
+
+    it("rejects a non-number activitySuppressed", () => {
+      expect(parseChildRunEvent({ ...validTerminal, activitySuppressed: "3" })).toBeNull();
+    });
+  });
+
   it("rejects an unknown kind", () => {
     expect(parseChildRunEvent({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "mystery" })).toBeNull();
   });

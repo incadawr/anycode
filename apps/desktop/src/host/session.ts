@@ -59,6 +59,7 @@ import type {
 } from "@anycode/core";
 import {
   SESSION_TITLE_MAX_LENGTH,
+  SUBAGENT_ACTIVITY_MAX_EVENTS,
   appendFinalText,
   createFinalTextAccumulator,
   deriveSessionTitle,
@@ -66,6 +67,7 @@ import {
   fixateFinalText,
   resetFinalText,
   sanitizeTitleSource,
+  summarizeChildToolCall,
   withBackgroundTaskNotices,
   withPlanModeReminder,
 } from "@anycode/core";
@@ -335,7 +337,26 @@ export interface ChildTerminalReport {
   turns: number;
   toolCalls: number;
   durationMs: number;
+  /**
+   * Count of eligible tool_result calls withheld past `SUBAGENT_ACTIVITY_MAX_EVENTS`
+   * over the child's WHOLE turn chain (CUT-S2 §10.7 п.4, parity with
+   * `runner.ts:573`'s inline `activitySuppressed`). Present only when >0.
+   */
+  activitySuppressed?: number;
 }
+
+/**
+ * The child-mode activity/progress report Session hands to
+ * `ChildSessionOptions.onProgress` (CUT-S2 §10.7 п.7) — mirrors
+ * `ChildProgress`'s (shared/child-sessions.ts) "progress" and "activity"
+ * variants minus the `type` discriminant, exactly like `ChildTerminalReport`
+ * above mirrors `ChildTerminal`. "attention" is deliberately NOT a variant
+ * here: that boundary is produced by the permission-tap (`tapChildPermissions`
+ * below) wrapping the broker's `emit`, not by Session's turn-event loop.
+ */
+export type ChildProgressReport =
+  | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
+  | { kind: "activity"; toolName: string; summary: string };
 
 /**
  * Child-mode options (CUT-S2 §2.6.3). Presence of this option is what turns
@@ -367,6 +388,24 @@ export interface ChildSessionOptions {
    * resolved.
    */
   onTerminal: (report: ChildTerminalReport) => void;
+  /**
+   * Fires on every activity/progress boundary the child's turn-event loop
+   * crosses (CUT-S2 §10.7 п.7) — a buffered `tool_execution_start`/
+   * `tool_result` pair for "activity", and a leading-edge 1000ms-throttled
+   * `tool_result`/`turn_end` boundary for "progress". REQUIRED, not
+   * optional: §10.7 п.7 calls out that an easily-forgotten optional seam here
+   * is the same defect class as the rejected `includeChildren?` (§0.4) — a
+   * host that constructs a child Session and forgets to wire this would lose
+   * the whole live activity/progress feed silently instead of a compile
+   * error.
+   */
+  onProgress: (report: ChildProgressReport) => void;
+  /**
+   * DI clock for the progress throttle (CUT-S2 §10.7 п.3): defaults to
+   * `Date.now`. Injected by tests for deterministic leading-edge 1000ms
+   * boundary assertions; never used outside the progress-throttle path.
+   */
+  now?: () => number;
 }
 
 /**
@@ -724,6 +763,29 @@ export class Session {
   private childLoopStatus: ChildRunStatus | undefined;
   /** Wall-clock start of the child's turn chain, set once by startProgrammaticTurn — the terminal report's durationMs baseline. */
   private childStartedAt = 0;
+  /**
+   * DI clock for the progress leading-edge throttle (CUT-S2 §10.7 п.3);
+   * defaults to `Date.now`, overridable via `child.now` for deterministic
+   * tests. Inert (never called) whenever `this.child === undefined`.
+   */
+  private readonly now: () => number;
+  /**
+   * Buffers a validated child tool call's name+input from
+   * `tool_execution_start` until its paired `tool_result` arrives (mirrors
+   * `runner.ts`'s `pendingChildCalls`, W1-FIX) — keyed by toolCallId so
+   * multiple in-flight starts before any result cannot collide.
+   */
+  private readonly pendingChildCalls = new Map<string, { toolName: string; input: unknown }>();
+  /** Per-child-session activity-event emission counter (CUT-S2 §10.7 п.3), capped at `SUBAGENT_ACTIVITY_MAX_EVENTS` over the WHOLE turn chain — never reset per turn. */
+  private childActivityEmitted = 0;
+  /** Count of eligible tool_result calls withheld past the activity cap (CUT-S2 §10.7 п.4) — reported on the terminal only when >0. */
+  private childActivitySuppressed = 0;
+  /** NEW counter (CUT-S2 §10.7 п.3): count of `turn_end` events over the whole turn chain — the progress report's `turns` field, mirroring inline's local `turnEndCount` (runner.ts). Distinct from `childTurns`, which sums `loop_end.turns`. */
+  private childTurnEndCount = 0;
+  /** The most recent tool_result's outcome.toolName, updated UNCONDITIONALLY (even on invalid_input) — mirrors `runner.ts:502`. */
+  private childLastTool: string | undefined;
+  /** Wall-clock (per `this.now`) of the last emitted progress report — `undefined` until the first boundary, so the first boundary always emits (leading edge). */
+  private childLastProgressEmitAt: number | undefined;
 
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
@@ -761,6 +823,7 @@ export class Session {
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
     this.child = options.child;
+    this.now = options.child?.now ?? Date.now;
     this.titleSet = options.hasTitle ?? false;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? []);
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
@@ -1543,6 +1606,7 @@ export class Session {
         turns: this.childTurns,
         toolCalls: this.childToolCalls,
         durationMs,
+        ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
       });
       return;
     }
@@ -1553,6 +1617,7 @@ export class Session {
       turns: this.childTurns,
       toolCalls: this.childToolCalls,
       durationMs,
+      ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
     });
   }
 
@@ -1562,6 +1627,15 @@ export class Session {
    * only — mirrors runner.ts's own local `currentTurnText`/`finalText`/
    * `toolCalls`/`loopReason` bookkeeping (subagents/runner.ts), just spread
    * across possibly-many `runTurn()` calls instead of one.
+   *
+   * CUT-S2 §10.7 additions: `tool_execution_start` buffers name+input by
+   * toolCallId; `tool_result` updates `childLastTool` UNCONDITIONALLY (even
+   * on invalid_input, mirroring `runner.ts:502`), then crosses the
+   * leading-edge-throttled progress boundary, then resolves the buffered
+   * pair into an activity report (skipped for invalid_input, capped at
+   * `SUBAGENT_ACTIVITY_MAX_EVENTS` over the whole turn chain); `turn_end`
+   * increments the NEW `childTurnEndCount` (the progress report's `turns`,
+   * distinct from `childTurns`) and crosses the same progress boundary.
    */
   private observeChildEvent(event: AgentEvent): void {
     switch (event.type) {
@@ -1574,11 +1648,19 @@ export class Session {
       case "stream_retry":
         this.childFinalText = resetFinalText(this.childFinalText);
         break;
-      case "turn_end":
-        this.childFinalText = fixateFinalText(this.childFinalText);
+      case "tool_execution_start":
+        this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
         break;
       case "tool_result":
         this.childToolCalls += 1;
+        this.childLastTool = event.outcome.toolName;
+        this.emitChildProgressBoundary();
+        this.emitChildActivity(event.outcome.toolCallId, event.outcome.status);
+        break;
+      case "turn_end":
+        this.childFinalText = fixateFinalText(this.childFinalText);
+        this.childTurnEndCount += 1;
+        this.emitChildProgressBoundary();
         break;
       case "loop_end":
         // A child config never receives a WorktreeControlPort (buildChildConfig
@@ -1591,6 +1673,61 @@ export class Session {
       default:
         break;
     }
+  }
+
+  /**
+   * Resolves a buffered `tool_execution_start` against its paired
+   * `tool_result` into one activity report (CUT-S2 §10.7 п.3, 1:1 with
+   * `runner.ts:516-529`). Skipped entirely — consuming no cap slot and never
+   * incrementing `activitySuppressed` — when there was no matching start
+   * (a call that never actually dispatched) or the outcome is
+   * `invalid_input` (an SDK/dispatcher parse failure; the call never ran).
+   * Past `SUBAGENT_ACTIVITY_MAX_EVENTS` (counted over the WHOLE turn chain,
+   * never reset per turn), the event is withheld and `childActivitySuppressed`
+   * increments instead — the terminal report surfaces that count honestly.
+   */
+  private emitChildActivity(toolCallId: string, status: ToolCallOutcome["status"]): void {
+    const pending = this.pendingChildCalls.get(toolCallId);
+    this.pendingChildCalls.delete(toolCallId);
+    if (!pending || status === "invalid_input") {
+      return;
+    }
+    if (this.childActivityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS) {
+      this.childActivityEmitted += 1;
+      this.child?.onProgress({
+        kind: "activity",
+        toolName: pending.toolName,
+        summary: summarizeChildToolCall(pending.toolName, pending.input),
+      });
+    } else {
+      this.childActivitySuppressed += 1;
+    }
+  }
+
+  /**
+   * Crosses a progress-report boundary (CUT-S2 §10.7 п.3: `tool_result` and
+   * `turn_end`, mirroring the inline runner's own two `onProgress({kind:
+   * "progress",…})` call sites, runner.ts:503/537). Leading-edge throttled
+   * at 1000ms via the injected `this.now` — the FIRST boundary this session
+   * ever crosses always emits (`childLastProgressEmitAt` starts `undefined`);
+   * every later boundary within 1000ms of the last emission is silently
+   * skipped (never a trailing timer — the next boundary, or the always-
+   * authoritative terminal report, absorbs whatever a skip withheld, so no
+   * count is ever lost, only delayed by at most ~1s). `turns` reads the NEW
+   * `childTurnEndCount`, not `childTurns` (§10.7 п.3's explicit distinction).
+   */
+  private emitChildProgressBoundary(): void {
+    const now = this.now();
+    if (this.childLastProgressEmitAt !== undefined && now - this.childLastProgressEmitAt < 1000) {
+      return;
+    }
+    this.childLastProgressEmitAt = now;
+    this.child?.onProgress({
+      kind: "progress",
+      turns: this.childTurnEndCount,
+      toolCalls: this.childToolCalls,
+      ...(this.childLastTool !== undefined ? { lastTool: this.childLastTool } : {}),
+    });
   }
 
   private async runTurn(

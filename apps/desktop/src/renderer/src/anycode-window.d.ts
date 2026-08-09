@@ -68,6 +68,10 @@ import type {
   SessionSummary,
   WorkspacePickResult,
 } from "../../shared/tabs";
+// TASK.102 CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
+// shared/protocol.ts (unrestricted read access; only EDITING
+// apps/desktop/src/shared/** is out of this slice's fence).
+import type { WireHistoryItem } from "../../shared/protocol";
 import type {
   CodexProfileRecord,
   ConnectionCheckRequest,
@@ -297,12 +301,23 @@ export type ClaudeLoginStartResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
 
+// TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): mirrors the SAME duplicated
+// shape declared in preload/index.ts and main/tab-ipc.ts.
+export type ChildHistoryResult =
+  | { ok: true; items: WireHistoryItem[] }
+  | { ok: false; reason: "invalid_id" | "not_found" };
+
 declare global {
   interface Window {
     anycode: {
       createTab(request: CreateTabRequest): Promise<CreateTabResult>;
       closeTab(tabId: string): Promise<CloseTabResult>;
       listSessions(): Promise<SessionSummary[]>;
+      // TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only
+      // completed-child transcript lookup — main authorizes by
+      // (parentSessionId, spawnToolCallId) relationship before touching
+      // persistence; no childSessionId ever crosses this bridge.
+      childHistory(parentSessionId: string, spawnToolCallId: string): Promise<ChildHistoryResult>;
       pickWorkspace(): Promise<WorkspacePickResult>;
       listAvailableEngines(): Promise<AvailableEngines>;
       // TASK.41 (design/slice-codex-fixes-cut.md §5.5): push fired after any

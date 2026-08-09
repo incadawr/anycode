@@ -305,31 +305,30 @@ function WorkflowStatus({ workflow }: { workflow: WorkflowSubStatus }) {
 }
 
 /**
- * TASK.102 CUT-S2 §2.5 (slice S2c C3): an Agent card's session-child badge +
- * Open action, or `undefined` for every card that isn't one — inline
- * subagents (the overwhelming common case), every non-Agent tool, and any
- * Agent card rendered with no `<TabContext.Provider>` above it (this file's
- * own SSR tests, ToolCallCard.test.ts, mount `ToolCallCard`/`AgentCardBody`
- * bare). Self-contained: reads TabContext plus the two C1 relation/layout
- * stores directly, so MessageList.tsx needs no new prop to thread through —
+ * TASK.102 CUT-S2 §2.5 (slice S2c C3), Open-gate widened by §10.8.1
+ * (slice C4): an Agent card's session-child badge + Open action, or
+ * `undefined` for every card that isn't one — inline subagents (the
+ * overwhelming common case), every non-Agent tool, and any Agent card
+ * rendered with no `<TabContext.Provider>` above it (this file's own SSR
+ * tests, ToolCallCard.test.ts, mount `ToolCallCard`/`AgentCardBody` bare).
+ * Self-contained: reads TabContext plus the two C1 relation/layout stores
+ * directly, so MessageList.tsx needs no new prop to thread through —
  * `useContext`/the two store hooks are called UNCONDITIONALLY (React's rules
  * of hooks) even for a non-Agent block; only the RETURN is gated on
  * `isAgentCard`, so a Bash/Read/Grep card's selectors always resolve to a
  * stable `undefined` and never re-render off child-store churn.
  *
- * The actual DECISION here is a single `hasOpenableChild` presence check
- * (child-sessions.ts, tested) plus `childBadgeKind` (child-layout.ts,
- * tested) — this hook is plumbing (TabContext -> parentSessionId ->
- * relation), not a new branch to discriminate.
+ * The actual DECISION here is `hasOpenableChild`'s two-argument presence
+ * check (child-sessions.ts, tested — `relation !== undefined ||
+ * block.subagent.sessionChild === true`, the restart-Open case included)
+ * plus `childBadgeKind` (child-layout.ts, tested) — this hook is plumbing
+ * (TabContext -> parentSessionId -> relation), not a new branch to
+ * discriminate.
  *
- * `onOpen` is present only while `relation.live` — ActiveTabBody only ever
- * shows a child surface for a LIVE relation (C4's read-only completed branch
- * doesn't exist yet), so an Open button wired to a non-live relation would
- * be a dead click: the store write would land, then ActiveTabBody's own
- * render-gate + self-heal effect would silently bounce it straight back to
- * master. The BADGE stays visible regardless of `live` (`hasOpenableChild`
- * doesn't check it) — the card's own settled status is honest information
- * either way; only the ACTION needs the stronger guard.
+ * `onOpen` is now UNCONDITIONAL once `hasOpenableChild` is true (§10.8.1
+ * point 3: "the dead click stops existing") — C4 built a read-only surface
+ * for a non-live/never-live-in-this-renderer child, so ActiveTabBody always
+ * has SOMETHING to show for a click here, live relation or not.
  */
 function useChildSessionAction(
   block: ToolCallBlock,
@@ -344,14 +343,15 @@ function useChildSessionAction(
       ? state.getRelation(parentSessionId, block.toolCallId)
       : undefined,
   );
-  if (!isAgentCard || ctx === null || block.subagent === null || !hasOpenableChild(relation)) {
+  const hydratedSessionChild = block.subagent?.sessionChild === true;
+  if (!isAgentCard || ctx === null || block.subagent === null || !hasOpenableChild(relation, hydratedSessionChild)) {
     return undefined;
   }
   const rootTabId = ctx.tabId;
   const spawnToolCallId = block.toolCallId;
   return {
     badge: childBadgeKind(block.subagent),
-    onOpen: relation?.live === true ? () => childLayoutStore.getState().open(rootTabId, spawnToolCallId) : undefined,
+    onOpen: () => childLayoutStore.getState().open(rootTabId, spawnToolCallId),
   };
 }
 

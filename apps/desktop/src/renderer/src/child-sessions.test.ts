@@ -130,16 +130,20 @@ describe("child relation-store", () => {
   });
 });
 
-describe("hasOpenableChild (TASK.102 CUT-S2 §2.5 C3: ToolCallCard's Open button/badge gate)", () => {
-  it("false when no relation has ever been recorded — the inline-subagent default (and a hydrated card this renderer never saw live)", () => {
-    expect(hasOpenableChild(undefined)).toBe(false);
+describe("hasOpenableChild (TASK.102 CUT-S2 §2.5/§10.8.1: ToolCallCard's Open button/badge gate)", () => {
+  it("false when no relation has ever been recorded and the card was never hydrated as a session child — the inline-subagent default", () => {
+    expect(hasOpenableChild(undefined, false)).toBe(false);
   });
 
-  it("true once a relation exists and is still live", () => {
-    expect(hasOpenableChild({ childTabId: "tab-child-1", childSessionId: "session-child-1", live: true })).toBe(true);
+  it("§10.8.1 c, the restart-Open case: no relation (fresh renderer process) but the hydrated S1 snapshot says sessionChild — TRUE, the second branch of §2.5 come alive", () => {
+    expect(hasOpenableChild(undefined, true)).toBe(true);
   });
 
-  it("STAYS true after the relation flips live:false — the BADGE remains visible for an already-gone child (its settled status is still honest); ToolCallCard.tsx gates the Open ACTION separately on `.live`, since this slice builds no surface for a non-live child yet (C4's concern, not this gate's)", () => {
-    expect(hasOpenableChild({ childTabId: "tab-child-1", childSessionId: "session-child-1", live: false })).toBe(true);
+  it("true once a relation exists and is still live, regardless of the hydrated marker (a live card hasn't settled yet, so it never carries one)", () => {
+    expect(hasOpenableChild({ childTabId: "tab-child-1", childSessionId: "session-child-1", live: true }, false)).toBe(true);
+  });
+
+  it("STAYS true after the relation flips live:false — the BADGE remains visible for an already-gone child (its settled status is still honest); ToolCallCard.tsx's Open action is unconditional once visibility is true (C4 builds the read-only surface for exactly this case)", () => {
+    expect(hasOpenableChild({ childTabId: "tab-child-1", childSessionId: "session-child-1", live: false }, false)).toBe(true);
   });
 });

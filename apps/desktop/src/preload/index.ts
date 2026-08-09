@@ -143,6 +143,11 @@ import type {
   SessionSummary,
   WorkspacePickResult,
 } from "../shared/tabs.js";
+// TASK.102 CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
+// shared/protocol.ts (unrestricted read access; only EDITING
+// apps/desktop/src/shared/** is out of this slice's fence) — the same import
+// store.ts already uses for the live session_history hydration path.
+import type { WireHistoryItem } from "../shared/protocol.js";
 import {
   UPDATE_CHECK_CHANNEL,
   UPDATE_DOWNLOAD_CHANNEL,
@@ -267,6 +272,16 @@ const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
 const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
 /** Night-track wave-1: user click on a local .html/.htm/.md artifact link opens/reopens it in PreviewHost. */
 const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
+// TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
+// history channel — main/tab-ipc.ts holds the byte-identical source of truth
+// for both the channel literal and `ChildHistoryResult`'s shape, same
+// duplicated-literal convention as every other channel in this file (the
+// natural shared home, apps/desktop/src/shared/**, is frozen for this slice).
+const CHILD_HISTORY_CHANNEL = "anycode:child-history";
+
+export type ChildHistoryResult =
+  | { ok: true; items: WireHistoryItem[] }
+  | { ok: false; reason: "invalid_id" | "not_found" };
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
@@ -535,6 +550,12 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(TAB_CLOSE_CHANNEL, { tabId }) as Promise<CloseTabResult>,
   listSessions: (): Promise<SessionSummary[]> =>
     ipcRenderer.invoke(SESSIONS_LIST_CHANNEL) as Promise<SessionSummary[]>,
+  // TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
+  // transcript lookup — main authorizes by (parentSessionId, spawnToolCallId)
+  // relationship (`getChildSession`) before ever touching `loadHistory`; no
+  // childSessionId ever crosses this bridge (the renderer does not need one).
+  childHistory: (parentSessionId: string, spawnToolCallId: string): Promise<ChildHistoryResult> =>
+    ipcRenderer.invoke(CHILD_HISTORY_CHANNEL, { parentSessionId, spawnToolCallId }) as Promise<ChildHistoryResult>,
   pickWorkspace: (): Promise<WorkspacePickResult> =>
     ipcRenderer.invoke(WORKSPACE_PICK_CHANNEL) as Promise<WorkspacePickResult>,
   listAvailableEngines: (): Promise<AvailableEngines> =>

@@ -236,7 +236,19 @@ export function decodeSubagentCardSnapshot(
   }
 }
 
-/** Straight 1:1 field mapping onto `SubagentSubStatus` (store.ts) — `attention` is S2-reserved and never projected (CUT-S1 §0.3 vердикт 3, §3 W4). */
+/**
+ * Straight 1:1 field mapping onto `SubagentSubStatus` (store.ts) — `attention`
+ * is S2-reserved and never projected (CUT-S1 §0.3 vердикт 3, §3 W4).
+ * `sessionChild` (TASK.102 CUT-S2 §10.8.1 vердикт 1) is the one exception:
+ * presence-encoded, set ONLY when `snapshot.target.kind === "session"`. This
+ * is a DISCRIMINANT, not the target itself — the three ids on a `"session"`
+ * target (childSessionId/parentSessionId/spawnToolCallId) deliberately never
+ * cross into the projection (§10.8.1 point 2): `spawnToolCallId` is already
+ * redundant with `block.toolCallId` (decodeTarget rejected any mismatch),
+ * and `parentSessionId`/`childSessionId` are unvalidated payload claims a
+ * future reader could wrongly prefer over the checked ambient
+ * `tab.sessionId` — exactly the plaiting CUT-S2 §2.3's header forbids.
+ */
 export function projectSubagentCard(snapshot: SubagentCardSnapshotV1): SubagentSubStatus {
   return {
     agentType: snapshot.identity.agentType,
@@ -249,5 +261,6 @@ export function projectSubagentCard(snapshot: SubagentCardSnapshotV1): SubagentS
     activity: snapshot.activity.entries,
     activityDropped: snapshot.activity.dropped,
     final: snapshot.final,
+    ...(snapshot.target.kind === "session" ? { sessionChild: true } : {}),
   };
 }

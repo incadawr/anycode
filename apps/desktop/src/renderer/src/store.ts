@@ -196,6 +196,15 @@ export interface SubagentSubStatus {
    * snapshot never carries — CUT-S1 §2.1, CUT-S2 §2.5).
    */
   waiting?: true;
+  /**
+   * PRESENCE-encoded (`?: true`, same discipline as `waiting` above): set
+   * ONLY by `projectSubagentCard` when the terminal S1 snapshot's
+   * `target.kind === "session"` — i.e. this Agent call spawned a session-tier
+   * child (TASK.102 CUT-S2 §2.5/§10.8). Live subagent_* patches never set it
+   * (the live Open path resolves through the child relation-store instead);
+   * inline cards and legacy hydrations never have the key.
+   */
+  sessionChild?: true;
 }
 
 /** Ring cap for `SubagentSubStatus.activity` (design slice-P7.18-cut.md §4 W2): oldest row drops, `activityDropped` increments. Renderer-side bound independent of the core's own per-run emission cap. */

@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { ipcMain } from "electron";
 import { z } from "zod";
-import type { PersistencePort, SessionMeta } from "@anycode/core";
+import type { HistoryItem, PersistencePort, SessionMeta } from "@anycode/core";
 import {
   ENGINES_LIST_CHANNEL,
   SESSIONS_LIST_CHANNEL,
@@ -35,6 +35,22 @@ import type {
 } from "../shared/tabs.js";
 import type { TabHostManager } from "./tabs.js";
 import { isEngineId, type EngineId } from "../shared/engines.js";
+// TASK.102 CUT-S2 §10.5/§10.8.1 point 5: `isValidChildId` is the SAME
+// shape/charset pre-flight the parent host's RPC client (host/child-session-port.ts)
+// runs before putting a spawnToolCallId on the child-spawn wire — reused here
+// so a malformed id from a compromised/buggy renderer is refused BEFORE it
+// ever reaches `getChildSession` (fail-closed, §2.5's "avtorizatsiya rodstvom").
+import { isValidChildId } from "../shared/child-sessions.js";
+// TASK.102 CUT-S2 §2.5/§10.8.1: the read-only completed-child history channel's
+// wire item shape — imported type-only from shared/protocol.ts (unrestricted
+// read access; only EDITING apps/desktop/src/shared/** is out of this slice's
+// fence). `CHILD_HISTORY_CHANNEL`/`ChildHistoryResult` themselves are NOT
+// declared in shared/** (that tree is frozen for this slice) — they are
+// duplicated across this file, preload/index.ts, and the renderer's
+// child-history.ts, the SAME "duplicated on purpose" convention this codebase
+// already uses for ARTIFACT_READ_IMAGE_CHANNEL/ArtifactReadImageResult across
+// main/artifacts-ipc.ts, preload/index.ts, and renderer/src/anycode-window.d.ts.
+import type { WireHistoryItem } from "../shared/protocol.js";
 
 /** Structural view of dialog.showOpenDialog (injected so main owns the real one). */
 export interface DialogLike {
@@ -79,9 +95,12 @@ export interface TabIpcDeps {
    * The picker/resume reads main uses (§2.3), plus `touchSession` (W10-FIX F1):
    * re-pinning a resumed session to a replacement connection writes only
    * `SessionMetaPatch.connectionId` (already part of the core port — ZERO core
-   * delta). No other new port methods needed.
+   * delta). TASK.102 CUT-S2 §2.5/§10.8.1 (slice C4) additive: `getChildSession`
+   * (relationship-authorized point lookup — null for a non-child or a child of
+   * a DIFFERENT parent) + `loadHistory` (the authorized child's own transcript)
+   * back the read-only `CHILD_HISTORY_CHANNEL` handler below.
    */
-  persistence: Pick<PersistencePort, "getRootSession" | "listRootSessions" | "touchSession">;
+  persistence: Pick<PersistencePort, "getRootSession" | "listRootSessions" | "touchSession" | "getChildSession" | "loadHistory">;
   dialog: DialogLike;
   /** Production gate proves the path is still a registered worktree on the persisted branch. */
   validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
@@ -174,6 +193,68 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
 ]);
 
 const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
+
+// TASK.102 CUT-S2 §2.5/§10.8.1: read-only completed-child transcript channel.
+// `CHILD_HISTORY_CHANNEL`/`ChildHistoryResult` are the source of truth this
+// slice owns — preload/index.ts and renderer/src/child-history.ts each carry
+// a byte-identical DUPLICATE (see this file's header comment for why: the
+// natural shared home, apps/desktop/src/shared/**, is frozen for this slice).
+export const CHILD_HISTORY_CHANNEL = "anycode:child-history";
+
+export type ChildHistoryResult =
+  | { ok: true; items: WireHistoryItem[] }
+  | { ok: false; reason: "invalid_id" | "not_found" };
+
+/** `HistoryItem` (core) -> `WireHistoryItem` (wire), dropping the core-only `tokenEstimate` cache field — same field-projection host/session.ts's own `buildSessionHistory` applies to a resumed session's boot history. */
+function toWireHistoryItems(items: readonly HistoryItem[]): WireHistoryItem[] {
+  return items.map((item) => ({
+    id: item.id,
+    createdAt: item.createdAt,
+    ...(item.kind !== undefined ? { kind: item.kind } : {}),
+    message: item.message,
+  }));
+}
+
+/**
+ * `CHILD_HISTORY_CHANNEL` handler (exported for tests, mirroring
+ * `handleCreate`/`handleWorkspacePick` above): a completed (or still-live,
+ * cancelled, whatever settled state) child's read-only transcript, gated by
+ * relationship — a request naming a parent this child does NOT belong to (or
+ * naming a spawn that never happened) gets the exact same `not_found` refusal
+ * as a typo'd id, never a hint about which half was wrong.
+ *
+ * §10.8.1 point 5 (fail-closed pre-flight): BOTH ids are run through
+ * `isValidChildId` BEFORE `deps.persistence` is touched at all — a malformed
+ * id (wrong shape/charset, oversized) never reaches a SQL query. This is the
+ * same shape rule `parseChildSpawnRequest` (shared/child-sessions.ts)
+ * enforces on the child-spawn wire, reused here for the SAME reason: a
+ * disagreement between the two would let a malformed id slip through on one
+ * side. Renderer identity discipline (§2.3's header, mirrored by C4's own
+ * law): the two ids this handler trusts are whatever the RENDERER'S CALLER
+ * (App.tsx, keyed off ambient `tab.sessionId` + `block.toolCallId` — never a
+ * card's own persisted `target` fields) put in the request; this handler adds
+ * no further ambient check of its own (unlike the child-spawn/progress wire,
+ * there is no "sender process" to correlate against here — the renderer IS
+ * the truthful sender of an invoke call, contextBridge's whole point).
+ */
+export async function handleChildHistory(
+  deps: Pick<TabIpcDeps, "persistence">,
+  raw: unknown,
+): Promise<ChildHistoryResult> {
+  if (typeof raw !== "object" || raw === null) {
+    return { ok: false, reason: "invalid_id" };
+  }
+  const { parentSessionId, spawnToolCallId } = raw as Record<string, unknown>;
+  if (!isValidChildId(parentSessionId) || !isValidChildId(spawnToolCallId)) {
+    return { ok: false, reason: "invalid_id" };
+  }
+  const meta = await deps.persistence.getChildSession(parentSessionId, spawnToolCallId);
+  if (meta === null) {
+    return { ok: false, reason: "not_found" };
+  }
+  const history = await deps.persistence.loadHistory(meta.id);
+  return { ok: true, items: toWireHistoryItems(history) };
+}
 
 /** exported for tests (tab-ipc.test.ts): the persistence->picker projection. */
 export function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSummary {
@@ -469,6 +550,10 @@ export function registerTabIpc(deps: TabIpcDeps): void {
   });
 
   ipcMain.handle(WORKSPACE_PICK_CHANNEL, async (): Promise<WorkspacePickResult> => handleWorkspacePick(deps));
+
+  ipcMain.handle(CHILD_HISTORY_CHANNEL, async (_event, raw: unknown): Promise<ChildHistoryResult> =>
+    handleChildHistory(deps, raw),
+  );
 
   ipcMain.handle(ENGINES_LIST_CHANNEL, (): AvailableEngines => ({
     // SLICE-CC C5: "claude" is now a real candidate — CC-A's unconditional
