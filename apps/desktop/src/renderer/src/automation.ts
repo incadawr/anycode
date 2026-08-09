@@ -55,6 +55,7 @@ import {
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
+import { childLayoutStore as defaultChildLayoutStore, type ChildLayoutStoreApi } from "./child-layout.js";
 import { useSettingsStore, type SettingsStoreApi } from "./settings-store.js";
 import { groupAlwaysAllowRules } from "./permission-rules.js";
 import { ruleDisplayPattern, ruleHasPattern, ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
@@ -1827,6 +1828,20 @@ export interface AutomationFacade {
   setMode(tabId: string, mode: string): FacadeResult;
   stop(tabId: string): FacadeResult;
   selectTab(tabId: string): FacadeResult;
+  /**
+   * TASK.102 S2d D1 (CUT-S2 §2.5/§4.2 п.5, "Open-клик"): switches `rootTabId`'s
+   * pane onto its `spawnToolCallId` child, the SAME unconditional call
+   * ToolCallCard.tsx's Open button makes (`childLayoutStore.open` —
+   * child-layout.ts). Composer/permission addressing for the opened child
+   * need no new facade method: `sendPrompt`/`respondPermission` above already
+   * take any registered tabId, root or child (`registry.getStore` has no
+   * root-only filter — `tab-registry.ts`'s `registerPort` creates a store for
+   * a child tab exactly like a root one, it just skips the tabs-store/Sidebar
+   * bootstrap), so a smoke driver addresses the child's own composer/
+   * permission-modal by passing its `childTabId` (off `/state`'s `childRuns`
+   * or `/child-runs`) straight into those two existing methods.
+   */
+  childOpen(rootTabId: string, spawnToolCallId: string): FacadeResult;
   resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult>;
   closeTab(tabId: string): Promise<{ ok: boolean; reason?: string }>;
   listSessions(): Promise<SessionSummary[]>;
@@ -4150,6 +4165,7 @@ export function createAutomationFacade(
   codexPaneDom: CodexPaneDom = realCodexPaneDom(),
   codexProfileChipDom: CodexProfileChipDom = realCodexProfileChipDom(),
   codexImportDom: CodexImportDialogDom = realCodexImportDialogDom(),
+  childLayoutStore: ChildLayoutStoreApi = defaultChildLayoutStore,
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -4386,6 +4402,22 @@ export function createAutomationFacade(
       // Pure renderer-side selection (design §3.2) — same call TabBar's click
       // handler makes (App.tsx's onSelectTab).
       tabsStore.getState().setActiveTab(tabId);
+      return { ok: true };
+    },
+
+    childOpen(rootTabId: string, spawnToolCallId: string): FacadeResult {
+      // Same structural refusal as selectTab above (rootTabId must be a
+      // known ROOT tab — a child tabId is never in tabsStore, tab-registry.ts's
+      // own doc). Deliberately NOT re-deriving ToolCallCard.tsx's
+      // `hasOpenableChild` badge-visibility gate here: `childLayoutStore.open`
+      // is itself unconditional (child-layout.ts: "there is no prior state to
+      // reconcile against"), and C4 renders a read-only surface for ANY
+      // spawnToolCallId with no live/ever-registered relation, so refusing on
+      // that gate would make this facade LESS permissive than the real button.
+      if (!tabsStore.getState().tabs.some((tab) => tab.tabId === rootTabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      childLayoutStore.getState().open(rootTabId, spawnToolCallId);
       return { ok: true };
     },
 

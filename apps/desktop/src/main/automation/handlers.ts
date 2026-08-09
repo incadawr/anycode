@@ -31,6 +31,7 @@ import type { PreviewConsoleEntry, PreviewOpenSuccess, PreviewResult } from "../
 import type { PreviewContainerKind, PreviewSetContainerResult } from "../../shared/preview-panel.js";
 import { navigateMdDoc, type MdDocDeps } from "../preview/md-doc.js";
 import type { MdDocReadResult } from "../../shared/md-preview.js";
+import type { PersistencePort, SessionMeta } from "@anycode/core";
 
 /** Structural view of `webContents` the channel needs (executeJavaScript for the facade, capturePage for evidence). */
 export interface CapturedImage {
@@ -52,6 +53,29 @@ export interface AppLike {
 }
 
 /**
+ * `GET /state`'s child-run projection (TASK.102 CUT-S2 §3 S2d, the D1
+ * bullet: "requestId/parentSessionId/childTabId/childSessionId/state/pid"
+ * verbatim).
+ * A straight field-for-field read of `TabHostManager`'s private
+ * `childRuns: Map<string, ChildRunLedgerEntry>` ledger (tabs.ts) — `state` is
+ * the ledger's own admission state ("starting"|"running"|"cancelling"),
+ * distinct from a tab's `TabSummary["state"]` ("running"|"crash_looped"|
+ * "closing"); `pid` is the CHILD tab's own live host pid (joined off
+ * `tabs.get(childTabId)`), `null` before the child's TabHost exists yet or
+ * once its host has exited. Declared locally (not imported from tabs.ts)
+ * because `ChildRunLedgerEntry` is not exported there — see `ManagerLike
+ * .listChildRuns`'s own doc for the seam this mirrors.
+ */
+export interface ChildRunSummary {
+  requestId: string;
+  parentSessionId: string;
+  childTabId: string;
+  childSessionId: string;
+  state: "starting" | "running" | "cancelling";
+  pid: number | null;
+}
+
+/**
  * Structural view of TabHostManager the channel uses. Kept structural (not the
  * class type) so handler tests can pass a fake with zero Electron; the shapes
  * are the real ones from tabs.ts.
@@ -61,6 +85,22 @@ export interface ManagerLike {
   deliverTabPort(tab: TabHost): void;
   listTabs(): ReadonlyArray<TabSummary>;
   killHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" };
+  /**
+   * TASK.102 S2d D1: projects the live child-run ledger for `/state`
+   * (`getState`/`getStateForTab` below). OPTIONAL — unlike every other
+   * member of this interface — because `TabHostManager` does not implement
+   * it as of this slice; a manager fixture (real or fake) without it
+   * degrades `/state`'s `childRuns` to `[]`, never throws. SEAM NEEDED: a
+   * real implementation belongs in tabs.ts next to `listTabs()`, e.g.
+   * `listChildRuns(): ReadonlyArray<ChildRunSummary> { return
+   * [...this.childRuns.values()].map((e) => ({ requestId: e.requestId,
+   * parentSessionId: e.parentSessionId, childTabId: e.childTabId,
+   * childSessionId: e.childSessionId, state: e.state, pid:
+   * this.tabs.get(e.childTabId)?.proc?.pid ?? null })); }` — out of this
+   * builder's fence (tabs.ts is under concurrent review elsewhere in this
+   * worktree), reported rather than built.
+   */
+  listChildRuns?(): ReadonlyArray<ChildRunSummary>;
 }
 
 /**
@@ -115,6 +155,22 @@ export interface HandlerDeps {
    * malformed-payload branch uses, never throws.
    */
   mdDocDeps?: MdDocDeps;
+  /**
+   * TASK.102 S2d D1 (CUT-S2 §2.4/§4.1 additive `/child-runs`): the SAME
+   * `PersistencePort` `main/index.ts` opens at boot (`persistence`,
+   * `SqlitePersistenceAdapter`) — `listChildRunsMaintenance` below calls
+   * `listSessionsForMaintenance()` directly over it (main-plane, no
+   * renderer facade involved, same posture as `previewHost`/`mdDocDeps`
+   * above) and filters to the rows carrying `parentSessionId` (a child
+   * session's own defining trait, `packages/core/src/ports/persistence.ts`).
+   * `Pick`, not the whole port, so a fixture/test HandlerDeps never has to
+   * fabricate the other 15 members. Absent in a fixture/test HandlerDeps (or
+   * in production until `main/index.ts` is wired to pass it) ->
+   * `listChildRunsMaintenance` answers the same honest
+   * `{ok:false, error:"persistence unavailable", errorKind:"unavailable"}`
+   * the preview routes' own absent-dep branch uses, never throws.
+   */
+  persistence?: Pick<PersistencePort, "listSessionsForMaintenance">;
 }
 
 /* */
@@ -209,21 +265,27 @@ export function health(deps: HandlerDeps): { ok: true; pid: number; version: str
   return { ok: true, pid: process.pid, version: deps.app.getVersion(), tabs: deps.manager.listTabs().length };
 }
 
-/** `GET /state`: renderer-plane snapshot + main-plane tab list side by side (design §4.1). */
+/**
+ * `GET /state`: renderer-plane snapshot + main-plane tab list side by side
+ * (design §4.1), plus (TASK.102 S2d D1) the main-side child-run ledger
+ * projection — `deps.manager.listChildRuns` is optional (see `ManagerLike`'s
+ * own doc), so an absent implementation degrades this to `[]` rather than
+ * throwing.
+ */
 export async function getState(
   deps: HandlerDeps,
   tail: number | undefined,
-): Promise<{ snapshot: unknown; tabs: ReadonlyArray<TabSummary> }> {
+): Promise<{ snapshot: unknown; tabs: ReadonlyArray<TabSummary>; childRuns: ReadonlyArray<ChildRunSummary> }> {
   const snapshot = await deps.callFacade("snapshot", tail !== undefined ? [tail] : []);
-  return { snapshot, tabs: deps.manager.listTabs() };
+  return { snapshot, tabs: deps.manager.listTabs(), childRuns: deps.manager.listChildRuns?.() ?? [] };
 }
 
-/** `GET /state/:tabId`: same, narrowed to one tab on both planes. */
+/** `GET /state/:tabId`: same, narrowed to one tab on both planes. `childRuns` stays UN-narrowed (the projection's own fields have no `tabId` to filter on — see `ChildRunSummary`'s doc). */
 export async function getStateForTab(
   deps: HandlerDeps,
   tabId: string,
   tail: number | undefined,
-): Promise<{ snapshot: unknown; tabs: ReadonlyArray<TabSummary> }> {
+): Promise<{ snapshot: unknown; tabs: ReadonlyArray<TabSummary>; childRuns: ReadonlyArray<ChildRunSummary> }> {
   const full = (await deps.callFacade("snapshot", tail !== undefined ? [tail] : [])) as {
     tabs: unknown;
     activeTabId: unknown;
@@ -235,7 +297,39 @@ export async function getStateForTab(
     activeTabId: full.activeTabId,
     states: state !== undefined ? { [tabId]: state } : {},
   };
-  return { snapshot: narrowed, tabs: deps.manager.listTabs().filter((t) => t.tabId === tabId) };
+  return {
+    snapshot: narrowed,
+    tabs: deps.manager.listTabs().filter((t) => t.tabId === tabId),
+    childRuns: deps.manager.listChildRuns?.() ?? [],
+  };
+}
+
+const PERSISTENCE_UNAVAILABLE = { ok: false, error: "persistence unavailable", errorKind: "unavailable" } as const;
+
+/**
+ * `GET /child-runs` (TASK.102 S2d D1, CUT-S2 §2.4/§4.1 additive): every
+ * DURABLE child-session row in SQLite, dev-only maintenance surface —
+ * `listSessionsForMaintenance` (the one `PersistencePort` method that sees
+ * every row, root and child alike, `packages/core/src/ports/persistence.ts`'s
+ * own doc on it) filtered here to the rows carrying `parentSessionId` (a
+ * child session's defining trait). Distinct from `/state`'s `childRuns`
+ * (`getState` above): that one is the main-process IN-MEMORY admission
+ * ledger (live runs only, gone the instant a run finalizes); this one is the
+ * durable row for every child session ever created, live or long since
+ * terminal — the same "two different views of sessions" split `/sessions`
+ * (renderer-plane, root-only) and `/state`'s `tabs` (main-plane) already have
+ * today. Degrades to `PERSISTENCE_UNAVAILABLE` (never throws) when
+ * `deps.persistence` is absent, same posture as the preview routes' own
+ * absent-dep branch.
+ */
+export async function listChildRunsMaintenance(
+  deps: HandlerDeps,
+): Promise<{ ok: true; sessions: SessionMeta[] } | typeof PERSISTENCE_UNAVAILABLE> {
+  if (deps.persistence === undefined) {
+    return PERSISTENCE_UNAVAILABLE;
+  }
+  const all = await deps.persistence.listSessionsForMaintenance();
+  return { ok: true, sessions: all.filter((meta) => meta.parentSessionId !== undefined) };
 }
 
 export function getSessions(deps: HandlerDeps): Promise<unknown> {
@@ -385,6 +479,20 @@ export function stop(deps: HandlerDeps, tabId: string): Promise<unknown> {
 
 export function selectTab(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("selectTab", [tabId]);
+}
+
+/**
+ * `POST /tabs/:tabId/child/open` (TASK.102 S2d D1, CUT-S2 §4.2 п.5
+ * "Open-клик"): thin forward to the facade's `childOpen`, same shape as
+ * `selectTab` above. `tabId` here is the ROOT tab whose pane switches;
+ * `spawnToolCallId` names which of its children. The child's own composer
+ * send / permission response need no dedicated route — `sendPrompt`/
+ * `respondPermission` already take any tabId, so a driver addresses the
+ * child directly with its `childTabId` (off `/state`'s `childRuns` or
+ * `/child-runs`).
+ */
+export function childOpen(deps: HandlerDeps, tabId: string, spawnToolCallId: string): Promise<unknown> {
+  return deps.callFacade("childOpen", [tabId, spawnToolCallId]);
 }
 
 /**

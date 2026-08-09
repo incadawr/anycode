@@ -612,6 +612,27 @@ export interface TabSummary {
   childOf?: { parentTabId: string; requestId: string };
 }
 
+/**
+ * Read-only projection of one admitted child-session run (TASK.102 CUT-S2
+ * §2.6.4 S2d, `automation/handlers.ts`'s `GET /state` `childRuns`): a
+ * field-for-field read of the manager's private `childRuns` ledger entry,
+ * excluding what does not belong outside the manager (the held `prompt`,
+ * the internal `startDeadline` timer) and adding the child tab's own live
+ * host `pid` (joined off `tabs`), which the ledger entry itself does not
+ * carry. Declared structurally identical to (but independent of)
+ * `automation/handlers.ts`'s own local `ChildRunSummary` — that module
+ * cannot import this one without a circular dependency (tabs.ts sits below
+ * automation/).
+ */
+export interface ChildRunSummary {
+  requestId: string;
+  parentSessionId: string;
+  childTabId: string;
+  childSessionId: string;
+  state: "starting" | "running" | "cancelling";
+  pid: number | null;
+}
+
 export class TabHostManager {
   private readonly tabs = new Map<string, TabHost>();
   /* */
@@ -720,6 +741,24 @@ export class TabHostManager {
       ...(tab.childOf !== undefined
         ? { childOf: { parentTabId: tab.childOf.parentTabId, requestId: tab.childOf.requestId } }
         : {}),
+    }));
+  }
+
+  /**
+   * Read-only snapshot of every live admitted child-session run (design
+   * §3.1/§4.1, TASK.102 CUT-S2 §2.6.4 S2d), for the automation server's
+   * `GET /state` `childRuns` projection — the ledger's own admission
+   * `state` ("starting"|"running"|"cancelling"), not a tab's breaker
+   * `state` ("running"|"crash_looped"|"closing").
+   */
+  listChildRuns(): ReadonlyArray<ChildRunSummary> {
+    return [...this.childRuns.values()].map((e) => ({
+      requestId: e.requestId,
+      parentSessionId: e.parentSessionId,
+      childTabId: e.childTabId,
+      childSessionId: e.childSessionId,
+      state: e.state,
+      pid: this.tabs.get(e.childTabId)?.proc?.pid ?? null,
     }));
   }
 
