@@ -258,10 +258,21 @@ async function cdpConnect(port, timeoutMs = 60_000) {
  * ALWAYS-visible (even collapsed) `.tool-call-status-badge` text
  * (`ToolCallCard.tsx:923` — the badge lives in the toggle row, not just the
  * expanded body, precisely so a collapsed-by-default card is still provably
- * showing its status). `elementFromPoint` at the card's own center lands
- * INSIDE the card — the same anti-facade discriminator (DOM-presence ≠
- * visibility) `child-session-scenario-smoke.mjs` established for the child
- * pane.
+ * showing its status). `elementFromPoint` lands INSIDE the card — the same
+ * anti-facade discriminator (DOM-presence ≠ visibility)
+ * `child-session-scenario-smoke.mjs` established for the child pane.
+ *
+ * The hit point is the centre of the card's INTERSECTION with the viewport,
+ * not the centre of its own rect. An expanded card whose activity feed is
+ * taller than the viewport has its own centre off-screen, where
+ * `elementFromPoint` returns null by definition and the probe reports a
+ * false "hit outside" — that is what went red on iter-21's probe B while the
+ * card was rendering correctly. Clamping strengthens the check rather than
+ * relaxing it: `visible` must be a non-empty on-screen area (a NEW assert an
+ * unclamped centre never made), and the hit is taken at a point that is
+ * provably on screen. `hitTag` names whatever was hit instead, so a real
+ * occlusion is distinguishable from an off-screen centre in the failure
+ * message itself.
  */
 function cardGeometryJs(toolCallId) {
   const idLiteral = JSON.stringify(toolCallId);
@@ -273,18 +284,27 @@ function cardGeometryJs(toolCallId) {
     if (!card) return { ok: false, reason: 'no_card' };
     const badge = card.querySelector('.tool-call-status-badge');
     const rect = card.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const hit = document.elementFromPoint(cx, cy);
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const visLeft = Math.max(rect.left, 0);
+    const visTop = Math.max(rect.top, 0);
+    const visWidth = Math.max(0, Math.min(rect.right, vw) - visLeft);
+    const visHeight = Math.max(0, Math.min(rect.bottom, vh) - visTop);
+    const cx = visLeft + visWidth / 2;
+    const cy = visTop + visHeight / 2;
+    const hit = visWidth > 0 && visHeight > 0 ? document.elementFromPoint(cx, cy) : null;
     return {
       ok: true,
       className: card.className,
       badgeText: badge ? badge.textContent : null,
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height, top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom },
+      visible: { left: visLeft, top: visTop, width: visWidth, height: visHeight },
+      hitPoint: { x: cx, y: cy },
+      hitTag: hit ? hit.tagName + (typeof hit.className === 'string' && hit.className ? '.' + hit.className : '') : null,
       offsetHeight: card.offsetHeight,
       hitInsideCard: hit ? (card.contains(hit) || hit === card) : false,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
+      viewportWidth: vw,
+      viewportHeight: vh,
     };
   })()`;
 }
@@ -586,14 +606,21 @@ async function probeB(ctx) {
     await apiAction(ctx, step, `/tabs/${resumedTabId}/agent-card/${dispatch.toolCallId}/expand`, {});
     await sleep(250);
     const geo = await ctx.cdp.eval(cardGeometryJs(dispatch.toolCallId));
+    // The PNG is taken BEFORE the geometry asserts, not after: a red geometry
+    // assert is exactly the run whose picture a human needs, and taking it
+    // afterwards left iter-21's first red probe B with no artifact at all.
+    const pngPath = await saveScreenshot(ctx, "race-probeB-cancelled-card");
     assert(step, geo.ok === true, `no card found in the DOM after resume+expand: ${JSON.stringify(geo)}`);
     assert(step, geo.rect.width > 0 && geo.rect.height > 0, `card has zero getBoundingClientRect: ${JSON.stringify(geo.rect)}`);
     assert(step, geo.offsetHeight > 0, "card offsetHeight is 0");
-    assert(step, geo.hitInsideCard === true, `elementFromPoint at the card's own center did NOT land inside the card (hit outside)`);
+    assert(step, geo.visible.width > 0 && geo.visible.height > 0, `card has no on-screen area at all: ${JSON.stringify(geo)}`);
+    assert(
+      step,
+      geo.hitInsideCard === true,
+      `elementFromPoint at the card's on-screen centre did NOT land inside the card (hit ${geo.hitTag}): ${JSON.stringify(geo)}`,
+    );
     assert(step, geo.className.includes("tool-call-status-cancelled"), `card class does not include tool-call-status-cancelled: ${geo.className}`);
     assert(step, geo.badgeText === "Cancelled", `expected badge text "Cancelled", got ${JSON.stringify(geo.badgeText)}`);
-
-    const pngPath = await saveScreenshot(ctx, "race-probeB-cancelled-card");
 
     return {
       name: "B",
@@ -654,14 +681,18 @@ async function probeC(ctx) {
     await apiAction(ctx, step, `/tabs/${tab.tabId}/agent-card/${dispatch.toolCallId}/expand`, {});
     await sleep(250);
     const geo = await ctx.cdp.eval(cardGeometryJs(dispatch.toolCallId));
+    const pngPath = await saveScreenshot(ctx, "race-probeC-error-card");
     assert(step, geo.ok === true, `no card found in the DOM: ${JSON.stringify(geo)}`);
     assert(step, geo.rect.width > 0 && geo.rect.height > 0, `card has zero getBoundingClientRect: ${JSON.stringify(geo.rect)}`);
     assert(step, geo.offsetHeight > 0, "card offsetHeight is 0");
-    assert(step, geo.hitInsideCard === true, "elementFromPoint at the card's own center did NOT land inside the card");
+    assert(step, geo.visible.width > 0 && geo.visible.height > 0, `card has no on-screen area at all: ${JSON.stringify(geo)}`);
+    assert(
+      step,
+      geo.hitInsideCard === true,
+      `elementFromPoint at the card's on-screen centre did NOT land inside the card (hit ${geo.hitTag}): ${JSON.stringify(geo)}`,
+    );
     assert(step, geo.className.includes("tool-call-status-error"), `card class does not include tool-call-status-error: ${geo.className}`);
     assert(step, geo.badgeText === "Error", `expected badge text "Error", got ${JSON.stringify(geo.badgeText)}`);
-
-    const pngPath = await saveScreenshot(ctx, "race-probeC-error-card");
 
     return {
       name: "C",
