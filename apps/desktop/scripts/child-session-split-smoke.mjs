@@ -149,7 +149,16 @@ const SIGTERM_GRACE_MS = 750;
  * has 7 before it even injects the steer).
  */
 const CHILD_SLEEP_SECONDS = 60;
-const TERMINAL_WAIT_TIMEOUT_MS = 120_000;
+/**
+ * How long step 6 waits for the steered child to go terminal. Budgeted for
+ * the worst honest case rather than the observed one: the steer can land at
+ * the very start of the child's own `sleep 60`, so the child still owes that
+ * sleep, then the steer's own tool call, then a reply — plus live-model
+ * latency on both turns. 120s used to cover it only when the steer landed
+ * late in the sleep window, and reddened a run purely on where the clock
+ * happened to fall.
+ */
+const TERMINAL_WAIT_TIMEOUT_MS = 240_000;
 
 const FLAGS = { keep: process.argv.slice(2).includes("--keep") };
 
@@ -945,7 +954,17 @@ async function step6Steering(ctx) {
   assert(step, running === true, "c1's own composer inside .child-split-pane never showed .composer-stop within 10s — no busy window to steer into");
 
   ctx.steerProofPath = join(ctx.tmpWorkspace, "split-steer-proof.txt");
-  const steerText = `Also run the Bash tool with the exact command "echo STEERED > ${ctx.steerProofPath}" before you reply DONE, in addition to the sleep.`;
+  // "do not sleep again" is load-bearing, not politeness: the earlier wording
+  // ("in addition to the sleep") let a live child read the steer as "sleep
+  // another 60s, THEN echo", which pushes the terminal transition past the
+  // wait below and reds the run on model wording alone. The assertion is not
+  // weakened by dropping it — the steer still has to reach the child and
+  // still has to add a second tool call, which is the whole point of the
+  // step; the busy window it was protecting is already proven by the
+  // status/composer asserts above and re-proven right after the click.
+  const steerText =
+    `Also run the Bash tool with the exact command "echo STEERED > ${ctx.steerProofPath}" ` +
+    "right now, before you reply DONE. Do not sleep again.";
 
   const typed = await ctx.cdp.eval(typeIntoSplitComposerJs(steerText));
   assert(step, typed.ok === true && typed.value === steerText, `typing into the split child composer failed or textarea value mismatched: ${JSON.stringify(typed)}`);
@@ -961,11 +980,22 @@ async function step6Steering(ctx) {
     `the steer click landed AFTER c1's master Agent tool_call had already gone terminal (status=${postClickBlock?.status}) — this run cannot demonstrate steering-before-unblock`,
   );
 
+  // Last observed block is kept so the timeout below reports WHAT the card
+  // looked like when the clock ran out (status + the subagent counters that
+  // say whether the steer's tool call ever happened). A bare "never reached
+  // terminal" cannot be told apart from a genuine hang without it.
+  let lastSeenBlock = null;
   const terminal = await pollUntil(TERMINAL_WAIT_TIMEOUT_MS, 500, async () => {
     const block = await findMasterToolCallBlock(ctx, step, ctx.c1ToolCallId);
+    lastSeenBlock = block;
     return block !== null && (block.status === "success" || block.status === "error") ? block : undefined;
   });
-  assert(step, terminal !== null, `c1's master Agent tool_call never reached a terminal status within ${TERMINAL_WAIT_TIMEOUT_MS}ms after the split-position steer`);
+  assert(
+    step,
+    terminal !== null,
+    `c1's master Agent tool_call never reached a terminal status within ${TERMINAL_WAIT_TIMEOUT_MS}ms after the split-position steer. ` +
+      `Last observed block: ${JSON.stringify(lastSeenBlock)}; steer proof file ${ctx.steerProofPath} exists=${existsSync(ctx.steerProofPath)}`,
+  );
   ctx.step6Terminal = terminal;
 
   const toolCallsMade = terminal.subagent?.toolCalls ?? null;
