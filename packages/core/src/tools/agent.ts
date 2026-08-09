@@ -329,6 +329,25 @@ async function runSessionTier(
     },
   });
 
+  // Round-trip check (F14, ports/session-subagent.ts docstring): core OWNS
+  // spawnToolCallId — it minted it as ctx.toolCallId and stamped it onto the
+  // request above — so the host is required to hand back exactly that string,
+  // never a value of its own choosing. This is asserted, not assumed: a host
+  // that fails to round-trip it correctly cannot be trusted for the two ids
+  // that ride alongside it either (childSessionId/parentSessionId — core has
+  // no independent way to verify those), so the whole delegation fails closed
+  // rather than let a corrupted id reach the persisted target, the
+  // relation-store key, or any downstream `(parentSessionId, spawnToolCallId)`
+  // lookup keyed by it.
+  if (outcome.spawnToolCallId !== request.spawnToolCallId) {
+    return {
+      ok: false,
+      error:
+        `Agent: the session host returned a mismatched spawn identity (sent "${request.spawnToolCallId}", ` +
+        `got "${outcome.spawnToolCallId}").`,
+    };
+  }
+
   // The three ids ride ONLY the presentation target (CUT-S2 §2.1: "core их
   // только копирует в target и НЕ изобретает") — core relays exactly what
   // the host's accepted-relay + its own sessionId already know, never

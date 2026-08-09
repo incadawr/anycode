@@ -95,6 +95,23 @@ export interface ChildRelationState {
    */
   markChildGone(childTabId: string): void;
 
+  /**
+   * Removes every relation whose key names `parentSessionId` — live or not
+   * (F11, review-wave R). A relation deliberately outlives its child's own
+   * host exit (`live` just flips false, see `ChildRelation.live`'s own doc)
+   * because Open must keep resolving through it for as long as the PARENT
+   * root tab is still open. But nothing removed it AT ALL, ever — the only
+   * plausible removal trigger, a child's own `disposeTab`, is unreachable
+   * (`closeTab` rejects a child tabId by construction, main/tabs.ts's
+   * `closeTab`: `tab.childOf !== undefined` -> `unknown_tab`), so relations
+   * for a long-dead root tab sat in this Map for the rest of the process's
+   * life. The real boundary was always the PARENT's own lifetime: once its
+   * root tab is disposed, none of its children can ever be Opened again, so
+   * this is wired into `tab-registry.ts`'s `disposeTab` for the closing root
+   * tab's own sessionId.
+   */
+  removeRelationsForParentSession(parentSessionId: string): void;
+
   /** Looks up the relation for one (parentSessionId, spawnToolCallId) pair, or undefined if this renderer has never seen a port for that child. */
   getRelation(parentSessionId: string, spawnToolCallId: string): ChildRelation | undefined;
 
@@ -121,6 +138,22 @@ export function createChildRelationStore() {
       const [key, relation] = match;
       const relations = new Map(get().relations);
       relations.set(key, { ...relation, live: false });
+      set({ relations });
+    },
+
+    removeRelationsForParentSession(parentSessionId): void {
+      // childRelationKey's own format (`${parentSessionId}\u0000${spawnToolCallId}`)
+      // — the NUL delimiter makes this prefix match exact, never a false
+      // positive between e.g. "session-A" and "session-AB".
+      const prefix = `${parentSessionId}\u0000`;
+      const keysToRemove = [...get().relations.keys()].filter((key) => key.startsWith(prefix));
+      if (keysToRemove.length === 0) {
+        return;
+      }
+      const relations = new Map(get().relations);
+      for (const key of keysToRemove) {
+        relations.delete(key);
+      }
       set({ relations });
     },
 

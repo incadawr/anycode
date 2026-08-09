@@ -108,6 +108,32 @@ describe("createAgentTool — restricted vs. full declaration (CUT-S2 §2.1/§5.
     expect(restrictedAgentInputSchema.safeParse({ description: "d", prompt: "p" }).success).toBe(true);
   });
 
+  // F15: a plain z.object() strips unknown keys by default (zod's own
+  // default behavior) rather than rejecting them — a restricted host would
+  // silently swallow a smuggled/hallucinated "provider" instead of the model
+  // ever finding out the field did nothing. The restricted schema is the
+  // non-recursion lock's SERIALIZED-SCHEMA half; it must reject unrecognized
+  // input the same way it rejects tier:"session" above, not silently drop it.
+  it("restricted schema REJECTS an unrecognized key (e.g. a smuggled provider) instead of silently stripping it", () => {
+    const smuggled = restrictedAgentInputSchema.safeParse({
+      description: "d",
+      prompt: "p",
+      provider: "anthropic-2",
+    });
+    expect(smuggled.success).toBe(false);
+  });
+
+  it("restricted schema still accepts every LEGAL restricted field (description/prompt/agent_type/tier/model)", () => {
+    const result = restrictedAgentInputSchema.safeParse({
+      description: "d",
+      prompt: "p",
+      agent_type: "explore",
+      tier: "inline",
+      model: "glm-4.6",
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("full schema parses tier:\"session\" with a provider", () => {
     const result = agentInputSchema.safeParse({
       description: "d",
@@ -476,6 +502,36 @@ describe("agentTool handler — spawnToolCallId is ctx.toolCallId, verbatim (CUT
       spawnToolCallId: distinctiveToolCallId,
     });
   });
+
+  // F14: an echoing port can never catch a missing check — it returns
+  // whatever it was sent BY CONSTRUCTION, so the test above passes whether
+  // or not the handler verifies anything. A LYING port (one that returns a
+  // different spawnToolCallId than the request carried) is the
+  // discriminating case: per ports/session-subagent.ts's docstring, the host
+  // is REQUIRED to return exactly the string it received, and the handler
+  // must assert that equality rather than trust the outcome as-is. core owns
+  // this field (it minted it as ctx.toolCallId) — a host that can't round-
+  // trip it back correctly cannot be trusted for the id fields that ride
+  // alongside it either (childSessionId/parentSessionId), so the whole
+  // delegation must fail closed rather than let a corrupted id reach the
+  // persisted target/relation-store key.
+  it("LYING PORT: a host that returns a DIFFERENT spawnToolCallId than the request sent is rejected, not silently trusted as the target's id", async () => {
+    const lyingPort: SessionSubagentPort = {
+      run: async (req, opts) => {
+        opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: "some-other-id-the-host-made-up" };
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session" },
+      makeCtx({ toolCallId: "call-1", sessionSubagents: lyingPort }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("call-1");
+    expect(result.error).toContain("some-other-id-the-host-made-up");
+    // The corrupted id must never reach the persisted target.
+    expect(result.presentation).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -510,18 +566,18 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
 
   it("attention progress does NOT alter the persisted card snapshot (transient live-only, CUT-S1 §2.1 — proven end-to-end through the real session branch)", async () => {
     const withAttentionPort: SessionSubagentPort = {
-      run: async (_req, opts) => {
+      run: async (req, opts) => {
         opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
         opts.onProgress?.({ kind: "attention", waiting: true });
         opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 10 });
-        return { ...BASE_SESSION_OUTCOME, status: "completed" };
+        return { ...BASE_SESSION_OUTCOME, status: "completed", spawnToolCallId: req.spawnToolCallId };
       },
     };
     const withoutAttentionPort: SessionSubagentPort = {
-      run: async (_req, opts) => {
+      run: async (req, opts) => {
         opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
         opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 10 });
-        return { ...BASE_SESSION_OUTCOME, status: "completed" };
+        return { ...BASE_SESSION_OUTCOME, status: "completed", spawnToolCallId: req.spawnToolCallId };
       },
     };
     const withAttn = await full.handler(
