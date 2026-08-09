@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PermissionMode, SessionSubagentOutcome, SubagentProgress } from "@anycode/core";
 import {
+  CHILD_AGENT_TYPE_MAX_CHARS,
+  CHILD_DESCRIPTION_MAX_CHARS,
   CHILD_ID_MAX_CHARS,
+  CHILD_MODEL_MAX_CHARS,
+  CHILD_PROMPT_MAX_CHARS,
+  CHILD_PROVIDER_MAX_CHARS,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_RUN_EVENT_TYPE,
   CHILD_SPAWN_REQUEST_TYPE,
@@ -412,5 +417,89 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
 
     expect(spawns(sent)).toHaveLength(1);
     expect(spawns(sent)[0]!.spawnToolCallId).toBe(atCap);
+  });
+
+  // ---------------------------------------------------------------------------
+  // F8 (review finding, MAJOR): parseChildSpawnRequest (shared/child-sessions.ts)
+  // fail-closed-and-SILENTLY-drops on FIVE more fields besides spawnToolCallId
+  // — agentType/description/prompt/model/provider are all MODEL-controlled free
+  // text (tools/agent.ts stamps them straight from AgentInput, unbounded). The
+  // pre-flight above only ever checked spawnToolCallId, so an oversized value on
+  // any of the other five reached main, was silently dropped (parser -> null,
+  // main never replies), and left this call's promise pending until the
+  // dispatcher's 600s tool timeout — reachable by an ordinary model turn, no
+  // attacker required.
+
+  it("an oversized/empty agentType, description, prompt, model, or provider resolves an IMMEDIATE error outcome and sends NOTHING — symmetry with parseChildSpawnRequest's own caps (F8)", async () => {
+    const base = { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-f8" };
+    const cases: Array<Partial<typeof base & { model: string; provider: string }>> = [
+      { agentType: "" },
+      { agentType: "a".repeat(CHILD_AGENT_TYPE_MAX_CHARS + 1) },
+      { description: "" },
+      { description: "d".repeat(CHILD_DESCRIPTION_MAX_CHARS + 1) },
+      { prompt: "" },
+      { prompt: "p".repeat(CHILD_PROMPT_MAX_CHARS + 1) },
+      { model: "m".repeat(CHILD_MODEL_MAX_CHARS + 1) },
+      { provider: "c".repeat(CHILD_PROVIDER_MAX_CHARS + 1) },
+    ];
+
+    for (const overrides of cases) {
+      const { port, sent } = harness();
+      const outcome = await port.run({ ...base, ...overrides }, {});
+
+      expect(sent, `sent should stay empty for ${JSON.stringify(overrides)}`).toHaveLength(0);
+      expect(outcome.status, `status for ${JSON.stringify(overrides)}`).toBe("error");
+      expect(outcome.finalText, `finalText for ${JSON.stringify(overrides)}`).toMatch(
+        /^Agent: the child session failed to start \(malformed /,
+      );
+      expect(outcome.parentSessionId).toBe(PARENT_SESSION_ID);
+      expect(outcome.spawnToolCallId).toBe("spawn-f8");
+    }
+  });
+
+  it("agentType/description/prompt/model/provider at exactly their caps are accepted (boundary, not rejected — F8)", () => {
+    const { port, sent } = harness();
+
+    void port.run(
+      {
+        agentType: "a".repeat(CHILD_AGENT_TYPE_MAX_CHARS),
+        description: "d".repeat(CHILD_DESCRIPTION_MAX_CHARS),
+        prompt: "p".repeat(CHILD_PROMPT_MAX_CHARS),
+        model: "m".repeat(CHILD_MODEL_MAX_CHARS),
+        provider: "c".repeat(CHILD_PROVIDER_MAX_CHARS),
+        spawnToolCallId: "spawn-f8-boundary",
+      },
+      {},
+    );
+
+    expect(spawns(sent)).toHaveLength(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // F9 (review finding, MEDIUM, found independently by all three reviewers): a
+  // signal that is ALREADY aborted when run() is called. onAbort() fires
+  // SYNCHRONOUSLY, sending ChildRunCancel BEFORE the spawn request — main has
+  // no ledger entry yet for this requestId, so it silently ignores the cancel,
+  // then admits the spawn normally a moment later. Because an AbortSignal only
+  // ever fires "abort" on the not-aborted -> aborted transition, a SECOND
+  // cancel can never arrive for this requestId — the child becomes permanently
+  // uncancellable, holding its quota slot forever. The existing abort test only
+  // covers abort() called AFTER run() starts; this covers the input already
+  // being aborted.
+
+  it("a signal that is ALREADY aborted when run() is called never sends a ChildSpawnRequest (F9): no doomed child is spawned that can never be cancelled again", async () => {
+    const { port, sent } = harness();
+    const controller = new AbortController();
+    controller.abort();
+
+    const outcome = await port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-preaborted" },
+      { signal: controller.signal },
+    );
+
+    expect(spawns(sent)).toHaveLength(0);
+    expect(outcome.status).toBe("cancelled");
+    expect(outcome.parentSessionId).toBe(PARENT_SESSION_ID);
+    expect(outcome.spawnToolCallId).toBe("spawn-preaborted");
   });
 });

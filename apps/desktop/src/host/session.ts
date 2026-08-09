@@ -761,6 +761,8 @@ export class Session {
   private childToolCalls = 0;
   /** The last loop_end's status (workspace_transition mapped to "error" — a child never actually relocates); undefined until the first loop_end. */
   private childLoopStatus: ChildRunStatus | undefined;
+  /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
+  private childTerminalFinalized = false;
   /** Wall-clock start of the child's turn chain, set once by startProgrammaticTurn — the terminal report's durationMs baseline. */
   private childStartedAt = 0;
   /**
@@ -1494,7 +1496,6 @@ export class Session {
     }
     this.busy = true;
     this.currentTurn = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice).finally(async () => {
-      this.busy = false;
       this.abort = null;
       this.turnId = null;
       this.snapshotPaths.clear();
@@ -1531,8 +1532,30 @@ export class Session {
       // = null` above — draining the steer queue synchronously starts a NEW
       // turn (busy=true, a fresh currentTurn promise) that this line must
       // never clobber back to null.
+      //
+      // F7 fix: `busy` used to be reset at the very TOP of this callback,
+      // before any of the awaits above — a steer message (or, for a root
+      // session, a plain next user_message) arriving in that window observed
+      // busy===false and bypassed the queue/reject gate entirely, starting a
+      // SECOND live turn while this teardown — and, for a child, the terminal
+      // finalize below — was still in flight (a live-probed defect, not a
+      // microsecond race: the child composer re-enables on `loop_end`, well
+      // before this callback even starts). `busy` now stays true across the
+      // WHOLE teardown and is cleared only once nothing further can run
+      // underneath it: for a root session that's right here; for a child,
+      // `onChildTurnSettled` either hands `busy` off to a freshly-drained turn
+      // (which already set it true itself — this callback must NOT clobber
+      // that back to false) or the terminal has actually finalized
+      // (`flushHistory` included), in which case `busy` clears after that
+      // await settles, not before.
       if (this.child !== undefined) {
-        this.onChildTurnSettled();
+        const settling = this.onChildTurnSettled();
+        if (settling !== undefined) {
+          await settling;
+          this.busy = false;
+        }
+      } else {
+        this.busy = false;
       }
     });
   }
@@ -1572,14 +1595,20 @@ export class Session {
    * non-empty would make steering a dead facade — a message queued during
    * the LAST turn's run must always get its own turn before the child ever
    * reports done).
+   *
+   * F7 fix: returns `undefined` when it drained a queued steer message (the
+   * new turn already set `busy=true` itself — the caller must leave `busy`
+   * alone) and the `finalizeChildTerminal()` promise otherwise, so the
+   * caller can await it and clear `busy` only once the terminal — including
+   * `flushHistory` — has actually finished, never before.
    */
-  private onChildTurnSettled(): void {
+  private onChildTurnSettled(): Promise<void> | undefined {
     const next = this.steerQueue.shift();
     if (next !== undefined) {
       this.acceptUserMessage(next.requestId, next.text, next.images);
-      return;
+      return undefined;
     }
-    void this.finalizeChildTerminal();
+    return this.finalizeChildTerminal();
   }
 
   /**
@@ -1589,11 +1618,18 @@ export class Session {
    * all — then hands off the accumulated final text/counters/status. A
    * flush failure produces an honest `error` terminal (never a "completed"
    * card whose durable transcript the flush never actually wrote).
+   *
+   * Once-latch (F7): `child.onTerminal`'s own contract promises "exactly
+   * once per host lifetime" — enforced here, not just documented, since the
+   * F7 busy-window race could otherwise drive this method from two
+   * concurrent completions (the legitimately-queued drain finalizing, racing
+   * a stray bypass turn's own finally reaching the same call).
    */
   private async finalizeChildTerminal(): Promise<void> {
-    if (this.child === undefined) {
+    if (this.child === undefined || this.childTerminalFinalized) {
       return;
     }
+    this.childTerminalFinalized = true;
     const { text: finalText, truncated } = finalizeFinalText(this.childFinalText);
     const durationMs = Date.now() - this.childStartedAt;
     try {

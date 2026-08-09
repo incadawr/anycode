@@ -37,6 +37,10 @@ import {
   type ChildRunEvent,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
+import {
+  WORKTREE_TRANSITION_MESSAGE_TYPE,
+  type WorktreeTransitionMessage,
+} from "../shared/worktrees.js";
 import { ENV_MODEL } from "./host-env.js";
 import {
   DEFAULT_BREAKER_LIMITS,
@@ -2711,5 +2715,270 @@ describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
       message:
         "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.",
     });
+  });
+});
+
+/**
+ * TASK.102 fix-wave F1: `drainChildren`'s `for(;;)` loop re-polls
+ * `childrenByParentTab` on every iteration and re-invokes `cancelChildRun` for
+ * every child it still finds — including one it already asked to shut down.
+ * On the child that is already `state === "closing"`, `cancelChildRun` used
+ * to return a bare `Promise.resolve()`: a promise that settles via the
+ * microtask queue alone, with NO macrotask ever involved. Because the loop
+ * feeds that straight back into another `await`, revisiting the SAME
+ * still-closing child (its real exit not yet delivered) turns into a
+ * self-sustaining chain of already-settled microtasks that never lets the
+ * event loop reach a macrotask phase — starving the timer/IPC/exit callbacks
+ * that would otherwise let the cascade actually finish. Reachable in
+ * production exactly per the finding: cancel a child, then close its parent
+ * before the child's real exit lands.
+ */
+describe("TabHostManager — drainChildren must not starve the event loop on an already-closing child (TASK.102 CUT-S2 F1)", () => {
+  it("cancelChildRun revisiting an already-`closing` child (the drain loop's own repeat-visit case) resolves only via a REAL macrotask, never via microtasks alone", async () => {
+    // liveForkRig: the child never auto-responds to the shutdown postMessage
+    // (unlike shutdownableForkRig), so it stays "closing but not yet exited"
+    // for as long as the test wants — the exact window the bug lives in.
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws-f1", sessionId: "root-f1-starve", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "f1-req" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "f1-req" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+
+    // The FIRST cancel: shutdownTabHost's synchronous prefix flips the child
+    // to "closing" immediately, without waiting for anything.
+    rootHost.emit("message", runCancel("f1-req"));
+    expect(manager.getTab(childTabId)?.state).toBe("closing");
+
+    // This is drainChildren's own repeat-visit case: a second cancel call on
+    // a child that is already closing. Reached via the private method
+    // directly (not the wire) on purpose: a full repro through closeTab's
+    // drainChildren cannot be safely awaited here — on the UNFIXED code this
+    // settles through an unbounded, self-sustaining microtask chain with no
+    // macrotask ever interleaved, which would hang the whole vitest worker
+    // (nothing — no fake timer, no Promise.race — can rescue an await stuck
+    // behind a queue that never empties). Bounding the microtask flush
+    // ourselves, from the test, is the only safe way to observe this.
+    const raw = manager as unknown as { cancelChildRun(id: string): Promise<void> };
+    let resolved = false;
+    raw.cancelChildRun(childTabId).then(() => {
+      resolved = true;
+    });
+
+    // Drain a large but FINITE number of microtask turns — bounded by the
+    // TEST, never by the code under test. A bare `Promise.resolve()` (the
+    // bug) flips `resolved` after the very first one of these.
+    for (let i = 0; i < 2000; i++) {
+      await Promise.resolve();
+    }
+    expect(resolved).toBe(false);
+
+    // Give it exactly one real macrotask turn — the fix must resolve here.
+    await new Promise<void>((r) => setImmediate(r));
+    expect(resolved).toBe(true);
+  });
+});
+
+/**
+ * TASK.102 fix-wave F2: on the timeout branch, `shutdownTabHost` nulls
+ * `tab.proc` right after calling `child.kill()`, before the process has
+ * actually exited. When that real exit arrives later, `handleChildExit`'s
+ * staleness guard (`tab.proc !== child`) — meant to catch a genuinely
+ * superseded generation — wrongly treats it as stale too, since `tab.proc`
+ * is already null. `finalizeChildRun` is then never called: the quota slot
+ * and the `(parentSessionId, spawnToolCallId)` dedup key leak forever, and
+ * the zombie child tab is never removed from `tabs`.
+ */
+describe("TabHostManager — a force-killed child's late real exit still finalizes the run (TASK.102 CUT-S2 F2)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("the exit that lands AFTER shutdownTabHost's exitDeadlineMs timeout still frees the slot, reaps the tab, and relays a cancelled terminal", async () => {
+    // liveForkRig: the child never auto-exits on the shutdown postMessage,
+    // forcing shutdownTabHost down its exitDeadlineMs timeout/force-kill
+    // branch instead of the happy "it exited in time" branch.
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { limits: { exitDeadlineMs: 1000 } });
+    const root = manager.createTab({ workspace: "/ws-f2", sessionId: "root-f2-timeout", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "f2-r1" }));
+    const childHost = hosts[1]!;
+    // Fill the rest of the per-parent cap with two ordinary (never cancelled)
+    // children, so a leaked slot is observable as a rejected 4th spawn.
+    rootHost.emit("message", spawnRequest({ requestId: "f2-r2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "f2-r3" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(CHILD_RUNS_PER_PARENT_MAX);
+
+    const accepted1 = childRunEvents(rootHost).find((e) => e.requestId === "f2-r1" && e.kind === "accepted");
+    const childTabId = accepted1?.kind === "accepted" ? accepted1.childTabId : "";
+    expect(manager.getTab(childTabId)).toBeDefined();
+
+    // Cancel r1 — starts a real shutdownTabHost race the child never answers.
+    rootHost.emit("message", runCancel("f2-r1"));
+    expect(manager.getTab(childTabId)?.state).toBe("closing");
+
+    // The deadline elapses: force-kill, and tab.proc gets nulled right here
+    // (the bug), before the process has actually died.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(childHost.kill).toHaveBeenCalled();
+    expect(manager.getTab(childTabId)?.proc).toBeNull();
+
+    // The REAL OS-level exit for the force-killed process arrives LATE —
+    // the event handleChildExit must still act on.
+    childHost.emit("exit", 137);
+
+    expect(manager.getTab(childTabId)).toBeUndefined(); // zombie tab reaped
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "f2-r1" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "cancelled" }); // parent notified
+
+    // The freed slot admits a 4th spawn that would otherwise stay rejected
+    // limit_parent forever.
+    rootHost.emit("message", spawnRequest({ requestId: "f2-r4" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "f2-r4")).toMatchObject({ kind: "accepted" });
+  });
+});
+
+/**
+ * TASK.102 fix-wave F3: `finalizeChildRun` relays the parent's `terminal`
+ * ChildRunEvent but never tells the RENDERER that the child TAB's own host
+ * exited — the `HOST_EXITED_ENVELOPE_TYPE` send that flips a
+ * `ChildRelation.live` flag in the UI. A finished child therefore renders as
+ * permanently live for the rest of the app's lifetime.
+ */
+describe("TabHostManager — a finalized child notifies the renderer's host-exited channel (TASK.102 CUT-S2 F3)", () => {
+  it("a normal ChildTerminal finalize sends HOST_EXITED for the CHILD's own tabId", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window, hostExited } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws-f3a", sessionId: "root-f3-happy", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "f3-r1" }));
+    const childHost = hosts[1]!;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "f3-r1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+    expect(hostExited).not.toContain(childTabId); // not yet, while the child is running
+
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+
+    expect(hostExited).toContain(childTabId);
+  });
+
+  it("the crash fallback (handleChildExit, no ChildTerminal ever sent) ALSO sends HOST_EXITED for the child's tabId", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window, hostExited } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws-f3b", sessionId: "root-f3-crash", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "f3-r2" }));
+    const childHost = hosts[1]!;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "f3-r2" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+
+    childHost.emit("exit", 1); // unprompted crash — no ChildTerminal
+
+    expect(hostExited).toContain(childTabId);
+  });
+});
+
+/**
+ * TASK.102 fix-wave F5: `relocateTab` (a master's worktree migration) shuts
+ * its own host down and respawns at the new workspace, but — unlike
+ * `closeTab` and the crashed-root respawn path in `handleExit` — never calls
+ * `drainChildren` first. Spec §0.6's "a dead root cancels its children" is
+ * enforced for a graceful close and an unexpected crash, but not for a
+ * rehost: any live child of that master is left running against a parent
+ * that has since moved to a different workspace/branch.
+ */
+describe("TabHostManager — a master's worktree relocation drains its children first (TASK.102 CUT-S2 F5)", () => {
+  it("relocateTab cancels a live child BEFORE respawning the master at the new worktree — the child is reaped, not orphaned", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws-f5", sessionId: "root-f5", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = root.ok ? root.tab.tabId : "";
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "f5-r1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "f5-r1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(manager.getTab(childTabId)).toBeDefined();
+
+    const transition: WorktreeTransitionMessage = {
+      type: WORKTREE_TRANSITION_MESSAGE_TYPE,
+      sessionId: "root-f5",
+      fromWorkspace: "/ws-f5",
+      toWorkspace: "/ws-f5/.worktrees/wt-1",
+      projectRoot: "/ws-f5",
+      worktree: {
+        id: "wt-1",
+        path: "/ws-f5/.worktrees/wt-1",
+        branch: "feature-x",
+        baseRef: "main",
+        ownedByAnyCode: true,
+      },
+    };
+    rootHost.emit("message", transition);
+    await flush();
+
+    // The child must have been cancelled and reaped as part of the
+    // relocation, not left running against a master that has since moved.
+    expect(manager.getTab(childTabId)).toBeUndefined();
+    expect(manager.listTabs().some((t) => t.childOf !== undefined)).toBe(false);
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "f5-r1" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "cancelled" });
+
+    // The master itself is still alive, now at the new workspace.
+    const relocated = manager.getTab(rootTabId);
+    expect(relocated?.workspace).toBe("/ws-f5/.worktrees/wt-1");
+  });
+});
+
+/**
+ * TASK.102 fix-wave F6: `handleChildTerminal` relays whatever `status` the
+ * child self-reports, verbatim. A child that finishes its own turn right as
+ * a cancel races in (ledger `state === "cancelling"`) can self-report
+ * "completed" — the cut's prescribed `cancelled` transition is not forced,
+ * so the parent sees a stale "completed" terminal for a run it just told
+ * main to cancel.
+ */
+describe("TabHostManager — a self-reported ChildTerminal racing a cancel does not override the forced `cancelled` transition (TASK.102 CUT-S2 F6)", () => {
+  it("ChildTerminal{status:'completed'} arriving while the ledger entry is still 'cancelling' is forced to status 'cancelled'", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws-f6", sessionId: "root-f6", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "f6-r1" }));
+    const childHost = hosts[1]!;
+
+    // Cancel is in flight (ledger entry now "cancelling"); shutdownableForkRig's
+    // auto-exit is only QUEUED on a microtask by the shutdown postMessage
+    // above, not delivered yet — so the child's own (already in-flight)
+    // ChildTerminal computation can still land, self-reporting "completed",
+    // exactly the race the cut requires main to resolve in favor of cancel.
+    rootHost.emit("message", runCancel("f6-r1"));
+    childHost.emit("message", childTerminalMsg({ status: "completed", finalText: "actually finished" }));
+
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "f6-r1" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "cancelled" });
+
+    await flush(); // let the queued auto-exit settle before the test ends
   });
 });
