@@ -17,7 +17,7 @@
  * Sandboxed CJS build — nothing else belongs here.
  */
 import { contextBridge, ipcRenderer } from "electron";
-import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../shared/envelopes.js";
 import {
   MCP_CONFIG_DELETE_CHANNEL,
   MCP_CONFIG_GET_CHANNEL,
@@ -500,7 +500,21 @@ export type ClaudeLoginStartResult =
 
 ipcRenderer.on(
   PORT_ENVELOPE_TYPE,
-  (event, payload: { tabId: string; workspace: string; connectionId?: string; providerId?: string }) => {
+  (
+    event,
+    payload: {
+      tabId: string;
+      workspace: string;
+      connectionId?: string;
+      providerId?: string;
+      // TASK.102 CUT-S2 §2.5 (review wave R, F10 fix): present ONLY for a
+      // child-session tab's port delivery (`deliverTabPort`, main/tabs.ts).
+      // Forwarded untouched below, same as connectionId/providerId — this
+      // module does not decide root vs. child, it only relays what main
+      // stamped (`classifyPortEnvelope`, child-sessions.ts, decides that).
+      child?: PortEnvelope["child"];
+    },
+  ) => {
     // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
     // when present — additive control-plane, no session-stream change. Both fields
     // ride together (main only sets them together) or are absent for an unpinned tab.
@@ -512,6 +526,12 @@ ipcRenderer.on(
         ...(payload.connectionId !== undefined && payload.providerId !== undefined
           ? { connectionId: payload.connectionId, providerId: payload.providerId }
           : {}),
+        // TASK.102 CUT-S2 §2.5 (F10 fix): without this, EVERY child-session
+        // port envelope loses its `child` field crossing this bridge, so
+        // `tab-registry.ts`'s `classifyPortEnvelope` always saw "root" —
+        // every child registered as an ordinary visible tab, the exact
+        // facade §5.3/§0.4 forbid.
+        ...(payload.child !== undefined ? { child: payload.child } : {}),
       },
       "*",
       event.ports,

@@ -621,6 +621,21 @@ export class TabHostManager {
    * (completed/error/cancelled/crash/start-deadline) that lead there.
    */
   private readonly childSpawnKeys = new Map<string, string>();
+  /**
+   * Child-tab `UtilityProcess` references whose `shutdownTabHost` call hit
+   * its `exitDeadlineMs` timeout and force-killed rather than seeing a real
+   * exit (TASK.102 fix-wave F2). Populated right before that same call nulls
+   * `tab.proc` — the moment `handleChildExit`'s ordinary `tab.proc !== child`
+   * staleness guard would otherwise treat the process's LATE, genuinely-still-
+   * pending exit as belonging to an already-superseded generation and drop
+   * it, never calling `finalizeChildRun` (the slot/dedup-key leak). Consumed
+   * (and removed) the first time that late exit is actually processed by
+   * `handleExit`, whether the tab turns out to be a child or a root — a root
+   * never needs it (its own `state === "closing"` guard already short-circuits
+   * before the staleness check), so leaving the entry there for a root's
+   * timeout would just be an unused, un-collected reference otherwise.
+   */
+  private readonly forceKilledExits = new Set<UtilityProcess>();
   private readonly limits: BreakerLimits;
   private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
@@ -1237,7 +1252,17 @@ export class TabHostManager {
     if (childTab.state === "closing") {
       // Already shutting down (a second cancel, or the drain loop revisiting
       // a child it already reached) — do not re-send the shutdown message.
-      return Promise.resolve();
+      // TASK.102 fix-wave F1: this must NOT settle on a bare microtask. A
+      // bare `Promise.resolve()` here fed straight back into `drainChildren`'s
+      // `for(;;)` loop turns a revisit into a self-sustaining chain of
+      // already-settled microtasks: the loop reschedules itself before the
+      // event loop ever reaches a macrotask phase, so the real "exit" (or
+      // `ChildTerminal`) that would eventually clear this child from
+      // `childrenByParentTab` never gets a turn to run — starving not just
+      // this cascade but the whole main-process event loop (IPC, timers,
+      // windows, quit). `setImmediate` forces at least one real macrotask
+      // per revisit, so the loop can only ever spin bounded by real ticks.
+      return new Promise<void>((resolve) => setImmediate(resolve));
     }
     return this.shutdownTabHost(childTab);
   }
@@ -1321,6 +1346,13 @@ export class TabHostManager {
         ...terminal,
       });
     }
+
+    // TASK.102 fix-wave F3: tell the renderer THIS tab's host is done, same
+    // channel `handleExit` uses for a root — without it, a finished child's
+    // `ChildRelation.live` flag in the UI never flips false (no root-tab
+    // path ever sends this for a child; the only other caller of this
+    // channel is gated behind `tab.childOf === undefined`).
+    this.notifyHostExited(entry.childTabId);
 
     const childTab = this.tabs.get(entry.childTabId);
     if (childTab !== undefined) {
@@ -1427,16 +1459,27 @@ export class TabHostManager {
     if (tab.proc !== sender || tab.childOf === undefined) {
       return;
     }
-    this.finalizeChildRun(tab.childOf.requestId, {
-      status: msg.status,
-      finalText: msg.finalText,
+    const requestId = tab.childOf.requestId;
+    // TASK.102 fix-wave F6: a self-reported ChildTerminal can race an
+    // in-flight `child-run-cancel` — the child's own turn finished (or was
+    // already computing its result) right as main told it to stop. Once the
+    // ledger has moved to `cancelling`, main already committed to cancelling
+    // this run; the child's self-reported status must not un-commit that,
+    // or the parent sees a stale "completed"/"error" terminal for a run it
+    // was just told is cancelled.
+    const cancelling = this.childRuns.get(requestId)?.state === "cancelling";
+    this.finalizeChildRun(requestId, {
+      status: cancelling ? "cancelled" : msg.status,
+      finalText: cancelling ? CHILD_CANCELLED_MESSAGE : msg.finalText,
       truncated: msg.truncated,
       turns: msg.turns,
       toolCalls: msg.toolCalls,
       durationMs: msg.durationMs,
       // Verbatim passthrough (CUT-S2 §10.7 п.4/§10.8.2's §3 B3 relay matrix):
       // main never recomputes or reinterprets the count, it only relays what
-      // the child itself reported.
+      // the child itself reported. Not overridden by the cancel-race above:
+      // it is orthogonal to `status`/`finalText`, both of which the cut's
+      // §10.8.2 п.3 wording ratifies verbatim for a cancelled run.
       ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed } : {}),
     });
   }
@@ -1449,9 +1492,15 @@ export class TabHostManager {
    * (cascade/explicit cancel) -> `cancelled`; any other state means it died
    * on its own -> `error` (cut §2.7's crash text).
    */
-  private handleChildExit(tab: TabHost, child: UtilityProcess, _code: number): void {
-    if (tab.proc !== child) {
-      return; // stale-generation exit from an already-superseded reference
+  private handleChildExit(tab: TabHost, child: UtilityProcess, _code: number, forceKilled = false): void {
+    if (tab.proc !== child && !forceKilled) {
+      // Stale-generation exit from an already-superseded reference — UNLESS
+      // this is the late, real exit of a process `shutdownTabHost`'s own
+      // timeout branch force-killed and pre-emptively nulled `tab.proc` for
+      // (TASK.102 fix-wave F2). A child tab never respawns, so `forceKilled`
+      // is the ONLY legitimate reason `tab.proc` can differ from `child`
+      // here while this is still the exit we are waiting on.
+      return;
     }
     tab.proc = null;
     tab.state = "closing";
@@ -1514,6 +1563,14 @@ export class TabHostManager {
       this.logger.warn(`[main] rejected stale or malformed worktree transition for tab ${tab.tabId}`);
       return;
     }
+    // TASK.102 fix-wave F5 / cut §0.6: a rehost is, from the CHILD's point of
+    // view, exactly as terminal as a graceful close or a crash — the master
+    // is about to run at a different workspace/branch entirely, so any
+    // in-flight child must be cancelled first (`closeTab` and the crashed-
+    // root respawn path in `handleExit` both already do this; only this
+    // rehost path was missing it, leaving live children running against a
+    // parent that has since moved on).
+    await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
     tab.workspace = message.toWorkspace;
     tab.projectRoot = message.projectRoot;
@@ -1537,13 +1594,18 @@ export class TabHostManager {
    * respawns (with a fresh channel) unless a per-tab or global breaker tripped.
    */
   private handleExit(tab: TabHost, child: UtilityProcess, code: number): void {
+    // TASK.102 fix-wave F2: consumed once, regardless of root/child — a root
+    // never needs it (its own `state === "closing"` guard below already
+    // short-circuits before any staleness check), but must not leave a
+    // stale entry behind either.
+    const forceKilled = this.forceKilledExits.delete(child);
     this.reapEngineProcess(tab, child);
     if (tab.childOf !== undefined) {
       // TASK.102 CUT-S2 §2.6.4: a child tab's exit is never a respawn
       // decision — it is caught (and finalized) here unconditionally,
       // regardless of `quitting`/`state`, since there is no "unexpected
       // respawn" to guard against for a tab that never respawns.
-      this.handleChildExit(tab, child, code);
+      this.handleChildExit(tab, child, code, forceKilled);
       return;
     }
     if (this.quitting || tab.state === "closing") {
@@ -1774,6 +1836,11 @@ export class TabHostManager {
       this.logger.error(
         `[main] tab ${tab.tabId} host did not exit within ${this.limits.exitDeadlineMs}ms; force killing`,
       );
+      // TASK.102 fix-wave F2: `tab.proc` is about to be nulled below even
+      // though `child` has not actually exited yet — record the reference so
+      // its late, real "exit" is still recognized as current (not stale) by
+      // `handleChildExit` when it eventually lands.
+      this.forceKilledExits.add(child);
       child.kill();
     } else {
       this.logger.log(`[main] tab ${tab.tabId} host exited gracefully within deadline`);

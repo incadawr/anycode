@@ -582,6 +582,22 @@ export function createTabRegistry(
       entry.unsubscribeQueue?.();
       entries.delete(tabId);
       pendingInitialPrompts.delete(tabId);
+      // TASK.102 CUT-S2 §2.5 (review wave R, F11 fix): a child's own tabId
+      // never reaches this point (main's `closeTab` rejects a `childOf`
+      // tabId by construction — see `child-sessions.ts`'s own doc on
+      // `removeRelationsForParentSession`), so `tabId` here is always a ROOT
+      // tab's. Captured BEFORE `removeTab` deletes its tabs-store record —
+      // that record is the only place this registry can still read the
+      // closing root's sessionId (a child tab is never in tabsStore at all,
+      // so this is a no-op read for one, same as the finally-unused branch
+      // below). Once a root tab is gone, none of its children can ever be
+      // Opened again, so every relation it owns is pruned right along with it
+      // — otherwise child-sessions.ts's `relations` Map would keep every
+      // relation of every closed root tab for the rest of the process's life.
+      const parentSessionId = tabsStore.getState().tabs.find((tab) => tab.tabId === tabId)?.sessionId;
+      if (parentSessionId !== null && parentSessionId !== undefined) {
+        childRelationStore.getState().removeRelationsForParentSession(parentSessionId);
+      }
       tabsStore.getState().removeTab(tabId);
       terminalView.dispose(tabId);
       statusStore.getState().remove(tabId);

@@ -128,6 +128,59 @@ describe("child relation-store", () => {
 
     expect(api.getState().relations.size).toBe(0);
   });
+
+  // F11 (review wave R): a root tab's children are keyed into this store by
+  // (parentSessionId, spawnToolCallId) for the lifetime of the whole app
+  // process — nothing ever removed an entry outright (only `markChildGone`
+  // flipped `live`), because the ROOT tab that owns them could never itself
+  // reach `disposeTab` for a child's own tabId (main's `closeTab` rejects a
+  // childOf tabId by construction, main/tabs.ts:1795 — a child is simply not
+  // externally addressable). The actual missing boundary was never "a child
+  // tab disposes its own relation" — it's "closing the PARENT root tab must
+  // prune every relation it owns", since a dead root can never Open into any
+  // of its own children again. `removeRelationsForParentSession` is that
+  // pruning primitive (wired into tab-registry.ts's `disposeTab` as the
+  // review-wave R fix).
+  describe("removeRelationsForParentSession (F11 leak fix)", () => {
+    it("removes every relation belonging to the given parentSessionId, leaving other parents' relations untouched", () => {
+      const api = createChildRelationStore();
+      api.getState().registerChild("session-master-A", "call-1", "tab-child-1", "session-child-1");
+      api.getState().registerChild("session-master-A", "call-2", "tab-child-2", "session-child-2");
+      api.getState().registerChild("session-master-B", "call-1", "tab-child-3", "session-child-3");
+
+      api.getState().removeRelationsForParentSession("session-master-A");
+
+      expect(api.getState().getRelation("session-master-A", "call-1")).toBeUndefined();
+      expect(api.getState().getRelation("session-master-A", "call-2")).toBeUndefined();
+      expect(api.getState().getRelation("session-master-B", "call-1")).toEqual({
+        childTabId: "tab-child-3",
+        childSessionId: "session-child-3",
+        live: true,
+      });
+      expect(api.getState().relations.size).toBe(1);
+    });
+
+    it("removes relations regardless of live state — a completed (non-live) child's relation is pruned along with a still-live sibling's", () => {
+      const api = createChildRelationStore();
+      api.getState().registerChild("session-master", "call-1", "tab-child-1", "session-child-1");
+      api.getState().registerChild("session-master", "call-2", "tab-child-2", "session-child-2");
+      api.getState().markChildGone("tab-child-1");
+
+      api.getState().removeRelationsForParentSession("session-master");
+
+      expect(api.getState().relations.size).toBe(0);
+    });
+
+    it("is a no-op — does not throw, does not touch map identity — for a parentSessionId with no relations", () => {
+      const api = createChildRelationStore();
+      api.getState().registerChild("session-master", "call-1", "tab-child-1", "session-child-1");
+      const before = api.getState().relations;
+
+      expect(() => api.getState().removeRelationsForParentSession("session-unknown")).not.toThrow();
+
+      expect(api.getState().relations).toBe(before);
+    });
+  });
 });
 
 describe("hasOpenableChild (TASK.102 CUT-S2 §2.5/§10.8.1: ToolCallCard's Open button/badge gate)", () => {

@@ -2,17 +2,27 @@
  * Renderer-side layout B logic for a root tab's master<->child surface
  * switching (TASK.102 CUT-S2 §2.5, slice S2c C1). Three pure concerns:
  *
- *  - `ChildLayoutView` + the `openChild`/`closeChild`/`onChildGone` reducer
- *    trio: which surface a root tab's pane currently shows — its own master
- *    transcript, or one of its children's (live or completed) transcript.
- *    One root tab shows at most one child at a time (§2.4.1's 3-per-parent
- *    admission cap bounds how many children CAN exist, not how many are
- *    open at once — layout B never splits the pane). All three functions
- *    are `(view, ...) => view`: pure state transitions with no store of
- *    their own — C2/C3 wire this into wherever they choose to hold the
- *    per-tab view (a new tabs-store field, most likely), the same way
- *    tab-status-store.ts's `deriveCoarse`/`isTurnCompletion` are pure
- *    projections a store's own actions call, not stores themselves.
+ *  - `ChildLayoutView` + the `openChild`/`closeChild` reducer pair: which
+ *    surface a root tab's pane currently shows — its own master transcript,
+ *    or one of its children's (live or completed) transcript. One root tab
+ *    shows at most one child at a time (§2.4.1's 3-per-parent admission cap
+ *    bounds how many children CAN exist, not how many are open at once —
+ *    layout B never splits the pane). Both functions are `(view, ...) =>
+ *    view`: pure state transitions with no store of their own — C2/C3 wire
+ *    this into wherever they choose to hold the per-tab view (a new
+ *    tabs-store field, most likely), the same way tab-status-store.ts's
+ *    `deriveCoarse`/`isTurnCompletion` are pure projections a store's own
+ *    actions call, not stores themselves.
+ *    (A third reducer, `onChildGone`, originally rounded this out as a
+ *    "bounce the pane back to master when its shown child goes non-live"
+ *    self-heal effect. CUT-S2 §10.8.1 point 3 later RATIFIED that this
+ *    bounce is replaced outright by C4's read-only branch — a shown child
+ *    going non-live now just renders read-only instead of yanking the user
+ *    back to master — so the reducer (and the store's `childGone` method
+ *    wrapping it) were removed wholesale in the review-wave R fix for F12:
+ *    both had zero call sites anywhere in App.tsx/ToolCallCard.tsx/
+ *    tab-registry.ts, and the docstring describing a wired "App.tsx's
+ *    self-heal effect" was never true.)
  *  - `childBadgeKind`: the ToolCallCard's Agent-card badge, collapsed to
  *    ONE of four kinds by the frozen priority order (§2.5): a card blocked
  *    on a permission ask outranks a running spinner, which outranks any
@@ -73,22 +83,6 @@ export function closeChild(_view: ChildLayoutView): ChildLayoutView {
   return MASTER_VIEW;
 }
 
-/**
- * Reacts to a child tab disappearing (host-exit -> `ChildRelation.live` flips
- * false, or the relation's tab is disposed outright). Reverts to master ONLY
- * when the pane was showing THAT child — a background child dying (or one of
- * a DIFFERENT sibling's, up to 3 per parent) must not yank the user out of
- * whichever child they're actually looking at. This is the discriminator
- * against a facade that reverts to master on ANY child-gone signal
- * regardless of which child it names.
- */
-export function onChildGone(view: ChildLayoutView, spawnToolCallId: string): ChildLayoutView {
-  if (view.kind === "child" && view.spawnToolCallId === spawnToolCallId) {
-    return MASTER_VIEW;
-  }
-  return view;
-}
-
 // ── badge priority ──
 
 /** The one badge kind an Agent tool_call card shows for its child, collapsed from `waiting`/`final` by `childBadgeKind`'s frozen priority. */
@@ -146,28 +140,21 @@ export function buildChildBreadcrumb(
 /**
  * `rootTabId -> ChildLayoutView`: the persistent home for layout B's view
  * state (see the module doc comment's C3 addendum above). Method names
- * (`open`/`close`/`view`/`childGone`) are deliberately distinct in SHAPE from
- * the free `openChild`/`closeChild`/`onChildGone` functions above even though
- * they wrap them 1:1 — `store.getState().open(rootTabId, id)` vs the free
- * `openChild(view, id)` take different first arguments (a tabId vs a view),
- * so reusing the exact same name would invite a caller to mix them up.
+ * (`open`/`close`/`view`) are deliberately distinct in SHAPE from the free
+ * `openChild`/`closeChild` functions above even though they wrap them 1:1 —
+ * `store.getState().open(rootTabId, id)` vs the free `openChild(view, id)`
+ * take different first arguments (a tabId vs a view), so reusing the exact
+ * same name would invite a caller to mix them up.
  */
 export interface ChildLayoutState {
   /** REPLACED (new Map) on every write; never mutated in place — matches every other store in this app (tab-status-store.ts, child-sessions.ts). */
   views: ReadonlyMap<string, ChildLayoutView>;
-  /** The given root tab's current view; `MASTER_VIEW` for a tab this store has never heard from — every tab's implicit starting state, so `open`/`close`/`childGone` never need a seeding call first. */
+  /** The given root tab's current view; `MASTER_VIEW` for a tab this store has never heard from — every tab's implicit starting state, so `open`/`close` never need a seeding call first. */
   view(rootTabId: string): ChildLayoutView;
   /** Applies the pure `openChild` reducer for one root tab (the Open button, ToolCallCard.tsx C3). */
   open(rootTabId: string, spawnToolCallId: string): void;
   /** Applies the pure `closeChild` reducer for one root tab (the breadcrumb's master segment, App.tsx C3). */
   close(rootTabId: string): void;
-  /**
-   * Applies the pure `onChildGone` reducer for one root tab — wired to a
-   * shown child's relation going `live:false` (App.tsx's self-heal effect,
-   * C3). No-op (by the pure reducer's own contract, asserted by its own
-   * tests above) unless that root tab was showing EXACTLY this child.
-   */
-  childGone(rootTabId: string, spawnToolCallId: string): void;
   /** Test-only escape hatch, mirroring every other store in this app. Production code never calls this. */
   reset(): void;
 }
@@ -194,17 +181,6 @@ export function createChildLayoutStore() {
       }
       const views = new Map(get().views);
       views.set(rootTabId, closeChild(current));
-      set({ views });
-    },
-
-    childGone(rootTabId, spawnToolCallId): void {
-      const current = get().view(rootTabId);
-      const next = onChildGone(current, spawnToolCallId);
-      if (next === current) {
-        return; // true no-op — see onChildGone's own reference-equality doc
-      }
-      const views = new Map(get().views);
-      views.set(rootTabId, next);
       set({ views });
     },
 

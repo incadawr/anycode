@@ -70,6 +70,11 @@ import type {
   SubagentRunOptions,
 } from "@anycode/core";
 import {
+  CHILD_AGENT_TYPE_MAX_CHARS,
+  CHILD_DESCRIPTION_MAX_CHARS,
+  CHILD_MODEL_MAX_CHARS,
+  CHILD_PROMPT_MAX_CHARS,
+  CHILD_PROVIDER_MAX_CHARS,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_SPAWN_REQUEST_TYPE,
   isValidChildId,
@@ -88,6 +93,71 @@ import {
  * honest, immediate refusal here is the only alternative to that.
  */
 const MALFORMED_SPAWN_ID_MESSAGE = "Agent: the child session failed to start (malformed spawn tool-call id).";
+
+/**
+ * Review finding F8 (TASK.102 CUT-S2, post-§10.5): `parseChildSpawnRequest`
+ * (shared/child-sessions.ts) caps FIVE more fields besides `spawnToolCallId`
+ * — `agentType`/`description`/`prompt`/`model`/`provider` — and is just as
+ * fail-closed-and-silent about all of them (violation -> `null` -> main drops
+ * the message, no reply). The pre-flight above used to check ONLY
+ * `spawnToolCallId`, so an oversized value on any of these other five reached
+ * main and hung the caller's promise until the dispatcher's 600s tool
+ * timeout. `description`/`prompt` in particular are free MODEL text (`tools/
+ * agent.ts`'s `runSessionTier` stamps them straight from `AgentInput`,
+ * unbounded) — this is reachable by an ordinary turn, no adversarial input
+ * required. One message per field (same "malformed X" shape as the id
+ * message above, covering both empty and over-cap — parity with how
+ * `isValidChildId`'s own message reads for every shape violation of that
+ * field, not just one).
+ */
+const MALFORMED_AGENT_TYPE_MESSAGE = "Agent: the child session failed to start (malformed agent type).";
+const MALFORMED_DESCRIPTION_MESSAGE = "Agent: the child session failed to start (malformed description).";
+const MALFORMED_PROMPT_MESSAGE = "Agent: the child session failed to start (malformed prompt).";
+const MALFORMED_MODEL_MESSAGE = "Agent: the child session failed to start (malformed model).";
+const MALFORMED_PROVIDER_MESSAGE = "Agent: the child session failed to start (malformed provider).";
+
+/**
+ * Non-empty, capped free text — the exact shape `parseChildSpawnRequest`'s
+ * own `isNonEmptyCappedString` (shared/child-sessions.ts, private there)
+ * enforces on `agentType`/`description`/`prompt`/`model`/`provider`. Reuses
+ * that module's exported char-cap CONSTANTS (never re-derives the numbers)
+ * so the two sides of this wire can never silently drift apart on where the
+ * line is drawn — only this trivial shape predicate is duplicated, not the
+ * limits themselves.
+ */
+function isValidFreeText(value: string, maxLength: number): boolean {
+  return value.length > 0 && value.length <= maxLength;
+}
+
+/**
+ * Full pre-flight shape check (F8): mirrors EVERY field
+ * `parseChildSpawnRequest` validates, in the same order it checks them, so a
+ * request this function accepts is one main's parser is guaranteed to also
+ * accept (barring the admission-time checks, e.g. quota, that only main can
+ * evaluate). Returns the model-visible refusal text for the first violation
+ * found, or `null` when the request is well-formed.
+ */
+function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null {
+  if (!isValidChildId(req.spawnToolCallId)) {
+    return MALFORMED_SPAWN_ID_MESSAGE;
+  }
+  if (!isValidFreeText(req.agentType, CHILD_AGENT_TYPE_MAX_CHARS)) {
+    return MALFORMED_AGENT_TYPE_MESSAGE;
+  }
+  if (!isValidFreeText(req.description, CHILD_DESCRIPTION_MAX_CHARS)) {
+    return MALFORMED_DESCRIPTION_MESSAGE;
+  }
+  if (!isValidFreeText(req.prompt, CHILD_PROMPT_MAX_CHARS)) {
+    return MALFORMED_PROMPT_MESSAGE;
+  }
+  if (req.model !== undefined && !isValidFreeText(req.model, CHILD_MODEL_MAX_CHARS)) {
+    return MALFORMED_MODEL_MESSAGE;
+  }
+  if (req.provider !== undefined && !isValidFreeText(req.provider, CHILD_PROVIDER_MAX_CHARS)) {
+    return MALFORMED_PROVIDER_MESSAGE;
+  }
+  return null;
+}
 
 export interface CreateChildSessionPortOptions {
   /**
@@ -143,15 +213,44 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   });
 
   function run(req: SessionSubagentRequest, opts: SubagentRunOptions): Promise<SessionSubagentOutcome> {
-    // Pre-flight, before minting a requestId or sending anything (§10.5): a
-    // malformed spawnToolCallId must fail IMMEDIATELY and HONESTLY here,
-    // rather than being sent and silently dropped by main's fail-closed
+    // Pre-flight, before minting a requestId or sending anything (§10.5,
+    // widened by F8 to every capped field, not just spawnToolCallId): a
+    // malformed request must fail IMMEDIATELY and HONESTLY here, rather than
+    // being sent and silently dropped by main's fail-closed
     // `parseChildSpawnRequest` — that path would leave this call's promise
     // pending until the dispatcher's 600s tool timeout with no explanation.
-    if (!isValidChildId(req.spawnToolCallId)) {
+    const shapeError = findSpawnRequestShapeError(req);
+    if (shapeError !== null) {
       return Promise.resolve({
         status: "error",
-        finalText: MALFORMED_SPAWN_ID_MESSAGE,
+        finalText: shapeError,
+        truncated: false,
+        turns: 0,
+        toolCalls: 0,
+        durationMs: 0,
+        childSessionId: "",
+        parentSessionId: options.parentSessionId,
+        spawnToolCallId: req.spawnToolCallId,
+      });
+    }
+
+    // F9 (review finding, found independently by all three reviewers): a
+    // signal that is ALREADY aborted at this point must never reach
+    // `options.send(spawnRequest)` below. The old code let `onAbort()` fire
+    // synchronously (sending ChildRunCancel) and THEN still sent the spawn
+    // request — main has no ledger entry yet for this requestId when the
+    // cancel arrives, so it silently ignores it, then admits the spawn
+    // normally moments later. An AbortSignal only ever fires "abort" once
+    // (the not-aborted -> aborted transition), so no second cancel can ever
+    // follow: the child would be spawned uncancellable, holding its quota
+    // slot forever (violates the track invariant that a quota slot must
+    // always be releasable). No child was ever asked for, so failing fast
+    // here — before minting a requestId or touching `waiters` — needs no
+    // main-side cooperation.
+    if (opts.signal?.aborted) {
+      return Promise.resolve({
+        status: "cancelled",
+        finalText: "",
         truncated: false,
         turns: 0,
         toolCalls: 0,
@@ -276,13 +375,10 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         },
       });
 
-      if (opts.signal) {
-        if (opts.signal.aborted) {
-          onAbort();
-        } else {
-          opts.signal.addEventListener("abort", onAbort, { once: true });
-        }
-      }
+      // opts.signal, if present, is guaranteed NOT already aborted here (F9's
+      // early return above handles that case before any code in this
+      // executor runs, and nothing async separates the two checks).
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
 
       const spawnRequest: ChildSpawnRequest = {
         type: CHILD_SPAWN_REQUEST_TYPE,

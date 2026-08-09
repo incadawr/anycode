@@ -11,13 +11,12 @@ import {
   closeChild,
   createChildLayoutStore,
   MASTER_VIEW,
-  onChildGone,
   openChild,
   type ChildLayoutView,
 } from "./child-layout.js";
 import type { SubagentSubStatus } from "./store.js";
 
-describe("child-layout view reducer (openChild / closeChild / onChildGone)", () => {
+describe("child-layout view reducer (openChild / closeChild)", () => {
   it("master -> child -> master: openChild switches the pane onto the given child, closeChild returns it to master", () => {
     let view: ChildLayoutView = MASTER_VIEW;
     expect(view).toEqual({ kind: "master" });
@@ -37,34 +36,6 @@ describe("child-layout view reducer (openChild / closeChild / onChildGone)", () 
 
   it("closeChild is a no-op shape-wise when already on master (idempotent)", () => {
     expect(closeChild(MASTER_VIEW)).toEqual({ kind: "master" });
-  });
-
-  it("onChildGone from a child-view returns to master when the gone child IS the one showing (the child-host-exit path)", () => {
-    const view = openChild(MASTER_VIEW, "call-1");
-    expect(onChildGone(view, "call-1")).toEqual({ kind: "master" });
-  });
-
-  it("onChildGone leaves the view UNCHANGED when a DIFFERENT (background) child goes away — discriminates a facade that reverts to master on any child-gone signal regardless of which child it names", () => {
-    const view = openChild(MASTER_VIEW, "call-1");
-    const result = onChildGone(view, "call-2");
-    expect(result).toEqual({ kind: "child", spawnToolCallId: "call-1" });
-    expect(result).toBe(view); // same reference: a true no-op, not a re-equal rebuild
-  });
-
-  it("onChildGone on the master view is a no-op regardless of which child is named", () => {
-    expect(onChildGone(MASTER_VIEW, "call-1")).toBe(MASTER_VIEW);
-  });
-
-  it("full sequence: master -> open(A) -> child(A) unaffected by gone(B) -> gone(A) -> master (exercises the trio together, mirrors the S2d 'Open on a bg child then close it' smoke path)", () => {
-    let view: ChildLayoutView = MASTER_VIEW;
-    view = openChild(view, "call-A");
-    expect(view).toEqual({ kind: "child", spawnToolCallId: "call-A" });
-
-    view = onChildGone(view, "call-B");
-    expect(view).toEqual({ kind: "child", spawnToolCallId: "call-A" });
-
-    view = onChildGone(view, "call-A");
-    expect(view).toEqual({ kind: "master" });
   });
 });
 
@@ -153,26 +124,6 @@ describe("child-layout store (per-root-tab view persistence, TASK.102 CUT-S2 §2
     expect(api.getState().view("tab-B")).toEqual({ kind: "child", spawnToolCallId: "call-B1" });
   });
 
-  it("childGone(rootTabId, id) reverts that root tab to master ONLY when it was showing exactly that child — a DIFFERENT tab's own child-view is untouched", () => {
-    const api = createChildLayoutStore();
-    api.getState().open("tab-root", "call-1");
-    api.getState().open("tab-other", "call-2");
-
-    api.getState().childGone("tab-root", "call-OTHER");
-    expect(api.getState().view("tab-root")).toEqual({ kind: "child", spawnToolCallId: "call-1" });
-
-    api.getState().childGone("tab-root", "call-1");
-    expect(api.getState().view("tab-root")).toEqual({ kind: "master" });
-    expect(api.getState().view("tab-other")).toEqual({ kind: "child", spawnToolCallId: "call-2" });
-  });
-
-  it("childGone is a true no-op (no Map rebuild) when the named root tab is already on master", () => {
-    const api = createChildLayoutStore();
-    const before = api.getState().views;
-    api.getState().childGone("tab-root", "call-1");
-    expect(api.getState().views).toBe(before);
-  });
-
   it("close() on an already-master tab is a true no-op (no Map rebuild)", () => {
     const api = createChildLayoutStore();
     const before = api.getState().views;
@@ -186,5 +137,27 @@ describe("child-layout store (per-root-tab view persistence, TASK.102 CUT-S2 §2
     api.getState().open("tab-B", "call-2");
     api.getState().reset();
     expect(api.getState().views.size).toBe(0);
+  });
+});
+
+// F12 (review wave R): the self-heal-bounce mechanic this module's `onChildGone`/
+// `childGone` implemented was RATIFIED-SUPERSEDED by CUT-S2 §10.8.1 point 3
+// ("Self-heal-bounce C3 ... заменяется этой веткой" — replaced by the C4
+// read-only branch: a shown child going non-live now stays shown, read-only,
+// instead of bouncing the pane back to master). Nothing in App.tsx/
+// ToolCallCard.tsx/tab-registry.ts ever called either symbol (verified by
+// repo-wide grep) — this is dead code whose own docstring claimed a live
+// "App.tsx's self-heal effect" wiring that was never built, because the
+// design that would have required it was retracted. Per the track's law
+// ("либо код зовётся, либо функция и докстринг уходят"), the code goes.
+describe("F12: the retracted self-heal-bounce mechanic is fully removed, not left dead", () => {
+  it("does not export onChildGone", async () => {
+    const mod: Record<string, unknown> = await import("./child-layout.js");
+    expect("onChildGone" in mod).toBe(false);
+  });
+
+  it("the store no longer exposes a childGone method", () => {
+    const api = createChildLayoutStore();
+    expect("childGone" in api.getState()).toBe(false);
   });
 });

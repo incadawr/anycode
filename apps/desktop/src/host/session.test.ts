@@ -2202,6 +2202,8 @@ function createChildHarness(opts: {
   bootHistory?: HistoryItem[];
   flushHistoryImpl?: () => Promise<void>;
   now?: () => number;
+  /** F7 regression harness: lets a test gate `flushTelemetry()` to deterministically land inside the turn-teardown window. */
+  envStatus?: SessionOptions["envStatus"];
 }): ChildHarness {
   const channel = new MessageChannel();
   const uiPort = channel.port1;
@@ -2272,6 +2274,7 @@ function createChildHarness(opts: {
     rules: new SessionPermissionRules(),
     persistence,
     child: { onReady, flushHistory, onTerminal, onProgress, now },
+    ...(opts.envStatus ? { envStatus: opts.envStatus } : {}),
   });
   session.bindPort(nodeWirePort(hostPort));
 
@@ -2507,6 +2510,88 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
       const report = h.onTerminal.mock.calls[0]?.[0];
       expect(report?.status).toBe("error");
       expect(report?.finalText).toContain("disk full");
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: busy spans the WHOLE turn teardown, not just runTurn() (F7)", () => {
+  it("a steer message sent while flushTelemetry() is still pending is queued, not started as a live second turn", async () => {
+    // Mirrors the root-session "shutdown() during teardown waits for
+    // flushTelemetry()" regression test above: flushTelemetry is gated on a
+    // manually-resolved promise so the test can deterministically land a
+    // user_message inside the EXACT window a facade that resets `busy` at
+    // the top of the turn's `.finally()` (before this await) would have
+    // already reopened the busy gate.
+    let flushCalled = false;
+    let releaseFlush: () => void = () => {};
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const h = createChildHarness({
+      steps: [textStep("done"), textStep("steer done")],
+      envStatus: {
+        telemetry: () => null,
+        repoMap: () => null,
+        flushTelemetry: async () => {
+          flushCalled = true;
+          await flushGate;
+        },
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitFor(agentEventOf("loop_end"));
+      // The turn's finally() is now stuck awaiting the gated flushTelemetry.
+      await h.waitUntil(() => flushCalled);
+
+      h.send({ type: "user_message", requestId: "steer-1", text: "and also this" });
+      // A real trip across the MessageChannel — a buggy bypass starts the
+      // second turn (and emits its own turn_started) synchronously off that
+      // delivery, so this window is enough to observe it either way.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Discriminator: a facade that reopened `busy` before teardown
+      // finished would have run onUserMessage's non-busy path here — an
+      // IMMEDIATE second runTurn() (turn_started #2), not a parked steer.
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+
+      releaseFlush();
+      // The queued steer only NOW gets to drain, as its own second turn —
+      // and the terminal publishes exactly once, after that turn's own
+      // teardown, never twice (the double-finalize the same race used to
+      // trigger once the bypassed turn 2 completed independently).
+      await h.waitUntil(() => h.received.filter(isTurnStarted).length === 2);
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+/** Narrow test-only escape hatch onto Session's private `finalizeChildTerminal` (F7's once-latch). */
+function finalizeChildTerminalDirect(session: Session): Promise<void> {
+  return (session as unknown as { finalizeChildTerminal(): Promise<void> }).finalizeChildTerminal();
+}
+
+describe("Session — child mode: finalizeChildTerminal once-latch (F7)", () => {
+  it("calls child.onTerminal at most once even if the finalizer is invoked twice — the docstring's 'exactly once' contract enforced, not just promised", async () => {
+    const h = createChildHarness({ steps: [textStep("done")] });
+    try {
+      // Two concurrent finalize attempts (the shape the F7 race produced: the
+      // legitimately-queued drain finalizing, racing a stray second call).
+      await Promise.all([finalizeChildTerminalDirect(h.session), finalizeChildTerminalDirect(h.session)]);
+
+      expect(h.flushHistory).toHaveBeenCalledTimes(1);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
     } finally {
       h.close();
     }

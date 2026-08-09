@@ -341,13 +341,21 @@ export type AgentInput = z.output<typeof agentInputSchema>;
  * that hallucinates `tier:"session"` here gets a schema-validation error, not
  * a silently-downgraded inline run (zod-strip would hide the mismatch).
  */
-export const restrictedAgentInputSchema = z.object({
-  description: agentInputSchema.shape.description,
-  prompt: agentInputSchema.shape.prompt,
-  agent_type: agentInputSchema.shape.agent_type,
-  tier: z.enum(["inline"]).optional().describe('Only "inline" subagents are available in this context.'),
-  model: agentInputSchema.shape.model,
-});
+export const restrictedAgentInputSchema = z
+  .object({
+    description: agentInputSchema.shape.description,
+    prompt: agentInputSchema.shape.prompt,
+    agent_type: agentInputSchema.shape.agent_type,
+    tier: z.enum(["inline"]).optional().describe('Only "inline" subagents are available in this context.'),
+    model: agentInputSchema.shape.model,
+  })
+  // `.strict()`, not the plain object (F15): a bare z.object() STRIPS unknown
+  // keys by default (zod's own behavior) rather than rejecting them, so a
+  // smuggled/hallucinated `provider` on a restricted host would silently do
+  // nothing instead of failing loud. The non-recursion lock must reject
+  // unrecognized input the same way it already rejects `tier:"session"`
+  // above, not quietly drop it.
+  .strict();
 
 export type RestrictedAgentInput = z.output<typeof restrictedAgentInputSchema>;
 
