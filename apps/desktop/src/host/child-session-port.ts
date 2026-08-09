@@ -238,11 +238,17 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "terminal": {
+              // CUT-S2 §10.7 п.4: passthrough of the honest suppressed-count
+              // (main relayed it verbatim from the child's own ChildTerminal)
+              // — mirrors the inline runner's own `activitySuppressed` on its
+              // `kind:"end"` SubagentProgress (runner.ts:573). Absent when
+              // the run never crossed the activity cap, exactly like inline.
               const progress: SubagentProgress = {
                 kind: "end",
                 status: event.status,
                 turns: event.turns,
                 durationMs: event.durationMs,
+                ...(event.activitySuppressed !== undefined ? { activitySuppressed: event.activitySuppressed } : {}),
               };
               opts.onProgress?.(progress);
               finish({
