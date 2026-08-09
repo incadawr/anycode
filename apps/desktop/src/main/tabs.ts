@@ -123,6 +123,15 @@ const CHILD_START_TIMEOUT_MESSAGE =
 /** §10.8.2 п.3 — ratified verbatim as-is; reused for both the drain-cascade and the explicit `child-run-cancel` path. */
 const CHILD_CANCELLED_MESSAGE = "Agent: the child session was cancelled.";
 /**
+ * §10.11.2's ratified tombstone text for the ADMINISTRATIVE reap: a
+ * `drainChildren` deadline expiring on a child whose host was force-killed
+ * but never actually exited (or a ghost `childTabId` `cancelChildRun` can
+ * never otherwise finalize, cut §0.7's carve-out). Text fixed by the
+ * ratification — not a main-side style choice.
+ */
+const CHILD_UNREAPED_MESSAGE =
+  "Agent: the child session was cancelled; its host process did not exit and was abandoned.";
+/**
  * §10.8.2 п.4 — ratified verbatim as-is. TASK.102 CUT-S2 §10.5 п.3's
  * in-flight admission-time dedup of a `(parentSessionId, spawnToolCallId)`
  * pair (see `childSpawnKeys` below). Reuses the existing `spawn_failed`
@@ -1255,24 +1264,44 @@ export class TabHostManager {
    * Marks a run `cancelling` (idempotent) and starts shutting down its
    * child's host. `cancelling` holds the quota slot (cut §0.7's "держит слот
    * до реального реапа") — this does NOT touch `childRuns`/`childrenByParentTab`;
-   * only `finalizeChildRun` (on the child's actual terminal transition) does.
+   * only `finalizeChildRun` (on the child's actual terminal transition, or
+   * §10.11.2's ratified carve-out: `drainChildren`'s own deadline branch
+   * administratively finalizing a child whose real reap never lands) does.
+   * `cancelChildRun` itself never releases anything.
    */
   private cancelChildRun(childTabId: string): Promise<void> {
     const childTab = this.tabs.get(childTabId);
     if (childTab === undefined) {
-      // A childTabId with no tab can never finalize — nothing will ever call
-      // `finalizeChildRun` for it — so drop it from whichever parent's
-      // sibling set still names it here, rather than let `drainChildren`
-      // revisit this ghost on every pass. And settle via a REAL macrotask,
-      // for the identical reason the "already closing" branch below does
-      // (review T1): a bare `Promise.resolve()` here feeds straight back
-      // into `drainChildren`'s `for(;;)` loop and starves the event loop on
-      // THIS branch exactly as F1 fixed on that one.
-      for (const [parentTabId, siblings] of this.childrenByParentTab) {
-        if (siblings.delete(childTabId) && siblings.size === 0) {
-          this.childrenByParentTab.delete(parentTabId);
+      // A childTabId with no tab can never finalize itself (no host, no
+      // late exit ever coming) — tombstone it now through the SAME single
+      // release funnel §10.11.2 established for `drainChildren`'s own
+      // deadline branch (Luna review R4 / N5), rather than only scrubbing
+      // the sibling set below and leaving `childRuns`/`childSpawnKeys`/the
+      // ledger entry's start-deadline timer to leak the quota slot forever.
+      const requestId = this.findChildRunRequestId(childTabId);
+      if (requestId !== undefined) {
+        this.finalizeChildRun(requestId, {
+          status: "cancelled",
+          finalText: CHILD_UNREAPED_MESSAGE,
+          truncated: false,
+          turns: 0,
+          toolCalls: 0,
+          durationMs: 0,
+        });
+      } else {
+        // A genuine ghost (no ledger entry either) — drop it from
+        // whichever parent's sibling set still names it, rather than let
+        // `drainChildren` revisit this ghost on every pass.
+        for (const [parentTabId, siblings] of this.childrenByParentTab) {
+          if (siblings.delete(childTabId) && siblings.size === 0) {
+            this.childrenByParentTab.delete(parentTabId);
+          }
         }
       }
+      // Settle via a REAL macrotask, for the identical reason the "already
+      // closing" branch below does (review T1): a bare `Promise.resolve()`
+      // here feeds straight back into `drainChildren`'s `for(;;)` loop and
+      // starves the event loop on THIS branch exactly as F1 fixed on that one.
       return new Promise<void>((resolve) => setImmediate(resolve));
     }
     const requestId = childTab.childOf?.requestId;
@@ -1302,10 +1331,20 @@ export class TabHostManager {
    * Cancels every child currently tracked under `parentTab`, looping until
    * the index is empty (cut §2.6.4's cascade "снапшот-цикл"): a snapshot,
    * not a live iteration, so a run that finalizes mid-batch cannot corrupt
-   * the `Set` this function is reading. Reused by both `closeTab` (parent
-   * closing gracefully) and a crashed root's `handleExit` (parent gone
-   * unexpectedly) — same mechanism, cut §0.6's "sync-join невосстановим"
-   * applies equally to both.
+   * the `Set` this function is reading. Reused by `closeTab` (parent closing
+   * gracefully), a crashed root's `handleExit` (parent gone unexpectedly),
+   * and `relocateTab` (parent about to move workspaces) — same mechanism,
+   * cut §0.6's "sync-join невосстановим" applies equally to all three.
+   *
+   * Postcondition (§10.11.2, ratified): this NEVER returns while
+   * `parentTab`'s entry in `childrenByParentTab` is non-empty. A reap
+   * deadline expiring on a child whose host never actually exits is an
+   * ADMINISTRATIVE reap, not a silent "the next drain retries it" — there
+   * may BE no next drain for this child (`closeTab`'s very next line deletes
+   * the parent). Every remaining child is tombstoned via `finalizeChildRun`,
+   * the SAME single release funnel every other terminal path already uses —
+   * §0.7's carve-out: this is the one place a `cancelling` slot is released
+   * without a real process reap ever landing.
    */
   private async drainChildren(parentTab: TabHost): Promise<void> {
     const deadline = this.now() + this.limits.exitDeadlineMs * DRAIN_CHILDREN_DEADLINE_MULTIPLIER;
@@ -1315,19 +1354,64 @@ export class TabHostManager {
         return;
       }
       if (this.now() >= deadline) {
-        // Honest outcome, not a silent continue (review T1): whatever is
-        // left here already had its own shutdown/force-kill started by
-        // `cancelChildRun` above and stays tracked — the NEXT drain (a later
-        // close/relocate/exit cascade) retries it. This call simply stops
-        // waiting on a child that should already be gone.
+        // §10.11.2: administrative reap, not a silent continue. Every
+        // remaining child (already had its own shutdown/force-kill started
+        // by `cancelChildRun` above) is tombstoned here, synchronously,
+        // through `finalizeChildRun` — no parallel manual map cleanup, the
+        // one release funnel stays the one release funnel.
+        const unreaped = childIds.size;
+        for (const childTabId of [...childIds]) {
+          const requestId = this.findChildRunRequestId(childTabId);
+          if (requestId !== undefined) {
+            const childTab = this.tabs.get(childTabId);
+            this.finalizeChildRun(requestId, {
+              status: "cancelled",
+              finalText: CHILD_UNREAPED_MESSAGE,
+              truncated: false,
+              turns: 0,
+              toolCalls: 0,
+              durationMs: childTab !== undefined ? Math.max(0, this.now() - childTab.spawnedAt) : 0,
+            });
+          } else {
+            // A genuine ghost (no tab, no ledger entry either) — nothing
+            // will ever finalize it; drop it directly, same as
+            // `cancelChildRun`'s own ghost branch below.
+            const siblings = this.childrenByParentTab.get(parentTab.tabId);
+            if (siblings?.delete(childTabId) === true && siblings.size === 0) {
+              this.childrenByParentTab.delete(parentTab.tabId);
+            }
+          }
+        }
         this.logger.error(
-          `[main] drainChildren for tab ${parentTab.tabId} gave up after ${this.limits.exitDeadlineMs * DRAIN_CHILDREN_DEADLINE_MULTIPLIER}ms with ${childIds.size} child(ren) still unreaped`,
+          `[main] drainChildren for tab ${parentTab.tabId}: reap deadline (${this.limits.exitDeadlineMs * DRAIN_CHILDREN_DEADLINE_MULTIPLIER}ms) expired; ${unreaped} child(ren) administratively finalized (cancelled)`,
         );
         return;
       }
       const snapshot = [...childIds];
       await Promise.allSettled(snapshot.map((childTabId) => this.cancelChildRun(childTabId)));
     }
+  }
+
+  /**
+   * Resolves a childTabId to its owning run's requestId without trusting the
+   * tab to still exist (§10.11.2's administrative-reap lookup, shared by
+   * `drainChildren`'s deadline branch and `cancelChildRun`'s unknown-tab
+   * branch below — the same lookup, not a second one per caller): the tab's
+   * own `childOf.requestId` when the tab is still live, else a scan of
+   * `childRuns` for the matching `childTabId` (the ghost case — tab already
+   * gone, ledger entry not yet finalized).
+   */
+  private findChildRunRequestId(childTabId: string): string | undefined {
+    const childTab = this.tabs.get(childTabId);
+    if (childTab?.childOf !== undefined) {
+      return childTab.childOf.requestId;
+    }
+    for (const entry of this.childRuns.values()) {
+      if (entry.childTabId === childTabId) {
+        return entry.requestId;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -1930,11 +2014,22 @@ export class TabHostManager {
         // still reap it off that late exit instead of leaking it forever.
         this.forceKilledExits.set(child, tab.engineProcess);
         child.kill();
+        // Luna review R2 MAJOR (N4): this null belongs ONLY to the call that
+        // still recognizes `tab.proc` as ITS `child` — the exact same
+        // condition already guarding the force-kill above. A losing racer
+        // (this guard false) must not null out a NEWER generation's `proc`
+        // that a respawn/relocate already installed while this call was
+        // still waiting on its own, now-irrelevant deadline.
+        tab.proc = null;
       }
     } else {
       this.logger.log(`[main] tab ${tab.tabId} host exited gracefully within deadline`);
+      // Same guard as the timeout branch above (N4): only the call whose
+      // own `child` is still the tab's CURRENT process may clear it.
+      if (tab.proc === child) {
+        tab.proc = null;
+      }
     }
-    tab.proc = null;
   }
 
   /**

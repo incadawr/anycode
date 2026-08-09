@@ -3056,9 +3056,17 @@ describe("TabHostManager — cancelChildRun's unknown-tab branch (review T1a)", 
  * resolve. The manager's injectable `now()` lets the test control the
  * deadline check deterministically without needing thousands of real
  * macrotask turns to elapse.
+ *
+ * SUPERSEDED outcome (TASK.102 CUT-S2 §10.11.2, N2): T1's original fix left
+ * the still-unreaped child tracked, on the theory that "a later drain
+ * retries it" — ratified as false (`closeTab`'s very next line deletes the
+ * parent; there may be no later drain at all). The deadline branch now
+ * administratively tombstones every remaining child via `finalizeChildRun`
+ * instead, so this test's own outcome assertions were updated to match —
+ * the BOUNDING behavior under test here (no infinite loop) is unchanged.
  */
 describe("TabHostManager — drainChildren is bounded, not an infinite cascade (review T1b)", () => {
-  it("gives up (with an honest, logged outcome) instead of looping forever when a child never actually finalizes", async () => {
+  it("gives up on waiting and administratively tombstones the still-unreaped child, instead of looping forever or leaving its ledger dangling (§10.11.2)", async () => {
     const { fork, hosts } = liveForkRig(); // never auto-responds to shutdown, never exits
     const { window } = windowRig();
     const errors: string[] = [];
@@ -3116,13 +3124,17 @@ describe("TabHostManager — drainChildren is bounded, not an infinite cascade (
 
     expect(result).toBe("resolved");
     // Honest outcome, not a silent continue: something was logged about the
-    // still-unreaped child rather than drainChildren just quietly returning
-    // as if the cascade had actually finished.
+    // deadline expiring rather than drainChildren just quietly returning as
+    // if the cascade had actually finished on its own.
     expect(errors.some((m) => m.includes(rootTabId))).toBe(true);
-    // The sibling is legitimately still there — cancelChildRun already
-    // signaled its shutdown; a LATER drain (the next close/relocate/exit
-    // cascade) gets to retry it. Giving up must not fabricate a reap.
-    expect(manager.getTab(childTabId)).toBeDefined();
+    // §10.11.2 (N2): giving up is an ADMINISTRATIVE reap, not a no-op —
+    // the child is gone, and so is its ledger entry (the quota slot it
+    // would otherwise have held forever).
+    expect(manager.getTab(childTabId)).toBeUndefined();
+    const raw2 = manager as unknown as { childRuns: Map<string, unknown> };
+    expect(raw2.childRuns.has("t1b-req")).toBe(false);
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "t1b-req" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "cancelled" });
   });
 });
 
@@ -3328,5 +3340,305 @@ describe("TabHostManager — a force-killed ROOT's external engine process is st
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * TASK.102 CUT-S2 §10.11.2 (N2) — the ratified verdict: an expired
+ * `drainChildren` deadline is an ADMINISTRATIVE reap, not a silent "the next
+ * drain retries it" (the removed comment's promise was false for `closeTab`,
+ * whose very next line deletes the parent tab — there IS no next drain for
+ * this child). The new postcondition is that `drainChildren` never returns
+ * with a non-empty per-parent ledger: every remaining child is tombstoned
+ * through the SAME single release funnel every other terminal path already
+ * uses (`finalizeChildRun`), freeing the quota slot and the
+ * `(parentSessionId, spawnToolCallId)` dedup key it was otherwise holding
+ * forever.
+ */
+describe("TabHostManager — drainChildren's deadline branch administratively tombstones every remaining child (TASK.102 CUT-S2 §10.11.2 N2)", () => {
+  it("(i) a force-killed child that never exits is finalized `cancelled`/CHILD_UNREAPED_MESSAGE, its tab/ledger/dedup-key are all gone, and a late real exit afterward is a harmless no-op (first-wins)", async () => {
+    const { fork, hosts } = liveForkRig(); // never responds to shutdown, never exits
+    const { window } = windowRig();
+    let jumped = false;
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      // Deterministic control over drainChildren's OWN (5x exitDeadlineMs)
+      // deadline, decoupled from the real per-child shutdownTabHost timer
+      // below — same technique as review T1b.
+      now: () => (jumped ? Number.MAX_SAFE_INTEGER : 0),
+      logger: silentLogger,
+      limits: { exitDeadlineMs: 20 },
+    });
+    // A second root so closing the first is never refused as last_tab.
+    const rootA = manager.createTab({ workspace: "/ws-n2i-a", sessionId: "root-n2i-a", resume: false });
+    const rootB = manager.createTab({ workspace: "/ws-n2i-b", sessionId: "root-n2i-b", resume: false });
+    expect(rootA.ok).toBe(true);
+    expect(rootB.ok).toBe(true);
+    const rootTabId = rootA.ok ? rootA.tab.tabId : "";
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "n2i-req" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "n2i-req" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+    const childHost = hosts[2]!;
+
+    // closeTab's synchronous prefix runs `drainChildren`'s own synchronous
+    // prefix too (computing its deadline off `now()` while `jumped` is still
+    // false) before ever yielding back here — so flipping `jumped` right
+    // after this call, still in the same synchronous turn, guarantees every
+    // SUBSEQUENT deadline check (the loop's later revisits) reads the jumped
+    // clock without disturbing the deadline value itself.
+    const closePromise = manager.closeTab(rootTabId);
+    jumped = true;
+
+    const result = await Promise.race([
+      closePromise.then((r) => ({ kind: "resolved" as const, r })),
+      new Promise<{ kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 2000)),
+    ]);
+    expect(result.kind).toBe("resolved");
+    if (result.kind === "resolved") {
+      expect(result.r).toEqual({ ok: true });
+    }
+
+    // The stuck child's host was genuinely force-killed (its own real
+    // exitDeadlineMs elapsed) — it just never actually exits in this rig.
+    expect(childHost.kill).toHaveBeenCalled();
+
+    const raw = manager as unknown as {
+      childRuns: Map<string, unknown>;
+      childSpawnKeys: Map<string, unknown>;
+      childrenByParentTab: Map<string, Set<string>>;
+    };
+    // Postcondition: drainChildren must not have returned with a non-empty
+    // per-parent ledger — quota slot AND dedup key both freed (folds in the
+    // optional (iv): `childRuns.size` IS the global quota's live count).
+    expect(raw.childRuns.size).toBe(0);
+    expect(raw.childSpawnKeys.size).toBe(0);
+    expect(raw.childrenByParentTab.has(rootTabId)).toBe(false);
+    expect(manager.getTab(childTabId)).toBeUndefined();
+
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "n2i-req" && e.kind === "terminal");
+    expect(terminal).toMatchObject({
+      status: "cancelled",
+      finalText: "Agent: the child session was cancelled; its host process did not exit and was abandoned.",
+    });
+
+    // (iii) regression guard: the force-killed process's real "exit" can
+    // still land late, after the administrative tombstone already ran.
+    // First-wins discipline (finalizeChildRun's own no-op-on-missing-entry
+    // branch, `handleChildExit:1556-1561`) must swallow it silently — no
+    // second terminal, no exception, no resurrected tab.
+    const terminalCountBefore = childRunEvents(rootHost).filter(
+      (e) => e.requestId === "n2i-req" && e.kind === "terminal",
+    ).length;
+    expect(() => childHost.emit("exit", 137)).not.toThrow();
+    const terminalCountAfter = childRunEvents(rootHost).filter(
+      (e) => e.requestId === "n2i-req" && e.kind === "terminal",
+    ).length;
+    expect(terminalCountAfter).toBe(terminalCountBefore);
+    expect(manager.getTab(childTabId)).toBeUndefined();
+  });
+
+  it("(ii) relocateTab's own drain deadline tombstones a stuck child too — the dedup key and per-parent quota are both freed for the relocated generation", async () => {
+    const { fork, hosts } = liveForkRig(); // never responds to shutdown, never exits
+    const { window } = windowRig();
+    let jumped = false;
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      now: () => (jumped ? Number.MAX_SAFE_INTEGER : 0),
+      logger: silentLogger,
+      limits: { exitDeadlineMs: 20 },
+    });
+    const root = manager.createTab({ workspace: "/ws-n2ii", sessionId: "root-n2ii", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = root.ok ? root.tab.tabId : "";
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "n2ii-r1", spawnToolCallId: "n2ii-call" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "n2ii-r1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+
+    const transition: WorktreeTransitionMessage = {
+      type: WORKTREE_TRANSITION_MESSAGE_TYPE,
+      sessionId: "root-n2ii",
+      fromWorkspace: "/ws-n2ii",
+      toWorkspace: "/ws-n2ii/.worktrees/wt-1",
+      projectRoot: "/ws-n2ii",
+      worktree: {
+        id: "wt-1",
+        path: "/ws-n2ii/.worktrees/wt-1",
+        branch: "feature-y",
+        baseRef: "main",
+        ownedByAnyCode: true,
+      },
+    };
+    // Same synchronous-prefix trick as (i) above: `relocateTab`'s own
+    // `drainChildren` deadline is computed before this emit ever returns.
+    rootHost.emit("message", transition);
+    jumped = true;
+
+    // The stuck child never answers, so the loop needs one real
+    // exitDeadlineMs (20ms) force-kill round-trip before the (already
+    // jumped) deadline check on the next revisit tombstones it, then the
+    // master's own (also real, 20ms) shutdown before the respawn lands.
+    // Budget generously against real wall-clock flakiness.
+    await new Promise<void>((resolve) => setTimeout(resolve, 400));
+
+    expect(manager.getTab(childTabId)).toBeUndefined();
+    const relocated = manager.getTab(rootTabId);
+    expect(relocated?.workspace).toBe("/ws-n2ii/.worktrees/wt-1");
+
+    const newRootHost = hosts[2]!;
+    // The SAME (parentSessionId, spawnToolCallId) pair the stuck child held
+    // — the dedup key must be free, not eaten forever by the never-exiting
+    // zombie.
+    newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r2", spawnToolCallId: "n2ii-call" }));
+    expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r2")?.kind).toBe("accepted");
+
+    // And the per-parent quota is genuinely back to a full 3 (not still
+    // counting the leaked stuck run): two MORE fresh spawns succeed...
+    newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r3", spawnToolCallId: "n2ii-call-2" }));
+    newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r4", spawnToolCallId: "n2ii-call-3" }));
+    expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r3")?.kind).toBe("accepted");
+    expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r4")?.kind).toBe("accepted");
+    // ...and a 4th is refused as over-quota.
+    const fifth = childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r5");
+    newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r5", spawnToolCallId: "n2ii-call-4" }));
+    const fifthEvent = childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r5");
+    expect(fifthEvent?.kind).toBe("rejected");
+    expect(fifthEvent?.kind === "rejected" ? fifthEvent.reason : undefined).toBe("limit_parent");
+  });
+});
+
+/**
+ * Luna review R2 MAJOR (N4) — a defect introduced by fix-wave F2/review T3:
+ * `shutdownTabHost`'s timeout branch correctly guards its force-kill
+ * bookkeeping on `tab.proc === child` (only the call that still recognizes
+ * the tab's CURRENT process may force-kill/register it), but the trailing
+ * `tab.proc = null;` at the very end of the function stayed UNCONDITIONAL.
+ * A losing racer — a call whose captured `child` has since been superseded
+ * by a newer generation (a respawn/relocate that already ran to completion
+ * while this call was still waiting on its own deadline) — nulls out the
+ * pointer to the CURRENT, live process. That generation's own later real
+ * exit then reads as stale (`tab.proc !== child`, since `tab.proc` is
+ * already null) and is silently dropped: the engine is never reaped.
+ */
+describe("TabHostManager — shutdownTabHost's trailing tab.proc=null is guarded like its force-kill bookkeeping (Luna R2 MAJOR / N4)", () => {
+  it("a losing shutdownTabHost call does not null out a NEWER generation's tab.proc out from under it", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fork, hosts } = liveForkRig(); // never responds to shutdown, never exits
+      const { window } = windowRig();
+      const manager = new TabHostManager({
+        fork,
+        hostEntry: "/fake/host.js",
+        createChannel: fakeChannel,
+        getWindow: () => window,
+        env: () => ({}),
+        logger: silentLogger,
+        limits: { exitDeadlineMs: 1000 },
+      });
+      const root = manager.createTab({ workspace: "/ws-n4", sessionId: "root-n4", resume: false });
+      expect(root.ok).toBe(true);
+      const rootTabId = root.ok ? root.tab.tabId : "";
+      const tab = manager.getTab(rootTabId)!;
+
+      const raw = manager as unknown as {
+        shutdownTabHost(tab: unknown): Promise<void>;
+        spawnTabHost(tab: unknown, opts: { firstSpawn: boolean }): void;
+      };
+
+      // The eventual LOSER: starts shutting down the CURRENT (old)
+      // generation. Its deadline is armed now, at t=1000, against a host
+      // that never answers and never exits.
+      const shutdownPromise = raw.shutdownTabHost(tab);
+
+      // While it is still waiting, something else (relocateTab's own
+      // drainChildren -> shutdownTabHost -> respawn sequence, simulated
+      // directly here to isolate this ONE guard, same technique review T3's
+      // second test uses) already moved the tab on to a NEW generation.
+      tab.state = "running";
+      raw.spawnTabHost(tab, { firstSpawn: false });
+      const newHost = hosts[1]!;
+      expect(manager.getTab(rootTabId)?.proc).toBe(newHost);
+
+      // The loser's own deadline (armed against the OLD generation) elapses
+      // now. On the unfixed code this unconditionally nulls `tab.proc`,
+      // wiping out the brand-new generation it never knew about.
+      await vi.advanceTimersByTimeAsync(1000);
+      await shutdownPromise;
+
+      expect(manager.getTab(rootTabId)?.proc).toBe(newHost);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * Luna review R4 MINOR (N5) — `cancelChildRun`'s unknown-tab branch (review
+ * T1a) scrubs the ghost `childTabId` out of `childrenByParentTab` (so
+ * `drainChildren`'s loop does not revisit it forever) but leaves `childRuns`
+ * (keyed by requestId), the `(parentSessionId, spawnToolCallId)` dedup key in
+ * `childSpawnKeys`, and the ledger entry's start-deadline timer all
+ * untouched — the same class of quota/dedup-key leak as N2, reached by a
+ * different path. Fixed the SAME way N2 was: through the single
+ * `finalizeChildRun` release funnel, never a second, bespoke cleanup.
+ */
+describe("TabHostManager — cancelChildRun's unknown-tab branch also frees the ledger entry, dedup key, and start-deadline timer (Luna R4 MINOR / N5)", () => {
+  it("tombstones the ghost childTabId's childRuns entry through finalizeChildRun instead of leaking its quota slot and dedup key", async () => {
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws-n5", sessionId: "root-n5", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = root.ok ? root.tab.tabId : "";
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "n5-req", spawnToolCallId: "n5-call" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "n5-req" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(childTabId).not.toBe("");
+
+    // Manufacture T1a's own state (identical technique, identical rationale
+    // for why this is the only safe way to reach it): the tab is gone from
+    // `tabs` while `childRuns`/`childrenByParentTab` still name it.
+    const raw = manager as unknown as {
+      tabs: Map<string, unknown>;
+      childRuns: Map<string, { childTabId: string; requestId: string }>;
+      childSpawnKeys: Map<string, string>;
+      childrenByParentTab: Map<string, Set<string>>;
+      cancelChildRun(id: string): Promise<void>;
+    };
+    // The dedup key's join character is `childSpawnKey`'s own NUL separator
+    // (§10.5 п.3) — built here via `String.fromCharCode`, not a literal
+    // escape, so no NUL byte ever passes through as source text.
+    const dedupKey = ["root-n5", "n5-call"].join(String.fromCharCode(0));
+    raw.tabs.delete(childTabId);
+    expect(raw.childRuns.has("n5-req")).toBe(true);
+    expect(raw.childSpawnKeys.has(dedupKey)).toBe(true);
+
+    await raw.cancelChildRun(childTabId);
+
+    // Sibling set is clean (already true before this fix, per T1a).
+    expect(raw.childrenByParentTab.get(rootTabId)?.has(childTabId)).toBeFalsy();
+    // The N5 gap: the ledger entry AND its dedup key — the actual quota
+    // reservation — must ALSO be freed, not left dangling forever.
+    expect(raw.childRuns.has("n5-req")).toBe(false);
+    expect(raw.childSpawnKeys.has(dedupKey)).toBe(false);
+
+    // Same tombstone funnel as N2: the parent gets a cancelled terminal for
+    // the abandoned run instead of silence.
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "n5-req" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "cancelled" });
   });
 });

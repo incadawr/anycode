@@ -732,6 +732,17 @@ export class Session {
   private abort: AbortController | null = null;
   private turnId: string | null = null;
   private currentTurn: Promise<void> | null = null;
+  /**
+   * TASK.102 CUT-S2 §10.11.1 N1: flipped as the FIRST step of `shutdown()`,
+   * strictly before `abort.abort()`/`denyAll`/`dispose` so any teardown woken
+   * by the abort below already observes it. A SEMANTIC gate (distinct from
+   * the reentrant `currentTurn` wait in `shutdown()` below, which is a
+   * STRUCTURAL guarantee): once set, no NEW turn may ever be admitted —
+   * `onUserMessage`, `startProgrammaticTurn`, and both child drain points
+   * (`onChildTurnSettled`, `finalizeChildTerminal`'s healthy-path re-check)
+   * all check it. Never cleared — a Session is never un-shut-down.
+   */
+  private shuttingDown = false;
 
   /**
 
@@ -883,6 +894,9 @@ export class Session {
 
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
   async shutdown(): Promise<void> {
+    // TASK.102 CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
+    // denyAll/dispose below, so teardown woken by the abort already sees it.
+    this.shuttingDown = true;
     // Slice P7.25/F3: release the LSP status subscription so no transition after
     // this point can push onto a shut-down session, and no listener reference
     // leaks past the session's life. (The host reaps lspManager BEFORE calling
@@ -911,7 +925,27 @@ export class Session {
       console.error(`[host] engine dispose threw during shutdown: ${describeError(error)}`);
       disposal = Promise.resolve();
     }
-    await Promise.allSettled([...(this.currentTurn ? [this.currentTurn] : []), disposal]);
+    // TASK.102 CUT-S2 §10.11.1 N1: a snapshot-await of `this.currentTurn`
+    // (the pre-fix shape) misses a FRESH turn a drain synchronously
+    // re-points it to (onChildTurnSettled / finalizeChildTerminal's
+    // re-check) — that new turn's own teardown (including its own
+    // finalizeChildTerminal/flushHistory) would run on the disposed engine,
+    // unobserved. Reentrant wait instead: loop until the SAME promise is
+    // observed twice in a row (or null) — terminates because every point
+    // that assigns `currentTurn` is now gated on `shuttingDown` (onUserMessage,
+    // startProgrammaticTurn, onChildTurnSettled, finalizeChildTerminal's
+    // re-check all refuse once the flag above is set), so no NEW turn can be
+    // admitted after this loop starts; each iteration waits out one already-
+    // in-flight turn's teardown, and teardown either nulls `currentTurn`
+    // (identity-guard, §10.10.1 O2) or leaves it pointing at a turn that was
+    // assigned strictly BEFORE the flag was set — so the number of iterations
+    // is bounded by the turns admitted before shutdown began, plus one.
+    let seen: Promise<void> | null = null;
+    while (this.currentTurn !== null && this.currentTurn !== seen) {
+      seen = this.currentTurn;
+      await Promise.allSettled([seen]);
+    }
+    await Promise.allSettled([disposal]);
   }
 
   private route(raw: unknown): void {
@@ -1403,6 +1437,17 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
     }
+    // TASK.102 CUT-S2 §10.11.1 N1: shutdown() may be waiting (reentrantly) on
+    // whatever `currentTurn` turns out to be — admitting a NEW turn here
+    // (root's own turn #2, or a child steer that nothing will ever drain)
+    // would start it on an engine `shutdown()` has already begun disposing.
+    // Checked here, next to `relocating` and strictly before the
+    // childTerminalFinalized/busy gates below, so BOTH the root accept path
+    // and the child steer-enqueue path are closed the instant shutdown begins.
+    if (this.shuttingDown) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
+      return;
+    }
     // TASK.102 CUT-S2 §10.10.1 п.5: a completed child is READ-ONLY (§6) —
     // once the terminal has been dispatched there is no live turn chain left
     // for a late message to join. Checked BEFORE the busy gate below because
@@ -1453,6 +1498,23 @@ export class Session {
   }
 
   /**
+   * Empties the steer queue with honest `turn_rejected "not_ready"` replies
+   * (§10.11.1 N1, extracted from §10.10.1 O7б's flush-failure path so
+   * `finalizeChildTerminal`'s shutdown branch can reuse it byte-identically):
+   * every queued message gets a reply, never a silent drop — used on the two
+   * paths that mean "no more turns will ever run against this child" (a
+   * broken durable sink, or shutdown already in progress).
+   */
+  private rejectQueuedSteerMessages(): void {
+    while (this.steerQueue.length > 0) {
+      const queued = this.steerQueue.shift();
+      if (queued !== undefined) {
+        this.outbound.emit({ type: "turn_rejected", requestId: queued.requestId, reason: "not_ready" });
+      }
+    }
+  }
+
+  /**
    * Starts an ACCEPTED turn (the caller has already resolved relocating/busy
    * and, for a steer message, the queue-admission checks). Shared by the
    * direct `onUserMessage` path, the steer-queue drain (`onChildTurnSettled`),
@@ -1461,12 +1523,18 @@ export class Session {
    * real user message would (CUT-S2 §2.6.3: "plan-reminder — нужен: mode
    * может быть plan"), only title derivation is skipped for a child (§5.14 —
    * a child never gets a name, on neither its initial turn nor a steer one).
+   *
+   * Returns whether a turn actually started (§10.11.1 N7): `false` on the
+   * `unsupported_images` refusal below — the ONLY way this can decline to
+   * start a turn — lets a caller draining a queued message (`finalizeChildTerminal`)
+   * tell "started, own `currentTurn` now covers it" apart from "refused, this
+   * queued item is fully spent and produced nothing to wait on."
    */
-  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
+  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[]): boolean {
     const attachments = images?.length ? [...images] : undefined;
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
-      return;
+      return false;
     }
     // Title derivation (design §4.2): the first accepted user message in a
     // title-less session names it (the picker is useless without titles). Done
@@ -1579,6 +1647,7 @@ export class Session {
       },
     );
     this.currentTurn = turn;
+    return true;
   }
 
   /**
@@ -1594,6 +1663,11 @@ export class Session {
   startProgrammaticTurn(prompt: string): { ok: true } | { ok: false; reason: string } {
     if (this.child === undefined) {
       return { ok: false, reason: "not a child session" };
+    }
+    // TASK.102 CUT-S2 §10.11.1 N1: a child-start that lands after shutdown()
+    // has begun must never start a turn on an engine already mid-dispose.
+    if (this.shuttingDown) {
+      return { ok: false, reason: "shutting down" };
     }
     if (this.programmaticTurnStarted) {
       return { ok: false, reason: "programmatic turn already started" };
@@ -1626,12 +1700,21 @@ export class Session {
    * the top-level check right above), so the caller only clears `busy` when
    * the settled value is literally `"terminal"` (§10.10.1's call-site
    * contract), never on `"drained"`.
+   *
+   * §10.11.1 N1: the shift+accept drain above only runs while
+   * `!this.shuttingDown` — once shutdown has begun, no new turn may start
+   * (the engine is already mid-dispose), so this goes straight to
+   * `finalizeChildTerminal()`, which empties the queue with honest rejects
+   * instead (shutdown = the second legal path to draining the queue,
+   * symmetric with the flush-failure path, §10.10.1 O7б).
    */
   private onChildTurnSettled(): Promise<"terminal" | "drained"> | undefined {
-    const next = this.steerQueue.shift();
-    if (next !== undefined) {
-      this.acceptUserMessage(next.requestId, next.text, next.images);
-      return undefined;
+    if (!this.shuttingDown) {
+      const next = this.steerQueue.shift();
+      if (next !== undefined) {
+        this.acceptUserMessage(next.requestId, next.text, next.images);
+        return undefined;
+      }
     }
     return this.finalizeChildTerminal();
   }
@@ -1653,6 +1736,29 @@ export class Session {
    * closes that window: non-empty ⇒ drain into a new turn and return
    * `"drained"` instead — cheap and idempotent, the next settle re-runs this
    * whole method (including `flushHistory`) from the top.
+   *
+   * §10.11.1 N1: the re-check above only DRAINS while `!this.shuttingDown` —
+   * once shutdown has begun no new turn may ever start (the engine is
+   * already mid-dispose), so the queue is instead emptied with honest
+   * `turn_rejected "not_ready"` replies via `rejectQueuedSteerMessages()`,
+   * the SAME helper the flush-failure path below uses. Shutdown is therefore
+   * a SECOND legal path to committing a terminal while the queue was
+   * non-empty at some point — symmetric with the flush-failure path
+   * (§10.10.1 O7б): both mean "no more turns will ever run against this
+   * child," so both drain honestly instead of leaving messages stranded.
+   *
+   * §10.11.1 N7: `acceptUserMessage` can itself refuse a queued message
+   * (currently only `unsupported_images`) without ever starting a turn — it
+   * already emitted its own `turn_rejected` for that one, but returning
+   * `"drained"` on its say-so alone would leave `busy` held with nothing
+   * left to ever clear it and no terminal ever published (the queued
+   * message lost AND the terminal silently withheld forever). The drain
+   * loop below instead keeps trying the REST of the queue until one message
+   * actually starts a turn (a real `"drained"`) or the queue empties (falls
+   * through to committing the terminal below, exactly like an
+   * already-empty queue) — this is what makes `finalizeChildTerminal`'s
+   * "never reject" contract true: every path either hands off a live turn
+   * or reaches a terminal, never neither.
    *
    * Once-latch (F7, moved under O7): `childTerminalFinalized` is set
    * SYNCHRONOUSLY, with no await in between, immediately before each
@@ -1685,12 +1791,7 @@ export class Session {
       // running more steer turns against it is pointless — every message
       // parked during the flush is rejected honestly instead of silently
       // lost (the O7 bug), and the error terminal publishes as-is.
-      while (this.steerQueue.length > 0) {
-        const queued = this.steerQueue.shift();
-        if (queued !== undefined) {
-          this.outbound.emit({ type: "turn_rejected", requestId: queued.requestId, reason: "not_ready" });
-        }
-      }
+      this.rejectQueuedSteerMessages();
       this.childTerminalFinalized = true;
       try {
         this.child.onTerminal({
@@ -1707,10 +1808,22 @@ export class Session {
       }
       return "terminal";
     }
-    const next = this.steerQueue.shift();
-    if (next !== undefined) {
-      this.acceptUserMessage(next.requestId, next.text, next.images);
-      return "drained";
+    if (this.shuttingDown) {
+      // §10.11.1 N1: shutdown = the second legal drain path (see docstring
+      // above) — reject-empty rather than start anything new.
+      this.rejectQueuedSteerMessages();
+    } else {
+      // §10.11.1 N7: keep trying queued messages until one actually starts a
+      // turn (own it via "drained") or the queue runs out (fall through to
+      // commit the terminal below) — a refusal from `acceptUserMessage`
+      // itself must never be mistaken for a live hand-off.
+      let next = this.steerQueue.shift();
+      while (next !== undefined) {
+        if (this.acceptUserMessage(next.requestId, next.text, next.images)) {
+          return "drained";
+        }
+        next = this.steerQueue.shift();
+      }
     }
     this.childTerminalFinalized = true;
     try {
