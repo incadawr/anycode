@@ -10,6 +10,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { homedir } from "node:os";
 import type { CreateTabRequest } from "../shared/tabs.js";
+import { ENV_ENGINE } from "../shared/engines.js";
 import {
   createTabRequestSchema,
   handleChildHistory,
@@ -1265,6 +1266,9 @@ describe('e2e-negative: engine:"claude" is refused by spawnableWhenKnown, NOT by
       getWindow: () => null,
       env: () => ({}),
       engineReady: () => true,
+      // Mirrors production's own engineEnv (main/index.ts:1462), which always
+      // stamps ANYCODE_ENGINE — required by the F4 gate-fix's fail-closed check.
+      engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
     });
     const { dialog } = makeDialog({ canceled: true, filePaths: [] });
     const deps: TabIpcDeps = { manager: realManager, persistence: persistenceStub, dialog };

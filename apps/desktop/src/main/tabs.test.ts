@@ -22,7 +22,7 @@ import {
   type PreviewArtifactsMessage,
   type PreviewRequestMessage,
 } from "../shared/preview.js";
-import type { EngineId } from "../shared/engines.js";
+import { ENV_ENGINE, type EngineId } from "../shared/engines.js";
 import {
   CHILD_PROGRESS_TYPE,
   CHILD_READY_TYPE,
@@ -152,6 +152,9 @@ function codexManager(fork: HostForkFn) {
     getWindow: () => windowRig().window,
     env: () => ({}),
     engineReady: () => true,
+    // Mirrors production's own engineEnv (main/index.ts:1462), which always
+    // stamps ANYCODE_ENGINE — required by the F4 gate-fix's fail-closed check.
+    engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
     logger: silentLogger,
     limits: {},
   });
@@ -264,6 +267,10 @@ function childManager(fork: HostForkFn, window: WindowLike, overrides: Partial<T
     createChannel: fakeChannel,
     getWindow: () => window,
     env: () => ({ PATH: "/base" }),
+    // Mirrors production's own engineEnv (main/index.ts:1462), which always
+    // stamps ANYCODE_ENGINE — required by the F4 gate-fix's fail-closed check.
+    // A test exercising that check overrides this explicitly.
+    engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
     logger: silentLogger,
     limits: {},
     ...overrides,
@@ -554,6 +561,7 @@ describe("TabHostManager — readiness gate keys on the PICKED Codex profile (S3
       getWindow: () => windowRig().window,
       env: () => ({}),
       engineReady,
+      engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
       logger: silentLogger,
       limits: {},
     });
@@ -652,9 +660,9 @@ describe("TabHostManager — engine identity and process ownership", () => {
       createChannel: fakeChannel,
       getWindow: () => windowRig().window,
       engineReady: () => true,
-      engineEnv: (_engine, generation) => {
+      engineEnv: (engine, generation) => {
         generations.push(generation);
-        return { ANYCODE_HOST_GENERATION: String(generation) };
+        return { [ENV_ENGINE]: engine, ANYCODE_HOST_GENERATION: String(generation) };
       },
       logger: silentLogger,
     });
@@ -678,6 +686,7 @@ describe("TabHostManager — engine identity and process ownership", () => {
       createChannel: fakeChannel,
       getWindow: () => window,
       engineReady: () => true,
+      engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
       reapEngineProcess: (registration) => reaped.push(registration.enginePid),
       logger: silentLogger,
     });
@@ -1539,6 +1548,7 @@ describe("TabHostManager — canSpawn(\"claude\") follows doctor readiness (SLIC
       getWindow: () => windowRig().window,
       env: () => ({}),
       engineReady,
+      engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
       logger: silentLogger,
       limits: {},
     });
@@ -1998,6 +2008,65 @@ describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", (
     expect(childArgs).not.toContain("--engine-preset");
     const childEnv = forkSpy.mock.calls[1]?.[2]?.env ?? {};
     expect(childEnv).not.toHaveProperty("ANYCODE_CONNECTION_ID");
+  });
+
+  // TASK.102 S4 gate-fix (L1): tabs.ts:1249 states connectionId is "Never
+  // consulted for a non-core engine" — an omitted req.model must NOT fall
+  // back to describeChildModel(connectionId), which reads the PARENT
+  // connection's own ANYCODE_MODEL (a core model string) off the ambient env.
+  it("an engine child with no explicit model reports the placeholder default, never the parent connection's core ANYCODE_MODEL (L1)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      engineReady: () => true,
+      env: () => ({ PATH: "/base", [ENV_MODEL]: "claude-opus-4-1" }),
+    });
+    const root = manager.createTab({
+      workspace: "/ws",
+      sessionId: "root-engine-model-law",
+      resume: false,
+      connectionId: "conn-parent",
+    });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "engine-no-model", engine: "claude" }));
+
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "engine-no-model");
+    expect(accepted).toMatchObject({ kind: "accepted" });
+    expect((accepted as { model: string }).model).not.toBe("claude-opus-4-1");
+  });
+
+  // TASK.102 S4 gate-fix (F4, latent): registry.ts's selectEnginePlugin treats
+  // an absent ANYCODE_ENGINE as core, SILENTLY. Production's engineEnv always
+  // stamps it (main/index.ts:1462), but a missing/misbehaving overlay must not
+  // let a `claude` child boot a full core session on the ambient connection —
+  // the spawn has to fail closed, the same shape as the unavailable-pinned-
+  // connection guard just above (log + return without setting tab.proc).
+  it("a claude child whose composed fork env omits ANYCODE_ENGINE fails closed — never forks a silent core session (F4)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      engineReady: () => true,
+      engineEnv: () => ({}), // omits ANYCODE_ENGINE entirely
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-engine-env-missing", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    const hostsBefore = hosts.length;
+
+    rootHost.emit("message", spawnRequest({ requestId: "engine-env-missing", engine: "claude" }));
+
+    expect(hosts).toHaveLength(hostsBefore); // no fork attempted — never a silent core session
+    expect(childRunEvents(rootHost)).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "engine-env-missing",
+        kind: "rejected",
+        reason: "spawn_failed",
+        message: "Agent: the child session failed to start.",
+      },
+    ]);
   });
 
   it("a core child (engine absent) keeps the byte-identical prior behavior: isEngineReady(\"core\"), connectionId inherited, model rides modelOverride not --engine-model", () => {
@@ -3384,6 +3453,7 @@ describe("TabHostManager — a force-killed ROOT's external engine process is st
         createChannel: fakeChannel,
         getWindow: () => window,
         engineReady: () => true,
+        engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
         reapEngineProcess: (registration) => reaped.push(registration.enginePid),
         logger: silentLogger,
         limits: { exitDeadlineMs: 1000 },
@@ -3436,6 +3506,7 @@ describe("TabHostManager — a force-killed ROOT's external engine process is st
         createChannel: fakeChannel,
         getWindow: () => window,
         engineReady: () => true,
+        engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
         reapEngineProcess: (registration) => reaped.push(registration.enginePid),
         logger: silentLogger,
         limits: { exitDeadlineMs: 1000 },
