@@ -103,7 +103,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -126,6 +126,7 @@ import {
   step1DiscoverTab,
   step1LaunchApp,
   waitForExit,
+  waitForFacade,
 } from "./child-session-explicit-provider-smoke.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -174,9 +175,24 @@ function redirectAppStderr() {
 }
 
 /**
+ * Written to fd 2 (i.e. INTO the captured app-stderr log, in stream order)
+ * the instant the renderer facade answers its first `GET /state` with 200.
+ * Step 10 splits the log on it: everything above the marker is the startup
+ * window, everything below it is steady state. Without the marker the
+ * boundary is unknowable, so step 10 FAILS rather than widening the
+ * allowlist over the whole run.
+ */
+const STARTUP_WINDOW_SENTINEL = "[child-session-split-smoke] ── renderer facade installed: startup window closed ──";
+
+function markStartupWindowClosed() {
+  writeSync(2, `${STARTUP_WINDOW_SENTINEL}\n`);
+}
+
+/**
  * Known-benign noise, explicit + comment-justified per CUT-S3 §6.3 п.10's
  * own allowance ("аллоулист известного шума ... явным списком ... с
- * комментарием-обоснованием"). Anything NOT matched here fails step 10.
+ * комментарием-обоснованием"). Anything NOT matched here (nor by the
+ * startup-window list below, above the sentinel) fails step 10.
  */
 const APP_STDERR_ALLOWLIST = [
   // Node's one-time process-level warning the instant `node:sqlite` is first
@@ -192,6 +208,43 @@ const APP_STDERR_ALLOWLIST = [
   // benign "failed" line logged by Electron's devtools-protocol bridge —
   // unrelated to the product, which has no form-autofill surface at all.
   /Request Autofill\.(enable|setAddresses) failed/,
+  // Chromium's own boot banner, printed once by Electron because this script
+  // launches the app with `--remote-debugging-port` (its CDP client IS the
+  // reason the port exists). Carries no product signal: the port number is
+  // this script's own reserved port.
+  /^DevTools listening on ws:\/\/127\.0\.0\.1:\d+\//,
+  // Environment noise, NOT a product defect: the host rejects skills whose
+  // directory name violates the CLI's own name regex. The offenders live in
+  // the developer's personal `~/.anycode/skills` (`incadawr:node-common-db`,
+  // `incadawr:node-db-orm`) and are unrelated to this repo, so the line count
+  // varies with whoever runs the smoke. Emitted once per host process, and
+  // this scenario starts three of them (master + two children), so it is
+  // deliberately NOT confined to the startup window.
+  /^\[host\] extensions: Skill discovery: skipping .+ does not match \^\[A-Za-z0-9\]/,
+];
+
+/**
+ * Allowed ONLY above `STARTUP_WINDOW_SENTINEL` — i.e. strictly before the
+ * renderer facade first answered `GET /state`. This is the boot race the
+ * harness itself creates: `waitForFacade` polls `/state?tail=0` every 150ms
+ * from the moment the automation server binds, and every poll that lands
+ * before the renderer installs its facade is answered 503 and logged by the
+ * server with a full Node error dump (header + three `at …` stack frames +
+ * `detail:` + closing brace, each arriving as its own stderr line).
+ *
+ * The same dump AFTER the facade is installed would be a real finding — the
+ * facade going away mid-run — so these patterns must never be promoted to
+ * `APP_STDERR_ALLOWLIST`.
+ */
+const APP_STDERR_STARTUP_ALLOWLIST = [
+  /^\[automation\] GET \/state\?tail=0 -> 503 FacadeUnavailableError: facade_unavailable: facade_not_installed$/,
+  // Stack frames of that dump. Anchored on the automation server's own bundle
+  // so an unrelated stack cannot slip through on a bare `at …`.
+  /^at .*chunks\/server-[^\s]*\.js:\d+:\d+/,
+  /^detail: .*'facade_not_installed'/,
+  // The dump's closing brace, on its own line. Tolerable only because the
+  // startup window is bounded by the sentinel.
+  /^\}$/,
 ];
 
 /** Empty by design (see file header) — extend with a comment-justified regex the same way `APP_STDERR_ALLOWLIST` is, the first time a real run needs one. */
@@ -998,18 +1051,33 @@ async function step10ConsoleGrep(ctx) {
     fail(step, `could not read the redirected app-stderr log at ${APP_STDERR_LOG}: ${err?.message ?? err}`);
   }
   const stderrLines = stderrText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-  const unexpectedStderrLines = stderrLines.filter((line) => !APP_STDERR_ALLOWLIST.some((re) => re.test(line)));
+  const sentinelIndex = stderrLines.indexOf(STARTUP_WINDOW_SENTINEL);
+  assert(
+    step,
+    sentinelIndex !== -1,
+    `the startup-window sentinel was never written into ${APP_STDERR_LOG} — the boundary between boot noise and steady state is unknowable, so this gate FAILS rather than applying the startup allowlist to the whole run`,
+  );
+  const unexpectedStderrLines = stderrLines.filter((line, index) => {
+    if (index === sentinelIndex) {
+      return false;
+    }
+    if (APP_STDERR_ALLOWLIST.some((re) => re.test(line))) {
+      return false;
+    }
+    return !(index < sentinelIndex && APP_STDERR_STARTUP_ALLOWLIST.some((re) => re.test(line)));
+  });
   ctx.stderrLineCount = stderrLines.length;
   ctx.unexpectedStderrLines = unexpectedStderrLines;
   assert(
     step,
     unexpectedStderrLines.length === 0,
-    `${unexpectedStderrLines.length} unexpected app-stderr line(s) (of ${stderrLines.length} total, ${APP_STDERR_ALLOWLIST.length}-pattern allowlist applied): ${JSON.stringify(unexpectedStderrLines.slice(0, 20))}`,
+    `${unexpectedStderrLines.length} unexpected app-stderr line(s) (of ${stderrLines.length} total; ${APP_STDERR_ALLOWLIST.length}-pattern allowlist applied throughout, ${APP_STDERR_STARTUP_ALLOWLIST.length} more only above the startup sentinel at line ${sentinelIndex + 1}): ${JSON.stringify(unexpectedStderrLines.slice(0, 20))}`,
   );
 
   pass(
     step,
-    `console/stderr grep clean: 0 unexpected CDP console-error records (of ${consoleErrors.length} total), 0 unexpected app-stderr lines (of ${stderrLines.length} total)`,
+    `console/stderr grep clean: 0 unexpected CDP console-error records (of ${consoleErrors.length} total), 0 unexpected app-stderr lines ` +
+      `(of ${stderrLines.length} total, ${sentinelIndex} of them inside the startup window)`,
   );
 }
 
@@ -1203,6 +1271,13 @@ async function run() {
     process.env.REMOTE_DEBUGGING_PORT = String(ctx.cdpPort);
 
     await step1LaunchApp(ctx);
+    // Closing the startup window explicitly (rather than letting
+    // `step1DiscoverTab` do its own internal `waitForFacade`) is what lets
+    // step 10 hold `facade_not_installed` to the boot race only: the marker
+    // has to land in the stderr stream at the exact first 200. The call
+    // `step1DiscoverTab` makes next returns immediately once this one has.
+    await waitForFacade(ctx, 1);
+    markStartupWindowClosed();
     // Creates (normal launch) or discovers (--attach) the boot tab AND
     // selects it — same call every precedent script in this directory makes
     // unmodified; no local reimplementation needed.
