@@ -1127,7 +1127,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     const rows = await shadowTranscript.list(connected.sessionRef);
     const items = projectClaudeHistory(rows);
     const sink = new WriteBehindHistorySink(persistence!, rowId);
-    sink.append(items);
+    sink.replaceAll(items);
     await sink.flushChecked();
   };
 

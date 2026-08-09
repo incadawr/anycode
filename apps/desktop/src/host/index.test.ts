@@ -52,8 +52,9 @@ import {
   resolveReasoningEffort,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   SqlitePersistenceAdapter,
+  WriteBehindHistorySink,
 } from "@anycode/core";
-import type { AgentEvent, PermissionMode, ResolvedTelemetryConfig, ResolvedWebSearchBackend, TelemetryPort } from "@anycode/core";
+import type { AgentEvent, HistoryItem, PermissionMode, ResolvedTelemetryConfig, ResolvedWebSearchBackend, TelemetryPort } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ShellCapabilitiesProjection } from "../shared/protocol.js";
 import { parseCodexProfileArgs } from "./engines/codex/codex-home.js";
@@ -1567,5 +1568,78 @@ describe("host preview_console outbound wiring shape (slice 96-D, cut §2.4)", (
     );
 
     expect(emitted[0]?.event).toBe(translated);
+  });
+});
+
+describe("Claude engine-child history flush write primitive (TASK.102 S4, cut §4.4)", () => {
+  /**
+   * A healthy engine child that is steered at the wrong instant reports
+   * FAILURE and loses a turn: claudeFlushHistory (index.ts:1111-1132) is a
+   * FULL-SNAPSHOT projection re-read from the shadow mirror on every call,
+   * but the sink write it drives is a plain INSERT. A steer message parked
+   * strictly during finalizeChildTerminal's flushHistory await
+   * (session.ts:1880-1919) makes the SECOND full-snapshot flush re-insert
+   * item_ids the first flush already wrote -> UNIQUE(session_id,item_id)
+   * (sqlite-persistence.ts:61-67) aborts the whole transaction ->
+   * flushChecked() rejects -> a completed child reports status:"error" and
+   * the steer turn's items are lost with the rolled-back batch.
+   *
+   * index.ts is not importable in a test (see file header) — this mirrors
+   * claudeFlushHistory's write step verbatim (index.ts:1126-1132: a FRESH
+   * WriteBehindHistorySink per call, over the SAME persistence + session id)
+   * against the REAL WriteBehindHistorySink and a REAL on-disk SQLite
+   * database, driven twice with an overlapping/superset projection — the
+   * second snapshot is exactly what a completed child's shadow mirror looks
+   * like once the parked steer turn's items have landed in it.
+   */
+  let dbDir: string;
+
+  beforeEach(async () => {
+    dbDir = await mkdtemp(join(tmpdir(), "anycode-claude-flush-history-"));
+  });
+
+  afterEach(async () => {
+    await rm(dbDir, { recursive: true, force: true });
+  });
+
+  function historyItem(id: string, text: string, createdAt: number): HistoryItem {
+    return { id, createdAt, message: { role: "user", content: text }, kind: "normal" };
+  }
+
+  /** Mirrors claudeFlushHistory's write step verbatim (index.ts:1126-1132). */
+  async function claudeFlushHistoryShape(
+    persistence: SqlitePersistenceAdapter,
+    sessionId: string,
+    items: readonly HistoryItem[],
+  ): Promise<void> {
+    const sink = new WriteBehindHistorySink(persistence, sessionId);
+    sink.replaceAll(items);
+    await sink.flushChecked();
+  }
+
+  it("a steer turn landing between two full-snapshot flushes does not corrupt or lose history", async () => {
+    const dbPath = join(dbDir, "anycode.sqlite");
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    try {
+      await persistence.createSession({ id: "child-1", workspace: "/ws", model: "m1", mode: "build" });
+
+      const firstSnapshot = [historyItem("u1", "first", 1), historyItem("a1", "reply", 2)];
+      await claudeFlushHistoryShape(persistence, "child-1", firstSnapshot);
+
+      // The steer turn's items landed in the shadow mirror during the first
+      // flush's await window — the second flush re-reads the FULL mirror, a
+      // superset that repeats u1/a1's stable item_ids alongside the new ones.
+      const secondSnapshot = [
+        ...firstSnapshot,
+        historyItem("u2", "steer", 3),
+        historyItem("a2", "steer reply", 4),
+      ];
+      await expect(claudeFlushHistoryShape(persistence, "child-1", secondSnapshot)).resolves.toBeUndefined();
+
+      const persisted = await persistence.loadHistory("child-1");
+      expect(persisted).toEqual(secondSnapshot);
+    } finally {
+      await persistence.close();
+    }
   });
 });
