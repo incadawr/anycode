@@ -231,12 +231,21 @@ const MIGRATIONS: readonly Migration[] = [
     ],
   },
   {
-    version: 13,
+    // Version 16, not 13, and the gap is deliberate. The runner skips every
+    // migration whose version is <= MAX(version) already recorded, so a
+    // version number is a claim on a SHARED namespace: any database that has
+    // already recorded 13 by some other branch's hand will silently skip this
+    // one forever, and the column below never appears. Versions 13-15 are
+    // taken by the unmerged orchestrator branch (the `orch_*` tables), which
+    // real development databases have already applied. Renumbering above the
+    // highest number any live database carries is what makes this migration
+    // reachable on an existing install rather than only on a fresh one.
+    version: 16,
     statements: [
       // Child-session identity (TASK.102 S2a §2.4): a child session's row
       // carries the parent it was spawned from plus the exact Agent
       // tool-call id that spawned it. Both NULL is a root session (every
-      // pre-v13 row, and every root session created after v13) — root-only
+      // pre-v16 row, and every root session created after v16) — root-only
       // consumers filter on `parent_session_id IS NULL`, never on absence of
       // a separate flag. No REFERENCES/FK (cut §1 p.4 — PRAGMA foreign_keys
       // stays OFF app-wide; the cascade delete is explicit, see
