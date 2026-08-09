@@ -494,6 +494,33 @@ describe("POST /tabs/:tabId/child/open (TASK.102 S2d D1, CUT-S2 §4.2 п.5 'Open
   });
 });
 
+describe("GET /tabs/:tabId/child/layout (TASK.102 S3c, CUT-S3 §6.2 read-only probe)", () => {
+  it("401s without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/child/layout"));
+    expect(res.status).toBe(401);
+  });
+
+  it("forwards {tabId} to the facade's childLayoutState", async () => {
+    const facadeResult = { ok: true, view: { kind: "master" } };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/child/layout"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"childLayoutState"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("decodes a URL-encoded tabId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true, view: { kind: "master" } });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, `/tabs/${encodeURIComponent("tab a")}/child/layout`), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a"]');
+  });
+});
+
 describe("git routes (slice-5.8-R8-cut.md §2.3)", () => {
   const GIT_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
     { path: "/tabs/tab-a/git", body: { command: { op: "refresh" } } },

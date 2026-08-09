@@ -530,6 +530,19 @@ export function childOpen(deps: HandlerDeps, tabId: string, spawnToolCallId: str
 }
 
 /**
+ * `GET /tabs/:tabId/child/layout` (TASK.102 S3c, CUT-S3 §6.2): thin forward
+ * to the facade's read-only `childLayoutState` probe, same shape as
+ * `childOpen` above but GET/no-body — the same discipline as the todo-panel/
+ * model-pill/ctx-popover GET probes: this layer only forwards method + args,
+ * the facade owns the `unknown_tab` guard. Every layout TRANSITION
+ * (enterSplit/exitSplit/expandRow/openChild) stays driven by a real DOM
+ * click in the smoke (CUT-S3 §6.1) — this route only ever reads.
+ */
+export function childLayoutState(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("childLayoutState", [tabId]);
+}
+
+/**
  * `POST /tabs {kind:"new"}` (design §4.2): the sanctioned dialog bypass (§1) —
  * the same `manager.createTab` + `deliverTabPort` the tab-ipc "new" handler
  * runs AFTER `dialog.showOpenDialog`, with the workspace supplied directly.
