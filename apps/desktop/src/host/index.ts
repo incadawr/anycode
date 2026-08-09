@@ -836,6 +836,18 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
    * persistence method). This is what lets a completed child's "Open" read a
    * non-empty transcript (Sol §3's diagnosis) instead of the native-only
    * shadow tables core's universal Open path never reads.
+   *
+   * Unreachable for a child session as of TASK.102 S4-codex-cut: the Agent
+   * tool's engine-profile routing (packages/core/src/tools/agent.ts) refuses
+   * every `engine:"codex"` md-profile before a child session is ever
+   * spawned, so `args.child` never carries a codex engine child in practice.
+   * The refusal exists because this flush's only source, `historyItems()`,
+   * is not a trustworthy transcript at flush time — the authoritative
+   * source, `client.request("thread/read")`, sits behind a private field on
+   * CodexEngine (frozen). Do not re-enable codex children at the Agent-tool
+   * layer without first giving this flush a real flush-time transcript
+   * source; this function, the posture map, and the rest of the child boot
+   * plumbing below are left in place for that unfreeze, not deleted.
    */
   const codexFlushHistory = async (): Promise<void> => {
     const sink = new WriteBehindHistorySink(persistence!, connected.sessionMeta.id);

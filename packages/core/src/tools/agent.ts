@@ -235,6 +235,29 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             error: 'Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account.',
           };
         }
+        // Codex engine children are UNSUPPORTED (TASK.102 S4-codex-cut), not
+        // merely unavailable: a Codex child's native transcript cannot be
+        // read at flush time. The only source is `client.request(
+        // "thread/read")`, but the `AppServerClient` that method lives on is
+        // created inside startCodexEngine/resumeCodexEngine and never
+        // returned (`ConnectedCodexEngine` = {engine, threadId, model,
+        // presetId}), and is `private readonly client` on CodexEngine itself
+        // (apps/desktop/src/host/engines/codex/codex-engine.ts, frozen) — so
+        // no caller outside that file can ever reach it. The shadow log is no
+        // substitute: it holds only commandExecution completions, never the
+        // conversation. Refusing here, before runSessionTier ever touches
+        // ctx.sessionSubagents, is the only honest option — the alternative
+        // is a card that reads "done" with an "Open" that is silently empty.
+        if (engineProfile.engine === "codex") {
+          return {
+            ok: false,
+            error:
+              `Agent: agent type "${agentType}" runs on the "codex" engine; codex engine children are not ` +
+              `supported — their transcript is unreachable at flush time, so a session would boot with no way ` +
+              `to persist what the child did.`,
+          };
+        }
+
         // Fail-closed: without a SessionSubagentPort an engine profile cannot
         // run at all — the one-shot in-process fallback no longer exists.
         if (!ctx.sessionSubagents) {
