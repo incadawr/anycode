@@ -69,7 +69,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -129,7 +129,7 @@ const FLAGS = parseArgs(process.argv.slice(2));
 
 // ── small process/fs helpers (lifted from subagent-card-smoke.mjs) ──
 
-function isPidAlive(pid) {
+export function isPidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -138,12 +138,12 @@ function isPidAlive(pid) {
   }
 }
 
-function sleep(ms) {
+export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
 /** macOS realpath-canonicalizes /var vs /private/var (tmpdir()'s two spellings of the same path). */
-function canonPath(p) {
+export function canonPath(p) {
   try {
     return realpathSync(p);
   } catch {
@@ -151,7 +151,7 @@ function canonPath(p) {
   }
 }
 
-function readDiscoveryFile(path) {
+export function readDiscoveryFile(path) {
   try {
     const info = JSON.parse(readFileSync(path, "utf8"));
     if (
@@ -168,7 +168,7 @@ function readDiscoveryFile(path) {
   }
 }
 
-function waitForExit(child, timeoutMs) {
+export function waitForExit(child, timeoutMs) {
   return new Promise((resolveExit) => {
     if (child.exitCode !== null || child.signalCode !== null) {
       resolveExit(true);
@@ -183,7 +183,7 @@ function waitForExit(child, timeoutMs) {
 }
 
 /** Kills the whole spawn tree, not just the direct child (detached -> own process group on POSIX). */
-function killTree(pid, signal) {
+export function killTree(pid, signal) {
   try {
     if (process.platform === "win32") {
       execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"]);
@@ -196,7 +196,7 @@ function killTree(pid, signal) {
 }
 
 /** Minimal KEY=VALUE .env parser (no quoting/escaping support). Blank lines and `#` comments are skipped. */
-function parseEnvFile(text) {
+export function parseEnvFile(text) {
   const out = {};
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -214,7 +214,7 @@ function parseEnvFile(text) {
 
 // ── step bookkeeping ──
 
-class SmokeFailure extends Error {
+export class SmokeFailure extends Error {
   constructor(step, detail) {
     super(`step ${step} failed: ${detail}`);
     this.step = step;
@@ -223,17 +223,17 @@ class SmokeFailure extends Error {
 
 let passCount = 0;
 
-function pass(step, detail) {
+export function pass(step, detail) {
   passCount += 1;
   console.log(`[step ${step}] PASS ${detail ?? ""}`.trimEnd());
 }
 
-function fail(step, detail) {
+export function fail(step, detail) {
   console.error(`[step ${step}] FAIL ${detail ?? ""}`.trimEnd());
   throw new SmokeFailure(step, detail);
 }
 
-function assert(step, cond, detail) {
+export function assert(step, cond, detail) {
   if (!cond) {
     fail(step, detail);
   }
@@ -241,7 +241,7 @@ function assert(step, cond, detail) {
 
 // ── HTTP helpers against the automation channel (README.md routes) ──
 
-async function api(ctx, method, path, body) {
+export async function api(ctx, method, path, body) {
   const headers = { Authorization: `Bearer ${ctx.token}` };
   const init = { method, headers };
   if (body !== undefined) {
@@ -261,7 +261,7 @@ async function api(ctx, method, path, body) {
   return { status: res.status, body: parsed };
 }
 
-async function apiOk(ctx, step, method, path, body) {
+export async function apiOk(ctx, step, method, path, body) {
   let resp;
   try {
     resp = await api(ctx, method, path, body);
@@ -274,7 +274,7 @@ async function apiOk(ctx, step, method, path, body) {
   return resp.body;
 }
 
-async function apiAction(ctx, step, path, body) {
+export async function apiAction(ctx, step, path, body) {
   const result = await apiOk(ctx, step, "POST", path, body);
   if (result?.ok !== true) {
     fail(step, `POST ${path} rejected: ${JSON.stringify(result)}`);
@@ -282,7 +282,7 @@ async function apiAction(ctx, step, path, body) {
   return result;
 }
 
-async function waitUntilTab(ctx, step, tabId, until, timeoutMs) {
+export async function waitUntilTab(ctx, step, tabId, until, timeoutMs) {
   const body = { tabId, until };
   if (timeoutMs !== undefined) {
     body.timeoutMs = timeoutMs;
@@ -295,7 +295,7 @@ async function waitUntilTab(ctx, step, tabId, until, timeoutMs) {
 }
 
 /** Poll `GET /state` until the renderer facade has finished installing (DEV dynamic import races the page load). */
-async function waitForFacade(ctx, step, timeoutMs = 45_000) {
+export async function waitForFacade(ctx, step, timeoutMs = 45_000) {
   const start = Date.now();
   for (;;) {
     let resp;
@@ -314,7 +314,7 @@ async function waitForFacade(ctx, step, timeoutMs = 45_000) {
   }
 }
 
-async function discoverTabByWorkspace(ctx, step, workspace, timeoutMs = 90_000) {
+export async function discoverTabByWorkspace(ctx, step, workspace, timeoutMs = 90_000) {
   const target = canonPath(workspace);
   const deadline = Date.now() + timeoutMs;
   let lastTabs = "[]";
@@ -342,7 +342,7 @@ async function discoverTabByWorkspace(ctx, step, workspace, timeoutMs = 90_000) 
 }
 
 /** Best-effort PNG evidence via `GET /screenshot` — never fails the step it's called from. */
-async function saveScreenshot(ctx, name) {
+export async function saveScreenshot(ctx, name) {
   try {
     const resp = await api(ctx, "GET", "/screenshot");
     if (resp.status !== 200 || typeof resp.body?.png !== "string") {
@@ -361,7 +361,7 @@ async function saveScreenshot(ctx, name) {
 }
 
 /** Fetches the current transcript block array for the active tab from `GET /state`. */
-async function getTranscriptBlocks(ctx, step, tabId) {
+export async function getTranscriptBlocks(ctx, step, tabId) {
   const resp = await api(ctx, "GET", "/state");
   if (resp.status !== 200) {
     fail(step, `GET /state -> HTTP ${resp.status}: ${JSON.stringify(resp.body)}`);
@@ -373,7 +373,7 @@ async function getTranscriptBlocks(ctx, step, tabId) {
   return { transcript, mainTabs: resp.body?.tabs, childRuns: resp.body?.childRuns };
 }
 
-function findAnyAgentBlock(transcript) {
+export function findAnyAgentBlock(transcript) {
   return transcript.find((b) => b.kind === "tool_call" && b.toolName === "Agent") ?? null;
 }
 
@@ -387,7 +387,7 @@ function findAnyAgentBlock(transcript) {
  * transcript reports). Returns as soon as EITHER settles into a stable
  * outcome worth deciding on, or the deadline passes.
  */
-async function pollForDispatch(ctx, step, timeoutMs) {
+export async function pollForDispatch(ctx, step, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let anyAgentSeen = false;
   let lastBlock = null;
@@ -416,14 +416,14 @@ async function pollForDispatch(ctx, step, timeoutMs) {
 }
 
 /** Stops the current turn and best-effort waits for it to settle to idle — used before a retry. */
-async function settleTurn(ctx, step) {
+export async function settleTurn(ctx, step) {
   await api(ctx, "POST", `/tabs/${ctx.tabId}/stop`, {});
   await waitUntilTab(ctx, step, ctx.tabId, { turnStatus: "idle" }, 30_000).catch(() => {
     // best-effort — proceed regardless of the settle wait outcome.
   });
 }
 
-async function attemptDispatch(ctx, step, prompt, timeoutMs) {
+export async function attemptDispatch(ctx, step, prompt, timeoutMs) {
   const sent = await apiOk(ctx, step, "POST", `/tabs/${ctx.tabId}/prompt`, { text: prompt });
   assert(step, sent?.ok === true, `prompt send rejected: ${JSON.stringify(sent)}`);
   await waitUntilTab(ctx, step, ctx.tabId, { turnStatus: "running" }, 60_000);
@@ -589,14 +589,14 @@ async function step4ConnectionIdParity(ctx) {
   pass(step, `child's durable SQLite row carries connectionId="${row.connectionId}" — matches the parent's single configured connection`);
 }
 
-async function settledScreenshot(ctx, name) {
+export async function settledScreenshot(ctx, name) {
   await sleep(200);
   return saveScreenshot(ctx, name);
 }
 
 // ── step 1: bootstrap a temp profile/workspace + launch (or attach to) the dev app, discover the boot tab ──
 
-async function step1LaunchApp(ctx) {
+export async function step1LaunchApp(ctx) {
   try {
     ctx.tmpWorkspace = mkdtempSync(join(tmpdir(), "anycode-f4-smoke-ws-"));
     writeFileSync(join(ctx.tmpWorkspace, "README.md"), "# smoke\n\nhello from child-session-explicit-provider smoke\n");
@@ -713,7 +713,7 @@ async function step1LaunchApp(ctx) {
   pass(1, `app launched (pid=${info.pid}), discovery ready after ${Date.now() - t0}ms on port ${info.port}, profile=${profile}`);
 }
 
-async function step1DiscoverTab(ctx) {
+export async function step1DiscoverTab(ctx) {
   await waitForFacade(ctx, 1);
 
   if (ctx.child === null) {
@@ -905,7 +905,17 @@ async function run() {
   process.exit(failedStep === null ? 0 : 1);
 }
 
-run().catch((err) => {
-  console.error(`[child-session-explicit-provider-smoke] fatal: ${err?.stack ?? err}`);
-  process.exit(1);
-});
+// TASK.102 S2d D2: guarded so `child-session-scenario-smoke.mjs` can `import`
+// this module's helpers (step1LaunchApp/step1DiscoverTab/api/… above, all now
+// `export`ed) without triggering ITS OWN app launch/dispatch/teardown cycle as
+// an unwanted side effect of the import — auto-run only fires when this file
+// is the process's own entry point, exactly the standard "if main module" ESM
+// idiom. Byte-identical behavior for a direct `node
+// child-session-explicit-provider-smoke.mjs` invocation (the condition is
+// true in that case, same as before this guard existed).
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run().catch((err) => {
+    console.error(`[child-session-explicit-provider-smoke] fatal: ${err?.stack ?? err}`);
+    process.exit(1);
+  });
+}
