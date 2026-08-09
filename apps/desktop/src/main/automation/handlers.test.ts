@@ -9,12 +9,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildFacadeExpr,
+  childOpen,
   closeTab,
   createTabNew,
   killHost,
   FacadeThrewError,
   FacadeUnavailableError,
   getState,
+  getStateForTab,
+  listChildRunsMaintenance,
   gitCommand,
   gitConfirmAccept,
   gitConfirmCancel,
@@ -239,6 +242,12 @@ describe("thin facade commands forward method + args", () => {
     expect(deps.callFacade).toHaveBeenCalledWith("stop", ["tab-a"]);
     expect(deps.callFacade).toHaveBeenCalledWith("selectTab", ["tab-a"]);
     expect(deps.callFacade).toHaveBeenCalledWith("closeTab", ["tab-a"]);
+  });
+
+  it("childOpen -> callFacade('childOpen', [tabId, spawnToolCallId]) (TASK.102 S2d D1)", async () => {
+    const deps = fakeDeps();
+    await childOpen(deps, "tab-a", "call-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("childOpen", ["tab-a", "call-1"]);
   });
 });
 
@@ -960,6 +969,38 @@ describe("health / getState / screenshot", () => {
     expect(deps.callFacade).toHaveBeenCalledWith("snapshot", [50]);
   });
 
+  it("getState projects manager.listChildRuns() verbatim as childRuns (TASK.102 S2d D1)", async () => {
+    const childRuns = [
+      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 555 },
+    ];
+    const deps = fakeDeps({
+      callFacade: vi.fn(async () => ({ tabs: [], activeTabId: null, states: {} })),
+      manager: fakeManager({ listChildRuns: () => childRuns }),
+    });
+    const result = await getState(deps, undefined);
+    expect(result.childRuns).toEqual(childRuns);
+  });
+
+  it("getState degrades childRuns to [] when manager.listChildRuns is absent (real TabHostManager, pre-seam)", async () => {
+    const deps = fakeDeps({ callFacade: vi.fn(async () => ({ tabs: [], activeTabId: null, states: {} })) });
+    const result = await getState(deps, undefined);
+    expect(result.childRuns).toEqual([]);
+  });
+
+  it("getStateForTab projects the SAME un-narrowed childRuns list alongside the narrowed tab", async () => {
+    const childRuns = [
+      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "starting" as const, pid: null },
+    ];
+    const tabs: TabSummary[] = [{ tabId: "t1", workspace: "/a", sessionId: "s1", state: "running", pid: 111 }];
+    const deps = fakeDeps({
+      callFacade: vi.fn(async () => ({ tabs: [], activeTabId: null, states: {} })),
+      manager: fakeManager({ listTabs: () => tabs, listChildRuns: () => childRuns }),
+    });
+    const result = await getStateForTab(deps, "t1", undefined);
+    expect(result.childRuns).toEqual(childRuns);
+    expect(result.tabs).toEqual(tabs);
+  });
+
   it("screenshot base64-encodes capturePage's PNG", async () => {
     const win = fakeWindow(async () => ({ __facade: "ok" }));
     const result = await screenshot(fakeDeps({ getWindow: () => win }));
@@ -968,6 +1009,49 @@ describe("health / getState / screenshot", () => {
 
   it("screenshot throws FacadeUnavailableError when there is no window", async () => {
     await expect(screenshot(fakeDeps({ getWindow: () => null }))).rejects.toBeInstanceOf(FacadeUnavailableError);
+  });
+});
+
+describe("listChildRunsMaintenance (GET /child-runs, TASK.102 S2d D1)", () => {
+  function meta(overrides: Partial<{ id: string; parentSessionId?: string; spawnToolCallId?: string }> = {}) {
+    return {
+      id: "sess-1",
+      workspace: "/ws",
+      model: "m1",
+      mode: "build" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      ...overrides,
+    };
+  }
+
+  it("filters listSessionsForMaintenance down to rows carrying parentSessionId, verbatim otherwise", async () => {
+    const root = meta({ id: "sess-root" });
+    const child1 = meta({ id: "sess-c1", parentSessionId: "sess-root", spawnToolCallId: "call-1" });
+    const child2 = meta({ id: "sess-c2", parentSessionId: "sess-root", spawnToolCallId: "call-2" });
+    const listSessionsForMaintenance = vi.fn(async () => [root, child1, child2]);
+    const deps = fakeDeps({ persistence: { listSessionsForMaintenance } });
+
+    const result = await listChildRunsMaintenance(deps);
+
+    expect(listSessionsForMaintenance).toHaveBeenCalledWith();
+    expect(result).toEqual({ ok: true, sessions: [child1, child2] });
+  });
+
+  it("answers {ok:true, sessions:[]} when every row is a root session (none carry parentSessionId)", async () => {
+    const deps = fakeDeps({
+      persistence: { listSessionsForMaintenance: vi.fn(async () => [meta({ id: "sess-root" })]) },
+    });
+    expect(await listChildRunsMaintenance(deps)).toEqual({ ok: true, sessions: [] });
+  });
+
+  it("answers unavailable (never throws) when persistence is absent", async () => {
+    const deps = fakeDeps({ persistence: undefined });
+    expect(await listChildRunsMaintenance(deps)).toEqual({
+      ok: false,
+      error: "persistence unavailable",
+      errorKind: "unavailable",
+    });
   });
 });
 

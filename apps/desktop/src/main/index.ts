@@ -2017,6 +2017,10 @@ void app.whenReady().then(async () => {
         // `navigateMdDoc` directly over it (main-side chain only; the
         // renderer-side MdLink click behavior stays unit-covered).
         mdDocDeps,
+        // TASK.102 S2d D1 (CUT-S2 §2.4/§4.1 additive `/child-runs`): the SAME
+        // persistence adapter opened at boot — absent, `/child-runs` degrades
+        // to `{ok:false, error:"persistence unavailable"}` rather than throwing.
+        persistence: persistence ?? undefined,
       });
     } catch (error) {
       console.error("[main] automation server failed to start", error);

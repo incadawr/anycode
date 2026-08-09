@@ -2420,6 +2420,32 @@ describe("TabHostManager — children are invisible outside the manager (TASK.10
     expect(childSummary?.childOf).toMatchObject({ parentTabId: rootTabId });
   });
 
+  it("listChildRuns() projects the admitted run's ledger fields plus the child tab's live host pid", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-child-runs", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "cr-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "cr-1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+    const childHost = hosts[1]!;
+
+    const runs = manager.listChildRuns();
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toEqual({
+      requestId: "cr-1",
+      parentSessionId: "root-child-runs",
+      childTabId,
+      childSessionId,
+      state: "starting",
+      pid: childHost.pid,
+    });
+  });
+
   it("deliverTabPort stamps the child envelope field and SKIPS the terminal channel entirely for a child tab", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window, posted } = windowRig();
