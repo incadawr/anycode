@@ -733,14 +733,17 @@ export class Session {
   private turnId: string | null = null;
   private currentTurn: Promise<void> | null = null;
   /**
-   * TASK.102 CUT-S2 §10.11.1 N1: flipped as the FIRST step of `shutdown()`,
+   * TASK.102 CUT-S2 §10.12.1: flipped as the FIRST step of `shutdown()`,
    * strictly before `abort.abort()`/`denyAll`/`dispose` so any teardown woken
    * by the abort below already observes it. A SEMANTIC gate (distinct from
    * the reentrant `currentTurn` wait in `shutdown()` below, which is a
-   * STRUCTURAL guarantee): once set, no NEW turn may ever be admitted —
-   * `onUserMessage`, `startProgrammaticTurn`, and both child drain points
-   * (`onChildTurnSettled`, `finalizeChildTerminal`'s healthy-path re-check)
-   * all check it. Never cleared — a Session is never un-shut-down.
+   * STRUCTURAL guarantee): once set, no NEW turn or tracked maintenance op
+   * (worktree exit, rewind, continuation) may ever be admitted — enforced at
+   * exactly four audited points: `route()`'s default-deny shutdown funnel
+   * (every wire message, future types included by construction),
+   * `startProgrammaticTurn`, and both child drain points
+   * (`onChildTurnSettled`, `finalizeChildTerminal`'s healthy-path re-check).
+   * Never cleared — a Session is never un-shut-down.
    */
   private shuttingDown = false;
 
@@ -925,21 +928,20 @@ export class Session {
       console.error(`[host] engine dispose threw during shutdown: ${describeError(error)}`);
       disposal = Promise.resolve();
     }
-    // TASK.102 CUT-S2 §10.11.1 N1: a snapshot-await of `this.currentTurn`
+    // TASK.102 CUT-S2 §10.12.1/§10.12.2: a snapshot-await of `this.currentTurn`
     // (the pre-fix shape) misses a FRESH turn a drain synchronously
     // re-points it to (onChildTurnSettled / finalizeChildTerminal's
     // re-check) — that new turn's own teardown (including its own
     // finalizeChildTerminal/flushHistory) would run on the disposed engine,
     // unobserved. Reentrant wait instead: loop until the SAME promise is
-    // observed twice in a row (or null) — terminates because every point
-    // that assigns `currentTurn` is now gated on `shuttingDown` (onUserMessage,
-    // startProgrammaticTurn, onChildTurnSettled, finalizeChildTerminal's
-    // re-check all refuse once the flag above is set), so no NEW turn can be
-    // admitted after this loop starts; each iteration waits out one already-
-    // in-flight turn's teardown, and teardown either nulls `currentTurn`
-    // (identity-guard, §10.10.1 O2) or leaves it pointing at a turn that was
-    // assigned strictly BEFORE the flag was set — so the number of iterations
-    // is bounded by the turns admitted before shutdown began, plus one.
+    // observed twice in a row (or null). Termination: admission happens at
+    // exactly four gated points (route() funnel / startProgrammaticTurn /
+    // both drain points), so no NEW op is admitted after the flag is set;
+    // `currentTurn` is the SINGLE wait primitive — it tracks turn teardown,
+    // worktree exits, rewinds and continuations — so iterations are bounded
+    // by ops admitted before the flag, plus one. The loop (vs a snapshot) is
+    // the STRUCTURAL backstop for an admission point a future audit misses —
+    // pinned by §10.12.2's white-box test.
     let seen: Promise<void> | null = null;
     while (this.currentTurn !== null && this.currentTurn !== seen) {
       seen = this.currentTurn;
@@ -956,6 +958,40 @@ export class Session {
       return;
     }
     const message = parsed.data;
+    // TASK.102 CUT-S2 §10.12.1: the SINGLE admission funnel for every wire
+    // message once shutdown has begun — default-deny: new message types are
+    // shutdown-safe by construction, not by a per-case audit (the class of
+    // bug this replaces: §10.11.1's own point-gates missed ui_ready's
+    // continuation, exit_worktree, and rewind_request). Three carve-outs get
+    // an honest reply (each starts trackable work the caller is owed an
+    // answer about); everything else is a silent drop (the renderer is
+    // attached to a dying host — replies to informational requests are moot).
+    if (this.shuttingDown) {
+      switch (message.type) {
+        case "user_message":
+          this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          break;
+        case "exit_worktree":
+          this.outbound.sendDirect({
+            type: "worktree_notice",
+            message: "Cannot exit the worktree: the session is shutting down.",
+          });
+          break;
+        case "rewind_request":
+          this.outbound.sendDirect({
+            type: "rewind_result",
+            requestId: message.requestId,
+            ok: false,
+            reason: "shutting down",
+            conversationRestored: false,
+            restoredPaths: null,
+          });
+          break;
+        default:
+          break;
+      }
+      return;
+    }
     switch (message.type) {
       case "ui_ready":
 
@@ -1368,7 +1404,21 @@ export class Session {
     }
     // Hold busy for the whole rewind (drift-flag-3): concurrent turn-starting /
     // mode / model messages observe busy=true while the store+git spawns run.
+    // TASK.102 CUT-S2 §10.12.1 (б): rewind is not abort-aware and a
+    // destructive two-tree git-restore split in half by shutdown is worse
+    // than one shutdown() awaits to completion — routed through
+    // `currentTurn`, the session's single wait primitive, via a
+    // self-managed deferred (no real turn promise exists to reuse here).
+    // Assignment can PREEMPT `currentTurn` from the tail of a prior turn's
+    // own teardown still in flight (the busy=false/tail-in-flight window) —
+    // an accepted trade: an awaited telemetry tail becomes an awaited
+    // destructive restore instead.
     this.busy = true;
+    let release!: () => void;
+    const op = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.currentTurn = op;
     try {
       const res = await this.checkpoints.rewind(checkpointId, {
         scope,
@@ -1429,22 +1479,13 @@ export class Session {
       });
     } finally {
       this.busy = false;
+      if (this.currentTurn === op) this.currentTurn = null;
+      release();
     }
   }
 
   private onUserMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
     if (this.relocating) {
-      this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
-      return;
-    }
-    // TASK.102 CUT-S2 §10.11.1 N1: shutdown() may be waiting (reentrantly) on
-    // whatever `currentTurn` turns out to be — admitting a NEW turn here
-    // (root's own turn #2, or a child steer that nothing will ever drain)
-    // would start it on an engine `shutdown()` has already begun disposing.
-    // Checked here, next to `relocating` and strictly before the
-    // childTerminalFinalized/busy gates below, so BOTH the root accept path
-    // and the child steer-enqueue path are closed the instant shutdown begins.
-    if (this.shuttingDown) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
     }
@@ -1682,6 +1723,25 @@ export class Session {
   }
 
   /**
+   * TASK.102 CUT-S2 §10.12.3: shifts queued steer messages until one
+   * actually STARTS a turn (`true` — the new turn owns busy/currentTurn) or
+   * the queue runs out (`false`). A refusal from `acceptUserMessage`
+   * (`unsupported_images` — it already emitted its own `turn_rejected`)
+   * spends the message and moves on: this is the N7 discipline
+   * ("a refusal from acceptUserMessage is never a live hand-off"), now
+   * shared by BOTH drain sites (`onChildTurnSettled` and
+   * `finalizeChildTerminal`'s healthy-path re-check) instead of duplicated.
+   */
+  private startNextQueuedSteerTurn(): boolean {
+    let next = this.steerQueue.shift();
+    while (next !== undefined) {
+      if (this.acceptUserMessage(next.requestId, next.text, next.images)) return true;
+      next = this.steerQueue.shift();
+    }
+    return false;
+  }
+
+  /**
    * Runs after EVERY turn a child session completes (the programmatic
    * initial one, and every steer-triggered one) — `acceptUserMessage`'s
    * finally calls this unconditionally when `this.child` is set. Chains the
@@ -1701,21 +1761,22 @@ export class Session {
    * the settled value is literally `"terminal"` (§10.10.1's call-site
    * contract), never on `"drained"`.
    *
-   * §10.11.1 N1: the shift+accept drain above only runs while
-   * `!this.shuttingDown` — once shutdown has begun, no new turn may start
-   * (the engine is already mid-dispose), so this goes straight to
-   * `finalizeChildTerminal()`, which empties the queue with honest rejects
-   * instead (shutdown = the second legal path to draining the queue,
-   * symmetric with the flush-failure path, §10.10.1 O7б).
+   * §10.12.1/§10.12.3: the drain above only runs while `!this.shuttingDown`
+   * — once shutdown has begun, no new turn may start (the engine is already
+   * mid-dispose), so this goes straight to `finalizeChildTerminal()`, which
+   * empties the queue with honest rejects instead (shutdown = the second
+   * legal path to draining the queue, symmetric with the flush-failure path,
+   * §10.10.1 O7б). `startNextQueuedSteerTurn()` (§10.12.3) is shared with
+   * `finalizeChildTerminal`'s own re-check below, so a refusal from
+   * `acceptUserMessage` here is spent and moved past exactly like it is
+   * there — this call site used to invoke `acceptUserMessage` directly and
+   * trust its return value blindly, which stranded the child forever
+   * (`busy` held, no terminal ever published) the moment a queued message's
+   * OWN admission was refused (e.g. images support revoked between enqueue
+   * and drain) — the shared helper is what closes that hole on both sites.
    */
   private onChildTurnSettled(): Promise<"terminal" | "drained"> | undefined {
-    if (!this.shuttingDown) {
-      const next = this.steerQueue.shift();
-      if (next !== undefined) {
-        this.acceptUserMessage(next.requestId, next.text, next.images);
-        return undefined;
-      }
-    }
+    if (!this.shuttingDown && this.startNextQueuedSteerTurn()) return undefined;
     return this.finalizeChildTerminal();
   }
 
@@ -1737,7 +1798,7 @@ export class Session {
    * `"drained"` instead — cheap and idempotent, the next settle re-runs this
    * whole method (including `flushHistory`) from the top.
    *
-   * §10.11.1 N1: the re-check above only DRAINS while `!this.shuttingDown` —
+   * §10.12.1: the re-check above only DRAINS while `!this.shuttingDown` —
    * once shutdown has begun no new turn may ever start (the engine is
    * already mid-dispose), so the queue is instead emptied with honest
    * `turn_rejected "not_ready"` replies via `rejectQueuedSteerMessages()`,
@@ -1747,18 +1808,18 @@ export class Session {
    * (§10.10.1 O7б): both mean "no more turns will ever run against this
    * child," so both drain honestly instead of leaving messages stranded.
    *
-   * §10.11.1 N7: `acceptUserMessage` can itself refuse a queued message
+   * §10.12.3: `acceptUserMessage` can itself refuse a queued message
    * (currently only `unsupported_images`) without ever starting a turn — it
    * already emitted its own `turn_rejected` for that one, but returning
    * `"drained"` on its say-so alone would leave `busy` held with nothing
    * left to ever clear it and no terminal ever published (the queued
-   * message lost AND the terminal silently withheld forever). The drain
-   * loop below instead keeps trying the REST of the queue until one message
-   * actually starts a turn (a real `"drained"`) or the queue empties (falls
-   * through to committing the terminal below, exactly like an
-   * already-empty queue) — this is what makes `finalizeChildTerminal`'s
-   * "never reject" contract true: every path either hands off a live turn
-   * or reaches a terminal, never neither.
+   * message lost AND the terminal silently withheld forever). The SHARED
+   * `startNextQueuedSteerTurn()` helper (both drain sites, §10.12.3) keeps
+   * trying the REST of the queue until one message actually starts a turn
+   * (a real `"drained"`) or the queue empties (falls through to committing
+   * the terminal below, exactly like an already-empty queue) — this is what
+   * makes `finalizeChildTerminal`'s "never reject" contract true: every path
+   * either hands off a live turn or reaches a terminal, never neither.
    *
    * Once-latch (F7, moved under O7): `childTerminalFinalized` is set
    * SYNCHRONOUSLY, with no await in between, immediately before each
@@ -1809,21 +1870,13 @@ export class Session {
       return "terminal";
     }
     if (this.shuttingDown) {
-      // §10.11.1 N1: shutdown = the second legal drain path (see docstring
+      // §10.12.1: shutdown = the second legal drain path (see docstring
       // above) — reject-empty rather than start anything new.
       this.rejectQueuedSteerMessages();
-    } else {
-      // §10.11.1 N7: keep trying queued messages until one actually starts a
-      // turn (own it via "drained") or the queue runs out (fall through to
-      // commit the terminal below) — a refusal from `acceptUserMessage`
-      // itself must never be mistaken for a live hand-off.
-      let next = this.steerQueue.shift();
-      while (next !== undefined) {
-        if (this.acceptUserMessage(next.requestId, next.text, next.images)) {
-          return "drained";
-        }
-        next = this.steerQueue.shift();
-      }
+    } else if (this.startNextQueuedSteerTurn()) {
+      // §10.12.3: shared helper — a refusal from `acceptUserMessage` itself
+      // must never be mistaken for a live hand-off (see docstring above).
+      return "drained";
     }
     this.childTerminalFinalized = true;
     try {

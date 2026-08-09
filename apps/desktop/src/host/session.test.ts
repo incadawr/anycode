@@ -211,6 +211,7 @@ const isTaskOutput = (m: HostToUiMessage): m is Of<"task_output"> => m.type === 
 const isTaskKillResult = (m: HostToUiMessage): m is Of<"task_kill_result"> => m.type === "task_kill_result";
 const isEnvStatus = (m: HostToUiMessage): m is Of<"env_status"> => m.type === "env_status";
 const isContextBreakdown = (m: HostToUiMessage): m is Of<"context_breakdown"> => m.type === "context_breakdown";
+const isRewindResult = (m: HostToUiMessage): m is Of<"rewind_result"> => m.type === "rewind_result";
 
 const agentEventOf =
   (innerType: string) =>
@@ -1152,7 +1153,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     worktree?: { id: string; path: string; branch: string; baseRef: string; ownedByAnyCode: boolean };
     worktreeControl?: SessionOptions["worktreeControl"];
     onWorkspaceTransition?: SessionOptions["onWorkspaceTransition"];
-  }): { port: FakeWirePort } {
+  }): { port: FakeWirePort; session: Session } {
     const outbound = new Outbound();
     const broker = new IpcPermissionBroker((message) => outbound.emit(message));
     const session = new Session({
@@ -1175,7 +1176,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     });
     const port = new FakeWirePort();
     session.bindPort(port);
-    return { port };
+    return { port, session };
   }
 
   it("never emits host_ready.shell for a core-shaped engine (id \"core\"), even if the host mistakenly supplied one — core wire stays byte-identical", () => {
@@ -1246,6 +1247,29 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     });
     expect(order).toEqual(["ready", "continue"]);
     expect(ordinaryRuns).toBe(0);
+  });
+
+  it("(Q1-a, TASK.102 CUT-S2 §10.12.1) ui_ready arriving after shutdown() has already resolved never starts the pending continuation on the disposed engine", async () => {
+    let continuationRuns = 0;
+    const engine = buildFakeEngine({
+      async *continueTurn(): AsyncIterable<AgentEvent> {
+        continuationRuns += 1;
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+    });
+    const { port, session } = buildTestSession({ engine, continuationPending: true });
+    // shutdown() resolves immediately here — nothing is busy and nothing is
+    // parked, so the reentrant currentTurn wait exits on its first check.
+    await session.shutdown();
+    port.send({ type: "ui_ready" });
+    // Discriminator (pre-fix): route()'s ui_ready case has no shuttingDown
+    // check of its own — it unconditionally assigns
+    // `this.currentTurn = this.startContinuation()...`, which emits
+    // host_ready/turn_started and calls the (disposed) engine's continueTurn.
+    expect(port.hostReady()).toBeUndefined();
+    expect(port.received.some((m) => (m as { type?: unknown }).type === "turn_started")).toBe(false);
+    expect(continuationRuns).toBe(0);
+    expect((session as unknown as { currentTurn: Promise<void> | null }).currentTurn).toBeNull();
   });
 
   it("permanently rejects new turns in the source host after transition handoff", async () => {
@@ -3002,6 +3026,263 @@ describe("Session — shutdown() vs. admission (TASK.102 CUT-S2 §10.11.1 N1)", 
   });
 });
 
+describe("Session — shutdown() admission funnel: exit_worktree / rewind_request / default-deny (TASK.102 CUT-S2 §10.12.1)", () => {
+  /**
+   * Minimal recording WirePort (mirrors the shell-capability describe's own
+   * FakeWirePort above, but typed HostToUiMessage for readable `toContainEqual`
+   * assertions) — used here because `createHarness` (test-harness.ts) does not
+   * expose a `worktreeControl` seam, and Q1-b needs one.
+   */
+  class RecordingPort implements WirePort {
+    readonly received: HostToUiMessage[] = [];
+    private cb: ((msg: unknown) => void) | null = null;
+    post(msg: unknown): void {
+      this.received.push(msg as HostToUiMessage);
+    }
+    onMessage(cb: (msg: unknown) => void): void {
+      this.cb = cb;
+    }
+    onClose(): void {
+      // Unused by these tests.
+    }
+    send(message: UiToHostMessage): void {
+      this.cb?.(message);
+    }
+  }
+
+  function buildStubEngine(overrides: Partial<SessionEngine> = {}): SessionEngine {
+    return {
+      id: "core",
+      capabilities: {
+        supportsCorePermissions: true,
+        supportsRewind: true,
+        supportsWorkflow: true,
+        supportsGitMutations: true,
+        supportsContextUsage: true,
+        supportsContextBreakdown: true,
+        supportsInteractiveApprovals: true,
+        costAccounting: true,
+        supportsModelSelection: true,
+        supportsReasoningEffort: true,
+        supportsImages: true,
+        supportsTasks: true,
+        supportsFileSnapshots: true,
+      },
+      mode: () => "build",
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+      ...overrides,
+    };
+  }
+
+  it("(Q1-b) exit_worktree after shutdown() has begun is refused without ever calling worktreeControl.exit", async () => {
+    const outbound = new Outbound();
+    const broker = new IpcPermissionBroker((message) => outbound.emit(message));
+    const exit = vi.fn(async () => ({ ok: false as const, error: "must not run" }));
+    const session = new Session({
+      outbound,
+      engine: buildStubEngine(),
+      broker,
+      fs: new MemFs(),
+      workspace: "/workspace",
+      model: "m1",
+      sessionId: "s1",
+      rules: new SessionPermissionRules(),
+      worktreeControl: { enter: vi.fn(), exit },
+    });
+    const port = new RecordingPort();
+    session.bindPort(port);
+    port.send({ type: "ui_ready" });
+
+    // Discriminator (pre-fix): none of exit_worktree's own guards
+    // (relocating/busy/worktreeControl-undefined) check shuttingDown, so
+    // once shutdown() has resolved (nothing busy), exit_worktree sails
+    // through and calls the REAL worktreeControl.exit — with
+    // `cleanup:"auto"` a genuine worktree deletion on a host already mid-teardown.
+    await session.shutdown();
+    port.send({ type: "exit_worktree", cleanup: "auto" });
+
+    expect(port.received).toContainEqual({
+      type: "worktree_notice",
+      message: "Cannot exit the worktree: the session is shutting down.",
+    });
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("(Q1-c) rewind_request after shutdown() has begun is refused without ever calling the checkpoints seam", async () => {
+    let rewindCalled = false;
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async () => {
+        rewindCalled = true;
+        return { ok: false, reason: "should not run" };
+      },
+    };
+    const h = createHarness({ steps: [], checkpointsSeam: seam });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // Discriminator (pre-fix): onRewind's own guards only check
+      // `this.busy` — busy is false here (nothing ever ran), so a
+      // rewind_request sent after shutdown() has resolved is admitted today.
+      await h.session.shutdown();
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "both" });
+
+      const res = await h.waitFor(isRewindResult);
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("shutting down");
+      expect(res.conversationRestored).toBe(false);
+      expect(res.restoredPaths).toBeNull();
+      expect(rewindCalled).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("(Q1-d) an in-flight rewind is awaited by shutdown() to completion, not abandoned via a null currentTurn snapshot", async () => {
+    let releaseRewind: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseRewind = resolve;
+    });
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async () => {
+        await gate;
+        return { ok: true, safetyCheckpointId: "safety-1", restoredPaths: 0, historyItems: null };
+      },
+    };
+    const h = createHarness({ steps: [], checkpointsSeam: seam });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "conversation" });
+      // A real round trip so the rewind's synchronous prefix (busy=true,
+      // currentTurn assigned) has definitely run before shutdown() is called.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      let shutdownSettled = false;
+      const shutdownPromise = h.session.shutdown().then(() => {
+        shutdownSettled = true;
+      });
+      // Discriminator (pre-fix): onRewind never assigns `this.currentTurn`,
+      // so shutdown()'s wait has nothing to observe (null) and resolves
+      // immediately — a real round trip is long enough for that to show.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(shutdownSettled).toBe(false);
+
+      releaseRewind();
+      await shutdownPromise;
+      expect(shutdownSettled).toBe(true);
+
+      const res = await h.waitFor(isRewindResult);
+      expect(res.ok).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("(Q1-e, mutational discriminator) the route() funnel default-denies EVERY message type once shutdown has begun, not just the three carved-out ones — proven against set_model", async () => {
+    // Green on the fixed code as-is (set_model has no dedicated shutdown
+    // gate of its own — it relies entirely on the funnel's default-deny).
+    // Turned red only by temporarily mutating route()'s funnel back into a
+    // list-style gate (removing the unconditional `return` so only the three
+    // named cases short-circuit) — see the builder's report for the mutation
+    // procedure; this comment documents the discipline per §10.12.2's sibling
+    // requirement for §10.12.1's own mutational test.
+    let switchCalls = 0;
+    const h = createHarness({
+      steps: [],
+      switchModel: (id, effort) => {
+        switchCalls += 1;
+        return { model: id, reasoningEffort: effort };
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await h.session.shutdown();
+      h.send({ type: "set_model", model: "gpt-5" });
+      await h.flush();
+      expect(switchCalls).toBe(0);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — shutdown() reentrant wait vs. a pre-fix single snapshot: white-box discriminator (TASK.102 CUT-S2 §10.12.2)", () => {
+  it("(iii-b) shutdown() re-observes a currentTurn reassignment made WHILE it is already waiting on the ORIGINAL turn's promise — a one-shot snapshot cannot see it", async () => {
+    let flushCalled = false;
+    let releaseFlush: () => void = () => {};
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    let resolveDeferred2: () => void = () => {};
+    const deferred2 = new Promise<void>((resolve) => {
+      resolveDeferred2 = resolve;
+    });
+    const h = createHarness({
+      steps: [finishStep()],
+      envStatus: {
+        telemetry: () => null,
+        repoMap: () => null,
+        flushTelemetry: async () => {
+          flushCalled = true;
+          await flushGate;
+        },
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "t1", text: "hi" });
+      await h.waitUntil(() => flushCalled);
+
+      // shutdown() starts waiting on turn 1's OWN promise here — nothing
+      // else has touched `currentTurn` yet.
+      let shutdownSettled = false;
+      const shutdownPromise = h.session.shutdown().then(() => {
+        shutdownSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(shutdownSettled).toBe(false);
+
+      // Simulates a future, unaudited admission point re-pointing
+      // `currentTurn` to its OWN fresh promise WHILE shutdown() is already
+      // mid-wait on turn 1's promise (§10.12.2) — the exact shape
+      // onChildTurnSettled/finalizeChildTerminal's own re-check produces
+      // today. Turn 1's identity-guarded teardown (`if (this.currentTurn
+      // === turn) this.currentTurn = null`) will see this NEW value below
+      // and correctly leave it alone once its own teardown completes.
+      (h.session as unknown as { currentTurn: Promise<void> | null }).currentTurn = deferred2;
+      releaseFlush();
+
+      // Turn 1's own promise settles now. Discipline (§10.12.2): a one-shot
+      // snapshot (`const t = this.currentTurn; if (t) await
+      // Promise.allSettled([t]);`) captured turn 1's promise BEFORE this
+      // reassignment and would resolve right here, never learning about
+      // deferred2 — the reentrant loop instead re-reads `currentTurn`, sees
+      // it now points at deferred2, and keeps waiting. Verified by the
+      // builder: mutating shutdown()'s loop into that exact snapshot turns
+      // THIS assertion red (shutdownSettled flips true here instead of
+      // after deferred2 resolves below); the mutation was reverted after
+      // observing it.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(shutdownSettled).toBe(false);
+
+      resolveDeferred2();
+      await shutdownPromise;
+      expect(shutdownSettled).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+});
+
 describe("Session — child mode: terminal/drained discriminator at the settling call-site (TASK.102 CUT-S2 §10.11.1 N3)", () => {
   it("a drained settle (queue non-empty post-flush) leaves busy===true — and a live user_message sent right after is queued, never a second concurrent runTurn", async () => {
     let releaseFlush: () => void = () => {};
@@ -3197,6 +3478,185 @@ describe("Session — child mode: finalizeChildTerminal drain branch never stran
       );
       // The refusal never started a turn — only the initial programmatic one ever ran.
       expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: shared startNextQueuedSteerTurn() drain helper (TASK.102 CUT-S2 §10.12.3)", () => {
+  it("(Q3-i) a queued image steer refused by acceptUserMessage at onChildTurnSettled's OWN top-level check no longer strands the child — terminal still commits exactly once", async () => {
+    let imagesAllowed = true;
+    const h = createChildHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      imageInputEnabled: () => imagesAllowed,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      const req = await h.waitFor(isPermissionRequest); // turn 1 parked, still mid-flight
+
+      // Enqueued WHILE turn 1 is still running (before it ever settles) —
+      // accepted by enqueueSteerMessage's guard while images are allowed.
+      h.send({
+        type: "user_message",
+        requestId: "steer-img",
+        text: "look at this",
+        images: [{ mediaType: "image/png", data: "AA==" }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+
+      // Flips BEFORE turn 1 settles — acceptUserMessage's own guard, re-run
+      // by onChildTurnSettled's TOP-LEVEL shift+accept (not the LATER
+      // finalizeChildTerminal re-check §10.11.1 N7 already covers), now
+      // refuses the queued message. Discriminator (pre-fix):
+      // onChildTurnSettled calls acceptUserMessage and returns `undefined`
+      // unconditionally — the caller then never calls finalizeChildTerminal,
+      // so `busy` is held forever and `onTerminal` never fires.
+      imagesAllowed = false;
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "steer-img", reason: "unsupported_images" }),
+      );
+      // The refusal never started a second turn — only turn 1 ever ran.
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("(Q3-ii) queue [image-steer, text-steer]: the image is refused and skipped, the text steer starts turn #2, and the terminal commits exactly once after it", async () => {
+    let imagesAllowed = true;
+    const h = createChildHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep(), textStep("steer done")],
+      imageInputEnabled: () => imagesAllowed,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      const req = await h.waitFor(isPermissionRequest); // turn 1 parked
+
+      h.send({
+        type: "user_message",
+        requestId: "steer-img",
+        text: "look at this",
+        images: [{ mediaType: "image/png", data: "AA==" }],
+      });
+      h.send({ type: "user_message", requestId: "steer-text", text: "and also this" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+
+      // Flips BEFORE turn 1 settles, same trick as Q3-i — only the QUEUED
+      // image steer is affected; the text steer carries no attachments and
+      // is unaffected by the toggle.
+      imagesAllowed = false;
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+
+      // Discriminator (pre-fix): onChildTurnSettled shifts ONLY the image
+      // steer, calls the refusing acceptUserMessage, and returns `undefined`
+      // regardless — the text steer is never even reached, `busy` is held
+      // forever, and the terminal never commits (both messages stranded).
+      await h.waitFor((m): m is Of<"turn_started"> => isTurnStarted(m) && m.requestId === "steer-text", 2_000);
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "steer-img", reason: "unsupported_images" }),
+      );
+      // Engine started exactly twice: turn 1, then the drained text steer.
+      expect(h.received.filter(isTurnStarted)).toHaveLength(2);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: Q4 admission gates get mutational discriminators (TASK.102 CUT-S2 §10.12.4)", () => {
+  it("(Q4-a, mutational discriminator) startProgrammaticTurn refuses once shutdown() has begun — kills a mutant removing that gate", async () => {
+    const h = createChildHarness({ steps: [textStep("done")] });
+    try {
+      await h.session.shutdown();
+      const result = h.session.startProgrammaticTurn("x");
+      expect(result).toEqual({ ok: false, reason: "shutting down" });
+      expect(h.received.filter(isTurnStarted)).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("(Q4-b, mutational discriminator) a steer queued BEFORE shutdown() and still queued when turn #1 settles is honestly rejected, never drained — kills both the onChildTurnSettled and finalizeChildTerminal shutdown-branch mutants", async () => {
+    let flushCalled = false;
+    let releaseFlush: () => void = () => {};
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    // A second script step exists ONLY so a mutated run (which erroneously
+    // starts a "turn #2" from the queued steer) has something real to
+    // stream instead of hanging on an exhausted ScriptedModelPort — the
+    // correct/unmutated run below never touches it.
+    const h = createChildHarness({
+      steps: [textStep("done"), textStep("mutant-only-turn-2")],
+      envStatus: {
+        telemetry: () => null,
+        repoMap: () => null,
+        flushTelemetry: async () => {
+          flushCalled = true;
+          await flushGate;
+        },
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitFor(agentEventOf("loop_end"));
+      // Turn 1's finally() is stuck inside flushTelemetry — BEFORE it ever
+      // reaches onChildTurnSettled's own top-level queue check (unlike the
+      // §10.11.1 N6/N7 tests above, which gate on flushHistory instead and
+      // so land strictly AFTER that check has already run with an empty
+      // queue). `busy` is still true here (child path), so the steer below
+      // is queued, not started.
+      await h.waitUntil(() => flushCalled);
+
+      h.send({ type: "user_message", requestId: "steer-1", text: "and this too" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+
+      let shutdownSettled = false;
+      const shutdownPromise = h.session.shutdown().then(() => {
+        shutdownSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(shutdownSettled).toBe(false);
+
+      releaseFlush();
+      await shutdownPromise;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(shutdownSettled).toBe(true);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      // Engine started exactly once — the queued steer was never drained
+      // into a second turn (kills a mutant removing onChildTurnSettled's
+      // `!this.shuttingDown` guard, which would otherwise drain it here).
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      // The queued steer got an honest reject, not silence (kills a mutant
+      // removing finalizeChildTerminal's `if (this.shuttingDown)` branch,
+      // which would otherwise try to drain it into a live turn instead of
+      // rejecting it, dropping this reply entirely).
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "steer-1", reason: "not_ready" }),
+      );
     } finally {
       h.close();
     }
