@@ -96,8 +96,9 @@
  * own 1..10 item numbers (step 7's PASS/FAIL line is printed after step 8
  * runs — its comparison needs data step 8 produces — see step7's own doc).
  * The first FAIL tears down and exits 1. A live-model non-compliance on the
- * dual spawn gets exactly ONE retry, then a documented SKIP (exit 0), same
- * discipline as every other harness in this directory. Evidence (5 required
+ * dual spawn gets exactly ONE retry, then a documented SKIP. Exit codes:
+ * `0 = ALL GREEN, 1 = FAIL, 2 = SKIP (no evidence)` — 0 means the run proved
+ * something, which a SKIP (no PNGs, no layout checked) did not. Evidence (5 required
  * PNGs + a JSON result dump + the redirected app-stderr log) lands in
  * `working-docs/task102-track/evidence/S3/`.
  */
@@ -954,17 +955,15 @@ async function step6Steering(ctx) {
   assert(step, running === true, "c1's own composer inside .child-split-pane never showed .composer-stop within 10s — no busy window to steer into");
 
   ctx.steerProofPath = join(ctx.tmpWorkspace, "split-steer-proof.txt");
-  // "do not sleep again" is load-bearing, not politeness: the earlier wording
-  // ("in addition to the sleep") let a live child read the steer as "sleep
-  // another 60s, THEN echo", which pushes the terminal transition past the
-  // wait below and reds the run on model wording alone. The assertion is not
-  // weakened by dropping it — the steer still has to reach the child and
-  // still has to add a second tool call, which is the whole point of the
-  // step; the busy window it was protecting is already proven by the
-  // status/composer asserts above and re-proven right after the click.
-  const steerText =
-    `Also run the Bash tool with the exact command "echo STEERED > ${ctx.steerProofPath}" ` +
-    "right now, before you reply DONE. Do not sleep again.";
+  // Wording is empirically load-bearing and must NOT be "improved": this
+  // exact sentence is the one a live child has actually obeyed (run 3 —
+  // toolCalls=2, proof file written). Rephrasing it to "right now ... do not
+  // sleep again" to shorten the wait was tried on run 5 and cost a red run:
+  // the child processed the steer (turns 2 -> 3) and answered DONE without
+  // running the tool at all, so the step lost the very effect it exists to
+  // observe. The double-sleep this wording can provoke is a WAIT-length
+  // problem, and it is solved by the wait budget, not by the prompt.
+  const steerText = `Also run the Bash tool with the exact command "echo STEERED > ${ctx.steerProofPath}" before you reply DONE, in addition to the sleep.`;
 
   const typed = await ctx.cdp.eval(typeIntoSplitComposerJs(steerText));
   assert(step, typed.ok === true && typed.value === steerText, `typing into the split child composer failed or textarea value mismatched: ${JSON.stringify(typed)}`);
@@ -1436,7 +1435,12 @@ async function run() {
   }
 
   await teardown(ctx, failedStep, stepsCompleted);
-  process.exit(failedStep === null ? 0 : 1);
+  // Exit 0 is reserved for a run that actually proved something (CUT-S3 §7
+  // arbitration, wave 1 / A1): a documented SKIP snapped no PNG and checked
+  // no layout, so it must not be indistinguishable from 10/10 ALL GREEN to
+  // anything reading the code alone. The verdict line and `skipped: true` in
+  // the result JSON are unchanged.
+  process.exit(failedStep !== null ? 1 : ctx.skipped === true ? 2 : 0);
 }
 
 run().catch((err) => {
