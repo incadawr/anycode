@@ -33,6 +33,13 @@ A lightweight task tracker lives in `working-docs/`:
 
 > The initial tasks, created on 2026-07-05, are TASK.1 and TASK.2: two independent defects from one incident (`glm-5.2`, project `/tmp/test-1`).
 
+## Track orchestration
+
+Multi-session background tracks (bg-orchestrator chains) are assembled ONLY
+from the canonical template `working-docs/ORCHESTRATOR-TEMPLATE.md`: `[FIXED]`
+sections are copied verbatim, `[FILL]` slots come from readable sources named
+in the prompt. Do not author a track bootstrap from memory or from scratch.
+
 ## Other conventions
 
 - `working-docs/build/**` belongs to the build track (`PROGRESS.md` is its source of truth); do not write there blindly from unrelated sessions.
