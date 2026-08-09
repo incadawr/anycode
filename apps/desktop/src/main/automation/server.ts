@@ -29,6 +29,7 @@ import { gitCommandMessageSchema } from "../../shared/protocol.js";
 import {
   createTabNew,
   childOpen,
+  childLayoutState,
   getSessions,
   getState,
   getStateForTab,
@@ -718,6 +719,14 @@ async function route(
   // — same per-block-scoped GET shape as the agent-card probe above.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "try-again-button") {
     return tryAgainButtonState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // Child-layout probe (TASK.102 S3c, CUT-S3 §6.2): `/tabs/:tabId/child/layout`
+  // — read-only counterpart of `POST .../child/open` below, same
+  // `parts.length === 4` shape as the try-again-button/agent-card GET probes
+  // above. Every layout TRANSITION stays a real DOM click in the smoke
+  // (§6.1); this route only ever reads `childLayoutStore.view(rootTabId)`.
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "layout") {
+    return childLayoutState(deps, decodeURIComponent(parts[1]!));
   }
   // Preview probes (night-track wave-1 cut §2.8, 96-E): `/tabs/:tabId/previews`
   // — same per-tab GET shape as the todo-panel/model-pill probes above, but

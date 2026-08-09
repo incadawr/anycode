@@ -55,7 +55,7 @@ import {
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
-import { childLayoutStore as defaultChildLayoutStore, type ChildLayoutStoreApi } from "./child-layout.js";
+import { childLayoutStore as defaultChildLayoutStore, type ChildLayoutStoreApi, type ChildLayoutView } from "./child-layout.js";
 import { useSettingsStore, type SettingsStoreApi } from "./settings-store.js";
 import { groupAlwaysAllowRules } from "./permission-rules.js";
 import { ruleDisplayPattern, ruleHasPattern, ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
@@ -1842,6 +1842,18 @@ export interface AutomationFacade {
    * or `/child-runs`) straight into those two existing methods.
    */
   childOpen(rootTabId: string, spawnToolCallId: string): FacadeResult;
+  /**
+   * TASK.102 S3c (CUT-S3 §6.2, read-only PROBE — not a driver): thin-forward
+   * read of `childLayoutStore.view(rootTabId)`. Deliberately the ONLY
+   * facade surface S3 adds for layout state — `enterSplit`/`exitSplit`/
+   * `expandRow` get NO facade drivers (CUT-S3 §6.1/§9 п.8): a driver would
+   * open a second path into the store that bypasses the real button ->
+   * store-method wiring the smoke exists to pin, so every layout TRANSITION
+   * in the smoke is a real DOM `.click()`, and this method only ever reads
+   * the result. Same `unknown_tab` structural refusal as `childOpen`/
+   * `selectTab` above (a child tabId is never in tabsStore either).
+   */
+  childLayoutState(rootTabId: string): { ok: true; view: ChildLayoutView } | FacadeErr;
   resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult>;
   closeTab(tabId: string): Promise<{ ok: boolean; reason?: string }>;
   listSessions(): Promise<SessionSummary[]>;
@@ -4419,6 +4431,16 @@ export function createAutomationFacade(
       }
       childLayoutStore.getState().open(rootTabId, spawnToolCallId);
       return { ok: true };
+    },
+
+    childLayoutState(rootTabId: string): { ok: true; view: ChildLayoutView } | FacadeErr {
+      // Same structural refusal as childOpen/selectTab above — no separate
+      // "does this view make sense" gate, it just reads whatever the store
+      // holds (MASTER_VIEW for a root tab the store has never heard from).
+      if (!tabsStore.getState().tabs.some((tab) => tab.tabId === rootTabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      return { ok: true, view: childLayoutStore.getState().view(rootTabId) };
     },
 
     resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult> {

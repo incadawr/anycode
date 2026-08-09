@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildFacadeExpr,
   childOpen,
+  childLayoutState,
   closeTab,
   createTabNew,
   killHost,
@@ -249,6 +250,12 @@ describe("thin facade commands forward method + args", () => {
     const deps = fakeDeps();
     await childOpen(deps, "tab-a", "call-1");
     expect(deps.callFacade).toHaveBeenCalledWith("childOpen", ["tab-a", "call-1"]);
+  });
+
+  it("childLayoutState -> callFacade('childLayoutState', [tabId]) (TASK.102 S3c, CUT-S3 §6.2)", async () => {
+    const deps = fakeDeps();
+    await childLayoutState(deps, "tab-a");
+    expect(deps.callFacade).toHaveBeenCalledWith("childLayoutState", ["tab-a"]);
   });
 });
 
