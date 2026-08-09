@@ -1403,6 +1403,17 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
     }
+    // TASK.102 CUT-S2 §10.10.1 п.5: a completed child is READ-ONLY (§6) —
+    // once the terminal has been dispatched there is no live turn chain left
+    // for a late message to join. Checked BEFORE the busy gate below because
+    // `busy` is already false by the time the terminal has committed (see
+    // acceptUserMessage's finally) — without this gate a late message would
+    // fall straight through into a real second turn whose result can never
+    // reach anyone (the child tab is already gone/closing).
+    if (this.child !== undefined && this.childTerminalFinalized) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
+      return;
+    }
     if (this.busy) {
       // TASK.102 CUT-S2 §1.1/§2.6.3: a child session queues a busy-time
       // user_message (steer) instead of rejecting it — the composer of a live
@@ -1495,69 +1506,79 @@ export class Session {
       }
     }
     this.busy = true;
-    this.currentTurn = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice).finally(async () => {
-      this.abort = null;
-      this.turnId = null;
-      this.snapshotPaths.clear();
-      this.flushPreviewArtifacts();
-      // Tier-2 title refinement (design §3): fired after the FIRST turn's
-      // teardown only (maybeRefineTitle no-ops once pendingTitleRefineText has
-      // been consumed) — fire-and-forget, never awaited here.
-      this.maybeRefineTitle();
-      // Slice 5.7: push a fresh git_status after the turn so a file the turn
-      // changed is reflected in the pill. Fire-and-forget — must NEVER block or
-      // throw into the turn (the bridge coalesces + swallows failures internally).
-      this.git?.refreshAfterTurn();
-      if (this.engine.capabilities.supportsTasks) this.pushTaskList();
-      // Codex-P2 fix (slice P7.8): wait for in-flight telemetry appends to
-      // settle before reading written/dropped counters, otherwise the panel
-      // shows the previous turn's counts (fail-soft: a flush error/timeout
-      // must never block the teardown push).
-      try {
-        await this.envStatus?.flushTelemetry?.();
-      } catch {
-        // flushTelemetry never rejects by contract (node-telemetry.ts); this
-        // guard exists only to keep teardown byte-identical if that changes.
-      }
-      // Slice P7.8: refresh written/dropped telemetry counters after each turn
-      // (mirror of the pushTaskList refresh above) — seam-gated, no-op in
-      // legacy tests/harness.
-      this.pushEnvStatus();
-      // Codex-P2 fix (slice P7.8 review): keep currentTurn non-null until the
-      // flush+push above have actually run, so shutdown()'s `await
-      // this.currentTurn` (session.ts:332-337) always waits for the full
-      // teardown instead of finding it already nulled mid-flush.
-      this.currentTurn = null;
-      // TASK.102 CUT-S2 §1.1/§2.6.3: MUST run strictly after `this.currentTurn
-      // = null` above — draining the steer queue synchronously starts a NEW
-      // turn (busy=true, a fresh currentTurn promise) that this line must
-      // never clobber back to null.
-      //
-      // F7 fix: `busy` used to be reset at the very TOP of this callback,
-      // before any of the awaits above — a steer message (or, for a root
-      // session, a plain next user_message) arriving in that window observed
-      // busy===false and bypassed the queue/reject gate entirely, starting a
-      // SECOND live turn while this teardown — and, for a child, the terminal
-      // finalize below — was still in flight (a live-probed defect, not a
-      // microsecond race: the child composer re-enables on `loop_end`, well
-      // before this callback even starts). `busy` now stays true across the
-      // WHOLE teardown and is cleared only once nothing further can run
-      // underneath it: for a root session that's right here; for a child,
-      // `onChildTurnSettled` either hands `busy` off to a freshly-drained turn
-      // (which already set it true itself — this callback must NOT clobber
-      // that back to false) or the terminal has actually finalized
-      // (`flushHistory` included), in which case `busy` clears after that
-      // await settles, not before.
-      if (this.child !== undefined) {
-        const settling = this.onChildTurnSettled();
-        if (settling !== undefined) {
-          await settling;
+    const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice).finally(
+      async () => {
+        // TASK.102 CUT-S2 §10.10.1 O1: `busy` means something different for a
+        // root session than for a child, and that asymmetry is now explicit
+        // instead of one flag doing two incompatible jobs. ROOT: `busy` means
+        // "a model turn is in flight" and clears as the very FIRST step of
+        // teardown, before any await below — the renderer's contract is
+        // "input is accepted right after loop_end" (P7.14's pause-on-reject
+        // exists for a genuine mid-stream anomaly, not for the host itself
+        // holding the gate across its own telemetry/fs tail). CHILD `busy`
+        // additionally guards the terminal-finalize window and is cleared by
+        // the branch at the end of this callback instead — F7's "root half"
+        // of holding busy across the whole teardown was overreach (STATE.md
+        // only ever described the child-side pause) and is reverted here.
+        if (this.child === undefined) {
           this.busy = false;
         }
-      } else {
-        this.busy = false;
-      }
-    });
+        this.abort = null;
+        this.turnId = null;
+        this.snapshotPaths.clear();
+        this.flushPreviewArtifacts();
+        // Tier-2 title refinement (design §3): fired after the FIRST turn's
+        // teardown only (maybeRefineTitle no-ops once pendingTitleRefineText has
+        // been consumed) — fire-and-forget, never awaited here.
+        this.maybeRefineTitle();
+        // Slice 5.7: push a fresh git_status after the turn so a file the turn
+        // changed is reflected in the pill. Fire-and-forget — must NEVER block or
+        // throw into the turn (the bridge coalesces + swallows failures internally).
+        this.git?.refreshAfterTurn();
+        if (this.engine.capabilities.supportsTasks) this.pushTaskList();
+        // Codex-P2 fix (slice P7.8): wait for in-flight telemetry appends to
+        // settle before reading written/dropped counters, otherwise the panel
+        // shows the previous turn's counts (fail-soft: a flush error/timeout
+        // must never block the teardown push).
+        try {
+          await this.envStatus?.flushTelemetry?.();
+        } catch {
+          // flushTelemetry never rejects by contract (node-telemetry.ts); this
+          // guard exists only to keep teardown byte-identical if that changes.
+        }
+        // Slice P7.8: refresh written/dropped telemetry counters after each turn
+        // (mirror of the pushTaskList refresh above) — seam-gated, no-op in
+        // legacy tests/harness.
+        this.pushEnvStatus();
+        // CUT-S2 §10.10.1 O7/O2: a queued steer message is drained into a
+        // brand-new turn (busy=true, a fresh currentTurn already assigned by
+        // ITS OWN acceptUserMessage call) before this turn is allowed to be
+        // "done" — publishing a terminal while the queue is non-empty would
+        // make steering a dead facade (§5.16). `busy` clears here only when
+        // finalizeChildTerminal actually committed a terminal ("terminal",
+        // not "drained") — a drained turn already owns `busy` itself and this
+        // callback must never clobber that back to false.
+        if (this.child !== undefined) {
+          const settling = this.onChildTurnSettled();
+          if (settling !== undefined && (await settling) === "terminal") {
+            this.busy = false;
+          }
+        }
+        // Identity-guarded (§10.10.1 O2): only THIS turn's own promise clears
+        // currentTurn — a plain unconditional null here (the naive fix the
+        // architect explicitly rejected) would clobber the FRESH currentTurn
+        // a synchronously-drained steer turn (onChildTurnSettled above)
+        // already assigned to itself. Moved to the very end of teardown (was
+        // the unconditional `this.currentTurn = null` ahead of the child
+        // branch) so shutdown()'s `await this.currentTurn` (`:914`) now
+        // covers the WHOLE teardown — including the child terminal
+        // finalize/flushHistory above — not just runTurn() itself.
+        if (this.currentTurn === turn) {
+          this.currentTurn = null;
+        }
+      },
+    );
+    this.currentTurn = turn;
   }
 
   /**
@@ -1596,13 +1617,17 @@ export class Session {
    * the LAST turn's run must always get its own turn before the child ever
    * reports done).
    *
-   * F7 fix: returns `undefined` when it drained a queued steer message (the
-   * new turn already set `busy=true` itself — the caller must leave `busy`
-   * alone) and the `finalizeChildTerminal()` promise otherwise, so the
-   * caller can await it and clear `busy` only once the terminal — including
-   * `flushHistory` — has actually finished, never before.
+   * F7 fix, return type widened under CUT-S2 §10.10.1 O7: returns `undefined`
+   * when it drained a queued steer message (the new turn already set
+   * `busy=true` itself — the caller must leave `busy` alone) and
+   * `finalizeChildTerminal()`'s own `"terminal" | "drained"` promise
+   * otherwise — `finalizeChildTerminal` can ALSO decide to drain (a message
+   * queued strictly during its `flushHistory` await, arriving too late for
+   * the top-level check right above), so the caller only clears `busy` when
+   * the settled value is literally `"terminal"` (§10.10.1's call-site
+   * contract), never on `"drained"`.
    */
-  private onChildTurnSettled(): Promise<void> | undefined {
+  private onChildTurnSettled(): Promise<"terminal" | "drained"> | undefined {
     const next = this.steerQueue.shift();
     if (next !== undefined) {
       this.acceptUserMessage(next.requestId, next.text, next.images);
@@ -1619,42 +1644,89 @@ export class Session {
    * flush failure produces an honest `error` terminal (never a "completed"
    * card whose durable transcript the flush never actually wrote).
    *
-   * Once-latch (F7): `child.onTerminal`'s own contract promises "exactly
-   * once per host lifetime" — enforced here, not just documented, since the
-   * F7 busy-window race could otherwise drive this method from two
-   * concurrent completions (the legitimately-queued drain finalizing, racing
-   * a stray bypass turn's own finally reaching the same call).
+   * Healthy-path re-check (§10.10.1 O7): a steer message can arrive strictly
+   * DURING the `flushHistory` await above — too late for `onChildTurnSettled`'s
+   * own top-level queue check, and (pre-fix) past the once-latch too, so it
+   * would sit in the queue forever, never drained, never rejected (a literal
+   * facade of §5.16's "no terminal while the queue is non-empty"). Re-reading
+   * the queue here, AFTER the flush but BEFORE committing to a terminal,
+   * closes that window: non-empty ⇒ drain into a new turn and return
+   * `"drained"` instead — cheap and idempotent, the next settle re-runs this
+   * whole method (including `flushHistory`) from the top.
+   *
+   * Once-latch (F7, moved under O7): `childTerminalFinalized` is set
+   * SYNCHRONOUSLY, with no await in between, immediately before each
+   * `onTerminal` call on both the healthy and flush-failure paths below —
+   * required so the re-check above can decide to drain WITHOUT having
+   * already committed to a terminal. `busy` spanning the whole child
+   * teardown (this callback included) means a second settle cannot start
+   * while this one is still in flight, so true concurrent re-entry no longer
+   * exists by construction; the latch remains as defense against a call
+   * arriving strictly AFTER the terminal already committed, not as a mutex
+   * against a race that can no longer happen.
+   *
+   * O3: `onTerminal` never propagates a throw — wrapped in try/catch on both
+   * paths (console.error, same discipline as the `flushTelemetry` guard
+   * above) — since the real call site never wraps `await settling` in a try,
+   * and by the time it runs `currentTurn` may already be nulled elsewhere;
+   * an unguarded throw here becomes an unhandled rejection that kills the
+   * host.
    */
-  private async finalizeChildTerminal(): Promise<void> {
+  private async finalizeChildTerminal(): Promise<"terminal" | "drained"> {
     if (this.child === undefined || this.childTerminalFinalized) {
-      return;
+      return "terminal";
     }
-    this.childTerminalFinalized = true;
     const { text: finalText, truncated } = finalizeFinalText(this.childFinalText);
     const durationMs = Date.now() - this.childStartedAt;
     try {
       await this.child.flushHistory();
     } catch (error) {
+      // Flush-failure path (§10.10.1 O7б): the durable sink is broken, so
+      // running more steer turns against it is pointless — every message
+      // parked during the flush is rejected honestly instead of silently
+      // lost (the O7 bug), and the error terminal publishes as-is.
+      while (this.steerQueue.length > 0) {
+        const queued = this.steerQueue.shift();
+        if (queued !== undefined) {
+          this.outbound.emit({ type: "turn_rejected", requestId: queued.requestId, reason: "not_ready" });
+        }
+      }
+      this.childTerminalFinalized = true;
+      try {
+        this.child.onTerminal({
+          status: "error",
+          finalText: `Child session history failed to persist durably: ${describeError(error)}`,
+          truncated: false,
+          turns: this.childTurns,
+          toolCalls: this.childToolCalls,
+          durationMs,
+          ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
+        });
+      } catch (onTerminalError) {
+        console.error(`[host] child.onTerminal threw (error terminal): ${describeError(onTerminalError)}`);
+      }
+      return "terminal";
+    }
+    const next = this.steerQueue.shift();
+    if (next !== undefined) {
+      this.acceptUserMessage(next.requestId, next.text, next.images);
+      return "drained";
+    }
+    this.childTerminalFinalized = true;
+    try {
       this.child.onTerminal({
-        status: "error",
-        finalText: `Child session history failed to persist durably: ${describeError(error)}`,
-        truncated: false,
+        status: this.childLoopStatus ?? "error",
+        finalText,
+        truncated,
         turns: this.childTurns,
         toolCalls: this.childToolCalls,
         durationMs,
         ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
       });
-      return;
+    } catch (error) {
+      console.error(`[host] child.onTerminal threw: ${describeError(error)}`);
     }
-    this.child.onTerminal({
-      status: this.childLoopStatus ?? "error",
-      finalText,
-      truncated,
-      turns: this.childTurns,
-      toolCalls: this.childToolCalls,
-      durationMs,
-      ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
-    });
+    return "terminal";
   }
 
   /**
