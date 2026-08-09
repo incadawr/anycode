@@ -513,29 +513,78 @@ const CHILD_SPLIT_MESSAGE_COUNT_JS = `(() => {
   return surface ? surface.querySelectorAll('.message-list .message').length : -1;
 })()`;
 
-const CLICK_BREADCRUMB_MASTER_JS = `(() => {
-  const btn = document.querySelector('.child-breadcrumb-master');
-  if (!btn) return { ok: false, reason: 'no_button' };
-  btn.click();
-  return { ok: true };
-})()`;
-
-function clickSelectorJs(selector) {
+/**
+ * Hit-tests THEN clicks a single element — every real DOM-transition click
+ * in this file goes through this one helper (CUT-S3 §6.1, LAW: "ассертит
+ * `document.elementFromPoint(cx, cy)` внутри элемента и кликает ЕГО", not a
+ * bare `el.click()` that would just as happily hit a hidden/covered node).
+ * `selectorExprJs` is a JS EXPRESSION (already safely built by the caller)
+ * that evaluates to the CSS selector — a `JSON.stringify`'d literal for a
+ * static selector, or a small `'...' + CSS.escape(id) + '...'` expression
+ * for a dynamic one (`clickRowJs` below). `extraCheckJs`, if given, is an
+ * inline JS expression over `el` that must be truthy for the click to
+ * proceed (the composer-send button's pre-existing `disabled` guard).
+ *
+ * The hit point is the on-screen INTERSECTION centre of the element's rect
+ * with the viewport, not the rect's own centre — same fix
+ * `child-session-race-smoke.mjs`'s `cardGeometryJs` already applies: an
+ * element whose own centre sits off-screen makes `elementFromPoint` return
+ * null there by definition, a false "hit outside" this track has already
+ * paid for once in a red run. A hit lands on the element itself OR one of
+ * its descendants (`el.contains(hit)`) — a button with an icon/span child is
+ * the normal case, not a miss.
+ *
+ * On failure the full geometry/hit payload comes back (rect, on-screen
+ * area, hit point, the tag/class of whatever `elementFromPoint` actually
+ * returned) — never just `{ ok: false }` — so a red run can be told apart
+ * from an assert demanding a state the product cannot be in by construction
+ * (CUT-S3 §8: a false red here is expensive, this smoke runs ~7 minutes
+ * against a live model).
+ */
+function hitTestClickJs(selectorExprJs, extraCheckJs) {
   return `(() => {
-    const el = document.querySelector(${JSON.stringify(selector)});
+    const el = document.querySelector(${selectorExprJs});
     if (!el) return { ok: false, reason: 'not_found' };
+    ${extraCheckJs ? `if (!(${extraCheckJs})) return { ok: false, reason: 'disabled' };` : ""}
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const visLeft = Math.max(rect.left, 0);
+    const visTop = Math.max(rect.top, 0);
+    const visWidth = Math.max(0, Math.min(rect.right, vw) - visLeft);
+    const visHeight = Math.max(0, Math.min(rect.bottom, vh) - visTop);
+    const geometry = {
+      rect: { width: rect.width, height: rect.height, top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom },
+      visible: { left: visLeft, top: visTop, width: visWidth, height: visHeight },
+    };
+    if (visWidth <= 0 || visHeight <= 0) {
+      return { ok: false, reason: 'no_onscreen_area', ...geometry };
+    }
+    const cx = visLeft + visWidth / 2, cy = visTop + visHeight / 2;
+    const hit = document.elementFromPoint(cx, cy);
+    const hitInside = hit ? (el.contains(hit) || hit === el) : false;
+    if (!hitInside) {
+      return {
+        ok: false,
+        reason: 'hit_outside',
+        ...geometry,
+        point: { x: cx, y: cy },
+        hitTag: hit ? hit.tagName : null,
+        hitClass: hit && typeof hit.className === 'string' ? hit.className : null,
+      };
+    }
     el.click();
     return { ok: true };
   })()`;
 }
 
+const CLICK_BREADCRUMB_MASTER_JS = hitTestClickJs(JSON.stringify(".child-breadcrumb-master"));
+
+function clickSelectorJs(selector) {
+  return hitTestClickJs(JSON.stringify(selector));
+}
+
 function clickRowJs(spawnId) {
-  return `(() => {
-    const row = document.querySelector('.child-split-row[data-spawn-id="' + CSS.escape(${JSON.stringify(spawnId)}) + '"]');
-    if (!row) return { ok: false, reason: 'not_found' };
-    row.click();
-    return { ok: true };
-  })()`;
+  return hitTestClickJs(`'.child-split-row[data-spawn-id="' + CSS.escape(${JSON.stringify(spawnId)}) + '"]'`);
 }
 
 function typeIntoSplitComposerJs(text) {
@@ -550,13 +599,7 @@ function typeIntoSplitComposerJs(text) {
 }
 
 const SPLIT_COMPOSER_RUNNING_JS = `(() => !!document.querySelector('.child-split-pane .composer-stop'))()`;
-const CLICK_SPLIT_COMPOSER_SEND_JS = `(() => {
-  const btn = document.querySelector('.child-split-pane .composer-send');
-  if (!btn) return { ok: false, reason: 'no_button' };
-  if (btn.disabled) return { ok: false, reason: 'disabled' };
-  btn.click();
-  return { ok: true };
-})()`;
+const CLICK_SPLIT_COMPOSER_SEND_JS = hitTestClickJs(JSON.stringify(".child-split-pane .composer-send"), "!el.disabled");
 
 /** Sidebar row titles (border-sanity §6.3 step 9 / I5) — same technique `child-session-scenario-smoke.mjs`'s own `SIDEBAR_ROW_TITLES_JS` established (not exported there). */
 const SIDEBAR_ROW_TITLES_JS = `(() => Array.from(document.querySelectorAll('.sidebar-row')).map((row) => (row.querySelector('.sidebar-row-title')?.textContent ?? null)))()`;
@@ -612,6 +655,29 @@ async function captureMasterSnapshot(ctx, step) {
     fail(step, "GET /state returned no transcript array for the root tab");
   }
   return { ids: transcript.map((b) => b.id), turnStatus: state?.turn?.status ?? null };
+}
+
+/**
+ * The roster head's EXPECTED text, computed independently off the same live
+ * sources the product itself reads for `buildChildStackHead`
+ * (child-layout.ts): `total` is `order.length` (App.tsx maps `order` to
+ * `ChildSplitPane`'s rows 1:1, no filtering), `running` is the count of ids
+ * whose master-transcript `subagent.final === null` — a missing block/
+ * subagent falls back to `FALLBACK_SUBAGENT_CARD` (App.tsx, `final: null`),
+ * same as the product, so it also counts as still-running. This mirrors
+ * `childBadgeKind`'s own priority (`waiting`/`running` are mutually
+ * exclusive with a non-null `final`, store.ts's own doc), never a literal —
+ * CUT-S3 §6.3 п.4 / §8 п.4's whole point.
+ */
+async function computeExpectedRosterText(ctx, step, order) {
+  const { transcript } = await getTranscriptBlocks(ctx, step, ctx.tabId);
+  const running = order.filter((id) => {
+    const block = transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
+    const subagent = block?.subagent ?? null;
+    return subagent === null || subagent.final === null;
+  }).length;
+  const total = order.length;
+  return { text: `Subagents${total} · ${running} running`, detail: { total, running, order } };
 }
 
 function assertIdsSubset(step, label, beforeIds, afterIds) {
@@ -787,6 +853,12 @@ async function step4OpenChild2Accordion(ctx) {
   );
   assert(step, probe.view?.expandedId === ctx.c2ToolCallId, `expected expandedId===c2, got ${JSON.stringify(probe.view)}`);
 
+  // Read BEFORE the DOM snapshot below (§6.3 п.4's own race: a child may go
+  // terminal between reading the source and reading the DOM) so a re-read
+  // after a mismatch below catches UP to the DOM snapshot already taken,
+  // rather than uselessly re-fetching a state that already predates it.
+  let rosterExpectation = await computeExpectedRosterText(ctx, step, probe.view.order);
+
   const state = await ctx.cdp.eval(childSplitStateJs());
   assert(step, state.ok === true, `no .child-split-pane in the DOM: ${JSON.stringify(state)}`);
   assert(step, state.headRoster === true, `expected the roster head variant (N=2), got: ${JSON.stringify(state)}`);
@@ -800,8 +872,18 @@ async function step4OpenChild2Accordion(ctx) {
     assert(step, row.hasSurface === false || row.surfaceHeight === 0, `collapsed row ${row.spawnId} unexpectedly has a non-zero-height surface: ${JSON.stringify(row)}`);
   }
   // Roster text sourced from live data (§8 п.4 anti-facade risk: a hardcoded
-  // "Subagents · 3 · 2 running" literal would still pass a naive DOM check).
-  assert(step, typeof state.headText === "string" && state.headText.includes("2"), `roster head text does not mention total=2: ${JSON.stringify(state.headText)}`);
+  // "Subagents · 3 · 2 running" literal would still pass a naive
+  // `includes("2")` check — it contains a "2" too). Compared against the
+  // independently-computed expectation above; one re-read of the source is
+  // allowed before failing (§6.3 п.4's own race — see the comment above).
+  if (state.headText !== rosterExpectation.text) {
+    rosterExpectation = await computeExpectedRosterText(ctx, step, probe.view.order);
+  }
+  assert(
+    step,
+    state.headText === rosterExpectation.text,
+    `roster head text not derived from live data: dom="${state.headText}" expected="${rosterExpectation.text}" (${JSON.stringify(rosterExpectation.detail)})`,
+  );
 
   ctx.losslessC2Early = await ctx.cdp.eval(CHILD_SPLIT_MESSAGE_COUNT_JS);
   ctx.pngLayoutD = await saveScreenshot(ctx, "s3-3-layout-D");
@@ -1271,6 +1353,13 @@ async function run() {
     process.env.REMOTE_DEBUGGING_PORT = String(ctx.cdpPort);
 
     await step1LaunchApp(ctx);
+    // Connect CDP (and with it, `Runtime.enable` + the console-error
+    // collector, §6.3 п.10) immediately after launch — BEFORE waiting on the
+    // facade — so a renderer `console.error` during the boot race itself
+    // still lands in the count step 10 later asserts is zero. `cdpConnect`
+    // tolerates the app not having a page target yet (polls `/json/list` up
+    // to 60s @ 400ms).
+    ctx.cdp = await cdpConnect(ctx.cdpPort);
     // Closing the startup window explicitly (rather than letting
     // `step1DiscoverTab` do its own internal `waitForFacade`) is what lets
     // step 10 hold `facade_not_installed` to the boot race only: the marker
@@ -1283,7 +1372,6 @@ async function run() {
     // unmodified; no local reimplementation needed.
     await step1DiscoverTab(ctx);
 
-    ctx.cdp = await cdpConnect(ctx.cdpPort);
     const baseline = await ctx.cdp.eval(SIDEBAR_ROW_TITLES_JS);
     ctx.baselineSidebarRowCount = Array.isArray(baseline) ? baseline.length : 0;
 
