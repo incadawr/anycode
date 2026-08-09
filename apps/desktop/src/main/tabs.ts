@@ -1267,7 +1267,10 @@ export class TabHostManager {
    * only `finalizeChildRun` (on the child's actual terminal transition, or
    * §10.11.2's ratified carve-out: `drainChildren`'s own deadline branch
    * administratively finalizing a child whose real reap never lands) does.
-   * `cancelChildRun` itself never releases anything.
+   * For a LIVE child, `cancelChildRun` itself never releases anything; the
+   * unknown-tab branch below is the ONE exception — an unreapable ghost is
+   * tombstoned immediately through the same `finalizeChildRun` funnel
+   * (§10.12.5).
    */
   private cancelChildRun(childTabId: string): Promise<void> {
     const childTab = this.tabs.get(childTabId);
