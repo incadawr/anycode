@@ -71,6 +71,32 @@ describe("parseChildSpawnRequest", () => {
     expect(parseChildSpawnRequest(withOptional)).toEqual(withOptional);
   });
 
+  // TASK.102 CUT-S4 §3.1: `engine` is absent = core (byte-compatible with
+  // every S2 producer); present = the child boots that engine instead of an
+  // in-process core loop.
+  describe("engine (CUT-S4 §3.1)", () => {
+    it("accepts absent engine (core, byte-compatible with S2)", () => {
+      expect(parseChildSpawnRequest(valid)).toEqual(valid);
+    });
+
+    it.each(["claude", "codex"] as const)("accepts a well-formed %s engine", (engine) => {
+      const withEngine = { ...valid, engine };
+      expect(parseChildSpawnRequest(withEngine)).toEqual(withEngine);
+    });
+
+    it("rejects an engine value outside the dictionary (fail-closed drop)", () => {
+      expect(parseChildSpawnRequest({ ...valid, engine: "gpt" })).toBeNull();
+    });
+
+    it("rejects a non-string engine", () => {
+      expect(parseChildSpawnRequest({ ...valid, engine: 1 })).toBeNull();
+    });
+
+    it("rejects the core-equivalent literal 'core' — absence, not a literal, spells core", () => {
+      expect(parseChildSpawnRequest({ ...valid, engine: "core" })).toBeNull();
+    });
+  });
+
   it.each(GARBAGE_INPUTS)("rejects garbage input %#", (garbage) => {
     expect(parseChildSpawnRequest(garbage)).toBeNull();
   });

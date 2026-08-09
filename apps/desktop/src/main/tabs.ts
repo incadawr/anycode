@@ -113,6 +113,25 @@ const CHILD_HOST_EXITED_MESSAGE = "Agent: the child session host exited before c
 const CHILD_ENGINE_NOT_READY_MESSAGE =
   'Agent: the core engine is not available in this host, so a child session could not be started. Use tier "inline".';
 /**
+ * TASK.102 CUT-S4 §3.2 п.2: the core text above stays byte-identical (it is
+ * ratified §10.8.2 п.1 wording), so a non-core engine gets its OWN not_ready
+ * text that actually names the engine — the core text's "the core engine" is
+ * simply false for a claude/codex child.
+ */
+function childEngineNotReadyMessage(engine: EngineId): string {
+  if (engine === "core") {
+    return CHILD_ENGINE_NOT_READY_MESSAGE;
+  }
+  return `Agent: the "${engine}" engine is not available in this host, so a child session could not be started. Use tier "inline".`;
+}
+/**
+ * TASK.102 CUT-S4 §3.2 п.3: main never trusts payload identity (file header)
+ * — an engine child is core-side already refused a `provider` (tools/agent.ts
+ * §2.2 п.1), and main refuses it independently here rather than resolving it.
+ */
+const CHILD_ENGINE_PROVIDER_MESSAGE =
+  'Agent: "provider" is not valid for an engine child — it runs on its own CLI account, not an AnyCode provider connection.';
+/**
  * §10.8.2 п.2 — ratified verbatim replacement: names the load-bearing fact
  * that the builder's draft lost — the prompt only ships to the child on
  * `child-ready` (§2.6.4, held in the ledger until then), so a deadline-miss
@@ -1155,8 +1174,20 @@ export class TabHostManager {
       reject("limit_global", CHILD_LIMIT_GLOBAL_MESSAGE);
       return;
     }
-    if (!this.isEngineReady("core")) {
-      reject("not_ready", CHILD_ENGINE_NOT_READY_MESSAGE);
+    // TASK.102 CUT-S4 §3.2 п.1-2: `req.engine` chooses which readiness
+    // authority gates this spawn — the SAME `isEngineReady` a root tab's
+    // `createTab` consults, never a second authority. Absent = core, byte-
+    // compatible with every S2 producer.
+    const engine: EngineId = req.engine ?? "core";
+    if (!this.isEngineReady(engine)) {
+      reject("not_ready", childEngineNotReadyMessage(engine));
+      return;
+    }
+    if (req.provider !== undefined && engine !== "core") {
+      // §3.2 п.3: an engine child runs on its own CLI account — "provider" is
+      // a core-connection concept and is meaningless here. core-side already
+      // refuses it (tools/agent.ts §2.2 п.1); main refuses independently.
+      reject("not_ready", CHILD_ENGINE_PROVIDER_MESSAGE);
       return;
     }
     let connectionId = parentTab.connectionId;
@@ -1208,19 +1239,24 @@ export class TabHostManager {
 
     // Main NEVER trusts payload identity (cut §2.3's own header): workspace,
     // projectRoot and the parent linkage below all come from the ACTUAL
-    // parentTab record, never from `req`. The child is core-engine only
-    // (cut §0's "Ребёнок S2 = ТОЛЬКО core-движок") — no worktree, no engine
-    // model/preset/codex-profile, and never a resume (children never
-    // respawn, cut §0.6).
+    // parentTab record, never from `req`. A child never has a worktree and
+    // never resumes (children never respawn, cut §0.6). CUT-S4 §3.2 п.4: a
+    // CORE child keeps every S2 field byte-identical (modelOverride,
+    // connectionId inherited); an ENGINE child instead carries its model as
+    // `engineModel` (rides `--engine-model` on the child's one, always-first
+    // spawn) and NEVER an `enginePreset`/`codexProfile`/`connectionId` — the
+    // preset comes from `--child-mode` (§4.2, host-side), the account is
+    // ambient (RS4-0-4), and `connectionId` is "Never consulted for a
+    // non-core engine" (tab-ipc law).
     const childTab: TabHost = {
       tabId: childTabId,
       workspace: parentTab.workspace,
       projectRoot: parentTab.projectRoot,
       sessionId: childSessionId,
-      ...(connectionId !== undefined ? { connectionId } : {}),
-      ...(req.model !== undefined ? { modelOverride: req.model } : {}),
-      engine: "core",
-      engineModel: null,
+      ...(engine === "core" && connectionId !== undefined ? { connectionId } : {}),
+      ...(engine === "core" && req.model !== undefined ? { modelOverride: req.model } : {}),
+      engine,
+      engineModel: engine !== "core" ? (req.model ?? null) : null,
       enginePreset: null,
       codexProfile: null,
       proc: null,

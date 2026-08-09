@@ -153,6 +153,53 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     await pending;
   });
 
+  // TASK.102 CUT-S4 §3.1: `req.engine` rides the wire verbatim into the
+  // ChildSpawnRequest AND into the "start" progress event on `accepted` —
+  // the client never re-derives it, only forwards whatever the engine-profile
+  // route (core, S4a) put on `SessionSubagentRequest.engine`.
+  describe("engine passthrough (CUT-S4 §3.1)", () => {
+    it("omits engine from the spawn request when the request carries none (core, byte-compatible)", async () => {
+      const { port, sent } = harness();
+      port.run({ agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-core" }, {});
+      const spawnRequest = spawns(sent)[0]!;
+      expect(spawnRequest).not.toHaveProperty("engine");
+    });
+
+    it.each(["claude", "codex"] as const)("forwards engine %s verbatim into the ChildSpawnRequest", async (engine) => {
+      const { port, sent } = harness();
+      port.run(
+        { agentType: "engine-persona", description: "d", prompt: "p", spawnToolCallId: `spawn-${engine}`, engine },
+        {},
+      );
+      const spawnRequest = spawns(sent)[0]!;
+      expect(spawnRequest.engine).toBe(engine);
+    });
+
+    it.each(["claude", "codex"] as const)("carries engine %s onto the 'start' SubagentProgress emitted on accepted", async (engine) => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "engine-persona", description: "d", prompt: "p", spawnToolCallId: `spawn-start-${engine}`, engine },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c1", childTabId: "t1", model: "claude-x" });
+
+      const expectedStart: SubagentProgress = {
+        kind: "start",
+        agentType: "engine-persona",
+        description: "d",
+        model: "claude-x",
+        engine,
+      };
+      expect(onProgress).toHaveBeenCalledWith(expectedStart);
+
+      emit(terminalEvent(requestId, { childSessionId: "c1" }));
+      await pending;
+    });
+  });
+
   it("rejected resolves an error outcome carrying the EXACT §2.7 message verbatim (no paraphrasing, no wrapping)", async () => {
     const { port, sent, emit } = harness();
     const pending = port.run(

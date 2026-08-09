@@ -1913,6 +1913,126 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
   });
 });
 
+describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", () => {
+  it("an engine child asks isEngineReady for THAT engine, not core — ready admits, naming the engine in fork args' --child-mode triple", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const engineReady = vi.fn((_engine: EngineId) => true);
+    const manager = childManager(fork, window, { engineReady });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-engine-ready", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    engineReady.mockClear();
+
+    rootHost.emit("message", spawnRequest({ requestId: "engine-1", engine: "claude" }));
+
+    expect(engineReady).toHaveBeenCalledWith("claude");
+    expect(childRunEvents(rootHost)).toEqual([
+      expect.objectContaining({ requestId: "engine-1", kind: "accepted" }),
+    ]);
+  });
+
+  it("an engine child is refused not_ready (naming the engine) when THAT engine is not ready, even though core is", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { engineReady: (engine) => engine === "core" });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-engine-notready", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    const hostsBefore = hosts.length;
+
+    rootHost.emit("message", spawnRequest({ requestId: "codex-down", engine: "codex" }));
+
+    expect(hosts).toHaveLength(hostsBefore); // no fork attempted — quota never reserved
+    const event = childRunEvents(rootHost).find((e) => e.requestId === "codex-down");
+    expect(event).toMatchObject({ kind: "rejected", reason: "not_ready" });
+    expect((event as { message: string }).message).toContain("codex");
+  });
+
+  it("a `provider` alongside a non-core engine is refused not_ready and never forks (main does not trust the payload)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      engineReady: () => true,
+      resolveProviderConnection: () => "conn-x",
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-engine-provider", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    const hostsBefore = hosts.length;
+
+    rootHost.emit("message", spawnRequest({ requestId: "engine-provider", engine: "claude", provider: "known" }));
+
+    expect(hosts).toHaveLength(hostsBefore);
+    expect(childRunEvents(rootHost)).toEqual([
+      expect.objectContaining({ requestId: "engine-provider", kind: "rejected", reason: "not_ready" }),
+    ]);
+  });
+
+  it("an accepted engine child's fork carries --engine-model (from req.model) but no --engine-preset, and the child's connectionId is never pinned", () => {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, { engineReady: () => true });
+    const root = manager.createTab({
+      workspace: "/ws",
+      sessionId: "root-engine-fork",
+      resume: false,
+      connectionId: "conn-parent",
+    });
+    expect(root.ok).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "engine-fork-1", engine: "claude", model: "opus[1m]" }));
+
+    const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(childArgs).toContain("--engine-model");
+    expect(childArgs[childArgs.indexOf("--engine-model") + 1]).toBe("opus[1m]");
+    expect(childArgs).not.toContain("--engine-preset");
+    const childEnv = forkSpy.mock.calls[1]?.[2]?.env ?? {};
+    expect(childEnv).not.toHaveProperty("ANYCODE_CONNECTION_ID");
+  });
+
+  it("a core child (engine absent) keeps the byte-identical prior behavior: isEngineReady(\"core\"), connectionId inherited, model rides modelOverride not --engine-model", () => {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const root = manager.createTab({
+      workspace: "/ws",
+      sessionId: "root-core-fork",
+      resume: false,
+      connectionId: "conn-parent",
+    });
+    expect(root.ok).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "core-fork-1", model: "sonnet" }));
+
+    const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(childArgs).not.toContain("--engine-model");
+    const childEnv = forkSpy.mock.calls[1]?.[2]?.env ?? {};
+    expect(childEnv).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-parent" });
+    expect(childRunEvents(hosts[0]!)).toEqual([
+      expect.objectContaining({ requestId: "core-fork-1", kind: "accepted" }),
+    ]);
+  });
+});
+
 describe("TabHostManager — non-recursion lock #3: a child cannot spawn its own child (TASK.102 CUT-S2 §0.2)", () => {
   it("a spawn request from a tab that IS a child is rejected recursion, replied to on the CHILD's OWN process — the root never sees it, and nothing is forked", () => {
     const { fork, hosts } = shutdownableForkRig();
