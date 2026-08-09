@@ -2262,6 +2262,8 @@ function createChildHarness(opts: {
   now?: () => number;
   /** F7 regression harness: lets a test gate `flushTelemetry()` to deterministically land inside the turn-teardown window. */
   envStatus?: SessionOptions["envStatus"];
+  /** §10.11.1 N7 harness: a LIVE toggle, so a test can flip it BETWEEN a steer message's enqueue and its later drain. */
+  imageInputEnabled?: () => boolean;
 }): ChildHarness {
   const channel = new MessageChannel();
   const uiPort = channel.port1;
@@ -2333,6 +2335,7 @@ function createChildHarness(opts: {
     persistence,
     child: { onReady, flushHistory, onTerminal, onProgress, now },
     ...(opts.envStatus ? { envStatus: opts.envStatus } : {}),
+    ...(opts.imageInputEnabled ? { imageInputEnabled: opts.imageInputEnabled } : {}),
   });
   session.bindPort(nodeWirePort(hostPort));
 
@@ -2874,6 +2877,326 @@ describe("Session — child mode: teardown contract (TASK.102 CUT-S2 §10.10.1)"
 
       expect(shutdownSettled).toBe(true);
       expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+/** Narrow test-only escape hatch onto Session's private `busy` flag (§10.11.1 N3: the terminal/drained discriminator at the settling call-site). */
+function sessionBusy(session: Session): boolean {
+  return (session as unknown as { busy: boolean }).busy;
+}
+
+describe("Session — shutdown() vs. admission (TASK.102 CUT-S2 §10.11.1 N1)", () => {
+  it("(i) child: a steer message queued while shutdown() is pending a delayed flushHistory is rejected not_ready, the terminal publishes exactly once, and shutdown() resolves only after it — engine started exactly one turn", async () => {
+    let releaseFlush: () => void = () => {};
+    const flushHistoryImpl = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        releaseFlush = resolve;
+      });
+    // Discriminator (pre-fix): the OLD unconditional healthy-path re-check
+    // drains this queued steer into a SECOND turn on an engine shutdown()
+    // already started disposing — the terminal is never published on the
+    // path shutdown() actually waits on, and shutdown() resolves off the
+    // stale turn-1 snapshot alone. Only ONE step is supplied on purpose:
+    // a fixed post-fix does not need a second one (the queue is rejected,
+    // not drained), and a still-buggy run should not be handed a clean
+    // second script to hide behind.
+    const h = createChildHarness({ steps: [textStep("done")], flushHistoryImpl });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => h.flushHistory.mock.calls.length > 0);
+
+      // Queued BEFORE shutdown() is even called — a live child's ordinary
+      // steer path, parked host-side while busy is still true.
+      h.send({ type: "user_message", requestId: "steer-1", text: "and this too" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      let shutdownSettled = false;
+      const shutdownPromise = h.session.shutdown().then(() => {
+        shutdownSettled = true;
+      });
+
+      // A real round trip; long enough for a buggy unconditional drain to
+      // have already fired its own turn_started off the release below.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(shutdownSettled).toBe(false);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+
+      releaseFlush();
+      await shutdownPromise;
+      // shutdownPromise settling only means the host-side teardown finished;
+      // the queued steer's turn_rejected still needs a tick to cross the
+      // (real) MessageChannel into `h.received`.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(shutdownSettled).toBe(true);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "steer-1", reason: "not_ready" }),
+      );
+    } finally {
+      h.close();
+    }
+  });
+
+  it("(ii) root: a user_message sent after shutdown() has begun (during a delayed flushTelemetry) is rejected not_ready, never a second turn — even though root's own busy already cleared", async () => {
+    let flushCalled = false;
+    let releaseFlush: () => void = () => {};
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    // Discriminator (pre-fix): §10.10.1 O1 clears root's `busy` as the FIRST
+    // step of teardown (before flushTelemetry), so a message arriving here
+    // sails straight through the (already-open) busy gate and starts a real
+    // turn #2 — the shutdown() snapshot from `:914` never covers it.
+    const h = createHarness({
+      steps: [finishStep(), finishStep()],
+      envStatus: {
+        telemetry: () => null,
+        repoMap: () => null,
+        flushTelemetry: async () => {
+          flushCalled = true;
+          await flushGate;
+        },
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "t1", text: "hi" });
+      await h.waitUntil(() => flushCalled);
+
+      let shutdownSettled = false;
+      const shutdownPromise = h.session.shutdown().then(() => {
+        shutdownSettled = true;
+      });
+
+      h.send({ type: "user_message", requestId: "t2", text: "still there?" });
+      // A real round trip; long enough for the pre-fix bypass to have
+      // already emitted its own turn_started for t2.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "t2", reason: "not_ready" }),
+      );
+      expect(shutdownSettled).toBe(false);
+
+      releaseFlush();
+      await shutdownPromise;
+
+      expect(shutdownSettled).toBe(true);
+      // Still exactly one turn ever started — the reentrant wait covered the
+      // full teardown without a second engine call ever happening.
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: terminal/drained discriminator at the settling call-site (TASK.102 CUT-S2 §10.11.1 N3)", () => {
+  it("a drained settle (queue non-empty post-flush) leaves busy===true — and a live user_message sent right after is queued, never a second concurrent runTurn", async () => {
+    let releaseFlush: () => void = () => {};
+    const flushHistoryImpl = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        releaseFlush = resolve;
+      });
+    const h = createChildHarness({
+      steps: [finishStep(), toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      flushHistoryImpl,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => h.flushHistory.mock.calls.length > 0);
+
+      // Queued too late for onChildTurnSettled's own top-level check (empty
+      // at that instant) — only finalizeChildTerminal's post-flush re-check
+      // catches it.
+      h.send({ type: "user_message", requestId: "steer-1", text: "and this too" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      releaseFlush();
+      // The re-check drains the queued steer into turn 2, which parks on its
+      // own permission ask — the settling promise (finalizeChildTerminal's
+      // own) resolves "drained" once that synchronous drain call returns,
+      // well before turn 2 itself reaches this ask.
+      const req2 = await h.waitFor(isPermissionRequest);
+      expect(h.received.filter(isTurnStarted)).toHaveLength(2);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+
+      // Discriminator (§10.11.1 N3): dropping the `=== "terminal"` check —
+      // i.e. `this.busy = false` unconditionally whenever settling is
+      // defined — would have cleared busy right here, even though turn 2 is
+      // still live, mid-flight, parked on its own permission ask.
+      expect(sessionBusy(h.session)).toBe(true);
+
+      // Proof beyond the flag itself: a live user_message sent NOW must be
+      // queued (the child steer path), never started as an immediate THIRD
+      // turn — the concrete two-concurrent-runTurn consequence the mutation
+      // produces in production.
+      h.send({ type: "user_message", requestId: "late-1", text: "one more" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.received.filter(isTurnStarted)).toHaveLength(2);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+      void req2;
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: flush-failure drain branch coverage (TASK.102 CUT-S2 §10.11.1 N6)", () => {
+  it("(a) flushHistory rejects while the steer queue is non-empty — every queued message gets its own turn_rejected not_ready, the error terminal still publishes exactly once, and the once-latch is set", async () => {
+    let rejectFlush: (reason: unknown) => void = () => {};
+    const flushHistoryImpl = (): Promise<void> =>
+      new Promise<void>((_resolve, reject) => {
+        rejectFlush = reject;
+      });
+    const h = createChildHarness({ steps: [textStep("done")], flushHistoryImpl });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => h.flushHistory.mock.calls.length > 0);
+
+      // Both queued strictly DURING the gated flush — too late for
+      // onChildTurnSettled's own top-level check, only reachable by the
+      // catch branch's own reject-loop.
+      h.send({ type: "user_message", requestId: "steer-1", text: "first queued" });
+      h.send({ type: "user_message", requestId: "steer-2", text: "second queued" });
+      // FIFO marker: both sends above are guaranteed routed by the time this
+      // resolves, without either having produced a turn_rejected yet.
+      h.send({ type: "context_breakdown_request" });
+      await h.waitFor(isContextBreakdown);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+
+      rejectFlush(new Error("disk full"));
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      // onTerminal is a local mock (no channel transit needed); the two
+      // reject-loop turn_rejected posts still need a tick to cross the
+      // (real) MessageChannel into `h.received`.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(h.received.filter(isTurnRejected)).toHaveLength(2);
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "steer-1", reason: "not_ready" }),
+      );
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "steer-2", reason: "not_ready" }),
+      );
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("error");
+
+      // The once-latch was set on THIS branch too: a late message now hits
+      // childTerminalFinalized, never a live ghost turn (O5's contract).
+      h.send({ type: "user_message", requestId: "late", text: "still there?" });
+      const lateRejected = await h.waitFor(
+        (m): m is Of<"turn_rejected"> => isTurnRejected(m) && m.requestId === "late",
+      );
+      expect(lateRejected.reason).toBe("not_ready");
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("(b) a throwing child.onTerminal on the flush-failure branch never rejects finalizeChildTerminal — no unhandled rejection reaches the host", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = createChildHarness({
+      steps: [textStep("done")],
+      flushHistoryImpl: () => Promise.reject(new Error("disk full")),
+    });
+    h.onTerminal.mockImplementation(() => {
+      throw new Error("renderer bridge boom");
+    });
+    try {
+      // Discriminator: pre-fix, `child.onTerminal(...)` on the flush-failure
+      // branch is called bare — a throw here rejects finalizeChildTerminal's
+      // own returned promise, and the real call site never wraps `await
+      // settling` in a try, so an unguarded throw here becomes an unhandled
+      // rejection that kills the host.
+      await expect(finalizeChildTerminalDirect(h.session)).resolves.toBe("terminal");
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      expect(
+        consoleError.mock.calls.some(
+          (call) =>
+            typeof call[0] === "string" && call[0].includes("[host]") && call[0].includes("onTerminal") && call[0].includes("error terminal"),
+        ),
+      ).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: finalizeChildTerminal drain branch never strands a terminal on acceptUserMessage's own refusal (TASK.102 CUT-S2 §10.11.1 N7)", () => {
+  it("a queued steer message that acceptUserMessage itself refuses (image support revoked between enqueue and drain) is skipped honestly, not lost — the terminal still commits", async () => {
+    let imagesAllowed = true;
+    let releaseFlush: () => void = () => {};
+    const flushHistoryImpl = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        releaseFlush = resolve;
+      });
+    const h = createChildHarness({
+      steps: [textStep("first")],
+      flushHistoryImpl,
+      imageInputEnabled: () => imagesAllowed,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => h.flushHistory.mock.calls.length > 0);
+
+      // Accepted into the queue by enqueueSteerMessage's own (identical)
+      // guard while images are still allowed.
+      h.send({
+        type: "user_message",
+        requestId: "steer-img",
+        text: "look at this",
+        images: [{ mediaType: "image/png", data: "AA==" }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+
+      // Flips BEFORE the drain — acceptUserMessage's OWN guard, re-evaluated
+      // at drain time, now refuses the very message enqueueSteerMessage let
+      // through a moment ago. Discriminator: pre-fix, the drain branch
+      // trusts `acceptUserMessage`'s call blindly and returns "drained" —
+      // busy is then held forever (nothing ever clears it) and the terminal
+      // never publishes, because nothing was actually started.
+      imagesAllowed = false;
+      releaseFlush();
+
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      // onTerminal is a local mock (no channel transit needed); the queued
+      // message's own turn_rejected still needs a tick to cross the (real)
+      // MessageChannel into `h.received`.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      expect(h.received.filter(isTurnRejected)).toContainEqual(
+        expect.objectContaining({ requestId: "steer-img", reason: "unsupported_images" }),
+      );
+      // The refusal never started a turn — only the initial programmatic one ever ran.
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
     } finally {
       h.close();
     }
