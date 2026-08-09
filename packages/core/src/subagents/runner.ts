@@ -34,6 +34,7 @@ import {
 } from "../types/config.js";
 import type {
   EngineChildSpec,
+  EngineProfileInfo,
   SubagentOutcome,
   SubagentPort,
   SubagentRequest,
@@ -99,6 +100,17 @@ export interface SubagentRunnerOptions {
    * resolveChildModelPort path is skipped for that spawn. A host that omits this
    * cannot run an engine persona at all: `run()` returns a honest error-outcome
    * rather than silently falling back to the in-process loop.
+   *
+   * @deprecated TASK.102 CUT-S4 §0.3/§2.4: engine profiles are migrated to
+   * session-tier child sessions — `tools/agent.ts` now routes an engine
+   * agent_type to `ctx.sessionSubagents` BEFORE this runner's `run()` is ever
+   * reached, on every host that wires a SessionSubagentPort (the desktop root
+   * host). This option and the branch that reads it stay wired, byte-live, for
+   * the one caller that still lands here: a workflow step or any other host
+   * without a SessionSubagentPort, which now gets the honest migration-notice
+   * error text below instead of a real one-shot run. Removing the option and
+   * this whole one-shot path is a separate owner decision (design spec §10),
+   * out of S4's scope.
    */
   runEngineChild?: (spec: EngineChildSpec, opts: SubagentRunOptions) => Promise<SubagentOutcome>;
 }
@@ -291,6 +303,20 @@ export function createSubagentRunner(
     listAgentTypes(): string[] {
       return [...listPersonaNames(), ...currentProfiles().keys()];
     },
+    // TASK.102 CUT-S4 §2.1: resolves an md-profile's `engine:` frontmatter for
+    // tools/agent.ts's routing branch. Reads the SAME thunk (currentProfiles())
+    // as listAgentTypes above — no second list/cache, so a profile rescanned
+    // mid-session is visible here too. Built-ins are never engine profiles.
+    engineProfile(agentType: string): EngineProfileInfo | null {
+      if (isKnownPersona(agentType)) {
+        return null;
+      }
+      const persona = currentProfiles().get(agentType);
+      if (!persona || persona.engine === undefined) {
+        return null;
+      }
+      return { engine: persona.engine, systemPrompt: persona.systemPrompt };
+    },
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {
       const startedAt = Date.now();
       const { signal, onProgress } = runOpts;
@@ -335,7 +361,9 @@ export function createSubagentRunner(
         if (runEngineChild === undefined) {
           return {
             status: "error",
-            finalText: `Agent: agent type "${persona.name}" runs on the "${persona.engine}" engine, which is not supported in this host.`,
+            finalText:
+              `Agent: agent type "${persona.name}" runs on the "${persona.engine}" engine. Engine agents now run ` +
+              `as child sessions via the Agent tool; this caller (workflow step or non-desktop host) cannot spawn one.`,
             truncated: false,
             turns: 0,
             toolCalls: 0,

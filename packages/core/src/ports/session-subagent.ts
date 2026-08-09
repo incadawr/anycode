@@ -50,6 +50,13 @@ export interface SessionSubagentRequest {
   provider?: string;
   /** Exact engine model id on that connection; defaults to the parent's model. */
   model?: string;
+  /**
+   * Set ONLY by the engine-profile route (tools/agent.ts, TASK.102 CUT-S4
+   * §2.2): the child boots this engine instead of core. Never model-visible —
+   * the model picks a profile NAME; the engine is the profile's own
+   * frontmatter fact.
+   */
+  engine?: "claude" | "codex";
 }
 
 /**

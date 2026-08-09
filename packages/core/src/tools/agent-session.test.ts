@@ -22,7 +22,7 @@ import type {
   SessionSubagentPort,
   SessionSubagentRequest,
 } from "../ports/session-subagent.js";
-import type { SubagentRunOptions } from "../ports/subagent.js";
+import type { SubagentPort, SubagentRunOptions } from "../ports/subagent.js";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -589,6 +589,137 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
       makeCtx({ toolCallId: "call-a", sessionSubagents: withoutAttentionPort }),
     );
     expect(withAttn.presentation?.subagent).toEqual(withoutAttn.presentation?.subagent);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Engine-profile routing (TASK.102 CUT-S4 §2.2): BEFORE the tier branch, the
+// handler asks ctx.subagents.engineProfile(agentType). When it resolves
+// non-null the call is routed to a child SESSION regardless of `tier` (a
+// silent inline->session upgrade, never a refusal — the one-shot in-process
+// path for engine personas no longer exists); `provider` is rejected (a
+// foreign-engine child has no core connection to run on); no
+// ctx.sessionSubagents fails closed with an honest "unavailable" error (the
+// one-shot foreign-CLI fallback is removed, not substituted).
+
+function enginePort(
+  agentType: string,
+  profile: { engine: "claude" | "codex"; systemPrompt: string } | null,
+): SubagentPort {
+  return {
+    listAgentTypes: () => [agentType],
+    engineProfile: (t) => (t === agentType ? profile : null),
+    run: async () => {
+      throw new Error("inline subagents.run must not be reached for an engine-profile agent");
+    },
+  };
+}
+
+describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)", () => {
+  const full = createAgentTool({ sessionTier: true });
+  const ENGINE_PROFILE = { engine: "codex" as const, systemPrompt: "PERSONA BODY" };
+
+  it('engine profile + provider (tier "session") => invalid_input with the engine-specific message (§2.2 p.1)', async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "codex-worker", tier: "session", provider: "anthropic-2" },
+      makeCtx({
+        subagents: enginePort("codex-worker", ENGINE_PROFILE),
+        sessionSubagents: portReturning(BASE_SESSION_OUTCOME),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("invalid_input");
+    expect(result.error).toBe(
+      'Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account.',
+    );
+  });
+
+  it("engine profile + no ctx.sessionSubagents => honest fail-closed error naming the engine, NOT a one-shot fallback (§2.2 p.2)", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "codex-worker" },
+      makeCtx({ subagents: enginePort("codex-worker", ENGINE_PROFILE) }), // no sessionSubagents
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toBe(
+      'Agent: agent type "codex-worker" runs on the "codex" engine; engine agents run as child sessions and are unavailable in this host.',
+    );
+  });
+
+  it("engine profile + sessionSubagents present => session request carries engine, spawnToolCallId===ctx.toolCallId, and the composed prompt", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "do the task", agent_type: "codex-worker" },
+      makeCtx({
+        toolCallId: "call-engine-1",
+        subagents: enginePort("codex-worker", ENGINE_PROFILE),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen?.engine).toBe("codex");
+    expect(seen?.spawnToolCallId).toBe("call-engine-1");
+    expect(seen?.prompt).toBe("PERSONA BODY\n\n---\n\ndo the task");
+  });
+
+  it("I3: the session-tier prompt composition is byte-identical to the one-shot composition subagents/runner.ts builds", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const systemPrompt = "PERSONA BODY";
+    const taskPrompt = "do the task";
+    await full.handler(
+      { description: "d", prompt: taskPrompt, agent_type: "codex-worker" },
+      makeCtx({
+        subagents: enginePort("codex-worker", { engine: "codex", systemPrompt }),
+        sessionSubagents: port,
+      }),
+    );
+    // Byte-identical to the one-shot EngineChildSpec.prompt composition
+    // (subagents/runner.ts: `${persona.systemPrompt}\n\n---\n\n${req.prompt}`).
+    const oneShotComposition = `${systemPrompt}\n\n---\n\n${taskPrompt}`;
+    expect(seen?.prompt).toBe(oneShotComposition);
+  });
+
+  it('tier:"inline" on an engine profile is silently UPGRADED to a session run, never a refusal (§2.2 p.3)', async () => {
+    let ran = false;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        ran = true;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "codex-worker", tier: "inline" },
+      makeCtx({ subagents: enginePort("codex-worker", ENGINE_PROFILE), sessionSubagents: port }),
+    );
+    expect(ran).toBe(true);
+    expect(result.ok).toBe(true);
+  });
+
+  it("tier omitted (default inline) on an engine profile also upgrades to a session run", async () => {
+    let ran = false;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        ran = true;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "codex-worker" },
+      makeCtx({ subagents: enginePort("codex-worker", ENGINE_PROFILE), sessionSubagents: port }),
+    );
+    expect(ran).toBe(true);
+    expect(result.ok).toBe(true);
   });
 });
 
