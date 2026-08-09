@@ -17,6 +17,7 @@ import type {
   SubagentRequest,
   SubagentRunOptions,
 } from "../ports/subagent.js";
+import type { SessionSubagentPort } from "../ports/session-subagent.js";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -579,6 +580,100 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
     const end = emitted.find((e) => e.type === "subagent_end");
     expect(end).toBeDefined();
     expect(end && "activitySuppressed" in end).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mapProgressToEvent's attention case (TASK.102 CUT-S2 §2.2/§0.8): a
+// { kind:"attention" } SubagentProgress maps 1:1 onto a subagent_attention
+// AgentEvent stamped with the Agent tool call's id, mirroring the existing
+// start/progress/tool/end bridges.
+//
+// SCOPE, pinned per review finding 3 (these tests were previously titled
+// "session-tier" without actually exercising a session-tier port — see the
+// track memo): `agentTool` today is the PRE-B1 tool — `tools/schemas.ts` has
+// no `tier` field yet and this handler never reads `ctx.sessionSubagents`
+// (grep confirms). The two tests below drive a FAKE `SubagentPort` through
+// `ctx.subagents` (the only wired port today) purely to prove the SHARED
+// `mapProgressToEvent` function forwards an attention progress correctly
+// WHEN one arrives on ANY port. They prove neither:
+//   (a) that the REAL inline runner (subagents/runner.ts) ever produces one
+//       — it must not (ports/subagent.ts's doc comment: "the in-process
+//       inline runner never emits it"); that half is runner.ts's own tests'
+//       job, out of this file;
+//   (b) that the real session-tier port (SessionSubagentPort, built in slice
+//       B1, CUT-S2 §3 — NOT this slice) routes its attention progress through
+//       THIS SAME bridge. A B1 implementation that hand-rolls its own event
+//       mapping and forgets the attention case would leave these two tests
+//       green while the live waiting-badge never appears — B1's OWN tests
+//       (agent-session.test.ts per the CUT's test plan) are what must prove
+//       (b) end to end; this file does not, and must not attempt to.
+describe("agentTool — mapProgressToEvent's attention case (TASK.102 CUT-S2 §2.2, bridge-only — see scope comment above)", () => {
+  it("maps an attention progress (waiting:true) onto a subagent_attention event stamped with toolCallId — bridge only, not proof any real port emits one (see scope comment)", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
+        opts.onProgress?.({ kind: "attention", waiting: true });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-attn", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const attention = emitted.filter((e) => e.type === "subagent_attention");
+    expect(attention).toHaveLength(1);
+    expect(attention[0]).toEqual({
+      type: "subagent_attention",
+      toolCallId: "call-attn",
+      waiting: true,
+    });
+  });
+
+  it("maps an attention progress (waiting:false) onto a subagent_attention event with waiting:false — bridge only, not proof any real port emits one (see scope comment)", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "attention", waiting: false });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-attn-2", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const attention = emitted.find((e) => e.type === "subagent_attention");
+    expect(attention).toEqual({
+      type: "subagent_attention",
+      toolCallId: "call-attn-2",
+      waiting: false,
+    });
+  });
+
+  it("PIN (review finding 3): a request with no `tier` (today's ONLY option — `tools/schemas.ts` has no `tier` field yet) never reads ctx.sessionSubagents — a ctx carrying ONLY a session-tier port fails closed exactly like no port at all", async () => {
+    const sessionPort: SessionSubagentPort = {
+      run: async () => {
+        throw new Error("sessionSubagents.run must not be reached — this request never asks for tier:\"session\"");
+      },
+    };
+
+    const result = await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      // Deliberately no `subagents` — only the session-tier port. Today (pre-
+      // B1) this is the ONLY reachable outcome: the handler has no tier
+      // branch at all. Once B1 lands tier:"session" (CUT-S2 §2.1), an absent
+      // `tier` still means "inline" by contract, so this pin stays true and
+      // durable — it would only break if a future change started consulting
+      // ctx.sessionSubagents for a request that never asked for it.
+      makeCtx({ sessionSubagents: sessionPort }),
+    );
+
+    expect(result).toEqual({ ok: false, error: "Agent: subagents are unavailable in this context." });
   });
 });
 

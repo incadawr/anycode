@@ -141,6 +141,12 @@ export function reduceSubagentCardEvent(
         },
       };
     }
+    case "subagent_attention": {
+      // No-op for the PERSISTED snapshot: attention is transient live-only
+      // state (a permission-broker wait on a session-tier child), not part of
+      // the terminal record (TASK.102 CUT-S2 §2.2/§0.8, CUT-S1 §2.1).
+      return acc;
+    }
     default: {
       const _exhaustive: never = ev;
       return _exhaustive;

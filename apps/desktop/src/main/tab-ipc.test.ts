@@ -67,8 +67,8 @@ function makeDialog(result: { canceled: boolean; filePaths: string[] }, order: s
 
 /** Persistence stub — the "new" branch never touches it. */
 const persistenceStub: TabIpcDeps["persistence"] = {
-  getSession: async () => null,
-  listSessions: async () => [],
+  getRootSession: async () => null,
+  listRootSessions: async () => [],
   touchSession: async () => {},
 };
 
@@ -257,7 +257,7 @@ describe("handleCreate — persisted engine identity", () => {
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const workspace = process.cwd();
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => ({
+      getRootSession: async () => ({
         id: "worktree-session",
         workspace,
         projectRoot: workspace,
@@ -273,7 +273,7 @@ describe("handleCreate — persisted engine identity", () => {
         createdAt: 1,
         updatedAt: 1,
       }),
-      listSessions: async () => [],
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const validateWorktreeResume = vi.fn(async () => false);
@@ -290,7 +290,7 @@ describe("handleCreate — persisted engine identity", () => {
     const { manager, createTab } = makeManager();
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => ({
+      getRootSession: async () => ({
         id: "codex-session",
         workspace: "/project",
         model: "effective",
@@ -299,7 +299,7 @@ describe("handleCreate — persisted engine identity", () => {
         updatedAt: 1,
         engineId: "codex",
       }),
-      listSessions: async () => [],
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
 
@@ -315,7 +315,7 @@ describe("handleCreate — persisted engine identity", () => {
     const { manager, createTab } = makeManager();
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => ({
+      getRootSession: async () => ({
         id: "unknown-session",
         workspace: "/project",
         model: "m",
@@ -324,7 +324,7 @@ describe("handleCreate — persisted engine identity", () => {
         updatedAt: 1,
         engineId: "unreviewed-engine",
       }),
-      listSessions: async () => [],
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
 
@@ -341,8 +341,8 @@ describe("handleCreate — imported-session model override (codex-profiles S4-1 
     return { id, workspace: "/project", model: "m", mode: "build" as const, createdAt: 1, updatedAt: 1 };
   }
   const importPersistence = (id = "s-import"): TabIpcDeps["persistence"] => ({
-    getSession: async () => importMeta(id),
-    listSessions: async () => [],
+    getRootSession: async () => importMeta(id),
+    listRootSessions: async () => [],
     touchSession: async () => {},
   });
 
@@ -469,8 +469,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x" }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-x" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-x" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
@@ -485,8 +485,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveResumePin = vi.fn(async () => ({ ok: false as const, connectionId: "conn-gone" }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-gone" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-gone" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
@@ -500,8 +500,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveResumePin = vi.fn(async () => ({ ok: true as const }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta(), // no connectionId
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta(), // no connectionId
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
@@ -517,8 +517,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const release = vi.fn();
     const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x", release }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-x" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-x" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
@@ -533,8 +533,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const release = vi.fn();
     const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x", release }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-x" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-x" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
@@ -548,8 +548,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const touchSession = vi.fn(async () => {});
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-dead" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      listRootSessions: async () => [],
       touchSession,
     };
     // The stored pin is dead; the replacement resolves.
@@ -575,8 +575,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const touchSession = vi.fn(async () => {});
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-alive" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-alive" }),
+      listRootSessions: async () => [],
       touchSession,
     };
     const resolveResumePin = vi.fn(async (m: { connectionId?: string }) =>
@@ -600,8 +600,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const touchSession = vi.fn(async () => {});
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-dead" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      listRootSessions: async () => [],
       touchSession,
     };
     // Neither the stored pin nor the replacement resolves.
@@ -627,8 +627,8 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       throw new Error("sqlite write failed");
     });
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ connectionId: "conn-dead" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      listRootSessions: async () => [],
       touchSession,
     };
     const release = vi.fn();
@@ -745,8 +745,8 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveCodexProfile = vi.fn(async () => ({ ok: true as const }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta(),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta(),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
@@ -762,8 +762,8 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const { manager, createTab } = makeManager();
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ codexProfileId: "work" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ codexProfileId: "work" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog };
@@ -779,8 +779,8 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveCodexProfile = vi.fn(async () => ({ ok: false as const }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ codexProfileId: "deleted-profile" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ codexProfileId: "deleted-profile" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
@@ -797,8 +797,8 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ codexProfileId: "work" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ codexProfileId: "work" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
@@ -846,8 +846,8 @@ describe("handleCreate — readiness gate keys on the PICKED Codex profile (S3-1
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
     const persistence: TabIpcDeps["persistence"] = {
-      getSession: async () => resumeMeta({ codexProfileId: "work" }),
-      listSessions: async () => [],
+      getRootSession: async () => resumeMeta({ codexProfileId: "work" }),
+      listRootSessions: async () => [],
       touchSession: async () => {},
     };
     const deps: TabIpcDeps = { manager, persistence, dialog, resolveCodexProfile };
@@ -1019,8 +1019,8 @@ describe("handleCreate — unknown-readiness hydration (TASK.64)", () => {
     ...(codexProfileId !== undefined ? { codexProfileId } : {}),
   });
   const metaPersistence = (meta: ReturnType<typeof codexMeta>): TabIpcDeps["persistence"] => ({
-    getSession: async () => meta,
-    listSessions: async () => [],
+    getRootSession: async () => meta,
+    listRootSessions: async () => [],
     touchSession: async () => {},
   });
 

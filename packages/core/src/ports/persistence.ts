@@ -80,6 +80,20 @@ export interface SessionMeta {
    * session (Codex owns its own account).
    */
   codexProfileId?: string;
+  /**
+   * Present ONLY on a child session (TASK.102 S2a §2.4): the parent session
+   * that spawned it via `Agent(tier:"session")`. Root sessions never have
+   * this field. Paired with `spawnToolCallId`; set once at creation, never
+   * patched.
+   */
+  parentSessionId?: string;
+  /**
+   * The parent's Agent tool-call id that spawned this child session (TASK.102
+   * S2a §2.4). Present iff `parentSessionId` is present; the pair is unique
+   * per parent (a parent can never spawn two children off the same tool
+   * call).
+   */
+  spawnToolCallId?: string;
 }
 
 export type SessionMetaPatch = Partial<
@@ -108,8 +122,45 @@ export type SessionMetaPatch = Partial<
 
 export interface PersistencePort {
   createSession(meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta>;
-  getSession(id: string): Promise<SessionMeta | null>;
-  listSessions(opts?: { workspace?: string; limit?: number }): Promise<SessionMeta[]>;
+  /**
+   * UX-facing selection (TASK.102 S2a §2.4): ONLY root sessions
+   * (`parentSessionId` absent). This is the SOLE list any picker, history
+   * view, or `/sessions` command may read — a child session is structurally
+   * unreachable through it, filtered in SQL before any LIMIT is applied (a
+   * post-limit JS filter would silently starve the page instead).
+   */
+  listRootSessions(opts?: { workspace?: string; limit?: number }): Promise<SessionMeta[]>;
+  /** UX-facing point read: null for both an unknown id AND a child session's id (no resume-through-id escape hatch). */
+  getRootSession(id: string): Promise<SessionMeta | null>;
+  /**
+   * Maintenance selection: EVERY row, including children — janitor/worktree-
+   * ownership/startup-probe need the child's live claim to avoid reaping it.
+   * `limit` is additive-only opt-in: omitting it (every existing caller)
+   * keeps the "sees everyone" contract exactly as before; a caller that only
+   * needs proof the schema is open — not the rows themselves — may cap the
+   * read instead of paying for a full table scan (TASK.102 S2 review MINOR).
+   */
+  listSessionsForMaintenance(opts?: { limit?: number }): Promise<SessionMeta[]>;
+  /** Internal point read by id, no root/child filtering — host boot resolves by an id main already trusts (root or child). */
+  getSessionById(id: string): Promise<SessionMeta | null>;
+  /**
+   * Authorized child access (TASK.102 S2a §2.4): null unless a row exists
+   * whose OWN `(parentSessionId, spawnToolCallId)` matches BOTH arguments —
+   * the query itself is the authorization check, not a bare id lookup a
+   * caller could fool with a stolen spawnToolCallId under the wrong parent.
+   */
+  getChildSession(parentSessionId: string, spawnToolCallId: string): Promise<SessionMeta | null>;
+  listChildSessions(parentSessionId: string): Promise<SessionMeta[]>;
+  /**
+   * Transactional cascade delete of `rootId` and every descendant reachable
+   * through `parentSessionId` chains, plus their `history_items`/
+   * `checkpoints`/`codex_thread_items`/`claude_transcript_items` rows, all in
+   * ONE transaction (a mid-cascade failure rolls back everything, including
+   * the earlier deletes in the same call). `externalSessionRefs` is every
+   * deleted row's native engine ref (for a future native-side cleanup
+   * consumer) — never interpreted or acted on here.
+   */
+  deleteSessionTree(rootId: string): Promise<{ deletedSessionIds: string[]; externalSessionRefs: string[] }>;
   touchSession(id: string, patch?: SessionMetaPatch): Promise<void>;
   /** Atomically refuses a path already active or pending cleanup in another session. */
   claimWorktree?(id: string, path: string, patch: SessionMetaPatch): Promise<boolean>;

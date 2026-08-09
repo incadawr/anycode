@@ -69,7 +69,15 @@ export type SubagentProgress =
   // progress events this run withheld past SUBAGENT_ACTIVITY_MAX_EVENTS.
   // Absent when the run never crossed the cap; feeds the persisted card's
   // honest dropped-activity count.
-  | { kind: "end"; status: SubagentOutcome["status"]; turns: number; durationMs: number; activitySuppressed?: number };
+  | { kind: "end"; status: SubagentOutcome["status"]; turns: number; durationMs: number; activitySuppressed?: number }
+  // Permission-broker gate crossing (TASK.102 CUT-S2 §2.2/§0.8): ONLY the
+  // session-tier port (SessionSubagentPort) ever produces this — a child
+  // SESSION has its own IpcPermissionBroker whose ask/settle can suspend the
+  // whole run, which the parent's card should reflect as a "waiting for
+  // permission" badge. The in-process inline runner never emits it (an inline
+  // child's tool calls flow through the SAME broker as the parent, so there
+  // is no separate wait to surface).
+  | { kind: "attention"; waiting: boolean };
 
 export interface SubagentRunOptions {
   /** Linked to the Agent tool call's abort so parent-stop cascades into the child. */

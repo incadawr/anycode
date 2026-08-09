@@ -218,5 +218,11 @@ function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): Sub
         durationMs: progress.durationMs,
         ...(progress.activitySuppressed !== undefined ? { activitySuppressed: progress.activitySuppressed } : {}),
       };
+    case "attention":
+      return {
+        type: "subagent_attention",
+        toolCallId,
+        waiting: progress.waiting,
+      };
   }
 }

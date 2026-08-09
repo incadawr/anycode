@@ -1039,7 +1039,7 @@ async function startInitialTab(opts: {
   const resumeId = parkedResumeId;
   parkedResumeId = undefined;
 
-  const resumed = resumeId !== undefined ? await persistence.getSession(resumeId) : null;
+  const resumed = resumeId !== undefined ? await persistence.getRootSession(resumeId) : null;
   if (resumeId !== undefined && resumed === null) {
     console.warn(`[main] no session found for --resume ${resumeId}; starting a new session`);
   }
@@ -1152,7 +1152,15 @@ void app.whenReady().then(async () => {
   // the host writers.
   const dbPath = resolveDbPath();
   persistence = new SqlitePersistenceAdapter(dbPath);
-  await persistence.listSessions({ limit: 1 });
+  // Maintenance selection (TASK.102 S2a §2.4): a physical read that forces
+  // open()+migrate() to run now, not a UX selection — the boot-critical part
+  // is ANY query reaching the adapter (migrate() runs inside open() before
+  // this or any other statement executes, regardless of which query
+  // triggered it), not that this specific query returns every row. `limit:1`
+  // (TASK.102 S2 review MINOR, opus) keeps the probe O(1) at startup instead
+  // of pulling and projecting the whole sessions table — which grows with
+  // every child session S2 introduces — on every launch.
+  await persistence.listSessionsForMaintenance({ limit: 1 });
   console.log(`[main] persistence opened + migrated: ${dbPath}`);
 
   // One global, ledger-driven pass before any tab host can mutate worktree

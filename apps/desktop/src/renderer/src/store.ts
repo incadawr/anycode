@@ -151,11 +151,12 @@ export interface ToolCallSnapshot {
  * `activityDropped` 0, `final` null, `engine` from the event or null — the
  * card shows a spinner while `final` is null); `subagent_progress` refreshes
  * the counters; `subagent_activity` appends a live per-child-tool row (slice
- * P7.18/F16b, ring-capped — see `SUBAGENT_ACTIVITY_RING`); `subagent_end`
- * fills `final`, flipping the card to the terminal status. The full child
- * result/text is NOT here — it arrives capped in the ordinary `tool_result`
- * that settles this same tool_call (design §3.3: no nested stream
- * forwarding).
+ * P7.18/F16b, ring-capped — see `SUBAGENT_ACTIVITY_RING`); `subagent_attention`
+ * toggles `waiting` (session-tier children only, TASK.102 CUT-S2 §2.5);
+ * `subagent_end` fills `final`, flipping the card to the terminal status. The
+ * full child result/text is NOT here — it arrives capped in the ordinary
+ * `tool_result` that settles this same tool_call (design §3.3: no nested
+ * stream forwarding).
  */
 export interface SubagentSubStatus {
   agentType: string;
@@ -180,6 +181,21 @@ export interface SubagentSubStatus {
   /** Count of activity rows dropped from the front of the ring once the cap was exceeded (honest overflow counter, not a wire field). */
   activityDropped: number;
   final: { status: "completed" | "max_turns" | "cancelled" | "error"; durationMs: number } | null;
+  /**
+   * PRESENCE, not value, is the signal: `true` while a session-tier child
+   * session is blocked on a permission ask, and the key is ABSENT — never
+   * `false` — the moment the ask is answered or the card settles. A single
+   * encoding is load-bearing here (TASK.102 CUT-S2 §2.5 review finding 2):
+   * both `patchSubagentAttention(false)` and `patchSubagentEnd`'s settle
+   * strip the key in the SAME way, so any reader — including the future
+   * badge-priority VM (CUT-S2 §2.5) — can test `"waiting" in subagent`
+   * (or truthiness) and get the right answer either way. Typed `?: true`
+   * rather than `?: boolean` so a value-based `waiting === false` write can
+   * never even compile. Absent for inline subagents and for cards hydrated
+   * from the durable S1 snapshot (attention is transient live-only state the
+   * snapshot never carries — CUT-S1 §2.1, CUT-S2 §2.5).
+   */
+  waiting?: true;
 }
 
 /** Ring cap for `SubagentSubStatus.activity` (design slice-P7.18-cut.md §4 W2): oldest row drops, `activityDropped` increments. Renderer-side bound independent of the core's own per-run emission cap. */
@@ -1384,6 +1400,41 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     }
 
     /**
+     * Toggles the session-tier permission-wait flag on `subagent_attention`
+     * (TASK.102 CUT-S2 §2.5; store case pulled forward into S2a — CUT-S2
+     * §10.1). Same existing-subagent + matching-toolCallId guard as
+     * `patchSubagentProgress`, including its terminal guard: once `final` is
+     * set, a late/replayed attention event is a no-op — a settled card never
+     * regresses to "waiting for permission". Only a session-tier child's
+     * permission broker ever produces the event; inline subagents never do.
+     *
+     * `waiting:false` DELETES the key rather than writing it (review finding
+     * 2): `SubagentSubStatus.waiting` is a presence-based flag end to end —
+     * writing an explicit `false` here would leave the key present with a
+     * falsy value, which a presence-only reader (`"waiting" in subagent`,
+     * the same test `patchSubagentEnd`'s settle strip is built and tested
+     * against) would still count as waiting. Answering the ask and settling
+     * the card must strip the key the SAME way.
+     */
+    function patchSubagentAttention(toolCallId: string, waiting: boolean): void {
+      flushDeltas();
+      set((state) => ({
+        transcript: state.transcript.map((block) => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
+            return block;
+          }
+          const subagent = { ...block.subagent };
+          if (waiting) {
+            subagent.waiting = true;
+          } else {
+            delete subagent.waiting;
+          }
+          return { ...block, subagent };
+        }),
+      }));
+    }
+
+    /**
      * Records the terminal outcome on `subagent_end`: fills `final`, which
      * flips the card from spinner to a settled status label. Same
      * existing-subagent + matching-toolCallId guard as `patchSubagentProgress`,
@@ -1393,7 +1444,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * outcome. `activitySuppressed` (CUT-S1 §0.5, core runner honesty count —
      * events the runner withheld past its own per-run cap) folds into
      * `activityDropped` at the SAME moment `final` is set, so the live
-     * "+N earlier" count matches what the persisted canon will carry.
+     * "+N earlier" count matches what the persisted canon will carry. The
+     * settle also strips a stale `waiting` flag (TASK.102 CUT-S2 §2.5/§10.1)
+     * — see the inline comment below.
      */
     function patchSubagentEnd(
       toolCallId: string,
@@ -1404,19 +1457,24 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     ): void {
       flushDeltas();
       set((state) => ({
-        transcript: state.transcript.map((block) =>
-          block.kind === "tool_call" && block.toolCallId === toolCallId && block.subagent && block.subagent.final === null
-            ? {
-                ...block,
-                subagent: {
-                  ...block.subagent,
-                  turns,
-                  activityDropped: block.subagent.activityDropped + (activitySuppressed ?? 0),
-                  final: { status, durationMs },
-                },
-              }
-            : block,
-        ),
+        transcript: state.transcript.map((block) => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
+            return block;
+          }
+          const settled: SubagentSubStatus = {
+            ...block.subagent,
+            turns,
+            activityDropped: block.subagent.activityDropped + (activitySuppressed ?? 0),
+            final: { status, durationMs },
+          };
+          // The settle strips any stale permission-wait flag in the SAME
+          // atomic update (TASK.102 CUT-S2 §2.5/§10.1): a child cancelled or
+          // errored mid-ask must land as a terminal card, never one still
+          // claiming to wait (`waiting` outranks the terminal badge in the
+          // §2.5 priority order, so leaving it set would mask the outcome).
+          delete settled.waiting;
+          return { ...block, subagent: settled };
+        }),
       }));
     }
 
@@ -1932,6 +1990,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // (patchSubagentActivity no-ops on a foreign/unseeded toolCallId).
         case "subagent_activity":
           patchSubagentActivity(event.toolCallId, event.toolName, event.summary);
+          return;
+        // Session-tier permission-wait flag (TASK.102 CUT-S2 §2.2/§2.5,
+        // store case pulled into S2a per §10.1): additive AgentEvent variant
+        // riding the same agent_event envelope; toggles
+        // `SubagentSubStatus.waiting` under the same S1 guards as
+        // progress/activity (unseeded/foreign toolCallId or settled `final`
+        // ⇒ no-op). Only a session-tier child ever produces it.
+        case "subagent_attention":
+          patchSubagentAttention(event.toolCallId, event.waiting);
           return;
 
         // ── Phase 3 workflow coarse-progress (design §2.3/§6, task 3.4.5):

@@ -611,7 +611,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         if (args.sessionId === undefined || args.sessionId.length === 0) {
           throw new Error("Codex resume requires a session id");
         }
-        const existing = await persistence!.getSession(args.sessionId);
+        // Engine sessions are always root in S2 (TASK.102 §2.4.1) — a codex
+        // resume can never legitimately target a child session's id.
+        const existing = await persistence!.getRootSession(args.sessionId);
         if (existing === null) throw new Error(`Codex session ${args.sessionId} was not found`);
         if (existing.engineId !== "codex" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Codex session ${args.sessionId} has no resumable native thread`);
@@ -756,7 +758,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
  *    `set_permission_mode`, `apply_flag_settings`) applies IMMEDIATELY over an
  *    async control request (`w0-16-setmodel.jsonl`), so `onSettingsApplied`
  *    fires on the control-ack, not on a `turn/start`.
- *  - Resume branch (mirrors codex ~500-529): `getSession` -> `engineId ===
+ *  - Resume branch (mirrors codex ~500-529): `getRootSession` -> `engineId ===
  *    "claude"` + `externalSessionRef` -> `--resume`. `--resume` never
  *    re-emits history on the wire (probe #4), so the shadow transcript mirror
  *    (below) is the ONLY source `historyItems()` reads from on resume.
@@ -812,7 +814,9 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         if (args.sessionId === undefined || args.sessionId.length === 0) {
           throw new Error("Claude resume requires a session id");
         }
-        const existing = await persistence!.getSession(args.sessionId);
+        // Engine sessions are always root in S2 (TASK.102 §2.4.1) — a claude
+        // resume can never legitimately target a child session's id.
+        const existing = await persistence!.getRootSession(args.sessionId);
         if (existing === null) throw new Error(`Claude session ${args.sessionId} was not found`);
         if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Claude session ${args.sessionId} has no resumable native session`);

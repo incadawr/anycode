@@ -8,6 +8,7 @@
 import type { z } from "zod";
 import type { CorePorts } from "../ports/index.js";
 import type { SubagentPort } from "../ports/subagent.js";
+import type { SessionSubagentPort } from "../ports/session-subagent.js";
 import type { SkillPort } from "../ports/skills.js";
 import type { WorkflowPort } from "../ports/workflow.js";
 import type { BackgroundTaskPort } from "../ports/tasks.js";
@@ -129,6 +130,16 @@ export interface ToolContext {
    * an "unavailable" error-outcome rather than spawning.
    */
   subagents?: SubagentPort;
+  /**
+   * Session-tier subagent entry (TASK.102 CUT-S2 §2.2/§0.2): spawns a full
+   * child SESSION in its own process, distinct from the in-process `subagents`
+   * port above. Optional by design and NEVER copied by buildChildConfig — its
+   * physical absence is non-recursion lock #2 of 3 (the schema-level
+   * restricted `Agent` declaration is lock #1; main's `childOf` spawn refusal
+   * is lock #3, CUT-S2 §0.2). The Agent tool's `tier:"session"` branch reads
+   * this; `tier:"inline"` (default) always uses `subagents` instead.
+   */
+  sessionSubagents?: SessionSubagentPort;
   /**
    * Discovered-skills entry (design §2.2/§3.3). Optional by design: its absence
    * is the fail-closed lock — the Skill tool returns a "skills unavailable"
