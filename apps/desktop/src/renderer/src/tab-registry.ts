@@ -481,6 +481,11 @@ export function createTabRegistry(
           // renderer-side one). This is the discriminator against the
           // pre-S2 facade, where ANY delivered port took the branch below
           // unconditionally.
+          //
+          // §10.15.1: marks the store so the composer forces the direct-send
+          // path for this tab instead of parking a steer message in the
+          // (undrained, for a child) renderer prompt queue.
+          entry.store.getState().setChildSurface();
         } else {
           tabsStore.getState().addTab({ tabId, workspace });
           // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime

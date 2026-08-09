@@ -34,6 +34,7 @@ import {
   getStateForTab,
   health,
   listChildRunsMaintenance,
+  deleteSessionTreeMaintenance,
   makeFacadeCaller,
   quit,
   resumeTab,
@@ -182,8 +183,12 @@ export interface AutomationServerDeps {
    * identical live `previewHost`, not a second copy of the wiring.
    */
   mdDocDeps?: MdDocDeps;
-  /** Forwarded to `HandlerDeps.persistence` (TASK.102 S2d D1, `/child-runs`). Absent -> that route degrades to `PERSISTENCE_UNAVAILABLE`, never throws. */
-  persistence?: Pick<PersistencePort, "listSessionsForMaintenance">;
+  /**
+   * Forwarded to `HandlerDeps.persistence` (TASK.102 S2d D1 `/child-runs`,
+   * widened by S2d D3 for `/sessions/:id/delete-tree`, CUT-S2 §4.2 п.12).
+   * Absent -> both routes degrade to `PERSISTENCE_UNAVAILABLE`, never throw.
+   */
+  persistence?: Pick<PersistencePort, "listSessionsForMaintenance" | "deleteSessionTree">;
 }
 
 export interface AutomationServerHandle {
@@ -651,6 +656,15 @@ async function route(
   // doc for how this differs from `/state`'s in-memory `childRuns`.
   if (method === "GET" && pathname === "/child-runs") {
     return listChildRunsMaintenance(deps);
+  }
+  // TASK.102 S2d D3 (CUT-S2 §4.2 п.12): dev-only direct cascade-delete —
+  // see `deleteSessionTreeMaintenance`'s own doc for why this exists (no
+  // production delete-session UI yet, CUT-S2 §6 names automation as the
+  // interim caller). `parts` shape mirrors `/child-runs` above one level
+  // deeper: `["sessions", ":id", "delete-tree"]`.
+  if (method === "POST" && parts[0] === "sessions" && parts.length === 3 && parts[2] === "delete-tree") {
+    parseBody(rawBody, emptyBody);
+    return deleteSessionTreeMaintenance(deps, decodeURIComponent(parts[1]!));
   }
   if (method === "GET" && pathname === "/screenshot") {
     return screenshot(deps);

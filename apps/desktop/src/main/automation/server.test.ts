@@ -414,7 +414,7 @@ describe("GET /child-runs (TASK.102 S2d D1, dev-only durable maintenance list)",
       spawnToolCallId: "call-1",
     };
     const listSessionsForMaintenance = vi.fn(async () => [root, child]);
-    const h = await boot({ persistence: { listSessionsForMaintenance } });
+    const h = await boot({ persistence: { listSessionsForMaintenance, deleteSessionTree: vi.fn() } });
     const res = await fetch(url(h, "/child-runs"), { headers: auth() });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, sessions: [child] });
@@ -423,6 +423,24 @@ describe("GET /child-runs (TASK.102 S2d D1, dev-only durable maintenance list)",
   it("answers unavailable (never throws) when no persistence dep was wired", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/child-runs"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, error: "persistence unavailable", errorKind: "unavailable" });
+  });
+});
+
+describe("POST /sessions/:id/delete-tree (TASK.102 S2d D3, CUT-S2 §4.2 п.12 dev-only cascade delete)", () => {
+  it("calls deleteSessionTree with the path id and returns its result", async () => {
+    const deleteSessionTree = vi.fn(async () => ({ deletedSessionIds: ["root-1", "child-1"], externalSessionRefs: [] }));
+    const h = await boot({ persistence: { listSessionsForMaintenance: vi.fn(async () => []), deleteSessionTree } });
+    const res = await fetch(url(h, "/sessions/root-1/delete-tree"), { method: "POST", headers: auth() });
+    expect(res.status).toBe(200);
+    expect(deleteSessionTree).toHaveBeenCalledWith("root-1");
+    expect(await res.json()).toEqual({ ok: true, deletedSessionIds: ["root-1", "child-1"], externalSessionRefs: [] });
+  });
+
+  it("answers unavailable (never throws) when no persistence dep was wired", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/sessions/root-1/delete-tree"), { method: "POST", headers: auth() });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: false, error: "persistence unavailable", errorKind: "unavailable" });
   });

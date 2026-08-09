@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { SqlitePersistenceAdapter, WriteBehindHistorySink, type HistorySinkLogger } from "./sqlite-persistence.js";
 import type { CheckpointRecord } from "../../ports/checkpoints.js";
 import type { PersistencePort, SessionMeta } from "../../ports/persistence.js";
@@ -2230,6 +2231,77 @@ describe("SqlitePersistenceAdapter", () => {
       expect(items).toHaveLength(1);
       expect(items[0]!.data).toEqual(first);
     });
+  });
+});
+
+/**
+ * A separate real OS thread (`node:worker_threads`) that opens its OWN
+ * `DatabaseSync` connection to the same file, takes an immediate write lock,
+ * signals the main thread, holds the lock synchronously (`Atomics.wait`,
+ * blocks only the worker's own thread) for `holdMs`, then commits. Simulates
+ * a second concurrently-forked child's writer racing this adapter's
+ * `open()`/`createSession` against the same on-disk file — the exact
+ * collision the S2d live smoke caught (TASK.102 CUT-S2 §10.15.2).
+ */
+const BUSY_LOCK_WORKER_SRC = `
+  const { parentPort, workerData } = require("node:worker_threads");
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(workerData.dbPath);
+  db.exec("BEGIN IMMEDIATE");
+  parentPort.postMessage("locked");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.holdMs);
+  db.exec("COMMIT");
+  db.close();
+  parentPort.postMessage("done");
+`;
+
+describe("SqlitePersistenceAdapter — concurrent writers (TASK.102 CUT-S2 §10.15.2)", () => {
+  let tmpDir: string;
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits out a concurrent writer's BEGIN IMMEDIATE window instead of failing with 'database is locked'", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-busy-timeout-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+
+    // Seed the schema first (mirrors production: by the time concurrently
+    // forked children boot, the schema is already migrated) so the worker's
+    // BEGIN IMMEDIATE below contends on an already-provisioned file, the same
+    // as `migrate()`'s own write-lock acquisition on a fresh `open()` does.
+    const seed = new SqlitePersistenceAdapter(dbPath);
+    await seed.createSession({ id: "seed", workspace: "/seed", model: "m", mode: "build" });
+    await seed.close();
+
+    const holdMs = 250;
+    const worker = new Worker(BUSY_LOCK_WORKER_SRC, { eval: true, workerData: { dbPath, holdMs } });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        worker.once("error", reject);
+        worker.on("message", (msg: string) => {
+          if (msg === "locked") resolve();
+        });
+      });
+
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      const start = Date.now();
+      const created = await adapter.createSession({ id: "concurrent", workspace: "/w2", model: "m", mode: "build" });
+      const elapsed = Date.now() - start;
+
+      expect(created.id).toBe("concurrent");
+      // Proves the adapter actually WAITED for the worker's commit rather than
+      // winning the lock by luck on an already-released window.
+      expect(elapsed).toBeGreaterThanOrEqual(holdMs / 2);
+
+      await adapter.close();
+    } finally {
+      // The worker exits on its own once its script finishes (COMMIT+close);
+      // wait for it so no dangling thread handle leaks past this test.
+      await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+    }
   });
 });
 

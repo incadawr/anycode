@@ -169,8 +169,18 @@ export interface HandlerDeps {
    * `listChildRunsMaintenance` answers the same honest
    * `{ok:false, error:"persistence unavailable", errorKind:"unavailable"}`
    * the preview routes' own absent-dep branch uses, never throws.
+   *
+   * TASK.102 S2d D3 (CUT-S2 §4.2 п.12 / §6's own "UI удаления сессий — вне
+   * S2... automation зовёт его напрямую для теста" contract): widened
+   * (`| "deleteSessionTree"`) so `deleteSessionTreeMaintenance` below can
+   * call the SAME adapter's cascade delete directly — no production
+   * delete-session UI exists yet, so this dev-only route is the ONLY way to
+   * drive the real cascade against a live app's real SQLite file. Adds no
+   * new field, just widens the existing `Pick` — `main/index.ts` already
+   * passes the full `SqlitePersistenceAdapter`, which structurally
+   * satisfies the wider Pick with zero wiring changes.
    */
-  persistence?: Pick<PersistencePort, "listSessionsForMaintenance">;
+  persistence?: Pick<PersistencePort, "listSessionsForMaintenance" | "deleteSessionTree">;
 }
 
 /* */
@@ -330,6 +340,30 @@ export async function listChildRunsMaintenance(
   }
   const all = await deps.persistence.listSessionsForMaintenance();
   return { ok: true, sessions: all.filter((meta) => meta.parentSessionId !== undefined) };
+}
+
+/**
+ * `POST /sessions/:id/delete-tree` (TASK.102 S2d D3, CUT-S2 §4.2 п.12): a
+ * dev-only direct call into `PersistencePort.deleteSessionTree` — the SAME
+ * cascade delete `sqlite-persistence.test.ts` covers with a full unit
+ * matrix (every dependent table, sibling isolation, transactional
+ * rollback), invoked here against a REAL running app's REAL SQLite file so
+ * a live smoke can prove the wiring, not just the SQL. `:id` is the ROOT
+ * session id (the same id a delete-tree call would take once a real
+ * delete-session UI exists — CUT-S2 §6 explicitly defers that UI and
+ * names automation as the interim caller). Degrades to
+ * `PERSISTENCE_UNAVAILABLE` (never throws) when `deps.persistence` is
+ * absent, same posture as `listChildRunsMaintenance` above.
+ */
+export async function deleteSessionTreeMaintenance(
+  deps: HandlerDeps,
+  rootSessionId: string,
+): Promise<{ ok: true; deletedSessionIds: string[]; externalSessionRefs: string[] } | typeof PERSISTENCE_UNAVAILABLE> {
+  if (deps.persistence === undefined) {
+    return PERSISTENCE_UNAVAILABLE;
+  }
+  const result = await deps.persistence.deleteSessionTree(rootSessionId);
+  return { ok: true, ...result };
 }
 
 export function getSessions(deps: HandlerDeps): Promise<unknown> {
