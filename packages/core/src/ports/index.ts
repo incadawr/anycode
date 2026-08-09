@@ -42,6 +42,11 @@ export type {
   SubagentRequest,
   SubagentRunOptions,
 } from "./subagent.js";
+export type {
+  SessionSubagentOutcome,
+  SessionSubagentPort,
+  SessionSubagentRequest,
+} from "./session-subagent.js";
 export type { LoadedSkill, SkillMeta, SkillPort } from "./skills.js";
 export type {
   BackgroundTaskNotice,

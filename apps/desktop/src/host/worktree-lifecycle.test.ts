@@ -57,13 +57,13 @@ function git(overrides: Partial<WorktreeGitPort> = {}): WorktreeGitPort {
 }
 
 function persistence(touchSession = vi.fn(async () => undefined)): {
-  port: Pick<PersistencePort, "touchSession" | "listSessions" | "claimWorktree">;
+  port: Pick<PersistencePort, "touchSession" | "listSessionsForMaintenance" | "claimWorktree">;
   touchSession: typeof touchSession;
 } {
   return {
     port: {
       touchSession,
-      listSessions: async () => [],
+      listSessionsForMaintenance: async () => [],
       claimWorktree: async (id, _path, patch) => {
         await (touchSession as unknown as PersistencePort["touchSession"])(id, patch);
         return true;
@@ -430,7 +430,7 @@ describe("WorktreeLifecycleService", () => {
   it("refuses an existing worktree claimed by another active session", async () => {
     const external = path.join(ROOT, "external-wt");
     const db = persistence();
-    db.port.listSessions = async () => [session({
+    db.port.listSessionsForMaintenance = async () => [session({
       id: "other-session",
       workspace: external,
       projectRoot: ROOT,
@@ -454,7 +454,7 @@ describe("WorktreeLifecycleService", () => {
     const external = path.join(ROOT, "external-wt");
     const transitionWorktree = { ...ownedWorktree(), path: external, branch: "topic", ownedByAnyCode: false };
     const db = persistence();
-    db.port.listSessions = async () => [session({
+    db.port.listSessionsForMaintenance = async () => [session({
       id: "other-session",
       workspace: ROOT,
       projectRoot: ROOT,
@@ -788,7 +788,7 @@ describe("WorktreeLifecycleService", () => {
       : git());
     const prepared = await service.exit({ cleanup: "auto" }, "exit-call");
     if (!prepared.ok) throw new Error(prepared.reason);
-    db.port.listSessions = async () => [session({
+    db.port.listSessionsForMaintenance = async () => [session({
       id: "other-session",
       projectRoot: ROOT,
       workspace: TARGET,
@@ -810,7 +810,7 @@ describe("WorktreeLifecycleService", () => {
       : git());
     const prepared = await service.exit({ cleanup: "auto" }, "exit-call");
     if (!prepared.ok) throw new Error(prepared.reason);
-    db.port.listSessions = async () => [session({
+    db.port.listSessionsForMaintenance = async () => [session({
       id: "other-session",
       projectRoot: ROOT,
       workspace: ROOT,
@@ -853,7 +853,7 @@ function ownedWorktree() {
 }
 
 function exitService(
-  port: Pick<PersistencePort, "touchSession" | "listSessions" | "claimWorktree">,
+  port: Pick<PersistencePort, "touchSession" | "listSessionsForMaintenance" | "claimWorktree">,
   gitForWorkspace: (workspace: string) => WorktreeGitPort,
   fsOverrides: Partial<WorktreeFileSystem> = {},
 ) {

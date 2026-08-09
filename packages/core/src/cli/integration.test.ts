@@ -149,7 +149,7 @@ function setupTempDirs(): { workspace: string; dbPath: string; settingsFilePath:
 async function assertHistoryFullyAnswered(dbPath: string, workspace: string): Promise<void> {
   const persistence = new SqlitePersistenceAdapter(dbPath);
   try {
-    const sessions = await persistence.listSessions({ workspace });
+    const sessions = await persistence.listRootSessions({ workspace });
     expect(sessions.length).toBeGreaterThan(0);
     const session = sessions[0]!;
     const items = await persistence.loadHistory(session.id);
@@ -173,7 +173,7 @@ async function assertHistoryFullyAnswered(dbPath: string, workspace: string): Pr
 async function readSessionMode(dbPath: string, workspace: string): Promise<PermissionMode> {
   const persistence = new SqlitePersistenceAdapter(dbPath);
   try {
-    const sessions = await persistence.listSessions({ workspace });
+    const sessions = await persistence.listRootSessions({ workspace });
     expect(sessions.length).toBeGreaterThan(0);
     return sessions[0]!.mode;
   } finally {
