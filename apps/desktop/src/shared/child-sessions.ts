@@ -63,6 +63,15 @@ export interface ChildSpawnRequest {
   provider?: string;
   model?: string;
   permissionMode: PermissionMode;
+  /**
+   * Child engine (TASK.102 CUT-S4 §3.1). Absent = core (byte-compatible with
+   * every S2 producer): the child runs the in-process AgentLoop, exactly as
+   * before this field existed. Present = the child boots that engine's own
+   * interactive CLI (startClaudeEngine/startCodexEngine) instead — set ONLY
+   * by the core-side engine-profile route (`tools/agent.ts`'s
+   * `SessionSubagentRequest.engine`, CUT-S4 §2.3), never model-visible.
+   */
+  engine?: "claude" | "codex";
 }
 
 /** Aborts a running child (parent turn cancel/timeout, §0.5's ctx.abortSignal). */
@@ -225,6 +234,16 @@ export const CHILD_FINAL_TEXT_MAX_CHARS = 100_000;
  */
 export const PERMISSION_MODE_VALUES: readonly string[] = ["plan", "build", "edit", "auto", "yolo"];
 
+/**
+ * Local dictionary for `ChildSpawnRequest.engine` (TASK.102 CUT-S4 §3.1) —
+ * same "verbatim over this wire, duplicated to avoid a runtime import"
+ * discipline as `PERMISSION_MODE_VALUES` above. `"core"` is deliberately NOT
+ * a member: core is spelled by the field's ABSENCE (file header), never by a
+ * literal — a message carrying `engine: "core"` is malformed, not a
+ * synonym for omitting the field.
+ */
+const CHILD_ENGINE_VALUES: readonly string[] = ["claude", "codex"];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -309,7 +328,14 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "provider",
   "model",
   "permissionMode",
+  // TASK.102 CUT-S4 §3.1: additive key, authorized amendment (mirrors the
+  // §2.6 п.4 amendment style already used for `activitySuppressed` below).
+  "engine",
 ] as const;
+
+function isChildEngine(value: unknown): value is "claude" | "codex" {
+  return typeof value === "string" && CHILD_ENGINE_VALUES.includes(value);
+}
 
 export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (!isRecord(msg) || msg.type !== CHILD_SPAWN_REQUEST_TYPE) {
@@ -336,6 +362,12 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (!isPermissionMode(msg.permissionMode)) {
     return null;
   }
+  // Fail-closed drop (file header): an `engine` outside the dictionary
+  // rejects the WHOLE message, exactly like an invalid `permissionMode`
+  // above — never silently downgraded to absent/core.
+  if (msg.engine !== undefined && !isChildEngine(msg.engine)) {
+    return null;
+  }
   return {
     type: CHILD_SPAWN_REQUEST_TYPE,
     requestId: msg.requestId,
@@ -346,6 +378,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     ...(msg.provider !== undefined ? { provider: msg.provider as string } : {}),
     ...(msg.model !== undefined ? { model: msg.model as string } : {}),
     permissionMode: msg.permissionMode,
+    ...(msg.engine !== undefined ? { engine: msg.engine } : {}),
   };
 }
 

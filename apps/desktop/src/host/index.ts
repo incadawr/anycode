@@ -315,10 +315,10 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
-import { createEngineChildRunner } from "./engine-children.js";
+import { claudeChildPresetId, codexChildPosture } from "./engines/child-permission-map.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
-import { Outbound, Session, tapChildPermissions } from "./session.js";
+import { Outbound, Session, tapChildPermissions, type ChildSessionOptions } from "./session.js";
 // TASK.102 CUT-S2 §2.6.2/§2.6.3 (slice S2b B4) built the CHILD side of this
 // wire (child-ready on first ui_ready, child-start dispatch, permission-tap
 // attention, terminal report). Slice S2b B5 (below) adds the PARENT side: the
@@ -576,6 +576,66 @@ function resolveCodexDbPath(env: NodeJS.ProcessEnv): string {
   return configured && configured.length > 0 ? configured : join(homedir(), ".anycode", "anycode.sqlite");
 }
 
+// ── child-mode wiring shared by all three boots (TASK.102 CUT-S4 §4.1) ──
+// Extracted so core/codex/claude each get ONE call-site instead of three
+// copies. `boot()`'s core path is byte-equivalent to before this extraction
+// (same tapChildPermissions/postMessage bodies, just factored out); codex/
+// claude previously had none of this wiring at all (S2 built it core-only).
+
+/**
+ * A child-mode broker's `emit`, wrapping the permission-tap
+ * (`tapChildPermissions`, session.ts) so an "attention" signal reaches main
+ * as `ChildProgress{kind:"attention"}` around every permission ask — the
+ * exact body `boot()`'s core path already ran (CUT-S2 §0.8/§2.6.3), now
+ * shared by the codex/claude boots too.
+ */
+function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (message: HostToUiMessage) => void {
+  return tapChildPermissions(emitFn, (waiting) => {
+    process.parentPort.postMessage({
+      type: CHILD_PROGRESS_TYPE,
+      kind: "attention",
+      waiting,
+    } satisfies ChildProgress);
+  });
+}
+
+/**
+ * The `child:` `ChildSessionOptions` every child-mode `Session` construction
+ * needs (CUT-S2 §2.6.3, now shared by all three boots per CUT-S4 §4.1).
+ * `flushHistory` is the one engine-specific seam (§4.4): core passes the
+ * existing `historySink.flushChecked()`; an engine child passes a fresh
+ * universal-snapshot write (see `bootCodexSession`/`bootClaudeSession`
+ * below). `onReady`/`onTerminal`/`onProgress` post directly onto this fork's
+ * own `process.parentPort` — the child side of the wire — identically for
+ * every engine.
+ */
+function buildChildSessionOptions(flushHistory: () => Promise<void>): ChildSessionOptions {
+  return {
+    onReady: () => {
+      process.parentPort.postMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
+    },
+    flushHistory,
+    onTerminal: (report) => {
+      process.parentPort.postMessage({
+        type: CHILD_TERMINAL_TYPE,
+        status: report.status,
+        finalText: report.finalText,
+        truncated: report.truncated,
+        turns: report.turns,
+        toolCalls: report.toolCalls,
+        durationMs: report.durationMs,
+        ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
+      } satisfies ChildTerminal);
+    },
+    onProgress: (report) => {
+      process.parentPort.postMessage({
+        type: CHILD_PROGRESS_TYPE,
+        ...report,
+      } satisfies ChildProgress);
+    },
+  };
+}
+
 /**
  * Native Codex branch. Keep this separate from `boot()` so a subscription-only
  * host never constructs the provider/core graph just to reach its session.
@@ -588,7 +648,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   const args = parseHostArgs(process.argv.slice(2));
   const dbPath = resolveCodexDbPath(process.env);
   persistence = new SqlitePersistenceAdapter(dbPath);
-  const broker = new IpcPermissionBroker(emit);
+  // TASK.102 CUT-S4 §4.1: a child-mode boot's broker wraps `emit` with the
+  // permission-tap, exactly like the core path already did (§4.1's shared
+  // helper) — Codex previously had none of this wiring (S2 built it core-only).
+  const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit);
   const processOwnership = readHostProcessOwnership(
     process.env,
     process.pid,
@@ -655,8 +718,11 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         if (args.sessionId === undefined || args.sessionId.length === 0) {
           throw new Error("Codex resume requires a session id");
         }
-        // Engine sessions are always root in S2 (TASK.102 §2.4.1) — a codex
-        // resume can never legitimately target a child session's id.
+        // TASK.102 CUT-S4 §4.3: as of S4 an engine session is NOT always root
+        // (a child boots on this same branch's `else` below) — but a RESUME
+        // still can never legitimately target a child's id: children never
+        // respawn (cut §0.6), so `--resume` only ever names a root session,
+        // and `getRootSession` staying the lookup here is correct unchanged.
         const existing = await persistence!.getRootSession(args.sessionId);
         if (existing === null) throw new Error(`Codex session ${args.sessionId} was not found`);
         if (existing.engineId !== "codex" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
@@ -683,11 +749,16 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         return { ...resumed, sessionMeta: existing };
       })()
     : (async () => {
+        // TASK.102 CUT-S4 §4.2: a child boots on the posture the child-
+        // permission-map derives from its inherited mode — NEVER the (always
+        // absent, §3.2 п.4's `enginePreset: null`) draft preset argv. A
+        // non-child boot keeps the byte-identical prior draft.preset path.
+        const childPresetId = args.child !== undefined ? codexChildPosture(args.child.initialMode) : draft.preset;
         const created = await startCodexEngine({
           ...options,
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
-            ...(draft.preset !== undefined ? { presetId: draft.preset } : {}),
+            ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
             origin: "draft",
           },
         });
@@ -707,6 +778,15 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           mode: created.presetId as PermissionMode,
           engineId: "codex",
           externalSessionRef: created.threadId,
+          // TASK.102 CUT-S4 §4.3: the engine-boot's own row-creation point
+          // stamps the same parentSessionId/spawnToolCallId columns the core
+          // path's `resolveBootSession`/`childCreateFields` (boot.ts) stamps
+          // — without this a codex child is INDISTINGUISHABLE from a root
+          // session (owner invariant #1: a child must never appear in
+          // `listRootSessions`).
+          ...(args.child !== undefined
+            ? { parentSessionId: args.child.parentSessionId, spawnToolCallId: args.child.spawnToolCallId }
+            : {}),
           // Codex-profiles Q1.3 (cut §3.3, completes W3-F): pin the profile id
           // this session was created under, so a cross-restart resume
           // re-resolves THIS profile's CODEX_HOME (main/index.ts's fail-closed
@@ -745,6 +825,22 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     gitReadOnly: codexGitEnabled,
     gitUserMutations: codexGitEnabled,
     terminal: true,
+  };
+
+  /**
+   * TASK.102 CUT-S4 §4.4: the universal-snapshot write an engine child's
+   * `flushHistory` performs — a SINGLE write of `connected.engine.
+   * historyItems()` into the SAME universal `history_items` table a core
+   * child's history lives in, through the existing
+   * `WriteBehindHistorySink(persistence, childSessionId)` port (no new
+   * persistence method). This is what lets a completed child's "Open" read a
+   * non-empty transcript (Sol §3's diagnosis) instead of the native-only
+   * shadow tables core's universal Open path never reads.
+   */
+  const codexFlushHistory = async (): Promise<void> => {
+    const sink = new WriteBehindHistorySink(persistence!, connected.sessionMeta.id);
+    sink.append(connected.engine.historyItems());
+    await sink.flushChecked();
   };
 
   session = new Session({
@@ -788,6 +884,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
       },
     },
     postPreviewArtifacts: sendPreviewArtifacts,
+    ...(args.child !== undefined ? { child: buildChildSessionOptions(codexFlushHistory) } : {}),
   });
   console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
 }
@@ -822,7 +919,9 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // and two copies of this two-line rule could drift into two databases.
   const dbPath = resolveCodexDbPath(process.env);
   persistence = new SqlitePersistenceAdapter(dbPath);
-  const broker = new IpcPermissionBroker(emit);
+  // TASK.102 CUT-S4 §4.1: same shared wrapping the codex boot above now gets —
+  // Claude previously had none of this wiring at all (S2 built it core-only).
+  const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit);
   const processOwnership = readClaudeHostProcessOwnership(
     process.env,
     process.pid,
@@ -858,8 +957,11 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         if (args.sessionId === undefined || args.sessionId.length === 0) {
           throw new Error("Claude resume requires a session id");
         }
-        // Engine sessions are always root in S2 (TASK.102 §2.4.1) — a claude
-        // resume can never legitimately target a child session's id.
+        // TASK.102 CUT-S4 §4.3: as of S4 an engine session is NOT always root
+        // (a child boots on this same branch's `else` below) — but a RESUME
+        // still can never legitimately target a child's id: children never
+        // respawn (cut §0.6), so `--resume` only ever names a root session,
+        // and `getRootSession` staying the lookup here is correct unchanged.
         const existing = await persistence!.getRootSession(args.sessionId);
         if (existing === null) throw new Error(`Claude session ${args.sessionId} was not found`);
         if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
@@ -877,11 +979,16 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         return { ...resumed, sessionMeta: existing };
       })()
     : (async () => {
+        // TASK.102 CUT-S4 §4.2: a child boots on the posture the child-
+        // permission-map derives from its inherited mode — NEVER the
+        // (always absent, §3.2 п.4's `enginePreset: null`) draft preset
+        // argv. A non-child boot keeps the byte-identical prior path.
+        const childPresetId = args.child !== undefined ? claudeChildPresetId(args.child.initialMode) : draft.preset;
         const created = await startClaudeEngine({
           ...options,
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
-            ...(draft.preset !== undefined ? { presetId: draft.preset } : {}),
+            ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
             origin: "draft",
           },
         });
@@ -900,6 +1007,15 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // rides the spawn argv); for a resume it is the persisted ref, echoed
     // verbatim (resumeClaudeEngine never falls back to a new session).
     externalSessionRef: connected.sessionRef,
+    // TASK.102 CUT-S4 §4.3: the engine-boot's own row-creation point stamps
+    // the same parentSessionId/spawnToolCallId columns the core path's
+    // `resolveBootSession`/`childCreateFields` (boot.ts) stamps — without
+    // this a claude child is INDISTINGUISHABLE from a root session (owner
+    // invariant #1: a child must never appear in `listRootSessions`).
+    // `ClaudeSessionRowWriter` forwards `identity` verbatim to `create()`.
+    ...(args.child !== undefined
+      ? { parentSessionId: args.child.parentSessionId, spawnToolCallId: args.child.spawnToolCallId }
+      : {}),
   };
   // The AnyCode row id is preallocated IN MEMORY so Session, the shadow mirror
   // and every `touch` can use it immediately — but no row is written yet
@@ -980,6 +1096,29 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     terminal: true,
   };
 
+  /**
+   * TASK.102 CUT-S4 §4.4: the universal-snapshot write an engine child's
+   * `flushHistory` performs. UNLIKE `booted.engine.historyItems()` (frozen at
+   * boot — `ClaudeShadowTranscriptEngine`'s own doc comment: it returns the
+   * BOOT-time mirror read, never live), this re-reads the shadow-transcript
+   * mirror FRESH at flush time — the exact same query/projection `bootHistory`
+   * above used, just re-run after the child's turn(s) actually wrote to it
+   * (`shadow-transcript.ts`'s fire-and-forget `sink.record()` in `runTurn`'s
+   * `finally`) — so a completed child's snapshot is the FULL transcript, not
+   * the empty pre-turn one. Written into the SAME universal `history_items`
+   * table a core child's history lives in, through the existing
+   * `WriteBehindHistorySink(persistence, childSessionId)` port (no new
+   * persistence method) — this is what lets a completed child's "Open" read a
+   * non-empty transcript (Sol §3's diagnosis).
+   */
+  const claudeFlushHistory = async (): Promise<void> => {
+    const rows = await shadowTranscript.list(connected.sessionRef);
+    const items = projectClaudeHistory(rows);
+    const sink = new WriteBehindHistorySink(persistence!, rowId);
+    sink.append(items);
+    await sink.flushChecked();
+  };
+
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -1015,6 +1154,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       },
     },
     postPreviewArtifacts: sendPreviewArtifacts,
+    ...(args.child !== undefined ? { child: buildChildSessionOptions(claudeFlushHistory) } : {}),
   });
   // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated (or
   // the persisted one, on resume) and the id is our own row id — no account
@@ -1704,18 +1844,9 @@ async function boot(): Promise<void> {
     // permission ask, relayed to main as `ChildProgress{kind:"attention"}` so
     // the parent's subagent card can show "waiting for permission" without
     // Open'ing the child surface. Non-child boots keep the bare `emit`,
-    // byte-identical to every pre-S2 host.
-    const broker = new IpcPermissionBroker(
-      args.child !== undefined
-        ? tapChildPermissions(emit, (waiting) => {
-            process.parentPort.postMessage({
-              type: CHILD_PROGRESS_TYPE,
-              kind: "attention",
-              waiting,
-            } satisfies ChildProgress);
-          })
-        : emit,
-    );
+    // byte-identical to every pre-S2 host. CUT-S4 §4.1: `buildChildBrokerEmit`
+    // is the exact same body, extracted so codex/claude share it too.
+    const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit);
 
     // Boot context-window resolution (slice 6.4, mirror of cli/main.ts):
     // env ANYCODE_CONTEXT_WINDOW > catalog window of the session model > absent
@@ -1862,14 +1993,14 @@ async function boot(): Promise<void> {
     // Without it the runner returns "model override is not supported in this
     // host" — the CLI wired this from the start, the desktop host did not.
     //
-    // runEngineChild (engine-children.ts) backs an `engine:` md-profile
-    // persona: a one-shot Claude Code / Codex CLI run in place of an
-    // in-process child. `env: process.env` is the HOST's own environment —
-    // main injects ENV_CLAUDE_BIN/ENV_CODEX_BIN into it whenever the doctor
-    // has a validated path, independent of which engine this session itself
-    // runs on (main/index.ts's `engineEnv`), so a core/codex session can still
-    // spawn a Claude subagent and vice versa. `cwd: workspace` roots the child
-    // in this session's own workspace, matching every other port above.
+    // `runEngineChild` (engine-children.ts) is NO LONGER wired here (TASK.102
+    // CUT-S4 §0.3): an `engine:` md-profile persona now routes to the
+    // session-child path (tools/agent.ts, S4a) instead of a one-shot Claude
+    // Code / Codex CLI run. `engine-children.ts` itself stays byte-untouched
+    // and importable (deprecated-live, owner-gated removal per spec §10) —
+    // only this ONE wiring line is gone, so an engine-profile Agent call from
+    // a WORKFLOW step (which cannot reach the session tier) now falls through
+    // to runner.ts's existing `runEngineChild === undefined` refusal branch.
     // profiles is a THUNK, not a snapshot: `ext` is reassigned in place by
     // refreshExtensionProfiles below (mirrors the switchModel callback's
     // in-place `config` mutation), so the runner built here re-reads whatever
@@ -1883,7 +2014,6 @@ async function boot(): Promise<void> {
           env: systemPromptEnv,
           memorySection: ext.memorySection,
           resolveChildModelPort: modelPortFactory,
-          runEngineChild: createEngineChildRunner({ cwd: workspace, env: process.env }),
         }),
         ext.workflows,
       ),
@@ -2195,42 +2325,10 @@ async function boot(): Promise<void> {
       // boot. `flushHistory` is the SAME `historySink.flushChecked()` ordering
       // guarantee the worktree-transition handoff above already relies on
       // (§0.5 — a terminal report is trusted by main/renderer ONLY once the
-      // child's transcript is durably on disk). `onReady`/`onTerminal` post
-      // directly onto this fork's OWN `process.parentPort` — the child side of
-      // the wire, disjoint from the RPC-client wiring slice B5 owns.
-      ...(args.child !== undefined
-        ? {
-            child: {
-              onReady: () => {
-                process.parentPort.postMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
-              },
-              flushHistory: () => historySink!.flushChecked(),
-              onTerminal: (report) => {
-                process.parentPort.postMessage({
-                  type: CHILD_TERMINAL_TYPE,
-                  status: report.status,
-                  finalText: report.finalText,
-                  truncated: report.truncated,
-                  turns: report.turns,
-                  toolCalls: report.toolCalls,
-                  durationMs: report.durationMs,
-                  ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
-                } satisfies ChildTerminal);
-              },
-              // TASK.102 CUT-S2 §10.7 п.7: zero-transform relay, the exact
-              // same shape as the attention-tap posting above (:1673-1683) —
-              // Session's child-mode turn loop already produces a report
-              // shaped exactly like `ChildProgress` minus `type`, so this
-              // never re-derives or re-validates anything, only stamps it.
-              onProgress: (report) => {
-                process.parentPort.postMessage({
-                  type: CHILD_PROGRESS_TYPE,
-                  ...report,
-                } satisfies ChildProgress);
-              },
-            },
-          }
-        : {}),
+      // child's transcript is durably on disk). CUT-S4 §4.1: `buildChildSessionOptions`
+      // is the exact same onReady/onTerminal/onProgress bodies, extracted so
+      // codex/claude share them too — only `flushHistory` differs per engine.
+      ...(args.child !== undefined ? { child: buildChildSessionOptions(() => historySink!.flushChecked()) } : {}),
     });
 
     console.log(

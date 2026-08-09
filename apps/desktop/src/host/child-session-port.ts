@@ -289,11 +289,16 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         onEvent: (event) => {
           switch (event.kind) {
             case "accepted": {
+              // TASK.102 CUT-S4 §3.1: `engine` rides verbatim from the
+              // REQUEST (never from main's `accepted` event, which carries
+              // no engine field) — the card's chip reflects what this run
+              // asked to boot, exactly like agentType/description above.
               const progress: SubagentProgress = {
                 kind: "start",
                 agentType: req.agentType,
                 description: req.description,
                 model: event.model,
+                ...(req.engine !== undefined ? { engine: req.engine } : {}),
               };
               opts.onProgress?.(progress);
               return;
@@ -389,6 +394,10 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         prompt: req.prompt,
         ...(req.provider !== undefined ? { provider: req.provider } : {}),
         ...(req.model !== undefined ? { model: req.model } : {}),
+        // TASK.102 CUT-S4 §3.1: verbatim passthrough, absent = core (the
+        // wire's own byte-compatible default — shared/child-sessions.ts's
+        // file header).
+        ...(req.engine !== undefined ? { engine: req.engine } : {}),
         permissionMode: options.getPermissionMode(),
       };
       options.send(spawnRequest);
