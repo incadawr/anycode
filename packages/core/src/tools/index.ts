@@ -1,4 +1,5 @@
 export { ToolRegistry, createDefaultToolRegistry } from "./registry.js";
+export type { CreateDefaultToolRegistryOptions } from "./registry.js";
 export { toToolDeclarations } from "./to-model-tools.js";
 export { readTool } from "./read.js";
 export { writeTool } from "./write.js";
@@ -10,7 +11,8 @@ export { todoReadTool } from "./todo-read.js";
 export { todoWriteTool } from "./todo-write.js";
 export { webFetchTool } from "./web-fetch.js";
 export { createWebSearchTool } from "./web-search.js";
-export { agentTool } from "./agent.js";
+export { agentTool, createAgentTool } from "./agent.js";
+export type { CreateAgentToolOptions } from "./agent.js";
 export { skillTool } from "./skill.js";
 export { workflowTool } from "./workflow.js";
 export { backgroundCapableBashTool } from "./bash-background.js";
@@ -43,6 +45,7 @@ export { InMemoryTodoStore } from "./todo-store.js";
 export type { TodoItem, TodoStore } from "./todo-store.js";
 export {
   agentInputSchema,
+  restrictedAgentInputSchema,
   backgroundBashInputSchema,
   bashInputSchema,
   bashKillInputSchema,
@@ -62,6 +65,7 @@ export {
 export type {
   AgentInput,
   AgentOutput,
+  RestrictedAgentInput,
   BackgroundBashInput,
   BashBackgroundStartedOutput,
   BashInput,
