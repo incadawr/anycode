@@ -206,6 +206,27 @@ function isPermissionMode(value: string): value is PermissionMode {
   return (PERMISSION_MODES as readonly string[]).includes(value);
 }
 
+/**
+ * Second, independent authority feeding non-recursion lock #2
+ * (`host/index.ts`'s `config.sessionSubagents` wiring — TASK.102 CUT-S2
+ * §10.9.2 arbitration). True when EITHER signal says "this boot is a
+ * child": the argv authority (`args.child`, the same fact lock #1 reads,
+ * before persistence is even consulted) OR the durable authority
+ * (`meta.parentSessionId`, main's own `tabs.ts` ledger replayed back
+ * through `resolveBootSession`) — two genuinely different sources of
+ * truth, not the same fact read twice. OR-semantics = fail-closed: either
+ * signal alone withholds the session-tier capability; agreement between
+ * them is never required. Lock #1 (the tool-registry ternary, built
+ * BEFORE `resolveBootSession` runs) deliberately stays argv-only — `meta`
+ * does not exist yet at that point in boot, and reordering boot to make it
+ * exist buys nothing because lock #2 (this predicate) and lock #3
+ * (`main/tabs.ts`'s own `childOf` ledger + sender check) already close the
+ * capability independently of lock #1's schema (CUT-S2 §10.9.2 p.4).
+ */
+export function isChildSessionBoot(args: HostArgs, meta: SessionMeta): boolean {
+  return args.child !== undefined || meta.parentSessionId !== undefined;
+}
+
 export interface BootSessionResult {
   sessionMeta: SessionMeta;
   /** Prior persisted history for a resumed session; empty for a freshly created one. */

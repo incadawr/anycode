@@ -35,11 +35,13 @@ import {
   type PreviewRequestMessage,
   type PreviewResponseMessage,
 } from "../shared/preview.js";
+import type { SessionMeta } from "@anycode/core";
 import {
   buildResolveApiKey,
   createMainCredentialProvider,
   createPreviewRpcClient,
   hostDiagnosticSink,
+  isChildSessionBoot,
   parseHostArgs,
   resolveBootSession,
   routePreviewMessage,
@@ -958,5 +960,41 @@ describe("resolveBootSession — child-mode session rows (TASK.102 CUT-S2 §2.6.
     } finally {
       await persistence.close();
     }
+  });
+});
+
+describe("isChildSessionBoot — second authority for non-recursion lock #2 (TASK.102 CUT-S2 §10.9.2)", () => {
+  function meta(overrides: Partial<SessionMeta> = {}): SessionMeta {
+    return {
+      id: "s1",
+      workspace: "/ws",
+      model: "m1",
+      mode: "build",
+      createdAt: 0,
+      updatedAt: 0,
+      ...overrides,
+    };
+  }
+
+  const rootArgs = { resume: false } as const;
+  const childArgs = {
+    resume: false,
+    child: { parentSessionId: "parent-1", spawnToolCallId: "call-1", initialMode: "build" as const },
+  };
+
+  it("argv-child + root-meta ⇒ true (the pre-existing signal, argv authority alone)", () => {
+    expect(isChildSessionBoot(childArgs, meta())).toBe(true);
+  });
+
+  it("argv-root + child-meta ⇒ true — new truth, unprovable by the old single-predicate code: the durable authority alone is enough, OR-semantics, fail-closed", () => {
+    expect(isChildSessionBoot(rootArgs, meta({ parentSessionId: "parent-9" }))).toBe(true);
+  });
+
+  it("argv-child + child-meta (agreeing) ⇒ true", () => {
+    expect(isChildSessionBoot(childArgs, meta({ parentSessionId: "parent-1" }))).toBe(true);
+  });
+
+  it("argv-root + root-meta ⇒ false — the only combination that opens lock #2", () => {
+    expect(isChildSessionBoot(rootArgs, meta())).toBe(false);
   });
 });

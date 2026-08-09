@@ -262,6 +262,7 @@ import {
   buildResolveApiKey,
   createPreviewRpcClient,
   hostDiagnosticSink,
+  isChildSessionBoot,
   parseHostArgs,
   repairDanglingToolCalls,
   resolveBootSession,
@@ -1813,12 +1814,22 @@ async function boot(): Promise<void> {
     // both mutate in place — LIVE, at the moment each `run()` call actually
     // fires, rather than a boot-time snapshot of the `mode` const above (cut
     // §0.8: "a snapshot of the parent's mode at the moment Agent was
-    // invoked"). Built ONLY for a non-child boot: a child-mode boot leaves
-    // `config.sessionSubagents` absent, so `tools/agent.ts`'s
-    // `runSessionTier` fail-closes with its own "unavailable in this host"
-    // error even in the hypothetical case where lock #1's restricted schema
-    // (above) were ever bypassed — belt and suspenders, cut §0.2.
-    if (args.child === undefined) {
+    // invoked"). CUT-S2 §10.9.2 arbitration: lock #1 above (the registry
+    // ternary) and this gate used to read the SAME single fact
+    // (`args.child`) twice, which is one authority checked twice, not two —
+    // that overclaim is fixed here. This gate now reads
+    // `isChildSessionBoot(args, sessionMeta)`, a genuine second, independent
+    // authority: argv (`args.child`, lock #1's own fact) OR the durable
+    // `sessionMeta.parentSessionId` (main's own `tabs.ts` ledger, replayed
+    // back through `resolveBootSession`) — OR-semantics, fail-closed, either
+    // signal alone withholds the capability. `config.sessionSubagents` stays
+    // absent whenever either fires, so `tools/agent.ts`'s `runSessionTier`
+    // fail-closes with its own "unavailable in this host" error even when
+    // lock #1's restricted schema (above) is bypassed by an argv/meta
+    // mismatch. The THIRD, independent defense lives in a different process
+    // entirely: `main/tabs.ts`'s own `childOf` ledger + sender check
+    // (`spawnChild`) — that one does not read anything boot built here.
+    if (!isChildSessionBoot(args, sessionMeta)) {
       config.sessionSubagents = createChildSessionPort({
         parentSessionId: sessionMeta.id,
         getPermissionMode: () => config.mode,
