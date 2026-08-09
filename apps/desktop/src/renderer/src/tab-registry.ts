@@ -555,6 +555,21 @@ export function createTabRegistry(
         // C3's Open/breadcrumb read `live: false` and fall back to the
         // read-only history channel (C4) instead of a dead port.
         childRelationStore.getState().markChildGone(tabId);
+        // TASK.102 CUT-S2 §10.10.2 (R2, O4/F3-R): a terminated child host
+        // never respawns (main's own reap-on-terminal verdict, §0), and a
+        // child's own tabId can never reach `disposeTab` — main's `closeTab`
+        // rejects any `childOf` tabId (`main/tabs.ts`, `unknown_tab`) — so
+        // this is the only disposal point this entry will ever get. Leaving
+        // it in `entries` would hold the child's whole store+transcript for
+        // the rest of the renderer process's life; nothing reads it after
+        // exit (C4 resolves "Open completed" through the durable
+        // `childHistory` IPC channel, never this registry — only the LIVE
+        // branch, gated on `relation.live`, ever calls `getStore` at all).
+        // `closedTabIds.add` fail-closes against a late/duplicate port
+        // delivery for this tabId: no legitimate one exists for a child.
+        entries.delete(tabId);
+        pendingInitialPrompts.delete(tabId);
+        closedTabIds.add(tabId);
       } else {
         tabsStore.getState().setHostExited(tabId, true);
       }

@@ -523,8 +523,52 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     // phantom tabs-store entry was ever created for the child to paint one on.
     expect(tabsStore.getState().tabs.find((t) => t.tabId === "root-1")?.hostExited).toBe(false);
     expect(tabsStore.getState().tabs.find((t) => t.tabId === "child-1")).toBeUndefined();
-    // The child's own store still reflects the exit (used by a completed-view read later).
-    expect(registry.getStore("child-1")?.getState().connection).toBe("host_exited");
+    // TASK.102 CUT-S2 §10.10.2 (R2, O4/F3-R): the child's entry is torn down
+    // right here, not retained — its own tabId can never reach `disposeTab`
+    // (main's `closeTab` rejects a `childOf` tabId, `main/tabs.ts`), so this
+    // is its only disposal point. Nothing reads the store after exit: C4
+    // (`ChildHistoryPane`, App.tsx) resolves "Open completed" through the
+    // durable `childHistory` IPC channel (App.tsx:704-705), never this
+    // registry — only the LIVE branch (`ChildSessionPane`, gated
+    // `relation.live` at App.tsx:500) calls `tabRegistry.getStore` at all
+    // (App.tsx:611), and that branch never renders once `live` is false.
+    expect(registry.getStore("child-1")).toBeUndefined();
+  });
+
+  it("markHostExited on a child tab disposes its entry (TASK.102 CUT-S2 §10.10.2 R2): the store is dropped, the subscription is torn down, and the tabId is closed against a stray late port — while the relation survives for C4", () => {
+    const tabsStore = createTabsStore();
+    const { registry, childRelationStore } = createTestRegistry(tabsStore);
+
+    registry.registerPort("root-1", "/ws/root", asPort(new FakeMessagePort()));
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    const staleStoreRef = registry.getStore("child-1")!;
+
+    registry.markHostExited("child-1");
+
+    // entries.delete: no leaked store for the rest of the renderer process's
+    // life (the bug this test discriminates — F3-R/O4 — is exactly a
+    // `markHostExited` that flips the relation but forgets this).
+    expect(registry.getStore("child-1")).toBeUndefined();
+    // closedTabIds.add: fail-closed against a late/duplicate port delivery —
+    // no legitimate respawn exists for a child (a terminated child host never
+    // respawns, §0), so a stray delivery must be dropped, not resurrect a tab.
+    expect(registry.isClosed("child-1")).toBe(true);
+    const latePort = new FakeMessagePort();
+    expect(registry.registerPort("child-1", "/ws/root", asPort(latePort), undefined, childField())).toBe(false);
+
+    // unsubscribeMessages ran before the entry left the map — a stray message
+    // on the old port must not resurrect state on the orphaned store instance.
+    port.emit(HOST_READY("/ws/root", "sess-child"));
+    expect(staleStoreRef.getState().workspace).toBeNull();
+
+    // The relation is what survives disposal — C4 resolves Open through IT,
+    // not the retained store — so it must outlive the entry, still `live: false`.
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toEqual({
+      childTabId: "child-1",
+      childSessionId: "sess-child",
+      live: false,
+    });
   });
 
   it("markHostExited on a ROOT tab still paints its banner as before (child branch doesn't leak into root)", () => {

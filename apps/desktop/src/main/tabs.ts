@@ -178,6 +178,17 @@ export const DEFAULT_BREAKER_LIMITS: BreakerLimits = {
 };
 
 /**
+ * Bounds `drainChildren`'s cascade (review T1) against a child whose process
+ * was force-killed but never actually emits "exit" — `finalizeChildRun` then
+ * never runs, the sibling set never empties, and an unbounded loop would
+ * revisit it forever, one real macrotask at a time, pinning whichever caller
+ * is awaiting the drain (`closeTab`, `relocateTab`) indefinitely. A generous
+ * multiple of the per-child force-kill deadline: a healthy shutdown/force-kill
+ * sequence resolves well within `exitDeadlineMs` alone.
+ */
+const DRAIN_CHILDREN_DEADLINE_MULTIPLIER = 5;
+
+/**
  * Synchronous refcount of pinned connections a resume has RESERVED but not yet
  * registered a live tab for (TASK.45 W10-FIX F3, layer a). `resolveResumePin`
  * reserves a pin BEFORE the first await of its env-prime and releases it once
@@ -622,20 +633,27 @@ export class TabHostManager {
    */
   private readonly childSpawnKeys = new Map<string, string>();
   /**
-   * Child-tab `UtilityProcess` references whose `shutdownTabHost` call hit
-   * its `exitDeadlineMs` timeout and force-killed rather than seeing a real
-   * exit (TASK.102 fix-wave F2). Populated right before that same call nulls
-   * `tab.proc` — the moment `handleChildExit`'s ordinary `tab.proc !== child`
-   * staleness guard would otherwise treat the process's LATE, genuinely-still-
-   * pending exit as belonging to an already-superseded generation and drop
-   * it, never calling `finalizeChildRun` (the slot/dedup-key leak). Consumed
-   * (and removed) the first time that late exit is actually processed by
-   * `handleExit`, whether the tab turns out to be a child or a root — a root
-   * never needs it (its own `state === "closing"` guard already short-circuits
-   * before the staleness check), so leaving the entry there for a root's
-   * timeout would just be an unused, un-collected reference otherwise.
+   * `UtilityProcess` references whose `shutdownTabHost` call hit its
+   * `exitDeadlineMs` timeout and force-killed rather than seeing a real exit
+   * (TASK.102 fix-wave F2), mapped to whatever `tab.engineProcess`
+   * registration existed for that tab AT THE MOMENT of the force-kill (`null`
+   * if none) — review T3's snapshot, taken before `shutdownTabHost` nulls
+   * `tab.proc` and before any later respawn could reset `tab.engineProcess`
+   * out from under it. Populated right before that same nulling — the moment
+   * `handleChildExit`'s (children) and `reapEngineProcess`'s (all tabs)
+   * ordinary `tab.proc !== child` staleness guards would otherwise treat the
+   * process's LATE, genuinely-still-pending exit as belonging to an
+   * already-superseded generation and drop it: for a child, never calling
+   * `finalizeChildRun` (the slot/dedup-key leak, F2); for any tab with an
+   * external engine, never reaping it (the orphaned process-group leak, T3).
+   * Consumed (and removed) the first time that late exit is actually
+   * processed by `handleExit`, whether the tab turns out to be a child or a
+   * root — a root's OWN `state === "closing"` respawn-suppression guard
+   * never needed the F2 half of this (children never respawn, so `forceKilled`
+   * is the only legitimate cause of staleness there), but a root CAN carry an
+   * `engineProcess`, so the T3 half applies to roots specifically.
    */
-  private readonly forceKilledExits = new Set<UtilityProcess>();
+  private readonly forceKilledExits = new Map<UtilityProcess, EngineProcessRegistration | null>();
   private readonly limits: BreakerLimits;
   private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
@@ -1242,7 +1260,20 @@ export class TabHostManager {
   private cancelChildRun(childTabId: string): Promise<void> {
     const childTab = this.tabs.get(childTabId);
     if (childTab === undefined) {
-      return Promise.resolve();
+      // A childTabId with no tab can never finalize — nothing will ever call
+      // `finalizeChildRun` for it — so drop it from whichever parent's
+      // sibling set still names it here, rather than let `drainChildren`
+      // revisit this ghost on every pass. And settle via a REAL macrotask,
+      // for the identical reason the "already closing" branch below does
+      // (review T1): a bare `Promise.resolve()` here feeds straight back
+      // into `drainChildren`'s `for(;;)` loop and starves the event loop on
+      // THIS branch exactly as F1 fixed on that one.
+      for (const [parentTabId, siblings] of this.childrenByParentTab) {
+        if (siblings.delete(childTabId) && siblings.size === 0) {
+          this.childrenByParentTab.delete(parentTabId);
+        }
+      }
+      return new Promise<void>((resolve) => setImmediate(resolve));
     }
     const requestId = childTab.childOf?.requestId;
     const entry = requestId !== undefined ? this.childRuns.get(requestId) : undefined;
@@ -1277,9 +1308,21 @@ export class TabHostManager {
    * applies equally to both.
    */
   private async drainChildren(parentTab: TabHost): Promise<void> {
+    const deadline = this.now() + this.limits.exitDeadlineMs * DRAIN_CHILDREN_DEADLINE_MULTIPLIER;
     for (;;) {
       const childIds = this.childrenByParentTab.get(parentTab.tabId);
       if (childIds === undefined || childIds.size === 0) {
+        return;
+      }
+      if (this.now() >= deadline) {
+        // Honest outcome, not a silent continue (review T1): whatever is
+        // left here already had its own shutdown/force-kill started by
+        // `cancelChildRun` above and stays tracked — the NEXT drain (a later
+        // close/relocate/exit cascade) retries it. This call simply stops
+        // waiting on a child that should already be gone.
+        this.logger.error(
+          `[main] drainChildren for tab ${parentTab.tabId} gave up after ${this.limits.exitDeadlineMs * DRAIN_CHILDREN_DEADLINE_MULTIPLIER}ms with ${childIds.size} child(ren) still unreaped`,
+        );
         return;
       }
       const snapshot = [...childIds];
@@ -1594,12 +1637,15 @@ export class TabHostManager {
    * respawns (with a fresh channel) unless a per-tab or global breaker tripped.
    */
   private handleExit(tab: TabHost, child: UtilityProcess, code: number): void {
-    // TASK.102 fix-wave F2: consumed once, regardless of root/child — a root
-    // never needs it (its own `state === "closing"` guard below already
-    // short-circuits before any staleness check), but must not leave a
-    // stale entry behind either.
+    // TASK.102 fix-wave F2 / review T3: read the snapshot BEFORE deleting —
+    // consumed once, regardless of root/child. A root never needed the F2
+    // half (its own `state === "closing"` guard below already short-circuits
+    // before any staleness check), but must not leave a stale entry behind
+    // either; the T3 half (the engine-process registration snapshot) applies
+    // to roots specifically, since only a root ever carries one.
+    const forceKilledRegistration = this.forceKilledExits.get(child);
     const forceKilled = this.forceKilledExits.delete(child);
-    this.reapEngineProcess(tab, child);
+    this.reapEngineProcess(tab, child, forceKilledRegistration);
     if (tab.childOf !== undefined) {
       // TASK.102 CUT-S2 §2.6.4: a child tab's exit is never a respawn
       // decision — it is caught (and finalized) here unconditionally,
@@ -1690,7 +1736,35 @@ export class TabHostManager {
     };
   }
 
-  private reapEngineProcess(tab: TabHost, child: UtilityProcess): void {
+  /**
+   * `forceKilledRegistration` is `undefined` for an ordinary (non-force-
+   * killed) exit — the ordinary `tab.proc === child` staleness check below
+   * applies. It is `EngineProcessRegistration | null` for a force-killed
+   * exit (review T3): `tab.proc` was already nulled by `shutdownTabHost`'s
+   * timeout branch, before this late exit ever arrived, so `tab.proc ===
+   * child` can never be true for it again — that check would otherwise
+   * always fail closed and leak the external engine process group forever.
+   * Reap the SNAPSHOT taken at force-kill time instead: it names exactly the
+   * child that was force-killed, so it can never be confused with a newer
+   * (respawned) generation's own engine — that one gets reaped on ITS OWN
+   * eventual exit, off ITS OWN snapshot, never this one.
+   */
+  private reapEngineProcess(
+    tab: TabHost,
+    child: UtilityProcess,
+    forceKilledRegistration?: EngineProcessRegistration | null,
+  ): void {
+    if (forceKilledRegistration !== undefined) {
+      if (forceKilledRegistration === null) {
+        return; // nothing was registered for this tab when it was force-killed
+      }
+      try {
+        this.deps.reapEngineProcess?.(forceKilledRegistration);
+      } catch (error) {
+        this.logger.warn(`[main] failed to reap external engine for tab ${tab.tabId}`, error);
+      }
+      return;
+    }
     const registration = tab.engineProcess;
     if (
       registration === null ||
@@ -1833,15 +1907,30 @@ export class TabHostManager {
       clearTimeout(timer);
     }
     if (result === "timeout") {
-      this.logger.error(
-        `[main] tab ${tab.tabId} host did not exit within ${this.limits.exitDeadlineMs}ms; force killing`,
-      );
-      // TASK.102 fix-wave F2: `tab.proc` is about to be nulled below even
-      // though `child` has not actually exited yet — record the reference so
-      // its late, real "exit" is still recognized as current (not stale) by
-      // `handleChildExit` when it eventually lands.
-      this.forceKilledExits.add(child);
-      child.kill();
+      // Review T2: two `shutdownTabHost` calls can overlap on the same
+      // `child` (an explicit parent cancel racing a self-reported
+      // ChildTerminal's own reap call, both capturing `child = tab.proc`
+      // before either nulls it). If the OTHER call already force-killed and
+      // nulled `tab.proc`, this one is the loser of that race — its own
+      // deadline elapsing here says nothing new; the process is already
+      // being torn down. Only the call that still recognizes the tab's
+      // CURRENT process does the force-kill bookkeeping, so a losing racer
+      // cannot redundantly re-kill an already-dying process.
+      if (tab.proc === child) {
+        this.logger.error(
+          `[main] tab ${tab.tabId} host did not exit within ${this.limits.exitDeadlineMs}ms; force killing`,
+        );
+        // TASK.102 fix-wave F2 / review T3: `tab.proc` is about to be nulled
+        // below even though `child` has not actually exited yet — record the
+        // reference so its late, real "exit" is still recognized as current
+        // (not stale) by `handleChildExit` when it eventually lands, paired
+        // with a snapshot of whatever engine-process registration this tab
+        // carried AT THIS EXACT MOMENT (before any later respawn could reset
+        // `tab.engineProcess` out from under it), so `reapEngineProcess` can
+        // still reap it off that late exit instead of leaking it forever.
+        this.forceKilledExits.set(child, tab.engineProcess);
+        child.kill();
+      }
     } else {
       this.logger.log(`[main] tab ${tab.tabId} host exited gracefully within deadline`);
     }
