@@ -359,12 +359,24 @@ async function createRootTab(ctx, step, workspace) {
 }
 
 /**
+ * How many times a single-spawn probe re-asks the live model before it gives
+ * up with a documented SKIP. The base harness asks twice (initial + one
+ * retry); probes B and C need the model to volunteer ONE
+ * `Agent(tier:"session")` call and skipped on two separate runs at that
+ * budget, while §10.14.7 п.3 needs them to actually execute. The extra
+ * attempt only re-asks — no assertion below is relaxed, and the skip reason
+ * carries the attempt count so a SKIP is never readable as proof.
+ */
+const DISPATCH_ATTEMPTS = 3;
+
+/**
  * Dispatches ONE `Agent(tier:"session")` call on `tabId`, reusing the base
  * harness's `attemptDispatch`/`settleTurn` by temporarily pointing the
  * shared `ctx.tabId` at this probe's own tab — safe because this script
  * never has two dispatches in flight at once (fully sequential probes).
- * Same retry-once-then-documented-SKIP discipline as
- * `child-session-explicit-provider-smoke.mjs`/`child-session-scenario-smoke.mjs`.
+ * Same retry-then-documented-SKIP discipline as
+ * `child-session-explicit-provider-smoke.mjs`/`child-session-scenario-smoke.mjs`,
+ * widened to `DISPATCH_ATTEMPTS` asks.
  */
 async function dispatchOneSpawn(ctx, step, tabId, sleepSeconds, label) {
   const priorTabId = ctx.tabId;
@@ -372,21 +384,26 @@ async function dispatchOneSpawn(ctx, step, tabId, sleepSeconds, label) {
   try {
     let result = await attemptDispatch(ctx, step, spawnOnePrompt(sleepSeconds, label, false), 60_000);
     let anyAgentSeen = result.anyAgentSeen;
+    let attempts = 1;
 
-    if (!hasSessionTierInput(result.block) && result.childRuns.length === 0) {
-      console.warn(`[child-session-race-smoke] probe ${step}: tier:"session" not seen on the first attempt — retrying once`);
+    while (attempts < DISPATCH_ATTEMPTS && !hasSessionTierInput(result.block) && result.childRuns.length === 0) {
+      console.warn(
+        `[child-session-race-smoke] probe ${step}: tier:"session" not seen on attempt ${attempts} — ` +
+          `retrying (attempt ${attempts + 1} of ${DISPATCH_ATTEMPTS})`,
+      );
       await settleTurn(ctx, step);
       result = await attemptDispatch(ctx, step, spawnOnePrompt(sleepSeconds, label, true), 90_000);
       anyAgentSeen = anyAgentSeen || result.anyAgentSeen;
+      attempts += 1;
     }
 
     if (!anyAgentSeen) {
       await settleTurn(ctx, step);
-      return { skipped: true, reason: "model never called Agent" };
+      return { skipped: true, reason: `model never called Agent (${attempts} of ${DISPATCH_ATTEMPTS} attempts)` };
     }
     if (!hasSessionTierInput(result.block) && result.childRuns.length === 0) {
       await settleTurn(ctx, step);
-      return { skipped: true, reason: 'model did not use tier:"session"' };
+      return { skipped: true, reason: `model did not use tier:"session" (${attempts} of ${DISPATCH_ATTEMPTS} attempts)` };
     }
     if (result.childRuns.length === 0) {
       fail(step, `Agent(tier:"session") dispatched but never admitted (childRuns empty). Block: ${JSON.stringify(result.block)}`);
