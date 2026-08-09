@@ -565,12 +565,42 @@ const CHILD_B_MESSAGE_COUNT_JS = `(() => {
 /** Sidebar row titles (border-sanity, I5) — same technique `child-session-scenario-smoke.mjs`/`child-session-split-smoke.mjs` already established (not exported by either), reused here to prove the sidebar's own row count never grows across either child's lifetime. */
 const SIDEBAR_ROW_TITLES_JS = `(() => Array.from(document.querySelectorAll('.sidebar-row')).map((row) => (row.querySelector('.sidebar-row-title')?.textContent ?? null)))()`;
 
-/** On-screen text of the card's own sub-status counter line (`.tool-call-subagent-counters`, `ToolCallCard.tsx`'s `formatSubagentCounters`) — the "engine chip" CUT-S4 §4.6/§6.2 п.1 calls for is a `"<engine> · "` TEXT PREFIX on this element while running (TASK.97 R5), not a separate badge element. */
+/**
+ * On-screen text of the card's own sub-status counter line — the "engine
+ * chip" CUT-S4 §4.6/§6.2 п.1 calls for is a `"<engine> · "` TEXT PREFIX on
+ * this element while running (TASK.97 R5's `formatSubagentCounters`,
+ * `ToolCallCard.tsx`), not a separate badge element. An Agent card is
+ * COLLAPSED BY DEFAULT in EVERY status (`defaultExpanded` returns `false`
+ * unconditionally for `toolName === "Agent"`) — the state this smoke
+ * actually observes, and the state the owner sees without touching anything
+ * — so `.tool-call-subagent-counters` (mounted by `SubagentStatus`, only
+ * inside the EXPANDED card body) is not on screen there. The same text
+ * renders, while running and collapsed, in the always-visible toggle row as
+ * `.subagent-collapsed-progress` (same `formatSubagentCounters` call, gated
+ * on `!expanded && block.subagent.final === null`). This probe reads the
+ * collapsed-row node FIRST (the stronger evidence, since it is the default
+ * state) and falls back to the expanded-body node for a card the caller
+ * happens to have expanded. DOM-presence != visibility (this track's law
+ * #1): whichever node is found must also have a non-zero on-screen box
+ * (`getBoundingClientRect()`), or the read counts as absent, not present —
+ * the returned `reason` distinguishes "no such node" (`no_card`/`no_node`)
+ * from "node present but not visible" (`zero_rect`) for the caller's own
+ * failure message.
+ */
 function subagentCounterTextJs(toolCallId) {
   return `(() => {
     const card = document.querySelector('[data-tool-call-id="${toolCallId}"]');
-    const el = card ? card.querySelector('.tool-call-subagent-counters') : null;
-    return el ? el.textContent : null;
+    if (!card) return { text: null, node: 'none', reason: 'no_card' };
+    const collapsedEl = card.querySelector('.subagent-collapsed-progress');
+    const expandedEl = card.querySelector('.tool-call-subagent-counters');
+    const el = collapsedEl ?? expandedEl;
+    if (!el) return { text: null, node: 'none', reason: 'no_node' };
+    const node = collapsedEl ? 'collapsed' : 'expanded';
+    const rect = el.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) {
+      return { text: null, node, reason: 'zero_rect', rect: { width: rect.width, height: rect.height } };
+    }
+    return { text: el.textContent, node, reason: null };
   })()`;
 }
 
@@ -811,10 +841,19 @@ async function step1Spawn(ctx) {
   const second = await findMasterToolCallBlock(ctx, step, ctx.denyToolCallId);
   assert(step, second !== null && second.status === "running", `card not still "running" 400ms later: ${JSON.stringify(second)}`);
 
-  const counterText = await ctx.cdp.eval(subagentCounterTextJs(ctx.denyToolCallId));
-  assert(step, typeof counterText === "string" && counterText.startsWith(`${ENGINE} · `), `on-screen chip text does not start with "${ENGINE} · ": ${JSON.stringify(counterText)}`);
+  const counter = await ctx.cdp.eval(subagentCounterTextJs(ctx.denyToolCallId));
+  const counterText = counter.text;
+  assert(
+    step,
+    typeof counterText === "string" && counterText.startsWith(`${ENGINE} · `),
+    counterText === null
+      ? counter.reason === "zero_rect"
+        ? `on-screen chip node found (${counter.node}) but not visible — zero on-screen box: ${JSON.stringify(counter.rect)}`
+        : `on-screen chip node not found (reason=${counter.reason})`
+      : `on-screen chip text does not start with "${ENGINE} · ": ${JSON.stringify(counterText)}`,
+  );
 
-  pass(step, `spawned via engine-profile "${PROFILE_NAME}": card running with engine chip "${counterText}", childRuns=1 (childSessionId=${ctx.denyChildSessionId})`);
+  pass(step, `spawned via engine-profile "${PROFILE_NAME}": card running with engine chip "${counterText}" (${counter.node}), childRuns=1 (childSessionId=${ctx.denyChildSessionId})`);
 }
 
 // ── step 2: Open -> modal live+real in the CHILD surface; badge on master, no master modal (CUT-S4 §6.2 п.2, anti-facade §8 пп.1,2) ──
