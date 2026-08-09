@@ -31,8 +31,12 @@
  * note) — the only real duration in this card is subagent.final.durationMs,
  * already rendered by formatSubagentCounters when expanded.
  */
-import { useEffect, useId, useRef, useState } from "react";
+import { useContext, useEffect, useId, useRef, useState } from "react";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowStepStatus, WorkflowSubStatus } from "../store.js";
+import { TabContext } from "../tab-context.js";
+import { useTabsStore } from "../tabs-store.js";
+import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
+import { childRelationStore, hasOpenableChild } from "../child-sessions.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -54,6 +58,21 @@ const SUBAGENT_FINAL_LABELS: Record<NonNullable<SubagentSubStatus["final"]>["sta
   max_turns: "Max turns reached",
   cancelled: "Cancelled",
   error: "Error",
+};
+
+/**
+ * TASK.102 CUT-S2 §2.5 (slice S2c C3): the session-tier child badge's label,
+ * one per `childBadgeKind` outcome. `waiting_permission` is the badge's whole
+ * reason to exist — `block.status` (the outer Agent tool_call's own status,
+ * STATUS_LABELS above) stays "Running" the entire time a child session is
+ * blocked on its own permission ask, so nothing else on this card can show
+ * that state.
+ */
+const CHILD_BADGE_LABELS: Record<ChildBadgeKind, string> = {
+  waiting_permission: "Waiting for permission",
+  running: "Running",
+  error: "Error",
+  done: "Done",
 };
 
 /**
@@ -285,11 +304,72 @@ function WorkflowStatus({ workflow }: { workflow: WorkflowSubStatus }) {
   );
 }
 
+/**
+ * TASK.102 CUT-S2 §2.5 (slice S2c C3): an Agent card's session-child badge +
+ * Open action, or `undefined` for every card that isn't one — inline
+ * subagents (the overwhelming common case), every non-Agent tool, and any
+ * Agent card rendered with no `<TabContext.Provider>` above it (this file's
+ * own SSR tests, ToolCallCard.test.ts, mount `ToolCallCard`/`AgentCardBody`
+ * bare). Self-contained: reads TabContext plus the two C1 relation/layout
+ * stores directly, so MessageList.tsx needs no new prop to thread through —
+ * `useContext`/the two store hooks are called UNCONDITIONALLY (React's rules
+ * of hooks) even for a non-Agent block; only the RETURN is gated on
+ * `isAgentCard`, so a Bash/Read/Grep card's selectors always resolve to a
+ * stable `undefined` and never re-render off child-store churn.
+ *
+ * The actual DECISION here is a single `hasOpenableChild` presence check
+ * (child-sessions.ts, tested) plus `childBadgeKind` (child-layout.ts,
+ * tested) — this hook is plumbing (TabContext -> parentSessionId ->
+ * relation), not a new branch to discriminate.
+ *
+ * `onOpen` is present only while `relation.live` — ActiveTabBody only ever
+ * shows a child surface for a LIVE relation (C4's read-only completed branch
+ * doesn't exist yet), so an Open button wired to a non-live relation would
+ * be a dead click: the store write would land, then ActiveTabBody's own
+ * render-gate + self-heal effect would silently bounce it straight back to
+ * master. The BADGE stays visible regardless of `live` (`hasOpenableChild`
+ * doesn't check it) — the card's own settled status is honest information
+ * either way; only the ACTION needs the stronger guard.
+ */
+function useChildSessionAction(
+  block: ToolCallBlock,
+): { badge: ChildBadgeKind; onOpen: (() => void) | undefined } | undefined {
+  const ctx = useContext(TabContext);
+  const isAgentCard = block.toolName === "Agent";
+  const parentSessionId = useTabsStore((state) =>
+    isAgentCard && ctx !== null ? state.tabs.find((tab) => tab.tabId === ctx.tabId)?.sessionId : undefined,
+  );
+  const relation = childRelationStore((state) =>
+    isAgentCard && parentSessionId !== null && parentSessionId !== undefined
+      ? state.getRelation(parentSessionId, block.toolCallId)
+      : undefined,
+  );
+  if (!isAgentCard || ctx === null || block.subagent === null || !hasOpenableChild(relation)) {
+    return undefined;
+  }
+  const rootTabId = ctx.tabId;
+  const spawnToolCallId = block.toolCallId;
+  return {
+    badge: childBadgeKind(block.subagent),
+    onOpen: relation?.live === true ? () => childLayoutStore.getState().open(rootTabId, spawnToolCallId) : undefined,
+  };
+}
+
 /** Sub-status region mounted below the input summary when `block.subagent` is
  *  set (Agent tool only). A flat two-line panel sharing the row atoms: glyph ·
  *  persona (mono anchor) · model (only when the child ran on its own) ·
- *  description, then the frozen counters line. */
-function SubagentStatus({ subagent }: { subagent: SubagentSubStatus }) {
+ *  description, then the frozen counters line. A THIRD line — the session-
+ *  child badge (+ Open button, only when the child is still live) — mounts
+ *  only when `child` is set (TASK.102 CUT-S2 §2.5 C3); every inline-subagent
+ *  card (the default `child` prop, `undefined`) renders byte-identically to
+ *  before this slice. */
+function SubagentStatus({
+  subagent,
+  child,
+}: {
+  subagent: SubagentSubStatus;
+  child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
+}) {
   const kind = substatusKind(subagent.final);
   return (
     <div className="tool-call-subagent">
@@ -307,6 +387,18 @@ function SubagentStatus({ subagent }: { subagent: SubagentSubStatus }) {
         <span className="tool-call-subagent-desc">{subagent.description}</span>
       </div>
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
+      {child !== undefined && (
+        <div className="tool-call-subagent-child-row">
+          <span className={`tool-call-child-badge tool-call-child-badge-${child.badge}`}>
+            {CHILD_BADGE_LABELS[child.badge]}
+          </span>
+          {child.onOpen !== undefined && (
+            <button type="button" className="tool-call-subagent-open-button" onClick={child.onOpen}>
+              Open
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -478,17 +570,20 @@ export function AgentCardBody({
   block,
   promptExpanded,
   onTogglePrompt,
+  child,
 }: {
   block: ToolCallBlock;
   promptExpanded: boolean;
   onTogglePrompt: () => void;
+  /** TASK.102 CUT-S2 §2.5 (C3): passed straight through to SubagentStatus — see its own doc comment. Omitted by ToolCallCard.test.ts's direct SSR renders, same as today. */
+  child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
 }) {
   const resultText = agentResultText(block);
   const prompt = agentPromptText(block.input);
   const strip = prompt !== null ? promptStripText(prompt) : null;
   return (
     <>
-      {block.subagent && <SubagentStatus subagent={block.subagent} />}
+      {block.subagent && <SubagentStatus subagent={block.subagent} child={child} />}
       {resultText !== null && (
         <div className="tool-call-agent-result message-markdown">
           <Markdown text={resultText} />
@@ -770,6 +865,9 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   const [promptExpanded, setPromptExpanded] = useState(false);
   // R17 a11y: bind the disclosure toggle to the body it controls.
   const bodyId = useId();
+  // TASK.102 CUT-S2 §2.5 (C3): undefined for every card but a session-tier
+  // child's — see the hook's own doc comment.
+  const childAction = useChildSessionAction(block);
 
   const isDiffable = block.toolName === "Write" || block.toolName === "Edit";
   const hasSnapshot = block.snapshots.before !== null || block.snapshots.after !== null;
@@ -823,6 +921,18 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
           </>
         )}
         <span className="tool-call-status-badge">{STATUS_LABELS[block.status]}</span>
+        {/* TASK.102 CUT-S2 §2.5 (C3): the session-child badge lives in the
+            ALWAYS-visible toggle row, not just the expanded body below — an
+            Agent card defaults to COLLAPSED in every status
+            (defaultExpanded above), so a "waiting for permission" signal
+            that only showed once expanded would be invisible in practice
+            (the owner's live-smoke checklist, CUT-S2 §8 point 4, checks the
+            badge on the — by default collapsed — master card). */}
+        {childAction !== undefined && (
+          <span className={`tool-call-child-badge tool-call-child-badge-${childAction.badge}`}>
+            {CHILD_BADGE_LABELS[childAction.badge]}
+          </span>
+        )}
         {isAgent && !expanded && block.subagent && block.subagent.final === null && (
           <span className="subagent-collapsed-progress">
             <Spinner className="icon-spin" />
@@ -847,6 +957,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
               block={block}
               promptExpanded={promptExpanded}
               onTogglePrompt={() => setPromptExpanded((value) => !value)}
+              child={childAction}
             />
           ) : (
             <>

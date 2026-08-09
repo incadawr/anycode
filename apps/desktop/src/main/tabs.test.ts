@@ -10,7 +10,7 @@
  */
 
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/credentials.js";
 import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
@@ -23,6 +23,21 @@ import {
   type PreviewRequestMessage,
 } from "../shared/preview.js";
 import type { EngineId } from "../shared/engines.js";
+import {
+  CHILD_PROGRESS_TYPE,
+  CHILD_READY_TYPE,
+  CHILD_RUNS_GLOBAL_MAX,
+  CHILD_RUNS_PER_PARENT_MAX,
+  CHILD_RUN_CANCEL_TYPE,
+  CHILD_RUN_EVENT_TYPE,
+  CHILD_SPAWN_REQUEST_TYPE,
+  CHILD_START_DEADLINE_MS,
+  CHILD_START_TYPE,
+  CHILD_TERMINAL_TYPE,
+  type ChildRunEvent,
+  type ChildSpawnRequest,
+} from "../shared/child-sessions.js";
+import { ENV_MODEL } from "./host-env.js";
 import {
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
@@ -141,6 +156,104 @@ function codexManager(fork: HostForkFn) {
 /** Drains the microtask exit-chain (bounded by the breakers). */
 async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+// ── TASK.102 CUT-S2 S2b/B3 fixtures: child-session control-plane messages ──
+// Every fixture below is a WELL-FORMED wire message — tests drive the
+// manager exclusively via `host.emit("message", ...)` on a fake host's
+// process (anti-facade §5.2: never call a private spawn method directly),
+// mirroring the credential-channel tests' existing style above.
+
+let requestSeq = 0;
+
+/** A valid ChildSpawnRequest (shared/child-sessions.ts's own shape); each call mints a fresh requestId unless overridden. */
+function spawnRequest(overrides: Partial<ChildSpawnRequest> = {}): ChildSpawnRequest {
+  requestSeq += 1;
+  return {
+    type: CHILD_SPAWN_REQUEST_TYPE,
+    requestId: `req-${requestSeq}`,
+    spawnToolCallId: `call-${requestSeq}`,
+    agentType: "general-purpose",
+    description: "test child",
+    prompt: "do something",
+    permissionMode: "build",
+    ...overrides,
+  };
+}
+
+function runCancel(requestId: string) {
+  return { type: CHILD_RUN_CANCEL_TYPE, requestId } as const;
+}
+
+function childReadyMsg() {
+  return { type: CHILD_READY_TYPE } as const;
+}
+
+function childTerminalMsg(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    type: CHILD_TERMINAL_TYPE,
+    status: "completed",
+    finalText: "done",
+    truncated: false,
+    turns: 1,
+    toolCalls: 0,
+    durationMs: 50,
+    ...overrides,
+  };
+}
+
+function childActivityMsg(toolName: string, summary: string) {
+  return { type: CHILD_PROGRESS_TYPE, kind: "activity", toolName, summary } as const;
+}
+
+function childAttentionMsg(waiting: boolean) {
+  return { type: CHILD_PROGRESS_TYPE, kind: "attention", waiting } as const;
+}
+
+/** Every ChildRunEvent posted to a fake host, in call order. */
+function childRunEvents(host: FakeHost): ChildRunEvent[] {
+  return host.postMessage.mock.calls
+    .map((call) => call[0] as { type?: unknown })
+    .filter((msg): msg is ChildRunEvent => msg.type === CHILD_RUN_EVENT_TYPE);
+}
+
+/**
+ * A fork whose hosts stay alive indefinitely UNLESS asked to shut down (a
+ * `{type:"shutdown"}` postMessage, `shutdownTabHost`'s own signal), in which
+ * case they exit on the next microtask — the realistic behavior a graceful
+ * `closeTab`/cascade-cancel race depends on, without a real OS process or a
+ * real multi-second `exitDeadlineMs` wait. Used as the default rig for the
+ * child-session suites below; a test that wants to simulate an UNEXPECTED
+ * crash instead just emits `"exit"` directly, bypassing this responder.
+ */
+function shutdownableForkRig(): ForkRig {
+  const hosts: FakeHost[] = [];
+  const fork: HostForkFn = () => {
+    const host = new FakeHost();
+    hosts.push(host);
+    queueMicrotask(() => host.emit("spawn"));
+    host.postMessage.mockImplementation((msg: unknown) => {
+      if ((msg as { type?: unknown }).type === "shutdown") {
+        queueMicrotask(() => host.emit("exit", 0));
+      }
+    });
+    return host as unknown as UtilityProcess;
+  };
+  return { fork, hosts };
+}
+
+/** Convenience: a manager whose core engine is ready and every provider resolves 1:1 by name (test default). */
+function childManager(fork: HostForkFn, window: WindowLike, overrides: Partial<TabHostManagerDeps> = {}) {
+  return new TabHostManager({
+    fork,
+    hostEntry: "/fake/host.js",
+    createChannel: fakeChannel,
+    getWindow: () => window,
+    env: () => ({ PATH: "/base" }),
+    logger: silentLogger,
+    limits: {},
+    ...overrides,
+  });
 }
 
 describe("decideRespawn — pure breaker accounting", () => {
@@ -1467,5 +1580,866 @@ describe("TabHostManager — canSpawn(\"claude\") follows doctor readiness (SLIC
 
     const unready = managerWith((engine) => engine !== "claude", fork);
     expect(candidates.filter((engine) => unready.canSpawn(engine))).not.toContain("claude");
+  });
+});
+
+/**
+ * TASK.102 CUT-S2 §2.6.4 / §3 "S2b — B3": main-process admission, quotas,
+ * spawn, and cascades for `Agent(tier:"session")` child sessions. Every test
+ * below drives the manager exclusively via `host.emit("message", ...)` on a
+ * fake host process (never a private method directly — anti-facade §5.2)
+ * mirroring the existing credential-channel tests' style above. `hosts` (from
+ * `shutdownableForkRig`) accumulates EVERY forked process — root and child
+ * alike — in fork-call order, so `hosts[0]` is always the first root, and a
+ * spawned child lands at whatever index its fork call landed at.
+ */
+describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 B3)", () => {
+  it("4 synchronous spawns from the SAME parent, no await between them, admit exactly 3 and refuse the 4th limit_parent", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-atomic", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    // Zero awaits between these four emits — the whole point of the test:
+    // if admission read the quota BEFORE reserving it across an await, all
+    // four could see "0 running" and all four would be admitted.
+    rootHost.emit("message", spawnRequest({ requestId: "r1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "r2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "r3" }));
+    rootHost.emit("message", spawnRequest({ requestId: "r4" }));
+
+    const events = childRunEvents(rootHost);
+    const accepted = events.filter((e) => e.kind === "accepted");
+    const rejected = events.filter((e) => e.kind === "rejected");
+    expect(accepted).toHaveLength(CHILD_RUNS_PER_PARENT_MAX);
+    expect(accepted.map((e) => e.requestId)).toEqual(["r1", "r2", "r3"]);
+    expect(rejected).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "r4",
+        kind: "rejected",
+        reason: "limit_parent",
+        message:
+          'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
+      },
+    ]);
+    // 1 root + 3 admitted children forked; the 4th never reached fork at all.
+    expect(hosts).toHaveLength(1 + CHILD_RUNS_PER_PARENT_MAX);
+  });
+
+  it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) is refused limit_global", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+
+    for (let n = 0; n < 3; n++) {
+      const r = manager.createTab({ workspace: "/ws", sessionId: `root-g${n}`, resume: false });
+      expect(r.ok).toBe(true);
+    }
+    const rootHosts = [hosts[0]!, hosts[1]!, hosts[2]!];
+    const perParentCounts = [3, 3, 2]; // sums to 8 — the global cap — none tripping limit_parent (max 3)
+
+    for (let p = 0; p < 3; p++) {
+      for (let n = 0; n < perParentCounts[p]!; n++) {
+        rootHosts[p]!.emit("message", spawnRequest({ requestId: `p${p}-${n}` }));
+      }
+    }
+    for (let p = 0; p < 3; p++) {
+      expect(childRunEvents(rootHosts[p]!).filter((e) => e.kind === "accepted")).toHaveLength(perParentCounts[p]!);
+    }
+
+    // A 9th spawn from the parent that still has per-parent room (2 of 3 used).
+    rootHosts[2]!.emit("message", spawnRequest({ requestId: "p2-overflow" }));
+    expect(childRunEvents(rootHosts[2]!).filter((e) => e.requestId === "p2-overflow")).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "p2-overflow",
+        kind: "rejected",
+        reason: "limit_global",
+        message:
+          'Agent: application-wide session-subagent limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".',
+      },
+    ]);
+    expect(hosts).toHaveLength(3 + 8); // 3 roots + exactly 8 children, the 9th never forked
+  });
+
+  it("the core engine being unready refuses not_ready without reserving a slot", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let ready = true;
+    const manager = childManager(fork, window, { engineReady: (engine) => engine === "core" && ready });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-notready", resume: false });
+    expect(root.ok).toBe(true); // root creation happened while ready
+    const rootHost = hosts[0]!;
+    const hostsBefore = hosts.length;
+
+    ready = false;
+    rootHost.emit("message", spawnRequest({ requestId: "engine-down" }));
+
+    expect(childRunEvents(rootHost)).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "engine-down",
+        kind: "rejected",
+        reason: "not_ready",
+        message: expect.any(String),
+      },
+    ]);
+    expect(hosts).toHaveLength(hostsBefore); // no fork attempted
+  });
+
+  it("an EXPLICIT known provider resolves via resolveProviderConnection — its connectionId (not the parent's) rides the child's fork env", () => {
+    const { hosts } = shutdownableForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
+      envs.push(opts.env);
+      const host = new FakeHost();
+      hosts.push(host);
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, {
+      resolveProviderConnection: (provider) => (provider === "known" ? "conn-known" : undefined),
+    });
+    const root = manager.createTab({
+      workspace: "/ws",
+      sessionId: "root-provider",
+      resume: false,
+      connectionId: "conn-parent",
+    });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "prov-1", provider: "known" }));
+
+    expect(envs[1]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-known" });
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "prov-1");
+    expect(accepted).toMatchObject({ kind: "accepted" });
+  });
+
+  it("an UNKNOWN provider is refused not_ready with the exact §2.7 text, and never forks", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { resolveProviderConnection: () => undefined });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-badprovider", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    const hostsBefore = hosts.length;
+
+    rootHost.emit("message", spawnRequest({ requestId: "ghost-provider", provider: "ghost" }));
+
+    expect(hosts).toHaveLength(hostsBefore);
+    expect(childRunEvents(rootHost)).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "ghost-provider",
+        kind: "rejected",
+        reason: "not_ready",
+        message:
+          'Agent: provider connection "ghost" is not available in this host. Omit "provider" to use the parent session\'s connection.',
+      },
+    ]);
+  });
+
+  it("a child WITHOUT an explicit connectionId inherits the ACTUAL parent tab's pinned connection, never a sibling's or a payload value (there is no such field on the wire)", () => {
+    const { hosts } = shutdownableForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
+      envs.push(opts.env);
+      const host = new FakeHost();
+      hosts.push(host);
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const a = manager.createTab({ workspace: "/a", sessionId: "root-conn-a", resume: false, connectionId: "conn-a" });
+    const b = manager.createTab({ workspace: "/b", sessionId: "root-conn-b", resume: false, connectionId: "conn-b" });
+    expect(a.ok && b.ok).toBe(true);
+    const [hostA, hostB] = hosts; // envs[0]=A root fork, envs[1]=B root fork
+
+    hostA!.emit("message", spawnRequest({ requestId: "from-a" }));
+    hostB!.emit("message", spawnRequest({ requestId: "from-b" }));
+
+    expect(envs[2]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-a" });
+    expect(envs[3]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-b" });
+  });
+
+  it("accepted.model is the explicit request model when given, else the resolved connection's own configured model", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { env: () => ({ PATH: "/base", [ENV_MODEL]: "connection-default" }) });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-model", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "explicit-model", model: "gpt-exotic" }));
+    rootHost.emit("message", spawnRequest({ requestId: "implicit-model" }));
+
+    const events = childRunEvents(rootHost).filter((e) => e.kind === "accepted");
+    expect(events.find((e) => e.requestId === "explicit-model")).toMatchObject({ model: "gpt-exotic" });
+    expect(events.find((e) => e.requestId === "implicit-model")).toMatchObject({ model: "connection-default" });
+  });
+
+  it("a throwing fork rolls back the reservation — replies spawn_failed, and a LATER spawn is admitted normally (the slot was truly freed, not left dangling)", () => {
+    const { hosts } = shutdownableForkRig();
+    let calls = 0;
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      calls++;
+      if (calls === 2) {
+        throw new Error("boom: OS refused the fork");
+      }
+      const host = new FakeHost();
+      hosts.push(host);
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-throw", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "boom" }));
+    expect(childRunEvents(rootHost)).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "boom",
+        kind: "rejected",
+        reason: "spawn_failed",
+        message: "Agent: the child session failed to start.",
+      },
+    ]);
+
+    // The slot was rolled back: the FULL per-parent cap now succeeds.
+    rootHost.emit("message", spawnRequest({ requestId: "ok-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "ok-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "ok-3" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+  });
+
+  it("a resolved connection whose env is unavailable ALSO rolls back and replies spawn_failed (the non-throwing W10-FIX F3 fork-failure path)", () => {
+    const hosts: FakeHost[] = [];
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, {
+      // The PARENT root's own connection resolves fine; only the CHILD's
+      // explicitly-requested provider resolves to a connection whose env is gone.
+      env: (connectionId) => (connectionId === "conn-gone" ? undefined : { PATH: "/base" }),
+      resolveProviderConnection: () => "conn-gone",
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-envgone", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    const hostsBefore = hosts.length;
+
+    rootHost.emit("message", spawnRequest({ requestId: "env-gone", provider: "anything" }));
+
+    expect(childRunEvents(rootHost)).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "env-gone",
+        kind: "rejected",
+        reason: "spawn_failed",
+        message: "Agent: the child session failed to start.",
+      },
+    ]);
+    expect(hosts).toHaveLength(hostsBefore); // spawnTabHost's soft-fail path never reaches fork()
+  });
+
+  it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays limit_parent until the cancelled child actually exits, then succeeds", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-cancel-holds", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "hold-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "hold-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "hold-3" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+    const child1Host = hosts[1]!;
+
+    rootHost.emit("message", runCancel("hold-1"));
+    expect(child1Host.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
+
+    // Still refused: cancelling still occupies the slot.
+    rootHost.emit("message", spawnRequest({ requestId: "too-soon" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "too-soon")).toMatchObject({
+      kind: "rejected",
+      reason: "limit_parent",
+    });
+
+    // The cancelled child ACTUALLY exits now (shutdownableForkRig's auto-responder
+    // already queued this on a microtask from the shutdown postMessage above, but
+    // emitting explicitly here keeps the test's causality readable and robust to
+    // any change in that timing).
+    child1Host.emit("exit", 0);
+
+    rootHost.emit("message", spawnRequest({ requestId: "after-reap" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "after-reap")).toMatchObject({ kind: "accepted" });
+    const terminalForHold1 = childRunEvents(rootHost).find((e) => e.requestId === "hold-1" && e.kind === "terminal");
+    expect(terminalForHold1).toMatchObject({ status: "cancelled" });
+  });
+});
+
+describe("TabHostManager — non-recursion lock #3: a child cannot spawn its own child (TASK.102 CUT-S2 §0.2)", () => {
+  it("a spawn request from a tab that IS a child is rejected recursion, replied to on the CHILD's OWN process — the root never sees it, and nothing is forked", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-recursion", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "legit-child" }));
+    const childHost = hosts[1]!;
+    const hostsBefore = hosts.length;
+
+    childHost.emit("message", spawnRequest({ requestId: "grandchild-attempt" }));
+
+    expect(childRunEvents(childHost)).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "grandchild-attempt",
+        kind: "rejected",
+        reason: "recursion",
+        message: 'Agent: a child session cannot spawn its own child sessions. Use tier "inline".',
+      },
+    ]);
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "grandchild-attempt")).toBe(false);
+    expect(hosts).toHaveLength(hostsBefore); // no grandchild process forked
+  });
+});
+
+describe("TabHostManager — spawn around a root's close: seal + cascade drain (TASK.102 CUT-S2 §2.6.4/anti-facade §5.8)", () => {
+  it("a spawn request that arrives after closeTab's synchronous seal is rejected closing — the seal precedes ANY await inside closeTab", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const a = manager.createTab({ workspace: "/a", sessionId: "root-seal-a", resume: false });
+    manager.createTab({ workspace: "/b", sessionId: "root-seal-b", resume: false }); // 2nd root: close(a) isn't last_tab-refused
+    expect(a.ok).toBe(true);
+    const rootTabId = a.ok ? a.tab.tabId : "";
+    const rootHost = hosts[0]!;
+
+    const closing = manager.closeTab(rootTabId); // seals tab.state="closing" synchronously before this line returns
+    rootHost.emit("message", spawnRequest({ requestId: "too-late" }));
+
+    expect(childRunEvents(rootHost)).toEqual([
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "too-late",
+        kind: "rejected",
+        reason: "closing",
+        message: "Agent: the child session could not be started (host is closing).",
+      },
+    ]);
+    await closing;
+  });
+
+  it("close on a root with a running child cancels it, relays a cancelled terminal, reaps the child, and leaves the child index empty — spawn-before-close is swept by the drain loop", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const a = manager.createTab({ workspace: "/a", sessionId: "root-cascade-a", resume: false });
+    manager.createTab({ workspace: "/b", sessionId: "root-cascade-b", resume: false });
+    expect(a.ok).toBe(true);
+    const rootTabId = a.ok ? a.tab.tabId : "";
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "cascade-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "cascade-1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(manager.getTab(childTabId)).toBeDefined();
+
+    const result = await manager.closeTab(rootTabId);
+
+    expect(result).toEqual({ ok: true });
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "cascade-1" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "cancelled" });
+    expect(manager.getTab(childTabId)).toBeUndefined();
+    expect(manager.getTab(rootTabId)).toBeUndefined();
+    expect(manager.listTabs().some((t) => t.childOf !== undefined)).toBe(false);
+  });
+
+  it("public closeTab(childTabId) reports unknown_tab — a child is never externally addressable", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-unknown", resume: false });
+    manager.createTab({ workspace: "/b", sessionId: "root-unknown-2", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "u1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "u1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+
+    await expect(manager.closeTab(childTabId)).resolves.toEqual({ ok: false, reason: "unknown_tab" });
+    expect(manager.getTab(childTabId)).toBeDefined(); // untouched by the refused close
+  });
+
+  it("last_tab counts ROOTS only, in both directions", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+
+    // Direction 1 (children must not falsely UNBLOCK a close): a lone root
+    // with 2 children must still refuse close, even though `tabs.size` is 3.
+    const solo = manager.createTab({ workspace: "/solo", sessionId: "root-solo", resume: false });
+    expect(solo.ok).toBe(true);
+    const soloTabId = solo.ok ? solo.tab.tabId : "";
+    const soloHost = hosts[0]!;
+    soloHost.emit("message", spawnRequest({ requestId: "solo-1" }));
+    soloHost.emit("message", spawnRequest({ requestId: "solo-2" }));
+    await expect(manager.closeTab(soloTabId)).resolves.toEqual({ ok: false, reason: "last_tab" });
+
+    // Direction 2 (children must not falsely BLOCK a close): with a SECOND
+    // root now present, closing the (childless) second root succeeds — the
+    // first root's children never counted as extra roots either way.
+    const second = manager.createTab({ workspace: "/second", sessionId: "root-second", resume: false });
+    expect(second.ok).toBe(true);
+    const secondTabId = second.ok ? second.tab.tabId : "";
+    await expect(manager.closeTab(secondTabId)).resolves.toEqual({ ok: true });
+  });
+});
+
+describe("TabHostManager — crashed root cancels its children BEFORE respawning (TASK.102 CUT-S2 §0.6)", () => {
+  it("cancellation is synchronously INITIATED before the respawn's fork call", () => {
+    const hosts: FakeHost[] = [];
+    const order: string[] = [];
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-crash-cascade", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "doomed-child" }));
+    expect(hosts).toHaveLength(2); // root + child, both synchronous
+    const childHost = hosts[1]!;
+    childHost.postMessage.mockImplementation((msg: unknown) => {
+      if ((msg as { type?: unknown }).type === "shutdown") order.push("child-cancel-sent");
+    });
+    forkSpy.mockImplementationOnce(() => {
+      order.push("root-respawn-forked");
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+
+    rootHost.emit("exit", 1); // unexpected crash (uptime ~0, below the breaker cap -> respawns)
+
+    expect(order).toEqual(["child-cancel-sent", "root-respawn-forked"]);
+  });
+
+  it("the crash-cascaded child, once it actually exits, finalizes cancelled and relays to the RESPAWNED root process", () => {
+    const hosts: FakeHost[] = [];
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-crash-cascade-2", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "doomed-child-2" }));
+    const childHost = hosts[1]!;
+
+    rootHost.emit("exit", 1); // crash -> cascade-cancel the child, then respawn root
+    const respawnedRootHost = hosts[2]!;
+
+    childHost.emit("exit", 0); // the child's own (shutdown-triggered) exit lands
+
+    const terminal = childRunEvents(respawnedRootHost).find(
+      (e) => e.requestId === "doomed-child-2" && e.kind === "terminal",
+    );
+    expect(terminal).toMatchObject({ status: "cancelled" });
+    // The old (crashed) root process never got this relay — it is dead.
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "doomed-child-2" && e.kind === "terminal")).toBe(
+      false,
+    );
+  });
+});
+
+describe("TabHostManager — child start-deadline (CHILD_START_DEADLINE_MS, TASK.102 CUT-S2 §2.3/§2.6.4)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("no child-ready within the deadline -> terminal error, quota freed, child's host asked to shut down (reap)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-deadline", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "slow-child" }));
+    const childHost = hosts[1]!;
+
+    vi.advanceTimersByTime(CHILD_START_DEADLINE_MS);
+
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "slow-child" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "error" });
+    expect(childHost.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
+
+    // The quota was freed: a fresh spawn on the same parent succeeds right away.
+    rootHost.emit("message", spawnRequest({ requestId: "after-timeout" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "after-timeout")).toMatchObject({ kind: "accepted" });
+  });
+
+  it("child-ready before the deadline clears it — no spurious timeout terminal, and the held prompt is released as ChildStart", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-ontime", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "on-time", prompt: "the actual task" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childReadyMsg());
+    expect(childHost.postMessage).toHaveBeenCalledWith({ type: CHILD_START_TYPE, prompt: "the actual task" });
+
+    vi.advanceTimersByTime(CHILD_START_DEADLINE_MS);
+
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "on-time" && e.kind === "terminal");
+    expect(terminal).toBeUndefined();
+  });
+});
+
+describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)", () => {
+  it("a normal ChildTerminal relays EXACTLY once, frees the quota, and reaps the child tab; a duplicate terminal is a no-op", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-term", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1" }));
+    const childHost = hosts[1]!;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "t1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+
+    childHost.emit(
+      "message",
+      childTerminalMsg({ status: "completed", finalText: "hi", turns: 2, toolCalls: 1, durationMs: 500 }),
+    );
+
+    const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ status: "completed", finalText: "hi", turns: 2, toolCalls: 1, durationMs: 500 });
+    expect(manager.getTab(childTabId)).toBeUndefined();
+
+    childHost.emit("message", childTerminalMsg({ status: "error", finalText: "should be ignored" }));
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal")).toHaveLength(1);
+
+    // The quota was freed exactly once: the full per-parent cap succeeds now.
+    rootHost.emit("message", spawnRequest({ requestId: "t2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "t3" }));
+    rootHost.emit("message", spawnRequest({ requestId: "t4" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
+  });
+
+  it("an unexpected child crash (no ChildTerminal ever sent) finalizes terminal error EXACTLY once, frees the quota EXACTLY once, and NEVER respawns the child", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-crash-child", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "c1" }));
+    const childHost = hosts[1]!;
+    const hostsBefore = hosts.length;
+
+    childHost.emit("exit", 1); // the child process just dies, unprompted
+
+    const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "c1" && e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({
+      status: "error",
+      finalText: "Agent: the child session host exited before completing.",
+    });
+    expect(hosts).toHaveLength(hostsBefore); // no respawn fork happened for the child
+
+    childHost.emit("exit", 1); // a second exit event cannot double-finalize
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "c1" && e.kind === "terminal")).toHaveLength(1);
+
+    rootHost.emit("message", spawnRequest({ requestId: "c2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "c3" }));
+    rootHost.emit("message", spawnRequest({ requestId: "c4" }));
+    // c1's own (earlier) accepted event is still in the log, plus c2/c3/c4:
+    // the quota freed by c1's crash was exactly one slot, refillable exactly once.
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
+  });
+
+  it("progress/activity/attention from a live child relay verbatim to the parent, correlated by requestId", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-progress", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "p1" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childActivityMsg("Bash", "ran a command"));
+    childHost.emit("message", childAttentionMsg(true));
+    childHost.emit("message", childAttentionMsg(false));
+
+    const events = childRunEvents(rootHost).filter((e) => e.requestId === "p1");
+    expect(events).toContainEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "p1",
+      kind: "activity",
+      toolName: "Bash",
+      summary: "ran a command",
+    });
+    expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "attention", waiting: true });
+    expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "attention", waiting: false });
+  });
+});
+
+describe("TabHostManager — children are invisible outside the manager (TASK.102 CUT-S2 §2.6.4)", () => {
+  it("count() and atCapacity() never see children, only roots", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { limits: { maxTabs: 1 } });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-cap", resume: false });
+    expect(root.ok).toBe(true);
+    expect(manager.count()).toBe(1);
+    expect(manager.atCapacity()).toBe(true); // maxTabs=1, one root already fills it
+
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "cap-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "cap-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "cap-3" }));
+
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+    expect(manager.count()).toBe(1); // 3 live children, still exactly 1 root
+    expect(manager.atCapacity()).toBe(true);
+  });
+
+  it("listTabs() tags a child tab with childOf; a root tab carries no such field", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-list", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = root.ok ? root.tab.tabId : "";
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "list-1" }));
+
+    const summaries = manager.listTabs();
+    const rootSummary = summaries.find((t) => t.tabId === rootTabId);
+    const childSummary = summaries.find((t) => t.tabId !== rootTabId);
+    expect(rootSummary?.childOf).toBeUndefined();
+    expect(childSummary?.childOf).toMatchObject({ parentTabId: rootTabId });
+  });
+
+  it("deliverTabPort stamps the child envelope field and SKIPS the terminal channel entirely for a child tab", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window, posted } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-envelope", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = root.ok ? root.tab.tabId : "";
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "env-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "env-1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+
+    const uiEnvelopes = posted.filter((p) => p.channel === PORT_ENVELOPE_TYPE);
+    expect(uiEnvelopes).toHaveLength(1);
+    expect(uiEnvelopes[0]?.payload).toMatchObject({
+      tabId: childTabId,
+      child: { parentTabId: rootTabId, childSessionId },
+    });
+    expect(posted.filter((p) => p.channel === TERMINAL_PORT_ENVELOPE_TYPE)).toHaveLength(0);
+  });
+});
+
+describe("TabHostManager — stale-generation child-session messages are ignored (TASK.102 CUT-S2 §2.6.4)", () => {
+  it("a spawn request from a root's OLD (already-respawned) process is silently ignored — no reply, no child forked", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-stale", resume: false });
+    expect(root.ok).toBe(true);
+    const staleHost = hosts[0]!;
+
+    staleHost.emit("exit", 1); // unexpected crash -> respawn, tab.proc becomes a NEW process
+    expect(hosts.length).toBeGreaterThanOrEqual(2);
+    const freshHost = hosts[1]!;
+    expect(manager.getTab(root.ok ? root.tab.tabId : "")?.state).toBe("running");
+
+    staleHost.emit("message", spawnRequest({ requestId: "ghost" })); // from the DEAD process reference
+
+    expect(childRunEvents(staleHost)).toEqual([]);
+    expect(childRunEvents(freshHost).some((e) => e.requestId === "ghost")).toBe(false);
+    expect(hosts).toHaveLength(2); // no child forked
+  });
+
+  it("child-ready/progress/terminal arriving after a child has already been finalized are all no-ops", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-stale-child", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "sc1" }));
+    const childHost = hosts[1]!;
+    childHost.emit("message", childTerminalMsg());
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "sc1" && e.kind === "terminal")).toHaveLength(1);
+
+    childHost.emit("message", childReadyMsg());
+    childHost.emit("message", childActivityMsg("Bash", "late activity"));
+    childHost.emit("message", childTerminalMsg({ status: "error" }));
+
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "sc1" && e.kind === "terminal")).toHaveLength(1);
+    expect(childRunEvents(rootHost).some((e) => e.kind === "progress" || e.kind === "activity")).toBe(false);
+  });
+
+  it("a child-run-cancel naming an unknown or foreign requestId is silently ignored (no crash, no cross-parent cancellation)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const a = manager.createTab({ workspace: "/a", sessionId: "root-cancel-a", resume: false });
+    const b = manager.createTab({ workspace: "/b", sessionId: "root-cancel-b", resume: false });
+    expect(a.ok && b.ok).toBe(true);
+    const [hostA, hostB] = hosts;
+    hostA!.emit("message", spawnRequest({ requestId: "owned-by-a" }));
+    const childOfAHost = hosts[2]!;
+
+    hostA!.emit("message", runCancel("no-such-request"));
+    hostB!.emit("message", runCancel("owned-by-a")); // B trying to cancel A's run
+
+    expect(childOfAHost.postMessage).not.toHaveBeenCalledWith({ type: "shutdown" });
+    // A's run is still perfectly alive/accepted, unaffected.
+    const accepted = childRunEvents(hostA!).find((e) => e.requestId === "owned-by-a");
+    expect(accepted).toMatchObject({ kind: "accepted" });
+  });
+});
+
+describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup (TASK.102 CUT-S2 §10.5 п.3)", () => {
+  const DUPLICATE_SPAWN_MESSAGE =
+    "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.";
+
+  it("a second spawn for the SAME (parentSessionId, spawnToolCallId) pair while the first is live is refused spawn_failed — the first run is untouched, and no second process is forked", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-dedup-live", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "r1", spawnToolCallId: "call-dup" }));
+    const hostsAfterFirst = hosts.length;
+    rootHost.emit("message", spawnRequest({ requestId: "r2", spawnToolCallId: "call-dup" }));
+
+    expect(childRunEvents(rootHost)).toEqual([
+      { type: CHILD_RUN_EVENT_TYPE, requestId: "r1", kind: "accepted", childSessionId: expect.any(String), childTabId: expect.any(String), model: expect.any(String) },
+      { type: CHILD_RUN_EVENT_TYPE, requestId: "r2", kind: "rejected", reason: "spawn_failed", message: DUPLICATE_SPAWN_MESSAGE },
+    ]);
+    // No second child process was ever forked for the duplicate.
+    expect(hosts).toHaveLength(hostsAfterFirst);
+  });
+
+  it("after the first run's happy-path terminal, the SAME pair spawns successfully again (the key was released)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-dedup-terminal", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "r1", spawnToolCallId: "call-reuse" }));
+    const childHost = hosts[1]!;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+
+    rootHost.emit("message", spawnRequest({ requestId: "r2", spawnToolCallId: "call-reuse" }));
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "r2")).toMatchObject({ kind: "accepted" });
+  });
+
+  it("after the first run's UNEXPECTED CRASH (no ChildTerminal ever sent), the SAME pair spawns successfully again — the crash path releases the key too, not only the happy path", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-dedup-crash", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "r1", spawnToolCallId: "call-crash" }));
+    const childHost = hosts[1]!;
+    childHost.emit("exit", 1); // unprompted crash — no ChildTerminal, handleChildExit's fallback finalizes
+
+    rootHost.emit("message", spawnRequest({ requestId: "r2", spawnToolCallId: "call-crash" }));
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "r2")).toMatchObject({ kind: "accepted" });
+  });
+
+  it("after the first run misses the start-deadline (no child-ready), the SAME pair spawns successfully again — the timeout path releases the key too", () => {
+    vi.useFakeTimers();
+    try {
+      const { fork, hosts } = shutdownableForkRig();
+      const { window } = windowRig();
+      const manager = childManager(fork, window);
+      const root = manager.createTab({ workspace: "/ws", sessionId: "root-dedup-deadline", resume: false });
+      expect(root.ok).toBe(true);
+      const rootHost = hosts[0]!;
+
+      rootHost.emit("message", spawnRequest({ requestId: "r1", spawnToolCallId: "call-deadline" }));
+      vi.advanceTimersByTime(CHILD_START_DEADLINE_MS); // never sends child-ready -> handleChildStartTimeout finalizes
+
+      rootHost.emit("message", spawnRequest({ requestId: "r2", spawnToolCallId: "call-deadline" }));
+
+      expect(childRunEvents(rootHost).find((e) => e.requestId === "r2")).toMatchObject({ kind: "accepted" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the SAME spawnToolCallId from DIFFERENT parents spawns BOTH — the dedup key is the (parentSessionId, spawnToolCallId) pair, not the bare id", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const a = manager.createTab({ workspace: "/a", sessionId: "root-dedup-pair-a", resume: false });
+    const b = manager.createTab({ workspace: "/b", sessionId: "root-dedup-pair-b", resume: false });
+    expect(a.ok && b.ok).toBe(true);
+    const [hostA, hostB] = hosts;
+
+    hostA!.emit("message", spawnRequest({ requestId: "from-a", spawnToolCallId: "shared-call-id" }));
+    hostB!.emit("message", spawnRequest({ requestId: "from-b", spawnToolCallId: "shared-call-id" }));
+
+    expect(childRunEvents(hostA!).find((e) => e.requestId === "from-a")).toMatchObject({ kind: "accepted" });
+    expect(childRunEvents(hostB!).find((e) => e.requestId === "from-b")).toMatchObject({ kind: "accepted" });
   });
 });

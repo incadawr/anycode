@@ -317,7 +317,21 @@ import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
 import { createEngineChildRunner } from "./engine-children.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
-import { Outbound, Session } from "./session.js";
+import { Outbound, Session, tapChildPermissions } from "./session.js";
+// TASK.102 CUT-S2 §2.6.2/§2.6.3 (slice S2b B4): child-mode wire — the
+// CHILD side only (child-ready on first ui_ready, child-start dispatch,
+// permission-tap attention, terminal report). The PARENT side (RPC client
+// wiring, ChildRunEvent routing, sessionTier:true registry) is slice B5's
+// job (child-session-port.ts), not touched here.
+import {
+  CHILD_PROGRESS_TYPE,
+  CHILD_READY_TYPE,
+  CHILD_TERMINAL_TYPE,
+  parseChildStart,
+  type ChildProgress,
+  type ChildReady,
+  type ChildTerminal,
+} from "../shared/child-sessions.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
 import { createWirePort } from "./wire.js";
@@ -1065,6 +1079,15 @@ async function boot(): Promise<void> {
     // model and back restores the tier. `set_reasoning_effort` writes it; the
     // model switch re-resolves the effective effort from it per the new model.
     let selectedEffort: ReasoningEffort = envConfig.reasoningEffort ?? "off";
+    // TASK.102 CUT-S2 §2.6.2 lock #2: a child-mode boot MUST build the plain
+    // default registry (no `{agent:{sessionTier:true}}`) so `Agent` never
+    // advertises tier "session" to a child's own model — a child structurally
+    // cannot spawn its own child session. This is already the unconditional
+    // case below (no branch reads `args.child` here): `sessionTier:true` is
+    // wired ONLY for a non-child root host, by slice B5, which has not landed
+    // yet — until it does, EVERY boot (root and child alike) gets this same
+    // inline-only registry, so the child invariant holds by construction with
+    // nothing left for this branch to opt out of.
     const registry = createDefaultToolRegistry();
     const fsAdapter = new NodeFileSystemAdapter();
     const execAdapter = new NodeExecutionAdapter();
@@ -1641,7 +1664,23 @@ async function boot(): Promise<void> {
       imageInputEnabled: () => resolveImageInput(currentModel, catalogEntry, envConfig.imageInput),
     };
 
-    const broker = new IpcPermissionBroker(emit);
+    // TASK.102 CUT-S2 §0.8/§2.6.3: a child-mode boot's broker wraps `emit`
+    // with the permission-tap — an `attention` signal bracketing every
+    // permission ask, relayed to main as `ChildProgress{kind:"attention"}` so
+    // the parent's subagent card can show "waiting for permission" without
+    // Open'ing the child surface. Non-child boots keep the bare `emit`,
+    // byte-identical to every pre-S2 host.
+    const broker = new IpcPermissionBroker(
+      args.child !== undefined
+        ? tapChildPermissions(emit, (waiting) => {
+            process.parentPort.postMessage({
+              type: CHILD_PROGRESS_TYPE,
+              kind: "attention",
+              waiting,
+            } satisfies ChildProgress);
+          })
+        : emit,
+    );
 
     // Boot context-window resolution (slice 6.4, mirror of cli/main.ts):
     // env ANYCODE_CONTEXT_WINDOW > catalog window of the session model > absent
@@ -2085,6 +2124,34 @@ async function boot(): Promise<void> {
       // unless they opt in via HarnessOptions.refineTitle.
       refineTitle: (text) => generateSessionTitle({ modelPort: config.modelPort, text }),
       postPreviewArtifacts: sendPreviewArtifacts,
+      // TASK.102 CUT-S2 §2.6.3 (slice S2b B4): present ONLY for a child-mode
+      // boot. `flushHistory` is the SAME `historySink.flushChecked()` ordering
+      // guarantee the worktree-transition handoff above already relies on
+      // (§0.5 — a terminal report is trusted by main/renderer ONLY once the
+      // child's transcript is durably on disk). `onReady`/`onTerminal` post
+      // directly onto this fork's OWN `process.parentPort` — the child side of
+      // the wire, disjoint from the RPC-client wiring slice B5 owns.
+      ...(args.child !== undefined
+        ? {
+            child: {
+              onReady: () => {
+                process.parentPort.postMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
+              },
+              flushHistory: () => historySink!.flushChecked(),
+              onTerminal: (report) => {
+                process.parentPort.postMessage({
+                  type: CHILD_TERMINAL_TYPE,
+                  status: report.status,
+                  finalText: report.finalText,
+                  truncated: report.truncated,
+                  turns: report.turns,
+                  toolCalls: report.toolCalls,
+                  durationMs: report.durationMs,
+                } satisfies ChildTerminal);
+              },
+            },
+          }
+        : {}),
     });
 
     console.log(
@@ -2227,6 +2294,17 @@ process.parentPort.on("message", (event) => {
     for (const listener of credentialResponseListeners) {
       listener(response);
     }
+    return;
+  }
+  // TASK.102 CUT-S2 §2.6.3 (slice S2b B4): main -> child host, the queued
+  // initial prompt, released once this fork's own `child-ready` was sent.
+  // `startProgrammaticTurn` is a safe no-op refusal on a non-child (or
+  // not-yet-booted) session — this branch is reachable from every boot path's
+  // shared dispatch table, but only ever does anything for an actual
+  // child-mode core session.
+  const childStart = parseChildStart(data);
+  if (childStart) {
+    session?.startProgrammaticTurn(childStart.prompt);
     return;
   }
   // Preview control-plane messages (night-track wave-1 cut §2.3/§2.4): routed

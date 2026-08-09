@@ -248,6 +248,23 @@ function isIdString(value: unknown, maxLength: number): value is string {
   );
 }
 
+/**
+ * Public pre-flight variant of `isIdString`, capped at `CHILD_ID_MAX_CHARS`
+ * (TASK.102 CUT-S2 §10.5, additive to the frozen S2a file). Lets the parent
+ * host's RPC client (`host/child-session-port.ts`) validate a model/provider-
+ * minted `spawnToolCallId` BEFORE putting it on the wire, using the EXACT
+ * same shape rule `parseChildSpawnRequest` enforces on the other end. This
+ * parity is load-bearing: `parseChildSpawnRequest` is fail-closed and silent
+ * (malformed input -> `null`, never a thrown/relayed error), so a pre-flight
+ * check that disagreed with it would let a malformed id through, main would
+ * drop the message with no reply, and the sender's promise would hang until
+ * the dispatcher's 600s tool timeout — a slow, confusing failure instead of
+ * an immediate, honest one.
+ */
+export function isValidChildId(value: unknown): value is string {
+  return isIdString(value, CHILD_ID_MAX_CHARS);
+}
+
 /** Non-empty string, capped at `maxLength` code units — the shape most free-text required fields on this wire share (agentType/description/prompt/model/provider/toolName). */
 function isNonEmptyCappedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;

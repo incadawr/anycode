@@ -45,6 +45,7 @@ import type {
   CodexRateLimitsWire,
   CommandHookDeclaration,
   FileSystemPort,
+  FinalTextAccumulator,
   HistoryItem,
   ImageAttachment,
   LspServerStatus,
@@ -58,7 +59,12 @@ import type {
 } from "@anycode/core";
 import {
   SESSION_TITLE_MAX_LENGTH,
+  appendFinalText,
+  createFinalTextAccumulator,
   deriveSessionTitle,
+  finalizeFinalText,
+  fixateFinalText,
+  resetFinalText,
   sanitizeTitleSource,
   withBackgroundTaskNotices,
   withPlanModeReminder,
@@ -77,6 +83,7 @@ import type {
   WirePort,
 } from "../shared/protocol.js";
 import { uiToHostMessageSchema } from "../shared/protocol.js";
+import { CHILD_STEER_QUEUE_MAX, type ChildRunStatus } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import type { IpcPermissionBroker } from "./permission-broker.js";
 import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-hook.js";
@@ -312,6 +319,83 @@ export class Outbound {
   }
 }
 
+// ── child-mode support (TASK.102 CUT-S2 §2.6.3, slice S2b B4) ──
+
+/**
+ * The child-mode terminal report Session hands to `ChildSessionOptions.
+ * onTerminal` — everything `apps/desktop/src/host/index.ts`'s child branch
+ * needs to build a `ChildTerminal` wire message (shared/child-sessions.ts),
+ * minus the `type` discriminant: posting to `process.parentPort` is that
+ * file's job, not Session's (Session never imports `process.parentPort`).
+ */
+export interface ChildTerminalReport {
+  status: ChildRunStatus;
+  finalText: string;
+  truncated: boolean;
+  turns: number;
+  toolCalls: number;
+  durationMs: number;
+}
+
+/**
+ * Child-mode options (CUT-S2 §2.6.3). Presence of this option is what turns
+ * an otherwise-ordinary `Session` into a child-mode one: title derivation
+ * becomes a no-op (§5.14 — a child has no name), a `user_message` received
+ * while busy is queued (bounded by `CHILD_STEER_QUEUE_MAX`) instead of
+ * rejected, and `startProgrammaticTurn` becomes available to kick off the
+ * child's one and only externally-triggered turn chain.
+ */
+export interface ChildSessionOptions {
+  /**
+   * Fires exactly once, on this session's FIRST `ui_ready` — never before
+   * (the renderer/relay is not listening yet) and never again on a later
+   * reconnect (CUT-S2 §2.6.3: "child-ready host шлёт на ПЕРВЫЙ ui_ready").
+   */
+  onReady: () => void;
+  /**
+   * Durably flushes the child's history sink (the SAME `flushChecked()` a
+   * durable transcript read — CUT-S2 §0.5/§2.6.3's ordering guarantee: the
+   * terminal report is handed to `onTerminal` ONLY after this resolves. A
+   * rejection produces an `error` terminal instead (an honest failure beats
+   * a "completed" card whose "Open" reads an empty transcript).
+   */
+  flushHistory: () => Promise<void>;
+  /**
+   * Invoked exactly once per host lifetime: after the steer queue has
+   * fully drained (CUT-S2 §5.16 — a terminal published while the queue is
+   * non-empty would make steering a dead facade) AND `flushHistory` has
+   * resolved.
+   */
+  onTerminal: (report: ChildTerminalReport) => void;
+}
+
+/**
+ * Permission-tap for a child session's broker (CUT-S2 §0.8/§2.6.3): wraps
+ * the `emit` closure an `IpcPermissionBroker` is constructed with (host/
+ * index.ts's child branch does the wrapping, since that is where the
+ * broker itself is built) so an "attention" signal reaches main — relayed
+ * over `process.parentPort` as `ChildProgress{kind:"attention"}` — around
+ * every permission ask: `true` right before a `permission_request` is
+ * forwarded, `false` right before a `permission_settled` is. Every message
+ * the broker ever emits (there are no other `HostToUiMessage` types an
+ * `IpcPermissionBroker` produces) is forwarded to the wrapped `emit`
+ * completely UNCHANGED — `onAttention` is a pure side effect that never
+ * alters, drops, or reorders what the UI wire itself sees.
+ */
+export function tapChildPermissions(
+  emit: (message: HostToUiMessage) => void,
+  onAttention: (waiting: boolean) => void,
+): (message: HostToUiMessage) => void {
+  return (message: HostToUiMessage): void => {
+    if (message.type === "permission_request") {
+      onAttention(true);
+    } else if (message.type === "permission_settled") {
+      onAttention(false);
+    }
+    emit(message);
+  };
+}
+
 /**
  * Narrow persistence callback injected into Session (design §4.2): Session
  * persists session-meta patches (title on the first user message, mode on a
@@ -520,6 +604,13 @@ export interface SessionOptions {
    * cost) but nothing is ever posted.
    */
   postPreviewArtifacts?: (paths: string[]) => void;
+  /**
+   * TASK.102 CUT-S2 §2.6.3: present ONLY for a child-mode host (host/index.ts's
+   * child branch). Absent -> every child-only branch below is inert and this
+   * Session is byte-identical to the pre-S2 root session (every legacy test
+   * omits this field).
+   */
+  child?: ChildSessionOptions;
 }
 
 export class Session {
@@ -613,6 +704,27 @@ export class Session {
   /** Slice P7.25/F3: unsubscribes the LSP status listener on shutdown (no leaked listener, no push-after-dispose). */
   private lspUnsubscribe: (() => void) | undefined;
 
+  // ── child-mode state (TASK.102 CUT-S2 §2.6.3); every field below is inert
+  // (never read or mutated) whenever `this.child === undefined`. ──
+
+  private readonly child: ChildSessionOptions | undefined;
+  /** Latches once `child.onReady()` has fired, so a later reconnect's ui_ready never fires it twice. */
+  private childReadySent = false;
+  /** Latches once `startProgrammaticTurn` has been called, so a second call is a refusal (one initial turn per host lifetime). */
+  private programmaticTurnStarted = false;
+  /** Host-side steer queue (§1.1/§2.6.3): a `user_message` received while busy is parked here instead of rejected, bounded by `CHILD_STEER_QUEUE_MAX`. */
+  private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[] }> = [];
+  /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
+  private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
+  /** Cumulative turn count across every runTurn() call this child session has made (summed from each call's own loop_end.turns). */
+  private childTurns = 0;
+  /** Cumulative tool_result count across the whole child session's turn chain. */
+  private childToolCalls = 0;
+  /** The last loop_end's status (workspace_transition mapped to "error" — a child never actually relocates); undefined until the first loop_end. */
+  private childLoopStatus: ChildRunStatus | undefined;
+  /** Wall-clock start of the child's turn chain, set once by startProgrammaticTurn — the terminal report's durationMs baseline. */
+  private childStartedAt = 0;
+
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
     this.engine = options.engine;
@@ -648,6 +760,7 @@ export class Session {
     this.availableEffortLevels = options.availableEffortLevels;
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
+    this.child = options.child;
     this.titleSet = options.hasTitle ?? false;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? []);
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
@@ -750,6 +863,13 @@ export class Session {
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
         // below (which already pushes the current lsp_status).
         this.uiReady = true;
+        // TASK.102 CUT-S2 §2.6.3: child-ready fires on the FIRST ui_ready only —
+        // never before (nothing was listening yet) and never again on a later
+        // reconnect (Open re-attaching to an already-running child).
+        if (this.child !== undefined && !this.childReadySent) {
+          this.childReadySent = true;
+          this.child.onReady();
+        }
         const presentation = enginePresentation(this.engine, this.engineSettings);
         this.outbound.sendDirect({
           type: "host_ready",
@@ -1219,10 +1339,54 @@ export class Session {
       return;
     }
     if (this.busy) {
+      // TASK.102 CUT-S2 §1.1/§2.6.3: a child session queues a busy-time
+      // user_message (steer) instead of rejecting it — the composer of a live
+      // child's own surface docks new instructions onto the running turn
+      // chain rather than losing them.
+      if (this.child !== undefined) {
+        this.enqueueSteerMessage(requestId, text, images);
+        return;
+      }
       // Protocol guard (the UI also blocks the composer): one turn at a time.
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "busy" });
       return;
     }
+    this.acceptUserMessage(requestId, text, images);
+  }
+
+  /**
+   * Parks a busy-time user_message in the child's host-side steer queue
+   * (CUT-S2 §1.1: the RENDERER prompt-queue is never used for a child
+   * surface — steering must affect the sync-join result, so it lives here,
+   * host-side, gating the terminal itself). Rejected exactly like a normal
+   * busy user_message would be once the bound is reached (§2.3's
+   * `CHILD_STEER_QUEUE_MAX`) or when the attachment isn't supported —
+   * neither consumes a queue slot.
+   */
+  private enqueueSteerMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
+    const attachments = images?.length ? [...images] : undefined;
+    if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
+      return;
+    }
+    if (this.steerQueue.length >= CHILD_STEER_QUEUE_MAX) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "busy" });
+      return;
+    }
+    this.steerQueue.push(attachments !== undefined ? { requestId, text, images: attachments } : { requestId, text });
+  }
+
+  /**
+   * Starts an ACCEPTED turn (the caller has already resolved relocating/busy
+   * and, for a steer message, the queue-admission checks). Shared by the
+   * direct `onUserMessage` path, the steer-queue drain (`onChildTurnSettled`),
+   * and `startProgrammaticTurn` — a child's programmatic initial turn goes
+   * through the EXACT same plan-mode-reminder/background-notices machinery a
+   * real user message would (CUT-S2 §2.6.3: "plan-reminder — нужен: mode
+   * может быть plan"), only title derivation is skipped for a child (§5.14 —
+   * a child never gets a name, on neither its initial turn nor a steer one).
+   */
+  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
     const attachments = images?.length ? [...images] : undefined;
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
@@ -1230,8 +1394,12 @@ export class Session {
     }
     // Title derivation (design §4.2): the first accepted user message in a
     // title-less session names it (the picker is useless without titles). Done
-    // exactly once per session — the flag is set on the first attempt.
-    this.maybeDeriveTitle(text);
+    // exactly once per session — the flag is set on the first attempt. A
+    // child session skips this unconditionally (CUT-S2 §5.14): it has no
+    // name, on neither its programmatic initial turn nor a later steer one.
+    if (this.child === undefined) {
+      this.maybeDeriveTitle(text);
+    }
     // Background-task completion notices (slice 6.DP-2, mirror of
     // cli/main.ts:1328-1340): drained (not peeked) so a notice is delivered
     // exactly once; injected strictly AFTER the raw-text title derivation above
@@ -1296,7 +1464,133 @@ export class Session {
       // this.currentTurn` (session.ts:332-337) always waits for the full
       // teardown instead of finding it already nulled mid-flush.
       this.currentTurn = null;
+      // TASK.102 CUT-S2 §1.1/§2.6.3: MUST run strictly after `this.currentTurn
+      // = null` above — draining the steer queue synchronously starts a NEW
+      // turn (busy=true, a fresh currentTurn promise) that this line must
+      // never clobber back to null.
+      if (this.child !== undefined) {
+        this.onChildTurnSettled();
+      }
     });
+  }
+
+  /**
+   * Starts a child session's ONE externally-triggered turn chain (CUT-S2
+   * §2.6.3: main's `child-start`, released once `child-ready` was sent).
+   * Guarded against a repeat call — a child gets exactly one initial turn
+   * per host lifetime; any further input arrives as a steer message through
+   * the normal `user_message` route instead. Goes through the SAME
+   * plan-mode-reminder/background-notices machinery a real user message
+   * would (`acceptUserMessage`); only title derivation differs, and that is
+   * already unconditionally skipped for a child there.
+   */
+  startProgrammaticTurn(prompt: string): { ok: true } | { ok: false; reason: string } {
+    if (this.child === undefined) {
+      return { ok: false, reason: "not a child session" };
+    }
+    if (this.programmaticTurnStarted) {
+      return { ok: false, reason: "programmatic turn already started" };
+    }
+    if (this.busy) {
+      return { ok: false, reason: "session is busy" };
+    }
+    this.programmaticTurnStarted = true;
+    this.childStartedAt = Date.now();
+    this.acceptUserMessage(randomUUID(), prompt);
+    return { ok: true };
+  }
+
+  /**
+   * Runs after EVERY turn a child session completes (the programmatic
+   * initial one, and every steer-triggered one) — `acceptUserMessage`'s
+   * finally calls this unconditionally when `this.child` is set. Chains the
+   * next queued steer message if one is waiting; otherwise this IS the
+   * terminal moment (CUT-S2 §5.16: publishing a terminal while the queue is
+   * non-empty would make steering a dead facade — a message queued during
+   * the LAST turn's run must always get its own turn before the child ever
+   * reports done).
+   */
+  private onChildTurnSettled(): void {
+    const next = this.steerQueue.shift();
+    if (next !== undefined) {
+      this.acceptUserMessage(next.requestId, next.text, next.images);
+      return;
+    }
+    void this.finalizeChildTerminal();
+  }
+
+  /**
+   * The child-mode terminal tap (CUT-S2 §0.5/§2.6.3): flushes the durable
+   * history sink BEFORE ever calling `onTerminal` — a durable "Open
+   * completed" transcript is the whole reason a child terminal is trusted at
+   * all — then hands off the accumulated final text/counters/status. A
+   * flush failure produces an honest `error` terminal (never a "completed"
+   * card whose durable transcript the flush never actually wrote).
+   */
+  private async finalizeChildTerminal(): Promise<void> {
+    if (this.child === undefined) {
+      return;
+    }
+    const { text: finalText, truncated } = finalizeFinalText(this.childFinalText);
+    const durationMs = Date.now() - this.childStartedAt;
+    try {
+      await this.child.flushHistory();
+    } catch (error) {
+      this.child.onTerminal({
+        status: "error",
+        finalText: `Child session history failed to persist durably: ${describeError(error)}`,
+        truncated: false,
+        turns: this.childTurns,
+        toolCalls: this.childToolCalls,
+        durationMs,
+      });
+      return;
+    }
+    this.child.onTerminal({
+      status: this.childLoopStatus ?? "error",
+      finalText,
+      truncated,
+      turns: this.childTurns,
+      toolCalls: this.childToolCalls,
+      durationMs,
+    });
+  }
+
+  /**
+   * Feeds one turn event into the child-mode accumulators (CUT-S2 §2.6.3).
+   * Called from `runTurn`'s event loop for every event, for a child session
+   * only — mirrors runner.ts's own local `currentTurnText`/`finalText`/
+   * `toolCalls`/`loopReason` bookkeeping (subagents/runner.ts), just spread
+   * across possibly-many `runTurn()` calls instead of one.
+   */
+  private observeChildEvent(event: AgentEvent): void {
+    switch (event.type) {
+      case "turn_start":
+        this.childFinalText = resetFinalText(this.childFinalText);
+        break;
+      case "text_delta":
+        this.childFinalText = appendFinalText(this.childFinalText, event.text);
+        break;
+      case "stream_retry":
+        this.childFinalText = resetFinalText(this.childFinalText);
+        break;
+      case "turn_end":
+        this.childFinalText = fixateFinalText(this.childFinalText);
+        break;
+      case "tool_result":
+        this.childToolCalls += 1;
+        break;
+      case "loop_end":
+        // A child config never receives a WorktreeControlPort (buildChildConfig
+        // never sets `ports.worktrees`), so `workspace_transition` cannot
+        // actually happen here; treated defensively as an error rather than
+        // widening ChildRunStatus, mirroring runner.ts's own precedent.
+        this.childLoopStatus = event.reason === "workspace_transition" ? "error" : event.reason;
+        this.childTurns += event.turns;
+        break;
+      default:
+        break;
+    }
   }
 
   private async runTurn(
@@ -1354,6 +1648,9 @@ export class Session {
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);
         this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
+        if (this.child !== undefined) {
+          this.observeChildEvent(event);
+        }
         if (event.type === "error") {
           // TASK.2 DoD-c: the raw provider failure reaches the process log
           // (stdio:"inherit" -> app log), not only the transcript block.

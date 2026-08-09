@@ -19,11 +19,32 @@
  * these tests only prove the SESSION-level wiring: injection byte-format,
  * exactly-once drain, A/B byte-identity with no tasks at all, busy-reject
  * never drains, and title purity.
+ *
+ * TASK.102 CUT-S2 §2.6.3 additions (slice S2b B4): child-mode Session over a
+ * SEPARATE local harness (`createChildHarness` below) rather than
+ * `createHarness` — it wires the `child` option `createHarness` deliberately
+ * never exposes (test-harness.ts is shared by many other test files; adding a
+ * child seam there is out of this slice's file fence). Covers the steer
+ * queue's bound, the terminal's ordering against `flushHistory` (including a
+ * non-empty queue and a flush failure), the no-title invariant on both the
+ * programmatic initial turn and a steer message, `startProgrammaticTurn`'s
+ * repeat-refusal, `child.onReady`'s first-ui_ready-only firing, and the
+ * frozen-`sessionHistory` invariant mirrored along the child path (§10.4).
+ * `tapChildPermissions` itself gets its own pure-function describe block —
+ * no harness needed for a pure `(message) => message` wrapper.
  */
 
+import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import {
+  AgentLoop,
+  InMemoryHookRunner,
+  InMemoryTodoStore,
+  ModePermissionEngine,
+  NodeHttpAdapter,
+  RuleAwarePermissionEngine,
   SessionPermissionRules,
+  createDefaultToolRegistry,
   matchCatalogEntryByBaseUrl,
   resolveEffortLevels,
   resolveReasoningEffort,
@@ -31,6 +52,7 @@ import {
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
   AgentEvent,
+  AgentLoopConfig,
   BackgroundTaskNotice,
   BackgroundTaskPort,
   BackgroundTaskSnapshot,
@@ -38,23 +60,36 @@ import type {
   BackgroundTaskStartResult,
   CommandHookDeclaration,
   DiagnosticsOutcome,
+  HistoryItem,
   ImageAttachment,
   LspServerStatus,
   LspPort,
   ModelRequest,
+  ModelStreamEvent,
+  PermissionMode,
   TelemetryStatus,
 } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
+import { CHILD_STEER_QUEUE_MAX } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
+import { CoreEngine } from "./engines/core-engine.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
-import { Outbound, Session, type SessionOptions } from "./session.js";
+import {
+  Outbound,
+  Session,
+  tapChildPermissions,
+  type ChildTerminalReport,
+  type SessionOptions,
+  type SessionPersistence,
+} from "./session.js";
 import {
   MemFs,
   ScriptedModelPort,
   ThrowingFs,
   createHarness,
   finishStep,
+  nodeWirePort,
   textStep,
   toolStep,
 } from "./test-harness.js";
@@ -2117,5 +2152,489 @@ describe("Session — model image-input verdict on the wire (TASK.56 W2)", () =>
     } finally {
       h.close();
     }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TASK.102 CUT-S2 §2.6.3 (slice S2b B4): child-mode Session
+// ═════════════════════════════════════════════════════════════════════════════
+
+const isSessionHistory = (m: HostToUiMessage): m is Of<"session_history"> => m.type === "session_history";
+const isTitleChanged = (m: HostToUiMessage): m is Of<"title_changed"> => m.type === "title_changed";
+
+interface ChildHarness {
+  session: Session;
+  received: HostToUiMessage[];
+  send(message: UiToHostMessage): void;
+  waitFor<T extends HostToUiMessage>(predicate: (message: HostToUiMessage) => message is T, timeoutMs?: number): Promise<T>;
+  waitUntil(predicate: () => boolean, timeoutMs?: number): Promise<void>;
+  /** Every persistence `touch` patch the Session emitted, in order (title/mode) — must never carry a `title` for a child. */
+  touches: { title?: string; mode?: PermissionMode }[];
+  onReady: ReturnType<typeof vi.fn<() => void>>;
+  onTerminal: ReturnType<typeof vi.fn<(report: ChildTerminalReport) => void>>;
+  flushHistory: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  close(): void;
+}
+
+/**
+ * A SEPARATE minimal harness (not `test-harness.ts`'s shared `createHarness`,
+ * which many other test files depend on and does not expose a `child` seam)
+ * wiring a real AgentLoop + dispatcher + broker against a scripted ModelPort,
+ * with Session's `child` option populated by inspectable `vi.fn()` mocks —
+ * mirrors `createHarness`'s own construction closely enough that every
+ * existing predicate/step-builder helper in this file works unchanged.
+ */
+function createChildHarness(opts: {
+  steps: ModelStreamEvent[][];
+  mode?: PermissionMode;
+  bootHistory?: HistoryItem[];
+  flushHistoryImpl?: () => Promise<void>;
+}): ChildHarness {
+  const channel = new MessageChannel();
+  const uiPort = channel.port1;
+  const hostPort = channel.port2;
+
+  const received: HostToUiMessage[] = [];
+  uiPort.on("message", (value: unknown) => {
+    received.push(value as HostToUiMessage);
+  });
+  uiPort.start();
+
+  const outbound = new Outbound();
+  const rawEmit = (message: HostToUiMessage): void => {
+    outbound.emit(message);
+  };
+  // Wired through the real permission-tap (not a bare `emit`) so these tests
+  // exercise the SAME broker-construction shape host/index.ts's child branch
+  // builds — tapChildPermissions itself is proven separately, pure, below.
+  const emit = tapChildPermissions(rawEmit, () => {});
+
+  const registry = createDefaultToolRegistry();
+  const hooks = new InMemoryHookRunner();
+  const broker = new IpcPermissionBroker(emit);
+  const toolFs = new MemFs();
+
+  const config: AgentLoopConfig = {
+    modelPort: new ScriptedModelPort(opts.steps),
+    registry,
+    hooks,
+    permissionEngine: new RuleAwarePermissionEngine(new ModePermissionEngine(), new SessionPermissionRules()),
+    permissionBroker: broker,
+    mode: opts.mode ?? "build",
+    ports: {
+      fs: toolFs,
+      exec: {} as AgentLoopConfig["ports"]["exec"],
+      http: new NodeHttpAdapter(),
+      todos: new InMemoryTodoStore(),
+    },
+    cwd: "/workspace",
+  };
+  const loop = new AgentLoop(config);
+  const engine = new CoreEngine({ loop, config });
+
+  const touches: { title?: string; mode?: PermissionMode }[] = [];
+  const persistence: SessionPersistence = {
+    touch(patch) {
+      touches.push(patch);
+    },
+  };
+
+  const onReady = vi.fn<() => void>();
+  const onTerminal = vi.fn<(report: ChildTerminalReport) => void>();
+  const flushHistory = vi.fn<() => Promise<void>>(opts.flushHistoryImpl ?? (() => Promise.resolve()));
+
+  const session = new Session({
+    outbound,
+    engine,
+    broker,
+    fs: toolFs,
+    workspace: "/workspace",
+    projectRoot: "/workspace",
+    model: "scripted-model",
+    sessionId: "child-session",
+    bootHistory: opts.bootHistory,
+    rules: new SessionPermissionRules(),
+    persistence,
+    child: { onReady, flushHistory, onTerminal },
+  });
+  session.bindPort(nodeWirePort(hostPort));
+
+  const waitFor = <T extends HostToUiMessage>(
+    predicate: (message: HostToUiMessage) => message is T,
+    timeoutMs = 1_000,
+  ): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const existing = received.find(predicate);
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+      const onMessage = (value: unknown): void => {
+        const message = value as HostToUiMessage;
+        if (predicate(message)) {
+          cleanup();
+          resolve(message);
+        }
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("waitFor timed out"));
+      }, timeoutMs);
+      const cleanup = (): void => {
+        uiPort.off("message", onMessage);
+        clearTimeout(timer);
+      };
+      uiPort.on("message", onMessage);
+    });
+
+  return {
+    session,
+    received,
+    touches,
+    onReady,
+    onTerminal,
+    flushHistory,
+    send(message: UiToHostMessage): void {
+      uiPort.postMessage(message);
+    },
+    waitFor,
+    // Polling, NOT message-triggered (unlike test-harness.ts's createHarness):
+    // several of this file's child-mode predicates observe a `vi.fn()` mock
+    // call (onReady/onTerminal/flushHistory) rather than a NEW wire message —
+    // a message-only recheck would silently hang forever on exactly those
+    // (the side effect that flips the predicate never itself posts anything
+    // over `uiPort`), so this polls unconditionally on a short interval.
+    waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+      return new Promise<void>((resolve, reject) => {
+        if (predicate()) {
+          resolve();
+          return;
+        }
+        const interval = setInterval(() => {
+          if (predicate()) {
+            cleanup();
+            resolve();
+          }
+        }, 5);
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("waitUntil timed out"));
+        }, timeoutMs);
+        const cleanup = (): void => {
+          clearInterval(interval);
+          clearTimeout(timer);
+        };
+      });
+    },
+    close(): void {
+      uiPort.close();
+      hostPort.close();
+    },
+  };
+}
+
+describe("Session — child mode: child.onReady (CUT-S2 §2.6.3)", () => {
+  it("fires exactly once, on the FIRST ui_ready — never before, never again on a reconnect", async () => {
+    const h = createChildHarness({ steps: [finishStep()] });
+    try {
+      expect(h.onReady).not.toHaveBeenCalled();
+
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(h.onReady).toHaveBeenCalledTimes(1);
+
+      // A reconnect (Open re-attaching to a live child) sends ui_ready again.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length === 2);
+      expect(h.onReady).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: host-side steer queue (CUT-S2 §1.1/§2.6.3)", () => {
+  it("queues a busy-time user_message instead of rejecting it, up to CHILD_STEER_QUEUE_MAX; the 17th is rejected", async () => {
+    const h = createChildHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      const started = h.session.startProgrammaticTurn("do it");
+      expect(started).toEqual({ ok: true });
+      await h.waitFor(isPermissionRequest); // parked -> busy
+
+      for (let i = 0; i < CHILD_STEER_QUEUE_MAX; i++) {
+        h.send({ type: "user_message", requestId: `steer-${i}`, text: `and also ${i}` });
+      }
+      h.send({ type: "user_message", requestId: "steer-overflow", text: "one too many" });
+
+      // FIFO delivery over the SAME MessageChannel guarantees every steer-N
+      // message above was already routed before this one settles.
+      const rejected = await h.waitFor(isTurnRejected);
+      expect(rejected).toMatchObject({ requestId: "steer-overflow", reason: "busy" });
+      expect(h.received.filter(isTurnRejected)).toHaveLength(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a facade that rejects a busy-time user_message like a root session would fail this: none of the first 16 is ever a turn_rejected", async () => {
+    const h = createChildHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("do it");
+      await h.waitFor(isPermissionRequest);
+
+      h.send({ type: "user_message", requestId: "steer-1", text: "first steer" });
+      h.send({ type: "user_message", requestId: "steer-2", text: "second steer" });
+      // A marker message proves the two steer sends above were both already
+      // routed (FIFO) without producing any turn_rejected.
+      h.send({ type: "context_breakdown_request" });
+      await h.waitFor(isContextBreakdown);
+
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)", () => {
+  it("chains a queued steer message before ever publishing the terminal — the terminal is never published while the queue is non-empty", async () => {
+    const h = createChildHarness({
+      steps: [
+        // Turn 1 (initial): parks on a permission ask, then (once denied)
+        // the SAME turn's internal tool-loop takes one more model round to
+        // actually finish — finishStep() is that second round, not a
+        // separate session-level turn (toolStep+finishStep together are ONE
+        // turn's full internal loop, exactly like the existing "cancel
+        // mid-turn"/"busy gate" tests above use).
+        toolStep("c1", "Write", WRITE_INPUT),
+        finishStep(),
+        // Turn 2 (the drained steer message): its own two-round internal loop.
+        toolStep("c2", "Write", WRITE_INPUT),
+        finishStep(),
+      ],
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("do it");
+      const req1 = await h.waitFor(isPermissionRequest);
+
+      h.send({ type: "user_message", requestId: "steer-1", text: "and also do this" });
+
+      h.send({ type: "permission_response", requestId: req1.requestId, behavior: "deny" });
+      // Turn 2 (the drained steer message) starts and parks on ITS OWN ask —
+      // proves the queue was drained rather than the terminal being published
+      // with turn 1's own status while the message was still sitting there.
+      const req2 = await h.waitFor(
+        (m): m is Of<"permission_request"> => isPermissionRequest(m) && m.requestId !== req1.requestId,
+      );
+      expect(h.received.filter(isTurnStarted)).toHaveLength(2);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+
+      h.send({ type: "permission_response", requestId: req2.requestId, behavior: "deny" });
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("publishes the terminal only AFTER flushHistory resolves — order is asserted with a deliberately-delayed fake sink, not just eventual completion", async () => {
+    let releaseFlush: (() => void) | undefined;
+    const flushHistoryImpl = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        releaseFlush = resolve;
+      });
+    const h = createChildHarness({ steps: [textStep("done")], flushHistoryImpl });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitFor(agentEventOf("loop_end"));
+
+      // flushHistory is gated (unresolved) -> a facade that publishes the
+      // terminal before/without awaiting it would already have called
+      // onTerminal by now; give any such synchronous path a chance to run.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.flushHistory).toHaveBeenCalledTimes(1);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+
+      releaseFlush?.();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("reports an error terminal when flushHistory rejects — an honest failure beats a completed card with an unreadable transcript", async () => {
+    const h = createChildHarness({
+      steps: [textStep("all done")],
+      flushHistoryImpl: () => Promise.reject(new Error("disk full")),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("error");
+      expect(report?.finalText).toContain("disk full");
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: no name (CUT-S2 §5.14)", () => {
+  it("never derives a title — not on the programmatic initial turn, not on a steer message that would obviously heuristic-title", async () => {
+    const h = createChildHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("Build the login page end to end");
+      const req = await h.waitFor(isPermissionRequest);
+
+      h.send({ type: "user_message", requestId: "steer-1", text: "Refactor the payments module too" });
+
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+      expect(h.touches.some((t) => t.title !== undefined)).toBe(false);
+      expect(h.received.some(isTitleChanged)).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: startProgrammaticTurn (CUT-S2 §2.6.3)", () => {
+  it("refuses a second call even AFTER the first has fully settled — one initial turn per child host lifetime, not merely a busy guard", async () => {
+    const h = createChildHarness({ steps: [finishStep(), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      const first = h.session.startProgrammaticTurn("go");
+      expect(first).toEqual({ ok: true });
+      // Wait for the FIRST turn to fully settle (onTerminal fired, busy back
+      // to false) before retrying — a facade that guards only on `busy`
+      // (and drops the "already started" latch) would let this second call
+      // through once the first is no longer running, so this specifically
+      // proves the guard is a per-host-lifetime latch, not a busy check.
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+      const second = h.session.startProgrammaticTurn("go again");
+      expect(second.ok).toBe(false);
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("on a NON-child session (no `child` option) it refuses without ever starting a turn", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      const result = h.session.startProgrammaticTurn("go");
+      expect(result).toEqual({ ok: false, reason: "not a child session" });
+      expect(h.received.some(isTurnStarted)).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — child mode: sessionHistory is frozen at construction (CUT-S2 §10.4, mirrors CUT-S1 §9.1 along the child path)", () => {
+  it("a live startProgrammaticTurn's events never leak into a later ui_ready's session_history handshake", async () => {
+    const bootHistory: HistoryItem[] = [
+      { id: "h1", createdAt: 1, message: { role: "user", content: "earlier turn" }, tokenEstimate: 3, kind: "normal" },
+    ];
+    const h = createChildHarness({ steps: [textStep("live output")], bootHistory });
+    try {
+      h.send({ type: "ui_ready" });
+      const firstHandshake = await h.waitFor(isSessionHistory);
+      expect(firstHandshake.items).toHaveLength(1);
+
+      h.session.startProgrammaticTurn("do X");
+      await h.waitFor(agentEventOf("loop_end"));
+
+      // Reconnect: Open re-attaching to a live child sends a SECOND ui_ready.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isSessionHistory).length === 2);
+      const secondHandshake = h.received.filter(isSessionHistory).at(-1) as Of<"session_history">;
+
+      // The turn that just ran produced real agent_events (visible in
+      // `received` via agent_event messages), but session_history is the
+      // FROZEN boot snapshot built once at construction — it must never grow
+      // from a live turn's events, on neither handshake.
+      expect(secondHandshake.items).toEqual(firstHandshake.items);
+      expect(secondHandshake.items).toHaveLength(1);
+      expect(h.received.some((m) => m.type === "agent_event" && m.event.type === "text_delta")).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("tapChildPermissions (TASK.102 CUT-S2 §0.8/§2.6.3)", () => {
+  it("emits attention(true) before forwarding a permission_request and attention(false) before a permission_settled — every message passes through completely unchanged", () => {
+    const emitted: HostToUiMessage[] = [];
+    const attention: boolean[] = [];
+    const tapped = tapChildPermissions(
+      (m) => emitted.push(m),
+      (waiting) => attention.push(waiting),
+    );
+
+    const req: HostToUiMessage = {
+      type: "permission_request",
+      requestId: "r1",
+      toolName: "Bash",
+      input: { command: "ls" },
+      mode: "build",
+      metadata: {
+        name: "Bash",
+        description: "run a shell command",
+        readOnly: false,
+        destructive: true,
+        riskLevel: "medium",
+        sideEffectScope: "process",
+      },
+    };
+    const settled: HostToUiMessage = { type: "permission_settled", requestId: "r1", behavior: "deny", origin: "ui" };
+    const other: HostToUiMessage = { type: "task_list", tasks: [] };
+
+    tapped(req);
+    tapped(other);
+    tapped(settled);
+
+    // Identity-equal — not merely deep-equal — proves the tap never
+    // reconstructs or mutates the message on its way through.
+    expect(emitted).toEqual([req, other, settled]);
+    expect(emitted[0]).toBe(req);
+    expect(emitted[1]).toBe(other);
+    expect(emitted[2]).toBe(settled);
+    expect(attention).toEqual([true, false]);
+  });
+
+  it("a message stream with no permission_request/permission_settled never touches onAttention", () => {
+    const attention: boolean[] = [];
+    const tapped = tapChildPermissions(
+      () => {},
+      (waiting) => attention.push(waiting),
+    );
+    tapped({ type: "task_list", tasks: [] });
+    tapped({ type: "hooks_list", hooks: [] });
+    expect(attention).toEqual([]);
   });
 });

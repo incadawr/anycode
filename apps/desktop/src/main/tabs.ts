@@ -18,12 +18,38 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
+import type { PermissionMode } from "@anycode/core";
 import {
   CREDENTIAL_REQUEST_TYPE,
   CREDENTIAL_RESPONSE_TYPE,
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import {
+  CHILD_PROGRESS_TYPE,
+  CHILD_READY_TYPE,
+  CHILD_RUNS_GLOBAL_MAX,
+  CHILD_RUNS_PER_PARENT_MAX,
+  CHILD_RUN_CANCEL_TYPE,
+  CHILD_RUN_EVENT_TYPE,
+  CHILD_SPAWN_REQUEST_TYPE,
+  CHILD_START_DEADLINE_MS,
+  CHILD_START_TYPE,
+  CHILD_TERMINAL_TYPE,
+  parseChildProgress,
+  parseChildReady,
+  parseChildRunCancel,
+  parseChildSpawnRequest,
+  parseChildTerminal,
+  type ChildProgress,
+  type ChildRunCancel,
+  type ChildRunEvent,
+  type ChildRunRejectReason,
+  type ChildRunStatus,
+  type ChildSpawnRequest,
+  type ChildStart,
+  type ChildTerminal,
+} from "../shared/child-sessions.js";
 import {
   PREVIEW_ARTIFACTS_TYPE,
   PREVIEW_REQUEST_TYPE,
@@ -55,6 +81,60 @@ import {
  */
 const HOST_INIT_MESSAGE_TYPE = "anycode:init";
 const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
+
+/**
+ * Model-visible rejection/terminal texts for the child-session admission path
+ * (TASK.102 CUT-S2 §2.6.4/§2.7). The reject-reason texts below (limit_parent,
+ * limit_global, recursion, the provider-not-ready template, closing,
+ * spawn_failed) and the crash text are VERBATIM from §2.7 — the model reads
+ * these through `tools/agent.ts`'s outcome mapping, so their wording is
+ * frozen by the cut, not a main-side style choice. Three texts have NO §2.7
+ * script (flagged in the S2b build report rather than guessed silently):
+ * the generic "core engine not ready" case (§2.7 only scripts the
+ * EXPLICIT-`provider` not_ready variant), the start-deadline miss (§2.3
+ * only specifies the effect — terminal `error` + reap — not a text), and the
+ * in-flight spawn-pair duplicate (§10.5 п.3 specifies only the reason,
+ * `spawn_failed`, and "внятным model-visible текстом" — an explicit text).
+ */
+const CHILD_LIMIT_PARENT_MESSAGE =
+  'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".';
+const CHILD_LIMIT_GLOBAL_MESSAGE =
+  'Agent: application-wide session-subagent limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".';
+const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own child sessions. Use tier "inline".';
+const CHILD_CLOSING_MESSAGE = "Agent: the child session could not be started (host is closing).";
+const CHILD_SPAWN_FAILED_MESSAGE = "Agent: the child session failed to start.";
+const CHILD_HOST_EXITED_MESSAGE = "Agent: the child session host exited before completing.";
+/** Not scripted by §2.7 (only the explicit-`provider` variant is) — see the block comment above. */
+const CHILD_ENGINE_NOT_READY_MESSAGE = "Agent: the core engine is not available in this host.";
+/** Not scripted by §2.3/§2.7 — see the block comment above. */
+const CHILD_START_TIMEOUT_MESSAGE = "Agent: the child session did not become ready in time.";
+/** Not scripted by §2.7 — reused for both the drain-cascade and the explicit `child-run-cancel` path. */
+const CHILD_CANCELLED_MESSAGE = "Agent: the child session was cancelled.";
+/**
+ * Not scripted by §2.7 — TASK.102 CUT-S2 §10.5 п.3's in-flight admission-time
+ * dedup of a `(parentSessionId, spawnToolCallId)` pair (see `childSpawnKeys`
+ * below). Reuses the existing `spawn_failed` reason (§10.5 п.3 names it
+ * explicitly) rather than minting a new `ChildRunRejectReason` member.
+ */
+const CHILD_DUPLICATE_SPAWN_MESSAGE =
+  "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.";
+
+function childProviderNotReadyMessage(provider: string): string {
+  return `Agent: provider connection "${provider}" is not available in this host. Omit "provider" to use the parent session's connection.`;
+}
+
+/**
+ * Composite in-flight-dedup key for a `(parentSessionId, spawnToolCallId)`
+ * pair (TASK.102 CUT-S2 §10.5 п.3). `\u0000` (NUL) is a safe join
+ * character: `shared/child-sessions.ts`'s `isIdString` forbids C0 control
+ * characters (including NUL) anywhere inside an id-shaped string, so
+ * neither `parentSessionId` (main-minted via `genId()`) nor a well-formed
+ * `spawnToolCallId` can ever itself contain one — no ambiguous collision
+ * between e.g. `("ab", "c")` and `("a", "bc")` is possible.
+ */
+function childSpawnKey(parentSessionId: string, spawnToolCallId: string): string {
+  return `${parentSessionId}\u0000${spawnToolCallId}`;
+}
 
 /**
 
@@ -223,6 +303,50 @@ export interface TabHost {
 
    */
   initialResume: boolean;
+  /**
+   * Present ONLY on a child-session tab (TASK.102 CUT-S2 §2.6.4): the whole
+   * non-recursion lock #3 and the cascade/quota machinery key off this field's
+   * presence, never off anything in an inbound message's payload. `requestId`
+   * correlates this tab's OWN control-plane messages (ChildReady/Progress/
+   * Terminal) back to its `ChildRunLedgerEntry` — a child never states its own
+   * ids on the wire (shared/child-sessions.ts's file header). `permissionMode`
+   * is the §0.8 snapshot, carried here (rather than only inside the ledger
+   * entry, which is deleted on the terminal transition) so `spawnTabHost` can
+   * read it for the child's ONE fork's `--child-mode` argv regardless of when
+   * that fork happens relative to ledger bookkeeping.
+   */
+  childOf?: {
+    parentTabId: string;
+    parentSessionId: string;
+    spawnToolCallId: string;
+    requestId: string;
+    permissionMode: PermissionMode;
+  };
+}
+
+/**
+ * One admitted (or starting) child-session run, keyed by `requestId` in
+ * `TabHostManager.childRuns` (TASK.102 CUT-S2 §2.6.4). Its mere PRESENCE in
+ * that map is the quota reservation — `state` distinguishes "still occupies
+ * the slot" (starting/running/cancelling, cut §0.7) from "gone" (removed by
+ * `finalizeChildRun`, exactly once, freeing the slot). `prompt` is held here
+ * (never sent to the child at spawn time) until `child-ready` releases it as
+ * a `ChildStart` message (§2.6.2/§2.6.4's "prompt хранится в леджере до этого
+ * момента"). `spawnToolCallId` (added CUT-S2 §10.5) is carried here — not
+ * merely on the child `TabHost.childOf` — so `finalizeChildRun` can release
+ * this entry's `childSpawnKeys` reservation without a second `tabs` lookup.
+ */
+interface ChildRunLedgerEntry {
+  requestId: string;
+  parentTabId: string;
+  parentSessionId: string;
+  spawnToolCallId: string;
+  childTabId: string;
+  childSessionId: string;
+  state: "starting" | "running" | "cancelling";
+  prompt: string;
+  /** Cleared (and the field deleted) on `child-ready`; fires `handleChildStartTimeout` otherwise. */
+  startDeadline?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -388,6 +512,19 @@ export interface TabHostManagerDeps {
    */
   describeConnection?: (connectionId: string) => { providerId: string } | undefined;
   /**
+   * Resolves an EXPLICIT `Agent(tier:"session", provider:…)` request's provider
+   * id to a live connection id (TASK.102 CUT-S2 §2.6.4), called synchronously
+   * from inside the admission section — main already holds the connections
+   * registry in memory (the same fact `env(connectionId)` relies on), so this
+   * never needs to be async. Returning `undefined` (unknown/deleted provider
+   * id) fails the spawn closed with `not_ready` (§2.7) rather than silently
+   * falling back to the parent's own connection. Absent = no explicit
+   * `provider` request can ever succeed (every `provider` value is treated as
+   * unresolvable) — every test/host that never wires this simply cannot honor
+   * a cross-connection spawn, which is the safe default.
+   */
+  resolveProviderConnection?: (provider: string) => string | undefined;
+  /**
    * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5, TASK.96
    * 96-A): main routes a host's `PREVIEW_REQUEST_TYPE`/`PREVIEW_ARTIFACTS_TYPE`
    * control-plane messages here unchanged, tabId-scoped — `main/index.ts` binds
@@ -433,12 +570,44 @@ export interface TabSummary {
   sessionId: string;
   state: TabHost["state"];
   pid: number | null;
+  /**
+   * Present only for a child-session tab (TASK.102 CUT-S2 §2.6.4's "listTabs()
+   * — добавить childOf-проекцию"), for the automation `/state` projection
+   * (S2d, not this slice) — never surfaced to the ordinary renderer, which
+   * only ever sees root tabs via the port-envelope/tab-registry path.
+   */
+  childOf?: { parentTabId: string; requestId: string };
 }
 
 export class TabHostManager {
   private readonly tabs = new Map<string, TabHost>();
   /* */
   private readonly bindings = new Map<string, string>();
+  /**
+   * parentTabId -> the set of that parent's currently-tracked child tabIds
+   * (TASK.102 CUT-S2 §2.6.4). A childTabId lives in this set for EXACTLY the
+   * same span it lives in `childRuns` under its own requestId (added
+   * together at admission, removed together by `finalizeChildRun`) — this is
+   * the per-parent quota index AND the drain-cascade's iteration surface.
+   */
+  private readonly childrenByParentTab = new Map<string, Set<string>>();
+  /** requestId -> the one admitted run it correlates (§2.6.4); its SIZE is the global quota's live count. */
+  private readonly childRuns = new Map<string, ChildRunLedgerEntry>();
+  /**
+   * `childSpawnKey(parentSessionId, spawnToolCallId)` -> the one live
+   * requestId currently holding that pair (TASK.102 CUT-S2 §10.5 п.3). The
+   * SQLite v13 unique index (`idx_sessions_parent_spawn`) only guards the
+   * DURABLE row once a child session has actually been persisted — it
+   * cannot see a second spawn for the SAME pair racing the first inside
+   * this process's memory, before either child's row exists yet. This map
+   * is `childRuns`'s admission-time twin for that pair: reserved in the
+   * exact same synchronous admission section (`spawnChild`) that reserves
+   * `childRuns`/`childrenByParentTab`, and released by the exact same single
+   * `finalizeChildRun` (or `spawnChild`'s own fork-failure rollback) — so a
+   * pair can never outlive the run it names, on ANY of the terminal paths
+   * (completed/error/cancelled/crash/start-deadline) that lead there.
+   */
+  private readonly childSpawnKeys = new Map<string, string>();
   private readonly limits: BreakerLimits;
   private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
@@ -461,16 +630,30 @@ export class TabHostManager {
     this.logger = deps.logger ?? console;
   }
 
-  /** Number of live tabs. */
+  /**
+   * Number of live ROOT tabs (TASK.102 CUT-S2 §2.6.4: "atCapacity()/count()
+   * — только roots"). A child session is not an application "tab" from
+   * MAX_TABS's perspective — it never counted against it, and never will.
+   */
   count(): number {
-    return this.tabs.size;
+    return this.rootCount();
+  }
+
+  private rootCount(): number {
+    let n = 0;
+    for (const tab of this.tabs.values()) {
+      if (tab.childOf === undefined) {
+        n++;
+      }
+    }
+    return n;
   }
 
   /**
    * Read-only snapshot of every live tab's main-plane facts (design
-   * §3.1/§4.1). Additive, no side effects — the automation server's `GET
-   * /state` reads this to sit the pid/state main-view next to the renderer's
-   * store projection.
+   * §3.1/§4.1), root AND child alike — the automation server's `GET /state`
+   * (S2d, not this slice) needs to see children too, tagged via `childOf`, to
+   * project the child-run ledger next to the renderer's (child-blind) store.
    */
   listTabs(): ReadonlyArray<TabSummary> {
     return [...this.tabs.values()].map((tab) => ({
@@ -479,11 +662,14 @@ export class TabHostManager {
       sessionId: tab.sessionId,
       state: tab.state,
       pid: tab.proc?.pid ?? null,
+      ...(tab.childOf !== undefined
+        ? { childOf: { parentTabId: tab.childOf.parentTabId, requestId: tab.childOf.requestId } }
+        : {}),
     }));
   }
 
   atCapacity(): boolean {
-    return this.tabs.size >= this.limits.maxTabs;
+    return this.rootCount() >= this.limits.maxTabs;
   }
 
   /**
@@ -627,6 +813,21 @@ export class TabHostManager {
       if (tab.codexProfile.home !== undefined) args.push("--codex-home", tab.codexProfile.home);
       if (tab.codexProfile.authLink !== undefined) args.push("--codex-auth-link", tab.codexProfile.authLink);
     }
+    // TASK.102 CUT-S2 §2.6.2/§2.6.4: a child session's ONE spawn (children
+    // never respawn, cut §0.6) carries its parent linkage + inherited
+    // permission-mode snapshot as argv, for the child host's boot
+    // (`parseHostArgs`/`resolveBootSession`, S2b/B4) to create its session row
+    // with `parentSessionId`/`spawnToolCallId` and the correct initial mode.
+    if (tab.childOf !== undefined) {
+      args.push(
+        "--child-parent",
+        tab.childOf.parentSessionId,
+        "--child-spawn-call",
+        tab.childOf.spawnToolCallId,
+        "--child-mode",
+        tab.childOf.permissionMode,
+      );
+    }
     // TASK.45 W10-FIX F3 (layer c): resolve the pinned base env BEFORE forking. A
     // `undefined` here means the tab is pinned to a connection whose per-connection
     // env is no longer available (deleted mid-resume). Refuse to fork rather than
@@ -722,6 +923,47 @@ export class TabHostManager {
       }
       return;
     }
+    // TASK.102 CUT-S2 §2.6.4: the child-session control plane. Every parser
+    // below is fail-closed (shared/child-sessions.ts) — a malformed message is
+    // silently dropped, same discipline as every other as-yet-unrecognized
+    // control-plane type on this channel. `spawnChild`/the handlers do their
+    // OWN sender-authority checks (tab.proc === sender, tab.childOf presence)
+    // — never trust anything about identity from the payload itself.
+    if (data.type === CHILD_SPAWN_REQUEST_TYPE) {
+      const req = parseChildSpawnRequest(message);
+      if (req !== null) {
+        this.spawnChild(tab, child, req);
+      }
+      return;
+    }
+    if (data.type === CHILD_RUN_CANCEL_TYPE) {
+      const cancel = parseChildRunCancel(message);
+      if (cancel !== null) {
+        this.handleChildRunCancel(tab, child, cancel);
+      }
+      return;
+    }
+    if (data.type === CHILD_READY_TYPE) {
+      const ready = parseChildReady(message);
+      if (ready !== null) {
+        this.handleChildReady(tab, child);
+      }
+      return;
+    }
+    if (data.type === CHILD_PROGRESS_TYPE) {
+      const progress = parseChildProgress(message);
+      if (progress !== null) {
+        this.handleChildProgress(tab, child, progress);
+      }
+      return;
+    }
+    if (data.type === CHILD_TERMINAL_TYPE) {
+      const terminal = parseChildTerminal(message);
+      if (terminal !== null) {
+        this.handleChildTerminal(tab, child, terminal);
+      }
+      return;
+    }
     if (data.type !== CREDENTIAL_REQUEST_TYPE || typeof data.requestId !== "string") {
       return;
     }
@@ -744,6 +986,479 @@ export class TabHostManager {
     } catch (error) {
       this.logger.warn(`[main] failed to post credential response`, error);
     }
+  }
+
+  /** Posts one `ChildRunEvent` to a tab's live process; best-effort (swallows a dead-proc postMessage throw). */
+  private replyChildRunEvent(tab: TabHost, event: ChildRunEvent): void {
+    if (tab.proc === null) {
+      return;
+    }
+    try {
+      tab.proc.postMessage(event);
+    } catch (error) {
+      this.logger.warn(`[main] failed to relay child-run event to tab ${tab.tabId}`, error);
+    }
+  }
+
+  /**
+   * Admits (or refuses) a session-tier `Agent` spawn request from a root tab
+   * (TASK.102 CUT-S2 §2.6.4). Everything from the stale-sender check through
+   * the fork attempt below is ONE synchronous section — no `await` anywhere
+   * in it — so that two spawn requests processed back to back (the SAME
+   * parent issuing several `Agent(tier:"session")` calls in one turn) always
+   * see each other's reservation: admission atomicity (cut §5.9) depends on
+   * there being no yield point between "check the quota" and "reserve the
+   * slot".
+   */
+  private spawnChild(parentTab: TabHost, sender: UtilityProcess, req: ChildSpawnRequest): void {
+    const reject = (reason: ChildRunRejectReason, message: string): void => {
+      this.replyChildRunEvent(parentTab, {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: req.requestId,
+        kind: "rejected",
+        reason,
+        message,
+      });
+    };
+
+    if (parentTab.proc !== sender) {
+      // Stale-generation sender (the tab respawned since this message was
+      // sent) — not even a reply, mirroring registerEngineProcess's precedent
+      // for a stale/foreign control-plane message.
+      return;
+    }
+    if (parentTab.childOf !== undefined) {
+      // Non-recursion lock #3 (cut §0.2): main refuses a spawn from a tab that
+      // is ITSELF a child, regardless of what locks #1/#2 (restricted schema,
+      // absent ctx.sessionSubagents) already should have prevented core-side.
+      reject("recursion", CHILD_RECURSION_MESSAGE);
+      return;
+    }
+    if (this.quitting || parentTab.state !== "running") {
+      reject("closing", CHILD_CLOSING_MESSAGE);
+      return;
+    }
+    // In-flight dedup of the (parentSessionId, spawnToolCallId) pair (cut
+    // §10.5 п.3): `parentSessionId` is the ACTUAL sender's tab, never
+    // `req`'s payload (same law as everything else in this section) —
+    // `spawnToolCallId` is the only piece that comes from `req`, and it is
+    // exactly the durable spawn identity §10.5 established. A second spawn
+    // for a pair whose first run is still starting/running/cancelling is
+    // refused HERE, synchronously, rather than being left to the SQLite v13
+    // unique index (which only fires once a child session row exists) or
+    // the 30s start-deadline path.
+    const spawnKey = childSpawnKey(parentTab.sessionId, req.spawnToolCallId);
+    if (this.childSpawnKeys.has(spawnKey)) {
+      reject("spawn_failed", CHILD_DUPLICATE_SPAWN_MESSAGE);
+      return;
+    }
+    const perParent = this.childrenByParentTab.get(parentTab.tabId)?.size ?? 0;
+    if (perParent >= CHILD_RUNS_PER_PARENT_MAX) {
+      reject("limit_parent", CHILD_LIMIT_PARENT_MESSAGE);
+      return;
+    }
+    if (this.childRuns.size >= CHILD_RUNS_GLOBAL_MAX) {
+      reject("limit_global", CHILD_LIMIT_GLOBAL_MESSAGE);
+      return;
+    }
+    if (!this.isEngineReady("core")) {
+      reject("not_ready", CHILD_ENGINE_NOT_READY_MESSAGE);
+      return;
+    }
+    let connectionId = parentTab.connectionId;
+    if (req.provider !== undefined) {
+      // Explicit resolve, synchronous (deps doc: main already holds the
+      // connections registry in memory) — an unknown/deleted provider id
+      // fails closed rather than silently falling back to the parent's own
+      // connection (cut §2.6.4's "неизвестный provider ⇒ not_ready").
+      const resolved = this.deps.resolveProviderConnection?.(req.provider);
+      if (resolved === undefined) {
+        reject("not_ready", childProviderNotReadyMessage(req.provider));
+        return;
+      }
+      connectionId = resolved;
+    }
+
+    // Reservation: the child's tabId/sessionId are minted and the ledger
+    // entry + per-parent index are written HERE, before the fork is even
+    // attempted — the slot exists from this point regardless of whether the
+    // fork below succeeds (a throw rolls it back explicitly).
+    const childTabId = this.genId();
+    const childSessionId = this.genId();
+    const entry: ChildRunLedgerEntry = {
+      requestId: req.requestId,
+      parentTabId: parentTab.tabId,
+      parentSessionId: parentTab.sessionId,
+      spawnToolCallId: req.spawnToolCallId,
+      childTabId,
+      childSessionId,
+      state: "starting",
+      prompt: req.prompt,
+    };
+    this.childRuns.set(req.requestId, entry);
+    this.childSpawnKeys.set(spawnKey, req.requestId);
+    let siblings = this.childrenByParentTab.get(parentTab.tabId);
+    if (siblings === undefined) {
+      siblings = new Set<string>();
+      this.childrenByParentTab.set(parentTab.tabId, siblings);
+    }
+    siblings.add(childTabId);
+    const rollback = (): void => {
+      this.childRuns.delete(req.requestId);
+      this.childSpawnKeys.delete(spawnKey);
+      siblings!.delete(childTabId);
+      if (siblings!.size === 0) {
+        this.childrenByParentTab.delete(parentTab.tabId);
+      }
+    };
+
+    // Main NEVER trusts payload identity (cut §2.3's own header): workspace,
+    // projectRoot and the parent linkage below all come from the ACTUAL
+    // parentTab record, never from `req`. The child is core-engine only
+    // (cut §0's "Ребёнок S2 = ТОЛЬКО core-движок") — no worktree, no engine
+    // model/preset/codex-profile, and never a resume (children never
+    // respawn, cut §0.6).
+    const childTab: TabHost = {
+      tabId: childTabId,
+      workspace: parentTab.workspace,
+      projectRoot: parentTab.projectRoot,
+      sessionId: childSessionId,
+      ...(connectionId !== undefined ? { connectionId } : {}),
+      ...(req.model !== undefined ? { modelOverride: req.model } : {}),
+      engine: "core",
+      engineModel: null,
+      enginePreset: null,
+      codexProfile: null,
+      proc: null,
+      hostGeneration: 0,
+      engineProcess: null,
+      spawnedAt: 0,
+      rapidRespawns: 0,
+      state: "running",
+      initialResume: false,
+      childOf: {
+        parentTabId: parentTab.tabId,
+        parentSessionId: parentTab.sessionId,
+        spawnToolCallId: req.spawnToolCallId,
+        requestId: req.requestId,
+        permissionMode: req.permissionMode,
+      },
+    };
+
+    try {
+      this.spawnTabHost(childTab, { firstSpawn: true });
+    } catch (error) {
+      rollback();
+      this.logger.error(`[main] child spawn threw for request ${req.requestId}`, error);
+      reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
+      return;
+    }
+    if (childTab.proc === null) {
+      // spawnTabHost's own fail-closed path (W10-FIX F3: the resolved
+      // connection's env is unavailable) already logged and marked
+      // crash_looped without throwing — treat it the same as a throwing fork.
+      rollback();
+      reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
+      return;
+    }
+
+    this.tabs.set(childTabId, childTab);
+    entry.startDeadline = setTimeout(() => this.handleChildStartTimeout(req.requestId), CHILD_START_DEADLINE_MS);
+    this.deliverTabPort(childTab);
+    this.replyChildRunEvent(parentTab, {
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: req.requestId,
+      kind: "accepted",
+      childSessionId,
+      childTabId,
+      model: req.model ?? this.describeChildModel(connectionId),
+    });
+  }
+
+  /**
+   * The model string reported on `accepted` when the request omitted an
+   * explicit `model` (cut §2.6.4's "model — существующий ENV_MODEL-механизм
+   * modelOverride"): the resolved connection's OWN currently-configured
+   * model, read off the same `env()` the fork itself just used — not a
+   * value main invents. Falls back to a placeholder only if the connection's
+   * env carries no model at all (an incompletely configured connection).
+   */
+  private describeChildModel(connectionId: string | undefined): string {
+    const env = this.env(connectionId);
+    const model = env?.[ENV_MODEL];
+    return typeof model === "string" && model.length > 0 ? model : "default";
+  }
+
+  /** requestId -> its owning parent's cancel of a still-live run (Agent tool abort/timeout, cut §0.5's ctx.abortSignal). */
+  private handleChildRunCancel(tab: TabHost, sender: UtilityProcess, msg: ChildRunCancel): void {
+    if (tab.proc !== sender) {
+      return;
+    }
+    const entry = this.childRuns.get(msg.requestId);
+    // Authorization by ownership, not merely existence: a tab can only cancel
+    // a run IT spawned. Since only a root tab can ever be a run's
+    // `parentTabId` (recursion lock #3 above), this also naturally rejects a
+    // child tab that tries to cancel anything — no separate childOf check needed.
+    if (entry === undefined || entry.parentTabId !== tab.tabId) {
+      return;
+    }
+    void this.cancelChildRun(entry.childTabId);
+  }
+
+  /**
+   * Marks a run `cancelling` (idempotent) and starts shutting down its
+   * child's host. `cancelling` holds the quota slot (cut §0.7's "держит слот
+   * до реального реапа") — this does NOT touch `childRuns`/`childrenByParentTab`;
+   * only `finalizeChildRun` (on the child's actual terminal transition) does.
+   */
+  private cancelChildRun(childTabId: string): Promise<void> {
+    const childTab = this.tabs.get(childTabId);
+    if (childTab === undefined) {
+      return Promise.resolve();
+    }
+    const requestId = childTab.childOf?.requestId;
+    const entry = requestId !== undefined ? this.childRuns.get(requestId) : undefined;
+    if (entry !== undefined) {
+      entry.state = "cancelling";
+    }
+    if (childTab.state === "closing") {
+      // Already shutting down (a second cancel, or the drain loop revisiting
+      // a child it already reached) — do not re-send the shutdown message.
+      return Promise.resolve();
+    }
+    return this.shutdownTabHost(childTab);
+  }
+
+  /**
+   * Cancels every child currently tracked under `parentTab`, looping until
+   * the index is empty (cut §2.6.4's cascade "снапшот-цикл"): a snapshot,
+   * not a live iteration, so a run that finalizes mid-batch cannot corrupt
+   * the `Set` this function is reading. Reused by both `closeTab` (parent
+   * closing gracefully) and a crashed root's `handleExit` (parent gone
+   * unexpectedly) — same mechanism, cut §0.6's "sync-join невосстановим"
+   * applies equally to both.
+   */
+  private async drainChildren(parentTab: TabHost): Promise<void> {
+    for (;;) {
+      const childIds = this.childrenByParentTab.get(parentTab.tabId);
+      if (childIds === undefined || childIds.size === 0) {
+        return;
+      }
+      const snapshot = [...childIds];
+      await Promise.allSettled(snapshot.map((childTabId) => this.cancelChildRun(childTabId)));
+    }
+  }
+
+  /**
+   * The ONE place a child run's quota slot AND its in-flight
+   * `(parentSessionId, spawnToolCallId)` dedup key (cut §10.5 п.3) are freed,
+   * and its `terminal` event is relayed to the parent — called at most once
+   * per `requestId` (an entry already gone is a no-op, the first-wins
+   * discipline that makes a ChildTerminal-message-vs-process-exit race
+   * harmless regardless of which arrives first, cut §0.6/anti-facade §5.12).
+   * Every terminal path funnels through here — the happy `ChildTerminal`
+   * (`handleChildTerminal`), an unreaped crash (`handleChildExit`'s
+   * fallback), and a missed `child-ready` (`handleChildStartTimeout`) — so
+   * `childSpawnKeys` can never carry a zombie entry past any of them; the
+   * ONLY other place that entry is released is `spawnChild`'s own
+   * fork-failure `rollback`, for a run that never got this far. Reaps the
+   * child's host (fire-and-forget `shutdownTabHost` — skipped if the process
+   * is already gone) and removes the child tab from `tabs`: a finished child
+   * never holds a live utilityProcess (cut §0's "Завершённый ребёнок НЕ
+   * держит utilityProcess").
+   */
+  private finalizeChildRun(
+    requestId: string,
+    terminal: {
+      status: ChildRunStatus;
+      finalText: string;
+      truncated: boolean;
+      turns: number;
+      toolCalls: number;
+      durationMs: number;
+    },
+  ): void {
+    const entry = this.childRuns.get(requestId);
+    if (entry === undefined) {
+      return;
+    }
+    this.childRuns.delete(requestId);
+    this.childSpawnKeys.delete(childSpawnKey(entry.parentSessionId, entry.spawnToolCallId));
+    if (entry.startDeadline !== undefined) {
+      clearTimeout(entry.startDeadline);
+    }
+    const siblings = this.childrenByParentTab.get(entry.parentTabId);
+    siblings?.delete(entry.childTabId);
+    if (siblings !== undefined && siblings.size === 0) {
+      this.childrenByParentTab.delete(entry.parentTabId);
+    }
+
+    const parentTab = this.tabs.get(entry.parentTabId);
+    if (parentTab !== undefined) {
+      // Best-effort: the parent may already be gone (a drain-cascade running
+      // because the parent itself is closing/crashed, cut §2.6.4's "родитель
+      // всё равно закрывается").
+      this.replyChildRunEvent(parentTab, {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId,
+        kind: "terminal",
+        childSessionId: entry.childSessionId,
+        ...terminal,
+      });
+    }
+
+    const childTab = this.tabs.get(entry.childTabId);
+    if (childTab !== undefined) {
+      this.tabs.delete(entry.childTabId);
+      if (childTab.proc !== null) {
+        void this.shutdownTabHost(childTab);
+      }
+    }
+  }
+
+  /** No `child-ready` within CHILD_START_DEADLINE_MS of a successful fork (cut §2.3/§2.6.4). */
+  private handleChildStartTimeout(requestId: string): void {
+    const entry = this.childRuns.get(requestId);
+    if (entry === undefined) {
+      return; // already finalized (ready arrived just as the timer fired, or otherwise)
+    }
+    const childTab = this.tabs.get(entry.childTabId);
+    const durationMs = childTab !== undefined ? Math.max(0, this.now() - childTab.spawnedAt) : 0;
+    this.finalizeChildRun(requestId, {
+      status: "error",
+      finalText: CHILD_START_TIMEOUT_MESSAGE,
+      truncated: false,
+      turns: 0,
+      toolCalls: 0,
+      durationMs,
+    });
+  }
+
+  /** child host -> main: sent on the child Session's first ui_ready (§2.6.3), releasing the held initial prompt. */
+  private handleChildReady(tab: TabHost, sender: UtilityProcess): void {
+    if (tab.proc !== sender || tab.childOf === undefined) {
+      return;
+    }
+    const entry = this.childRuns.get(tab.childOf.requestId);
+    if (entry === undefined || entry.state !== "starting") {
+      // Unknown (already finalized), or a late/duplicate ready after the run
+      // already moved on (e.g. a cancel raced in) — never restart a run that
+      // is not, in fact, still starting.
+      return;
+    }
+    if (entry.startDeadline !== undefined) {
+      clearTimeout(entry.startDeadline);
+      delete entry.startDeadline;
+    }
+    entry.state = "running";
+    const startMsg: ChildStart = { type: CHILD_START_TYPE, prompt: entry.prompt };
+    try {
+      tab.proc?.postMessage(startMsg);
+    } catch (error) {
+      this.logger.warn(`[main] failed to post child-start to tab ${tab.tabId}`, error);
+    }
+  }
+
+  /** child host -> main: coarse progress, relayed to the parent verbatim (minus the ids main already owns). */
+  private handleChildProgress(tab: TabHost, sender: UtilityProcess, msg: ChildProgress): void {
+    if (tab.proc !== sender || tab.childOf === undefined) {
+      return;
+    }
+    const entry = this.childRuns.get(tab.childOf.requestId);
+    if (entry === undefined) {
+      return; // already finalized; drop stray progress from a child mid-teardown
+    }
+    const parentTab = this.tabs.get(entry.parentTabId);
+    if (parentTab === undefined) {
+      return;
+    }
+    const base = { type: CHILD_RUN_EVENT_TYPE, requestId: entry.requestId } as const;
+    let event: ChildRunEvent;
+    switch (msg.kind) {
+      case "progress":
+        event = {
+          ...base,
+          kind: "progress",
+          turns: msg.turns,
+          toolCalls: msg.toolCalls,
+          ...(msg.lastTool !== undefined ? { lastTool: msg.lastTool } : {}),
+        };
+        break;
+      case "activity":
+        event = { ...base, kind: "activity", toolName: msg.toolName, summary: msg.summary };
+        break;
+      case "attention":
+        event = { ...base, kind: "attention", waiting: msg.waiting };
+        break;
+      default: {
+        // Exhaustiveness guard (mirrors host/child-session-port.ts's own):
+        // a new ChildProgress kind fails to compile here.
+        const _exhaustive: never = msg;
+        void _exhaustive;
+        return;
+      }
+    }
+    this.replyChildRunEvent(parentTab, event);
+  }
+
+  /**
+   * child host -> main: sent exactly once, only after the child's history is
+   * durably flushed (cut §0.5). This is the HAPPY/ERROR/self-reported-cancel
+   * path; a child that dies WITHOUT ever sending this is caught by
+   * `handleChildExit`'s fallback below instead — whichever arrives first
+   * finalizes (first-wins, see `finalizeChildRun`).
+   */
+  private handleChildTerminal(tab: TabHost, sender: UtilityProcess, msg: ChildTerminal): void {
+    if (tab.proc !== sender || tab.childOf === undefined) {
+      return;
+    }
+    this.finalizeChildRun(tab.childOf.requestId, {
+      status: msg.status,
+      finalText: msg.finalText,
+      truncated: msg.truncated,
+      turns: msg.turns,
+      toolCalls: msg.toolCalls,
+      durationMs: msg.durationMs,
+    });
+  }
+
+  /**
+   * A child tab's host exited without ever sending its own `ChildTerminal`
+   * (crash, or a force-kill past `shutdownTabHost`'s deadline). Children
+   * NEVER respawn (cut §0.6) — this is the fallback finalize, not a
+   * decision point. `cancelling` at the time of exit means WE killed it
+   * (cascade/explicit cancel) -> `cancelled`; any other state means it died
+   * on its own -> `error` (cut §2.7's crash text).
+   */
+  private handleChildExit(tab: TabHost, child: UtilityProcess, _code: number): void {
+    if (tab.proc !== child) {
+      return; // stale-generation exit from an already-superseded reference
+    }
+    tab.proc = null;
+    tab.state = "closing";
+    const requestId = tab.childOf?.requestId;
+    if (requestId === undefined) {
+      this.tabs.delete(tab.tabId); // defensive; a child tab always carries childOf
+      return;
+    }
+    const entry = this.childRuns.get(requestId);
+    if (entry === undefined) {
+      // Already finalized via ChildTerminal (or a previous exit) — this is
+      // the fire-and-forget reap's own exit landing; nothing left to do
+      // beyond making sure the tab is not left registered.
+      this.tabs.delete(tab.tabId);
+      return;
+    }
+    const status: ChildRunStatus = entry.state === "cancelling" ? "cancelled" : "error";
+    const finalText = entry.state === "cancelling" ? CHILD_CANCELLED_MESSAGE : CHILD_HOST_EXITED_MESSAGE;
+    this.finalizeChildRun(requestId, {
+      status,
+      finalText,
+      truncated: false,
+      turns: 0,
+      toolCalls: 0,
+      durationMs: Math.max(0, this.now() - tab.spawnedAt),
+    });
   }
 
   /** Gracefully replaces one host with a resume host rooted at the transition target. */
@@ -804,6 +1519,14 @@ export class TabHostManager {
    */
   private handleExit(tab: TabHost, child: UtilityProcess, code: number): void {
     this.reapEngineProcess(tab, child);
+    if (tab.childOf !== undefined) {
+      // TASK.102 CUT-S2 §2.6.4: a child tab's exit is never a respawn
+      // decision — it is caught (and finalized) here unconditionally,
+      // regardless of `quitting`/`state`, since there is no "unexpected
+      // respawn" to guard against for a tab that never respawns.
+      this.handleChildExit(tab, child, code);
+      return;
+    }
     if (this.quitting || tab.state === "closing") {
       this.logger.log(`[main] tab ${tab.tabId} host exited during shutdown (code ${code})`);
       return;
@@ -813,6 +1536,18 @@ export class TabHostManager {
       return;
     }
     tab.proc = null;
+
+    // TASK.102 CUT-S2 §0.6: a dead root cannot resume its children's
+    // sync-join ("sync-join невосстановим") — cancel them before any
+    // respawn attempt, whether respawn actually happens or the breaker gives
+    // up below. Fire-and-forget: an async function's synchronous PREFIX
+    // (state flip + shutdown postMessage for every currently-tracked child)
+    // runs to completion before this call returns control here — JS runs an
+    // async function body synchronously up to its first `await` — so this
+    // reliably precedes `spawnTabHost` below without making `handleExit`
+    // itself async (every synchronous respawn assertion in this suite
+    // depends on `handleExit` staying fully synchronous end to end).
+    void this.drainChildren(tab);
 
     const uptime = this.now() - tab.spawnedAt;
     const decision = decideRespawn({
@@ -941,10 +1676,33 @@ export class TabHostManager {
         ...(tab.connectionId !== undefined && pin !== undefined
           ? { connectionId: tab.connectionId, providerId: pin.providerId }
           : {}),
+        // TASK.102 CUT-S2 §2.5: stamped ONLY for a child-session tab — this is
+        // what lets `tab-registry.registerPort` (S2c) classify the port as a
+        // child and skip ordinary root-tab registration (no addTab, no
+        // Sidebar/StartScreen/CommandPalette visibility, §0.4's skip-hide
+        // contract). `childSessionId` is this tab's OWN sessionId.
+        ...(tab.childOf !== undefined
+          ? {
+              child: {
+                parentTabId: tab.childOf.parentTabId,
+                parentSessionId: tab.childOf.parentSessionId,
+                spawnToolCallId: tab.childOf.spawnToolCallId,
+                childSessionId: tab.sessionId,
+              },
+            }
+          : {}),
       },
       [channel.port2],
     );
     this.logger.log(`[main] delivered fresh MessageChannel to tab ${tab.tabId}`);
+
+    if (tab.childOf !== undefined) {
+      // TASK.102 CUT-S2 §2.5: "Терминальный порт ребёнку НЕ доставляется" — a
+      // child session has no PTY-backed tab surface, so main simply never
+      // sends this second channel for one (mirrors how every other
+      // as-yet-unwired control-plane message is just not sent).
+      return;
+    }
 
     const termChannel = this.deps.createChannel();
     tab.proc.postMessage({ type: TERMINAL_INIT_MESSAGE_TYPE }, [termChannel.port1]);
@@ -1011,12 +1769,27 @@ export class TabHostManager {
    */
   async closeTab(tabId: string): Promise<CloseTabResult> {
     const tab = this.tabs.get(tabId);
-    if (tab === undefined) {
+    // TASK.102 CUT-S2 §2.6.4: a child session is not externally addressable —
+    // closing one by id reads as "no such tab" to the public API, exactly
+    // like a genuinely-unknown id (children are invisible outside the
+    // manager, §0.4's skip-hide contract extended to the close path).
+    if (tab === undefined || tab.childOf !== undefined) {
       return { ok: false, reason: "unknown_tab" };
     }
-    if (this.tabs.size <= 1) {
+    // last_tab counts ROOTS only (§2.6.4): a root with live children is
+    // still the application's only root and must not be closable, and
+    // conversely a root's children must never inflate the denominator into
+    // falsely allowing (or blocking) a close.
+    if (this.rootCount() <= 1) {
       return { ok: false, reason: "last_tab" };
     }
+    // Seal FIRST, synchronously, before any await (cut §2.6.4/anti-facade
+    // §5.8): a spawn request racing in after this line sees `state !==
+    // "running"` and is rejected `closing` by `spawnChild`'s admission
+    // section. Anything admitted BEFORE this line is already registered in
+    // `childrenByParentTab` and is swept by the drain below.
+    tab.state = "closing";
+    await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
     this.tabs.delete(tabId);
     this.bindings.delete(tab.sessionId);

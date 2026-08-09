@@ -11,6 +11,7 @@ import type {
   SubagentCardActivityEntry,
   SubagentCardFinalStatus,
   SubagentCardSnapshotV1,
+  SubagentCardTarget,
 } from "../types/subagent-card.js";
 import type { ToolEmittedEvent } from "../types/tools.js";
 import {
@@ -160,10 +161,18 @@ export function reduceSubagentCardEvent(
  * W1: "the card is not fabricated"). `fallback` supplies status/durationMs
  * when no `subagent_end` was ever seen (the caller settled from its own known
  * outcome, e.g. a throw in the runner that skipped the end-progress callback).
+ *
+ * `target` (TASK.102 CUT-S2 §2.1, ADDITIVE third parameter): optional,
+ * defaults to `{kind:"inline"}` — every S1 call site (inline tier) omits it
+ * and keeps producing exactly what it always did. The session tier
+ * (tools/agent.ts, S2b) passes the three ids the host's accepted-relay +
+ * its own sessionId already established; this function only copies them,
+ * never invents any.
  */
 export function finalizeSubagentCard(
   acc: SubagentCardAccumulator,
   fallback: { status: SubagentCardFinalStatus; durationMs: number },
+  target?: SubagentCardTarget,
 ): SubagentCardSnapshotV1 | null {
   if (!acc.started || acc.identity === null) {
     return null;
@@ -172,7 +181,7 @@ export function finalizeSubagentCard(
   return {
     kind: "subagent",
     version: 1,
-    target: { kind: "inline" },
+    target: target ?? { kind: "inline" },
     identity: acc.identity,
     counters: {
       turns: acc.end?.turns ?? acc.counters.turns,

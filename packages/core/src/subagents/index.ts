@@ -20,6 +20,14 @@ export {
   reduceSubagentCardEvent,
 } from "./card-snapshot.js";
 export type { SubagentCardAccumulator, SubagentCardEvent } from "./card-snapshot.js";
+export {
+  appendFinalText,
+  createFinalTextAccumulator,
+  finalizeFinalText,
+  fixateFinalText,
+  resetFinalText,
+} from "./final-text.js";
+export type { FinalTextAccumulator } from "./final-text.js";
 // Re-exported so the renderer's S1 parity test (subagent-card.test.ts) can
 // value-import the real cap alongside the five SUBAGENT_CARD_* constants
 // (TASK.102 slice S1 review finding #1): summarize-tool.ts is not a types/
