@@ -61,6 +61,7 @@ import { ENV_CONNECTION_ID, ENV_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import {
   ENGINE_PROCESS_REGISTRATION_TYPE,
+  ENV_ENGINE,
   type EngineId,
   type EngineProcessRegistration,
 } from "../shared/engines.js";
@@ -958,7 +959,29 @@ export class TabHostManager {
       this.notifyHostExited(tab.tabId);
       return;
     }
-    tab.hostGeneration += 1;
+    // TASK.102 S4 gate-fix (F4, latent): resolve the engine env overlay BEFORE
+    // forking, same layer as the baseEnv check above. registry.ts's
+    // `selectEnginePlugin` treats an absent ANYCODE_ENGINE as core, SILENTLY —
+    // an `engineEnv` dep that is absent or omits it would otherwise fork a
+    // non-core tab as a full core session on the ambient connection, with
+    // every card/quota/terminal staying green. Refuse to fork rather than let
+    // that downgrade happen unnoticed (production's own `engineEnv` always
+    // stamps it, main/index.ts:1462, so this only ever trips a missing/broken
+    // overlay). The generation is computed but NOT yet committed to `tab`, so
+    // a refusal here leaves the tab's breaker state exactly as a rejected
+    // baseEnv check would.
+    const nextGeneration = tab.hostGeneration + 1;
+    const engineEnvOverlay = this.deps.engineEnv?.(tab.engine, nextGeneration) ?? {};
+    if (tab.engine !== "core" && engineEnvOverlay[ENV_ENGINE] !== tab.engine) {
+      this.logger.error(
+        `[main] tab ${tab.tabId} engine ${tab.engine} but the composed fork env omits/mismatches ANYCODE_ENGINE; refusing to spawn`,
+      );
+      tab.proc = null;
+      tab.state = "crash_looped";
+      this.notifyHostExited(tab.tabId);
+      return;
+    }
+    tab.hostGeneration = nextGeneration;
     tab.engineProcess = null;
     const cleanup = tab.pendingWorktreeCleanup;
     const child = this.deps.fork(this.deps.hostEntry, args, {
@@ -975,7 +998,7 @@ export class TabHostManager {
         // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
         // tab). Absent for every non-import spawn ⇒ nothing stamped.
         ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
-        ...(this.deps.engineEnv?.(tab.engine, tab.hostGeneration) ?? {}),
+        ...engineEnvOverlay,
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
       },
       stdio: "inherit",
@@ -1295,13 +1318,19 @@ export class TabHostManager {
     this.tabs.set(childTabId, childTab);
     entry.startDeadline = setTimeout(() => this.handleChildStartTimeout(req.requestId), CHILD_START_DEADLINE_MS);
     this.deliverTabPort(childTab);
+    // TASK.102 S4 gate-fix (L1): connectionId is "Never consulted for a
+    // non-core engine" (§1249's own law) — an engine child's omitted model
+    // reports the SAME placeholder describeChildModel falls back to, never
+    // the parent connection's ANYCODE_MODEL (describeChildModel(connectionId)
+    // would read a CORE model string for an engine that has none, since an
+    // omitted req.model boots the engine host with no --engine-model at all).
     this.replyChildRunEvent(parentTab, {
       type: CHILD_RUN_EVENT_TYPE,
       requestId: req.requestId,
       kind: "accepted",
       childSessionId,
       childTabId,
-      model: req.model ?? this.describeChildModel(connectionId),
+      model: req.model ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
     });
   }
 
