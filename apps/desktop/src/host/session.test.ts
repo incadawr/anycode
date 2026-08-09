@@ -1432,6 +1432,34 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     port.send({ type: "git_command", requestId: "r1", command: { op: "stage_all" } });
     expect(git.handled).toHaveLength(1);
   });
+
+  it("(mutational discriminator, TASK.102 CUT-S2 §10.14.3 BLOCKER-2) once relocating is true (the post-handoff workspace-transition window), rewind is refused and a git MUTATION never reaches the bridge, while a read-only git op still does", () => {
+    const git = new FakeGitBridge();
+    const { port, session } = buildTestSession({
+      shell: { gitReadOnly: true, gitUserMutations: true, terminal: true },
+      git,
+    });
+    port.send({ type: "ui_ready" });
+    // Discriminator (pre-fix): onRewind and the git_command mutation branch
+    // only ever checked `this.busy`/`shell.gitUserMutations` — neither
+    // observed `relocating`, so all three sends below were admitted against a
+    // workspace main is already tearing down via `git worktree remove`.
+    (session as unknown as { relocating: boolean }).relocating = true;
+    port.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "both" });
+    port.send({ type: "git_command", requestId: "g1", command: { op: "stage_all" } });
+    port.send({ type: "git_command", requestId: "g2", command: { op: "refresh" } });
+
+    expect(port.received).toContainEqual({
+      type: "rewind_result",
+      requestId: "rw1",
+      ok: false,
+      reason: "workspace transition in progress",
+      conversationRestored: false,
+      restoredPaths: null,
+    });
+    expect(git.handled).toHaveLength(1);
+    expect(git.handled[0]?.requestId).toBe("g2");
+  });
 });
 
 describe("Session — permission allow + snapshots", () => {
@@ -3138,6 +3166,43 @@ describe("Session — shutdown() admission funnel: exit_worktree / rewind_reques
       expect(res.conversationRestored).toBe(false);
       expect(res.restoredPaths).toBeNull();
       expect(rewindCalled).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("(Q1-f, mutational discriminator, TASK.102 CUT-S2 §10.14.3 BLOCKER-1) closeAdmissions() closes the funnel BEFORE shutdown() itself runs — a rewind_request and a user_message sent in that window are both refused", async () => {
+    let rewindCalled = false;
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async () => {
+        rewindCalled = true;
+        return { ok: false, reason: "should not run" };
+      },
+    };
+    const h = createHarness({ steps: [], checkpointsSeam: seam });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // Discriminator (pre-fix): nothing arms `this.shuttingDown` until deep
+      // inside `shutdown()` itself — the entire host teardown window before
+      // that call (git abort, terminal/task/lsp reap, mcp dispose) admitted
+      // both message types below. Removing the closeAdmissions() call in
+      // handleShutdown lets them sail through admitted, same as Q1-c/Q1-a
+      // pre-fix.
+      h.session.closeAdmissions();
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "both" });
+      h.send({ type: "user_message", requestId: "um1", text: "still there?" });
+
+      const res = await h.waitFor(isRewindResult);
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("shutting down");
+      expect(rewindCalled).toBe(false);
+
+      const rejected = await h.waitFor(isTurnRejected);
+      expect(rejected.requestId).toBe("um1");
+      expect(rejected.reason).toBe("not_ready");
     } finally {
       h.close();
     }
