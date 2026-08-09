@@ -1608,6 +1608,140 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
   });
 });
 
+// subagent_attention → SubagentSubStatus.waiting (TASK.102 CUT-S2 §2.5; the
+// store case was pulled forward into S2a by CUT-S2 §10.1 — the variant is
+// A4's, and the sequence contract is frozen in §2.5, so the case closes with
+// its designed behavior rather than a stub). Only a session-tier child's
+// permission broker ever emits the event.
+describe("desktop store — subagent_attention permission-wait flag (TASK.102 CUT-S2 §2.5/§10.1)", () => {
+  function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+  }
+
+  function seedSubagent(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId, agentType: "general-purpose", description: "build X" },
+    });
+  }
+
+  function attention(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string, waiting: boolean): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_attention", toolCallId, waiting },
+    });
+  }
+
+  const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
+    store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
+
+  it("waiting:true raises the flag on a seeded, unsettled card; the matching waiting:false REMOVES it (presence-based encoding, review finding 2)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+
+    attention(store, turnId, "call-1", true);
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { waiting: true, final: null } });
+
+    attention(store, turnId, "call-1", false);
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: null } });
+    expect(block !== undefined && block.kind === "tool_call" && block.subagent !== null && "waiting" in block.subagent).toBe(
+      false,
+    );
+  });
+
+  it("attention(false) removes the `waiting` key entirely — same encoding as the subagent_end settle (review finding 2: the two paths must agree, or a presence-based badge-priority reader would misread waiting:false as still-waiting)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+
+    attention(store, turnId, "call-1", true);
+    attention(store, turnId, "call-1", false);
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: null } });
+    expect(block !== undefined && block.kind === "tool_call" && block.subagent !== null && "waiting" in block.subagent).toBe(
+      false,
+    );
+  });
+
+  it("an attention event AFTER the sub-status settled is a no-op — a terminal card never regresses to waiting (S1 terminal guard)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 2, durationMs: 500 },
+    });
+
+    const settled = store.getState().transcript;
+    attention(store, turnId, "call-1", true);
+    expect(store.getState().transcript).toEqual(settled);
+  });
+
+  it("subagent_end STRIPS a stale waiting:true in the same settle — a child cancelled mid-ask lands terminal, not 'waiting'", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+    attention(store, turnId, "call-1", true);
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { waiting: true } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "cancelled", turns: 1, durationMs: 100 },
+    });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: { status: "cancelled", durationMs: 100 } } });
+    // Key present ⇒ the badge-priority VM (CUT-S2 §2.5, C1) would rank
+    // waiting above the terminal badge — the settle must remove the key
+    // entirely, not merely set it false.
+    expect(block !== undefined && block.kind === "tool_call" && block.subagent !== null && "waiting" in block.subagent).toBe(
+      false,
+    );
+  });
+
+  it("attention for an unseeded or foreign toolCallId is a no-op (same posture as subagent_progress)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+
+    // Unseeded: the Agent tool_call block exists but no subagent_start ran.
+    const unseeded = store.getState().transcript;
+    attention(store, turnId, "call-1", true);
+    expect(store.getState().transcript).toEqual(unseeded);
+
+    // Foreign toolCallId: seeded call-1 must stay untouched.
+    seedSubagent(store, turnId, "call-1");
+    const seeded = store.getState().transcript;
+    attention(store, turnId, "foreign-call", true);
+    expect(store.getState().transcript).toEqual(seeded);
+  });
+});
+
 describe("desktop store — subagent activity feed (slice P7.18/F16b, design/slice-P7.18-cut.md §4 W2)", () => {
   function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });

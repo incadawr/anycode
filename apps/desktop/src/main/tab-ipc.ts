@@ -81,7 +81,7 @@ export interface TabIpcDeps {
    * `SessionMetaPatch.connectionId` (already part of the core port — ZERO core
    * delta). No other new port methods needed.
    */
-  persistence: Pick<PersistencePort, "getSession" | "listSessions" | "touchSession">;
+  persistence: Pick<PersistencePort, "getRootSession" | "listRootSessions" | "touchSession">;
   dialog: DialogLike;
   /** Production gate proves the path is still a registered worktree on the persisted branch. */
   validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
@@ -224,7 +224,7 @@ async function spawnableWhenKnown(deps: TabIpcDeps, engine: EngineId, codexProfi
  *  - new: capacity-guard -> workspace source (GUI-P1: a preselected
  *    `req.workspace` skips the dialog; otherwise showOpenDialog, cancel ->
  *    "cancelled") -> fresh uuid session -> spawn + deliver.
- *  - resume: getSession (missing -> "session_not_found") -> already_open guard
+ *  - resume: getRootSession (missing, or a child session's id -> "session_not_found") -> already_open guard
 
  * MAX_TABS is enforced authoritatively by manager.createTab.
  */
@@ -306,7 +306,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   }
 
-  const meta = await deps.persistence.getSession(req.sessionId);
+  const meta = await deps.persistence.getRootSession(req.sessionId);
   if (meta === null) {
     return { ok: false, reason: "session_not_found" };
   }
@@ -462,7 +462,9 @@ export function registerTabIpc(deps: TabIpcDeps): void {
   });
 
   ipcMain.handle(SESSIONS_LIST_CHANNEL, async (): Promise<SessionSummary[]> => {
-    const sessions = await deps.persistence.listSessions();
+    // Root-only by construction (TASK.102 S2a §2.4): a child session must
+    // never appear in the desktop Sidebar/StartScreen/CommandPalette list.
+    const sessions = await deps.persistence.listRootSessions();
     return sessions.map((meta) => toSummary(meta, deps.manager));
   });
 

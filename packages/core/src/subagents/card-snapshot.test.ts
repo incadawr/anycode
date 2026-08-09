@@ -190,6 +190,41 @@ describe("reduceSubagentCardEvent — subagent_end", () => {
   });
 });
 
+describe("reduceSubagentCardEvent — subagent_attention (TASK.102 CUT-S2 §2.2/§0.8)", () => {
+  const fallback = { status: "error" as const, durationMs: 42 };
+
+  it("is a no-op for the persisted snapshot — attention is transient live-only state, not part of the terminal record (CUT-S1 §2.1)", () => {
+    let withAttention = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    withAttention = reduceSubagentCardEvent(withAttention, {
+      type: "subagent_attention",
+      toolCallId: "call-1",
+      waiting: true,
+    });
+    withAttention = reduceSubagentCardEvent(withAttention, end());
+
+    let withoutAttention = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    withoutAttention = reduceSubagentCardEvent(withoutAttention, end());
+
+    // Byte-for-byte snapshot equality is the discriminating assert: a reducer
+    // that merely avoided throwing (e.g. accidentally bumped a counter, added
+    // an activity entry, or touched `end`) would still pass a "does not crash"
+    // check but would fail this equality.
+    expect(finalizeSubagentCard(withAttention, fallback)).toEqual(finalizeSubagentCard(withoutAttention, fallback));
+  });
+
+  it("leaves the accumulator itself unchanged, before or after start", () => {
+    const beforeStart = createSubagentCardAccumulator();
+    expect(
+      reduceSubagentCardEvent(beforeStart, { type: "subagent_attention", toolCallId: "call-1", waiting: false }),
+    ).toEqual(beforeStart);
+
+    const afterStart = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    expect(
+      reduceSubagentCardEvent(afterStart, { type: "subagent_attention", toolCallId: "call-1", waiting: true }),
+    ).toEqual(afterStart);
+  });
+});
+
 describe("finalizeSubagentCard", () => {
   const fallback = { status: "error" as const, durationMs: 42 };
 

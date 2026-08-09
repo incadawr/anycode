@@ -1168,7 +1168,7 @@ describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut �
     // A FRESH adapter over the same file: the pin must have survived to disk,
     // not just the in-memory meta object — this is exactly what a relaunch reads.
     const reader = new SqlitePersistenceAdapter(dbPath);
-    const row = await reader.getSession("sess-1");
+    const row = await reader.getSessionById("sess-1");
     await reader.close();
     expect(row?.codexProfileId).toBe("work");
     expect(row?.engineId).toBe("codex");
@@ -1185,7 +1185,7 @@ describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut �
       "sess-2",
       "/tmp/ws",
     );
-    const row = await writer.getSession("sess-2");
+    const row = await writer.getSessionById("sess-2");
     await writer.close();
     expect(row?.codexProfileId).toBe("alt");
   });
@@ -1194,7 +1194,7 @@ describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut �
     const dbPath = join(dbDir, "anycode.sqlite");
     const writer = new SqlitePersistenceAdapter(dbPath);
     await createCodexSessionRow(writer, [], CREATED, "sess-3", "/tmp/ws");
-    const row = await writer.getSession("sess-3");
+    const row = await writer.getSessionById("sess-3");
     await writer.close();
     expect(row?.codexProfileId).toBeUndefined();
   });
@@ -1223,7 +1223,7 @@ describe("host Claude session-row wiring (SLICE-CC C4, cut §1.4)", () => {
 
   async function claudeRowShape(
     persistence: {
-      getSession(id: string): Promise<Row | null>;
+      getRootSession(id: string): Promise<Row | null>;
       createSession(row: Row & Record<string, unknown>): Promise<Row>;
       touchSession(id: string, patch: Record<string, unknown>): Promise<void>;
     },
@@ -1237,7 +1237,7 @@ describe("host Claude session-row wiring (SLICE-CC C4, cut §1.4)", () => {
       engineId: "claude" as const,
       externalSessionRef: connected.sessionRef,
     };
-    const existing = argsSessionId === undefined ? null : await persistence.getSession(argsSessionId);
+    const existing = argsSessionId === undefined ? null : await persistence.getRootSession(argsSessionId);
     if (existing !== null && existing.engineId !== "claude") {
       throw new Error(`Session ${existing.id} belongs to engine "${existing.engineId ?? "core"}", not claude`);
     }
@@ -1255,7 +1255,7 @@ describe("host Claude session-row wiring (SLICE-CC C4, cut §1.4)", () => {
       created,
       touched,
       persistence: {
-        getSession: vi.fn(async () => initial),
+        getRootSession: vi.fn(async () => initial),
         createSession: vi.fn(async (row: Row & Record<string, unknown>) => {
           created.push(row);
           return row;
@@ -1321,14 +1321,14 @@ describe("host Claude resume wiring (SLICE-CC D-min, cut §1.5)", () => {
   }
 
   async function claudeResumeShape(
-    persistence: { getSession(id: string): Promise<Row | null> },
+    persistence: { getRootSession(id: string): Promise<Row | null> },
     resumeEngine: (ref: string, selection: { model?: string; presetId?: string }) => Promise<{ sessionRef: string; model: string; presetId: string }>,
     sessionId: string | undefined,
   ): Promise<{ existing: Row; connected: { sessionRef: string; model: string; presetId: string } }> {
     if (sessionId === undefined || sessionId.length === 0) {
       throw new Error("Claude resume requires a session id");
     }
-    const existing = await persistence.getSession(sessionId);
+    const existing = await persistence.getRootSession(sessionId);
     if (existing === null) throw new Error(`Claude session ${sessionId} was not found`);
     if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
       throw new Error(`Claude session ${sessionId} has no resumable native session`);
@@ -1338,10 +1338,10 @@ describe("host Claude resume wiring (SLICE-CC D-min, cut §1.5)", () => {
   }
 
   it("resumes with the persisted externalSessionRef and selection, never a fresh id", async () => {
-    const getSession = vi.fn(async () => ({ id: "s1", engineId: "claude", externalSessionRef: "native-ref-1", model: "opus", mode: "workspace" }));
+    const getRootSession = vi.fn(async () => ({ id: "s1", engineId: "claude", externalSessionRef: "native-ref-1", model: "opus", mode: "workspace" }));
     const resumeEngine = vi.fn(async (ref: string) => ({ sessionRef: ref, model: "opus", presetId: "workspace" }));
 
-    const { connected } = await claudeResumeShape({ getSession }, resumeEngine, "s1");
+    const { connected } = await claudeResumeShape({ getRootSession }, resumeEngine, "s1");
 
     expect(resumeEngine).toHaveBeenCalledWith("native-ref-1", { model: "opus", presetId: "workspace" });
     expect(connected.sessionRef).toBe("native-ref-1");
@@ -1349,14 +1349,14 @@ describe("host Claude resume wiring (SLICE-CC D-min, cut §1.5)", () => {
 
   it("fails closed when the row has no resumable native session (missing ref, or belongs to another engine)", async () => {
     const noRef = vi.fn(async () => ({ id: "s1", engineId: "claude" }));
-    await expect(claudeResumeShape({ getSession: noRef }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
+    await expect(claudeResumeShape({ getRootSession: noRef }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
 
     const wrongEngine = vi.fn(async () => ({ id: "s1", engineId: "codex", externalSessionRef: "thread-1" }));
-    await expect(claudeResumeShape({ getSession: wrongEngine }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
+    await expect(claudeResumeShape({ getRootSession: wrongEngine }, vi.fn(), "s1")).rejects.toThrow(/no resumable native session/);
   });
 
   it("fails closed when the row is gone entirely", async () => {
-    await expect(claudeResumeShape({ getSession: vi.fn(async () => null) }, vi.fn(), "s1")).rejects.toThrow(/was not found/);
+    await expect(claudeResumeShape({ getRootSession: vi.fn(async () => null) }, vi.fn(), "s1")).rejects.toThrow(/was not found/);
   });
 
   /**

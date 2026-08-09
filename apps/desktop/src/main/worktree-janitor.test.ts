@@ -86,7 +86,7 @@ describe("runWorktreeJanitor", () => {
     });
 
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => [session()], touchSession },
+      persistence: { listSessionsForMaintenance: async () => [session()], touchSession },
       gitForWorkspace: (workspace) => workspace === ROOT ? rootGit : git(),
       exists: async () => true,
     });
@@ -117,7 +117,7 @@ describe("runWorktreeJanitor", () => {
     ];
 
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => sessions, touchSession: vi.fn(async () => {}) },
+      persistence: { listSessionsForMaintenance: async () => sessions, touchSession: vi.fn(async () => {}) },
       gitForWorkspace: (workspace) => workspace === ROOT
         ? git({ worktreeRemove: dirtyRemove, deleteBranch: dirtyDelete })
         : git({ worktreeIsPristine: async () => ({ ok: true, value: false }) }),
@@ -133,7 +133,7 @@ describe("runWorktreeJanitor", () => {
     const touchSession = vi.fn(async () => {});
     const remove = vi.fn(async () => ({ ok: true as const, value: null }));
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => [session()], touchSession },
+      persistence: { listSessionsForMaintenance: async () => [session()], touchSession },
       gitForWorkspace: () => git({
         worktreeList: async () => ({ ok: true, value: [] }),
         worktreeRemove: remove,
@@ -152,7 +152,7 @@ describe("runWorktreeJanitor", () => {
       worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true },
     });
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => [legacy], touchSession: vi.fn(async () => {}) },
+      persistence: { listSessionsForMaintenance: async () => [legacy], touchSession: vi.fn(async () => {}) },
       gitForWorkspace: () => git({
         worktreeList: async () => ({
           ok: true,
@@ -172,7 +172,7 @@ describe("runWorktreeJanitor", () => {
     let listed = 0;
     const touchSession = vi.fn(async () => {});
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => [session()], touchSession },
+      persistence: { listSessionsForMaintenance: async () => [session()], touchSession },
       gitForWorkspace: () => git({
         worktreeList: async () => {
           order.push("list");
@@ -198,7 +198,7 @@ describe("runWorktreeJanitor", () => {
   it("keeps the branch ledger when merged-only deletion refuses after checkout removal", async () => {
     const touchSession = vi.fn(async () => {});
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => [session()], touchSession },
+      persistence: { listSessionsForMaintenance: async () => [session()], touchSession },
       gitForWorkspace: (workspace) => workspace === ROOT
         ? git({ deleteBranch: async () => ({ ok: false, reason: "not fully merged" }) })
         : git(),
@@ -212,7 +212,7 @@ describe("runWorktreeJanitor", () => {
   it("clears an already-absent checkout and branch idempotently", async () => {
     const touchSession = vi.fn(async () => {});
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => [session()], touchSession },
+      persistence: { listSessionsForMaintenance: async () => [session()], touchSession },
       gitForWorkspace: () => git({
         worktreeList: async () => ({ ok: true, value: [] }),
         listBranches: async () => ({ ok: true, value: [] }),
@@ -230,7 +230,7 @@ describe("runWorktreeJanitor", () => {
       worktreeCleanup: { path: TARGET, mode: "auto", ownedByAnyCode: true },
     });
     const result = await runWorktreeJanitor({
-      persistence: { listSessions: async () => [legacy], touchSession },
+      persistence: { listSessionsForMaintenance: async () => [legacy], touchSession },
       gitForWorkspace: () => git({ worktreeList: async () => ({ ok: true, value: [] }) }),
       exists: async () => false,
     });

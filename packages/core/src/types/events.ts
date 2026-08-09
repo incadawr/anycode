@@ -175,6 +175,19 @@ export type AgentEvent =
        */
       activitySuppressed?: number;
     }
+  /**
+   * Permission-broker gate crossing for a session-tier subagent (TASK.102
+   * CUT-S2 §2.2/§0.8). Additive-optional: rides the existing agent_event
+   * envelope on the desktop wire with no protocol change (mirrors
+   * subagent_start/progress/end's precedent), and is a structured-clone
+   * passthrough — the wire format is unaffected. ONLY a session-tier
+   * `Agent` call ever produces it (bridged from SubagentProgress's
+   * `attention` variant, ports/subagent.ts); an inline subagent never does.
+   * The S1 durable-card reducer (subagents/card-snapshot.ts) treats this as
+   * a no-op for the PERSISTED snapshot — attention is transient live-only
+   * state, not part of the terminal record (CUT-S1 §2.1).
+   */
+  | { type: "subagent_attention"; toolCallId: string; waiting: boolean }
   // Per-child-tool activity (Phase 7 slice P7.18/F16b). Additive: rides the same
   // agent_event envelope on the desktop wire with no protocol change (protocol.ts
   // projects new AgentEvent variants automatically). One bounded one-liner per

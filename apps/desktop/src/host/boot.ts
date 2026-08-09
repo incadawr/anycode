@@ -154,7 +154,10 @@ export async function resolveBootSession(
   const pin = connectionId !== undefined && connectionId !== "" ? { connectionId } : {};
 
   if (args.resume && args.sessionId !== undefined) {
-    const existing = await persistence.getSession(args.sessionId);
+    // Internal read by id (TASK.102 S2a §2.4): a child-mode boot resumes by
+    // the exact id main built into its argv (root or child) — not a
+    // UX-facing selection, so root-filtering here would break child boot.
+    const existing = await persistence.getSessionById(args.sessionId);
     if (existing) {
       const initialHistory = await persistence.loadHistory(args.sessionId);
       return { sessionMeta: existing, initialHistory, resumedMissing: false };

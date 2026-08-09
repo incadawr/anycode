@@ -230,6 +230,44 @@ const MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX idx_claude_transcript_items_session ON claude_transcript_items (session_ref, turn_ordinal, position_in_turn)`,
     ],
   },
+  {
+    version: 13,
+    statements: [
+      // Child-session identity (TASK.102 S2a §2.4): a child session's row
+      // carries the parent it was spawned from plus the exact Agent
+      // tool-call id that spawned it. Both NULL is a root session (every
+      // pre-v13 row, and every root session created after v13) — root-only
+      // consumers filter on `parent_session_id IS NULL`, never on absence of
+      // a separate flag. No REFERENCES/FK (cut §1 p.4 — PRAGMA foreign_keys
+      // stays OFF app-wide; the cascade delete is explicit, see
+      // deleteSessionTree).
+      "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
+      // CHECK (TASK.102 S2 review MAJOR, opus+Luna): the pair is structural,
+      // not advisory — a one-sided row (parent set, spawn NULL, or vice
+      // versa) is invisible to listRootSessions/getRootSession (excluded by
+      // `parent_session_id IS NULL`) yet unreachable via getChildSession
+      // (which needs an exact spawnToolCallId) and NOT caught by the partial
+      // unique index below (a lone NULL never collides). Referencing
+      // `parent_session_id` here is legal: it was added by the ALTER
+      // immediately above, in the SAME migration, before this one runs.
+      // `createSession` additionally normalizes an empty-string id to NULL
+      // (empty string is NOT NULL in SQL but reads back as root through
+      // rowToSessionMeta's length>0 guard) so this CHECK alone cannot be
+      // satisfied by that discrepancy sneaking two non-NULL empty strings in.
+      `ALTER TABLE sessions ADD COLUMN spawn_tool_call_id TEXT
+         CHECK ((parent_session_id IS NULL) = (spawn_tool_call_id IS NULL))`,
+      "CREATE INDEX idx_sessions_parent ON sessions(parent_session_id)",
+      // Partial unique index (only when parent_session_id IS NOT NULL): a
+      // parent can never spawn two children off the same Agent tool-call id.
+      // Two different parents MAY reuse the same spawn_tool_call_id (their
+      // own tool-call ids are independent), and any number of root sessions
+      // (parent_session_id NULL) are unaffected — SQLite excludes NULL
+      // columns from a partial unique index's WHERE-filtered rows.
+      `CREATE UNIQUE INDEX idx_sessions_parent_spawn
+         ON sessions(parent_session_id, spawn_tool_call_id)
+         WHERE parent_session_id IS NOT NULL`,
+    ],
+  },
 ];
 
 /**
@@ -296,6 +334,8 @@ interface SessionRow {
   worktree_transition_json: string | null;
   connection_id: string | null;
   codex_profile_id: string | null;
+  parent_session_id: string | null;
+  spawn_tool_call_id: string | null;
 }
 
 function parseWorktreeTransitionJson(raw: string | null): SessionMeta["worktreeTransition"] {
@@ -401,6 +441,12 @@ function rowToSessionMeta(row: SessionRow): SessionMeta {
     ...(typeof row.codex_profile_id === "string" && row.codex_profile_id.length > 0
       ? { codexProfileId: row.codex_profile_id }
       : {}),
+    ...(typeof row.parent_session_id === "string" && row.parent_session_id.length > 0
+      ? { parentSessionId: row.parent_session_id }
+      : {}),
+    ...(typeof row.spawn_tool_call_id === "string" && row.spawn_tool_call_id.length > 0
+      ? { spawnToolCallId: row.spawn_tool_call_id }
+      : {}),
   };
 }
 
@@ -412,6 +458,18 @@ interface CheckpointRow {
   reason: string;
   label: string;
   history_json: string;
+}
+
+/**
+ * An empty string is NOT NULL in SQL (it would sail past the migration v13
+ * CHECK's `IS NULL` comparisons on both sides at once) but reads back as
+ * root through `rowToSessionMeta`'s `length > 0` guard — the exact
+ * SQL-vs-projection discrepancy TASK.102 S2 review flagged (opus+Luna).
+ * Folding an empty string to `null` here, at the single write site, keeps
+ * "absent" meaning exactly one thing on disk.
+ */
+function nonEmptyOrNull(value: string | undefined): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function rowToCheckpointMeta(row: CheckpointRow): CheckpointMeta {
@@ -552,8 +610,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
          project_root, worktree_id, worktree_path, worktree_branch, worktree_base_ref, worktree_owned_by_anycode,
          continuation_pending, continuation_mode, worktree_cleanup_path, worktree_cleanup_mode, worktree_cleanup_owned_by_anycode,
          worktree_cleanup_branch,
-         worktree_transition_json, worktree_exit_notice_pending, connection_id, codex_profile_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         worktree_transition_json, worktree_exit_notice_pending, connection_id, codex_profile_id,
+         parent_session_id, spawn_tool_call_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       full.id,
       full.workspace,
@@ -580,6 +639,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       full.worktreeExitNoticePending === true ? 1 : 0,
       full.connectionId ?? null,
       full.codexProfileId ?? null,
+      nonEmptyOrNull(full.parentSessionId),
+      nonEmptyOrNull(full.spawnToolCallId),
     );
     // Return the same backward-compatible projection as get/list.
     return rowToSessionMeta(
@@ -587,18 +648,20 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     );
   }
 
-  async getSession(id: string): Promise<SessionMeta | null> {
+  /**
+   * Root-only, filtered BEFORE any LIMIT (TASK.102 S2a A2): the WHERE clause
+   * carries `parent_session_id IS NULL` in the SAME query as the optional
+   * workspace filter and the LIMIT, so SQLite excludes every child row before
+   * counting rows toward the limit. A post-query JS `.filter()` here would be
+   * the exact anti-facade CUT-S2 §5.6 warns about — an old root session could
+   * silently starve a `limit:1` page out from behind a pile of fresh children.
+   */
+  async listRootSessions(opts?: { workspace?: string; limit?: number }): Promise<SessionMeta[]> {
     const db = this.open();
-    const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
-    return row ? rowToSessionMeta(row) : null;
-  }
-
-  async listSessions(opts?: { workspace?: string; limit?: number }): Promise<SessionMeta[]> {
-    const db = this.open();
-    let sql = "SELECT * FROM sessions";
+    let sql = "SELECT * FROM sessions WHERE parent_session_id IS NULL";
     const params: (string | number)[] = [];
     if (opts?.workspace !== undefined) {
-      sql += " WHERE workspace = ?";
+      sql += " AND workspace = ?";
       params.push(opts.workspace);
     }
     sql += " ORDER BY updated_at DESC";
@@ -608,6 +671,139 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     }
     const rows = db.prepare(sql).all(...params) as unknown as SessionRow[];
     return rows.map(rowToSessionMeta);
+  }
+
+  async getRootSession(id: string): Promise<SessionMeta | null> {
+    const db = this.open();
+    const row = db.prepare("SELECT * FROM sessions WHERE id = ? AND parent_session_id IS NULL").get(id) as
+      | SessionRow
+      | undefined;
+    return row ? rowToSessionMeta(row) : null;
+  }
+
+  /**
+   * Maintenance selection: every row, including children — no filter; an
+   * optional `limit` caps the page (TASK.102 S2 review MINOR) without
+   * narrowing WHICH rows are eligible — omitting it still returns everyone.
+   */
+  async listSessionsForMaintenance(opts?: { limit?: number }): Promise<SessionMeta[]> {
+    const db = this.open();
+    let sql = "SELECT * FROM sessions ORDER BY updated_at DESC";
+    const params: number[] = [];
+    if (opts?.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(opts.limit);
+    }
+    const rows = db.prepare(sql).all(...params) as unknown as SessionRow[];
+    return rows.map(rowToSessionMeta);
+  }
+
+  async getSessionById(id: string): Promise<SessionMeta | null> {
+    const db = this.open();
+    const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
+    return row ? rowToSessionMeta(row) : null;
+  }
+
+  /**
+   * Authorized child access (TASK.102 S2a §2.4): the WHERE clause matches
+   * BOTH `parent_session_id` and `spawn_tool_call_id` against the caller's
+   * claimed parent — a row that belongs to a DIFFERENT parent simply never
+   * matches, so this is authorization by construction, not a permission
+   * check bolted onto a bare id lookup.
+   */
+  async getChildSession(parentSessionId: string, spawnToolCallId: string): Promise<SessionMeta | null> {
+    const db = this.open();
+    const row = db
+      .prepare("SELECT * FROM sessions WHERE parent_session_id = ? AND spawn_tool_call_id = ?")
+      .get(parentSessionId, spawnToolCallId) as SessionRow | undefined;
+    return row ? rowToSessionMeta(row) : null;
+  }
+
+  async listChildSessions(parentSessionId: string): Promise<SessionMeta[]> {
+    const db = this.open();
+    const rows = db
+      .prepare("SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC")
+      .all(parentSessionId) as unknown as SessionRow[];
+    return rows.map(rowToSessionMeta);
+  }
+
+  /**
+   * Transactional cascade delete (TASK.102 S2a §2.4, cut §1 p.4 — no PRAGMA
+   * foreign_keys, explicit DELETEs instead). The recursive CTE walks
+   * `parent_session_id` links from `rootId` outward (root sessions have no
+   * children of their own children in S2, but this does not assume that —
+   * any depth is handled); the outer SELECT then drops the seed value when
+   * `rootId` does not name an actual session, making an unknown id a clean
+   * no-op rather than a special case.
+   *
+   * `UNION` (not `UNION ALL`, TASK.102 S2 review MAJOR, opus): nothing in the
+   * schema forbids `parent_session_id` from forming a cycle (no CHECK, no
+   * FK — cut §1 p.4), and `DatabaseSync` is synchronous, so a `UNION ALL`
+   * recursive step re-deriving the same id forever would not throw or time
+   * out — it would hang the whole event loop indefinitely while holding the
+   * WAL write lock inside this transaction, with no exception `transaction()`
+   * could ever catch. SQLite's recursive-CTE dedup rule for plain `UNION` is
+   * exactly "stop deriving a row already produced", which both terminates on
+   * a cycle and is byte-identical to `UNION ALL` on any acyclic tree (every
+   * id in a real parent chain is already distinct, so there is nothing for
+   * dedup to remove).
+   */
+  async deleteSessionTree(rootId: string): Promise<{ deletedSessionIds: string[]; externalSessionRefs: string[] }> {
+    return this.transaction((db) => {
+      const treeRows = db
+        .prepare(
+          `WITH RECURSIVE tree(id) AS (
+             SELECT ? AS id
+             UNION
+             SELECT s.id FROM sessions s JOIN tree t ON s.parent_session_id = t.id
+           )
+           SELECT s.id AS id, s.external_session_ref AS external_session_ref, s.engine_id AS engine_id
+           FROM sessions s WHERE s.id IN (SELECT id FROM tree)`,
+        )
+        .all(rootId) as unknown as { id: string; external_session_ref: string | null; engine_id: string | null }[];
+
+      const deletedSessionIds = treeRows.map((row) => row.id);
+      if (deletedSessionIds.length === 0) {
+        return { deletedSessionIds, externalSessionRefs: [] };
+      }
+      const externalSessionRefs = treeRows
+        .map((row) => row.external_session_ref)
+        .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
+
+      const idPlaceholders = deletedSessionIds.map(() => "?").join(", ");
+      db.prepare(`DELETE FROM history_items WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
+      db.prepare(`DELETE FROM checkpoints WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
+
+      // The shadow-log tables are keyed by the native engine ref (thread_id /
+      // session_ref), never the AnyCode session id — see codex/shadow-log.ts
+      // and claude/shadow-transcript.ts. That ref is opaque and nothing
+      // enforces its uniqueness ACROSS engines, so the SAME literal ref can
+      // legally name a codex thread on one session and an unrelated claude
+      // transcript on another (TASK.102 S2 review BLOCKER, Luna). Scoping
+      // each ref's DELETE to the deleted row's OWN `engine_id` — rather than
+      // trying both tables for every ref — means a collision with a
+      // SURVIVING sibling's ref in the other engine's table can never be
+      // touched by this cascade.
+      const codexRefs = treeRows
+        .filter((row) => row.engine_id === "codex" && typeof row.external_session_ref === "string" && row.external_session_ref.length > 0)
+        .map((row) => row.external_session_ref as string);
+      const claudeRefs = treeRows
+        .filter((row) => row.engine_id === "claude" && typeof row.external_session_ref === "string" && row.external_session_ref.length > 0)
+        .map((row) => row.external_session_ref as string);
+
+      if (codexRefs.length > 0) {
+        const refPlaceholders = codexRefs.map(() => "?").join(", ");
+        db.prepare(`DELETE FROM codex_thread_items WHERE thread_id IN (${refPlaceholders})`).run(...codexRefs);
+      }
+      if (claudeRefs.length > 0) {
+        const refPlaceholders = claudeRefs.map(() => "?").join(", ");
+        db.prepare(`DELETE FROM claude_transcript_items WHERE session_ref IN (${refPlaceholders})`).run(...claudeRefs);
+      }
+
+      db.prepare(`DELETE FROM sessions WHERE id IN (${idPlaceholders})`).run(...deletedSessionIds);
+
+      return { deletedSessionIds, externalSessionRefs };
+    });
   }
 
   async touchSession(id: string, patch?: SessionMetaPatch): Promise<void> {
