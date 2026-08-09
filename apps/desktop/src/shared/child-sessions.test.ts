@@ -204,6 +204,28 @@ describe("parseChildSpawnRequest", () => {
       expect(parseChildSpawnRequest({ ...valid, provider: "a".repeat(CHILD_PROVIDER_MAX_CHARS + 1) })).toBeNull();
     });
   });
+
+  // S4 blocker (found independently by two reviewers): `model` is a
+  // model-authored field that reaches the child host's argv unsanitized
+  // (main/tabs.ts pushes `["--engine-model", value]`) and `host/boot.ts`'s
+  // `parseHostArgs` has no `--engine-model` branch, so a value starting with
+  // `-` gets re-read as a FLAG by the next iteration. `model:"--session=x"`
+  // rewrites another session's transcript; `model:"--child-parent"` strips
+  // the pedigree stamp, making the child visible in the session list. Fixed
+  // by requiring `model` to be id-shaped (same rule as spawnToolCallId/
+  // requestId above), never flag-shaped.
+  describe("model id-shape hardening (S4 blocker)", () => {
+    it.each(["--session=x", "--child-parent", "--resume=x", "-x"])(
+      "rejects a flag-shaped model: %s",
+      (model) => {
+        expect(parseChildSpawnRequest({ ...valid, model })).toBeNull();
+      },
+    );
+
+    it.each(["claude-sonnet-4-5", "us.anthropic.claude-3"])("accepts a legitimate model: %s", (model) => {
+      expect(parseChildSpawnRequest({ ...valid, model })).toEqual({ ...valid, model });
+    });
+  });
 });
 
 describe("parseChildRunCancel", () => {

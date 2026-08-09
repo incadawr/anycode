@@ -72,12 +72,12 @@ import type {
 import {
   CHILD_AGENT_TYPE_MAX_CHARS,
   CHILD_DESCRIPTION_MAX_CHARS,
-  CHILD_MODEL_MAX_CHARS,
   CHILD_PROMPT_MAX_CHARS,
   CHILD_PROVIDER_MAX_CHARS,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_SPAWN_REQUEST_TYPE,
   isValidChildId,
+  isValidChildModel,
   type ChildRunCancel,
   type ChildRunEvent,
   type ChildSpawnRequest,
@@ -119,7 +119,9 @@ const MALFORMED_PROVIDER_MESSAGE = "Agent: the child session failed to start (ma
 /**
  * Non-empty, capped free text — the exact shape `parseChildSpawnRequest`'s
  * own `isNonEmptyCappedString` (shared/child-sessions.ts, private there)
- * enforces on `agentType`/`description`/`prompt`/`model`/`provider`. Reuses
+ * enforces on `agentType`/`description`/`prompt`/`provider` (`model` is
+ * id-shaped, checked separately by `isValidChildModel`, S4 blocker fix).
+ * Reuses
  * that module's exported char-cap CONSTANTS (never re-derives the numbers)
  * so the two sides of this wire can never silently drift apart on where the
  * line is drawn — only this trivial shape predicate is duplicated, not the
@@ -150,7 +152,7 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   if (!isValidFreeText(req.prompt, CHILD_PROMPT_MAX_CHARS)) {
     return MALFORMED_PROMPT_MESSAGE;
   }
-  if (req.model !== undefined && !isValidFreeText(req.model, CHILD_MODEL_MAX_CHARS)) {
+  if (req.model !== undefined && !isValidChildModel(req.model)) {
     return MALFORMED_MODEL_MESSAGE;
   }
   if (req.provider !== undefined && !isValidFreeText(req.provider, CHILD_PROVIDER_MAX_CHARS)) {
