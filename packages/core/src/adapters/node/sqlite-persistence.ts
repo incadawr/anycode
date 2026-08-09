@@ -578,6 +578,19 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       mkdirSync(dirname(this.dbPath), { recursive: true });
     }
     const db = new DatabaseSync(this.dbPath);
+    // TASK.102 CUT-S2 §10.15.2: without a busy handler, a second concurrent
+    // writer's write-lock acquisition (below, and every write this adapter
+    // does afterwards) fails IMMEDIATELY with "database is locked" instead of
+    // waiting for the first writer to release it. Must be set before the WAL
+    // pragma and migrate() — both take a write lock on open and are exactly
+    // where the live smoke caught concurrently-forked children colliding.
+    // TASK.102 CUT-S2 §10.15.2: without a busy handler, a second concurrent
+    // writer's write-lock acquisition (below, and every write this adapter
+    // does afterwards) fails IMMEDIATELY with "database is locked" instead of
+    // waiting for the first writer to release it. Must be set before the WAL
+    // pragma and migrate() — both take a write lock on open and are exactly
+    // where the live smoke caught concurrently-forked children colliding.
+    db.exec("PRAGMA busy_timeout = 5000;");
     // WAL is a no-op on :memory: databases (sqlite keeps them in "memory" journal mode); harmless.
     db.exec("PRAGMA journal_mode = WAL;");
     migrate(db);

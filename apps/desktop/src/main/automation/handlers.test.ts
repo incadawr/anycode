@@ -18,6 +18,7 @@ import {
   getState,
   getStateForTab,
   listChildRunsMaintenance,
+  deleteSessionTreeMaintenance,
   gitCommand,
   gitConfirmAccept,
   gitConfirmCancel,
@@ -1030,7 +1031,7 @@ describe("listChildRunsMaintenance (GET /child-runs, TASK.102 S2d D1)", () => {
     const child1 = meta({ id: "sess-c1", parentSessionId: "sess-root", spawnToolCallId: "call-1" });
     const child2 = meta({ id: "sess-c2", parentSessionId: "sess-root", spawnToolCallId: "call-2" });
     const listSessionsForMaintenance = vi.fn(async () => [root, child1, child2]);
-    const deps = fakeDeps({ persistence: { listSessionsForMaintenance } });
+    const deps = fakeDeps({ persistence: { listSessionsForMaintenance, deleteSessionTree: vi.fn() } });
 
     const result = await listChildRunsMaintenance(deps);
 
@@ -1040,7 +1041,10 @@ describe("listChildRunsMaintenance (GET /child-runs, TASK.102 S2d D1)", () => {
 
   it("answers {ok:true, sessions:[]} when every row is a root session (none carry parentSessionId)", async () => {
     const deps = fakeDeps({
-      persistence: { listSessionsForMaintenance: vi.fn(async () => [meta({ id: "sess-root" })]) },
+      persistence: {
+        listSessionsForMaintenance: vi.fn(async () => [meta({ id: "sess-root" })]),
+        deleteSessionTree: vi.fn(),
+      },
     });
     expect(await listChildRunsMaintenance(deps)).toEqual({ ok: true, sessions: [] });
   });
@@ -1048,6 +1052,27 @@ describe("listChildRunsMaintenance (GET /child-runs, TASK.102 S2d D1)", () => {
   it("answers unavailable (never throws) when persistence is absent", async () => {
     const deps = fakeDeps({ persistence: undefined });
     expect(await listChildRunsMaintenance(deps)).toEqual({
+      ok: false,
+      error: "persistence unavailable",
+      errorKind: "unavailable",
+    });
+  });
+});
+
+describe("deleteSessionTreeMaintenance (POST /sessions/:id/delete-tree, TASK.102 S2d D3)", () => {
+  it("forwards the root id to persistence.deleteSessionTree and wraps its result with ok:true", async () => {
+    const deleteSessionTree = vi.fn(async () => ({ deletedSessionIds: ["sess-root", "sess-c1"], externalSessionRefs: ["thread-1"] }));
+    const deps = fakeDeps({ persistence: { listSessionsForMaintenance: vi.fn(), deleteSessionTree } });
+
+    const result = await deleteSessionTreeMaintenance(deps, "sess-root");
+
+    expect(deleteSessionTree).toHaveBeenCalledWith("sess-root");
+    expect(result).toEqual({ ok: true, deletedSessionIds: ["sess-root", "sess-c1"], externalSessionRefs: ["thread-1"] });
+  });
+
+  it("answers unavailable (never throws) when persistence is absent", async () => {
+    const deps = fakeDeps({ persistence: undefined });
+    expect(await deleteSessionTreeMaintenance(deps, "sess-root")).toEqual({
       ok: false,
       error: "persistence unavailable",
       errorKind: "unavailable",

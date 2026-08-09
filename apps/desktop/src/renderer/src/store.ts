@@ -630,6 +630,17 @@ export interface DesktopState {
    * outside the session slice a host_ready reset clears.
    */
   pinnedConnection: { connectionId: string; providerId: string } | null;
+  /**
+   * TASK.102 CUT-S2 §10.15.1: true for a child-session tab's store, set once
+   * at `registerPort` (tab-registry.ts's child branch) and never flipped back
+   * — same "control-plane, outside the session slice" shape as
+   * `pinnedConnection` above, so a host_ready respawn never drops it. Lets
+   * the composer force the direct-send path for a child surface (its
+   * rendererside prompt queue has no drainer subscribed, §1.1: the renderer
+   * prompt-queue is never used for a child surface) instead of parking a
+   * steer message where it would sit forever.
+   */
+  childSurface: boolean;
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
@@ -786,6 +797,8 @@ export interface DesktopState {
   setHostExited(): void;
   /** Records the tab's pinned connection from the tab-port envelope (TASK.45 W10-FIX F2). */
   setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void;
+  /** Marks this tab's store as a child surface (TASK.102 CUT-S2 §10.15.1); set once, never cleared. */
+  setChildSurface(): void;
   /** Sets or clears (null) the transient notice; the toast UI (MVP.5) dismisses through this. */
   setNotice(notice: Notice | null): void;
   /** Appends the local user's message to the transcript (the wire never echoes user input back, §3). */
@@ -2112,6 +2125,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // W10-FIX F2: pin is control-plane, set at port attach — OUTSIDE the session
       // slice so a host_ready respawn reset never drops it.
       pinnedConnection: null,
+      childSurface: false,
       workspace: null,
       model: null,
       mode: null,
@@ -2523,6 +2537,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
         set({ pinnedConnection });
+      },
+
+      setChildSurface(): void {
+        set({ childSurface: true });
       },
 
       setHostExited(): void {
