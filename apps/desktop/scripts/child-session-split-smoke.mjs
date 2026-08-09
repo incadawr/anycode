@@ -102,6 +102,7 @@
  * `working-docs/task102-track/evidence/S3/`.
  */
 
+import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -691,7 +692,13 @@ async function step3EnterSplit(ctx) {
   assert(step, state.hitInside === true, `elementFromPoint at .child-split-pane's on-screen centre (hit=${state.hitTag}) did NOT land inside it`);
   assert(step, state.breadcrumbPresent === false, "expected NO .child-session-breadcrumb in split mode, one is present");
   assert(step, state.sessionHeaderPresent === true, "expected the master's own .session-header present in split mode, none found");
-  assert(step, state.hasComposerTextarea === true && state.hasComposerSend === true, `expected the child's composer inside .child-split-pane, found none: ${JSON.stringify(state)}`);
+  // Only `.composer-textarea` is required here: the child is RUNNING at this
+  // point (a live long-sleep task), and Composer.tsx renders `.composer-stop`
+  // (not `.composer-send`) while a turn is in flight — `.composer-send` only
+  // exists once the (still-empty) draft becomes non-empty (see step 6, which
+  // types first and only then requires `.composer-send`). Asserting
+  // `.composer-send` here would fail on a correctly-behaving product.
+  assert(step, state.hasComposerTextarea === true, `expected the child's composer (.composer-textarea) inside .child-split-pane, found none: ${JSON.stringify(state)}`);
 
   const master = await ctx.cdp.eval(MASTER_PANEL_GEOMETRY_JS);
   assert(step, master.ok === true, `no master .session-conversation panel found (outside .child-split-pane): ${JSON.stringify(master)}`);
@@ -1167,6 +1174,13 @@ async function run() {
     baselineSidebarRowCount: null,
     stderrRedirected: false,
   };
+  ctx.mkdirEvidenceDir = () => {
+    try {
+      execFileSync(process.execPath, ["-e", `require("node:fs").mkdirSync(${JSON.stringify(ctx.evidenceDir)}, {recursive:true})`]);
+    } catch {
+      // fall through to the caller's own writeFileSync, whose ENOENT would surface as a clear warning instead.
+    }
+  };
   installSignalTeardown(ctx);
 
   // MUST run before step1LaunchApp spawns the dev app — see this file's own
@@ -1221,9 +1235,11 @@ async function run() {
     stepsCompleted += 1;
   } catch (err) {
     failedStep = err instanceof SmokeFailure ? err.step : "unknown";
-    if (!(err instanceof SmokeFailure)) {
-      console.log(`[child-session-split-smoke] unexpected error: ${err?.stack ?? err}`);
-    }
+    // `fail()`/`assert()` (imported) report via `console.error`, which is fd 2
+    // — redirected to APP_STDERR_LOG by `redirectAppStderr()` above, not this
+    // run's own stdout. Reprint the failure reason here so it is visible in
+    // the run's normal output, not only in the evidence log file.
+    console.log(`[child-session-split-smoke] ${err instanceof SmokeFailure ? err.message : `unexpected error: ${err?.stack ?? err}`}`);
   }
 
   await teardown(ctx, failedStep, stepsCompleted);
