@@ -29,6 +29,7 @@ import {
   CHILD_SUMMARY_MAX_CHARS,
   CHILD_TERMINAL_TYPE,
   CHILD_TOOL_NAME_MAX_CHARS,
+  isValidChildId,
   parseChildProgress,
   parseChildReady,
   parseChildRunCancel,
@@ -636,5 +637,77 @@ describe("protocol constants", () => {
 describe("PERMISSION_MODE_VALUES parity with @anycode/core's PERMISSION_MODES (review finding 4)", () => {
   it("stays byte-for-byte in sync with the real core export", () => {
     expect(PERMISSION_MODE_VALUES).toEqual(PERMISSION_MODES);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isValidChildId (TASK.102 CUT-S2 §10.5, additive export): lets the parent
+// host's RPC client pre-flight validate a spawnToolCallId BEFORE putting it
+// on the wire. It must accept/reject the exact same shapes
+// parseChildSpawnRequest's own spawnToolCallId gate does — a disagreement
+// here would either reject requests main would have accepted, or (worse) let
+// through requests main's fail-closed parser silently drops, hanging the
+// caller until the 600s dispatcher timeout.
+
+describe("isValidChildId", () => {
+  it("accepts a well-formed id", () => {
+    expect(isValidChildId("call-1")).toBe(true);
+  });
+
+  it.each([null, undefined, 42, {}, [], true, Symbol("x")])("rejects a non-string value %#", (value) => {
+    expect(isValidChildId(value)).toBe(false);
+  });
+
+  it("rejects an empty string", () => {
+    expect(isValidChildId("")).toBe(false);
+  });
+
+  it("rejects a value starting with a dash", () => {
+    expect(isValidChildId("-oops")).toBe(false);
+  });
+
+  it("rejects a value containing a space", () => {
+    expect(isValidChildId("has space")).toBe(false);
+  });
+
+  it("rejects a value containing a control character", () => {
+    expect(isValidChildId("has\x1fcontrol")).toBe(false);
+  });
+
+  it("rejects a value one over CHILD_ID_MAX_CHARS", () => {
+    expect(isValidChildId("a".repeat(CHILD_ID_MAX_CHARS + 1))).toBe(false);
+  });
+
+  it("accepts a value at exactly CHILD_ID_MAX_CHARS", () => {
+    expect(isValidChildId("a".repeat(CHILD_ID_MAX_CHARS))).toBe(true);
+  });
+
+  describe("parity with parseChildSpawnRequest's spawnToolCallId gate (§10.5: pre-flight and main must never disagree)", () => {
+    const base = {
+      type: CHILD_SPAWN_REQUEST_TYPE,
+      requestId: "req-1",
+      agentType: "general-purpose",
+      description: "d",
+      prompt: "p",
+      permissionMode: "build",
+    };
+
+    const candidates: unknown[] = [
+      "ok-id",
+      "",
+      "-dash-lead",
+      "has space",
+      "has\x1fcontrol",
+      "a".repeat(CHILD_ID_MAX_CHARS),
+      "a".repeat(CHILD_ID_MAX_CHARS + 1),
+    ];
+
+    it.each(candidates)(
+      "isValidChildId(%j) agrees with whether parseChildSpawnRequest accepts the SAME value as spawnToolCallId",
+      (candidate) => {
+        const parsed = parseChildSpawnRequest({ ...base, spawnToolCallId: candidate });
+        expect(isValidChildId(candidate)).toBe(parsed !== null);
+      },
+    );
   });
 });

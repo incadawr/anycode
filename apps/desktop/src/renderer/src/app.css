@@ -1139,6 +1139,44 @@ body {
   font-family: var(--font-mono);
 }
 
+/* TASK.102 CUT-S2 §2.5 (slice S2c C3): layout B's child breadcrumb bar. It
+   reuses `.session-header` wholesale for its box model — height, background,
+   border, and (crucially) the titlebar drag region + traffic-light/window-
+   controls clearance rules above, since it occupies the EXACT SAME strip
+   SessionHeader would. Only the breadcrumb-specific children below are new;
+   `.session-header`'s own comment ("any new interactive child MUST set
+   -webkit-app-region: no-drag") applies here too. */
+.child-breadcrumb-master {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.child-breadcrumb-master:hover {
+  color: var(--text-1);
+  text-decoration: underline;
+}
+
+.child-breadcrumb-sep {
+  color: var(--text-ghost);
+  flex: none;
+}
+
+.child-breadcrumb-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+}
+
 /* R20: the workspace chip is a copy button. Rest state stays visually
    identical to the old span — kill the UA button face, keep the chip's own
    border/padding/type (`.session-header-chip` supplies size, `-mono` the
@@ -3015,6 +3053,73 @@ body {
 }
 .tool-call-subagent-counters,
 .tool-call-workflow-counters { font-variant-numeric: tabular-nums; }  /* live digits (R13 precedent) */
+
+/* TASK.102 CUT-S2 §2.5 (slice S2c C3): the session-child badge, shown in the
+   ALWAYS-visible toggle header (an Agent card defaults to collapsed, see
+   ToolCallCard.tsx) — additive over `.tool-call-status-badge`, same shape,
+   mounted only for a card whose Agent call spawned a session-tier child this
+   renderer knows about. Color-coded like `.tool-call-status-badge` above,
+   plus a fourth `waiting_permission` tint that badge's vocabulary has no
+   equivalent for. */
+.tool-call-child-badge {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--bg-hover);
+  color: var(--text-3);
+  flex: none;
+}
+
+.tool-call-child-badge-running {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.tool-call-child-badge-done {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.tool-call-child-badge-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* waiting_permission outranks every other kind (childBadgeKind's frozen
+   priority, child-layout.ts) — the accent tint keeps it visually distinct
+   from the warning/success/danger trio above, so it never reads as just
+   another ordinary status color. */
+.tool-call-child-badge-waiting_permission {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Expanded-body row (SubagentStatus, ToolCallCard.tsx): badge + Open action,
+   mounted only alongside the header badge above (same `child` gate). */
+.tool-call-subagent-child-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.tool-call-subagent-open-button {
+  padding: 0.15rem 0.65rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.tool-call-subagent-open-button:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
 
 /* Workflow step checklist (R14 signature). Rows are ledger lines: no borders,
    no backgrounds, no hover — this is a record, not a control surface. */

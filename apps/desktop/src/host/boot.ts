@@ -49,8 +49,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { ConversationHistory, SessionPermissionRules } from "@anycode/core";
-import type { DiagnosticSink, HistoryItem, HistorySink, PersistencePort, SessionMeta } from "@anycode/core";
+import { ConversationHistory, PERMISSION_MODES, SessionPermissionRules } from "@anycode/core";
+import type {
+  DiagnosticSink,
+  HistoryItem,
+  HistorySink,
+  PermissionMode,
+  PersistencePort,
+  SessionMeta,
+} from "@anycode/core";
 import { SECRET_ENV_KEYS } from "../shared/settings.js";
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
@@ -71,21 +78,48 @@ import {
   type PreviewResult,
 } from "../shared/preview.js";
 
+/**
+ * Child-mode argv, present only for a host main forked to run a session
+ * spawned by another session's `Agent tier:"session"` call (TASK.102 CUT-S2
+ * §2.6.2). `parentSessionId`/`spawnToolCallId` become this session's durable
+ * `parent_session_id`/`spawn_tool_call_id` columns (§2.4, migration v13);
+ * `initialMode` is a SNAPSHOT of the parent's permission mode at the moment
+ * `Agent` was invoked (§0.8) — a child never tracks the parent's LIVE mode
+ * after that.
+ */
+export interface HostChildArgs {
+  parentSessionId: string;
+  spawnToolCallId: string;
+  initialMode: PermissionMode;
+}
+
 export interface HostArgs {
   /** Session id from `--session`/`--resume` (undefined = brand-new random session). */
   sessionId?: string;
   /** True for `--resume` (load, create-if-absent); false for `--session`/no id (create). */
   resume: boolean;
+  /** Present only for a child-mode boot (§2.6.2); absent for every root/legacy boot. */
+  child?: HostChildArgs;
 }
 
 /**
- * Parses `--session <id>|--session=<id>` and `--resume <id>|--resume=<id>` from
- * argv (mirror of cli/main.ts:60-105). The last id-bearing flag wins; `--resume`
- * sets resume=true, `--session` sets resume=false.
+ * Parses `--session <id>|--session=<id>`, `--resume <id>|--resume=<id>`, and
+ * the child-mode triple `--child-parent <id>`, `--child-spawn-call <id>`,
+ * `--child-mode <mode>` from argv (mirror of cli/main.ts:60-105; child flags
+ * added by TASK.102 CUT-S2 §2.6.2). The last id-bearing flag of each kind
+ * wins; `--resume` sets resume=true, `--session` sets resume=false. `child`
+ * is populated ONLY when all three child flags were seen with well-formed
+ * values (an unrecognized `--child-mode` value is dropped rather than
+ * accepted — main is a trusted, non-adversarial sender of this argv, but a
+ * malformed child triple must never silently produce a HALF-populated
+ * `HostArgs.child`, which downstream code treats as an all-or-nothing signal).
  */
 export function parseHostArgs(argv: string[]): HostArgs {
   let sessionId: string | undefined;
   let resume = false;
+  let childParent: string | undefined;
+  let childSpawnCall: string | undefined;
+  let childMode: PermissionMode | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -118,10 +152,58 @@ export function parseHostArgs(argv: string[]): HostArgs {
     if (arg.startsWith("--resume=")) {
       sessionId = arg.slice("--resume=".length);
       resume = true;
+      continue;
+    }
+    if (arg === "--child-parent") {
+      const value = argv[i + 1];
+      i++;
+      if (value !== undefined) {
+        childParent = value;
+      }
+      continue;
+    }
+    if (arg.startsWith("--child-parent=")) {
+      childParent = arg.slice("--child-parent=".length);
+      continue;
+    }
+    if (arg === "--child-spawn-call") {
+      const value = argv[i + 1];
+      i++;
+      if (value !== undefined) {
+        childSpawnCall = value;
+      }
+      continue;
+    }
+    if (arg.startsWith("--child-spawn-call=")) {
+      childSpawnCall = arg.slice("--child-spawn-call=".length);
+      continue;
+    }
+    if (arg === "--child-mode") {
+      const value = argv[i + 1];
+      i++;
+      if (value !== undefined && isPermissionMode(value)) {
+        childMode = value;
+      }
+      continue;
+    }
+    if (arg.startsWith("--child-mode=")) {
+      const value = arg.slice("--child-mode=".length);
+      if (isPermissionMode(value)) {
+        childMode = value;
+      }
     }
   }
 
-  return { sessionId, resume };
+  const child =
+    childParent !== undefined && childSpawnCall !== undefined && childMode !== undefined
+      ? { parentSessionId: childParent, spawnToolCallId: childSpawnCall, initialMode: childMode }
+      : undefined;
+
+  return child !== undefined ? { sessionId, resume, child } : { sessionId, resume };
+}
+
+function isPermissionMode(value: string): value is PermissionMode {
+  return (PERMISSION_MODES as readonly string[]).includes(value);
 }
 
 export interface BootSessionResult {
@@ -137,11 +219,36 @@ export interface BootSessionResult {
 }
 
 /**
+ * The session-row fields a freshly CREATED session gets from `args.child`
+ * (TASK.102 CUT-S2 §2.6.2/§0's "Строку сессии ребёнка создаёт ХОСТ ребёнка,
+ * из argv"): `parentSessionId`/`spawnToolCallId` (durable parent-link,
+ * migration v13) plus `mode: initialMode` — the parent's permission-mode
+ * SNAPSHOT at spawn, in place of the hardcoded `"build"` every non-child
+ * creation still gets (a fresh root session has no prior mode to inherit).
+ * Applied identically at BOTH create call-sites below: the normal
+ * `--session <childId>` creation AND the `resumedMissing` respawn-race
+ * branch — a missing child row respawned before the write-behind queue
+ * flushed must become a child row again, never a nameless ROOT row that
+ * would then sit forever in the Sidebar (the S2a residual this closes).
+ */
+function childCreateFields(args: HostArgs): { parentSessionId?: string; spawnToolCallId?: string; mode: PermissionMode } {
+  if (args.child === undefined) {
+    return { mode: "build" };
+  }
+  return {
+    parentSessionId: args.child.parentSessionId,
+    spawnToolCallId: args.child.spawnToolCallId,
+    mode: args.child.initialMode,
+  };
+}
+
+/**
  * Resolves the boot session from parsed args against persistence (§3.5). Mirror
  * of cli/main.ts:239-253: a resumed session's meta+history is loaded; anything
  * else creates a fresh session. `mode` for a freshly created session defaults to
- * "build" (a new session has no prior mode); a resumed session keeps its
- * persisted mode.
+ * "build" (a new session has no prior mode) UNLESS this is a child-mode boot, in
+ * which case it is the parent's permission-mode snapshot (`childCreateFields`
+ * above); a resumed EXISTING session keeps its own persisted mode either way.
  */
 export async function resolveBootSession(
   persistence: PersistencePort,
@@ -162,11 +269,15 @@ export async function resolveBootSession(
       const initialHistory = await persistence.loadHistory(args.sessionId);
       return { sessionMeta: existing, initialHistory, resumedMissing: false };
     }
+    // resumedMissing: `--resume <childId>` raced the write-behind queue and
+    // found no row. Without `childCreateFields` here this would silently
+    // create a PARENT-LESS root row under the child's own id — permanently
+    // visible in the Sidebar with no owner (the S2a residual, CUT-S2 §10.4).
     const sessionMeta = await persistence.createSession({
       id: args.sessionId,
       workspace,
       model,
-      mode: "build",
+      ...childCreateFields(args),
       ...pin,
     });
     return { sessionMeta, initialHistory: [], resumedMissing: true };
@@ -174,7 +285,13 @@ export async function resolveBootSession(
 
   // `--session <id>` (id supplied by main) or no id at all (legacy/dev boot).
   const id = args.sessionId ?? randomUUID();
-  const sessionMeta = await persistence.createSession({ id, workspace, model, mode: "build", ...pin });
+  const sessionMeta = await persistence.createSession({
+    id,
+    workspace,
+    model,
+    ...childCreateFields(args),
+    ...pin,
+  });
   return { sessionMeta, initialHistory: [], resumedMissing: false };
 }
 

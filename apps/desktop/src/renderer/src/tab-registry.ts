@@ -27,6 +27,19 @@
  * registry receives is routed straight into `terminalView.write`/
  * `markOpened`/`markDead`, and `disposeTab`/`markHostExited` call
  * `terminalView.dispose`/`markDead` to keep the two lifecycles in lockstep.
+ *
+ * TASK.102 (CUT-S2 §2.5/§5.3, slice S2c C2) adds a SECOND `registerPort`
+ * path, taken when the incoming envelope carries a `child` field
+ * (`classifyPortEnvelope`, `child-sessions.ts`): a child session still gets
+ * an entry in `entries` (store+connection+ui_ready — the child host needs
+ * `ui_ready` to emit `child-ready`, §2.6.3), but never the root-tab
+ * bootstrap `tabsStore.addTab`/the R10 status-mirror/the P7.14
+ * queue-drainer perform for every other port — a child session must never
+ * surface in the Sidebar/StartScreen/CommandPalette (design §0.4's
+ * skip-hide contract). `TabEntry.isChild` remembers the branch taken at
+ * creation so `markHostExited` can route a child's exit to the
+ * child-relation store (`live: false`) instead of a root-tab banner nobody
+ * would ever see.
  */
 import { createDesktopStore, type DesktopState, type QueuedPromptImage } from "./store.js";
 import { transcriptTextWithImages } from "./queue-format.js";
@@ -36,8 +49,14 @@ import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
 import { deriveCoarse, useTabStatusStore, type TabStatusStoreApi } from "./tab-status-store.js";
 import { terminalView as defaultTerminalView, type TerminalDims, type TerminalView } from "./terminal-view.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
+import type { PortEnvelope } from "../../shared/envelopes.js";
 import { TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS, type TermToHostMessage } from "../../shared/terminal.js";
 import { loadUsageLimitNotices, saveUsageLimitNotice } from "./provider-notices.js";
+import {
+  classifyPortEnvelope,
+  childRelationStore as defaultChildRelationStore,
+  type ChildRelationStoreApi,
+} from "./child-sessions.js";
 // TASK.81: the SAME model-level image gate Composer's own send-path uses
 // (`canSend`'s `!attachmentsBlockedByModel`), reused here — not re-derived —
 // for the one send site with no live composer to react from beforehand (the
@@ -57,6 +76,16 @@ interface TabEntry {
   unsubscribeStatus: (() => void) | null;
   /** P7.14 prompt-queue drainer subscription on this tab's own store; store-lifetime (survives respawns), dies in disposeTab (symmetry with `unsubscribeStatus`). */
   unsubscribeQueue: (() => void) | null;
+  /**
+   * TASK.102 CUT-S2 §2.5/§5.3: true iff this tabId was classified `"child"`
+   * (`classifyPortEnvelope`) on its FIRST `registerPort` — fixed for the
+   * entry's lifetime, decided once at creation the same way `store` is.
+   * Gates the root-tab-only side effects in `registerPort`/`markHostExited`
+   * (tabsStore bootstrap/banner, status-mirror, queue-drainer) without a
+   * second lookup into the child-relation store just to ask "is this one of
+   * mine".
+   */
+  isChild: boolean;
 }
 
 export interface TabRegistry {
@@ -75,12 +104,29 @@ export interface TabRegistry {
    *
    * TASK.45 W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
    * provider connection on its per-tab store so the ModelPill targets it.
+   *
+   * TASK.102 CUT-S2 §2.5/§5.3: `child` (additive), present only for a
+   * child-session tab's port delivery (`port.ts`'s `HostPortMeta.child`,
+   * carried from the envelope's own `child` field). Its presence is the
+   * branch condition — `classifyPortEnvelope` — for a SECOND registration
+   * path that deliberately skips `tabsStore.addTab`, the R10 status-mirror,
+   * and the P7.14 queue-drainer: a child session must never surface in the
+   * Sidebar/StartScreen/CommandPalette (design §0.4's skip-hide contract;
+   * this is the anti-facade CUT-S2 §5.3 names — today ANY delivered port
+   * takes the root-tab path unconditionally). The store+connection+ui_ready
+   * mechanism below is otherwise unchanged: a child tab still gets its own
+   * store, still gets `ui_ready` sent (the child host needs it to emit
+   * `child-ready`, §2.6.3), and is still torn down by `disposeTab` like any
+   * other entry. When `child` is present, this also (re-)registers the
+   * relation in the child-relation store (`child-sessions.ts`) that C3's
+   * Open button and breadcrumb resolve through.
    */
   registerPort(
     tabId: string,
     workspace: string,
     port: MessagePort,
     pinnedConnection?: { connectionId: string; providerId: string },
+    child?: PortEnvelope["child"],
   ): boolean;
   /**
    * Flips the tab's own store into `host_exited` and mirrors that onto the
@@ -88,6 +134,13 @@ export interface TabRegistry {
    * tabId; every other tab's store/banner state is untouched. Drops the dead
    * connection reference; a later `registerPort` (respawn) clears the flag
    * again and reconnects. No-op for an unknown/disposed tabId.
+   *
+   * TASK.102 CUT-S2 §2.5/§0: for a CHILD tabId (`TabEntry.isChild`), the
+   * tabs-store mirror is skipped entirely (there is no root-tab banner to
+   * paint — a child was never added there) and the child-relation store's
+   * entry is flipped to `live: false` instead (main's reap-on-terminal
+   * verdict, §0: a terminated child host never respawns, so this is a
+   * one-way flip, not a "wait for reconnect" state like a root tab's).
    */
   markHostExited(tabId: string): void;
   /**
@@ -180,12 +233,17 @@ export interface TabRegistry {
  * tab-registry.test.ts can assert on the term-plane routing without touching
  * `@xterm/xterm` or `document` — the terminal-view.test.ts suite already
  * covers the xterm-instance/DOM-reparent logic in isolation.
+ *
+ * `childRelationStore` (TASK.102 CUT-S2 §2.5, slice S2c C2) is injectable
+ * the same way: defaults to `child-sessions.ts`'s app singleton, isolated
+ * per test the same way `statusStore` is.
  */
 export function createTabRegistry(
   tabsStore: TabsStoreApi,
   createStore: () => DesktopStoreApi = () => createDesktopStore(),
   terminalView: TerminalView = defaultTerminalView,
   statusStore: TabStatusStoreApi = useTabStatusStore,
+  childRelationStore: ChildRelationStoreApi = defaultChildRelationStore,
 ): TabRegistry {
   const entries = new Map<string, TabEntry>();
   const closedTabIds = new Set<string>();
@@ -396,10 +454,11 @@ export function createTabRegistry(
   }
 
   return {
-    registerPort(tabId, workspace, port, pinnedConnection): boolean {
+    registerPort(tabId, workspace, port, pinnedConnection, child): boolean {
       if (!tabId || closedTabIds.has(tabId)) {
         return false;
       }
+      const kind = classifyPortEnvelope({ child });
       let entry = entries.get(tabId);
       if (!entry) {
         entry = {
@@ -410,49 +469,71 @@ export function createTabRegistry(
           unsubscribeTerminalMessages: null,
           unsubscribeStatus: null,
           unsubscribeQueue: null,
+          isChild: kind === "child",
         };
         entries.set(tabId, entry);
-        tabsStore.getState().addTab({ tabId, workspace });
-        // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime
-        // subscription per tabId, wired at store birth. The storm guard lives
-        // in applyCoarse (no mirror write unless the coarse tuple flips);
-        // this callback is a thin projection that runs on every setState of
-        // this tab's store. Background-ness is read HERE, at event time — the
-        // activeTabId at the completion moment decides whether the completion
-        // was "unseen". Seeded synchronously so the mirror never has a gap
-        // between a tab existing and its status being readable.
-        const mirrorStatus = (state: DesktopState): void => {
-          statusStore.getState().applyCoarse(tabId, deriveCoarse(state), tabsStore.getState().activeTabId !== tabId);
-        };
-        entry.unsubscribeStatus = entry.store.subscribe(mirrorStatus);
-        mirrorStatus(entry.store.getState());
+        if (kind === "child") {
+          // TASK.102 CUT-S2 §2.5/§5.3: a child session gets the SAME
+          // store+connection+ui_ready mechanism (below/attach()) but never
+          // the root-tab bootstrap — no Sidebar/StartScreen/CommandPalette
+          // entry, no status-mirror, no prompt-queue-drainer (the child's
+          // steer-queue is host-side, §1 п.1 of the cut, not this
+          // renderer-side one). This is the discriminator against the
+          // pre-S2 facade, where ANY delivered port took the branch below
+          // unconditionally.
+        } else {
+          tabsStore.getState().addTab({ tabId, workspace });
+          // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime
+          // subscription per tabId, wired at store birth. The storm guard lives
+          // in applyCoarse (no mirror write unless the coarse tuple flips);
+          // this callback is a thin projection that runs on every setState of
+          // this tab's store. Background-ness is read HERE, at event time — the
+          // activeTabId at the completion moment decides whether the completion
+          // was "unseen". Seeded synchronously so the mirror never has a gap
+          // between a tab existing and its status being readable.
+          const mirrorStatus = (state: DesktopState): void => {
+            statusStore.getState().applyCoarse(tabId, deriveCoarse(state), tabsStore.getState().activeTabId !== tabId);
+          };
+          entry.unsubscribeStatus = entry.store.subscribe(mirrorStatus);
+          mirrorStatus(entry.store.getState());
 
-        // P7.14 prompt-queue drainer: a SECOND store-lifetime subscription
-        // (mirror of mirrorStatus). Covers every drain trigger through one
-        // point — turn-end flips idle, resumeQueue clears paused, an
-        // enqueue-at-idle lands immediately. The guard admits exactly one drain
-        // at a time (inFlight === null); takeQueueHead inside dispatch flips
-        // inFlight synchronously so the re-entrant fire this dispatch causes
-        // bails. `entry` is captured (not reassigned) so it always points at
-        // the live connection after a respawn's `attach`.
-        const capturedEntry = entry;
-        const maybeDrain = (state: DesktopState): void => {
-          if (
-            state.connection === "ready" &&
-            state.turn.status === "idle" &&
-            !state.queuePaused &&
-            state.queueInFlight === null &&
-            state.promptQueue.length > 0
-          ) {
-            dispatchQueuedPrompt(capturedEntry);
-          }
-        };
-        entry.unsubscribeQueue = entry.store.subscribe(maybeDrain);
+          // P7.14 prompt-queue drainer: a SECOND store-lifetime subscription
+          // (mirror of mirrorStatus). Covers every drain trigger through one
+          // point — turn-end flips idle, resumeQueue clears paused, an
+          // enqueue-at-idle lands immediately. The guard admits exactly one drain
+          // at a time (inFlight === null); takeQueueHead inside dispatch flips
+          // inFlight synchronously so the re-entrant fire this dispatch causes
+          // bails. `entry` is captured (not reassigned) so it always points at
+          // the live connection after a respawn's `attach`.
+          const capturedEntry = entry;
+          const maybeDrain = (state: DesktopState): void => {
+            if (
+              state.connection === "ready" &&
+              state.turn.status === "idle" &&
+              !state.queuePaused &&
+              state.queueInFlight === null &&
+              state.promptQueue.length > 0
+            ) {
+              dispatchQueuedPrompt(capturedEntry);
+            }
+          };
+          entry.unsubscribeQueue = entry.store.subscribe(maybeDrain);
+        }
       }
       // W10-FIX F2: record the tab's pinned connection (stable for the tab's life;
       // re-delivered on every respawn, so re-applying it is a harmless no-op).
       if (pinnedConnection !== undefined) {
         entry.store.getState().setPinnedConnection(pinnedConnection);
+      }
+      if (child !== undefined) {
+        // TASK.102 CUT-S2 §2.5: records (or re-records) the relation C3's
+        // Open button and breadcrumb resolve through. Re-registering an
+        // already-known (parent, spawn) pair resets `live` to true —
+        // child-sessions.ts's own doc: a fresh port delivery only ever
+        // happens for a running host.
+        childRelationStore
+          .getState()
+          .registerChild(child.parentSessionId, child.spawnToolCallId, tabId, child.childSessionId);
       }
       attach(entry, tabId, port);
       return true;
@@ -467,12 +548,22 @@ export function createTabRegistry(
       entry.unsubscribeMessages = null;
       entry.connection = null;
       entry.store.getState().setHostExited();
-      tabsStore.getState().setHostExited(tabId, true);
 
+      if (entry.isChild) {
+        // TASK.102 CUT-S2 §0/§2.5: no root-tab banner to paint (a child was
+        // never added to the tabs-store) — flip the relation instead, so
+        // C3's Open/breadcrumb read `live: false` and fall back to the
+        // read-only history channel (C4) instead of a dead port.
+        childRelationStore.getState().markChildGone(tabId);
+      } else {
+        tabsStore.getState().setHostExited(tabId, true);
+      }
 
       // drop the dead term connection too and paint the banner. A later
       // registerTerminalPort (respawn) reattaches and, if the panel is still
-      // open, resends term_open automatically.
+      // open, resends term_open automatically. (A child tab never has a live
+      // term connection to begin with — no PTY — so this is a harmless no-op
+      // for it, same as `terminalView.markDead` below.)
       entry.unsubscribeTerminalMessages?.();
       entry.unsubscribeTerminalMessages = null;
       entry.terminal = null;

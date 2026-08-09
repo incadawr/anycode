@@ -20,10 +20,26 @@
  * SubagentProgress -> ctx.emit(subagent_*) bridge and output capping. The
  * version here validates agent_type, enforces the fail-closed "unavailable"
  * lock, and keeps the run() seam clean.
+ *
+ * TASK.102 CUT-S2 §2.1/§3 B1 widens this into a FACTORY, `createAgentTool`.
+ * A single handler now branches on `tier`: "inline" (default, unchanged
+ * behavior above) runs through `ctx.subagents` (SubagentPort, in-process
+ * child loop); "session" runs through `ctx.sessionSubagents`
+ * (SessionSubagentPort, a full child session in its own process — CUT-S2
+ * §2.2). The two ports are entirely independent capabilities: which one a
+ * given call can reach is decided by (a) whether `tier:"session"` is even
+ * REACHABLE in the declared schema (non-recursion lock #1, `sessionTier`
+ * option below) and (b) whether the host actually wired `ctx.sessionSubagents`
+ * (non-recursion lock #2, buildChildConfig never copies it — same discipline
+ * as `subagents`). The outcome->ToolResult mapping (status/errorKind/message)
+ * is IDENTICAL for both tiers (`outcomeToResult` below) since
+ * SessionSubagentOutcome extends SubagentOutcome with the same terminal
+ * status union — only the target recorded on the presentation card differs.
  */
 
-import type { ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
-import type { SubagentProgress } from "../ports/subagent.js";
+import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
+import type { SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
+import type { SessionSubagentRequest } from "../ports/session-subagent.js";
 import { SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS, SUBAGENT_OUTPUT_MAX_BYTES } from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
 import {
@@ -36,136 +52,301 @@ import {
   reduceSubagentCardEvent,
   type SubagentCardEvent,
 } from "../subagents/card-snapshot.js";
-import type { ToolResultPresentation } from "../types/subagent-card.js";
-import { agentInputSchema, type AgentInput, type AgentOutput } from "./schemas.js";
+import type { SubagentCardTarget, ToolResultPresentation } from "../types/subagent-card.js";
+import { agentInputSchema, restrictedAgentInputSchema, type AgentInput, type AgentOutput } from "./schemas.js";
 
 /** Persona used when the model omits agent_type. */
 const DEFAULT_AGENT_TYPE = "general-purpose";
 
-const metadata: ToolMetadata = {
-  name: "Agent",
-  description:
-    'Delegate a task to a subagent. agent_type "explore" = read-only recon for sweeping several files when you only need the conclusion; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.',
-  readOnly: true,
-  destructive: false,
-  concurrentSafe: true,
-  riskLevel: "low",
-  sideEffectScope: "process",
-  needsApproval: false,
-  timeoutMs: 600_000,
-  maxTimeoutMs: 600_000,
-  maxOutputBytes: SUBAGENT_OUTPUT_MAX_BYTES,
-};
+/** Base description shared by both declarations (CUT-S2 §2.1); sessionTier:true appends one sentence. */
+const BASE_DESCRIPTION =
+  'Delegate a task to a subagent. agent_type "explore" = read-only recon for sweeping several files when you only need the conclusion; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
-export const agentTool: ToolDefinition<AgentInput, AgentOutput> = {
-  metadata,
-  inputSchema: agentInputSchema,
-  handler: async (input, ctx) => {
-    const agentType = input.agent_type ?? DEFAULT_AGENT_TYPE;
+const SESSION_TIER_DESCRIPTION_SUFFIX =
+  ' Tier "session" spawns a full child session the user can open and steer.';
 
-    // Validate the agent_type (design §2.3/§3.4): the set of runnable types is
-    // delegated to the port (built-in personas + md-profiles) so slice 3.3's
-    // profiles are reachable WITHOUT touching the frozen schema. A port lacking
-    // listAgentTypes (older/fake) falls back to the built-in persona list.
-    // Unknown type is a handler-level invalid_input carrying the available list.
-    const available = ctx.subagents?.listAgentTypes?.() ?? listPersonaNames();
-    if (!available.includes(agentType)) {
-      return {
-        ok: false,
-        errorKind: "invalid_input",
-        error: `Unknown agent_type "${agentType}". Available agent types: ${available.join(", ")}.`,
-      };
-    }
+export interface CreateAgentToolOptions {
+  /**
+   * true: the FULL declaration (`agentInputSchema` — `tier`/`provider` reach
+   * "session") for the root desktop host, the only concrete
+   * SessionSubagentPort implementer (CUT-S2 §2.6.1). false/absent (default):
+   * the RESTRICTED declaration (`restrictedAgentInputSchema` — no `provider`
+   * key, `tier` can only ever be `"inline"`) for CLI, every child session,
+   * and any other host that never wires a SessionSubagentPort — the schema
+   * itself is non-recursion lock #1 of 3 (CUT-S2 §0.2/§5.13): a model talking
+   * to a restricted host cannot even DISCOVER the session tier exists.
+   */
+  sessionTier?: boolean;
+}
 
-    // Non-recursion lock (design §3.1/§3.2): no port => fail closed. A child
-    // loop's DispatchContext leaves subagents unset, so a child can never spawn.
-    // A known-but-childless type still lands here (invalid_input for unknown,
-    // unavailable for known — both fail-closed, design §2.3).
-    if (!ctx.subagents) {
-      return {
-        ok: false,
-        error: "Agent: subagents are unavailable in this context.",
-      };
-    }
+function buildMetadata(sessionTier: boolean): ToolMetadata {
+  return {
+    name: "Agent",
+    description: sessionTier ? BASE_DESCRIPTION + SESSION_TIER_DESCRIPTION_SUFFIX : BASE_DESCRIPTION,
+    readOnly: true,
+    destructive: false,
+    concurrentSafe: true,
+    riskLevel: "low",
+    sideEffectScope: "process",
+    needsApproval: false,
+    timeoutMs: 600_000,
+    maxTimeoutMs: 600_000,
+    maxOutputBytes: SUBAGENT_OUTPUT_MAX_BYTES,
+  };
+}
 
-    // Run the child loop through the port. Coarse progress is bridged into the
-    // parent's stream as subagent_* events via ctx.emit (design §3.2/§3.3), each
-    // carrying THIS Agent call's toolCallId so the desktop card correlates them.
-    // The dispatcher turns any throw into an error-outcome, so the loop stays sound.
-    //
-    // Presentation accumulation (TASK.102 slice S1 W3, CUT-S1 §3 W3): the
-    // accumulator is fed from every progress callback UNCONDITIONALLY — it
-    // must survive even when ctx.emit is absent (a handler running outside
-    // the batch runner still needs a persisted card). Feeding it the SAME
-    // mapped event ctx.emit receives keeps the persisted activity entries
-    // byte-identical to what the live renderer saw.
-    let acc = createSubagentCardAccumulator();
-    const outcome = await ctx.subagents.run(
-      {
-        agentType,
-        description: input.description,
-        prompt: input.prompt,
-        ...(input.model !== undefined ? { model: input.model } : {}),
+/**
+ * Projects the terminal SubagentOutcome (shared shape of the inline and
+ * session tiers) onto the tool's ToolResult, honoring TASK.44's honest
+ * outcome mapping. Pulled out of the per-tier run branches so the mapping
+ * text/logic is provably the SAME for both (CUT-S2 §2.1: "маппинг
+ * outcome→result ОБЩИЙ для обоих ярусов").
+ */
+function outcomeToResult(
+  outcome: SubagentOutcome,
+  presentation: { presentation?: ToolResultPresentation },
+): ToolResult<AgentOutput> {
+  if (outcome.status === "error") {
+    return { ok: false, error: outcome.finalText || "Agent: the subagent failed.", ...presentation };
+  }
+  // max_turns (TASK.44): the child hit its turn budget — this is NOT a
+  // success. Return an explicit incomplete errorKind so the dispatcher maps
+  // the tool_call to status "max_turns" (not "success"), the parent model
+  // receives a clear message naming the limit and the turns spent, and any
+  // partial finalText the child did produce is forwarded (after the limit
+  // notice) so it is not lost. An EMPTY partial must not read as success:
+  // the error message is always non-empty here, so an empty-finalText
+  // max_turns outcome can never provoke a blind re-delegation.
+  if (outcome.status === "max_turns") {
+    const partial = outcome.finalText.trim();
+    const error = partial
+      ? `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing. Partial result:\n\n${partial}`
+      : `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing and produced no partial result. The task was not completed — refine the prompt, narrow the scope, or raise maxTurns.`;
+    return { ok: false, errorKind: "max_turns", error, output: toAgentOutput(outcome), ...presentation };
+  }
+  // cancelled (TASK.44): preserve cancellation semantics — never success.
+  // The dispatcher maps errorKind "cancelled" to status "cancelled", so the
+  // card's external badge and the internal subagent_end status agree.
+  if (outcome.status === "cancelled") {
+    return {
+      ok: false,
+      errorKind: "cancelled",
+      error: "Agent: the subagent was cancelled.",
+      output: toAgentOutput(outcome),
+      ...presentation,
+    };
+  }
+  // The runner already capped finalText and set truncated; forward the outcome
+  // verbatim (finalText/truncated/status/counters) as the tool payload.
+  return { ok: true, output: toAgentOutput(outcome), ...presentation };
+}
+
+/**
+ * Narrows a (possibly wider) SubagentOutcome-shaped value down to exactly
+ * AgentOutput's fields. Explicit rather than `{ ...outcome }`: a
+ * SessionSubagentOutcome carries three extra id fields (childSessionId/
+ * parentSessionId/spawnToolCallId) that belong on the presentation card's
+ * `target` (CUT-S2 §2.1: "core их только копирует в target"), not on the
+ * model-visible tool output.
+ */
+function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
+  return {
+    status: outcome.status,
+    finalText: outcome.finalText,
+    truncated: outcome.truncated,
+    turns: outcome.turns,
+    toolCalls: outcome.toolCalls,
+    durationMs: outcome.durationMs,
+  };
+}
+
+function formatResultForModel(result: ToolResult<AgentOutput>): string {
+  if (!result.ok) {
+    return result.error ?? "Agent: the subagent failed.";
+  }
+  return result.output?.finalText ?? "";
+}
+
+/**
+ * Builds the Agent tool. `sessionTier:false` (default) is the RESTRICTED
+ * declaration; `sessionTier:true` is the FULL one (CUT-S2 §2.1). Both share
+ * ONE handler — the branch on `input.tier` below, not a second copy of the
+ * outcome-mapping logic.
+ */
+export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<AgentInput, AgentOutput> {
+  const sessionTier = opts?.sessionTier ?? false;
+  const metadata = buildMetadata(sessionTier);
+  // The restricted schema's output type is a structural subtype of AgentInput
+  // (no `provider` key, `tier` narrowed to `"inline"`) — every value it can
+  // ever produce is already a valid AgentInput. The cast makes that provable
+  // relationship explicit for the shared handler below, which is typed once
+  // against the FULL AgentInput regardless of which declaration is live.
+  const inputSchema = (sessionTier ? agentInputSchema : restrictedAgentInputSchema) as typeof agentInputSchema;
+
+  return {
+    metadata,
+    inputSchema,
+    handler: async (input, ctx) => {
+      const agentType = input.agent_type ?? DEFAULT_AGENT_TYPE;
+      const tier = input.tier ?? "inline";
+
+      // provider is session-tier only (design §2.1/CUT-S2 §1 p.2). Checked
+      // BEFORE agent_type/availability so a malformed inline call fails fast
+      // with the precise reason, independent of what ports the host wired.
+      if (input.provider !== undefined && tier !== "session") {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: 'Agent: "provider" is only valid with tier "session".',
+        };
+      }
+
+      // Validate the agent_type (design §2.3/§3.4): the set of runnable types is
+      // delegated to the port (built-in personas + md-profiles) so slice 3.3's
+      // profiles are reachable WITHOUT touching the frozen schema. A port lacking
+      // listAgentTypes (older/fake) falls back to the built-in persona list.
+      // Unknown type is a handler-level invalid_input carrying the available list.
+      // Persona validity is orthogonal to tier — both tiers run the SAME
+      // persona set, so this always reads the inline `subagents` port.
+      const available = ctx.subagents?.listAgentTypes?.() ?? listPersonaNames();
+      if (!available.includes(agentType)) {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: `Unknown agent_type "${agentType}". Available agent types: ${available.join(", ")}.`,
+        };
+      }
+
+      if (tier === "session") {
+        return runSessionTier(input, ctx, agentType);
+      }
+      return runInlineTier(input, ctx, agentType);
+    },
+    formatResultForModel,
+  };
+}
+
+/**
+ * Inline tier (unchanged behavior from the pre-B1 handler — design §3.1/§3.2).
+ * Non-recursion lock: no port => fail closed. A child loop's DispatchContext
+ * leaves `subagents` unset, so a child can never spawn. A known-but-childless
+ * type still lands here (invalid_input for unknown, unavailable for known —
+ * both fail-closed, design §2.3).
+ */
+async function runInlineTier(
+  input: AgentInput,
+  ctx: ToolContext,
+  agentType: string,
+): Promise<ToolResult<AgentOutput>> {
+  if (!ctx.subagents) {
+    return {
+      ok: false,
+      error: "Agent: subagents are unavailable in this context.",
+    };
+  }
+
+  // Run the child loop through the port. Coarse progress is bridged into the
+  // parent's stream as subagent_* events via ctx.emit (design §3.2/§3.3), each
+  // carrying THIS Agent call's toolCallId so the desktop card correlates them.
+  // The dispatcher turns any throw into an error-outcome, so the loop stays sound.
+  //
+  // Presentation accumulation (TASK.102 slice S1 W3, CUT-S1 §3 W3): the
+  // accumulator is fed from every progress callback UNCONDITIONALLY — it
+  // must survive even when ctx.emit is absent (a handler running outside
+  // the batch runner still needs a persisted card). Feeding it the SAME
+  // mapped event ctx.emit receives keeps the persisted activity entries
+  // byte-identical to what the live renderer saw.
+  let acc = createSubagentCardAccumulator();
+  const outcome = await ctx.subagents.run(
+    {
+      agentType,
+      description: input.description,
+      prompt: input.prompt,
+      ...(input.model !== undefined ? { model: input.model } : {}),
+    },
+    {
+      signal: ctx.abortSignal,
+      onProgress: (progress) => {
+        const event = mapProgressToEvent(progress, ctx.toolCallId);
+        acc = reduceSubagentCardEvent(acc, event);
+        ctx.emit?.(event);
       },
-      {
-        signal: ctx.abortSignal,
-        onProgress: (progress) => {
-          const event = mapProgressToEvent(progress, ctx.toolCallId);
-          acc = reduceSubagentCardEvent(acc, event);
-          ctx.emit?.(event);
-        },
-      },
-    );
-    // Terminal snapshot, or null when the child never reached subagent_start
-    // (an early failure before the first progress callback — the card is
-    // never fabricated from nothing, CUT-S1 §3 W1). The fallback status/
-    // durationMs cover the case where the port settled without ever sending
-    // an end-progress (e.g. a throw in the runner).
-    const snapshot = finalizeSubagentCard(acc, { status: outcome.status, durationMs: outcome.durationMs });
-    const presentation: { presentation?: ToolResultPresentation } =
-      snapshot !== null ? { presentation: { subagent: snapshot } } : {};
+    },
+  );
+  // Terminal snapshot, or null when the child never reached subagent_start
+  // (an early failure before the first progress callback — the card is
+  // never fabricated from nothing, CUT-S1 §3 W1). The fallback status/
+  // durationMs cover the case where the port settled without ever sending
+  // an end-progress (e.g. a throw in the runner).
+  const snapshot = finalizeSubagentCard(acc, { status: outcome.status, durationMs: outcome.durationMs });
+  const presentation: { presentation?: ToolResultPresentation } =
+    snapshot !== null ? { presentation: { subagent: snapshot } } : {};
+  return outcomeToResult(outcome, presentation);
+}
 
-    if (outcome.status === "error") {
-      return { ok: false, error: outcome.finalText || "Agent: the subagent failed.", ...presentation };
-    }
-    // max_turns (TASK.44): the child hit its turn budget — this is NOT a
-    // success. Return an explicit incomplete errorKind so the dispatcher maps
-    // the tool_call to status "max_turns" (not "success"), the parent model
-    // receives a clear message naming the limit and the turns spent, and any
-    // partial finalText the child did produce is forwarded (after the limit
-    // notice) so it is not lost. An EMPTY partial must not read as success:
-    // the error message is always non-empty here, so an empty-finalText
-    // max_turns outcome can never provoke a blind re-delegation.
-    if (outcome.status === "max_turns") {
-      const partial = outcome.finalText.trim();
-      const error = partial
-        ? `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing. Partial result:\n\n${partial}`
-        : `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing and produced no partial result. The task was not completed — refine the prompt, narrow the scope, or raise maxTurns.`;
-      return { ok: false, errorKind: "max_turns", error, output: { ...outcome }, ...presentation };
-    }
-    // cancelled (TASK.44): preserve cancellation semantics — never success.
-    // The dispatcher maps errorKind "cancelled" to status "cancelled", so the
-    // card's external badge and the internal subagent_end status agree.
-    if (outcome.status === "cancelled") {
-      return {
-        ok: false,
-        errorKind: "cancelled",
-        error: "Agent: the subagent was cancelled.",
-        output: { ...outcome },
-        ...presentation,
-      };
-    }
-    // The runner already capped finalText and set truncated; forward the outcome
-    // verbatim (finalText/truncated/status/counters) as the tool payload.
-    return { ok: true, output: { ...outcome }, ...presentation };
-  },
-  formatResultForModel: (result) => {
-    if (!result.ok) {
-      return result.error ?? "Agent: the subagent failed.";
-    }
-    return result.output?.finalText ?? "";
-  },
-};
+/**
+ * Session tier (TASK.102 CUT-S2 §2.1/§2.2). Fail-closed when the host wired
+ * no SessionSubagentPort — this is non-recursion lock #2 firing at runtime
+ * (buildChildConfig never copies `sessionSubagents`, so every child session
+ * lands here even though its restricted SCHEMA already made "session"
+ * unreachable — belt and suspenders, CUT-S2 §0.2).
+ */
+async function runSessionTier(
+  input: AgentInput,
+  ctx: ToolContext,
+  agentType: string,
+): Promise<ToolResult<AgentOutput>> {
+  if (!ctx.sessionSubagents) {
+    return {
+      ok: false,
+      error: "Agent: session-tier subagents are unavailable in this host.",
+    };
+  }
+
+  // spawnToolCallId is core's own fact, not a relay (CUT-S2 §10.5): this
+  // Agent tool_call's own ctx.toolCallId, minted by the dispatcher before
+  // this handler ever ran. Stamped verbatim — never a freshly-generated id,
+  // never left to the host to invent.
+  const request: SessionSubagentRequest = {
+    agentType,
+    description: input.description,
+    prompt: input.prompt,
+    spawnToolCallId: ctx.toolCallId,
+    ...(input.provider !== undefined ? { provider: input.provider } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+  };
+
+  // Same accumulation/bridge discipline as the inline tier above — the
+  // mapProgressToEvent bridge is shared (including the "attention" case,
+  // CUT-S2 §2.2 — only a session-tier port ever produces one).
+  let acc = createSubagentCardAccumulator();
+  const outcome = await ctx.sessionSubagents.run(request, {
+    signal: ctx.abortSignal,
+    onProgress: (progress) => {
+      const event = mapProgressToEvent(progress, ctx.toolCallId);
+      acc = reduceSubagentCardEvent(acc, event);
+      ctx.emit?.(event);
+    },
+  });
+
+  // The three ids ride ONLY the presentation target (CUT-S2 §2.1: "core их
+  // только копирует в target и НЕ изобретает") — core relays exactly what
+  // the host's accepted-relay + its own sessionId already know, never
+  // fabricating any of the three.
+  const target: SubagentCardTarget = {
+    kind: "session",
+    childSessionId: outcome.childSessionId,
+    parentSessionId: outcome.parentSessionId,
+    spawnToolCallId: outcome.spawnToolCallId,
+  };
+  const snapshot = finalizeSubagentCard(acc, { status: outcome.status, durationMs: outcome.durationMs }, target);
+  const presentation: { presentation?: ToolResultPresentation } =
+    snapshot !== null ? { presentation: { subagent: snapshot } } : {};
+  return outcomeToResult(outcome, presentation);
+}
+
+/** Inline-only, byte-compatible with the pre-B1 constant export (CUT-S2 §2.1). */
+export const agentTool: ToolDefinition<AgentInput, AgentOutput> = createAgentTool();
 
 /**
  * Projects a coarse SubagentProgress onto the matching subagent_* AgentEvent,

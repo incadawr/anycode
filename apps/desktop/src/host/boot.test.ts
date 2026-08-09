@@ -26,7 +26,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AiSdkModelPort, NodeExecutionAdapter } from "@anycode/core";
+import { AiSdkModelPort, NodeExecutionAdapter, SqlitePersistenceAdapter } from "@anycode/core";
 import { CREDENTIAL_RESPONSE_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
 import {
   PREVIEW_EVENT_TYPE,
@@ -40,6 +40,8 @@ import {
   createMainCredentialProvider,
   createPreviewRpcClient,
   hostDiagnosticSink,
+  parseHostArgs,
+  resolveBootSession,
   routePreviewMessage,
   scrubSecretEnv,
   seedAlwaysAllowRules,
@@ -764,5 +766,197 @@ describe("routePreviewMessage (night-track wave-1 cut §2.3 parentPort filter)",
     expect(routePreviewMessage(null, { onResponse })).toBe(false);
     expect(routePreviewMessage("just a string", { onResponse })).toBe(false);
     expect(onResponse).not.toHaveBeenCalled();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TASK.102 CUT-S2 §2.6.2 (slice S2b B4): child-mode argv + resolveBootSession
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("parseHostArgs — child-mode flags (TASK.102 CUT-S2 §2.6.2)", () => {
+  it("parses --child-parent/--child-spawn-call/--child-mode (space form) into args.child", () => {
+    const result = parseHostArgs([
+      "--session",
+      "child-1",
+      "--child-parent",
+      "parent-1",
+      "--child-spawn-call",
+      "call-1",
+      "--child-mode",
+      "plan",
+    ]);
+    expect(result).toEqual({
+      sessionId: "child-1",
+      resume: false,
+      child: { parentSessionId: "parent-1", spawnToolCallId: "call-1", initialMode: "plan" },
+    });
+  });
+
+  it("parses the same triple in --flag=value form", () => {
+    const result = parseHostArgs([
+      "--child-parent=parent-2",
+      "--child-spawn-call=call-2",
+      "--child-mode=edit",
+    ]);
+    expect(result.child).toEqual({ parentSessionId: "parent-2", spawnToolCallId: "call-2", initialMode: "edit" });
+  });
+
+  it("a plain (non-child) argv has no `child` field at all", () => {
+    const result = parseHostArgs(["--session", "root-1"]);
+    expect(result).toEqual({ sessionId: "root-1", resume: false });
+    expect("child" in result).toBe(false);
+  });
+
+  it("requires ALL THREE child flags — any one missing leaves args.child undefined (never half-populated)", () => {
+    expect(parseHostArgs(["--child-parent", "p", "--child-spawn-call", "c"]).child).toBeUndefined();
+    expect(parseHostArgs(["--child-parent", "p", "--child-mode", "build"]).child).toBeUndefined();
+    expect(parseHostArgs(["--child-spawn-call", "c", "--child-mode", "build"]).child).toBeUndefined();
+  });
+
+  it("an unrecognized --child-mode value is dropped (fail-closed), not accepted as a PermissionMode", () => {
+    const result = parseHostArgs([
+      "--child-parent",
+      "p",
+      "--child-spawn-call",
+      "c",
+      "--child-mode",
+      "not-a-real-mode",
+    ]);
+    expect(result.child).toBeUndefined();
+  });
+
+  it("accepts every real PermissionMode value for --child-mode", () => {
+    for (const mode of ["plan", "build", "edit", "auto", "yolo"] as const) {
+      const result = parseHostArgs(["--child-parent", "p", "--child-spawn-call", "c", "--child-mode", mode]);
+      expect(result.child?.initialMode).toBe(mode);
+    }
+  });
+});
+
+describe("resolveBootSession — child-mode session rows (TASK.102 CUT-S2 §2.6.2)", () => {
+  it("--session <childId> with args.child writes parentSessionId/spawnToolCallId and mode from initialMode (NOT the hardcoded \"build\")", async () => {
+    const persistence = new SqlitePersistenceAdapter(":memory:");
+    try {
+      const result = await resolveBootSession(persistence, {
+        args: {
+          sessionId: "child-1",
+          resume: false,
+          child: { parentSessionId: "parent-1", spawnToolCallId: "call-1", initialMode: "plan" },
+        },
+        workspace: "/ws",
+        model: "m1",
+      });
+      expect(result.sessionMeta.parentSessionId).toBe("parent-1");
+      expect(result.sessionMeta.spawnToolCallId).toBe("call-1");
+      expect(result.sessionMeta.mode).toBe("plan");
+
+      const persisted = await persistence.getSessionById("child-1");
+      expect(persisted?.parentSessionId).toBe("parent-1");
+      expect(persisted?.spawnToolCallId).toBe("call-1");
+      expect(persisted?.mode).toBe("plan");
+    } finally {
+      await persistence.close();
+    }
+  });
+
+  it("a non-child boot is unaffected: no parent fields, mode defaults to \"build\" (byte-identical to pre-S2b)", async () => {
+    const persistence = new SqlitePersistenceAdapter(":memory:");
+    try {
+      const result = await resolveBootSession(persistence, {
+        args: { sessionId: "root-1", resume: false },
+        workspace: "/ws",
+        model: "m1",
+      });
+      expect(result.sessionMeta.parentSessionId).toBeUndefined();
+      expect(result.sessionMeta.spawnToolCallId).toBeUndefined();
+      expect(result.sessionMeta.mode).toBe("build");
+    } finally {
+      await persistence.close();
+    }
+  });
+
+  it(
+    "TASK.102 CUT-S2 §10.4 residual: --resume <childId> of an ABSENT row (respawn racing the write-behind queue) " +
+      "still writes parentSessionId/spawnToolCallId/mode from args.child — it must NOT silently fall back to a " +
+      "parent-less ROOT row that would sit forever in the Sidebar",
+    async () => {
+      const persistence = new SqlitePersistenceAdapter(":memory:");
+      try {
+        const result = await resolveBootSession(persistence, {
+          args: {
+            sessionId: "ghost-child",
+            resume: true,
+            child: { parentSessionId: "parent-9", spawnToolCallId: "call-9", initialMode: "auto" },
+          },
+          workspace: "/ws",
+          model: "m1",
+        });
+        expect(result.resumedMissing).toBe(true);
+        expect(result.sessionMeta.parentSessionId).toBe("parent-9");
+        expect(result.sessionMeta.spawnToolCallId).toBe("call-9");
+        expect(result.sessionMeta.mode).toBe("auto");
+
+        // The strongest form of the assertion: the row must be genuinely
+        // invisible to every root-only consumer (Sidebar/StartScreen/
+        // CommandPalette/CLI all route through listRootSessions), not merely
+        // carry the right columns while still being reachable as a root.
+        const roots = await persistence.listRootSessions();
+        expect(roots.some((s) => s.id === "ghost-child")).toBe(false);
+        expect((await persistence.getRootSession("ghost-child"))).toBeNull();
+
+        // And it IS reachable as a proper child of its parent.
+        const child = await persistence.getChildSession("parent-9", "call-9");
+        expect(child?.id).toBe("ghost-child");
+      } finally {
+        await persistence.close();
+      }
+    },
+  );
+
+  it("--resume of an absent id with NO args.child still falls back to a root row with mode \"build\" (pre-existing behavior, unaffected)", async () => {
+    const persistence = new SqlitePersistenceAdapter(":memory:");
+    try {
+      const result = await resolveBootSession(persistence, {
+        args: { sessionId: "plain-ghost", resume: true },
+        workspace: "/ws",
+        model: "m1",
+      });
+      expect(result.resumedMissing).toBe(true);
+      expect(result.sessionMeta.parentSessionId).toBeUndefined();
+      expect(result.sessionMeta.mode).toBe("build");
+      const roots = await persistence.listRootSessions();
+      expect(roots.some((s) => s.id === "plain-ghost")).toBe(true);
+    } finally {
+      await persistence.close();
+    }
+  });
+
+  it("--resume of an EXISTING child row keeps its own persisted parent-fields/mode untouched, regardless of args.child", async () => {
+    const persistence = new SqlitePersistenceAdapter(":memory:");
+    try {
+      await persistence.createSession({
+        id: "existing-child",
+        workspace: "/ws",
+        model: "m1",
+        mode: "edit",
+        parentSessionId: "parent-orig",
+        spawnToolCallId: "call-orig",
+      });
+      const result = await resolveBootSession(persistence, {
+        args: {
+          sessionId: "existing-child",
+          resume: true,
+          // A respawn's argv still carries the child triple — must never overwrite the loaded row.
+          child: { parentSessionId: "parent-orig", spawnToolCallId: "call-orig", initialMode: "yolo" },
+        },
+        workspace: "/ws",
+        model: "m1",
+      });
+      expect(result.resumedMissing).toBe(false);
+      expect(result.sessionMeta.mode).toBe("edit"); // persisted mode wins, not initialMode "yolo"
+      expect(result.sessionMeta.parentSessionId).toBe("parent-orig");
+    } finally {
+      await persistence.close();
+    }
   });
 });
