@@ -294,6 +294,21 @@ export function isValidChildId(value: unknown): value is string {
   return isIdString(value, CHILD_ID_MAX_CHARS);
 }
 
+/**
+ * Public pre-flight variant of `isIdString` for `ChildSpawnRequest.model`
+ * (TASK.102 S4 blocker fix), capped at `CHILD_MODEL_MAX_CHARS` rather than
+ * `CHILD_ID_MAX_CHARS` — `isValidChildId` cannot be reused directly since the
+ * two caps differ (model 200, id 256). `model` is model-authored and, on the
+ * main side, becomes a literal `--engine-model` argv value forwarded onto the
+ * child host's own argv (`main/tabs.ts`); the same leading-dash desync this
+ * file's header describes for id-shaped fields applies here too, since
+ * `host/boot.ts`'s `parseHostArgs` has no branch for that flag and would
+ * misread a dash-leading value as the FOLLOWING flag instead.
+ */
+export function isValidChildModel(value: unknown): value is string {
+  return isIdString(value, CHILD_MODEL_MAX_CHARS);
+}
+
 /** Non-empty string, capped at `maxLength` code units — the shape most free-text required fields on this wire share (agentType/description/prompt/model/provider/toolName). */
 function isNonEmptyCappedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;
@@ -356,7 +371,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.provider !== undefined && !isNonEmptyCappedString(msg.provider, CHILD_PROVIDER_MAX_CHARS)) {
     return null;
   }
-  if (msg.model !== undefined && !isNonEmptyCappedString(msg.model, CHILD_MODEL_MAX_CHARS)) {
+  if (msg.model !== undefined && !isIdString(msg.model, CHILD_MODEL_MAX_CHARS)) {
     return null;
   }
   if (!isPermissionMode(msg.permissionMode)) {
