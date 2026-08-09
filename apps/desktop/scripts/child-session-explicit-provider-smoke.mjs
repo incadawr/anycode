@@ -221,10 +221,13 @@ export class SmokeFailure extends Error {
   }
 }
 
-let passCount = 0;
+// Distinct step numbers that reported a PASS. Counting pass() CALLS overstates
+// the score: step 1 alone emits two (launch, then boot-tab discovery), which is
+// why runs printed "5/4 steps passed".
+const passedSteps = new Set();
 
 export function pass(step, detail) {
-  passCount += 1;
+  passedSteps.add(step);
   console.log(`[step ${step}] PASS ${detail ?? ""}`.trimEnd());
 }
 
@@ -809,7 +812,7 @@ async function runTeardown(ctx, failedStep) {
   }
 
   const verdict = ctx.skipped ? `SKIPPED (${ctx.skipReason})` : failedStep === null ? "ALL GREEN" : `STOPPED at step ${failedStep}`;
-  console.log(`\n[child-session-explicit-provider-smoke] ${passCount}/${TOTAL_STEPS} steps passed — ${verdict}`);
+  console.log(`\n[child-session-explicit-provider-smoke] ${passedSteps.size}/${TOTAL_STEPS} steps passed — ${verdict}`);
 
   try {
     ctx.mkdirEvidenceDir();
@@ -824,7 +827,7 @@ async function runTeardown(ctx, failedStep) {
           skipReason: ctx.skipReason ?? null,
           toolCallId: ctx.toolCallId ?? null,
           childEntry: ctx.childEntry ?? null,
-          passCount,
+          passCount: passedSteps.size,
           totalSteps: TOTAL_STEPS,
           at: new Date().toISOString(),
         },
