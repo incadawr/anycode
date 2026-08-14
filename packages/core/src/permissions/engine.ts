@@ -24,7 +24,7 @@
  * re-escalated to ask by the block above.
  */
 
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import type { PermissionEngine, PermissionRequest, PermissionRuling } from "../types/permissions.js";
 import { isWithinWorkspace } from "./workspace-policy.js";
 
@@ -116,5 +116,11 @@ function isContainedWorkspaceWrite(request: PermissionRequest): boolean {
   // candidate AGAINST the root, which would turn a sloppy caller's relative
   // resolvedPath into a false "inside". Facts must be absolute real paths.
   if (!isAbsolute(ws.root) || !isAbsolute(ws.resolvedPath)) return false;
+  // Degenerate-root refusal (ARBITRATION-S1-W1 N2): a workspace root that is
+  // the filesystem root — its own dirname: POSIX "/", a Windows drive/UNC
+  // root — makes lexical containment vacuously true for EVERY absolute path,
+  // so it proves nothing; edit mode must not widen on it. Fail-closed to the
+  // ordinary edit-mode ask.
+  if (dirname(ws.root) === ws.root) return false;
   return isWithinWorkspace(ws.resolvedPath, ws.root);
 }
