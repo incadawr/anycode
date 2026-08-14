@@ -24,6 +24,16 @@ export interface FileStat {
    * target into our catalog).
    */
   isSymbolicLink?: boolean;
+  /**
+   * Hard-link count (POSIX st_nlink). Optional so existing mocks/adapters keep
+   * compiling unchanged; the edit-mode workspace-write resolver
+   * (util/path-containment.ts) requires `nlink === 1` on an EXISTING
+   * regular-file target before minting containment facts — a multi-linked
+   * inode has aliases path containment cannot see, and a truncate-in-place
+   * write mutates all of them. Absent means UNPROVABLE (the resolver fails
+   * closed to no-facts => ask), never assumed 1.
+   */
+  nlink?: number;
 }
 
 export interface FileSystemPort {

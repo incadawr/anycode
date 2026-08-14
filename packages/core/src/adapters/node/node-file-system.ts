@@ -36,6 +36,7 @@ export class NodeFileSystemAdapter implements FileSystemPort {
       isDirectory: s.isDirectory(),
       mode: s.mode,
       isSymbolicLink: s.isSymbolicLink(),
+      nlink: s.nlink,
     };
   }
 
@@ -48,6 +49,7 @@ export class NodeFileSystemAdapter implements FileSystemPort {
       isDirectory: s.isDirectory(),
       mode: s.mode,
       isSymbolicLink: s.isSymbolicLink(),
+      nlink: s.nlink,
     };
   }
 
