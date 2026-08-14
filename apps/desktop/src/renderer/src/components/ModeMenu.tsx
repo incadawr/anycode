@@ -40,14 +40,15 @@ const MODE_MENU_POPOVER_WIDTH = 240;
 
 /**
  * One-line description per mode, aligned to the permission engine's semantics
- * (packages/core/src/permissions/engine.ts): plan denies all writes; build/edit
- * ask before side-effecting tools; auto asks only on high-risk tools; yolo
- * never asks.
+ * (packages/core/src/permissions/engine.ts): plan denies all writes; build
+ * asks before every side-effecting tool; edit allows Write/Edit inside the
+ * workspace without asking and asks for everything else side-effecting
+ * (TASK.32); auto asks only on high-risk tools; yolo never asks.
  */
-const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
+export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   plan: "Read-only planning",
   build: "Ask before edits",
-  edit: "Ask before shell",
+  edit: "Edit files in this project without asking",
   auto: "Ask only for risky actions",
   yolo: "Never ask",
 };

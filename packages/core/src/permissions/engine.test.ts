@@ -255,3 +255,162 @@ describe("ModePermissionEngine — mode × 11-tool snapshot (real tool metadata)
     }
   });
 });
+
+/**
+ * TASK.32 honest Edit mode (CUT-S1 §7a): a Write/Edit whose dispatch-site-
+ * resolved target provably sits inside the workspace is allowed TERMINALLY in
+ * edit mode — before baseRuling's needsApproval escalation ever sees it (DV-4).
+ * Uses REAL writeTool/editTool/bashTool metadata (needsApproval:true) so a
+ * naive implementation that teaches baseRuling's edit branch to allow (and
+ * lets the later escalation re-ask) goes red here.
+ */
+describe("ModePermissionEngine — TASK.32 edit-mode workspace containment", () => {
+  const engine = new ModePermissionEngine();
+
+  const facts = (root: string, resolvedPath: string) => ({ root, resolvedPath });
+
+  it("E1: edit + contained Write => allow, terminally (DV-4)", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("allow");
+    expect(ruling.reason).toContain("workspace");
+  });
+
+  it("E2: edit + contained Edit => allow", () => {
+    const ruling = engine.check({
+      toolName: "Edit",
+      input: {},
+      metadata: editTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("allow");
+    expect(ruling.reason).toContain("workspace");
+  });
+
+  it("E3: edit + resolved target outside => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/tmp/x.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+    expect(ruling.reason).toBeTruthy();
+  });
+
+  it("E4: edit + resolvedPath escaping via .. => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/../etc/passwd"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E5: prefix collision /ws-evil vs /ws => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws-evil/x.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E6: absent workspace block => today's ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+    });
+    expect(ruling.decision).toBe("ask");
+    expect(ruling.reason).toContain("write/side-effecting");
+  });
+
+  it("E7: build + contained Write => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "build",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E8: plan + contained Write => deny", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "plan",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("deny");
+  });
+
+  it("E9: yolo/auto + contained Write => allow (unchanged)", () => {
+    for (const mode of ["yolo", "auto"] as const) {
+      const ruling = engine.check({
+        toolName: "Write",
+        input: {},
+        metadata: writeTool.metadata,
+        mode,
+        workspace: facts("/ws", "/ws/a/b.md"),
+      });
+      expect(ruling.decision, mode).toBe("allow");
+    }
+  });
+
+  it("E10: Bash in edit with a workspace block => ask", () => {
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: {},
+      metadata: bashTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E11: non-absolute facts => ask", () => {
+    const r1 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("ws", "/ws/x"),
+    });
+    expect(r1.decision).toBe("ask");
+    const r2 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "x"),
+    });
+    expect(r2.decision).toBe("ask");
+  });
+
+  it("E12: root itself resolvable: facts(\"/ws\",\"/ws\") => allow", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws"),
+    });
+    expect(ruling.decision).toBe("allow");
+  });
+});
