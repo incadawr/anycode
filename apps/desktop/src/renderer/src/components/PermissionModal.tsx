@@ -53,6 +53,7 @@ import { useTabSend, useTabStore } from "../tab-context.js";
 import { Markdown } from "./Markdown.js";
 import { X } from "./icons.js";
 import { commandBinary, sanitizeBashPattern } from "../permission-pattern.js";
+import { classifyBashCommandLine } from "@anycode/core/permissions/safe-command";
 import "../settings.css";
 
 export interface PermissionModalProps {
@@ -160,6 +161,28 @@ export interface PermissionAskPresentation {
   canRemember: boolean;
 }
 
+/** TASK.35: the honest reason line for a Bash ask caused by unprovable shell
+ * syntax, as opposed to a plainly high-risk single command. Exported for the
+ * copy-pinning test. */
+export const UNKNOWN_SHELL_HINT =
+  "Unknown shell expression — AnyCode can't prove this command is read-only, so it's asking. Unproven is not necessarily dangerous; review the command before allowing.";
+
+/** Resolves the TASK.35 hint for a generic ask; null for everything that is
+ * not a Bash shell-expression ask (fail-closed presentation: no command
+ * string, or a plain single command, or a proven read-only line → no hint). */
+function bashUnknownShellHint(toolName: string, input: unknown): string | null {
+  if (toolName !== "Bash") {
+    return null;
+  }
+  const command =
+    input !== null && typeof input === "object" ? (input as { command?: unknown }).command : undefined;
+  if (typeof command !== "string") {
+    return null;
+  }
+  const verdict = classifyBashCommandLine(command);
+  return verdict.class === "unknown" && verdict.shellExpression ? UNKNOWN_SHELL_HINT : null;
+}
+
 /**
  * Resolves how an ask should be presented (TASK.27). The plan branch is a
  * PRESENTATION special case only — the tool reached this modal through the
@@ -190,7 +213,7 @@ export function describePermissionAsk(toolName: string, input: unknown): Permiss
       sentence: formatPermissionTitle(toolName).sentence,
       allowLabel: "Allow",
       denyLabel: "Deny",
-      hint: null,
+      hint: bashUnknownShellHint(toolName, input),
       canRemember: true,
     };
   }
@@ -573,7 +596,12 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
         {isPlan ? (
           <div className="permission-plan-hint">{presentation.hint}</div>
         ) : (
-          <div className="permission-mode">Mode: {request.mode}</div>
+          <>
+            {presentation.hint !== null && (
+              <div className="permission-ask-hint">{presentation.hint}</div>
+            )}
+            <div className="permission-mode">Mode: {request.mode}</div>
+          </>
         )}
 
         {showRemember && <div className="permission-remember">
