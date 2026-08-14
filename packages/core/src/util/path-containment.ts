@@ -18,6 +18,7 @@
 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
+import type { PermissionWorkspaceFacts } from "../types/permissions.js";
 
 /**
  * Realpath of the DEEPEST existing ancestor of `path`, with any not-yet-existing
@@ -209,4 +210,41 @@ export async function isUnderOwnRootsResolved(
     }
   }
   return false;
+}
+
+/**
+ * Dispatch-site workspace-containment facts for a Write/Edit permission check
+ * (TASK.32 DV-3). Resolves BOTH sides to real paths so the pure engine can
+ * decide lexically: the workspace root via `realpath` (must EXIST — a missing
+ * root cannot anchor trust), the target via `realpathExistingAncestor`.
+ * Fail-closed to `undefined` (= containment unprovable) on: port missing or
+ * lacking `realpath`, relative `filePath`, any `.`/`..` segment in the RAW
+ * `filePath` (lexical dot-collapse happens before symlink resolution, so a
+ * `..` after a symlink component would be proven against the wrong directory
+ * — see CUT-S1 D-S1-3), unresolvable root or target, or any throw. NEVER
+ * throws.
+ */
+export async function resolveWorkspaceWriteFacts(
+  fs: FileSystemPort | undefined,
+  workspaceRoot: string,
+  filePath: string,
+): Promise<PermissionWorkspaceFacts | undefined> {
+  try {
+    if (typeof fs?.realpath !== "function") return undefined;
+    if (!isAbsolute(filePath)) return undefined;
+    if (filePath.split(/[\\/]/).some((seg) => seg === "." || seg === "..")) {
+      return undefined;
+    }
+    let root: string;
+    try {
+      root = await fs.realpath(workspaceRoot);
+    } catch {
+      return undefined;
+    }
+    const resolvedPath = await realpathExistingAncestor(fs, filePath);
+    if (resolvedPath === undefined) return undefined;
+    return { root, resolvedPath };
+  } catch {
+    return undefined;
+  }
 }

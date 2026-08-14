@@ -20,6 +20,24 @@ export interface PermissionRequest {
   mode: PermissionMode;
   /* */
   toolCallId?: string;
+  /** Present only when the dispatch site proved the target resolvable (TASK.32). */
+  workspace?: PermissionWorkspaceFacts;
+}
+
+/**
+ * Dispatch-site workspace facts for a filesystem-write permission check
+ * (TASK.32, DV-2/DV-3). Built ONLY by the dispatcher, ONLY for the Write/Edit
+ * tools, and ONLY when the target could be fully symlink-resolved: `root` is
+ * the realpath of the workspace root (DispatchContext.cwd), `resolvedPath` is
+ * the symlink-resolved absolute target (deepest existing ancestor realpath'd,
+ * not-yet-existing remainder rejoined; raw paths containing `.`/`..` segments
+ * are refused upstream). Both are absolute real paths, so a pure engine may
+ * decide containment lexically over them. An absent block means containment is
+ * unprovable — the engine then keeps today's fail-closed behavior.
+ */
+export interface PermissionWorkspaceFacts {
+  root: string;
+  resolvedPath: string;
 }
 
 /** Pure rule evaluation result. */
