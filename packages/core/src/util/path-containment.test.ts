@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import { isWithinWorkspace } from "../permissions/workspace-policy.js";
 import { resolveWorkspaceWriteFacts } from "./path-containment.js";
-import type { FileSystemPort } from "../ports/file-system.js";
+import type { FileStat, FileSystemPort } from "../ports/file-system.js";
 
 const adapter = new NodeFileSystemAdapter();
 const tmpRoots: string[] = [];
@@ -255,6 +255,41 @@ describe("resolveWorkspaceWriteFacts", () => {
     // Before the fix this returned {root: ws, resolvedPath: `${ws}/out/pwn.txt`}
     // — lexically "inside" the workspace while the real OS-level write follows
     // the symlink out to `outside/pwn.txt`. The engine would then rule "allow".
+    expect(facts).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------
+  // Fix cycle 1 extension (ARBITRATION-S1-W1 N1): NUL byte in `filePath`.
+
+  it("R14: NUL byte in filePath => undefined (N1, ARBITRATION-S1-W1)", async () => {
+    // Deliberately a FAKE, NUL-TOLERANT port (not the real adapter): its
+    // `lstat` reports plain ENOENT for any NUL-bearing path instead of
+    // throwing Node's ERR_INVALID_ARG_VALUE. This makes the test deterministic
+    // under BOTH pre-B1 and post-B1 probe semantics — every probePresence
+    // variant treats ENOENT as "absent" — so a red here can only be caused by
+    // the N1 refusal itself, never by the B1 errno guard rescuing it.
+    const nulTolerantPort: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: async (p: string) => p,
+      lstat: async (p: string): Promise<FileStat> => {
+        if (p.includes("\0")) {
+          const err = new Error("simulated ENOENT for a NUL-bearing path") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        }
+        return { size: 0, mtimeMs: 0, isFile: true, isDirectory: false, isSymbolicLink: false };
+      },
+    };
+
+    const facts = await resolveWorkspaceWriteFacts(nulTolerantPort, "/ws", "/ws/a\u0000b.txt");
+
     expect(facts).toBeUndefined();
   });
 });
