@@ -294,6 +294,26 @@ export async function resolveWorkspaceWriteFacts(
     }
     const resolvedPath = await realpathExistingAncestor(fs, filePath);
     if (resolvedPath === undefined) return undefined;
+    // Inode-alias refusal (ARBITRATION-S1-W2 MAJOR-1): path containment proves
+    // where the NAME lives, not where the write's EFFECT lands. An existing
+    // regular file with st_nlink > 1 has hard-link aliases this resolver cannot
+    // enumerate; writeFile truncates in place, mutating every alias — possibly
+    // outside the workspace. Facts are minted only when the leaf is: absent
+    // (creation mints a fresh inode), a directory (POSIX forbids directory hard
+    // links; a Write there fails EISDIR in the handler, unchanged), or a regular
+    // file PROVABLY single-linked. Unknown link count — port without nlink,
+    // nlink 0 or >1, non-file/non-dir leaf, non-ENOENT lstat failure — fails
+    // closed: no facts, edit mode keeps today's ask.
+    if (typeof fs.lstat !== "function") return undefined; // TS narrowing; unreachable in practice — the realpath-only-port case above already returned undefined via realpathExistingAncestor's own lstat-less refusal
+    try {
+      const leaf = await fs.lstat(resolvedPath);
+      if (!leaf.isDirectory && !(leaf.isFile && !leaf.isSymbolicLink && leaf.nlink === 1)) {
+        return undefined;
+      }
+    } catch (err) {
+      if (errnoCode(err) !== "ENOENT") return undefined;
+      // ENOENT: not-yet-existing leaf — creation mints a fresh inode; proceed.
+    }
     return { root, resolvedPath };
   } catch {
     return undefined;
