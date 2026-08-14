@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import { isWithinWorkspace } from "../permissions/workspace-policy.js";
-import { resolveWorkspaceWriteFacts } from "./path-containment.js";
+import { isUnderOwnRootsResolved, resolveWorkspaceWriteFacts } from "./path-containment.js";
 import type { FileStat, FileSystemPort } from "../ports/file-system.js";
 
 const adapter = new NodeFileSystemAdapter();
@@ -291,5 +291,62 @@ describe("resolveWorkspaceWriteFacts", () => {
     const facts = await resolveWorkspaceWriteFacts(nulTolerantPort, "/ws", "/ws/a\u0000b.txt");
 
     expect(facts).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------
+  // Fix cycle 2 (W2-NIT-1): errnoCode's `.code` read used to be unguarded
+  // inside probePresence's catch, so a rejection whose `.code` is a THROWING
+  // accessor escaped probePresence, then realpathExistingAncestor (whose loop
+  // has no try), regressing `isUnderOwnRootsResolved`'s totality (its own
+  // `catch { return false }` never sees a throw from outside its scope).
+
+  it("R15: lstat rejecting with a throwing `.code` getter => both resolveWorkspaceWriteFacts and isUnderOwnRootsResolved fail closed WITHOUT throwing (W2-NIT-1)", async () => {
+    const poisonedPort: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: async (p: string) => p,
+      lstat: async (): Promise<FileStat> => {
+        const err = new Error("boom");
+        Object.defineProperty(err, "code", {
+          get(): string {
+            throw new Error("getter exploded");
+          },
+        });
+        throw err;
+      },
+    };
+
+    // Half 1: resolveWorkspaceWriteFacts already absorbs this (its own outer
+    // try/catch) — pinned so a future regression there is also caught.
+    let facts: Awaited<ReturnType<typeof resolveWorkspaceWriteFacts>>;
+    let threwFacts = false;
+    try {
+      facts = await resolveWorkspaceWriteFacts(poisonedPort, "/ws", "/ws/a.txt");
+    } catch {
+      threwFacts = true;
+    }
+    expect(threwFacts).toBe(false);
+    expect(facts).toBeUndefined();
+
+    // Half 2: isUnderOwnRootsResolved — the actual regression. Its bare
+    // `catch { return false }` cannot catch a throw from OUTSIDE its own
+    // scope (realpathExistingAncestor's walk loop has no try), so pre-fix
+    // this call propagates `Error: getter exploded` instead of returning
+    // false.
+    let underRoots: boolean | undefined;
+    let threwUnder = false;
+    try {
+      underRoots = await isUnderOwnRootsResolved(poisonedPort, "/ws/a.txt", ["/ws"]);
+    } catch {
+      threwUnder = true;
+    }
+    expect(threwUnder).toBe(false);
+    expect(underRoots).toBe(false);
   });
 });
