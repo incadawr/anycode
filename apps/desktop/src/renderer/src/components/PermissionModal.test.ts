@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PLAN_PREVIEW_MAX_CHARS,
+  UNKNOWN_SHELL_HINT,
   buildAlwaysAllowRule,
   buildPermissionAllowMessage,
   canRememberPermission,
@@ -313,5 +314,47 @@ describe("canRememberPermission x plan ask", () => {
   it("an engine that permits remembering still cannot remember a plan", () => {
     const presentation = describePermissionAsk("ExitPlanMode", { plan: "x" });
     expect(canRememberPermission(null) && presentation.canRemember).toBe(false);
+  });
+});
+
+describe("describePermissionAsk — Bash unknown shell expression (TASK.35)", () => {
+  it("UM1: a Bash pipeline that cannot be proven read-only carries the hint, generic kind, remember allowed", () => {
+    const presentation = describePermissionAsk("Bash", { command: "git status | cat" });
+    expect(presentation.hint).toBe(UNKNOWN_SHELL_HINT);
+    expect(presentation.kind).toBe("generic");
+    expect(presentation.canRemember).toBe(true);
+    expect(presentation.sentence).toBe(formatPermissionTitle("Bash").sentence);
+  });
+
+  it("UM2: a plain high-risk single command keeps today's presentation — no hint", () => {
+    expect(describePermissionAsk("Bash", { command: "rm -rf /" }).hint).toBeNull();
+  });
+
+  it("UM3: further unknown shell expressions carry the hint", () => {
+    expect(describePermissionAsk("Bash", { command: "cat f | tee out" }).hint).toBe(UNKNOWN_SHELL_HINT);
+    expect(describePermissionAsk("Bash", { command: "ls > f" }).hint).toBe(UNKNOWN_SHELL_HINT);
+  });
+
+  it("UM4: fail-closed presentation — non-Bash tools and malformed Bash input never get the hint", () => {
+    expect(describePermissionAsk("Write", { file_path: "/tmp/x", content: "y" }).hint).toBeNull();
+    expect(describePermissionAsk("Bash", {}).hint).toBeNull();
+    expect(describePermissionAsk("Bash", null).hint).toBeNull();
+    expect(describePermissionAsk("Bash", { command: 42 }).hint).toBeNull();
+  });
+
+  it("UM5: a PROVEN read-only pipeline never gets called 'unknown' even if it reaches the modal via a forced ask", () => {
+    expect(describePermissionAsk("Bash", { command: "sed -n '1p' f | cat" }).hint).toBeNull();
+  });
+
+  it("UM6: copy pin — exact string and honest-cause wording", () => {
+    expect(UNKNOWN_SHELL_HINT).toBe(
+      "Unknown shell expression — AnyCode can't prove this command is read-only, so it's asking. Unproven is not necessarily dangerous; review the command before allowing.",
+    );
+    expect(UNKNOWN_SHELL_HINT).toContain("Unknown shell expression");
+    expect(UNKNOWN_SHELL_HINT).toContain("can't prove");
+  });
+
+  it("UM7: plan asks are unaffected — the plan hint keeps saying 'still ask' (already pinned at :261; not duplicated here)", () => {
+    expect(describePermissionAsk("ExitPlanMode", { plan: "x" }).hint).toContain("still ask");
   });
 });
