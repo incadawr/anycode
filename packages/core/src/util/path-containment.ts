@@ -58,9 +58,24 @@ type Presence = "present" | "absent" | "unknown";
 
 /** Narrows a thrown value's errno `.code`, mirroring `cli/settings-rules.ts`'s
  * `errno()` helper. Node's fs/promises rejects with `NodeJS.ErrnoException`; a
- * `FileSystemPort` implementation is expected to match that shape. */
+ * `FileSystemPort` implementation is expected to match that shape.
+ *
+ * Fix cycle 2 (W2-NIT-1): `.code` is read behind a `try/catch` because a
+ * `FileSystemPort` is an external boundary — nothing stops an adapter (or a
+ * test double) from rejecting with an object whose `code` is a THROWING
+ * getter. That read used to happen unguarded inside `probePresence`'s catch,
+ * so the throw escaped `probePresence`, then `realpathExistingAncestor` (its
+ * loop has no try), turning every caller's fail-closed `catch { return
+ * false }` (`isUnderOwnRootsResolved` included) into an uncaught exception —
+ * the opposite of fail-closed. An unreadable `.code` is treated as
+ * `undefined`, i.e. NOT `"ENOENT"`, so `probePresence` still resolves to
+ * `"unknown"` and every caller keeps failing closed. */
 function errnoCode(err: unknown): string | undefined {
-  return (err as NodeJS.ErrnoException | undefined)?.code;
+  try {
+    return (err as NodeJS.ErrnoException | undefined)?.code;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function realpathExistingAncestor(

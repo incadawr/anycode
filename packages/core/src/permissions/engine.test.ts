@@ -440,4 +440,25 @@ describe("ModePermissionEngine — TASK.32 edit-mode workspace containment", () 
     });
     expect(r2.decision).toBe("ask");
   });
+
+  // Fix cycle 2 (W2-MAJOR-2): the degenerate-root refusal keyed on the RAW
+  // root string, so a non-canonical vacuous root ("//", "/.", ...) — which
+  // resolves to "/" but is not its own raw dirname — slipped past the guard
+  // and reached isWithinWorkspace's vacuous "allow". The guard must run on
+  // the RESOLVED root. Literal "/" is included as a control: it must stay
+  // "ask" exactly as under the old (E13) guard.
+  it("E14: non-canonical vacuous roots (\"//\", \"///\", \"/.\", \"/..\", \"/x/..\") plus literal \"/\" => ask (ARBITRATION-S1-W1 N2, widened W2-MAJOR-2)", () => {
+    const vacuousRoots = ["//", "///", "/.", "/..", "/x/..", "/"];
+    for (const root of vacuousRoots) {
+      const ruling = engine.check({
+        toolName: "Write",
+        input: {},
+        metadata: writeTool.metadata,
+        mode: "edit",
+        workspace: facts(root, "/etc/passwd"),
+      });
+      expect(ruling.decision).toBe("ask");
+      expect(ruling.reason).toBe("Write: write/side-effecting tool requires approval in edit mode");
+    }
+  });
 });
