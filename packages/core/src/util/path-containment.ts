@@ -256,7 +256,8 @@ export async function isUnderOwnRootsResolved(
  * `filePath` (lexical dot-collapse happens before symlink resolution, so a
  * `..` after a symlink component would be proven against the wrong directory
  * — see CUT-S1 D-S1-3), unresolvable root or target, or any throw. NEVER
- * throws.
+ * throws. NUL in `filePath` refused (ARBITRATION-S1-W1 N1) — no real
+ * filesystem path contains NUL, so a NUL-bearing string must never mint facts.
  */
 export async function resolveWorkspaceWriteFacts(
   fs: FileSystemPort | undefined,
@@ -269,6 +270,7 @@ export async function resolveWorkspaceWriteFacts(
     if (filePath.split(/[\\/]/).some((seg) => seg === "." || seg === "..")) {
       return undefined;
     }
+    if (filePath.includes("\0")) return undefined;
     let root: string;
     try {
       root = await fs.realpath(workspaceRoot);

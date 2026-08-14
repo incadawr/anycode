@@ -413,4 +413,31 @@ describe("ModePermissionEngine — TASK.32 edit-mode workspace containment", () 
     });
     expect(ruling.decision).toBe("allow");
   });
+
+  // ARBITRATION-S1-W1 N2: a workspace root that IS the filesystem root makes
+  // lexical containment vacuously true for every absolute path, so edit mode
+  // must not widen on it — falls through to baseRuling's ordinary ask.
+  // Windows drive-root form (`C:\`) is untestable on a POSIX host
+  // (`isAbsolute("C:\\")` is false there and already refused by D-S1-9); not
+  // tested here.
+  it("E13: degenerate root \"/\" => ask (vacuous containment, ARBITRATION-S1-W1 N2)", () => {
+    const r1 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/", "/etc/passwd"),
+    });
+    expect(r1.decision).toBe("ask");
+    expect(r1.reason).toBe("Write: write/side-effecting tool requires approval in edit mode");
+
+    const r2 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/", "/x"),
+    });
+    expect(r2.decision).toBe("ask");
+  });
 });
