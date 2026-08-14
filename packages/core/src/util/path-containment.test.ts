@@ -195,4 +195,66 @@ describe("resolveWorkspaceWriteFacts", () => {
     expect(facts!.root).toBe(realroot);
     expect(isWithinWorkspace(facts!.resolvedPath, facts!.root)).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // Fix cycle 1 (TASK.32 S1 adversarial review): B1 (errno-blind presence
+  // probe) + M1 (lstat-less port fails open, contrary to the port contract).
+
+  it("R12: port with realpath but without lstat over a dangling-symlink component => undefined (M1, port contract fail-closed)", async () => {
+    const ws = await mkWorkspace();
+    await fsp.symlink(join(ws, "gone"), join(ws, "dang"), "dir");
+    const noLstatPort: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: adapter.realpath.bind(adapter),
+      // lstat intentionally omitted — the port has realpath but not lstat.
+    };
+
+    const facts = await resolveWorkspaceWriteFacts(noLstatPort, ws, join(ws, "dang", "pwn.txt"));
+
+    expect(facts).toBeUndefined();
+  });
+
+  it("R13: lstat rejecting with a non-ENOENT errno on a LIVE escaping symlink component => undefined, not lexically rejoined (B1)", async () => {
+    const base = await mkWorkspace();
+    const ws = join(base, "ws");
+    const outside = join(base, "outside");
+    await fsp.mkdir(ws, { recursive: true });
+    await fsp.mkdir(outside, { recursive: true });
+    await fsp.symlink(outside, join(ws, "out"), "dir");
+    const flakyTarget = join(ws, "out");
+
+    const flakyPort: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: adapter.realpath.bind(adapter),
+      lstat: async (p: string) => {
+        if (p === flakyTarget) {
+          const err = new Error("simulated EIO (network/removable mount)") as NodeJS.ErrnoException;
+          err.code = "EIO";
+          throw err;
+        }
+        return adapter.lstat(p);
+      },
+    };
+
+    const facts = await resolveWorkspaceWriteFacts(flakyPort, ws, join(ws, "out", "pwn.txt"));
+
+    // Before the fix this returned {root: ws, resolvedPath: `${ws}/out/pwn.txt`}
+    // — lexically "inside" the workspace while the real OS-level write follows
+    // the symlink out to `outside/pwn.txt`. The engine would then rule "allow".
+    expect(facts).toBeUndefined();
+  });
 });
