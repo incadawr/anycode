@@ -349,4 +349,106 @@ describe("resolveWorkspaceWriteFacts", () => {
     expect(threwUnder).toBe(false);
     expect(underRoots).toBe(false);
   });
+
+  // ---------------------------------------------------------------------
+  // Fix cycle 2 (W2-MAJOR-1, ARBITRATION-S1-W2): containment is inode-blind.
+  // A hard link inside the workspace aliases an inode whose OTHER name can
+  // sit outside the workspace; `writeFile` truncates in place, mutating
+  // every alias. Facts for an EXISTING leaf are minted only when `lstat`
+  // proves a single-linked (`nlink === 1`) regular file.
+
+  it("R16: hard-linked in-workspace leaf aliases an outside file => undefined (measured trigger, real adapter, ARBITRATION-S1-W2 MAJOR-1)", async () => {
+    const base = await mkWorkspace();
+    const ws = join(base, "ws");
+    const outside = join(base, "outside");
+    await fsp.mkdir(ws, { recursive: true });
+    await fsp.mkdir(outside, { recursive: true });
+    await fsp.writeFile(join(outside, "secret.txt"), "ORIGINAL");
+    // Hard link: a SECOND name for the SAME inode, one name inside the
+    // workspace, one outside. NOT a symlink — lstat reports isFile:true,
+    // isSymbolicLink:false, exactly like an ordinary contained file.
+    await fsp.link(join(outside, "secret.txt"), join(ws, "innocent.txt"));
+
+    const facts = await resolveWorkspaceWriteFacts(adapter, ws, join(ws, "innocent.txt"));
+
+    expect(facts).toBeUndefined();
+  });
+
+  it("R17: existing regular-file leaf with unknown link count (port omits nlink) => undefined (pins the port class, ARBITRATION-S1-W2 MAJOR-1)", async () => {
+    const noNlinkPort: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: async (p: string) => p,
+      lstat: async (): Promise<FileStat> => ({
+        size: 0,
+        mtimeMs: 0,
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        // nlink intentionally OMITTED — the port class this pins.
+      }),
+    };
+
+    const facts = await resolveWorkspaceWriteFacts(noNlinkPort, "/ws", "/ws/innocent.txt");
+
+    expect(facts).toBeUndefined();
+  });
+
+  it("R18: existing regular-file leaf with nlink === 1 => facts minted (predicate boundary, ARBITRATION-S1-W2 MAJOR-1)", async () => {
+    const singleLinkPort: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: async (p: string) => p,
+      lstat: async (): Promise<FileStat> => ({
+        size: 0,
+        mtimeMs: 0,
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        nlink: 1,
+      }),
+    };
+
+    const facts = await resolveWorkspaceWriteFacts(singleLinkPort, "/ws", "/ws/innocent.txt");
+
+    expect(facts).toEqual({ root: "/ws", resolvedPath: "/ws/innocent.txt" });
+  });
+
+  it("R18a: existing regular-file leaf with nlink === 2 => undefined (predicate boundary, ARBITRATION-S1-W2 MAJOR-1)", async () => {
+    const doubleLinkPort: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: async (p: string) => p,
+      lstat: async (): Promise<FileStat> => ({
+        size: 0,
+        mtimeMs: 0,
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        nlink: 2,
+      }),
+    };
+
+    const facts = await resolveWorkspaceWriteFacts(doubleLinkPort, "/ws", "/ws/innocent.txt");
+
+    expect(facts).toBeUndefined();
+  });
 });
