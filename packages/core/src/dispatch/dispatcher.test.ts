@@ -42,6 +42,7 @@ import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import type { CorePorts } from "../ports/index.js";
 import type { ExecResult } from "../ports/execution.js";
+import type { FileSystemPort } from "../ports/file-system.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { bashTool } from "../tools/bash.js";
 import { bashOutputTool } from "../tools/bash-output.js";
@@ -1479,5 +1480,68 @@ describe("executeToolCall — TASK.32 workspace facts", () => {
 
     expect(outcome.status).toBe("denied");
     await expect(fsp.access(join(outside, "x.md"))).rejects.toBeDefined();
+  });
+
+  it("D8: end-to-end: errno-blind lstat on an escaping symlink component => denied, file never written outside (B1, fix cycle 1)", async () => {
+    // Reviewer's exact repro: root <ws>, live symlink <ws>/out -> outside, one
+    // lstat("<ws>/out") failing non-ENOENT (here: simulated EIO, e.g. a
+    // network/removable mount hiccup). Before the fix, `probePresence` treated
+    // that rejection as "absent", the walk skipped the symlink component and
+    // lexically rejoined "<ws>/out/pwn.md" as though it were a plain path
+    // inside the workspace, the engine ruled "allow" in edit mode, and
+    // writeTool's real fs.writeFile then followed the REAL symlink at the OS
+    // level, landing the file in `outside`.
+    const ws = await mkWorkspace();
+    const outside = await mkWorkspace();
+    await fsp.symlink(outside, join(ws, "out"), "dir");
+    const flakyTarget = join(ws, "out");
+    const flakyAdapter: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      readFileBytes: adapter.readFileBytes.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      rename: adapter.rename.bind(adapter),
+      chmod: adapter.chmod.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: adapter.realpath.bind(adapter),
+      readFileNoFollow: adapter.readFileNoFollow.bind(adapter),
+      copyFileNoFollow: adapter.copyFileNoFollow.bind(adapter),
+      lstat: async (p: string) => {
+        if (p === flakyTarget) {
+          const err = new Error("simulated EIO (network/removable mount)") as NodeJS.ErrnoException;
+          err.code = "EIO";
+          throw err;
+        }
+        return adapter.lstat(p);
+      },
+    };
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const engine = new RuleAwarePermissionEngine(
+      new SafeCommandPermissionEngine(new ModePermissionEngine()),
+      new SessionPermissionRules(),
+    );
+    const ctx: DispatchContext = {
+      registry,
+      hooks: makeHooks(),
+      permissionEngine: engine,
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: flakyAdapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    const outcome = await executeToolCall(ctx, {
+      id: "w-7",
+      name: "Write",
+      input: { file_path: join(ws, "out", "pwn.md"), content: "hello" },
+    });
+
+    expect(outcome.status).toBe("denied");
+    await expect(fsp.access(join(outside, "pwn.md"))).rejects.toBeDefined();
   });
 });

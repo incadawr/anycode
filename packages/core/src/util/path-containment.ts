@@ -35,7 +35,34 @@ import type { PermissionWorkspaceFacts } from "../types/permissions.js";
  * escape the catalog. With `lstat`, a dangling link IS "present" and `realpath`
  * on it THROWS, so we fail closed (undefined). A live symlink resolves to its
  * real target and is then containment-checked normally.
+ *
+ * B1/M1 (fix cycle 1, TASK.32 S1 adversarial review): presence is TRI-STATE,
+ * not boolean. Only an `lstat` rejection whose `.code` is literally `"ENOENT"`
+ * proves genuine absence. Any OTHER `lstat` failure (EACCES/EIO/ESTALE under a
+ * network/removable mount, EMFILE/ENFILE under fd pressure, ENAMETOOLONG, ...)
+ * means an EXISTING component's status could not be read — treating that as
+ * "absent" (the old `catch { return false }`) let the walk skip PAST a live
+ * component and lexically reconstruct ITS OWN path from the parent's realpath,
+ * exactly like the dangling-symlink bug this function was built to close: if
+ * that skipped component is itself a symlink to outside, the reconstructed
+ * path lies about where a subsequent write actually lands (B1). Likewise, a
+ * port that offers `realpath` without `lstat` can never prove a component is
+ * NOT a symlink at all — per the port contract (`ports/file-system.ts` `lstat`
+ * doc: "callers that need symlink safety and find it absent must fail
+ * closed"), so lstat's absence is now also UNKNOWN, never a silent fallback to
+ * `exists` (which itself follows the final symlink) (M1). Both cases fail
+ * closed to `undefined` here, one level below every caller (`resolveTrustedRoot`,
+ * `resolveWorkspaceWriteFacts`, `isUnderOwnRootsResolved`).
  */
+type Presence = "present" | "absent" | "unknown";
+
+/** Narrows a thrown value's errno `.code`, mirroring `cli/settings-rules.ts`'s
+ * `errno()` helper. Node's fs/promises rejects with `NodeJS.ErrnoException`; a
+ * `FileSystemPort` implementation is expected to match that shape. */
+function errnoCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | undefined)?.code;
+}
+
 export async function realpathExistingAncestor(
   fs: FileSystemPort,
   path: string,
@@ -43,21 +70,28 @@ export async function realpathExistingAncestor(
   if (typeof fs.realpath !== "function") {
     return undefined;
   }
-  const probePresence = async (p: string): Promise<boolean> => {
-    if (typeof fs.lstat === "function") {
-      try {
-        await fs.lstat(p);
-        return true; // present as a regular file/dir OR a dangling symlink
-      } catch {
-        return false;
-      }
+  const probePresence = async (p: string): Promise<Presence> => {
+    if (typeof fs.lstat !== "function") {
+      // M1: a port without `lstat` cannot prove absence of a symlink — per
+      // the port contract this must fail closed, not fall back to `exists`.
+      return "unknown";
     }
-    return fs.exists(p);
+    try {
+      await fs.lstat(p);
+      return "present"; // present as a regular file/dir OR a dangling symlink
+    } catch (err) {
+      // B1: ONLY ENOENT proves genuine absence; any other errno is unknown.
+      return errnoCode(err) === "ENOENT" ? "absent" : "unknown";
+    }
   };
   let current = resolve(path);
   const tail: string[] = [];
   for (;;) {
-    if (await probePresence(current)) {
+    const presence = await probePresence(current);
+    if (presence === "unknown") {
+      return undefined; // presence unprovable — fail closed
+    }
+    if (presence === "present") {
       try {
         const real = await fs.realpath(current);
         return tail.length > 0 ? join(real, ...tail.slice().reverse()) : real;
