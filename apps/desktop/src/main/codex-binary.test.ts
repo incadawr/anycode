@@ -1,6 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import {
   candidatesFromPath,
   checkCodexBinaryPathTrust,
@@ -20,6 +21,9 @@ interface FakeEntry {
   mode?: number;
   uid?: number;
   gid?: number;
+  /** TASK.103 fingerprint fields — optional so every pre-existing fixture keeps typechecking untouched. */
+  size?: number;
+  mtimeMs?: number;
 }
 
 /** Every directory from `dirname(path)` up to (and including) the filesystem root — mirrors `ancestorDirectories` in codex-binary.ts. */
@@ -61,11 +65,27 @@ function fakeFs(
     stat(path) {
       const file = files[path];
       if (file !== undefined) {
-        return { isFile: () => true, isDirectory: () => false, mode: file.mode ?? 0o755, uid: file.uid ?? ME.uid, gid: file.gid ?? 20 };
+        return {
+          isFile: () => true,
+          isDirectory: () => false,
+          mode: file.mode ?? 0o755,
+          uid: file.uid ?? ME.uid,
+          gid: file.gid ?? 20,
+          size: file.size,
+          mtimeMs: file.mtimeMs,
+        };
       }
       const dir = dirEntries[path];
       if (dir !== undefined) {
-        return { isFile: () => false, isDirectory: () => true, mode: dir.mode ?? 0o755, uid: dir.uid ?? ME.uid, gid: dir.gid ?? 20 };
+        return {
+          isFile: () => false,
+          isDirectory: () => true,
+          mode: dir.mode ?? 0o755,
+          uid: dir.uid ?? ME.uid,
+          gid: dir.gid ?? 20,
+          size: dir.size,
+          mtimeMs: dir.mtimeMs,
+        };
       }
       throw new Error("ENOENT");
     },
@@ -407,5 +427,270 @@ describe("installedCodexCandidates", () => {
     expect(installedCodexCandidates({ USERPROFILE: "C:\\Users\\dev" }, "win32", "x64", fs)).toEqual([
       "C:\\Users\\dev\\.anycode\\codex\\bin\\0.144.3\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
     ]);
+  });
+});
+
+// TASK.103 — consent threading through resolveCodexBinary/discoverCodexBinary.
+const FILE_SIZE = 4096;
+const FILE_MTIME = 1_700_000_000_000;
+
+/** A consent matching a fake file's DEFAULT stat (mode 0o755, uid ME.uid, gid 20 unless overridden) at the given path, fingerprint pinned to FILE_SIZE/FILE_MTIME. */
+function consentFor(path: string, stat: { mode?: number; uid?: number; gid?: number } = {}): BinaryTrustConsent {
+  return {
+    path,
+    fingerprint: { mode: stat.mode ?? 0o755, uid: stat.uid ?? ME.uid, gid: stat.gid ?? 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+    grantedAt: "2026-08-15T00:00:00.000Z",
+  };
+}
+
+describe("consent-aware trust threading (TASK.103)", () => {
+  it("BG1 resolveCodexBinary: no consents refuses with a trustRefusal; a matching consent resolves", () => {
+    const fs = fakeFs({ "/opt/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME } }, { "/opt": { mode: 0o777 } });
+    const noConsent = resolveCodexBinary("/opt/codex", fs, "darwin", ME);
+    expect(noConsent.path).toBeNull();
+    expect(noConsent.reason).toMatch(/world-writable/);
+    expect(noConsent.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: noConsent.reason, staleConsent: false });
+
+    const withConsent = resolveCodexBinary("/opt/codex", fs, "darwin", ME, [consentFor("/opt/codex")]);
+    expect(withConsent).toEqual({ path: "/opt/codex" });
+  });
+
+  it("BG2 the tag discriminates: a structural refusal carries no trustRefusal; a trust-gate refusal does", () => {
+    const structural = resolveCodexBinary("/opt/codex", fakeFs({ "/opt/codex": { mode: 0o644 } }), "darwin", ME);
+    expect(structural.path).toBeNull();
+    expect(structural.reason).toMatch(/executable/);
+    expect(structural.trustRefusal).toBeUndefined();
+
+    const trustGateRefused = resolveCodexBinary(
+      "/opt/codex",
+      fakeFs({ "/opt/codex": {} }, { "/opt": { mode: 0o777 } }),
+      "darwin",
+      ME,
+    );
+    expect(trustGateRefused.path).toBeNull();
+    expect(trustGateRefused.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: trustGateRefused.reason, staleConsent: false });
+  });
+
+  it("BG3 discoverCodexBinary carries the FIRST rung's trustRefusal; a matching consent resolves that rung", () => {
+    const fs = fakeFs(
+      { "/env/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME }, "/settings/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME } },
+      { "/env": { mode: 0o777 }, "/settings": { mode: 0o777 } },
+    );
+    const noConsent = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(noConsent.path).toBeNull();
+    expect(noConsent.source).toBe("none");
+    // env is the highest-priority rung — its refusal must win over settings',
+    // even though settings is refused too (BM8: reporting the LAST refusal
+    // instead would name the wrong, lower-priority binary).
+    expect(noConsent.trustRefusal?.binaryPath).toBe("/env/codex");
+
+    const withConsent = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+      consents: [consentFor("/env/codex")],
+    });
+    expect(withConsent).toEqual({ path: "/env/codex", source: "env" });
+  });
+
+  it("BG5 a stale consent (recorded mtimeMs, live stat now newer) refuses again with trustRefusal present — no auto-refresh", () => {
+    const fs = fakeFs({ "/opt/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME + 1000 } }, { "/opt": { mode: 0o777 } });
+    // consentFor pins FILE_MTIME, but the fake fs now reports FILE_MTIME+1000.
+    const result = resolveCodexBinary("/opt/codex", fs, "darwin", ME, [consentFor("/opt/codex")]);
+    expect(result.path).toBeNull();
+    expect(result.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: result.reason, staleConsent: true });
+  });
+
+  it("BG6 the tag names the RESOLVED path (D-S4-14), suppresses for non-consentable refusals (D-S4-13), never promotes a missing path (D-S4-18), and discoverCodexBinary carries the rung (D-S4-20)", () => {
+    // A fake fs modelling a symlink: /link/codex resolves to /real/codex. The
+    // trust gate must judge and NAME the resolved file, never the candidate.
+    function symlinkFs(overrides: { real?: FakeEntry; link?: FakeEntry } = {}): CodexBinaryFs {
+      const base = fakeFs({
+        "/link/codex": { mode: 0o777, ...overrides.link },
+        "/real/codex": { mode: 0o777, ...overrides.real },
+      });
+      return { ...base, realpath: (path) => (path === "/link/codex" ? "/real/codex" : path) };
+    }
+
+    // (a) consentable refusal: trustRefused true, trustRefusal.binaryPath is
+    // the RESOLVED path (/real/codex), not the candidate (/link/codex).
+    const consentable = resolveCodexBinary("/link/codex", symlinkFs(), "darwin", ME);
+    expect(consentable.path).toBeNull();
+    expect(consentable.trustRefused).toBe(true);
+    expect(consentable.trustRefusal).toEqual({ binaryPath: "/real/codex", reason: consentable.reason, staleConsent: false });
+
+    // (b) a consent recorded for the RESOLVED path with a drifted fingerprint
+    // surfaces staleConsent:true.
+    const staleConsent: BinaryTrustConsent = {
+      path: "/real/codex",
+      fingerprint: { mode: 0o777, uid: ME.uid, gid: 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+    const staleResult = resolveCodexBinary(
+      "/link/codex",
+      symlinkFs({ real: { size: FILE_SIZE, mtimeMs: FILE_MTIME + 1000 } }),
+      "darwin",
+      ME,
+      [staleConsent],
+    );
+    expect(staleResult.path).toBeNull();
+    expect(staleResult.trustRefusal?.staleConsent).toBe(true);
+
+    // (c) third-party-owned resolved file: trustRefused true, trustRefusal
+    // ABSENT — the affordance is suppressed (D-S4-13 layer 3), not merely
+    // re-labelled.
+    const ownedResult = resolveCodexBinary("/link/codex", symlinkFs({ real: { uid: 777, mode: 0o755 } }), "darwin", ME);
+    expect(ownedResult.path).toBeNull();
+    expect(ownedResult.trustRefused).toBe(true);
+    expect(ownedResult.trustRefusal).toBeUndefined();
+
+    // (d) the pre-check stat(path) succeeds (raw candidate looks fine) but the
+    // gate's own realpath throws (the file vanished between the pre-check and
+    // the gate) — a MISSING outcome, never an offerable refusal: no
+    // trustRefused, no trustRefusal, and the reason is the plain "does not
+    // exist" string (D-S4-18), never a promoted catch.
+    const vanishingFs: CodexBinaryFs = {
+      stat(path) {
+        if (path === "/link/codex") return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+        throw new Error("ENOENT");
+      },
+      realpath(path) {
+        if (path === "/link/codex") throw new Error("ENOENT — vanished between pre-check and gate");
+        return path;
+      },
+    };
+    const vanished = resolveCodexBinary("/link/codex", vanishingFs, "darwin", ME);
+    expect(vanished.path).toBeNull();
+    expect(vanished.reason).toBe("Codex binary path does not exist");
+    expect(vanished.trustRefused).toBeUndefined();
+    expect(vanished.trustRefusal).toBeUndefined();
+
+    // (e) discoverCodexBinary carries trustRefusalSource for the refusing
+    // rung, present iff trustRefusal is present.
+    const discovered = discoverCodexBinary({
+      envOverride: "/link/codex",
+      env: { PATH: "" },
+      fs: symlinkFs(),
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(discovered.path).toBeNull();
+    expect(discovered.trustRefusal?.binaryPath).toBe("/real/codex");
+    expect(discovered.trustRefusalSource).toBe("env");
+  });
+});
+
+// D-S4-22 — explicit-rung hard-stop: a trust-refused env/settings candidate
+// must not let a lower rung silently substitute a different binary. Ambient
+// rungs (path/common/installed) keep the pre-existing fall-through behavior
+// (pinned by the untouched test at :339-351).
+describe("BG8 explicit-rung hard-stop (D-S4-22)", () => {
+  it("BG8 (a) an env-rung consentable refusal hard-stops the ladder even though settings resolves — THE observed live defect, verbatim", () => {
+    const fs = fakeFs(
+      { "/env/codex": {}, "/settings/codex": {} },
+      { "/env": { mode: 0o777 } }, // env candidate's directory is world-writable: consentable refusal
+    );
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefusal).toEqual({ binaryPath: "/env/codex", reason: result.reason, staleConsent: false });
+    expect(result.trustRefusalSource).toBe("env");
+    expect(result.trustRefused).toBeUndefined();
+  });
+
+  it("BG8 (b) a settings-rung consentable refusal hard-stops the ladder even though PATH resolves", () => {
+    const fs = fakeFs(
+      { "/settings/codex": {}, "/usr/local/bin/codex": {} },
+      { "/settings": { mode: 0o777 } },
+    );
+    const result = discoverCodexBinary({
+      settingsPath: "/settings/codex",
+      env: { PATH: "/usr/local/bin" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefusal).toEqual({ binaryPath: "/settings/codex", reason: result.reason, staleConsent: false });
+    expect(result.trustRefusalSource).toBe("settings");
+  });
+
+  it("BG8 (c) a consent matching the env binary's fingerprint still resolves it — consent lifts the wall even with a lower rung available", () => {
+    const fs = fakeFs(
+      { "/env/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME }, "/settings/codex": {} },
+      { "/env": { mode: 0o777 } },
+    );
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+      consents: [consentFor("/env/codex")],
+    });
+    expect(result).toEqual({ path: "/env/codex", source: "env" });
+  });
+
+  // Ambient side of PIN B.1's boundary: the guard at :339-351 above (a
+  // path-rung refusal falling through to a common-rung success) stays green
+  // UNMODIFIED. This pins the SAME-rung variant: two PATH-rung candidates,
+  // the first refused, the second valid — the ladder keeps walking within an
+  // ambient rung exactly as it does across ambient rungs.
+  it("BG8 (d) same-rung ambient variant: two PATH dirs, first refused, second valid — the ladder keeps walking (ambient rungs never hard-stop)", () => {
+    const fs = fakeFs({ "/a/codex": {}, "/b/codex": {} }, { "/a": { mode: 0o777 } });
+    const result = discoverCodexBinary({
+      env: { PATH: "/a:/b", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: "/b/codex", source: "path" });
+  });
+
+  it("BG8 (e) an env-rung NON-consentable refusal (third-party-owned) hard-stops with no trustRefusal payload", () => {
+    const fs = fakeFs({ "/env/codex": { uid: 777 }, "/settings/codex": {} });
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefused).toBe(true);
+    expect(result.trustRefusal).toBeUndefined();
+  });
+
+  it("BG8 (f) a MISSING env override (stat throws) falls through to a valid lower rung — the :324-332 doc-comment case stays green", () => {
+    const fs = fsWith(["/usr/local/bin/codex"]);
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex-gone",
+      env: { PATH: "/usr/local/bin" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: "/usr/local/bin/codex", source: "path" });
   });
 });

@@ -17,6 +17,7 @@ import {
   emptySecrets,
   loadSecrets,
   loadSettings,
+  readTrustedBinaryConsentsSync,
   saveSecrets,
   saveSettings,
   withSettingsFileLock,
@@ -286,5 +287,57 @@ describe("secrets.json (frozen v1 custody format)", () => {
     await writeFile(secretsPath(), JSON.stringify({ version: 1, entries: { x: { cipher: "rot13" } } }), "utf8");
     const result = await loadSecrets(secretsPath());
     expect(result.file).toEqual(emptySecrets());
+  });
+});
+
+describe("readTrustedBinaryConsentsSync (TASK.103) — fail-soft, per-element", () => {
+  const validConsent = {
+    path: "/opt/homebrew/bin/codex",
+    fingerprint: { mode: 0o755, uid: 501, gid: 20, size: 4096, mtimeMs: 1_700_000_000_000 },
+    grantedAt: "2026-08-15T00:00:00.000Z",
+  };
+
+  it("BS3 returns the records from a valid settings.json", async () => {
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({ ...cloneDefaults(), security: { allowWeakSecretStorage: false, trustedBinaries: [validConsent] } }),
+      "utf8",
+    );
+    expect(readTrustedBinaryConsentsSync(settingsPath())).toEqual([validConsent]);
+  });
+
+  it("BS3 returns [] for a missing file", () => {
+    expect(readTrustedBinaryConsentsSync(settingsPath())).toEqual([]);
+  });
+
+  it("BS3 returns [] for corrupt JSON, never throws", async () => {
+    await writeFile(settingsPath(), "not json at all", "utf8");
+    expect(() => readTrustedBinaryConsentsSync(settingsPath())).not.toThrow();
+    expect(readTrustedBinaryConsentsSync(settingsPath())).toEqual([]);
+  });
+
+  it("BS3 returns [] when security or trustedBinaries is absent/malformed at the top level, never throws", async () => {
+    await writeFile(settingsPath(), JSON.stringify({ ...cloneDefaults() }), "utf8");
+    expect(readTrustedBinaryConsentsSync(settingsPath())).toEqual([]);
+
+    await writeFile(settingsPath(), JSON.stringify({ ...cloneDefaults(), security: "not-an-object" }), "utf8");
+    expect(() => readTrustedBinaryConsentsSync(settingsPath())).not.toThrow();
+    expect(readTrustedBinaryConsentsSync(settingsPath())).toEqual([]);
+
+    await writeFile(settingsPath(), "null", "utf8");
+    expect(readTrustedBinaryConsentsSync(settingsPath())).toEqual([]);
+  });
+
+  it("BS3 drops invalid elements alone; valid siblings survive", async () => {
+    const malformed = { path: "/opt/broken", fingerprint: { mode: 0o755, uid: 501, gid: 20, size: 4096 }, grantedAt: "2026-08-15T00:00:00.000Z" };
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({
+        ...cloneDefaults(),
+        security: { allowWeakSecretStorage: false, trustedBinaries: [malformed, validConsent] },
+      }),
+      "utf8",
+    );
+    expect(readTrustedBinaryConsentsSync(settingsPath())).toEqual([validConsent]);
   });
 });

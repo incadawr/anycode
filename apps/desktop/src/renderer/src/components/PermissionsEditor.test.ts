@@ -52,6 +52,11 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
     setSecret: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     clearSecret: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     addRule: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
+    // TASK.103: mechanical addition ONLY — `SettingsBridge` gained a new
+    // required member (settings-store.ts row 42); this file's own fixture
+    // must satisfy the type, though nothing in PermissionsEditor.tsx itself
+    // changed (D-S4-7: the trusted-binaries section is a sibling component).
+    binaryTrustRevoke: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     oauthStart: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),
     oauthCancel: vi.fn().mockResolvedValue(undefined),
     connectionUpdate: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() }),

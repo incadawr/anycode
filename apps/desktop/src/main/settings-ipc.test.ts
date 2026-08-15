@@ -21,6 +21,8 @@ import {
   applyConnectionHealthEvent,
   buildSettingsSnapshot,
   handleAddRule,
+  handleBinaryTrustGrant,
+  handleBinaryTrustRevoke,
   handleClearSecret,
   handleConnectionCheck,
   handleConnectionCreate,
@@ -2289,5 +2291,203 @@ describe("legacy write-seam retirement — mechanical source-text gate (TASK.45 
     const source = await readFile(new URL("./settings-ipc.ts", import.meta.url), "utf8");
     expect(source).toContain("findOrCreateConnectionByProvider");
     expect(source).toContain("bucketConnection");
+  });
+});
+
+// TASK.103 — binary-trust grant/revoke custody (D-S4-5).
+const TRUST_STAT_DEFAULTS = { isFile: true, mode: 0o755, uid: 501, gid: 20, size: 4096, mtimeMs: 1_700_000_000_000 };
+
+/** A statBinaryForTrust seam that always resolves to `resolvedPath` with the given (or default) raw stat tuple. */
+function fakeStatBinaryForTrust(
+  resolvedPath: string,
+  overrides: Partial<typeof TRUST_STAT_DEFAULTS> = {},
+): NonNullable<SettingsIpcDeps["statBinaryForTrust"]> {
+  return () => ({ ok: true, resolvedPath, stat: { ...TRUST_STAT_DEFAULTS, ...overrides } });
+}
+
+/** A settings.json body that loads readOnly (version newer than CURRENT) — the shared fixture the read_only-refusal tests below reuse. */
+const READ_ONLY_SETTINGS_JSON = JSON.stringify({
+  version: 3,
+  provider: { connections: [] },
+  tools: {},
+  permissions: { alwaysAllow: [] },
+  ui: { theme: "system" },
+  security: { allowWeakSecretStorage: false },
+});
+
+describe("handleBinaryTrustGrant — happy path + upsert (TASK.103, D-S4-5)", () => {
+  it("BS4 persists the seam's RAW fingerprint tuple (never a caller-supplied one) and returns ok:true with a snapshot carrying it", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), now: () => "2026-08-15T00:00:00.000Z", uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    expect(res.ok).toBe(true);
+    const expectedRecord = {
+      path: "/opt/codex",
+      fingerprint: { mode: 0o755, uid: 501, gid: 20, size: 4096, mtimeMs: 1_700_000_000_000 },
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+    if (res.ok) {
+      expect(res.snapshot.settings.security.trustedBinaries).toEqual([expectedRecord]);
+    }
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries).toEqual([expectedRecord]);
+  });
+
+  it("BS4 re-granting the SAME path REPLACES its record — one entry, the new fingerprint (upsert, not duplicate)", async () => {
+    await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex", { mtimeMs: 1 }), now: () => "T1", uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex", { mtimeMs: 2 }), now: () => "T2", uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries).toHaveLength(1);
+    expect(loaded.settings.security.trustedBinaries?.[0]).toMatchObject({
+      fingerprint: { mtimeMs: 2 },
+      grantedAt: "T2",
+    });
+  });
+});
+
+describe("handleBinaryTrustGrant — refusals (TASK.103)", () => {
+  it("BS5 refuses a relative path; settings.json is never created", async () => {
+    const res = await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), uid: 501 }), {
+      path: "relative/codex",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries).toBeUndefined();
+  });
+
+  it("BS5 refuses when the seam reports ok:false (e.g. ENOENT)", async () => {
+    const res = await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: () => ({ ok: false, error: "ENOENT" }), uid: 501 }), {
+      path: "/opt/codex",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("BS5 refuses a non-file target (isFile:false)", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex", { isFile: false }), uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("BS5 refuses a non-executable target (mode 0o644)", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex", { mode: 0o644 }), uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("BS5 refuses on win32 — the unchecked path needs no consent", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), platform: "win32", uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("BS5 refuses read_only (settings.json newer than CURRENT); the file is byte-untouched", async () => {
+    await writeFile(settingsPath, READ_ONLY_SETTINGS_JSON);
+    const before = await readFile(settingsPath, "utf8");
+    const res = await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), uid: 501 }), {
+      path: "/opt/codex",
+    });
+    expect(res).toEqual({ ok: false, reason: "read_only" });
+    expect(await readFile(settingsPath, "utf8")).toBe(before);
+  });
+});
+
+describe("handleBinaryTrustRevoke — surgical + idempotent (TASK.103)", () => {
+  it("BS6 removes exactly the named path; a sibling record survives", async () => {
+    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex") }), { path: "/opt/codex" });
+    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/claude") }), { path: "/opt/claude" });
+    const res = await handleBinaryTrustRevoke(makeDeps(), { path: "/opt/codex" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries?.map((c) => c.path)).toEqual(["/opt/claude"]);
+  });
+
+  it("BS6 an unknown path is an idempotent ok:true no-op, with a fresh snapshot", async () => {
+    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex") }), { path: "/opt/codex" });
+    const res = await handleBinaryTrustRevoke(makeDeps(), { path: "/opt/does-not-exist" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.snapshot.settings.security.trustedBinaries?.map((c) => c.path)).toEqual(["/opt/codex"]);
+    }
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries?.map((c) => c.path)).toEqual(["/opt/codex"]);
+  });
+
+  it("BS6 refuses read_only", async () => {
+    await writeFile(settingsPath, READ_ONLY_SETTINGS_JSON);
+    const res = await handleBinaryTrustRevoke(makeDeps(), { path: "/opt/codex" });
+    expect(res).toEqual({ ok: false, reason: "read_only" });
+  });
+});
+
+describe("handleSet — binary-trust custody (TASK.103, D-S4-5)", () => {
+  it("BS7 refuses a patch carrying security.trustedBinaries; the file is untouched (consent smuggling via generic merge)", async () => {
+    const res = await handleSet(makeDeps(), {
+      security: {
+        trustedBinaries: [
+          { path: "/opt/codex", fingerprint: { mode: 0o755, uid: 0, gid: 0, size: 1, mtimeMs: 1 }, grantedAt: "forged" },
+        ],
+      },
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries).toBeUndefined();
+  });
+
+  it("BS7 security.allowWeakSecretStorage patches still succeed — the custody refusal is scoped to trustedBinaries only (regression arm)", async () => {
+    const res = await handleSet(makeDeps(), { security: { allowWeakSecretStorage: true } });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.allowWeakSecretStorage).toBe(true);
+  });
+});
+
+describe("handleBinaryTrustGrant — grant custody v2 (TASK.103 fix wave, D-S4-13 layer 2 + D-S4-14)", () => {
+  it("BS9 (a) refuses a third-party-owned file (seam uid 777, deps uid 501) — canonical, executable, still refused; settings file untouched", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex", { uid: 777 }), uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries).toBeUndefined();
+  });
+
+  it("BS9 (b) root-owned (seam uid 0) stays grantable — the RES-2 boundary", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex", { uid: 0 }), uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it("BS9 (c) refuses non-canonical input — seam resolves /link/codex to /real/codex; canonical + executable + self-owned, still refused; settings file untouched", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/real/codex"), uid: 501 }),
+      { path: "/link/codex" },
+    );
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.security.trustedBinaries).toBeUndefined();
+  });
+
+  it("BS9 (d) request path === resolvedPath (canonical, self-owned) grants — the happy path pins the canonical flow", async () => {
+    const res = await handleBinaryTrustGrant(
+      makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), uid: 501 }),
+      { path: "/opt/codex" },
+    );
+    expect(res.ok).toBe(true);
   });
 });

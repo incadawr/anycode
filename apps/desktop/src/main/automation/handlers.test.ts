@@ -81,6 +81,11 @@ import {
   codexPaneInstall,
   codexPaneRecheckAll,
   codexPaneRefreshManifest,
+  codexPaneTrustOpen,
+  binaryTrustDialogState,
+  binaryTrustDialogResolve,
+  trustedBinariesState,
+  trustedBinaryRevoke,
   codexProfileChipState,
   codexProfileChipOpen,
   codexProfileChipPick,
@@ -1276,6 +1281,38 @@ describe("Codex pane / profile chip / rollout-import thin facade commands forwar
     const deps = fakeDeps();
     await codexPaneRefreshManifest(deps);
     expect(deps.callFacade).toHaveBeenCalledWith("codexPaneRefreshManifest", []);
+  });
+
+  it("codexPaneTrustOpen -> callFacade('codexPaneTrustOpen', [])", async () => {
+    const deps = fakeDeps();
+    await codexPaneTrustOpen(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("codexPaneTrustOpen", []);
+  });
+
+  it("binaryTrustDialogState -> callFacade('binaryTrustDialogState', [])", async () => {
+    const deps = fakeDeps();
+    await binaryTrustDialogState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("binaryTrustDialogState", []);
+  });
+
+  it("binaryTrustDialogResolve -> callFacade('binaryTrustDialogResolve', [accept])", async () => {
+    const deps = fakeDeps();
+    await binaryTrustDialogResolve(deps, true);
+    expect(deps.callFacade).toHaveBeenCalledWith("binaryTrustDialogResolve", [true]);
+    await binaryTrustDialogResolve(deps, false);
+    expect(deps.callFacade).toHaveBeenCalledWith("binaryTrustDialogResolve", [false]);
+  });
+
+  it("trustedBinariesState -> callFacade('trustedBinariesState', [])", async () => {
+    const deps = fakeDeps();
+    await trustedBinariesState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("trustedBinariesState", []);
+  });
+
+  it("trustedBinaryRevoke -> callFacade('trustedBinaryRevoke', [path])", async () => {
+    const deps = fakeDeps();
+    await trustedBinaryRevoke(deps, "/opt/codex");
+    expect(deps.callFacade).toHaveBeenCalledWith("trustedBinaryRevoke", ["/opt/codex"]);
   });
 
   it("codexProfileChipState -> callFacade('codexProfileChipState', [])", async () => {

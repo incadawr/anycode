@@ -229,7 +229,12 @@ export interface AgentLoopConfig {
    * loop back onto itself nor escalate into the broker-less yolo mode.
    */
   planExitMode?: Exclude<PermissionMode, "plan" | "yolo">;
-  /** Notifies the client of a mode change made by the exit arc (CLI: touchSession; desktop consume later). */
+  /**
+   * Notifies the client of a mode change made by the exit arc (CLI:
+   * touchSession; desktop: since TASK.27). Never fired by setMode() — a
+   * user-initiated mid-turn mode change (TASK.37) owns its own notification
+   * via its caller (desktop: Session.onSetMode).
+   */
   onModeChange?: (mode: PermissionMode) => void;
   /**
    * Lazy per-turn workspace checkpoint (design slice-4.7-cut.md §2.4): built ONLY
@@ -338,6 +343,16 @@ export class AgentLoop {
   private readonly schedulerConfig: ToolSchedulerConfig;
   /** Same instance handed to history/context; reused by contextBreakdown() (design slice-P7.17-cut.md §2.1). */
   private readonly tokenizer: Tokenizer;
+  /**
+   * DispatchContext of the in-flight turn; null between turns. Set by
+   * runTurnInner immediately after the context is constructed, cleared in its
+   * finally (identity-guarded so a hypothetical interleaved successor turn can
+   * never be cleared by a predecessor's teardown; turns are sequential per
+   * session today, so the guard is defensive). Enables the user-initiated
+   * mid-turn mode change (TASK.37) to reach the running turn's permission
+   * gate, exactly as the ExitPlanMode arc's dispatchCtx.mode mutation does.
+   */
+  private activeDispatchCtx: DispatchContext | null = null;
 
   constructor(private readonly config: AgentLoopConfig) {
     const tokenizer = config.tokenizer ?? new HeuristicTokenizer();
@@ -417,11 +432,6 @@ export class AgentLoop {
     const signal = options?.signal;
     const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
 
-    // single sanctioned mid-turn transition is a broker-approved ExitPlanMode
-    // advancing plan -> planExitMode (design slice-4.3-cut.md §2.3), applied via
-    // the PlanModeControl mutation below rather than by re-reading config.
-    const mode = options?.mode ?? this.config.mode;
-
     // Pre-aborted: end immediately, before hooks or any model call.
     if (signal?.aborted) {
       yield* this.emitLoopEnd("cancelled", 0, signal);
@@ -459,6 +469,20 @@ export class AgentLoop {
       });
     }
 
+    // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved
+    // ExitPlanMode advancing plan -> planExitMode (design slice-4.3-cut.md
+    // §2.3), applied via the PlanModeControl mutation below rather than by
+    // re-reading config; (2) the user-initiated setMode() (TASK.37), which
+    // reaches this same running turn via activeDispatchCtx. The mode is read
+    // HERE — after the UserPromptSubmit await above, not at generator entry —
+    // and consumed by the context literal below in the same synchronous
+    // stretch as the activeDispatchCtx publish, so a setMode() landing during
+    // the hook await lands in config.mode and this read picks it up
+    // (ARBITRATION-S3-W1 D-S3-16: reading it before the await silently
+    // reverted a user's mid-turn switch for the whole turn). No await may be
+    // introduced between this line and the publish.
+    const mode = options?.mode ?? this.config.mode;
+
     const dispatchCtx: DispatchContext = {
       registry: this.config.registry,
       hooks: this.config.hooks,
@@ -480,8 +504,9 @@ export class AgentLoop {
     };
 
     // Plan-mode exit arc (design slice-4.3-cut.md §2.3): built ONLY when the
-    // wiring opted in via planExitMode. exitPlan is the one sanctioned mid-turn
-    // mode mutation — it advances dispatchCtx.mode (so later tool calls THIS turn
+    // wiring opted in via planExitMode. exitPlan is ONE of the two sanctioned
+    // mid-turn mode mutations (the other is the user-initiated setMode(),
+    // TASK.37) — it advances dispatchCtx.mode (so later tool calls THIS turn
     // gate under the target) and config.mode (so later turns and lazily-spawned
     // children inherit it), then notifies the client. When planExitMode is unset
     // this block does not run, so dispatchCtx.planMode stays absent and the turn
@@ -525,242 +550,251 @@ export class AgentLoop {
       };
     }
 
-    let turn = 0;
-    for (;;) {
-      if (signal?.aborted) {
-        yield* this.emitLoopEnd("cancelled", turn, signal);
-        return;
-      }
-
-      turn += 1;
-      yield { type: "turn_start", turn };
-
-      if (turn > maxTurns) {
-        yield* this.emitLoopEnd("max_turns", turn - 1, signal);
-        return;
-      }
-
-      // Compaction at iteration start (design §2.6): microcompact first, then
-      // token-pressure LLM auto-compaction. The turn signal is linked so Stop
-      // during compaction cancels cleanly and leaves the history untouched.
-      const micro = this.context.maybeMicrocompact();
-      if (micro) {
-        yield {
-          type: "microcompact",
-          clearedToolResults: micro.clearedToolResults,
-          savedTokens: micro.savedTokens,
-        };
-      }
-      if (this.context.shouldAutoCompact()) {
-        yield* this.runCompactionCycle("auto", signal);
-      }
-      if (signal?.aborted) {
-        yield* this.emitLoopEnd("cancelled", turn, signal);
-        return;
-      }
-
-      const textParts: string[] = [];
-      const toolCalls: ProposedToolCall[] = [];
-      let finishReason: FinishReason = "unknown";
-      let usage: TokenUsage = {};
-      let streamErrored = false;
-      let sawFinish = false;
-      // Terminal-retry metadata counters (TASK.33 W7b): attemptsMade counts
-      // stream_retry events seen THIS TURN, and hadModelOutput records whether any
-      // model output reached the consumer this turn. Unlike the content
-      // accumulators below, NEITHER is reset on stream_retry — a retry increments
-      // attemptsMade, and once output was delivered hadModelOutput stays true
-      // across the retry (W7b-FIX #3: the stall retry may fire after output).
-      let attemptsMade = 0;
-      let maxAttempts: number | undefined;
-      let hadModelOutput = false;
-
-      try {
-        const stream = this.config.modelPort.streamText({
-          system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
-          messages: this.history.toMessages(),
-          tools: toToolDeclarations(this.config.registry),
-          maxOutputTokens: this.config.maxOutputTokens,
-          reasoningEffort: this.config.reasoningEffort,
-          abortSignal: signal,
-        });
-        for await (const event of stream) {
-          if (event.type === "error") {
-            const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
-            yield { ...event, retry, safe };
-          } else {
-            yield event;
-          }
-          if (isModelOutputEvent(event)) {
-            hadModelOutput = true;
-          }
-          switch (event.type) {
-            case "text_delta":
-              textParts.push(event.text);
-              break;
-            case "tool_call":
-              toolCalls.push(event.toolCall);
-              break;
-            case "finish":
-              finishReason = event.finishReason;
-              usage = event.usage;
-              sawFinish = event.finishReason !== "error";
-              break;
-            case "error":
-              streamErrored = true;
-              break;
-            case "stream_retry":
-              attemptsMade += 1;
-              maxAttempts = event.maxAttempts;
-              // hadModelOutput is deliberately NOT reset here: the STALL retry path
-              // (model-port.ts) permits a stream_retry AFTER model output has
-              // already reached the consumer, so once output was delivered this
-              // turn the flag must stay true across the retry. Resetting it would
-              // make the terminal metadata claim no output was delivered, and W8
-              // would offer Try-again on a step whose re-send risks double-dispatch/
-              // double-bill (TASK.33 invariant #1).
-              //
-              // The CONTENT accumulators below still reset: the whole step is
-              // replayed from scratch, so every accumulator built up from the
-              // aborted attempt's partial events must be discarded — the eventual
-              // assistant message must reflect only the winning attempt. For a
-              // pre-first-event retry every one of these is already a no-op. Known
-              // cosmetic gap (out of scope for 2.3): any partial text already
-              // rendered by the UI before the stall stays on screen; only the
-              // written history is guaranteed clean.
-              textParts.length = 0;
-              toolCalls.length = 0;
-              finishReason = "unknown";
-              usage = {};
-              streamErrored = false;
-              sawFinish = false;
-              break;
-            default:
-              break;
-          }
-        }
-      } catch (error) {
-        // The stream iterator threw. An abort is a clean cancellation; anything
-        // else is an unrecoverable stream error — surfaced as an {type:"error"}
-        // event (transcript block / CLI line / host log) before loop_end so the
-        // real provider failure is diagnosable (TASK.2 DoD-c), never swallowed.
+    // Published in the same synchronous stretch as the mode read above — no
+    // await between them (ARBITRATION-S3-W1 D-S3-16).
+    this.activeDispatchCtx = dispatchCtx;
+    try {
+      let turn = 0;
+      for (;;) {
         if (signal?.aborted) {
           yield* this.emitLoopEnd("cancelled", turn, signal);
-        } else {
-          const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
-          yield { type: "error", error, retry, safe };
-          // The consumer may abort while paused on the yielded error event
-          // (before this generator resumes) — re-check so a synchronous
-          // abort there still ends the loop as "cancelled", not "error".
+          return;
+        }
+
+        turn += 1;
+        yield { type: "turn_start", turn };
+
+        if (turn > maxTurns) {
+          yield* this.emitLoopEnd("max_turns", turn - 1, signal);
+          return;
+        }
+
+        // Compaction at iteration start (design §2.6): microcompact first, then
+        // token-pressure LLM auto-compaction. The turn signal is linked so Stop
+        // during compaction cancels cleanly and leaves the history untouched.
+        const micro = this.context.maybeMicrocompact();
+        if (micro) {
+          yield {
+            type: "microcompact",
+            clearedToolResults: micro.clearedToolResults,
+            savedTokens: micro.savedTokens,
+          };
+        }
+        if (this.context.shouldAutoCompact()) {
+          yield* this.runCompactionCycle("auto", signal);
+        }
+        if (signal?.aborted) {
+          yield* this.emitLoopEnd("cancelled", turn, signal);
+          return;
+        }
+
+        const textParts: string[] = [];
+        const toolCalls: ProposedToolCall[] = [];
+        let finishReason: FinishReason = "unknown";
+        let usage: TokenUsage = {};
+        let streamErrored = false;
+        let sawFinish = false;
+        // Terminal-retry metadata counters (TASK.33 W7b): attemptsMade counts
+        // stream_retry events seen THIS TURN, and hadModelOutput records whether any
+        // model output reached the consumer this turn. Unlike the content
+        // accumulators below, NEITHER is reset on stream_retry — a retry increments
+        // attemptsMade, and once output was delivered hadModelOutput stays true
+        // across the retry (W7b-FIX #3: the stall retry may fire after output).
+        let attemptsMade = 0;
+        let maxAttempts: number | undefined;
+        let hadModelOutput = false;
+
+        try {
+          const stream = this.config.modelPort.streamText({
+            system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
+            messages: this.history.toMessages(),
+            tools: toToolDeclarations(this.config.registry),
+            maxOutputTokens: this.config.maxOutputTokens,
+            reasoningEffort: this.config.reasoningEffort,
+            abortSignal: signal,
+          });
+          for await (const event of stream) {
+            if (event.type === "error") {
+              const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
+              yield { ...event, retry, safe };
+            } else {
+              yield event;
+            }
+            if (isModelOutputEvent(event)) {
+              hadModelOutput = true;
+            }
+            switch (event.type) {
+              case "text_delta":
+                textParts.push(event.text);
+                break;
+              case "tool_call":
+                toolCalls.push(event.toolCall);
+                break;
+              case "finish":
+                finishReason = event.finishReason;
+                usage = event.usage;
+                sawFinish = event.finishReason !== "error";
+                break;
+              case "error":
+                streamErrored = true;
+                break;
+              case "stream_retry":
+                attemptsMade += 1;
+                maxAttempts = event.maxAttempts;
+                // hadModelOutput is deliberately NOT reset here: the STALL retry path
+                // (model-port.ts) permits a stream_retry AFTER model output has
+                // already reached the consumer, so once output was delivered this
+                // turn the flag must stay true across the retry. Resetting it would
+                // make the terminal metadata claim no output was delivered, and W8
+                // would offer Try-again on a step whose re-send risks double-dispatch/
+                // double-bill (TASK.33 invariant #1).
+                //
+                // The CONTENT accumulators below still reset: the whole step is
+                // replayed from scratch, so every accumulator built up from the
+                // aborted attempt's partial events must be discarded — the eventual
+                // assistant message must reflect only the winning attempt. For a
+                // pre-first-event retry every one of these is already a no-op. Known
+                // cosmetic gap (out of scope for 2.3): any partial text already
+                // rendered by the UI before the stall stays on screen; only the
+                // written history is guaranteed clean.
+                textParts.length = 0;
+                toolCalls.length = 0;
+                finishReason = "unknown";
+                usage = {};
+                streamErrored = false;
+                sawFinish = false;
+                break;
+              default:
+                break;
+            }
+          }
+        } catch (error) {
+          // The stream iterator threw. An abort is a clean cancellation; anything
+          // else is an unrecoverable stream error — surfaced as an {type:"error"}
+          // event (transcript block / CLI line / host log) before loop_end so the
+          // real provider failure is diagnosable (TASK.2 DoD-c), never swallowed.
           if (signal?.aborted) {
             yield* this.emitLoopEnd("cancelled", turn, signal);
           } else {
-            yield* this.emitLoopEnd("error", turn, signal);
+            const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
+            yield { type: "error", error, retry, safe };
+            // The consumer may abort while paused on the yielded error event
+            // (before this generator resumes) — re-check so a synchronous
+            // abort there still ends the loop as "cancelled", not "error".
+            if (signal?.aborted) {
+              yield* this.emitLoopEnd("cancelled", turn, signal);
+            } else {
+              yield* this.emitLoopEnd("error", turn, signal);
+            }
+          }
+          return;
+        }
+
+        if (signal?.aborted) {
+          yield* this.emitLoopEnd("cancelled", turn, signal);
+          return;
+        }
+
+        // Fail-closed at the RIGHT granularity (TASK.2): a mid-stream error event
+        // is fatal only when the step's finish never arrived (usage/stop_reason
+        // lost — the assistant frame is not trustworthy). When finish WAS received
+        // the frame is complete; the error (already re-yielded above as a visible
+        // event) is a provider artifact — the turn continues instead of dying.
+        // A synthetic SDK finish with finishReason "error" does not count as a real finish.
+        if (streamErrored && !sawFinish) {
+          yield* this.emitLoopEnd("error", turn, signal);
+          return;
+        }
+
+        // Record provider usage against the pre-assistant history so its input
+        // count anchors the delta correctly (design §2.5), then append the
+        // assistant message and report context_usage.
+        this.context.noteUsage(usage);
+        this.history.append({
+          role: "assistant",
+          content: buildAssistantParts(textParts.join(""), toolCalls),
+        });
+        const usageEstimate = this.context.estimate();
+        yield {
+          type: "context_usage",
+          estimatedTokens: usageEstimate.tokens,
+          budgetTokens: this.budgetTokens,
+          source: usageEstimate.source,
+        };
+
+        // Sentinel: a step with no proposed tool calls ends the loop.
+        if (toolCalls.length === 0) {
+          yield { type: "turn_end", turn, finishReason };
+          yield* this.emitLoopEnd("completed", turn, signal);
+          return;
+        }
+
+        // Dispatch. Invalid calls (§2.9) never reach the scheduler: they get a
+        // synthesized invalid_input outcome. Valid calls flow through
+        // runToolBatches, which returns exactly one outcome per call (cancelled
+        // included) in proposal order. Every outcome is appended before any exit.
+        const outcomeById = new Map<string, ToolCallOutcome>();
+
+        for (const call of toolCalls) {
+          if (!call.invalid) {
+            continue;
+          }
+          const outcome = synthesizeInvalidOutcome(call);
+          outcomeById.set(call.id, outcome);
+          yield { type: "tool_execution_start", toolCallId: call.id, toolName: call.name, input: {} };
+          yield { type: "tool_result", outcome };
+        }
+
+        const validCalls = toolCalls.filter((call) => !call.invalid);
+        if (validCalls.length > 0) {
+          const batches = runToolBatches(dispatchCtx, validCalls, this.schedulerConfig, signal);
+          let next = await batches.next();
+          while (!next.done) {
+            yield next.value;
+            next = await batches.next();
+          }
+          for (const outcome of next.value) {
+            outcomeById.set(outcome.toolCallId, outcome);
           }
         }
-        return;
-      }
 
-      if (signal?.aborted) {
-        yield* this.emitLoopEnd("cancelled", turn, signal);
-        return;
-      }
+        // Append every result in PROPOSAL order (invariant: full pairing).
+        for (const call of toolCalls) {
+          const outcome = outcomeById.get(call.id);
+          if (outcome) {
+            this.history.append(buildToolResultMessage(call, outcome));
+          }
+        }
 
-      // Fail-closed at the RIGHT granularity (TASK.2): a mid-stream error event
-      // is fatal only when the step's finish never arrived (usage/stop_reason
-      // lost — the assistant frame is not trustworthy). When finish WAS received
-      // the frame is complete; the error (already re-yielded above as a visible
-      // event) is a provider artifact — the turn continues instead of dying.
-      // A synthetic SDK finish with finishReason "error" does not count as a real finish.
-      if (streamErrored && !sawFinish) {
-        yield* this.emitLoopEnd("error", turn, signal);
-        return;
-      }
+        const transition = toolCalls
+          .map((call) => outcomeById.get(call.id))
+          .find(
+            (outcome) =>
+              outcome?.status === "success" &&
+              outcome.result?.ok === true &&
+              outcome.result.control?.type === "workspace_transition",
+          )?.result?.control?.transition;
 
-      // Record provider usage against the pre-assistant history so its input
-      // count anchors the delta correctly (design §2.5), then append the
-      // assistant message and report context_usage.
-      this.context.noteUsage(usage);
-      this.history.append({
-        role: "assistant",
-        content: buildAssistantParts(textParts.join(""), toolCalls),
-      });
-      const usageEstimate = this.context.estimate();
-      yield {
-        type: "context_usage",
-        estimatedTokens: usageEstimate.tokens,
-        budgetTokens: this.budgetTokens,
-        source: usageEstimate.source,
-      };
+        if (transition !== undefined) {
+          yield { type: "turn_end", turn, finishReason };
+          yield { type: "workspace_transition", transition };
+          yield* this.emitLoopEnd("workspace_transition", turn, signal);
+          return;
+        }
 
-      // Sentinel: a step with no proposed tool calls ends the loop.
-      if (toolCalls.length === 0) {
+        // Cancellation mid-dispatch: history is now balanced (all outcomes written),
+        // so this exit satisfies the no-dangling-tool_call invariant.
+        if (signal?.aborted) {
+          yield* this.emitLoopEnd("cancelled", turn, signal);
+          return;
+        }
+
         yield { type: "turn_end", turn, finishReason };
-        yield* this.emitLoopEnd("completed", turn, signal);
-        return;
       }
-
-      // Dispatch. Invalid calls (§2.9) never reach the scheduler: they get a
-      // synthesized invalid_input outcome. Valid calls flow through
-      // runToolBatches, which returns exactly one outcome per call (cancelled
-      // included) in proposal order. Every outcome is appended before any exit.
-      const outcomeById = new Map<string, ToolCallOutcome>();
-
-      for (const call of toolCalls) {
-        if (!call.invalid) {
-          continue;
-        }
-        const outcome = synthesizeInvalidOutcome(call);
-        outcomeById.set(call.id, outcome);
-        yield { type: "tool_execution_start", toolCallId: call.id, toolName: call.name, input: {} };
-        yield { type: "tool_result", outcome };
+    } finally {
+      if (this.activeDispatchCtx === dispatchCtx) {
+        this.activeDispatchCtx = null;
       }
-
-      const validCalls = toolCalls.filter((call) => !call.invalid);
-      if (validCalls.length > 0) {
-        const batches = runToolBatches(dispatchCtx, validCalls, this.schedulerConfig, signal);
-        let next = await batches.next();
-        while (!next.done) {
-          yield next.value;
-          next = await batches.next();
-        }
-        for (const outcome of next.value) {
-          outcomeById.set(outcome.toolCallId, outcome);
-        }
-      }
-
-      // Append every result in PROPOSAL order (invariant: full pairing).
-      for (const call of toolCalls) {
-        const outcome = outcomeById.get(call.id);
-        if (outcome) {
-          this.history.append(buildToolResultMessage(call, outcome));
-        }
-      }
-
-      const transition = toolCalls
-        .map((call) => outcomeById.get(call.id))
-        .find(
-          (outcome) =>
-            outcome?.status === "success" &&
-            outcome.result?.ok === true &&
-            outcome.result.control?.type === "workspace_transition",
-        )?.result?.control?.transition;
-
-      if (transition !== undefined) {
-        yield { type: "turn_end", turn, finishReason };
-        yield { type: "workspace_transition", transition };
-        yield* this.emitLoopEnd("workspace_transition", turn, signal);
-        return;
-      }
-
-      // Cancellation mid-dispatch: history is now balanced (all outcomes written),
-      // so this exit satisfies the no-dangling-tool_call invariant.
-      if (signal?.aborted) {
-        yield* this.emitLoopEnd("cancelled", turn, signal);
-        return;
-      }
-
-      yield { type: "turn_end", turn, finishReason };
     }
   }
 
@@ -911,6 +945,30 @@ export class AgentLoop {
     const next = { ...this.context.getBudgetConfig(), contextWindowTokens: tokens };
     this.context.setBudgetConfig(next);
     this.budgetTokens = effectiveWindowTokens(next);
+  }
+
+  /**
+   * User-initiated permission-mode change (TASK.37), valid between turns AND
+   * mid-turn. Always mutates config.mode (later turns and lazily-spawned
+   * children read it); when a turn is in flight, also mutates the live
+   * DispatchContext's mode, so the NEXT not-yet-taken permission check gates
+   * under the new mode. An already-escalated ask is untouched by construction
+   * (snapshot semantics, track DV-1): its PermissionRequest captured `mode` at
+   * dispatch time and is never rebuilt. A call landing during the runTurn
+   * prologue (before activeDispatchCtx is published) is not lost either: the
+   * prologue reads config.mode AFTER its UserPromptSubmit await, in the same
+   * synchronous stretch as the publish (ARBITRATION-S3-W1 D-S3-16), so the
+   * config half of this write is what that turn gates under. Deliberately
+   * does NOT fire
+   * config.onModeChange — that callback is the loop-INITIATED notification
+   * channel (the ExitPlanMode arc); a user-initiated caller owns its own
+   * persistence and notification (desktop: Session.onSetMode).
+   */
+  setMode(mode: PermissionMode): void {
+    this.config.mode = mode;
+    if (this.activeDispatchCtx !== null) {
+      this.activeDispatchCtx.mode = mode;
+    }
   }
 
   /**

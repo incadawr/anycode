@@ -5,7 +5,7 @@
  * directly rather than DOM-rendering the popover.
  */
 import { describe, expect, it } from "vitest";
-import { modeIndexForDigit, nextRovingIndex } from "./ModeMenu.js";
+import { modeChangeDisabled, modeIndexForDigit, MODE_DESCRIPTIONS, nextRovingIndex } from "./ModeMenu.js";
 
 describe("nextRovingIndex", () => {
   it("advances by +1 (ArrowDown)", () => {
@@ -51,5 +51,37 @@ describe("modeIndexForDigit", () => {
 
   it("is total over an empty option list", () => {
     expect(modeIndexForDigit("Digit1", 0)).toBeNull();
+  });
+});
+
+/**
+ * TASK.32 honest Edit mode: the copy string pin (D-S1-11). Only the `edit`
+ * entry changes; the other four modes' strings are byte-exact pins of today.
+ */
+describe("MODE_DESCRIPTIONS", () => {
+  it("M1t: edit copy is the TASK.32 string", () => {
+    expect(MODE_DESCRIPTIONS.edit).toBe("Edit files in this project without asking");
+  });
+
+  it("M2t: other four modes' copy unchanged", () => {
+    expect(MODE_DESCRIPTIONS.plan).toBe("Read-only planning");
+    expect(MODE_DESCRIPTIONS.build).toBe("Ask before edits");
+    expect(MODE_DESCRIPTIONS.auto).toBe("Ask only for risky actions");
+    expect(MODE_DESCRIPTIONS.yolo).toBe("Never ask");
+  });
+});
+
+describe("modeChangeDisabled (TASK.37)", () => {
+  it("MR1: a running turn no longer disables mode changes — THE task pin", () => {
+    expect(modeChangeDisabled("running", true)).toBe(false);
+  });
+
+  it("MR2: not-ready still gates, running or idle", () => {
+    expect(modeChangeDisabled("idle", false)).toBe(true);
+    expect(modeChangeDisabled("running", false)).toBe(true);
+  });
+
+  it("MR3: idle + ready is enabled", () => {
+    expect(modeChangeDisabled("idle", true)).toBe(false);
   });
 });

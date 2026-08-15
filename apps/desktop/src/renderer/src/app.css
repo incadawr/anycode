@@ -4979,8 +4979,10 @@ body {
 }
 
 /* Consequence line: says what Approve actually does. One notch above the
-   generic "Mode:" footnote, since it is the decision the user is making. */
-.permission-plan-hint {
+   generic "Mode:" footnote, since it is the decision the user is making.
+   TASK.35 reuses the same treatment for the Bash unknown-shell reason line. */
+.permission-plan-hint,
+.permission-ask-hint {
   font-size: var(--fs-sm);
   color: var(--text-2);
 }

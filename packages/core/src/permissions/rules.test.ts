@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ModePermissionEngine } from "./engine.js";
-import { RuleAwarePermissionEngine, SessionPermissionRules } from "./rules.js";
+import { RuleAwarePermissionEngine, SessionPermissionRules, splitBashSegments } from "./rules.js";
 import { bashTool, editTool, globTool, grepTool, readTool, webFetchTool, writeTool } from "../tools/index.js";
 import type { PermissionEngine, PermissionMode, PermissionRequest } from "../types/permissions.js";
 import type { ToolMetadata } from "../types/tools.js";
@@ -471,5 +471,91 @@ describe("RuleAwarePermissionEngine", () => {
       mode: "build",
     });
     expect(ruling).toEqual({ decision: "allow" });
+  });
+});
+
+describe("splitBashSegments — exported splitter with separator kinds (TASK.35)", () => {
+  it("SP1: 'a | b' splits into two segments with a single '|' separator", () => {
+    expect(splitBashSegments("a | b")).toEqual({ segments: ["a ", " b"], separators: ["|"] });
+  });
+
+  it("SP2: 'a || b' is recorded as '||', distinct from '|'", () => {
+    expect(splitBashSegments("a || b")).toEqual({ segments: ["a ", " b"], separators: ["||"] });
+  });
+
+  it("SP3: every separator kind is recorded distinctly", () => {
+    expect(splitBashSegments("a && b")).toEqual({ segments: ["a ", " b"], separators: ["&&"] });
+    expect(splitBashSegments("a & b")).toEqual({ segments: ["a ", " b"], separators: ["&"] });
+    expect(splitBashSegments("a ; b")).toEqual({ segments: ["a ", " b"], separators: [";"] });
+    expect(splitBashSegments("a \n b")).toEqual({ segments: ["a ", " b"], separators: ["\n"] });
+  });
+
+  it("SP4: 'a |& b' has no '|&' kind of its own — reads as '|' + '&' with a blank middle segment", () => {
+    expect(splitBashSegments("a |& b")).toEqual({
+      segments: ["a ", "", " b"],
+      separators: ["|", "&"],
+    });
+  });
+
+  it("SP5: quoted operators stay literal — one segment, no separators", () => {
+    expect(splitBashSegments("echo 'a|b'")).toEqual({ segments: ["echo 'a|b'"], separators: [] });
+    expect(splitBashSegments('echo "a;b"')).toEqual({ segments: ['echo "a;b"'], separators: [] });
+  });
+
+  it("SP6: an escaped pipe stays one segment", () => {
+    expect(splitBashSegments("echo a\\| b")).toEqual({ segments: ["echo a\\| b"], separators: [] });
+  });
+
+  it("SP7: substitutions and unterminated quotes are unsegmentable", () => {
+    expect(splitBashSegments("a `b`")).toBeUndefined();
+    expect(splitBashSegments("a $(b)")).toBeUndefined();
+    expect(splitBashSegments("a <(b)")).toBeUndefined();
+    expect(splitBashSegments("a >(b)")).toBeUndefined();
+    expect(splitBashSegments('echo "$(b)"')).toBeUndefined();
+    expect(splitBashSegments("echo 'unterminated")).toBeUndefined();
+  });
+
+  it("SP8: '&' redirection forms are kept inside one segment, not treated as a separator", () => {
+    expect(splitBashSegments("ls 2>&1")).toEqual({ segments: ["ls 2>&1"], separators: [] });
+    expect(splitBashSegments("ls >&2")).toEqual({ segments: ["ls >&2"], separators: [] });
+    expect(splitBashSegments("ls &>log")).toEqual({ segments: ["ls &>log"], separators: [] });
+  });
+
+  it("SP9: separators.length is always segments.length - 1, segments.length >= 1", () => {
+    const commands = [
+      "ls",
+      "a | b",
+      "a || b",
+      "a && b",
+      "a ; b",
+      "a & b",
+      "a | b || c && d ; e",
+      "cat f | wc -l | head -1",
+      "",
+      "   ",
+    ];
+    for (const command of commands) {
+      const split = splitBashSegments(command);
+      expect(split, `expected a split for: ${JSON.stringify(command)}`).toBeDefined();
+      if (split === undefined) {
+        continue;
+      }
+      expect(split.segments.length, `segments for ${JSON.stringify(command)}`).toBeGreaterThanOrEqual(1);
+      expect(split.separators.length, `separators for ${JSON.stringify(command)}`).toBe(split.segments.length - 1);
+    }
+  });
+
+  it("SP10: mixed separator kinds are recorded in order", () => {
+    expect(splitBashSegments("a | b || c && d ; e")).toEqual({
+      segments: ["a ", " b ", " c ", " d ", " e"],
+      separators: ["|", "||", "&&", ";"],
+    });
+  });
+
+  it("SP11: blank segments between pipes are kept, not dropped", () => {
+    expect(splitBashSegments("a | | b")).toEqual({
+      segments: ["a ", " ", " b"],
+      separators: ["|", "|"],
+    });
   });
 });

@@ -8,6 +8,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./permissions/safe-command": "./src/permissions/safe-command.ts",
     "./persistence": "./src/adapters/node/sqlite-persistence.ts",
     "./node-git": "./src/adapters/node/node-git.ts",
     "./node-execution": "./src/adapters/node/node-execution.ts",

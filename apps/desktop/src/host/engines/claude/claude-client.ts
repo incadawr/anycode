@@ -20,7 +20,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
 import { ENGINE_PROCESS_REGISTRATION_TYPE } from "../../../shared/engines.js";
-import { checkCodexBinaryTrust, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
+import { checkConsentedBinaryTrust, type BinaryTrustConsent, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
 import { resolveClaudeConfigDir } from "../../../shared/claude-config-dir.js";
 import {
   CLAUDE_CONTROL_REQUEST_TIMEOUT_MS,
@@ -217,8 +217,20 @@ export function redactHomePaths<T>(value: T, homeDir: string): T {
 // policy (cut §1.2: "политика движко-агностична; переименование = запрещённый
 // рефакторинг общего файла").
 
-function toPathStat(path: string, stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
-  return { path, isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+function toPathStat(
+  path: string,
+  stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number; size?: number; mtimeMs?: number },
+): CodexPathStat {
+  return {
+    path,
+    isFile: stat.isFile(),
+    isDirectory: stat.isDirectory(),
+    mode: stat.mode,
+    uid: stat.uid,
+    gid: stat.gid,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
 }
 
 function ancestorDirectories(resolvedFile: string, originalPath: string): string[] {
@@ -241,18 +253,25 @@ function ancestorDirectories(resolvedFile: string, originalPath: string): string
   return ordered;
 }
 
-export function checkClaudeBinaryTrustOnDisk(binaryPath: string, platform: NodeJS.Platform = process.platform): string | null {
+export function checkClaudeBinaryTrustOnDisk(
+  binaryPath: string,
+  platform: NodeJS.Platform = process.platform,
+  consents: readonly BinaryTrustConsent[] = [],
+): string | null {
   if (platform === "win32") return null;
   try {
     const resolved = realpathSync(binaryPath);
     const directories = ancestorDirectories(resolved, binaryPath).map((dir) => toPathStat(dir, statSync(dir)));
-    return checkCodexBinaryTrust({
-      file: toPathStat(resolved, statSync(resolved)),
-      directories,
-      uid: process.getuid?.() ?? -1,
-      egid: process.getegid?.() ?? -1,
-      platform,
-    });
+    return checkConsentedBinaryTrust(
+      {
+        file: toPathStat(resolved, statSync(resolved)),
+        directories,
+        uid: process.getuid?.() ?? -1,
+        egid: process.getegid?.() ?? -1,
+        platform,
+      },
+      consents,
+    );
   } catch {
     return "Claude binary path does not exist";
   }

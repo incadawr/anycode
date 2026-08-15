@@ -15,12 +15,13 @@
  * / `defaultSecretsPath()` provide the production paths.
  */
 
+import { readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
-import { cloneDefaults, parseSettings } from "./schema.js";
+import type { AnycodeSettings, SecretKey, TrustedBinaryConsent } from "../shared/settings.js";
+import { cloneDefaults, parseSettings, trustedBinaryConsentSchema } from "./schema.js";
 
 /**
  * Repairs the `activeConnectionId` <-> non-empty `connections` invariant on
@@ -275,4 +276,42 @@ export async function loadSecrets(path: string, logger?: FileIoLogger): Promise<
 /** Atomically persist secrets.json (0600). Values must already be ciphered by main/vault.ts. */
 export async function saveSecrets(path: string, file: SecretsFileV1): Promise<void> {
   await atomicWrite(path, `${JSON.stringify(file, null, 2)}\n`, SECRETS_FILE_MODE);
+}
+
+// ── trusted-binary consents (TASK.103) ──
+
+/** Per-element tolerant parse against the schema's own element validator (mirrors schema.ts's private `parseElementsTolerantly`, scoped here to avoid touching schema.ts's export surface). A malformed element is dropped alone. */
+function parseTrustedBinariesTolerantly(raw: unknown): TrustedBinaryConsent[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TrustedBinaryConsent[] = [];
+  for (const element of raw) {
+    const result = trustedBinaryConsentSchema.safeParse(element);
+    if (result.success) out.push(result.data);
+  }
+  return out;
+}
+
+/**
+ * Synchronous, fail-soft read of settings.security.trustedBinaries for the
+ * spawn-time trust gates (TASK.103). Both processes call it per gate check —
+ * main via the injected ipc deps, the host from its binaryTrust closures
+ * (host reads settings.json fail-soft by standing custody; main is the sole
+ * writer). Validates PER ELEMENT with the schema's own element validator;
+ * every failure mode — missing file, unreadable, corrupt JSON, non-array,
+ * bad element — degrades to «no consent», i.e. the refusal stands. Never
+ * throws into a spawn path. Deliberately does NOT run the full document
+ * schema: a corrupt sibling section must not also disable consents the user
+ * granted, and the per-element validator is the only part with authority
+ * over this field.
+ */
+export function readTrustedBinaryConsentsSync(path: string = defaultSettingsPath()): TrustedBinaryConsent[] {
+  try {
+    const json: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof json !== "object" || json === null) return [];
+    const security = (json as { security?: unknown }).security;
+    if (typeof security !== "object" || security === null) return [];
+    return parseTrustedBinariesTolerantly((security as { trustedBinaries?: unknown }).trustedBinaries);
+  } catch {
+    return [];
+  }
 }

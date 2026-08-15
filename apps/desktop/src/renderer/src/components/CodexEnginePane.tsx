@@ -29,8 +29,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../../../shared/codex-quota.js";
 import { CODEX_MIN_FLOOR } from "../../../shared/codex-support.js";
-import type { CodexProfileRecord } from "../../../shared/settings.js";
+import type { CodexProfileRecord, SettingsMutationResult } from "../../../shared/settings.js";
+import { describeMutationFailure } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
+import { BinaryTrustDialog, binaryTrustRefusalOf } from "./BinaryTrustDialog.js";
 import { CodexRolloutImportDialog } from "./CodexRolloutImportDialog.js";
 
 /**
@@ -513,6 +515,8 @@ export interface CodexBridge {
   acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;
   supportStatus(): Promise<CodexSupportStatusResult>;
   manifestRefresh(): Promise<CodexManifestRefreshResult>;
+  /** TASK.103 (D-S4-8): grants a per-path binary-trust consent. `path` ONLY — the fingerprint is computed entirely main-side. */
+  trustBinary(path: string): Promise<SettingsMutationResult>;
 }
 
 export interface CodexEnginePaneProps {
@@ -619,6 +623,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   const [newLabel, setNewLabel] = useState("");
   const [signingInId, setSigningInId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // TASK.103 (D-S4-8): the binary-trust consent dialog's open state.
+  const [trustDialogOpen, setTrustDialogOpen] = useState(false);
   // TASK.52 (cut §8.8, lane W3-H): this pane is ONLY the entry point for the
   // rollout-import wizard — all of its own logic/state lives in
   // CodexRolloutImportDialog.tsx.
@@ -747,6 +753,35 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     }
   }
 
+  /**
+   * TASK.103 (D-S4-8, §4 step 4): Accept ⇒ grant IPC (path only — main
+   * computes the fingerprint) ⇒ on `ok` the pane fires its existing recheck
+   * so the card resolves through the SAME path every other pane action uses
+   * (the `pick()`/`installBinary()` precedent above: set the fresh binary
+   * snapshot directly, no full profile re-diagnose needed for a binary-level
+   * change). A refusal never closes the dialog silently — it surfaces via
+   * the pane's own notice (§8's "Could not trust this binary: {error}").
+   */
+  async function acceptTrust(): Promise<void> {
+    const refusal = binaryTrustRefusalOf(binarySnapshot?.report);
+    if (refusal === null) return;
+    setNotice(null);
+    setBusy(true);
+    try {
+      const result = await bridge.trustBinary(refusal.binaryPath);
+      if (result.ok) {
+        setTrustDialogOpen(false);
+        const snapshot = await bridge.recheck(undefined, true);
+        setBinarySnapshot(snapshot);
+        setReportsById((prev) => ({ ...prev, [SYSTEM_PROFILE_ID]: snapshot.report }));
+      } else {
+        setNotice(`Could not trust this binary: ${describeMutationFailure(result.reason)}`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshManifest(): Promise<void> {
     setNotice(null);
     setBusy(true);
@@ -855,6 +890,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   const binaryActions = deriveBinaryActions(binaryReport, support);
   const atProfileLimit = profiles.length >= MAX_CODEX_PROFILES;
   const accountRows = resolveAccountRows(binaryReport, profiles, reportsById);
+  // TASK.103 (D-S4-6): the consent card source — the structured field only,
+  // never a string-match on `binaryStatus.detail`.
+  const trustRefusal = binaryTrustRefusalOf(binarySnapshot?.report);
 
   return (
     <section className="settings-section">
@@ -904,6 +942,23 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
         {binaryActions.showUseAnyway && (
           <button type="button" className="settings-button" disabled={busy} onClick={() => void acceptRiskForBinary()}>
             Use anyway
+          </button>
+        )}
+        {trustRefusal !== null && (
+          <button
+            type="button"
+            className="settings-button"
+            disabled={busy}
+            // TASK.103: structured facts for the automation facade
+            // (`realCodexPaneDom().trust()`) — never read by string-matching
+            // the rendered reason text (D-S4-6's "no string-matching" carried
+            // into the automation surface too).
+            data-trust-binary-path={trustRefusal.binaryPath}
+            data-trust-reason={trustRefusal.reason}
+            data-trust-stale-consent={String(trustRefusal.staleConsent)}
+            onClick={() => setTrustDialogOpen(true)}
+          >
+            Trust this binary…
           </button>
         )}
         <button type="button" className="settings-button" disabled={busy} onClick={() => void refreshManifest()}>
@@ -994,6 +1049,14 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       {importOpen && (
         <CodexRolloutImportDialog open={importOpen} onClose={() => setImportOpen(false)} profiles={profiles} onRequestCloseSettings={onRequestCloseSettings} />
       )}
+      <BinaryTrustDialog
+        open={trustDialogOpen && trustRefusal !== null}
+        binaryPath={trustRefusal?.binaryPath ?? ""}
+        reason={trustRefusal?.reason ?? ""}
+        staleConsent={trustRefusal?.staleConsent ?? false}
+        onAccept={() => void acceptTrust()}
+        onDecline={() => setTrustDialogOpen(false)}
+      />
     </section>
   );
 }

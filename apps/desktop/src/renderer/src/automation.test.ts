@@ -50,6 +50,9 @@ import {
   type CodexPaneRowState,
   type CodexProfileChipOptionState,
   type CodexImportRolloutRowDomFacts,
+  type BinaryTrustDialogDom,
+  type BinaryTrustDialogState,
+  type TrustedBinariesSectionDom,
 } from "./automation.js";
 import { dispatchTryAgain } from "./App.js";
 import type { SkillScope } from "../../shared/skills-config.js";
@@ -442,16 +445,30 @@ describe("automation facade — setMode", () => {
     expect(port.sent).toEqual([{ type: "ui_ready" }]);
   });
 
-  it("rejects while a turn is running (mode unchanged), sending nothing", () => {
+  it("MA1: sends set_mode while a turn is running (TASK.37 — busy no longer refuses), valid against uiToHostMessageSchema", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
     port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 
     const result = facade.setMode(tabId, "plan");
 
-    expect(result).toEqual({ ok: false, reason: "busy" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
-    expect(registry.getStore(tabId)!.getState().mode).toBe("build");
+    expect(result).toEqual({ ok: true });
+    const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
+    expect(sentMessages).toEqual([{ type: "set_mode", mode: "plan" }]);
+    expect(uiToHostMessageSchema.safeParse(sentMessages[0]).success).toBe(true);
+  });
+
+  it("MA2: not-ready still refuses, sending nothing", () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port)); // never emits host_ready -> stays awaiting_host_ready
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.setMode("tab-a", "plan");
+
+    expect(result).toEqual({ ok: false, reason: "not_ready" });
+    expect(port.sent).toEqual([{ type: "ui_ready" }]); // only the handshake, no set_mode
   });
 
   it("sends set_mode when ready+idle+valid, valid against uiToHostMessageSchema", () => {
@@ -5492,6 +5509,10 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
       binary: CodexPaneBinaryState;
       rows: CodexPaneRowState[];
       notices: string[];
+      // TASK.103 (BU5): the "Trust this binary…" button's structured facts,
+      // or null (no button rendered) — mirrors realCodexPaneDom's `trust()`.
+      // BU10 (D-S4-17 fix wave): staleConsent gains a THIRD structured fact.
+      trust: { binaryPath: string; reason: string; buttonVisible: boolean; staleConsent: boolean } | null;
     }> = {},
   ) {
     const binary = overrides.binary ?? binaryState();
@@ -5508,6 +5529,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
       installButton: () => binary.installButton,
       clickInstall: vi.fn(() => binary.installButton !== null),
       clickImportSession: vi.fn(() => true),
+      trust: () => overrides.trust ?? null,
     };
   }
 
@@ -5603,6 +5625,199 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
     expect(busyFacade.codexPaneRecheckAll()).toEqual({ ok: false, reason: "button_disabled" });
     expect(busyFacade.codexPaneRefreshManifest()).toEqual({ ok: false, reason: "button_disabled" });
     expect(busyDom.clickAction).not.toHaveBeenCalled();
+  });
+
+  // TASK.103 (CUT-S4.md §6c BU5): codexPaneState().trust — present iff the
+  // DOM accessor's OWN trust() read returns a value (structured facts, never
+  // a re-derivation off `binary`/`rows`); absent when the button isn't
+  // rendered. must-fail-naive.
+  it("BU5 codexPaneState().trust mirrors the DOM accessor's trust() read — present with the refusal, absent without", () => {
+    const withTrust = buildFacade(
+      fakeCodexPaneDom({ trust: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: false } }),
+    );
+    expect(withTrust.codexPaneState().trust).toEqual({ binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: false });
+
+    const withoutTrust = buildFacade(fakeCodexPaneDom());
+    expect(withoutTrust.codexPaneState().trust).toBeUndefined();
+  });
+
+  // TASK.103 fix wave (D-S4-17, BU10): staleConsent rides codexPaneState().trust
+  // as a THIRD structured fact — read off the DOM accessor's own trust() read,
+  // never re-derived. must-fail-naive.
+  it("BU10 codexPaneState().trust.staleConsent mirrors the DOM accessor's trust() read", () => {
+    const stale = buildFacade(
+      fakeCodexPaneDom({ trust: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: true } }),
+    );
+    expect(stale.codexPaneState().trust?.staleConsent).toBe(true);
+
+    const fresh = buildFacade(
+      fakeCodexPaneDom({ trust: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: false } }),
+    );
+    expect(fresh.codexPaneState().trust?.staleConsent).toBe(false);
+  });
+
+  // TASK.103 (BU5, D-S4-8): codexPaneTrustOpen — the SAME
+  // codexPaneRecheckAll/codexPaneInstall mechanism (a real click on the
+  // pane's OWN "Trust this binary…" action-row button via `clickAction`),
+  // not a re-implementation.
+  it("BU5 codexPaneTrustOpen refuses pane_not_mounted / button_not_present / button_disabled, else fires the real click", () => {
+    expect(buildFacade(fakeCodexPaneDom({ mounted: false })).codexPaneTrustOpen()).toEqual({ ok: false, reason: "pane_not_mounted" });
+    expect(buildFacade(fakeCodexPaneDom()).codexPaneTrustOpen()).toEqual({ ok: false, reason: "button_not_present" });
+
+    const disabledDom = fakeCodexPaneDom({ binary: binaryState({ actions: [{ label: "Trust this binary…", disabled: true }] }) });
+    expect(buildFacade(disabledDom).codexPaneTrustOpen()).toEqual({ ok: false, reason: "button_disabled" });
+
+    const dom = fakeCodexPaneDom({ binary: binaryState({ actions: [{ label: "Trust this binary…", disabled: false }] }) });
+    expect(buildFacade(dom).codexPaneTrustOpen()).toEqual({ ok: true });
+    expect(dom.clickAction).toHaveBeenCalledWith("Trust this binary…");
+  });
+});
+
+describe("automation facade — binaryTrustDialogState / Resolve, trustedBinariesState / Revoke (TASK.103, CUT-S4.md §6c BU6-BU7)", () => {
+  /**
+   * `createAutomationFacade`'s positional-parameter list is 28 long
+   * (registry .. trustedBinariesSectionDom, TASK.103's two additions
+   * appended at the END — see the factory's own comment on why). Every
+   * describe block in this file builds its OWN thin wrapper rather than
+   * sharing one, same convention as `buildFacade` above and every other
+   * describe block in this file (grep confirms a dozen local `buildFacade`
+   * variants, none shared) — positions annotated inline since an off-by-one
+   * here would silently wire a fake DOM into the wrong seam.
+   */
+  function buildTrustFacade(
+    overrides: {
+      binaryTrustDialogDom?: BinaryTrustDialogDom;
+      trustedBinariesSectionDom?: TrustedBinariesSectionDom;
+    } = {},
+  ) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry, // 1
+      tabsStore, // 2
+      stubBridge(), // 3
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      createSettingsStore(), // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      overrides.binaryTrustDialogDom, // 27
+      overrides.trustedBinariesSectionDom, // 28
+    );
+  }
+
+  /** A fully-controllable fake `BinaryTrustDialogDom` (pillDom discipline): reads frozen via overrides, clicks are spies. */
+  function fakeBinaryTrustDialogDom(
+    overrides: Partial<BinaryTrustDialogState> & { open?: boolean } = {},
+  ): BinaryTrustDialogDom & { clickAccept: ReturnType<typeof vi.fn>; clickDecline: ReturnType<typeof vi.fn> } {
+    const state: BinaryTrustDialogState = {
+      open: overrides.open ?? false,
+      visible: overrides.visible ?? false,
+      binaryPath: overrides.binaryPath,
+      reason: overrides.reason,
+      staleConsent: overrides.staleConsent,
+    };
+    return {
+      state: () => state,
+      clickAccept: vi.fn(() => state.open),
+      clickDecline: vi.fn(() => state.open),
+    };
+  }
+
+  it("BU6 binaryTrustDialogState reads the dialog's real state (open+visible+path+reason, or the closed default)", () => {
+    const closed = buildTrustFacade({ binaryTrustDialogDom: fakeBinaryTrustDialogDom() });
+    expect(closed.binaryTrustDialogState()).toEqual({ open: false, visible: false });
+
+    const open = buildTrustFacade({
+      binaryTrustDialogDom: fakeBinaryTrustDialogDom({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable", staleConsent: false }),
+    });
+    expect(open.binaryTrustDialogState()).toEqual({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable", staleConsent: false });
+  });
+
+  // TASK.103 fix wave (D-S4-17, BU10): staleConsent rides binaryTrustDialogState()
+  // as read off the dialog's own DOM accessor. must-fail-naive.
+  it("BU10 binaryTrustDialogState().staleConsent mirrors the DOM accessor's state() read", () => {
+    const stale = buildTrustFacade({
+      binaryTrustDialogDom: fakeBinaryTrustDialogDom({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable", staleConsent: true }),
+    });
+    expect(stale.binaryTrustDialogState().staleConsent).toBe(true);
+  });
+
+  it("BU6 binaryTrustDialogResolve(true) invokes clickAccept exactly once and nothing else; (false) invokes clickDecline exactly once and nothing else", () => {
+    const acceptDom = fakeBinaryTrustDialogDom({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable" });
+    const acceptFacade = buildTrustFacade({ binaryTrustDialogDom: acceptDom });
+    expect(acceptFacade.binaryTrustDialogResolve(true)).toEqual({ ok: true });
+    expect(acceptDom.clickAccept).toHaveBeenCalledTimes(1);
+    expect(acceptDom.clickDecline).not.toHaveBeenCalled();
+
+    const declineDom = fakeBinaryTrustDialogDom({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable" });
+    const declineFacade = buildTrustFacade({ binaryTrustDialogDom: declineDom });
+    expect(declineFacade.binaryTrustDialogResolve(false)).toEqual({ ok: true });
+    expect(declineDom.clickDecline).toHaveBeenCalledTimes(1);
+    expect(declineDom.clickAccept).not.toHaveBeenCalled();
+  });
+
+  it("BU6 binaryTrustDialogResolve refuses dialog_not_open without clicking anything", () => {
+    const dom = fakeBinaryTrustDialogDom({ open: false });
+    const facade = buildTrustFacade({ binaryTrustDialogDom: dom });
+    expect(facade.binaryTrustDialogResolve(true)).toEqual({ ok: false, reason: "dialog_not_open" });
+    expect(dom.clickAccept).not.toHaveBeenCalled();
+    expect(dom.clickDecline).not.toHaveBeenCalled();
+  });
+
+  /** A fully-controllable fake `TrustedBinariesSectionDom`. */
+  function fakeTrustedBinariesSectionDom(
+    overrides: Partial<{ mounted: boolean; rows: Array<{ path: string; visible: boolean }> }> = {},
+  ): TrustedBinariesSectionDom & { clickRevoke: ReturnType<typeof vi.fn> } {
+    const rows = overrides.rows ?? [];
+    return {
+      mounted: () => overrides.mounted ?? true,
+      rows: () => rows,
+      clickRevoke: vi.fn((path: string) => rows.some((row) => row.path === path)),
+    };
+  }
+
+  it("BU7 trustedBinariesState mirrors the section's rows; reads rows:[] (not an error) when the section isn't mounted", () => {
+    const rows = [
+      { path: "/opt/codex", visible: true },
+      { path: "/opt/claude", visible: true },
+    ];
+    const mountedFacade = buildTrustFacade({ trustedBinariesSectionDom: fakeTrustedBinariesSectionDom({ rows }) });
+    expect(mountedFacade.trustedBinariesState()).toEqual({ rows });
+
+    const unmountedFacade = buildTrustFacade({ trustedBinariesSectionDom: fakeTrustedBinariesSectionDom({ mounted: false, rows }) });
+    expect(unmountedFacade.trustedBinariesState()).toEqual({ rows: [] });
+  });
+
+  it("BU7 trustedBinaryRevoke clicks the named row's Revoke button, refusing pane_not_mounted / button_not_present", () => {
+    expect(buildTrustFacade({ trustedBinariesSectionDom: fakeTrustedBinariesSectionDom({ mounted: false }) }).trustedBinaryRevoke("/opt/codex")).toEqual({
+      ok: false,
+      reason: "pane_not_mounted",
+    });
+
+    const dom = fakeTrustedBinariesSectionDom({ rows: [{ path: "/opt/codex", visible: true }] });
+    const facade = buildTrustFacade({ trustedBinariesSectionDom: dom });
+    expect(facade.trustedBinaryRevoke("/opt/claude")).toEqual({ ok: false, reason: "button_not_present" });
+    expect(facade.trustedBinaryRevoke("/opt/codex")).toEqual({ ok: true });
+    expect(dom.clickRevoke).toHaveBeenCalledWith("/opt/codex");
   });
 });
 
@@ -5856,6 +6071,7 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
       installButton: () => null,
       clickInstall: () => false,
       clickImportSession: vi.fn(() => clickResult),
+      trust: () => null,
     };
   }
 

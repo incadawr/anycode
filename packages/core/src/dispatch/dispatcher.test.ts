@@ -5,8 +5,11 @@
  * NEVER throws — every failure path resolves to a ToolCallOutcome.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import * as fsp from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { checkpointRequired, executeToolCall, type DispatchContext } from "./dispatcher.js";
 import type {
   AggregatedPreToolUseResult,
@@ -40,6 +43,7 @@ import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import type { CorePorts } from "../ports/index.js";
 import type { ExecResult } from "../ports/execution.js";
+import type { FileSystemPort } from "../ports/file-system.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { bashTool } from "../tools/bash.js";
 import { bashOutputTool } from "../tools/bash-output.js";
@@ -55,6 +59,13 @@ import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import { agentTool } from "../tools/agent.js";
 import { workflowTool } from "../tools/workflow.js";
 import { bridgeMcpTool } from "../mcp/tool-bridge.js";
+import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
+import {
+  ModePermissionEngine,
+  RuleAwarePermissionEngine,
+  SafeCommandPermissionEngine,
+  SessionPermissionRules,
+} from "../permissions/index.js";
 import {
   BASH_RESULT_MAX_MODEL_BYTES,
   DEFAULT_TOOL_RESULT_BUDGET,
@@ -1328,5 +1339,273 @@ describe("executeToolCall — result budget", () => {
     const outcome = await executeToolCall(ctx, call());
 
     expect(outcome.modelText).toBe("small enough");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.32 — honest Edit mode: dispatch-site workspace facts (CUT-S1 §7c).
+
+describe("executeToolCall — TASK.32 workspace facts", () => {
+  const adapter = new NodeFileSystemAdapter();
+  const tmpRoots: string[] = [];
+
+  async function mkWorkspace(): Promise<string> {
+    const dir = await fsp.mkdtemp(join(tmpdir(), "dispatcher-ws-"));
+    const real = await fsp.realpath(dir);
+    tmpRoots.push(real);
+    return real;
+  }
+
+  afterEach(async () => {
+    await Promise.all(
+      tmpRoots.splice(0).map((dir) => fsp.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  it("D1: Write dispatch fills request.workspace from ctx.cwd", async () => {
+    const ws = await mkWorkspace();
+    const seen: PermissionRequest[] = [];
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const ctx: DispatchContext = {
+      registry,
+      hooks: makeHooks(),
+      permissionEngine: makeEngine({ decision: "allow" }, (request) => seen.push(request)),
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: adapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    const outcome = await executeToolCall(ctx, {
+      id: "w-1",
+      name: "Write",
+      input: { file_path: join(ws, "probe.md"), content: "x" },
+    });
+
+    expect(outcome.status).toBe("success");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.workspace).toEqual({ root: ws, resolvedPath: join(ws, "probe.md") });
+  });
+
+  it("D2: Bash dispatch never carries workspace (tool gate is literal)", async () => {
+    const ws = await mkWorkspace();
+    const seen: PermissionRequest[] = [];
+    const stubBash = makeTool({
+      metadata: { ...baseMetadata, name: "Bash" },
+      inputSchema: z.object({ file_path: z.string() }),
+    });
+    const ctx: DispatchContext = {
+      registry: makeRegistry({ Bash: stubBash }),
+      hooks: makeHooks(),
+      permissionEngine: makeEngine({ decision: "allow" }, (request) => seen.push(request)),
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: adapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    const outcome = await executeToolCall(ctx, {
+      id: "b-1",
+      name: "Bash",
+      input: { file_path: join(ws, "probe.md") },
+    });
+
+    expect(outcome.status).toBe("success");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.workspace).toBeUndefined();
+  });
+
+  it("D3: mocked ports without fs => block absent, no throw", async () => {
+    const stubWrite = makeTool({
+      metadata: { ...baseMetadata, name: "Write" },
+      inputSchema: z.object({ file_path: z.string() }),
+    });
+    const seen: PermissionRequest[] = [];
+    const ctx = makeCtx({
+      registry: makeRegistry({ Write: stubWrite }),
+      permissionEngine: makeEngine({ decision: "allow" }, (request) => seen.push(request)),
+      mode: "edit",
+    });
+
+    const outcome = await executeToolCall(ctx, { id: "w-2", name: "Write", input: { file_path: "/work/a.md" } });
+
+    expect(outcome.status).toBe("success");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.workspace).toBeUndefined();
+  });
+
+  it("D4: relative file_path => block absent", async () => {
+    // A stub handler (not the real writeTool) so a relative file_path can
+    // never actually touch a file relative to the test runner's process cwd.
+    const ws = await mkWorkspace();
+    const seen: PermissionRequest[] = [];
+    const stubWrite = makeTool({
+      metadata: { ...baseMetadata, name: "Write" },
+      inputSchema: z.object({ file_path: z.string(), content: z.string() }),
+    });
+    const ctx: DispatchContext = {
+      registry: makeRegistry({ Write: stubWrite }),
+      hooks: makeHooks(),
+      permissionEngine: makeEngine({ decision: "allow" }, (request) => seen.push(request)),
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: adapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    await executeToolCall(ctx, { id: "w-3", name: "Write", input: { file_path: "rel.md", content: "x" } });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.workspace).toBeUndefined();
+  });
+
+  it("D5: end-to-end: edit + inside => success with DenyPermissionBroker (DV-4 proven on the full stack)", async () => {
+    const ws = await mkWorkspace();
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const engine = new RuleAwarePermissionEngine(
+      new SafeCommandPermissionEngine(new ModePermissionEngine()),
+      new SessionPermissionRules(),
+    );
+    const ctx: DispatchContext = {
+      registry,
+      hooks: makeHooks(),
+      permissionEngine: engine,
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: adapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    const outcome = await executeToolCall(ctx, {
+      id: "w-4",
+      name: "Write",
+      input: { file_path: join(ws, "new.md"), content: "hello" },
+    });
+
+    expect(outcome.status).toBe("success");
+    await expect(fsp.readFile(join(ws, "new.md"), "utf-8")).resolves.toBe("hello");
+  });
+
+  it("D6: end-to-end: edit + outside => denied", async () => {
+    const ws = await mkWorkspace();
+    const outsideWs = await mkWorkspace();
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const engine = new RuleAwarePermissionEngine(
+      new SafeCommandPermissionEngine(new ModePermissionEngine()),
+      new SessionPermissionRules(),
+    );
+    const ctx: DispatchContext = {
+      registry,
+      hooks: makeHooks(),
+      permissionEngine: engine,
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: adapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    const outcome = await executeToolCall(ctx, {
+      id: "w-5",
+      name: "Write",
+      input: { file_path: join(outsideWs, "new.md"), content: "hello" },
+    });
+
+    expect(outcome.status).toBe("denied");
+  });
+
+  it("D7: end-to-end: escaping symlink => denied, file never written", async () => {
+    const ws = await mkWorkspace();
+    const outside = await mkWorkspace();
+    await fsp.symlink(outside, join(ws, "out"), "dir");
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const engine = new RuleAwarePermissionEngine(
+      new SafeCommandPermissionEngine(new ModePermissionEngine()),
+      new SessionPermissionRules(),
+    );
+    const ctx: DispatchContext = {
+      registry,
+      hooks: makeHooks(),
+      permissionEngine: engine,
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: adapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    const outcome = await executeToolCall(ctx, {
+      id: "w-6",
+      name: "Write",
+      input: { file_path: join(ws, "out", "x.md"), content: "hello" },
+    });
+
+    expect(outcome.status).toBe("denied");
+    await expect(fsp.access(join(outside, "x.md"))).rejects.toBeDefined();
+  });
+
+  it("D8: end-to-end: errno-blind lstat on an escaping symlink component => denied, file never written outside (B1, fix cycle 1)", async () => {
+    // Reviewer's exact repro: root <ws>, live symlink <ws>/out -> outside, one
+    // lstat("<ws>/out") failing non-ENOENT (here: simulated EIO, e.g. a
+    // network/removable mount hiccup). Before the fix, `probePresence` treated
+    // that rejection as "absent", the walk skipped the symlink component and
+    // lexically rejoined "<ws>/out/pwn.md" as though it were a plain path
+    // inside the workspace, the engine ruled "allow" in edit mode, and
+    // writeTool's real fs.writeFile then followed the REAL symlink at the OS
+    // level, landing the file in `outside`.
+    const ws = await mkWorkspace();
+    const outside = await mkWorkspace();
+    await fsp.symlink(outside, join(ws, "out"), "dir");
+    const flakyTarget = join(ws, "out");
+    const flakyAdapter: FileSystemPort = {
+      readFile: adapter.readFile.bind(adapter),
+      readFileBytes: adapter.readFileBytes.bind(adapter),
+      writeFile: adapter.writeFile.bind(adapter),
+      stat: adapter.stat.bind(adapter),
+      exists: adapter.exists.bind(adapter),
+      mkdir: adapter.mkdir.bind(adapter),
+      readdir: adapter.readdir.bind(adapter),
+      rename: adapter.rename.bind(adapter),
+      chmod: adapter.chmod.bind(adapter),
+      copyFile: adapter.copyFile.bind(adapter),
+      rm: adapter.rm.bind(adapter),
+      realpath: adapter.realpath.bind(adapter),
+      readFileNoFollow: adapter.readFileNoFollow.bind(adapter),
+      copyFileNoFollow: adapter.copyFileNoFollow.bind(adapter),
+      lstat: async (p: string) => {
+        if (p === flakyTarget) {
+          const err = new Error("simulated EIO (network/removable mount)") as NodeJS.ErrnoException;
+          err.code = "EIO";
+          throw err;
+        }
+        return adapter.lstat(p);
+      },
+    };
+    const registry = new ToolRegistry();
+    registry.register(writeTool);
+    const engine = new RuleAwarePermissionEngine(
+      new SafeCommandPermissionEngine(new ModePermissionEngine()),
+      new SessionPermissionRules(),
+    );
+    const ctx: DispatchContext = {
+      registry,
+      hooks: makeHooks(),
+      permissionEngine: engine,
+      permissionBroker: denyBroker,
+      mode: "edit",
+      ports: { fs: flakyAdapter } as unknown as CorePorts,
+      cwd: ws,
+    };
+
+    const outcome = await executeToolCall(ctx, {
+      id: "w-7",
+      name: "Write",
+      input: { file_path: join(ws, "out", "pwn.md"), content: "hello" },
+    });
+
+    expect(outcome.status).toBe("denied");
+    await expect(fsp.access(join(outside, "pwn.md"))).rejects.toBeDefined();
   });
 });

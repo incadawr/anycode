@@ -2951,6 +2951,11 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
     { path: "/settings/codex/install", body: {} },
     { path: "/settings/codex/recheck", body: {} },
     { path: "/settings/codex/manifest-refresh", body: {} },
+    // TASK.103 (CUT-S4.md §3.8): joined into the SAME generic 401 sweep as
+    // every other route above, not a separate ad hoc check.
+    { path: "/settings/codex/trust", body: {} },
+    { path: "/settings/binary-trust-dialog", body: { accept: true } },
+    { path: "/settings/trusted-binaries/revoke", body: { path: "/opt/codex" } },
     { path: "/start-screen/codex-profile", body: { open: true } },
     { path: "/settings/codex/import/open", body: { open: true } },
     { path: "/settings/codex/import/profile", body: { profileId: "tmp-a" } },
@@ -2962,6 +2967,17 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
   it("401s the three GET routes without a token", async () => {
     const h = await boot();
     for (const path of ["/settings/codex", "/settings/codex/import", "/start-screen/codex-profile"]) {
+      const res = await fetch(url(h, path));
+      expect(res.status, `${path} should 401 without a token`).toBe(401);
+    }
+  });
+
+  // TASK.103 (CUT-S4.md §3.8): the two NEW GET routes — a separate append,
+  // deliberately not folded into the pre-existing "three GET routes" test
+  // above (D-S4-12 discipline: every existing test stays byte-identical).
+  it("401s the two binary-trust GET routes without a token", async () => {
+    const h = await boot();
+    for (const path of ["/settings/binary-trust-dialog", "/settings/trusted-binaries"]) {
       const res = await fetch(url(h, path));
       expect(res.status, `${path} should 401 without a token`).toBe(401);
     }
@@ -3154,6 +3170,64 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
       const res = await fetch(url(h, "/settings/codex/manifest-refresh"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
       expect(res.status).toBe(200);
       expect(calls[0]).toContain('"codexPaneRefreshManifest"');
+    });
+
+    // TASK.103 (CUT-S4.md §3.8/D-S4-7).
+    it("POST /settings/codex/trust -> codexPaneTrustOpen()", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/codex/trust"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"codexPaneTrustOpen"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("GET /settings/binary-trust-dialog -> binaryTrustDialogState()", async () => {
+      const facadeResult = { open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable" };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/binary-trust-dialog"), { headers: auth() });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"binaryTrustDialogState"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/binary-trust-dialog {accept} -> binaryTrustDialogResolve([accept])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/binary-trust-dialog"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ accept: true }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"binaryTrustDialogResolve"');
+      expect(calls[0]).toContain("[true]");
+    });
+
+    it("GET /settings/trusted-binaries -> trustedBinariesState()", async () => {
+      const facadeResult = { rows: [{ path: "/opt/codex", visible: true }] };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/trusted-binaries"), { headers: auth() });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"trustedBinariesState"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/trusted-binaries/revoke {path} -> trustedBinaryRevoke([path])", async () => {
+      const { window, calls } = fakeWindowCapture({ ok: true });
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/trusted-binaries/revoke"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ path: "/opt/codex" }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls[0]).toContain('"trustedBinaryRevoke"');
+      expect(calls[0]).toContain('["/opt/codex"]');
     });
 
     it("POST /start-screen/codex-profile {open} -> codexProfileChipOpen([open])", async () => {

@@ -100,8 +100,9 @@ const PAREN_RE = /[()]/;
 
 /**
  * Splits a Bash command into the individual commands a shell would run
- * (TASK.104). Returns `undefined` when the command must be treated as
- * unsegmentable — the caller then refuses the match (fail closed).
+ * (TASK.104; exported and separator-kind-aware as of TASK.35). Returns
+ * `undefined` when the command must be treated as unsegmentable — the caller
+ * then refuses the match (fail closed).
  *
  * **Why (TASK.104):** the pattern used to be matched against the WHOLE raw
  * command string, so a stored `git *` rule auto-allowed
@@ -125,9 +126,34 @@ const PAREN_RE = /[()]/;
  *   it. `git log $(touch /tmp/x)` re-asks even under `git *`.
  * - an unterminated quote: the command is malformed for our purposes and its
  *   segmentation is undecidable.
+ *
+ * **TASK.35:** now exported for `safe-command.ts`'s pipeline classifier (the
+ * ONE splitter, invariant 2). The return shape grows a `separators` array
+ * recording each separator's exact kind (`||`≠`|`, `&&`≠`&` — the walk always
+ * distinguished them, only the old return type erased it). Blank segments are
+ * KEPT in the returned `segments` — dropping them is `bashMatchSubjects`'
+ * rule-matching leniency below, never the splitter's own behavior. `|&` has no
+ * kind of its own: the walk reads it as `|` + control `&`, producing a blank
+ * segment between them (`"a |& b"` → segments `["a ", "", " b"]`, separators
+ * `["|", "&"]`) — teaching the walker a dedicated `|&` kind would change
+ * segmentation for zero gain, since the pipeline classifier rejects it twice
+ * over (non-`|` separator AND a blank segment).
  */
-function splitBashSegments(command: string): string[] | undefined {
+export type BashSeparatorKind = ";" | "&" | "&&" | "|" | "||" | "\n";
+
+export interface BashSegments {
+  /** Raw segment texts, quotes/escapes preserved verbatim; blanks are KEPT
+   * (dropping them is bashMatchSubjects' rule-matching leniency, never the
+   * splitter's). Always segments.length >= 1. */
+  segments: string[];
+  /** separators[i] sits between segments[i] and segments[i+1];
+   * separators.length === segments.length - 1. */
+  separators: BashSeparatorKind[];
+}
+
+export function splitBashSegments(command: string): BashSegments | undefined {
   const segments: string[] = [];
+  const separators: BashSeparatorKind[] = [];
   let current = "";
   let inSingle = false;
   let inDouble = false;
@@ -189,12 +215,16 @@ function splitBashSegments(command: string): string[] | undefined {
     }
     if (ch === ";" || ch === "\n") {
       segments.push(current);
+      separators.push(ch);
       current = "";
       continue;
     }
     if (ch === "|") {
       if (next === "|") {
         i++;
+        separators.push("||");
+      } else {
+        separators.push("|");
       }
       segments.push(current);
       current = "";
@@ -209,6 +239,9 @@ function splitBashSegments(command: string): string[] | undefined {
       }
       if (next === "&") {
         i++;
+        separators.push("&&");
+      } else {
+        separators.push("&");
       }
       segments.push(current);
       current = "";
@@ -222,7 +255,7 @@ function splitBashSegments(command: string): string[] | undefined {
     return undefined;
   }
   segments.push(current);
-  return segments;
+  return { segments, separators };
 }
 
 /**
@@ -233,11 +266,11 @@ function splitBashSegments(command: string): string[] | undefined {
  * has to face the pattern instead of vacuously satisfying "every segment".
  */
 function bashMatchSubjects(command: string): string[] | undefined {
-  const segments = splitBashSegments(command);
-  if (segments === undefined) {
+  const split = splitBashSegments(command);
+  if (split === undefined) {
     return undefined;
   }
-  const commands = segments.map((segment) => segment.trim()).filter((segment) => segment !== "");
+  const commands = split.segments.map((segment) => segment.trim()).filter((segment) => segment !== "");
   return commands.length > 0 ? commands : [command];
 }
 

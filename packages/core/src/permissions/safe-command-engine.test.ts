@@ -144,3 +144,51 @@ describe("SafeCommandPermissionEngine composed with RuleAwarePermissionEngine �
     expect(engine.check(bashRequest("git status", "plan")).decision).toBe("deny");
   });
 });
+
+describe("SafeCommandPermissionEngine — TASK.35 pipelines", () => {
+  it("EN1: the DEFAULT classifier (no injection) allows a proven read-only pipeline, same reason string as single commands", () => {
+    const engine = new SafeCommandPermissionEngine(askAlways);
+    const ruling = engine.check(bashRequest("sed -n '1,5p' f | cat -A"));
+    expect(ruling.decision).toBe("allow");
+    expect(ruling.reason).toContain("read-only");
+    expect(ruling.reason).toContain("auto-approved");
+  });
+
+  it("EN2: auto mode + a safe pipeline is allowed through the composed production stack", () => {
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    const ruling = engine.check(bashRequest("sed -n '1,5p' f | cat -A", "auto"));
+    expect(ruling.decision).toBe("allow");
+  });
+
+  it("EN3: pipelines with an effectful or excluded segment still ask in build", () => {
+    const engine = new SafeCommandPermissionEngine(askAlways);
+    expect(engine.check(bashRequest("cat f | tee out")).decision).toBe("ask");
+    expect(engine.check(bashRequest("git status | cat")).decision).toBe("ask");
+  });
+
+  it("EN4: plan mode denies a proven-safe pipeline through the composed stack — narrowing never overrides deny", () => {
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    const ruling = engine.check(bashRequest("sed -n '1p' f | cat", "plan"));
+    expect(ruling.decision).toBe("deny");
+  });
+
+  it("EN5: yolo + pipeline passes the base's own ruling through verbatim (no auto-approved reason)", () => {
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    const ruling = engine.check(bashRequest("sed -n '1p' f | cat", "yolo"));
+    expect(ruling).toEqual({ decision: "allow" });
+  });
+
+  it("EN6: the injected classifier still wins the seam for pipelines", () => {
+    const denyingEngine = new SafeCommandPermissionEngine(askAlways, () => "unknown");
+    expect(denyingEngine.check(bashRequest("sed -n '1p' f | cat")).decision).toBe("ask");
+
+    const allowingEngine = new SafeCommandPermissionEngine(askAlways, () => "read-only");
+    expect(allowingEngine.check(bashRequest("cat f | sh")).decision).toBe("allow");
+  });
+
+  // EN7: deny-rule-beats-allow — the system has no engine-level deny rules; deny
+  // precedence is plan-mode (EN4) plus the dispatcher's own hook-vs-engine
+  // DECISION_RANK merge, which S2 does not touch (dispatcher and its tests are
+  // zero-diff — §2 conformance criterion). No new test: named here so the
+  // reviewer knows the DoD line was considered, not skipped.
+});
