@@ -44,13 +44,16 @@
  *  - The write-flag safety net matches whole flag tokens (and `--long=value`),
  *    not bundled short flags (`-ao`) or attached short values (`-ofile`). It is
  *    NOT the source of safety: every allowlisted binary is read-only BY NATURE,
- *    and the WRITE_CAPABLE_FLAGS screen is only a defense-in-depth backstop for a
- *    binary that is read-only except for one rare output flag (e.g. `tree -o`).
+ *    and the WRITE_CAPABLE_FLAGS screen is pure defense in depth — no entry may
+ *    LEAN on it (TASK.35 fix wave 1 removed `tree` for exactly that reason; see
+ *    the READ_ONLY_BINARIES doc below).
  *    A binary whose write/exec surface the screen cannot exhaust is NOT a
  *    candidate for the allowlist: ripgrep (`--pre`/`--pre-glob` run an arbitrary
  *    program per file, `--hostname-bin` runs one unconditionally, `-z` spawns
- *    external decompressors) and `file` (`-C`/`--compile` writes a `magic.mgc`
- *    into cwd) are therefore DELIBERATELY excluded — fail-closed, plain search is
+ *    external decompressors), `file` (`-C`/`--compile` writes a `magic.mgc`
+ *    into cwd), and `tree` (`-o FILE` writes, and `-no FILE`/`-o<FILE>` cluster
+ *    spellings evade any verbatim flag net — TASK.35 fix wave 1) are therefore
+ *    DELIBERATELY excluded — fail-closed, plain search is
  *    covered by grep/egrep/fgrep. Any binary ADDED via U1-P5 tuning must be
  *    read-only by nature (not merely "denylist a few flags") before it is trusted.
  */
@@ -83,16 +86,18 @@ const SHELL_METACHARACTERS: ReadonlySet<string> = new Set([
  * arbitrary programs and `file -C` writes to cwd — write/exec surfaces the flag
  * screen cannot exhaust. Plain search is served by grep/egrep/fgrep instead.
  *
- * `tree` is the ONE entry whose read-only-ness leans on the WRITE_CAPABLE_FLAGS
- * net rather than being read-only by nature: `tree -o FILE` writes, but `-o` is
- * in the net so `tree -o out.txt` demotes to "unknown" (pinned by regression
- * test). It is retained because that single output flag is fully covered; a tool
- * with more than one such flag would not qualify.
+ * `tree` was REMOVED (TASK.35 fix wave 1, W1-BLOCKER-1): `tree -o FILE` writes
+ * its listing to FILE, and the verbatim flag net cannot exhaust that surface —
+ * short clusters and attached values (`tree -no FILE`, `tree -o<FILE>`) spell
+ * the same write without ever producing the token `-o`. Under the module-doc
+ * admission criterion (a binary whose write surface the screen cannot exhaust
+ * is not a candidate) `tree` never qualified; it now asks like any other
+ * non-allowlisted binary. No entry may lean on the flag net for its safety.
  */
 export const READ_ONLY_BINARIES: ReadonlySet<string> = new Set([
   "ls", "cat", "head", "tail", "wc", "pwd", "whoami", "id", "uname",
   "stat", "du", "df", "echo", "printf",
-  "grep", "egrep", "fgrep", "tree",
+  "grep", "egrep", "fgrep",
   "readlink", "basename", "dirname", "realpath",
   "cksum", "md5sum", "sha1sum",
   "date", "true", "false",
@@ -410,7 +415,13 @@ function classifyPipelineSegment(segment: string): BashCommandClass {
     return "unknown";
   }
   // 3. The command word must be quote-free (D-S2-6): a quoted or
-  //    quote-assembled binary name never auto-runs.
+  //    quote-assembled binary name never auto-runs. LIVE but security-inert
+  //    (ARBITRATION-S2-W1 D-W1-2): removing it would only admit
+  //    quoted-directory-prefix spellings (`"a"/cat x`) whose executed basename
+  //    is identical to an already-sanctioned unquoted twin (RES-6 basename
+  //    trust). Kept as a zero-cost strictness rule, not as a load-bearing
+  //    security guard — do NOT delete as "dead code" (MUTATION-S2.md W1
+  //    corrections; A7's slash-after-quote vectors go red on deletion).
   const first = tokens[0]!;
   if (first.raw !== first.unquoted) {
     return "unknown";

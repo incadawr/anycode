@@ -103,8 +103,9 @@ describe("classifyBashCommand — adversarial vectors (all MUST be unknown)", ()
     // rg/file were removed from READ_ONLY_BINARIES: their write/exec surface
     // (ripgrep --pre/--hostname-bin/-z run arbitrary programs; file -C writes
     // magic.mgc) cannot be exhausted by the flag screen, so both fall through to
-    // "unknown" as non-allowlisted binaries. tree stays allowlisted but `-o` is
-    // caught by the WRITE_CAPABLE_FLAGS net (pins that coverage).
+    // "unknown" as non-allowlisted binaries. tree was removed too (TASK.35 fix
+    // wave 1, W1-BLOCKER-1): `-no FILE`/`-o<FILE>` cluster spellings evade the
+    // verbatim net, so its `-o` write surface is not exhaustible either.
     expectAllUnknown([
       "rg --pre rm needle f.txt", // --pre runs `rm f.txt` per matched file (proven RCE)
       "rg --hostname-bin ./x.sh needle f.txt", // runs ./x.sh unconditionally
@@ -114,7 +115,7 @@ describe("classifyBashCommand — adversarial vectors (all MUST be unknown)", ()
       "file -C", // writes magic.mgc into cwd (proven FS write)
       "file --compile", // long form of -C
       "file f", // plain file also demoted after removal
-      "tree -o out.txt", // tree kept, but -o output flag caught by the net
+      "tree -o out.txt", // tree removed (TASK.35 W1): unknown via allowlist miss
     ]);
   });
 
@@ -469,6 +470,13 @@ describe("classifyBashCommandLine — pipeline adversarial (all MUST be unknown)
       "''ls | cat",
       'cat f | "wc" -l',
       "\"sed\" -n '1p' f | cat",
+      // W1 (ARBITRATION-S2-W1 D-W1-3): slash-after-quote vectors — basename()
+      // slices at the LAST `/`, so quote characters sitting before that slash
+      // are sliced off with the directory prefix and the suffix can land on an
+      // allowlist entry. These are the ONLY spellings whose refusal step 3
+      // independently carries (MV2's detector).
+      '"a"/cat x | wc -l',
+      '"/bin"/ls | cat',
     ]);
   });
 
@@ -574,5 +582,47 @@ describe("classifyBashCommandLine — shellExpression flag", () => {
 
   it("F7: a plain unknown binary is not a shell expression — no hint deserved", () => {
     expect(classifyBashCommandLine("npm install")).toEqual({ class: "unknown", shellExpression: false });
+  });
+});
+
+describe("TASK.35 fix wave 1 — tree removal and divergence pins (V-series)", () => {
+  it("V1: single-path tree invocations all ask after the W1 allowlist removal", () => {
+    expectAllUnknown([
+      "tree",
+      "tree x",
+      "tree -L 2",
+      "tree -no /tmp/pwn",
+      "tree -o/tmp/pwn",
+      'tree "-o" pwn',
+    ]);
+  });
+
+  it("V2: pipeline tree invocations all ask — the W1-BLOCKER-1 vectors", () => {
+    expectAllLineUnknown([
+      "tree -no /tmp/PWN | cat",
+      "tree -o/tmp/PWN | cat",
+      "cat f | tree -no /tmp/PWN",
+      "tree | head -5",
+    ]);
+  });
+
+  it("V3: allowlist exclusion pins — tree and sed must never be READ_ONLY_BINARIES entries", () => {
+    // tree: W1-BLOCKER-1 — its write surface is not exhaustible by the
+    // verbatim flag net (`-no FILE` / `-o<FILE>` cluster spellings).
+    // sed: legal ONLY via the 4-token pipeline subgrammar; an allowlist entry
+    // would silently legalize bare `sed -n '1p' f` and every non-subgrammar
+    // single-command form (C2 is the behavioral twin detector, proven by MV4).
+    expect(READ_ONLY_BINARIES.has("tree")).toBe(false);
+    expect(READ_ONLY_BINARIES.has("sed")).toBe(false);
+  });
+
+  it("V4: unbalanced-quote divergence is pinned narrowing-only (D-S2-4 caveat, RES-11)", () => {
+    // Base laxity, documented not endorsed: the single-command path never sees
+    // quote state, so `cat 'f` (a /bin/sh syntax error) classifies read-only
+    // there. The line classifier refuses it (splitter refusal). The divergence
+    // must only ever point in the strict direction; this pin notices a flip.
+    expect(classifyBashCommand("cat 'f")).toBe("read-only");
+    expect(classifyBashCommandLine("cat 'f").class).toBe("unknown");
+    expect(classifyBashCommandLine('cat "f').class).toBe("unknown");
   });
 });
