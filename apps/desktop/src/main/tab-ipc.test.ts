@@ -180,6 +180,22 @@ describe("createTabRequestSchema — new-tab workspace matrix (§2F.4)", () => {
     ).toBe(true);
   });
 
+  it("accepts an optional connectionId draft pick (TASK.106 cut-1 stage A); bounds enforced", () => {
+    expect(
+      createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", connectionId: "conn-x" }).success,
+    ).toBe(true);
+    // Optional — a draft that never touched the picker omits it entirely.
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x" }).success).toBe(true);
+    expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", connectionId: "" }).success).toBe(false);
+    expect(
+      createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", connectionId: "x".repeat(129) }).success,
+    ).toBe(false);
+    // The 128 boundary itself is accepted.
+    expect(
+      createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", connectionId: "x".repeat(128) }).success,
+    ).toBe(true);
+  });
+
   it("rejects an empty-string engineModel/enginePreset (min(1)) and a value over 128 chars (max)", () => {
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", engineModel: "" }).success).toBe(false);
     expect(createTabRequestSchema.safeParse({ kind: "new", workspace: "/x", enginePreset: "" }).success).toBe(false);
@@ -745,6 +761,83 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     // forever (until an app restart).
     expect(release).toHaveBeenCalledOnce();
     expect(createTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleCreate — New Session picker connectionId pin (TASK.106 cut-1 stage A)", () => {
+  it("a known connectionId reaches manager.createTab verbatim, and activeConnectionId is never consulted", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const connectionExists = vi.fn((id: string) => id === "conn-picked");
+    const activeConnectionId = vi.fn(() => "conn-active");
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, connectionExists, activeConnectionId };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", connectionId: "conn-picked" });
+
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/x" });
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn-picked" }));
+    expect(connectionExists).toHaveBeenCalledWith("conn-picked");
+    // The picked connection wins outright — main never even reads the active
+    // connection when an explicit pick is present.
+    expect(activeConnectionId).not.toHaveBeenCalled();
+  });
+
+  it("an unknown connectionId refuses not_ready and never spawns or opens the folder dialog", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: [] });
+    const connectionExists = vi.fn(() => false);
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, connectionExists };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", connectionId: "conn-deleted" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(connectionExists).toHaveBeenCalledWith("conn-deleted");
+    expect(createTab).not.toHaveBeenCalled();
+    expect(showOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it("no connectionExists dep wired (legacy wiring) + an explicit pick still refuses fail-closed, never trusts the id", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", connectionId: "conn-x" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("no connectionId in the request ⇒ falls back to activeConnectionId, unchanged", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const connectionExists = vi.fn(() => true);
+    const activeConnectionId = vi.fn(() => "conn-active");
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, connectionExists, activeConnectionId };
+
+    await handleCreate(deps, { kind: "new", workspace: "/x" });
+
+    expect(connectionExists).not.toHaveBeenCalled();
+    expect(activeConnectionId).toHaveBeenCalledOnce();
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn-active" }));
+  });
+
+  it("engine: 'codex' with a connectionId in the request ⇒ the field is never read, no refusal, no connectionId on createTab", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const connectionExists = vi.fn(() => false); // would refuse if consulted
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, connectionExists };
+
+    const res = await handleCreate(deps, {
+      kind: "new",
+      workspace: "/x",
+      engine: "codex",
+      connectionId: "conn-x",
+    });
+
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/x" });
+    expect(connectionExists).not.toHaveBeenCalled();
+    const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("connectionId" in call).toBe(false);
   });
 });
 

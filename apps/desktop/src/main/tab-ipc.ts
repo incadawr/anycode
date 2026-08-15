@@ -127,6 +127,16 @@ export interface TabIpcDeps {
    */
   activeConnectionId?(): string | undefined;
   /**
+   * TASK.106 cut-1 stage A: does this connection id exist in main's live
+   * connection registry right now? Backs the New Session model picker's
+   * cross-connection pick — a `new` request's explicit `connectionId` is
+   * validated against this BEFORE it is trusted (see handleCreate). Absent =
+   * legacy wiring / unit fixtures with no registry to check; an explicit id
+   * then fail-closed refuses (never a silent fallback to the active
+   * connection) rather than trusting an unverifiable id.
+   */
+  connectionExists?(connectionId: string): boolean;
+  /**
    * Resolves the connection a RESUMED session is pinned to (TASK.45 W10). Absent
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
    */
@@ -197,6 +207,11 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
     // resolves the id against its own registry (resolveCodexProfile), never
     // trusts it directly, same discipline as engineModel/enginePreset above.
     codexProfileId: z.string().min(1).max(128).optional(),
+    // TASK.106 cut-1 stage A: bounds only (a hostile-length string) — main
+    // resolves the id against its own live connection registry
+    // (deps.connectionExists), never trusts it directly, same discipline as
+    // codexProfileId above.
+    connectionId: z.string().min(1).max(128).optional(),
   }),
   z.object({
     kind: z.literal("resume"),
@@ -454,6 +469,20 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       codexProfile = resolved.codexProfile;
     }
+    // TASK.106 cut-1 stage A: resolve the New Session picker's explicit
+    // connection pick BEFORE prompting — same "never make the user pick a
+    // folder for a refused request" reasoning as the Codex profile resolution
+    // above. Fail-closed: an id absent from main's live registry (or no
+    // registry wired at all) refuses `not_ready`, it NEVER falls back to the
+    // active connection. Non-core engines never consult `req.connectionId` —
+    // it is simply not read below.
+    let explicitConnectionId: string | undefined;
+    if (engine === "core" && req.connectionId !== undefined) {
+      if (deps.connectionExists === undefined || !deps.connectionExists(req.connectionId)) {
+        return { ok: false, reason: "not_ready" };
+      }
+      explicitConnectionId = req.connectionId;
+    }
     // Guard capacity BEFORE prompting: never make the user pick a folder we
     // cannot open (UI also disables "+" at capacity, this is the backstop).
     if (deps.manager.atCapacity()) {
@@ -479,7 +508,11 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // creation (main stamps it into the fork env, the host persists it), so a
     // later default-switch never retargets this session's account. Codex owns
     // its own account, so a codex tab is never pinned to a core connection.
-    const newConnectionId = engine === "core" ? deps.activeConnectionId?.() : undefined;
+    // TASK.106 cut-1 stage A: an explicit (already-validated) picker pick
+    // wins over the active connection — `settings.provider.activeConnectionId`
+    // itself is never touched by this pick (session-scoped, not a default
+    // change).
+    const newConnectionId = engine === "core" ? (explicitConnectionId ?? deps.activeConnectionId?.()) : undefined;
     const result = deps.manager.createTab({
       workspace,
       sessionId: randomUUID(),

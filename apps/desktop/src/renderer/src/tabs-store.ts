@@ -85,6 +85,18 @@ export interface SessionDraft {
    */
   codexProfileId?: string;
   /**
+   * Core-only provider-connection pin for a new session (TASK.106 cut-1
+   * stage A): an opaque connection id from main's live registry, set when
+   * the New Session model picker's chosen model belongs to a connection
+   * other than the active one. Absent until the user picks a cross-connection
+   * model (mirrors `codexProfileId`'s "unset in this slice" convention) ⇒
+   * the session pins to `activeConnectionId()`, today's behavior. Never read
+   * for a non-core draft; picking this never changes
+   * `settings.provider.activeConnectionId` itself — it is a session-scoped
+   * pin, not a default switch.
+   */
+  connectionId?: string;
+  /**
    * Image attachments for the first turn (TASK.81, Composer.tsx parity —
    * `attachedImages`, projected through the SAME `QueuedPromptImage` shape a
    * queued prompt's images already use so `queueInitialPrompt`/
@@ -172,6 +184,12 @@ export interface TabsState {
    * convention).
    */
   setDraftCodexProfileId(profileId: string | undefined): void;
+  /**
+   * No-op while `draft === null`. Core-only pin (mirrors
+   * `setDraftCodexProfileId`, TASK.106 cut-1 stage A). `undefined` clears
+   * back to the active-connection default.
+   */
+  setDraftConnectionId(connectionId: string | undefined): void;
   /**
    * No-op while `draft === null`. Full replace (mirrors `setDraftPrompt`) —
    * the caller (StartScreen's attach/paste/remove handlers) computes the
@@ -355,6 +373,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
           mode: state.draft?.mode ?? "build",
           ...(state.draft?.enginePreset !== undefined ? { enginePreset: state.draft.enginePreset } : {}),
           ...(state.draft?.codexProfileId !== undefined ? { codexProfileId: state.draft.codexProfileId } : {}),
+          ...(state.draft?.connectionId !== undefined ? { connectionId: state.draft.connectionId } : {}),
           ...(state.draft?.images !== undefined ? { images: state.draft.images } : {}),
           ...(state.draft?.engineEffort !== undefined ? { engineEffort: state.draft.engineEffort } : {}),
         },
@@ -388,6 +407,10 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftCodexProfileId(profileId): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, codexProfileId: profileId } }));
+    },
+
+    setDraftConnectionId(connectionId): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, connectionId } }));
     },
 
     setDraftImages(images): void {

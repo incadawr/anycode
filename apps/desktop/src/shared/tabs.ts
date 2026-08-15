@@ -115,6 +115,17 @@ export type CreateTabRequest =
        * discipline as `engineModel`/`enginePreset` above.
        */
       codexProfileId?: string;
+      /**
+       * The New Session start screen's cross-connection model picker pick
+       * (TASK.106 cut-1 stage A): an opaque provider-connection id from
+       * main's live connection registry — never a credential. Absent ⇒ the
+       * host's own default applies (`activeConnectionId()`, today's
+       * behavior). Only read on the session-CREATING spawn (main/tabs.ts),
+       * never a resume/respawn, and only for engine `core` — a non-core
+       * engine owns its own account and never consults this field, same
+       * discipline as `codexProfileId` being non-core's own opaque channel.
+       */
+      connectionId?: string;
     }
   | {
       kind: "resume";
