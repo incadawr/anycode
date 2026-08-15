@@ -277,6 +277,18 @@ import {
  */
 const ENV_SETTINGS_PATH = "ANYCODE_SETTINGS_PATH";
 /**
+ * TASK.103: the same trimmed-non-empty-or-undefined read of `ENV_SETTINGS_PATH`
+ * `boot()` already performs inline at its `seedAlwaysAllowRules` call site
+ * (below) — extracted here so the two spawn-time `binaryTrust` closures
+ * (bootCodexSession / bootClaudeSession) can share it without reaching into
+ * `boot()`'s local scope. The `boot()` call site itself is left untouched
+ * (byte-identical): this helper is a NEW standalone read, not a replacement.
+ */
+function hostSettingsPathOverride(): string | undefined {
+  const raw = process.env[ENV_SETTINGS_PATH];
+  return raw !== undefined && raw.trim() !== "" ? raw : undefined;
+}
+/**
  * Mirrors main/host-env.ts's `ENV_CONNECTION_ID` (TASK.45 W10) — kept in sync by
  * contract, same convention as `ENV_SETTINGS_PATH` above (host does not import
  * main/*). Informational: the pinned provider connection id main stamped into
@@ -300,6 +312,7 @@ import {
 import { parseCodexEngineArgs } from "./engines/codex/draft-args.js";
 import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
 import { SqliteCodexShadowLog } from "./engines/codex/shadow-log.js";
+import { checkCodexBinaryTrustOnDisk } from "./engines/codex/app-server-client.js";
 import { ENV_CODEX_BIN } from "../shared/engines.js";
 // SLICE-CC C4 (cut §1.4): new import lines — the Claude composition mirrors the
 // codex one above. `readHostProcessOwnership` is aliased because the claude
@@ -314,7 +327,12 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
+import { checkClaudeBinaryTrustOnDisk } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
+// TASK.103: the host-side consent reader. Host never WRITES settings.json
+// (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
+// fail-soft read, same standing custody as seedAlwaysAllowRules above.
+import { readTrustedBinaryConsentsSync } from "../settings/files.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
 import { Outbound, Session } from "./session.js";
@@ -585,6 +603,11 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     workspace,
     sourceEnv: process.env,
     shadowLog,
+    // TASK.103: per-call re-read so a consent granted or revoked mid-session
+    // is honored by the very next spawn gate (D-S4-4) — main is the sole
+    // writer, this closure just re-reads before each of assertTrusted's
+    // per-spawn calls.
+    binaryTrust: (path: string) => checkCodexBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     ...(processOwnership !== undefined ? { processOwnership } : {}),
     ...(codexProfile !== null
       ? {
@@ -804,6 +827,9 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // `~/.claude` main's doctor diagnosed before it let this tab spawn.
     profileDir: resolveClaudeConfigDir(),
     sourceEnv: process.env,
+    // TASK.103: mirror of the codex closure above — same per-call re-read
+    // rationale (D-S4-4).
+    binaryTrust: (path: string) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     ...(processOwnership !== undefined ? { processOwnership } : {}),
   };
 

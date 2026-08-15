@@ -5,6 +5,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { ClaudeDoctorReport } from "../../../shared/claude-doctor.js";
+import { binaryTrustRefusalOf } from "./BinaryTrustDialog.js";
 import {
   CLAUDE_LOGIN_IN_PROGRESS_COPY,
   CLAUDE_PROFILE_LOGIN_COMMAND,
@@ -279,5 +280,44 @@ describe("cancelClaudeSignIn", () => {
     cancelClaudeSignIn({ loginCancel });
     expect(loginCancel).toHaveBeenCalledTimes(1);
     expect(loginCancel).toHaveBeenCalledWith();
+  });
+});
+
+// TASK.103 (CUT-S4.md §12 step 8, row 38): the claude mirror of
+// CodexEnginePane.test.ts's binary-trust wiring pin — confirms a real
+// ClaudeOnboardingSnapshot's `.report` satisfies the shared dialog helper's
+// input structurally, and that describeClaudeReportStatus needs ZERO change
+// for a trust-refused report (D-S4-6).
+describe("binary-trust wiring (TASK.103)", () => {
+  it("a ClaudeOnboardingSnapshot carrying trustRefusal is read correctly by the shared dialog helper", () => {
+    const snapshot: ClaudeOnboardingSnapshot = {
+      report: {
+        status: "error",
+        error: "Claude binary (/opt/claude) is world-writable",
+        trustRefusal: { binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable" },
+      },
+      binaryPath: "/opt/claude",
+      source: "env",
+      checkedAt: "2026-08-15T00:00:00.000Z",
+    };
+    expect(binaryTrustRefusalOf(snapshot.report)).toEqual({ binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable" });
+  });
+
+  it("a report with NO trustRefusal is read as null — no Trust button offered", () => {
+    const notInstalled: ClaudeDoctorReport = { status: "not_installed" };
+    const plainError: ClaudeDoctorReport = { status: "error", error: "spawn ENOENT" };
+    expect(binaryTrustRefusalOf(notInstalled)).toBeNull();
+    expect(binaryTrustRefusalOf(plainError)).toBeNull();
+  });
+
+  it("describeClaudeReportStatus needs no change for a trust-refused report — same 'Error' tone/detail as any other error status (D-S4-6)", () => {
+    const trustRefused: ClaudeDoctorReport = {
+      status: "error",
+      error: "Claude binary (/opt/claude) is world-writable",
+      trustRefusal: { binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable" },
+    };
+    const plainError: ClaudeDoctorReport = { status: "error", error: "Claude binary (/opt/claude) is world-writable" };
+    expect(describeClaudeReportStatus(trustRefused)).toEqual(describeClaudeReportStatus(plainError));
+    expect(describeClaudeReportStatus(trustRefused).tone).toBe("error");
   });
 });

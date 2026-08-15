@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 import { checkClaudeBinaryPathTrust } from "./claude-binary.js";
 import { augmentPathForGui } from "./codex-doctor.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
+import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 
 // ── version floor gate (cut §0.2 invariant 4 / §0.3-9: a floor, never an
@@ -464,6 +465,8 @@ export interface RunClaudeDoctorOptions {
   profileDir?: string;
   versionTimeoutMs?: number;
   initTimeoutMs?: number;
+  /** Live per-path binary-trust consents (TASK.103), fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
+  consents?: readonly BinaryTrustConsent[];
 }
 
 /**
@@ -476,7 +479,7 @@ export interface RunClaudeDoctorOptions {
 export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoctorOptions): Promise<ClaudeDoctorReport> {
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
-  const trust = options.trust ?? ((path: string) => checkClaudeBinaryPathTrust(path, undefined, platform));
+  const trust = options.trust ?? ((path: string) => checkClaudeBinaryPathTrust(path, undefined, platform, undefined, options.consents ?? []));
   const versionTimeoutMs = options.versionTimeoutMs ?? VERSION_PREFLIGHT_TIMEOUT_MS;
   const initTimeoutMs = options.initTimeoutMs ?? INIT_HANDSHAKE_TIMEOUT_MS;
   const watchdogMs =
@@ -492,7 +495,7 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     }
     const untrusted = trust(binaryPath);
     if (untrusted !== null) {
-      return { status: "error", error: untrusted };
+      return { status: "error", error: untrusted, trustRefusal: { binaryPath, reason: untrusted } };
     }
     const preflight = await preflightVersion(binaryPath, childEnv, spawnImpl, versionTimeoutMs, cancellation);
     if (preflight.error !== undefined) {
@@ -515,7 +518,7 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     // a whole `--version` round trip.
     const untrustedAtSpawn = trust(binaryPath);
     if (untrustedAtSpawn !== null) {
-      return { status: "error", error: untrustedAtSpawn };
+      return { status: "error", error: untrustedAtSpawn, trustRefusal: { binaryPath, reason: untrustedAtSpawn } };
     }
 
     const handshake = await runInitializeHandshake(binaryPath, childEnv, spawnImpl, initTimeoutMs, cancellation);

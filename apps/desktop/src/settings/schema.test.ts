@@ -888,3 +888,61 @@ describe("DEFAULT_SETTINGS", () => {
     expect(defaults.permissions.alwaysAllow).toEqual([]);
   });
 });
+
+describe("security.trustedBinaries (TASK.103, DV-6) — round-trip + per-element tolerance", () => {
+  const validConsent = {
+    path: "/opt/homebrew/bin/codex",
+    fingerprint: { mode: 0o755, uid: 501, gid: 20, size: 4096, mtimeMs: 1_700_000_000_000 },
+    grantedAt: "2026-08-15T00:00:00.000Z",
+  };
+
+  it("BS1 round-trips a valid trustedBinaries array intact", () => {
+    const withConsent: AnycodeSettings = {
+      ...cloneDefaults(),
+      security: { allowWeakSecretStorage: false, trustedBinaries: [validConsent] },
+    };
+    const before = JSON.stringify(withConsent);
+    const parsed = settingsSchema.safeParse(JSON.parse(before));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.security.trustedBinaries).toEqual([validConsent]);
+      expect(JSON.stringify(parsed.data)).toBe(before); // byte-identical round-trip
+    }
+  });
+
+  it("BS1 a settings.json WITHOUT trustedBinaries round-trips byte-identically (additive-optional)", () => {
+    const before = JSON.stringify(cloneDefaults());
+    const parsed = settingsSchema.safeParse(JSON.parse(before));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.security.trustedBinaries).toBeUndefined();
+      expect(JSON.stringify(parsed.data)).toBe(before);
+    }
+  });
+
+  it("BS2 per-element tolerance: one malformed record is dropped alone — valid siblings and allowWeakSecretStorage survive, security never collapses", () => {
+    const malformedMissingFingerprintField = {
+      path: "/opt/broken",
+      fingerprint: { mode: 0o755, uid: 501, gid: 20, size: 4096 }, // mtimeMs missing
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+    const malformedWrongType = {
+      path: "/opt/also-broken",
+      fingerprint: { mode: "not-a-number", uid: 501, gid: 20, size: 4096, mtimeMs: 1 },
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+    const withMixedBinaries = {
+      ...cloneDefaults(),
+      security: {
+        allowWeakSecretStorage: true,
+        trustedBinaries: [malformedMissingFingerprintField, validConsent, malformedWrongType],
+      },
+    };
+    const parsed = settingsSchema.safeParse(withMixedBinaries);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.security.trustedBinaries).toEqual([validConsent]);
+      expect(parsed.data.security.allowWeakSecretStorage).toBe(true);
+    }
+  });
+});

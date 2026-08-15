@@ -102,6 +102,8 @@ import type {
 } from "../shared/profile-config.js";
 import { TERMINAL_PORT_ENVELOPE_TYPE, type TerminalPortEnvelope } from "../shared/terminal.js";
 import {
+  BINARY_TRUST_GRANT_CHANNEL,
+  BINARY_TRUST_REVOKE_CHANNEL,
   CONNECTION_CHECK_CHANNEL,
   CONNECTION_CREATE_CHANNEL,
   CONNECTION_DELETE_CHANNEL,
@@ -616,6 +618,11 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_ROLLOUT_PREVIEW_CHANNEL, { profileId, fileName }) as Promise<CodexRolloutPreviewResult>,
     rolloutImport: (profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult> =>
       ipcRenderer.invoke(CODEX_ROLLOUT_IMPORT_CHANNEL, { profileId, fileName, model }) as Promise<CodexRolloutImportResult>,
+    // TASK.103 (D-S4-8): the consent-card "Trust this binary" action. `path`
+    // ONLY — the fingerprint is computed entirely main-side
+    // (handleBinaryTrustGrant); this bridge never carries or constructs one.
+    trustBinary: (path: string): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(BINARY_TRUST_GRANT_CHANNEL, { path }) as Promise<SettingsMutationResult>,
   },
   // SLICE-CC A4 (cut §1.2): Claude onboarding invoke-API — a minimal subset of
   // the codex bridge above (no login/profile/quota surface in CC-A). No
@@ -632,6 +639,11 @@ contextBridge.exposeInMainWorld("anycode", {
     loginStart: (): Promise<ClaudeLoginStartResult> =>
       ipcRenderer.invoke(CLAUDE_LOGIN_START_CHANNEL) as Promise<ClaudeLoginStartResult>,
     loginCancel: (): Promise<void> => ipcRenderer.invoke(CLAUDE_LOGIN_CANCEL_CHANNEL) as Promise<void>,
+    // TASK.103 (D-S4-8): the consent-card "Trust this binary" action — the
+    // exact codex mirror above, same GRANT channel (the record is
+    // engine-agnostic, D-S4-1), same path-only payload.
+    trustBinary: (path: string): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(BINARY_TRUST_GRANT_CHANNEL, { path }) as Promise<SettingsMutationResult>,
     // Doctor-spawn-loop fix: pushes the fresh snapshot itself after every
     // recheck/pick/login step, so the Settings pane can apply it directly
     // instead of answering the shared `engines-changed` push with another
@@ -657,6 +669,10 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(SECRET_CLEAR_CHANNEL, { key }) as Promise<SettingsMutationResult>,
     addRule: (rule: PermissionRuleAddRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(PERMISSION_RULE_ADD_CHANNEL, rule) as Promise<SettingsMutationResult>,
+    // TASK.103 (D-S4-7): revokes ONE trusted-binary consent by path — the
+    // Permissions pane's "Trusted binaries" section's only mutating call.
+    binaryTrustRevoke: (path: string): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(BINARY_TRUST_REVOKE_CHANNEL, { path }) as Promise<SettingsMutationResult>,
     // Slice 2.5 (design §4.5): OAuth sign-in/cancel — two more thin invoke
 
     // token ever crosses back (oauthStart resolves with a snapshot whose

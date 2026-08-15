@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { checkCodexBinaryTrust, type CodexBinaryTrustInput, type CodexPathStat } from "./codex-binary-trust.js";
+import {
+  checkCodexBinaryTrust,
+  checkConsentedBinaryTrust,
+  type BinaryTrustConsent,
+  type CodexBinaryTrustInput,
+  type CodexPathStat,
+} from "./codex-binary-trust.js";
 
 /**
  * The identity every fixture below is judged against, UNLESS a test
@@ -142,5 +148,130 @@ describe("checkCodexBinaryTrust — directory chain", () => {
   it("refuses when ANY directory in the supplied chain is unsafe, not only the first entry", () => {
     const result = checkCodexBinaryTrust(input(fileStat("/a/b/codex"), [dirStat("/a/b"), dirStat("/a", { mode: 0o777 })]));
     expect(result).toMatch(/world-writable/);
+  });
+});
+
+// TASK.103 — a consent record is authored main-side from a live stat (D-S4-5);
+// here it is a literal fixture, no fs involved. `FINGERPRINT_SIZE`/`_MTIME`
+// stand in for the raw stat values a real grant would capture.
+const FINGERPRINT_SIZE = 4096;
+const FINGERPRINT_MTIME = 1_700_000_000_000;
+const GRANTED_AT = "2026-08-15T00:00:00.000Z";
+
+/** A file stat that carries the fingerprint fields (production fs.Stats always does). */
+function fingerprintedFileStat(path: string, overrides: Partial<CodexPathStat> = {}): CodexPathStat {
+  return fileStat(path, { size: FINGERPRINT_SIZE, mtimeMs: FINGERPRINT_MTIME, ...overrides });
+}
+
+/** A consent record that exactly matches the given (fingerprinted) file stat. */
+function consentFor(file: CodexPathStat, overrides: Partial<BinaryTrustConsent> = {}): BinaryTrustConsent {
+  return {
+    path: file.path,
+    fingerprint: {
+      mode: file.mode,
+      uid: file.uid,
+      gid: file.gid,
+      size: file.size as number,
+      mtimeMs: file.mtimeMs as number,
+    },
+    grantedAt: GRANTED_AT,
+    ...overrides,
+  };
+}
+
+describe("consented binary trust (TASK.103)", () => {
+  it("BT1 consent lifts a directory-shape refusal; without consent the base refusal returns verbatim", () => {
+    const file = fingerprintedFileStat("/opt/codex");
+    const trustInput = input(file, [dirStat("/opt", { mode: 0o777 })]);
+    const base = checkCodexBinaryTrust(trustInput);
+    expect(base).toMatch(/world-writable/);
+    expect(checkConsentedBinaryTrust(trustInput, [consentFor(file)])).toBeNull();
+    expect(checkConsentedBinaryTrust(trustInput, [])).toBe(base);
+  });
+
+  it("BT2 drift matrix: each fingerprint field varied alone (mode/uid/gid/size/mtimeMs) invalidates the consent", () => {
+    const file = fingerprintedFileStat("/opt/codex");
+    const trustInput = input(file, [dirStat("/opt", { mode: 0o777 })]);
+    const base = checkCodexBinaryTrust(trustInput);
+    const good = consentFor(file);
+
+    const drifted = (field: keyof typeof good.fingerprint, delta: number): BinaryTrustConsent => ({
+      ...good,
+      fingerprint: { ...good.fingerprint, [field]: good.fingerprint[field] + delta },
+    });
+
+    for (const field of ["mode", "uid", "gid", "size", "mtimeMs"] as const) {
+      const consent = drifted(field, 1);
+      expect(checkConsentedBinaryTrust(trustInput, [consent]), `drift on ${field} must refuse`).toBe(base);
+    }
+    // sanity: the un-drifted consent still lifts the refusal.
+    expect(checkConsentedBinaryTrust(trustInput, [good])).toBeNull();
+  });
+
+  it("BT3 path mismatch: an identical fingerprint recorded for a sibling/prefix path does not match (scope-creep guard)", () => {
+    const file = fingerprintedFileStat("/opt/codex");
+    const trustInput = input(file, [dirStat("/opt", { mode: 0o777 })]);
+    const base = checkCodexBinaryTrust(trustInput);
+    // A wholly different sibling binary's consent must not leak.
+    const siblingConsent = consentFor(file, { path: "/opt/claude" });
+    expect(checkConsentedBinaryTrust(trustInput, [siblingConsent])).toBe(base);
+    // A PREFIX of this path (e.g. from a shorter-named binary) must not
+    // match either — exact equality only, no prefix/normalization logic.
+    const prefixConsent = consentFor(file, { path: "/opt/code" });
+    expect(checkConsentedBinaryTrust(trustInput, [prefixConsent])).toBe(base);
+  });
+
+  it("BT4 structural refusals are never consented, even with an otherwise-matching consent", () => {
+    const notAFile = fingerprintedFileStat("/opt/codex", { isFile: false });
+    const notExecutable = fingerprintedFileStat("/opt/codex", { mode: 0o644 });
+    const badAncestorFile = fingerprintedFileStat("/opt/codex");
+
+    const cases: Array<{ file: CodexPathStat; directories: readonly CodexPathStat[] }> = [
+      { file: notAFile, directories: [dirStat("/opt")] },
+      { file: notExecutable, directories: [dirStat("/opt")] },
+      { file: badAncestorFile, directories: [dirStat("/opt", { isDirectory: false })] },
+    ];
+
+    for (const { file, directories } of cases) {
+      const trustInput = input(file, directories);
+      const base = checkCodexBinaryTrust(trustInput);
+      expect(base).not.toBeNull();
+      expect(checkConsentedBinaryTrust(trustInput, [consentFor(file)])).toBe(base);
+    }
+  });
+
+  it("BT5 consent lifts a FILE-shape unsafeReason refusal (world-writable file)", () => {
+    const file = fingerprintedFileStat("/opt/codex", { mode: 0o777 });
+    const trustInput = input(file, [dirStat("/opt")]);
+    const base = checkCodexBinaryTrust(trustInput);
+    expect(base).toMatch(/world-writable/);
+    expect(checkConsentedBinaryTrust(trustInput, [consentFor(file)])).toBeNull();
+  });
+
+  it("BT6 absence fails closed: a live stat missing size/mtimeMs never matches, and an empty consent list refuses", () => {
+    const file = fileStat("/opt/codex"); // deliberately no size/mtimeMs
+    const trustInput = input(file, [dirStat("/opt", { mode: 0o777 })]);
+    const base = checkCodexBinaryTrust(trustInput);
+    const consent: BinaryTrustConsent = {
+      path: file.path,
+      fingerprint: { mode: file.mode, uid: file.uid, gid: file.gid, size: 0, mtimeMs: 0 },
+      grantedAt: GRANTED_AT,
+    };
+    expect(checkConsentedBinaryTrust(trustInput, [consent])).toBe(base);
+    expect(checkConsentedBinaryTrust(trustInput, [])).toBe(base);
+  });
+
+  it("BT7 a fully-trusted input returns null with and without consents (base-pass short-circuit)", () => {
+    const file = fingerprintedFileStat("/opt/codex");
+    const trustInput = input(file, [dirStat("/opt")]);
+    expect(checkConsentedBinaryTrust(trustInput, [])).toBeNull();
+    expect(checkConsentedBinaryTrust(trustInput, [consentFor(file)])).toBeNull();
+  });
+
+  it("BT8 win32 stays unconditionally unchecked (null) regardless of consents", () => {
+    const file = fingerprintedFileStat("/c/codex.exe", { mode: 0o777, uid: 999 });
+    const trustInput = input(file, [], { platform: "win32" });
+    expect(checkConsentedBinaryTrust(trustInput, [])).toBeNull();
+    expect(checkConsentedBinaryTrust(trustInput, [consentFor(file)])).toBeNull();
   });
 });

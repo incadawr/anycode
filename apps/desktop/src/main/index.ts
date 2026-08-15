@@ -21,7 +21,7 @@
  *  - Tab control plane: registerTabIpc (main/tab-ipc.ts) wires create/close/list.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -45,7 +45,7 @@ import {
   resolveEndpoint,
 } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
-import { defaultSecretsPath, defaultSettingsPath, loadSettings } from "../settings/files.js";
+import { defaultSecretsPath, defaultSettingsPath, loadSettings, readTrustedBinaryConsentsSync } from "../settings/files.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById } from "../shared/settings.js";
 import {
@@ -1638,6 +1638,23 @@ void app.whenReady().then(async () => {
     // pin but not yet registered its tab counts too, closing the resume/delete race.
     connectionInUse: (connectionId) =>
       (manager?.pinnedConnectionIds().has(connectionId) ?? false) || pinReservations.has(connectionId),
+    // TASK.103 (D-S4-5): the grant handler's fingerprint seam — main
+    // computes it from the LIVE filesystem at grant time, synchronously
+    // (realpathSync -> statSync), never accepting one from the renderer.
+    statBinaryForTrust: (path: string) => {
+      try {
+        const resolvedPath = realpathSync(path);
+        const stat = statSync(resolvedPath);
+        return {
+          ok: true as const,
+          resolvedPath,
+          stat: { isFile: stat.isFile(), mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs },
+        };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    platform: process.platform,
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
       // TASK.54: `provider.custom` is schema-reachable through this generic
@@ -1717,6 +1734,9 @@ void app.whenReady().then(async () => {
     bootEnv,
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
+    // TASK.103: fresh read of settings.security.trustedBinaries per gate
+    // check — mirror of readBinaryPathSetting's dep shape.
+    readTrustedBinaries: () => readTrustedBinaryConsentsSync(settingsPath),
     // The profile registry's settings slice (codex-profiles cut §2.3), read
     // fresh off the same in-memory settings the onMutation reload maintains.
     readCodexSettings: async () => settings?.codex,
@@ -1777,6 +1797,9 @@ void app.whenReady().then(async () => {
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
     readBinaryPathSetting: async () => settings?.claude?.binaryPath,
+    // TASK.103: fresh read of settings.security.trustedBinaries per gate
+    // check — mirror of readBinaryPathSetting's dep shape.
+    readTrustedBinaries: () => readTrustedBinaryConsentsSync(settingsPath),
     writeClaudeSettings: (patch) => handleSet(settingsIpcDeps, { claude: patch }),
     dialog,
     // SLICE-CC-LOGIN (cut §4): the same `shell.openPath` pattern `openExternal`

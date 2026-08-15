@@ -40,6 +40,19 @@ const alwaysAllowRuleSchema = z.object({
   pattern: z.string().optional(),
 });
 
+/** One trusted-binary consent (TASK.103, DV-6). Validated PER ELEMENT — a malformed record is dropped alone (= that consent inert, fail-closed) without disturbing siblings. */
+export const trustedBinaryConsentSchema = z.object({
+  path: z.string().min(1),
+  fingerprint: z.object({
+    mode: z.number().int(),
+    uid: z.number().int(),
+    gid: z.number().int(),
+    size: z.number(),
+    mtimeMs: z.number(),
+  }),
+  grantedAt: z.string(),
+});
+
 /** One persisted keybinding override (F20, slice-P7.24-cut.md §1, additive-optional). */
 const keybindingOverrideSchema = z.object({
   action: z.string(),
@@ -307,6 +320,12 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     }),
     security: z.object({
       allowWeakSecretStorage: z.boolean(),
+      // TASK.103: per-element tolerance (the codexProfilesArraySchema
+      // precedent above) — NO outer `.catch`, security is functional, not
+      // advisory; a corrupt sibling section must not silently vanish here.
+      trustedBinaries: z
+        .preprocess((raw) => parseElementsTolerantly(trustedBinaryConsentSchema, raw), z.array(trustedBinaryConsentSchema))
+        .optional(),
     }),
     // Per-action keybinding overrides (F20, slice-P7.24-cut.md §1, additive-optional;
     // version NOT bumped, same forward-compat reasoning as `provider.id`/`provider.defaults`).

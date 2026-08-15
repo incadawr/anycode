@@ -56,6 +56,7 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
     setSecret: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     clearSecret: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     addRule: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
+    binaryTrustRevoke: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     oauthStart: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies OAuthStartResult),
     oauthCancel: vi.fn().mockResolvedValue(undefined),
     connectionUpdate: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
@@ -231,6 +232,32 @@ describe("settings-store: plain mutations", () => {
 
     expect(bridge.addRule).toHaveBeenCalledWith({ toolName: "Bash", pattern: "git *" });
     expect(store.getState().snapshot).toEqual(withRule);
+  });
+
+  // TASK.103 (BU4): revokeBinaryTrust — the mirror of every other mutation
+  // action's discipline (calls the dedicated bridge method with the raw
+  // path, commits the fresh snapshot on ok:true, sets the failure notice on
+  // ok:false — never a wholesale settings-set, D-S4-5's custody).
+  it("revokeBinaryTrust calls bridge.binaryTrustRevoke(path) and applies the returned snapshot on success", async () => {
+    const revoked = baseSnapshot({ settings: { ...baseSettings(), security: { allowWeakSecretStorage: false, trustedBinaries: [] } } });
+    const bridge = fakeBridge({ binaryTrustRevoke: vi.fn().mockResolvedValue({ ok: true, snapshot: revoked }) });
+    const store = createSettingsStore(bridge);
+
+    const result = await store.getState().revokeBinaryTrust("/opt/codex");
+
+    expect(bridge.binaryTrustRevoke).toHaveBeenCalledWith("/opt/codex");
+    expect(result).toEqual({ ok: true, snapshot: revoked });
+    expect(store.getState().snapshot).toEqual(revoked);
+  });
+
+  it("revokeBinaryTrust sets the failure notice on an {ok:false} result, mirroring every sibling action", async () => {
+    const bridge = fakeBridge({ binaryTrustRevoke: vi.fn().mockResolvedValue({ ok: false, reason: "read_only" }) });
+    const store = createSettingsStore(bridge);
+
+    const result = await store.getState().revokeBinaryTrust("/opt/codex");
+
+    expect(result).toEqual({ ok: false, reason: "read_only" });
+    expect(store.getState().notice).toBe(describeMutationFailure("read_only"));
   });
 });
 
