@@ -1026,6 +1026,21 @@ body {
   opacity: 0;
 }
 
+/* REVIEW 15.08 (TASK.114 defect 1): preset submenu inside the project menu —
+   window.prompt is unsupported in Electron ("prompt() is not supported"),
+   so the day horizon is chosen from these rows instead. */
+.sidebar-project-menu-item-group {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-1);
+}
+
+.sidebar-project-menu-subitem {
+  padding-left: calc(var(--sp-3) + var(--sp-2));
+}
+
 .sidebar-footer {
   position: relative;
   flex-shrink: 0;

@@ -446,3 +446,54 @@ describe("deleteOlderNotice (TASK.114)", () => {
     expect(deleteOlderNotice(3, 2)).toBe("Deleted 3 tasks. Skipped 2 open tasks.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// REVIEW 15.08 (TASK.114 defect 1) — THE PROMPT GUARD. window.prompt is NOT
+// supported by Electron: it THROWS "prompt() is not supported" the moment it
+// is called. The old bulk-delete flow called it as the FIRST line of its
+// handler (before every try), via `void …` — so the button silently did
+// nothing: no dialog, no error, no notice. This guard fails on ANY occurrence
+// of window.prompt / globalThis.prompt in the renderer's PRODUCTION source —
+// so the next builder cannot quietly reintroduce a dead dialog. Pure-fn
+// tests around the handler can never catch this class of bug.
+
+describe("renderer prompt guard (TASK.114 review 15.08)", () => {
+  it("no renderer production source calls window.prompt / globalThis.prompt (Electron throws on it)", async () => {
+    const { readdir, readFile } = await import("node:fs/promises");
+    const { join, extname } = await import("node:path");
+
+    const rendererRoot = join(__dirname, "..");
+    const banned = /(?:window|globalThis)\s*\.\s*prompt\s*\(/;
+
+    async function* walk(dir: string): AsyncGenerator<string> {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name === "dist") {
+            continue;
+          }
+          yield* walk(p);
+        } else if (/\.[cm]?[jt]sx?$/.test(extname(p)) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name)) {
+          // Production source only: this very guard's title mentions the
+          // banned call, and specs may quote it in assertions.
+          yield p;
+        }
+      }
+    }
+
+    const offenders: string[] = [];
+    for await (const file of walk(rendererRoot)) {
+      const src = await readFile(file, "utf8");
+      // Strip comments so a mentioned-in-passing prompt never trips the guard;
+      // real call sites survive the strip.
+      const stripped = src
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/\/\/[^\n]*/g, " ");
+      if (banned.test(stripped)) {
+        offenders.push(file);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});

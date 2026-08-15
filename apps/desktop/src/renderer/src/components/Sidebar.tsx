@@ -335,10 +335,21 @@ export function singleDeleteConfirm(title: string): string {
 }
 
 /**
- * Parses the delete-older days prompt. `null` = cancel/invalid (no deletion).
- * Accepts whole days 1..3650 only — the same bounds main's zod schema enforces
- * (a client-side disagreement would just produce a refused invoke).
+ * TASK.114 (review 15.08, defect 1): `window.prompt` is NOT supported by
+ * Electron — it throws "prompt() is not supported" the moment it is called.
+ * The bulk-delete flow therefore takes its day count from an in-app submenu
+ * of preset horizons instead of a prompt. Never call `window.prompt` in the
+ * renderer; the prompt-guard test (Sidebar.test.ts) scans the compiled-out
+ * source of every renderer module and fails on any occurrence.
  */
+export const DELETE_OLDER_PRESETS = [7, 30, 90] as const;
+
+/** Label for one preset horizon in the submenu ("Older than 7 days"). */
+export function deleteOlderPresetLabel(days: number): string {
+  return `Older than ${days} ${days === 1 ? "day" : "days"}`;
+}
+
+/** Parses a free-form days value — kept for main's zod bounds parity (1..3650, whole days). */
 export function parseOlderThanDays(raw: string | null): number | null {
   if (raw === null) {
     return null;
@@ -468,6 +479,8 @@ export function Sidebar({
   // Project `…` menu (design slice-GUI-P1 §2F.2): a single fixed-position popover
   // — exactly one open at a time — anchored to the trigger it was summoned from.
   const [menuFor, setMenuFor] = useState<{ workspace: string; top: number; left: number } | null>(null);
+  // REVIEW 15.08 DEFECT 1: preset submenu (7/30/90 days) replaces window.prompt.
+  const [deleteOlderSubmenuFor, setDeleteOlderSubmenuFor] = useState<string | null>(null);
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -531,6 +544,7 @@ export function Sidebar({
 
   const closeProjectMenu = useCallback((returnFocus: boolean) => {
     setMenuFor(null);
+    setDeleteOlderSubmenuFor(null);
     if (returnFocus) {
       menuTriggerRef.current?.focus();
     }
@@ -604,17 +618,15 @@ export function Sidebar({
   );
 
   /**
-   * Menu item 3 — "Delete old tasks…" (decision 5): prompt for N days →
-   * dryRun (main counts, deletes nothing) → confirm quoting the EXACT count
-   * → commit. Count 0 short-circuits before any confirm; skipped actives are
-   * reported, never silently dropped.
+   * Menu item 3 — "Delete old tasks…" (decision 5, review 15.08 defect 1):
+   * the day count comes from the submenu presets (7/30/90) — NO window.prompt
+   * anywhere (Electron throws "prompt() is not supported", which had left the
+   * button silently dead). Then: dryRun (main counts, deletes nothing) →
+   * confirm quoting the EXACT count → commit. Count 0 short-circuits before
+   * any confirm; skipped actives are reported, never silently dropped.
    */
   const deleteOlderSessionsInProject = useCallback(
-    async (workspace: string) => {
-      const days = parseOlderThanDays(window.prompt("Delete tasks older than how many days?", "30"));
-      if (days === null) {
-        return;
-      }
+    async (workspace: string, days: number) => {
       let count = 0;
       let skippedBefore = 0;
       try {
@@ -1113,14 +1125,37 @@ export function Sidebar({
             }}
             tabIndex={menuFocusIndex === 2 ? 0 : -1}
             className="sidebar-project-menu-item"
+            aria-expanded={deleteOlderSubmenuFor !== null}
+            aria-haspopup="menu"
             onClick={() => {
-              const workspace = menuFor.workspace;
-              closeProjectMenu(false);
-              void deleteOlderSessionsInProject(workspace);
+              // REVIEW 15.08 DEFECT 1: opens the preset submenu instead of
+              // window.prompt (Electron: "prompt() is not supported" — the
+              // old flow was a silently dead button).
+              setDeleteOlderSubmenuFor(menuFor.workspace);
+              setMenuFocusIndex(2);
             }}
           >
             Delete old tasks…
           </button>
+          {deleteOlderSubmenuFor === menuFor.workspace && (
+            <div className="sidebar-project-menu-item-group" role="group" aria-label="Delete tasks older than">
+              {DELETE_OLDER_PRESETS.map((days) => (
+                <button
+                  type="button"
+                  key={days}
+                  className="sidebar-project-menu-item sidebar-project-menu-subitem"
+                  onClick={() => {
+                    const workspace = menuFor.workspace;
+                    closeProjectMenu(false);
+                    setDeleteOlderSubmenuFor(null);
+                    void deleteOlderSessionsInProject(workspace, days);
+                  }}
+                >
+                  {deleteOlderPresetLabel(days)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </nav>

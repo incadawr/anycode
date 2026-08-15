@@ -2795,6 +2795,31 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
       const candidates = await adapter.listSessionsOlderThan("/w", Date.now() + 1);
       expect(candidates.map((s) => s.id)).toEqual(["root"]);
     });
+
+    it("REVIEW 15.08 d2: age follows the LAST history record, not a stale updated_at", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const now = Date.now();
+      const backdate = (id: string, ms: number): void => {
+        (adapter as unknown as { db: DatabaseSync }).db!
+          .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
+          .run(now - ms, id);
+      };
+      // "stale": updated_at is old (never touched again), but its last history
+      // record is FRESH — must NOT be offered under a 7-day filter.
+      await adapter.createSession({ id: "stale", workspace: "/w", model: "m", mode: "build" });
+      backdate("stale", 40 * 864e5);
+      await adapter.appendHistory("stale", [makeItem({ id: "h-fresh", createdAt: now - 1 * 864e5 })]);
+      // "quiet": no history at all — updated_at is its only witness (fallback).
+      await adapter.createSession({ id: "quiet", workspace: "/w", model: "m", mode: "build" });
+      backdate("quiet", 40 * 864e5);
+      // "gone": both witnesses old — a genuine candidate.
+      await adapter.createSession({ id: "gone", workspace: "/w", model: "m", mode: "build" });
+      backdate("gone", 40 * 864e5);
+      await adapter.appendHistory("gone", [makeItem({ id: "h-old", createdAt: now - 30 * 864e5 })]);
+
+      const candidates = await adapter.listSessionsOlderThan("/w", now - 7 * 864e5);
+      expect(candidates.map((s) => s.id).sort()).toEqual(["gone", "quiet"]);
+    });
   });
 
   it("deleteSessionTree engine parity: deleteSession's summary mirrors the reviewed cascade", async () => {
