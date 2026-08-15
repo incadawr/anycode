@@ -449,7 +449,7 @@ describe("consent-aware trust threading (TASK.103)", () => {
     const noConsent = resolveCodexBinary("/opt/codex", fs, "darwin", ME);
     expect(noConsent.path).toBeNull();
     expect(noConsent.reason).toMatch(/world-writable/);
-    expect(noConsent.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: noConsent.reason });
+    expect(noConsent.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: noConsent.reason, staleConsent: false });
 
     const withConsent = resolveCodexBinary("/opt/codex", fs, "darwin", ME, [consentFor("/opt/codex")]);
     expect(withConsent).toEqual({ path: "/opt/codex" });
@@ -468,7 +468,7 @@ describe("consent-aware trust threading (TASK.103)", () => {
       ME,
     );
     expect(trustGateRefused.path).toBeNull();
-    expect(trustGateRefused.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: trustGateRefused.reason });
+    expect(trustGateRefused.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: trustGateRefused.reason, staleConsent: false });
   });
 
   it("BG3 discoverCodexBinary carries the FIRST rung's trustRefusal; a matching consent resolves that rung", () => {
@@ -508,6 +508,84 @@ describe("consent-aware trust threading (TASK.103)", () => {
     // consentFor pins FILE_MTIME, but the fake fs now reports FILE_MTIME+1000.
     const result = resolveCodexBinary("/opt/codex", fs, "darwin", ME, [consentFor("/opt/codex")]);
     expect(result.path).toBeNull();
-    expect(result.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: result.reason });
+    expect(result.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: result.reason, staleConsent: true });
+  });
+
+  it("BG6 the tag names the RESOLVED path (D-S4-14), suppresses for non-consentable refusals (D-S4-13), never promotes a missing path (D-S4-18), and discoverCodexBinary carries the rung (D-S4-20)", () => {
+    // A fake fs modelling a symlink: /link/codex resolves to /real/codex. The
+    // trust gate must judge and NAME the resolved file, never the candidate.
+    function symlinkFs(overrides: { real?: FakeEntry; link?: FakeEntry } = {}): CodexBinaryFs {
+      const base = fakeFs({
+        "/link/codex": { mode: 0o777, ...overrides.link },
+        "/real/codex": { mode: 0o777, ...overrides.real },
+      });
+      return { ...base, realpath: (path) => (path === "/link/codex" ? "/real/codex" : path) };
+    }
+
+    // (a) consentable refusal: trustRefused true, trustRefusal.binaryPath is
+    // the RESOLVED path (/real/codex), not the candidate (/link/codex).
+    const consentable = resolveCodexBinary("/link/codex", symlinkFs(), "darwin", ME);
+    expect(consentable.path).toBeNull();
+    expect(consentable.trustRefused).toBe(true);
+    expect(consentable.trustRefusal).toEqual({ binaryPath: "/real/codex", reason: consentable.reason, staleConsent: false });
+
+    // (b) a consent recorded for the RESOLVED path with a drifted fingerprint
+    // surfaces staleConsent:true.
+    const staleConsent: BinaryTrustConsent = {
+      path: "/real/codex",
+      fingerprint: { mode: 0o777, uid: ME.uid, gid: 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+    const staleResult = resolveCodexBinary(
+      "/link/codex",
+      symlinkFs({ real: { size: FILE_SIZE, mtimeMs: FILE_MTIME + 1000 } }),
+      "darwin",
+      ME,
+      [staleConsent],
+    );
+    expect(staleResult.path).toBeNull();
+    expect(staleResult.trustRefusal?.staleConsent).toBe(true);
+
+    // (c) third-party-owned resolved file: trustRefused true, trustRefusal
+    // ABSENT — the affordance is suppressed (D-S4-13 layer 3), not merely
+    // re-labelled.
+    const ownedResult = resolveCodexBinary("/link/codex", symlinkFs({ real: { uid: 777, mode: 0o755 } }), "darwin", ME);
+    expect(ownedResult.path).toBeNull();
+    expect(ownedResult.trustRefused).toBe(true);
+    expect(ownedResult.trustRefusal).toBeUndefined();
+
+    // (d) the pre-check stat(path) succeeds (raw candidate looks fine) but the
+    // gate's own realpath throws (the file vanished between the pre-check and
+    // the gate) — a MISSING outcome, never an offerable refusal: no
+    // trustRefused, no trustRefusal, and the reason is the plain "does not
+    // exist" string (D-S4-18), never a promoted catch.
+    const vanishingFs: CodexBinaryFs = {
+      stat(path) {
+        if (path === "/link/codex") return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+        throw new Error("ENOENT");
+      },
+      realpath(path) {
+        if (path === "/link/codex") throw new Error("ENOENT — vanished between pre-check and gate");
+        return path;
+      },
+    };
+    const vanished = resolveCodexBinary("/link/codex", vanishingFs, "darwin", ME);
+    expect(vanished.path).toBeNull();
+    expect(vanished.reason).toBe("Codex binary path does not exist");
+    expect(vanished.trustRefused).toBeUndefined();
+    expect(vanished.trustRefusal).toBeUndefined();
+
+    // (e) discoverCodexBinary carries trustRefusalSource for the refusing
+    // rung, present iff trustRefusal is present.
+    const discovered = discoverCodexBinary({
+      envOverride: "/link/codex",
+      env: { PATH: "" },
+      fs: symlinkFs(),
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(discovered.path).toBeNull();
+    expect(discovered.trustRefusal?.binaryPath).toBe("/real/codex");
+    expect(discovered.trustRefusalSource).toBe("env");
   });
 });

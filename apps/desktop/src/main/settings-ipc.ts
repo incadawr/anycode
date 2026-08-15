@@ -161,6 +161,8 @@ export interface SettingsIpcDeps {
     | { ok: false; error: string };
   /** TASK.103: platform gate for the grant (win32 refuses — the unchecked path needs no consent). Defaults to process.platform. */
   platform?: NodeJS.Platform;
+  /** TASK.103 fix wave (D-S4-13): the process uid the grant custody check judges file ownership against. Defaults to `process.getuid?.() ?? -1` (the -1 sentinel matches no real owner — fail-closed). */
+  uid?: number;
 }
 
 /** Outcome of an explicit `connection-check` probe (TASK.45 W11). */
@@ -771,7 +773,22 @@ export async function handleBinaryTrustGrant(deps: SettingsIpcDeps, raw: unknown
     return { ok: false, reason: "invalid" };
   }
   const { resolvedPath, stat } = statResult;
+  // D-S4-14: the grant channel accepts ONLY a canonical path — the record
+  // must pin exactly the file the dialog named. A caller handing a symlink
+  // (or a path whose resolution moved since the card rendered) is refused;
+  // the trustRefusal carrier always names the resolved path, so the UI flow
+  // always sends a canonical one.
+  if (resolvedPath !== parsed.data.path) {
+    return { ok: false, reason: "invalid" };
+  }
   if (!stat.isFile || (stat.mode & 0o111) === 0) {
+    return { ok: false, reason: "invalid" };
+  }
+  // D-S4-13 custody layer: never mint a consent for a file owned by a third
+  // party — its owner can restore the whole fingerprint (B-2). Root-owned is
+  // allowed (outside the threat model, RES-2).
+  const selfUid = deps.uid ?? (process.getuid?.() ?? -1);
+  if (stat.uid !== selfUid && stat.uid !== 0) {
     return { ok: false, reason: "invalid" };
   }
 

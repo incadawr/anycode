@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkCodexBinaryTrust,
   checkConsentedBinaryTrust,
+  classifyConsentedBinaryTrust,
   type BinaryTrustConsent,
   type CodexBinaryTrustInput,
   type CodexPathStat,
@@ -273,5 +274,82 @@ describe("consented binary trust (TASK.103)", () => {
     const trustInput = input(file, [], { platform: "win32" });
     expect(checkConsentedBinaryTrust(trustInput, [])).toBeNull();
     expect(checkConsentedBinaryTrust(trustInput, [consentFor(file)])).toBeNull();
+  });
+
+  it("BT9 third-party-owned FILE is never consentable, even with a matching consent (D-S4-13)", () => {
+    // (a) file-level reason: third-party ownership is the ONLY refusal shape.
+    const ownedFile = fingerprintedFileStat("/opt/codex", { uid: 777 });
+    const ownedInput = input(ownedFile, [dirStat("/opt")]);
+    const ownedBase = checkCodexBinaryTrust(ownedInput);
+    expect(ownedBase).toMatch(/owned by another user \(uid 777\)/);
+    expect(checkConsentedBinaryTrust(ownedInput, [consentFor(ownedFile)])).toBe(ownedBase);
+
+    // (b) the ordering hole: world-writable AND third-party-owned — the base
+    // reason names world-writable (unsafeReason checks that shape first),
+    // but the file's owner still keeps forgery power over the whole
+    // fingerprint, so consent must still be refused on the FACT, not the
+    // reason string.
+    const worldWritableOwnedFile = fingerprintedFileStat("/opt/codex", { mode: 0o777, uid: 777 });
+    const worldWritableOwnedInput = input(worldWritableOwnedFile, [dirStat("/opt")]);
+    const worldWritableOwnedBase = checkCodexBinaryTrust(worldWritableOwnedInput);
+    expect(worldWritableOwnedBase).toMatch(/world-writable/);
+    expect(checkConsentedBinaryTrust(worldWritableOwnedInput, [consentFor(worldWritableOwnedFile)])).toBe(
+      worldWritableOwnedBase,
+    );
+  });
+
+  it("BT10 classify shape: consentable + staleConsent per input shape", () => {
+    // (a) structural refusal.
+    const notAFile = fingerprintedFileStat("/opt/codex", { isFile: false });
+    const structuralInput = input(notAFile, [dirStat("/opt")]);
+    expect(classifyConsentedBinaryTrust(structuralInput, [consentFor(notAFile)])).toEqual({
+      reason: checkCodexBinaryTrust(structuralInput),
+      consentable: false,
+      staleConsent: false,
+    });
+
+    // (b) third-party-owned file.
+    const ownedFile = fingerprintedFileStat("/opt/codex", { uid: 777 });
+    const ownedInput = input(ownedFile, [dirStat("/opt")]);
+    const ownedResult = classifyConsentedBinaryTrust(ownedInput, [consentFor(ownedFile)]);
+    expect(ownedResult?.consentable).toBe(false);
+
+    // (c) self-owned dir-shape refusal, no records.
+    const file = fingerprintedFileStat("/opt/codex");
+    const dirRefusalInput = input(file, [dirStat("/opt", { mode: 0o777 })]);
+    expect(classifyConsentedBinaryTrust(dirRefusalInput, [])).toEqual({
+      reason: checkCodexBinaryTrust(dirRefusalInput),
+      consentable: true,
+      staleConsent: false,
+    });
+
+    // (d) a record whose path matches but fingerprint drifted (mtimeMs+1).
+    const goodConsent = consentFor(file);
+    const drifted: BinaryTrustConsent = {
+      ...goodConsent,
+      fingerprint: { ...goodConsent.fingerprint, mtimeMs: goodConsent.fingerprint.mtimeMs + 1 },
+    };
+    expect(classifyConsentedBinaryTrust(dirRefusalInput, [drifted])).toEqual({
+      reason: checkCodexBinaryTrust(dirRefusalInput),
+      consentable: true,
+      staleConsent: true,
+    });
+
+    // (e) matching record.
+    expect(classifyConsentedBinaryTrust(dirRefusalInput, [goodConsent])).toBeNull();
+
+    // (f) record for a sibling path.
+    const siblingConsent = consentFor(file, { path: "/opt/claude" });
+    expect(classifyConsentedBinaryTrust(dirRefusalInput, [siblingConsent])).toEqual({
+      reason: checkCodexBinaryTrust(dirRefusalInput),
+      consentable: true,
+      staleConsent: false,
+    });
+  });
+
+  it("BT11 root-owned file (uid 0) with a dir-shape refusal + matching consent stays consentable (RES-2 boundary)", () => {
+    const rootFile = fingerprintedFileStat("/opt/codex", { uid: 0 });
+    const rootInput = input(rootFile, [dirStat("/opt", { mode: 0o777 })]);
+    expect(classifyConsentedBinaryTrust(rootInput, [consentFor(rootFile)])).toBeNull();
   });
 });

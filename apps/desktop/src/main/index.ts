@@ -1655,6 +1655,7 @@ void app.whenReady().then(async () => {
       }
     },
     platform: process.platform,
+    uid: process.getuid?.() ?? -1,
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
       // TASK.54: `provider.custom` is schema-reachable through this generic

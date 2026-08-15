@@ -385,7 +385,7 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
           Choose binary…
         </button>
         {trustRefusal !== null && (
-          <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => setTrustDialogOpen(true)}>
+          <button type="button" className="settings-button" disabled={busy} onClick={() => setTrustDialogOpen(true)}>
             Trust this binary…
           </button>
         )}
@@ -394,6 +394,7 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
         open={trustDialogOpen && trustRefusal !== null}
         binaryPath={trustRefusal?.binaryPath ?? ""}
         reason={trustRefusal?.reason ?? ""}
+        staleConsent={trustRefusal?.staleConsent ?? false}
         onAccept={() => void acceptTrust()}
         onDecline={() => setTrustDialogOpen(false)}
       />

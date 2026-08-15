@@ -195,7 +195,14 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
     return promise;
   }
 
-  function discover(settingsPath: string | undefined): { path: string | null; source: ClaudeBinarySource; trustRefusal?: { binaryPath: string; reason: string } } {
+  function discover(
+    settingsPath: string | undefined,
+  ): {
+    path: string | null;
+    source: ClaudeBinarySource;
+    trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
+    trustRefusalSource?: ClaudeBinarySource;
+  } {
     return discoverClaudeBinary({
       envOverride: deps.bootEnv[ENV_CLAUDE_BIN],
       ...(settingsPath !== undefined ? { settingsPath } : {}),
@@ -232,13 +239,25 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
   async function checkPath(
     binaryPath: string | null,
     source: ClaudeBinarySource,
-    discoveryTrustRefusal?: { binaryPath: string; reason: string },
+    discoveryTrustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean; offerTrust: boolean },
   ): Promise<ClaudeOnboardingSnapshot> {
     const consents = deps.readTrustedBinaries?.() ?? [];
     const report: ClaudeDoctorReport =
       binaryPath === null
         ? discoveryTrustRefusal !== undefined
-          ? { status: "error", error: discoveryTrustRefusal.reason, trustRefusal: discoveryTrustRefusal }
+          ? {
+              status: "error",
+              error: discoveryTrustRefusal.reason,
+              ...(discoveryTrustRefusal.offerTrust
+                ? {
+                    trustRefusal: {
+                      binaryPath: discoveryTrustRefusal.binaryPath,
+                      reason: discoveryTrustRefusal.reason,
+                      staleConsent: discoveryTrustRefusal.staleConsent,
+                    },
+                  }
+                : {}),
+            }
           : { status: "not_installed" }
         : await runDoctor(binaryPath, {
             env: deps.bootEnv,
@@ -258,7 +277,16 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
   async function discoverAndCheck(): Promise<ClaudeOnboardingSnapshot> {
     const settingsPath = await deps.readBinaryPathSetting();
     const discovery = discover(settingsPath);
-    return checkPath(discovery.path, discovery.source, discovery.trustRefusal);
+    return checkPath(
+      discovery.path,
+      discovery.source,
+      discovery.trustRefusal !== undefined
+        ? {
+            ...discovery.trustRefusal,
+            offerTrust: discovery.trustRefusalSource === "env" || discovery.trustRefusalSource === "settings",
+          }
+        : undefined,
+    );
   }
 
   /**
@@ -321,11 +349,13 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
       if (picked.canceled || filePath === undefined) {
         return { ok: false, reason: "cancelled" };
       }
+      // consents deliberately NOT passed here — the doctor's gate is the
+      // consent-honoring authority on this route (D-S4-21).
       const resolved = resolveClaudeBinary(filePath, deps.fs, deps.platform ?? process.platform, deps.identity);
-      if (resolved.path === null) {
+      if (resolved.path === null && resolved.trustRefused !== true) {
         return { ok: false, reason: "invalid" };
       }
-      const confirmedPath = resolved.path;
+      const confirmedPath = resolved.path ?? filePath.trim();
       const snapshot = await runExclusive(() => checkPath(confirmedPath, "picker"));
       return { ok: true, snapshot };
     },

@@ -235,7 +235,7 @@ describe("consent-aware trust threading (TASK.103) — BG4", () => {
     const fs = fakeFs({ "/opt/claude": { size: FILE_SIZE, mtimeMs: FILE_MTIME } }, { "/opt": { mode: 0o777 } });
     const noConsent = resolveClaudeBinary("/opt/claude", fs, "darwin", ME);
     expect(noConsent.path).toBeNull();
-    expect(noConsent.trustRefusal).toEqual({ binaryPath: "/opt/claude", reason: noConsent.reason });
+    expect(noConsent.trustRefusal).toEqual({ binaryPath: "/opt/claude", reason: noConsent.reason, staleConsent: false });
 
     const withConsent = resolveClaudeBinary("/opt/claude", fs, "darwin", ME, [consentFor("/opt/claude")]);
     expect(withConsent).toEqual({ path: "/opt/claude" });
@@ -267,5 +267,46 @@ describe("consent-aware trust threading (TASK.103) — BG4", () => {
       consents: [consentFor("/env/claude")],
     });
     expect(withConsent).toEqual({ path: "/env/claude", source: "env" });
+  });
+
+  it("BG7 the tag names the RESOLVED path (D-S4-14), suppresses for non-consentable refusals (D-S4-13), never promotes a missing path (D-S4-18) — condensed mirror of codex BG6 arms a/c/d", () => {
+    function symlinkFs(overrides: { real?: FakeEntry; link?: FakeEntry } = {}): ClaudeBinaryFs {
+      const base = fakeFs({
+        "/link/claude": { mode: 0o777, ...overrides.link },
+        "/real/claude": { mode: 0o777, ...overrides.real },
+      });
+      return { ...base, realpath: (path) => (path === "/link/claude" ? "/real/claude" : path) };
+    }
+
+    // (a) consentable refusal: trustRefused true, trustRefusal.binaryPath is
+    // the RESOLVED path, not the candidate.
+    const consentable = resolveClaudeBinary("/link/claude", symlinkFs(), "darwin", ME);
+    expect(consentable.path).toBeNull();
+    expect(consentable.trustRefused).toBe(true);
+    expect(consentable.trustRefusal).toEqual({ binaryPath: "/real/claude", reason: consentable.reason, staleConsent: false });
+
+    // (c) third-party-owned resolved file: trustRefused true, trustRefusal ABSENT.
+    const ownedResult = resolveClaudeBinary("/link/claude", symlinkFs({ real: { uid: 777, mode: 0o755 } }), "darwin", ME);
+    expect(ownedResult.path).toBeNull();
+    expect(ownedResult.trustRefused).toBe(true);
+    expect(ownedResult.trustRefusal).toBeUndefined();
+
+    // (d) the pre-check stat(path) succeeds but the gate's own realpath
+    // throws — a MISSING outcome, never an offerable refusal.
+    const vanishingFs: ClaudeBinaryFs = {
+      stat(path) {
+        if (path === "/link/claude") return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+        throw new Error("ENOENT");
+      },
+      realpath(path) {
+        if (path === "/link/claude") throw new Error("ENOENT — vanished between pre-check and gate");
+        return path;
+      },
+    };
+    const vanished = resolveClaudeBinary("/link/claude", vanishingFs, "darwin", ME);
+    expect(vanished.path).toBeNull();
+    expect(vanished.reason).toBe("Claude binary path does not exist");
+    expect(vanished.trustRefused).toBeUndefined();
+    expect(vanished.trustRefusal).toBeUndefined();
   });
 });

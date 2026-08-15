@@ -743,12 +743,21 @@ describe("createCodexOnboardingController — consent threading (TASK.103)", () 
 
   it("BD3 an all-refused ladder yields {status:'error', trustRefusal} — NOT not_installed; a plain nothing-found ladder stays not_installed byte-identically (regression)", async () => {
     const runDoctor = vi.fn();
-    const deps = makeDeps({ bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev" }, fs: trustRefusedFs, runDoctor });
+    // D-S4-20 Ruling 2: staged on the SETTINGS rung (explicit — D-S4-16 keeps
+    // the affordance there), not the ambient PATH rung the fixture's PATH env
+    // would otherwise resolve through. The settings rung outranks path, so
+    // trustRefusalSource is "settings" and offerTrust stays true.
+    const deps = makeDeps({
+      bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev" },
+      readBinaryPathSetting: async () => "/usr/local/bin/codex",
+      fs: trustRefusedFs,
+      runDoctor,
+    });
     const controller = createCodexOnboardingController(deps);
     const snapshot = await controller.recheck();
     expect(snapshot.report.status).toBe("error");
     expect(snapshot.report.error).toMatch(/world-writable/);
-    expect(snapshot.report.trustRefusal).toEqual({ binaryPath: "/usr/local/bin/codex", reason: snapshot.report.error });
+    expect(snapshot.report.trustRefusal).toEqual({ binaryPath: "/usr/local/bin/codex", reason: snapshot.report.error, staleConsent: false });
     expect(snapshot.binaryPath).toBeNull();
     expect(runDoctor).not.toHaveBeenCalled();
 
@@ -795,5 +804,142 @@ describe("createCodexOnboardingController — consent threading (TASK.103)", () 
     const controller = createCodexOnboardingController(deps);
     await controller.recheck();
     expect(runDoctor.mock.calls[0]?.[1]).toMatchObject({ consents: [] });
+  });
+
+  describe("pickBinary — trust threading (D-S4-15, BD6)", () => {
+    const pickedPath = "/usr/local/bin/codex";
+
+    const pickedTrustRefusedFs: CodexBinaryFs = {
+      realpath: (path) => path,
+      stat: (path) => {
+        if (path === pickedPath) {
+          return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20, size: FILE_SIZE, mtimeMs: FILE_MTIME };
+        }
+        if (path === "/usr/local/bin" || path === "/usr/local" || path === "/usr" || path === "/") {
+          return { isFile: () => false, isDirectory: () => true, mode: path === "/usr/local/bin" ? 0o777 : 0o755, uid: ME.uid, gid: 20 };
+        }
+        throw new Error("ENOENT");
+      },
+    };
+
+    const pickedConsent: TrustedBinaryConsent = {
+      path: pickedPath,
+      fingerprint: { mode: 0o755, uid: ME.uid, gid: 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+
+    function pickerDeps(overrides: Partial<CodexIpcDeps> = {}) {
+      return makeDeps({
+        fs: pickedTrustRefusedFs,
+        dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [pickedPath] }) },
+        ...overrides,
+      });
+    }
+
+    /**
+     * A fake doctor that decides EXACTLY like the real one would for this
+     * fixture: `checkPath` hands it the picked path plus the SAME `consents`
+     * it read — the picker route relies on the doctor's OWN trust gate to
+     * re-refuse an uncovered pick (D-S4-15), so the fake must honor that
+     * consent, not skip it.
+     */
+    function pickerRunDoctor() {
+      return vi.fn(async (binaryPath: string, options?: { consents?: readonly TrustedBinaryConsent[] }) => {
+        const covered = (options?.consents ?? []).some((c) => c.path === binaryPath);
+        if (covered) {
+          return { status: "ready" as const, version: "0.144.3", account: { type: "chatgpt", plan: "plus" }, models: [] };
+        }
+        const reason = "Codex binary's directory (/usr/local/bin) is world-writable";
+        return { status: "error" as const, error: reason, trustRefusal: { binaryPath, reason, staleConsent: false } };
+      });
+    }
+
+    it("BD6 (a) a granted consent is honored on the picker route — the doctor runs against the picked path and reports ready", async () => {
+      const runDoctor = pickerRunDoctor();
+      const deps = pickerDeps({ runDoctor, readTrustedBinaries: () => [pickedConsent] });
+      const controller = createCodexOnboardingController(deps);
+      const result = await controller.pickBinary();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("unreachable — asserted above");
+      expect(result.snapshot.report.status).toBe("ready");
+      expect(runDoctor).toHaveBeenCalledTimes(1);
+      expect(runDoctor.mock.calls[0]?.[0]).toBe(pickedPath);
+    });
+
+    it("BD6 (b) a trust-refused pick with NO consent reports honestly — {ok:true, snapshot} carrying an error report + trustRefusal, NOT {ok:false, reason:'invalid'}; the picked path is persisted", async () => {
+      const runDoctor = pickerRunDoctor();
+      const deps = pickerDeps({ runDoctor });
+      const controller = createCodexOnboardingController(deps);
+      const result = await controller.pickBinary();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("unreachable — asserted above");
+      expect(result.snapshot.report.status).toBe("error");
+      expect(result.snapshot.report.error).toMatch(/world-writable/);
+      expect(result.snapshot.report.trustRefusal).toEqual({
+        binaryPath: pickedPath,
+        reason: result.snapshot.report.error,
+        staleConsent: false,
+      });
+      expect(runDoctor).toHaveBeenCalledTimes(1);
+      expect(deps.writtenPatches).toContainEqual(expect.objectContaining({ binaryPath: pickedPath }));
+    });
+
+    it("BD6 (c) a structurally invalid pick (not executable) stays byte-identical: {ok:false, reason:'invalid'}", async () => {
+      const notExecutableFs: CodexBinaryFs = {
+        realpath: (path) => path,
+        stat: () => ({ isFile: () => true, isDirectory: () => false, mode: 0o644, uid: ME.uid, gid: 20 }),
+      };
+      const deps = makeDeps({
+        fs: notExecutableFs,
+        dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [pickedPath] }) },
+      });
+      const controller = createCodexOnboardingController(deps);
+      const result = await controller.pickBinary();
+      expect(result).toEqual({ ok: false, reason: "invalid" });
+    });
+  });
+
+  describe("discoverAndCheck — rung-gated Trust affordance (D-S4-16, BD8)", () => {
+    /** /env/codex resolves; its directory /env is world-writable — the ONE
+     * candidate that may resolve (mirrors trustRefusedFs's own discipline). */
+    const envRefusedFs: CodexBinaryFs = {
+      realpath: (path) => path,
+      stat: (path) => {
+        if (path === "/env/codex") {
+          return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+        }
+        if (path === "/env") {
+          return { isFile: () => false, isDirectory: () => true, mode: 0o777, uid: ME.uid, gid: 20 };
+        }
+        if (path === "/") {
+          return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: ME.uid, gid: 20 };
+        }
+        throw new Error("ENOENT");
+      },
+    };
+
+    it("BD8 (a) an env-rung refusal carries the affordance — explicit rung, user-named", async () => {
+      const deps = makeDeps({ bootEnv: { PATH: "", HOME: "", ANYCODE_CODEX_BIN: "/env/codex" }, fs: envRefusedFs });
+      const controller = createCodexOnboardingController(deps);
+      const snapshot = await controller.recheck();
+      expect(snapshot.report.status).toBe("error");
+      expect(snapshot.report.trustRefusal).toEqual({ binaryPath: "/env/codex", reason: snapshot.report.error, staleConsent: false });
+    });
+
+    it("BD8 (b) the SAME refusal shape reachable only via the ambient PATH rung loses the affordance — honest text, no button", async () => {
+      const deps = makeDeps({ bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev" }, fs: trustRefusedFs });
+      const controller = createCodexOnboardingController(deps);
+      const snapshot = await controller.recheck();
+      expect(snapshot.report.status).toBe("error");
+      expect(snapshot.report.error).toMatch(/world-writable/);
+      expect(snapshot.report.trustRefusal).toBeUndefined();
+    });
+
+    it("BD8 (c) a plain nothing-found ladder stays not_installed byte-identically", async () => {
+      const deps = makeDeps({ bootEnv: { PATH: "", HOME: "" }, fs: noBinaryFs });
+      const controller = createCodexOnboardingController(deps);
+      const snapshot = await controller.recheck();
+      expect(snapshot.report).toEqual({ status: "not_installed" });
+    });
   });
 });

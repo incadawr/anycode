@@ -22,6 +22,8 @@ export interface BinaryTrustDialogProps {
   open: boolean;
   binaryPath: string;
   reason: string;
+  /** TASK.103 fix wave (D-S4-17): true iff this refusal is a DRIFTED consent (the file changed since it was granted) — names the risk at the exact re-consent moment. */
+  staleConsent: boolean;
   /** "Trust this binary" — the caller invokes the grant bridge and then its recheck. */
   onAccept(): void;
   /** Cancel / Esc / close — nothing is written. */
@@ -37,9 +39,13 @@ export interface BinaryTrustDialogProps {
  * structurally without an import cycle back into `shared/**`.
  */
 export function binaryTrustRefusalOf(
-  report: { trustRefusal?: { binaryPath: string; reason: string } } | undefined,
-): { binaryPath: string; reason: string } | null {
-  return report?.trustRefusal ?? null;
+  report: { trustRefusal?: { binaryPath: string; reason: string; staleConsent?: boolean } } | undefined,
+): { binaryPath: string; reason: string; staleConsent: boolean } | null {
+  const refusal = report?.trustRefusal;
+  if (refusal === undefined) return null;
+  // `=== true` is deliberate: a field absent on the wire degrades to the
+  // NON-stale copy — fail-safe direction for a copy line, no wrong offer.
+  return { binaryPath: refusal.binaryPath, reason: refusal.reason, staleConsent: refusal.staleConsent === true };
 }
 
 export interface BinaryTrustGrantCopy {
@@ -49,14 +55,16 @@ export interface BinaryTrustGrantCopy {
   pinLine: string;
   acceptLabel: string;
   declineLabel: string;
+  /** TASK.103 fix wave (D-S4-17): the drift warning, non-null iff staleConsent — §6 string, verbatim. */
+  changedLine: string | null;
 }
 
 /**
- * Dialog copy (CUT-S4.md §8) as data, so the node-env tests pin the exact
- * strings the live-DoD smoke greps for — never re-derived or paraphrased at
- * the render call site.
+ * Dialog copy (CUT-S4.md §8, TASK.103 fix wave §6) as data, so the node-env
+ * tests pin the exact strings the live-DoD smoke greps for — never
+ * re-derived or paraphrased at the render call site.
  */
-export function describeBinaryTrustGrant(binaryPath: string, reason: string): BinaryTrustGrantCopy {
+export function describeBinaryTrustGrant(binaryPath: string, reason: string, staleConsent = false): BinaryTrustGrantCopy {
   return {
     title: "Trust this binary?",
     refusalLine: `AnyCode refused to run ${binaryPath}: ${reason}`,
@@ -66,10 +74,13 @@ export function describeBinaryTrustGrant(binaryPath: string, reason: string): Bi
       "If you trust it, AnyCode pins the binary exactly as it is right now (owner, permissions, size, modification time). If anything about it changes, AnyCode will ask again before running it.",
     acceptLabel: "Trust this binary",
     declineLabel: "Cancel",
+    changedLine: staleConsent
+      ? "You trusted this binary before, but it has changed since that grant. If you did not update it yourself, do not trust it again."
+      : null,
   };
 }
 
-export function BinaryTrustDialog({ open, binaryPath, reason, onAccept, onDecline }: BinaryTrustDialogProps) {
+export function BinaryTrustDialog({ open, binaryPath, reason, staleConsent, onAccept, onDecline }: BinaryTrustDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const declineRef = useRef<HTMLButtonElement>(null);
   useOverlayFlag(open);
@@ -108,7 +119,7 @@ export function BinaryTrustDialog({ open, binaryPath, reason, onAccept, onDeclin
     return null;
   }
 
-  const copy = describeBinaryTrustGrant(binaryPath, reason);
+  const copy = describeBinaryTrustGrant(binaryPath, reason, staleConsent);
 
   return (
     <dialog
@@ -124,6 +135,7 @@ export function BinaryTrustDialog({ open, binaryPath, reason, onAccept, onDeclin
       data-binary-trust-dialog="true"
       data-trust-binary-path={binaryPath}
       data-trust-reason={reason}
+      data-trust-stale-consent={String(staleConsent)}
       onCancel={(event) => {
         event.preventDefault();
         onDecline();
@@ -135,6 +147,7 @@ export function BinaryTrustDialog({ open, binaryPath, reason, onAccept, onDeclin
 
       <div className="consent-dialog-body">
         <p>{copy.refusalLine}</p>
+        {copy.changedLine !== null && <p>{copy.changedLine}</p>}
         <p>{copy.attackerLine}</p>
         <p>{copy.pinLine}</p>
       </div>

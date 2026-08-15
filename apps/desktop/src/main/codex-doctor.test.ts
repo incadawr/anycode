@@ -494,15 +494,19 @@ describe("runCodexDoctor — consent threading (TASK.103)", () => {
       writeFileSync(binary, "#!/bin/sh\nexit 0\n");
       chmodSync(binary, 0o755);
 
+      // Hoisted (D-S4-20 Ruling 3): the refused arm's expectation and the
+      // consent arm below both need the RESOLVED path — the gate now mints
+      // trustRefusal.binaryPath from its own realpath, not the raw candidate.
+      const resolvedBinary = realpathSync(binary);
+
       // No consents: the DEFAULT (real, un-stubbed) trust closure refuses —
       // this test deliberately omits `trust` so main's production seam
       // (checkCodexBinaryPathTrust) is what decides.
       const refused = await runCodexDoctor(binary, { spawnImpl: fakeSpawn() });
       expect(refused.status).toBe("error");
       expect(refused.error).toMatch(/world-writable/);
-      expect(refused.trustRefusal).toEqual({ binaryPath: binary, reason: refused.error });
+      expect(refused.trustRefusal).toEqual({ binaryPath: resolvedBinary, reason: refused.error, staleConsent: false });
 
-      const resolvedBinary = realpathSync(binary);
       const stat = statSync(resolvedBinary);
       const consent: BinaryTrustConsent = {
         path: resolvedBinary,
@@ -519,9 +523,41 @@ describe("runCodexDoctor — consent threading (TASK.103)", () => {
 
   it("BD2 the refusal report carries a structured trustRefusal sourced from the injected trust seam", async () => {
     const reason = "Codex binary (/fake/codex) is world-writable";
-    const report = await runCodexDoctor("/fake/codex", { trust: () => reason, spawnImpl: fakeSpawn() });
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: () => ({ kind: "refused", reason, consentable: true, staleConsent: false, resolvedPath: "/fake/codex" }),
+      spawnImpl: fakeSpawn(),
+    });
     expect(report.status).toBe("error");
     expect(report.error).toBe(reason);
-    expect(report.trustRefusal).toEqual({ binaryPath: "/fake/codex", reason });
+    expect(report.trustRefusal).toEqual({ binaryPath: "/fake/codex", reason, staleConsent: false });
+  });
+
+  it("BD10 the report mirrors the injected trust outcome's kind/consentable/staleConsent (D-S4-13/17/18)", async () => {
+    // (a) consentable + stale.
+    const staleReport = await runCodexDoctor("/fake/codex", {
+      trust: () => ({ kind: "refused", reason: "stale reason", consentable: true, staleConsent: true, resolvedPath: "/real/codex" }),
+      spawnImpl: fakeSpawn(),
+    });
+    expect(staleReport.status).toBe("error");
+    expect(staleReport.error).toBe("stale reason");
+    expect(staleReport.trustRefusal).toEqual({ binaryPath: "/real/codex", reason: "stale reason", staleConsent: true });
+
+    // (b) non-consentable: honest error, no affordance.
+    const ownedReport = await runCodexDoctor("/fake/codex", {
+      trust: () => ({ kind: "refused", reason: "owned by another user", consentable: false, staleConsent: false, resolvedPath: "/real/codex" }),
+      spawnImpl: fakeSpawn(),
+    });
+    expect(ownedReport.status).toBe("error");
+    expect(ownedReport.error).toBe("owned by another user");
+    expect(ownedReport.trustRefusal).toBeUndefined();
+
+    // (c) missing: never an offerable refusal (D-S4-18 at the doctor).
+    const missingReport = await runCodexDoctor("/fake/codex", {
+      trust: () => ({ kind: "missing", reason: "Codex binary path does not exist" }),
+      spawnImpl: fakeSpawn(),
+    });
+    expect(missingReport.status).toBe("error");
+    expect(missingReport.error).toBe("Codex binary path does not exist");
+    expect(missingReport.trustRefusal).toBeUndefined();
   });
 });

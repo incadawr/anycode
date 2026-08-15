@@ -955,6 +955,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             // into the automation surface too).
             data-trust-binary-path={trustRefusal.binaryPath}
             data-trust-reason={trustRefusal.reason}
+            data-trust-stale-consent={String(trustRefusal.staleConsent)}
             onClick={() => setTrustDialogOpen(true)}
           >
             Trust this binary…
@@ -1052,6 +1053,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
         open={trustDialogOpen && trustRefusal !== null}
         binaryPath={trustRefusal?.binaryPath ?? ""}
         reason={trustRefusal?.reason ?? ""}
+        staleConsent={trustRefusal?.staleConsent ?? false}
         onAccept={() => void acceptTrust()}
         onDecline={() => setTrustDialogOpen(false)}
       />
