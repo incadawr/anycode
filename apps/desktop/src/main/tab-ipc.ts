@@ -240,13 +240,17 @@ function emptyDeleteSummaryWire(): SessionDeleteSummaryWire {
  * (`sessionOpenInTab`) OR while ANY open tab lives on its project — the
  * second clause closes the spawn-window race (a running host whose row is
  * not flushed yet) and covers a tab's running TASK.102 children, which never
- * carry `openInTabId`.
+ * carry `openInTabId`. A worktree tab's `workspace` is the WORKTREE path,
+ * while the session's identity key is its `projectRoot ?? workspace` — so a
+ * tab counts as "on this project" when it matches EITHER the session's
+ * project key or its raw workspace (the worktree-relocated session's own
+ * `workspace` is the worktree path, matching its tab exactly).
  */
-export function isSessionActive(deps: TabIpcDeps, sessionId: string, projectKey: string): boolean {
+export function isSessionActive(deps: TabIpcDeps, sessionId: string, projectKey: string, workspace?: string): boolean {
   if (deps.manager.sessionOpenInTab(sessionId) !== undefined) {
     return true;
   }
-  return deps.manager.listTabs().some((tab) => tab.workspace === projectKey);
+  return deps.manager.listTabs().some((tab) => tab.workspace === projectKey || (workspace !== undefined && tab.workspace === workspace));
 }
 
 /** TASK.114: hard-delete one session. Exported for tests (tab-ipc.test.ts). */
@@ -256,7 +260,7 @@ export async function handleSessionDelete(deps: TabIpcDeps, sessionId: string): 
     return { ok: false, reason: "not_found" };
   }
   const projectKey = meta.projectRoot ?? meta.workspace;
-  if (isSessionActive(deps, sessionId, projectKey)) {
+  if (isSessionActive(deps, sessionId, projectKey, meta.workspace)) {
     return { ok: false, reason: "active" };
   }
   const summary = await deps.persistence.deleteSession(sessionId);
@@ -280,7 +284,7 @@ export async function handleSessionsDeleteOlder(
   const skippedActive: string[] = [];
   for (const meta of candidates) {
     const projectKey = meta.projectRoot ?? meta.workspace;
-    if (isSessionActive(deps, meta.id, projectKey)) {
+    if (isSessionActive(deps, meta.id, projectKey, meta.workspace)) {
       skippedActive.push(meta.id);
     } else {
       deletable.push(meta.id);

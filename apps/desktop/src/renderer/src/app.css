@@ -992,6 +992,40 @@ body {
   opacity: 0;
 }
 
+/* TASK.114: resumable-row hard-delete affordance — the close (×) pattern
+   reused verbatim (absolute right, hover/focus reveal, danger on hover),
+   just the Trash glyph and a danger tint so delete reads as destructive. */
+.sidebar-row-delete {
+  position: absolute;
+  right: var(--sp-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.sidebar-row-wrap:hover .sidebar-row-delete:not(:disabled),
+.sidebar-row-delete:focus-visible:not(:disabled) {
+  opacity: 1;
+}
+
+.sidebar-row-delete:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--bg-active);
+}
+
+.sidebar-row-delete:disabled {
+  /* Live-tab guard (TASK.114 decision 4): never offer a delete main would refuse. */
+  cursor: not-allowed;
+  opacity: 0;
+}
+
 .sidebar-footer {
   position: relative;
   flex-shrink: 0;

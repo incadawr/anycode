@@ -22,7 +22,7 @@ import { rowStatusKind, useTabStatusStore, type RowStatusKind } from "../tab-sta
 import { nextRovingIndex } from "./ModeMenu.js";
 import { handleCreateTabResult, resolveConnectionMissingAction } from "./SessionPicker.js";
 import { highlight } from "./highlight.js";
-import { ArrowUp, Chevron, Collapse, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, X } from "./icons.js";
+import { ArrowUp, Chevron, Collapse, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
 
 /** Label fallback when a tab/session has no title (design §2.3). */
 const UNTITLED = "Untitled task";
@@ -312,8 +312,58 @@ export function clampMenuLeft(triggerLeft: number, menuWidth: number, viewportWi
   return Math.max(margin, Math.min(triggerLeft, maxLeft));
 }
 
-/** The project menu's two items (New session / Remove) — the roving-focus modulus. */
-const PROJECT_MENU_ITEM_COUNT = 2;
+// ---------------------------------------------------------------------------
+// TASK.114: session delete. Pure message/verdict helpers (unit-tested in
+// Sidebar.test.ts, same discipline as buildSidebarGroups above); the IPC
+// calls live in the component below. Hard delete, never an archive — the
+// confirm dialogs are the irreversibility brake (task decisions 1/4/5).
+
+/**
+ * TASK.114 gate (decision 4): a resumable row's delete affordance is offered
+ * ONLY while its project has no live tab — main's `isSessionActive` refuses
+ * exactly then (a session open in a tab OR any live tab on the project), so
+ * the renderer never offers an action main would refuse. Open rows carry no
+ * delete at all (they are live by definition).
+ */
+export function isRowDeletable(kind: SidebarRow["kind"], projectHasLiveTab: boolean): boolean {
+  return kind === "resumable" && !projectHasLiveTab;
+}
+
+/** Confirm copy for a single hard delete — names the task, states irreversibility. */
+export function singleDeleteConfirm(title: string): string {
+  return `Delete “${title}” permanently? This cannot be undone.`;
+}
+
+/**
+ * Parses the delete-older days prompt. `null` = cancel/invalid (no deletion).
+ * Accepts whole days 1..3650 only — the same bounds main's zod schema enforces
+ * (a client-side disagreement would just produce a refused invoke).
+ */
+export function parseOlderThanDays(raw: string | null): number | null {
+  if (raw === null) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const days = Number(trimmed);
+  return days >= 1 && days <= 3650 ? days : null;
+}
+
+/** Confirm copy for the bulk delete — QUOTES the exact candidate count BEFORE anything is deleted (decision 5). */
+export function bulkDeleteConfirm(count: number, days: number): string {
+  return `Permanently delete ${count} ${count === 1 ? "task" : "tasks"} older than ${days} ${days === 1 ? "day" : "days"}? This cannot be undone.`;
+}
+
+/** Post-bulk notice: what left, plus the actives main skipped (never silently dropped). */
+export function deleteOlderNotice(deleted: number, skippedActive: number): string {
+  const base = `Deleted ${deleted} ${deleted === 1 ? "task" : "tasks"}.`;
+  return skippedActive > 0 ? `${base} Skipped ${skippedActive} open ${skippedActive === 1 ? "task" : "tasks"}.` : base;
+}
+
+/** The project menu's three items (New task / Remove / Delete old tasks) — the roving-focus modulus. */
+const PROJECT_MENU_ITEM_COUNT = 3;
 
 /** Nominal project-menu width (px) used only for right-edge clamping before the popover measures itself. */
 const PROJECT_MENU_WIDTH = 224;
@@ -326,7 +376,7 @@ const PROJECT_MENU_WIDTH = 224;
  * `onCloseTab` refreshes). Fail-soft: a rejected list surfaces `error = true`
  * and leaves `sessions` null so open tabs still render.
  */
-function useSessionIndex(tabs: readonly TabInfo[]): { sessions: SessionSummary[] | null; error: boolean } {
+function useSessionIndex(tabs: readonly TabInfo[]): { sessions: SessionSummary[] | null; error: boolean; refetch: () => Promise<void> } {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [error, setError] = useState(false);
   // Monotonic request id: focus + tabs-change refetches can overlap, and
@@ -365,7 +415,9 @@ function useSessionIndex(tabs: readonly TabInfo[]): { sessions: SessionSummary[]
     return () => window.removeEventListener("focus", onFocus);
   }, [refetch]);
 
-  return { sessions, error };
+  // TASK.114: `refetch` lets the delete paths refresh the persisted index
+  // immediately, without waiting for the next focus/tabs-change trigger.
+  return { sessions, error, refetch };
 }
 
 export interface SidebarProps {
@@ -391,7 +443,7 @@ export function Sidebar({
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
-  const { sessions, error } = useSessionIndex(tabs);
+  const { sessions, error, refetch: refetchSessions } = useSessionIndex(tabs);
   // R10: one subscription to the whole mirror map. Its identity changes ONLY
   // on a real coarse flip (applyCoarse's storm guard), so this re-renders the
   // Sidebar at human cadence — never per transcript delta.
@@ -523,6 +575,87 @@ export function Sidebar({
       setNoticeAction(null);
     }
   }, []);
+
+  // -------------------------------------------------------------------------
+  // TASK.114: session delete (decisions 1–5 in working-docs/tasks/TASK.114.md).
+  // Both paths hard-delete through main's one-transaction cascade; the active
+  // gate is main's (`isSessionActive` in main/tab-ipc.ts) — the renderer only
+  // gates the AFFORDANCE and surfaces refusals as notices.
+
+  const deleteSessionById = useCallback(
+    async (sessionId: string, title: string) => {
+      if (!window.confirm(singleDeleteConfirm(title))) {
+        return;
+      }
+      try {
+        const result = await window.anycode.deleteSession(sessionId);
+        if (result.ok) {
+          await refetchSessions();
+        } else {
+          setNotice(result.reason === "active" ? "Close this task's open tabs first" : "Task not found — refresh the list");
+          setNoticeAction(null);
+        }
+      } catch {
+        setNotice("Failed to delete task.");
+        setNoticeAction(null);
+      }
+    },
+    [refetchSessions],
+  );
+
+  /**
+   * Menu item 3 — "Delete old tasks…" (decision 5): prompt for N days →
+   * dryRun (main counts, deletes nothing) → confirm quoting the EXACT count
+   * → commit. Count 0 short-circuits before any confirm; skipped actives are
+   * reported, never silently dropped.
+   */
+  const deleteOlderSessionsInProject = useCallback(
+    async (workspace: string) => {
+      const days = parseOlderThanDays(window.prompt("Delete tasks older than how many days?", "30"));
+      if (days === null) {
+        return;
+      }
+      let count = 0;
+      let skippedBefore = 0;
+      try {
+        const probe = await window.anycode.deleteSessionsOlder(workspace, days, true);
+        if (!probe.ok) {
+          setNotice("Couldn't count old tasks.");
+          setNoticeAction(null);
+          return;
+        }
+        count = probe.summary.deleted.length;
+        skippedBefore = probe.summary.skippedActive.length;
+      } catch {
+        setNotice("Couldn't count old tasks.");
+        setNoticeAction(null);
+        return;
+      }
+      if (count === 0) {
+        setNotice(skippedBefore > 0 ? `Nothing to delete — ${skippedBefore} open task(s) skipped.` : "No tasks that old.");
+        setNoticeAction(null);
+        return;
+      }
+      if (!window.confirm(bulkDeleteConfirm(count, days))) {
+        return;
+      }
+      try {
+        const result = await window.anycode.deleteSessionsOlder(workspace, days);
+        if (!result.ok) {
+          setNotice("Failed to delete old tasks.");
+          setNoticeAction(null);
+          return;
+        }
+        setNotice(deleteOlderNotice(result.summary.deleted.length, result.summary.skippedActive.length));
+        setNoticeAction(null);
+        await refetchSessions();
+      } catch {
+        setNotice("Failed to delete old tasks.");
+        setNoticeAction(null);
+      }
+    },
+    [refetchSessions],
+  );
 
 
   // trigger is excluded so its own click stays a toggle), any scroll of the
@@ -860,6 +993,21 @@ export function Sidebar({
                         )}
                         {row.age && <span className="sidebar-row-age">{row.age}</span>}
                       </button>
+                      {/* TASK.114: hard-delete affordance. Same hover-reveal +
+                          disabled-inert pattern as the open row's close (×):
+                          while the project has ANY live tab, main would refuse
+                          the delete (`isSessionActive`) — keep the button in
+                          the a11y tree but inert, never offer what would be
+                          refused. */}
+                      <button
+                        type="button"
+                        className="sidebar-row-delete"
+                        aria-label={`Delete ${row.title}`}
+                        disabled={!isRowDeletable(row.kind, tabs.some((t) => (t.projectRoot ?? t.workspace) === group.workspace))}
+                        onClick={() => void deleteSessionById(row.sessionId!, row.title)}
+                      >
+                        <Trash />
+                      </button>
                     </div>
                   );
                 })}
@@ -956,6 +1104,22 @@ export function Sidebar({
             }}
           >
             Remove project from list
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            ref={(el) => {
+              menuItemRefs.current[2] = el;
+            }}
+            tabIndex={menuFocusIndex === 2 ? 0 : -1}
+            className="sidebar-project-menu-item"
+            onClick={() => {
+              const workspace = menuFor.workspace;
+              closeProjectMenu(false);
+              void deleteOlderSessionsInProject(workspace);
+            }}
+          >
+            Delete old tasks…
           </button>
         </div>
       )}

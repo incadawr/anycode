@@ -65,6 +65,8 @@ import type {
   CloseTabResult,
   CreateTabRequest,
   CreateTabResult,
+  DeleteSessionResult,
+  DeleteSessionsOlderResult,
   SessionSummary,
   WorkspacePickResult,
 } from "../../shared/tabs";
@@ -315,6 +317,11 @@ declare global {
       createTab(request: CreateTabRequest): Promise<CreateTabResult>;
       closeTab(tabId: string): Promise<CloseTabResult>;
       listSessions(): Promise<SessionSummary[]>;
+      // TASK.114: hard-delete one persisted session + its cascade; main's
+      // active-session gate (`reason:"active"`) is the authority.
+      deleteSession(sessionId: string): Promise<DeleteSessionResult>;
+      // TASK.114: bulk delete-older; `dryRun` counts without deleting.
+      deleteSessionsOlder(workspace: string, olderThanDays: number, dryRun?: boolean): Promise<DeleteSessionsOlderResult>;
       // TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only
       // completed-child transcript lookup — main authorizes by
       // (parentSessionId, spawnToolCallId) relationship before touching

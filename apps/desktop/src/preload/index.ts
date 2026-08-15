@@ -132,6 +132,8 @@ import type {
 } from "../shared/settings.js";
 import {
   SESSIONS_LIST_CHANNEL,
+  SESSIONS_DELETE_OLDER_CHANNEL,
+  SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
@@ -140,6 +142,8 @@ import type {
   CloseTabResult,
   CreateTabRequest,
   CreateTabResult,
+  DeleteSessionResult,
+  DeleteSessionsOlderResult,
   SessionSummary,
   WorkspacePickResult,
 } from "../shared/tabs.js";
@@ -572,6 +576,22 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(TAB_CLOSE_CHANNEL, { tabId }) as Promise<CloseTabResult>,
   listSessions: (): Promise<SessionSummary[]> =>
     ipcRenderer.invoke(SESSIONS_LIST_CHANNEL) as Promise<SessionSummary[]>,
+  // TASK.114: hard-delete one persisted session (its TASK.102 children ride
+  // the cascade). Main refuses a session that is open in a tab / whose
+  // project has a live tab (`reason:"active"`) — the renderer only offers
+  // the affordance on idle resumable rows and surfaces the refusal as a
+  // notice, main's gate stays the authority.
+  deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
+    ipcRenderer.invoke(SESSION_DELETE_CHANNEL, { sessionId }) as Promise<DeleteSessionResult>,
+  // TASK.114: bulk-delete one project's sessions older than N whole days.
+  // `dryRun: true` counts the candidates WITHOUT deleting — the confirm
+  // dialog quotes that exact number before the committing call.
+  deleteSessionsOlder: (workspace: string, olderThanDays: number, dryRun?: boolean): Promise<DeleteSessionsOlderResult> =>
+    ipcRenderer.invoke(SESSIONS_DELETE_OLDER_CHANNEL, {
+      workspace,
+      olderThanDays,
+      ...(dryRun === undefined ? {} : { dryRun }),
+    }) as Promise<DeleteSessionsOlderResult>,
   // TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
   // transcript lookup — main authorizes by (parentSessionId, spawnToolCallId)
   // relationship (`getChildSession`) before ever touching `loadHistory`; no
