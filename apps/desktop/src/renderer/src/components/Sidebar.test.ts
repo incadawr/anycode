@@ -395,7 +395,11 @@ describe("isRowDeletable (TASK.114)", () => {
     expect(isRowDeletable("open", false)).toBe(false);
   });
 
-  it("refuses while the project has a live tab (decision 4 — main would refuse too)", () => {
+  // Live smoke 15.08 (defect 3): the argument used to be "the project has a
+  // live tab", which hid the affordance from every row of a project as soon
+  // as one session there was open. It now asks about THIS row's session, so a
+  // sibling being open cannot reach this verdict at all.
+  it("refuses only while THAT session is open in a tab (main would refuse too)", () => {
     expect(isRowDeletable("resumable", true)).toBe(false);
   });
 });
