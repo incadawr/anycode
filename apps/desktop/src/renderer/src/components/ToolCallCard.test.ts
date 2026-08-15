@@ -21,6 +21,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ChildBadgeKind } from "../child-layout.js";
 import {
   activityRowText,
   activityRows,
@@ -32,6 +33,7 @@ import {
   flattenSummary,
   formatSubagentCounters,
   formatWorkflowCounters,
+  isClickableChildBadge,
   moreLinesLabel,
   parseTodos,
   pendingStepsLabel,
@@ -44,6 +46,7 @@ import {
   SUMMARY_MAX_CHARS,
   todoSummary,
   ToolCallCard,
+  ToolCallHeaderRow,
   workflowRunLabel,
   workflowStepAria,
   workflowStepMeta,
@@ -936,9 +939,13 @@ function mkAgentBlock(overrides: Partial<ToolCallBlock> = {}): ToolCallBlock {
  * jsdom-free SSR rationale). `noop` covers the required onTogglePrompt prop
  * — no click is simulated (SSR has no event system); the plaque's two states
  * are instead reached directly via the `promptExpanded` prop. */
-function renderAgentBody(block: ToolCallBlock, promptExpanded = false): string {
+function renderAgentBody(
+  block: ToolCallBlock,
+  promptExpanded = false,
+  child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined },
+): string {
   const noop = () => {};
-  return renderToStaticMarkup(createElement(AgentCardBody, { block, promptExpanded, onTogglePrompt: noop }));
+  return renderToStaticMarkup(createElement(AgentCardBody, { block, promptExpanded, onTogglePrompt: noop, child }));
 }
 
 describe("AgentCardBody (SSR component render)", () => {
@@ -1114,5 +1121,143 @@ describe("ToolCallCard (SSR) — max_turns external badge (TASK.44)", () => {
     expect(html).toContain(">Max turns reached<");
     expect(html).not.toContain(">Success<");
     expect(html).toContain("tool-call-status-max_turns");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.120 — the session-child badge as an ACTION. While a session-tier child
+// is blocked on a permission ask, the "Waiting for permission" chip becomes a
+// real <button> firing the same onOpen the Open button uses (both mounts), so
+// the master can jump straight to the ask. isClickableChildBadge is the seam:
+// kind + handler presence decide button-vs-span; the pure tests pin its truth
+// table, the SSR renders pin the markup consequences — same jsdom-free
+// rationale as the TASK.44 block above.
+
+describe("isClickableChildBadge (TASK.120) — pure truth table", () => {
+  const open = () => {};
+
+  it("ONLY waiting_permission + a real onOpen handler is actionable", () => {
+    expect(isClickableChildBadge("waiting_permission", open)).toBe(true);
+  });
+
+  it("waiting_permission WITHOUT onOpen stays a static chip (pre-TASK.120 render, byte-identical)", () => {
+    expect(isClickableChildBadge("waiting_permission", undefined)).toBe(false);
+  });
+
+  it("the three outcome kinds are NEVER actionable, handler or not — their card already carries the Open button", () => {
+    for (const badge of ["running", "error", "done"] as const) {
+      expect(isClickableChildBadge(badge, open)).toBe(false);
+      expect(isClickableChildBadge(badge, undefined)).toBe(false);
+    }
+  });
+});
+
+describe("AgentCardBody (SSR) — expanded child-row badge (TASK.120)", () => {
+  it("waiting_permission + onOpen renders a <button> with the -action modifier, not a span", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ waiting: true }) });
+    const html = renderAgentBody(block, false, { badge: "waiting_permission", onOpen: () => {} });
+    expect(html).toContain(
+      '<button type="button" class="tool-call-child-badge tool-call-child-badge-waiting_permission tool-call-child-badge-action"',
+    );
+    expect(html).toContain(">Waiting for permission</button>");
+    // ...and the static span form is absent: exactly one badge node in the row.
+    expect(html).not.toContain("<span class=\"tool-call-child-badge");
+  });
+
+  it("the three outcome kinds keep the static span even WITH an onOpen handler", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent() });
+    for (const badge of ["running", "error", "done"] as const) {
+      const html = renderAgentBody(block, false, { badge, onOpen: () => {} });
+      expect(html).toContain(`<span class="tool-call-child-badge tool-call-child-badge-${badge}"`);
+      expect(html).not.toContain("tool-call-child-badge-action");
+    }
+  });
+});
+
+describe("ToolCallCard (SSR) — header-row badge (TASK.120)", () => {
+  // The header row is rendered via the exported ToolCallHeaderRow (same
+  // rationale as AgentCardBody): the badge's childAction comes from
+  // useChildSessionAction, which reads the tabs + child-relation zustand
+  // stores — and zustand's server snapshot (what renderToStaticMarkup sees)
+  // is frozen at the INITIAL state, so no seed can reach a static render.
+  // The row takes the resolved childAction as a plain prop instead.
+
+  it("every card (plain Bash included) wraps its toggle in the row wrapper — one child, layout unchanged", () => {
+    const block: ToolCallBlock = {
+      kind: "tool_call",
+      id: "b1",
+      toolCallId: "tc1",
+      toolName: "Bash",
+      input: { command: "npm test" },
+      status: "error",
+      modelText: "boom",
+      snapshots: { before: null, after: null },
+      subagent: null,
+      workflow: null,
+    };
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(html).toContain('class="tool-call-toggle-row"');
+    // The toggle itself is still the row's sole child, exactly one instance.
+    expect(html.match(/class="tool-call-toggle"/g)).toHaveLength(1);
+    // And no badge action leaked onto a card without a session child.
+    expect(html).not.toContain("tool-call-child-badge");
+  });
+
+  it("waiting_permission renders the badge OUTSIDE the toggle, as a button on the row wrapper (no nested buttons)", () => {
+    const block = mkAgentBlock({
+      status: "running",
+      subagent: mkSubagent({ waiting: true }),
+    });
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block,
+        expanded: false,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+        childAction: { badge: "waiting_permission", onOpen: () => {} },
+      }),
+    );
+    // The badge is the -action button riding the row wrapper...
+    expect(html).toContain("tool-call-child-badge-action");
+    expect(html).toContain(">Waiting for permission</button>");
+    // ...positioned AFTER the toggle </button> closes (beside it, not nested).
+    const toggleEnd = html.indexOf("</button>"); // the toggle's own close tag
+    const badgeStart = html.indexOf("tool-call-child-badge-action");
+    expect(badgeStart).toBeGreaterThan(toggleEnd);
+    // The static in-toggle span form is absent — the badge appears once.
+    expect(html).not.toContain("<span class=\"tool-call-child-badge");
+  });
+
+  it("the three outcome kinds keep the static span INSIDE the toggle even with an onOpen handler", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent() });
+    for (const badge of ["running", "error", "done"] as const) {
+      const html = renderToStaticMarkup(
+        createElement(ToolCallHeaderRow, {
+          block,
+          expanded: false,
+          bodyId: "body-1",
+          onToggleExpanded: () => {},
+          childAction: { badge, onOpen: () => {} },
+        }),
+      );
+      // Static span inside the toggle, no -action layer, no second badge.
+      expect(html).toContain(`<span class="tool-call-child-badge tool-call-child-badge-${badge}"`);
+      expect(html).not.toContain("tool-call-child-badge-action");
+    }
+  });
+
+  it("a waiting badge without onOpen stays a static span inside the toggle (pre-TASK.120 markup)", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ waiting: true }) });
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block,
+        expanded: false,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+        childAction: { badge: "waiting_permission", onOpen: undefined },
+      }),
+    );
+    expect(html).toContain('<span class="tool-call-child-badge tool-call-child-badge-waiting_permission"');
+    expect(html).not.toContain("tool-call-child-badge-action");
   });
 });
