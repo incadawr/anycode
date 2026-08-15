@@ -444,7 +444,9 @@ function classifyPipelineSegment(segment: string): BashCommandClass {
     return "unknown";
   }
   // 8. Write-flag screen on RAW and UNQUOTED forms — unquoted is the
-  //    load-bearing one (`tree "-o" x` — DV-5); raw is defense in depth.
+  //    load-bearing one (`cat "--in-place" f | wc` — MV5's sole surviving
+  //    discriminator; the original DV-5 example `tree "-o" x` now dies at
+  //    the step-6 allowlist miss, W1 removed tree); raw is defense in depth.
   for (const token of tokens.slice(1)) {
     if (isWriteFlag(token.raw, WRITE_CAPABLE_FLAGS) || isWriteFlag(token.unquoted, WRITE_CAPABLE_FLAGS)) {
       return "unknown";

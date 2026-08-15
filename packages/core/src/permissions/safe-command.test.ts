@@ -626,3 +626,41 @@ describe("TASK.35 fix wave 1 — tree removal and divergence pins (V-series)", (
     expect(classifyBashCommandLine('cat "f').class).toBe("unknown");
   });
 });
+
+describe("TASK.35 fix wave 2 — RES-1 witness pins (GP-series)", () => {
+  it("GP1: RES-1's former witness is refused by the `=` screen, NOT the flag net", () => {
+    // `git diff "--output=victim"` asks TODAY, but the refusal is carried by
+    // the step-1 quote-UNAWARE metacharacter screen (`=` is in
+    // SHELL_METACHARACTERS) — the git flag loop never sees the token (and
+    // could not catch it: the raw token starts with `"`). The flag-free twin
+    // proves the attribution: no write flag anywhere, same verdict. This pin
+    // exists so the `=`-form can never again be cited as evidence that the
+    // flag net catches quoted write flags — it does not (see GP2). MG2
+    // proves this pin load-bearing.
+    expect(classifyBashCommand('git diff "--output=victim"')).toBe("unknown");
+    expect(classifyBashCommand('git diff "--zzzz=victim"')).toBe("unknown");
+  });
+
+  it("GP2: RES-1's LIVE spellings — quote-hidden git write flags classify read-only TODAY (base P1, documented NOT endorsed)", () => {
+    // Divergence pin in the spirit of V4: these are FALSE ALLOWS on the
+    // frozen single-command path (base debt, RESIDUALS-S2.md RES-1 —
+    // owner-facing, NOT fixed by this track). isWriteFlag sees the raw
+    // token (`"--output"` starts with `"`; `--outp"ut"` normalization only
+    // strips a `=value` suffix), so classifyGit's flag loop passes them.
+    // Executed against real git 2.37.1 in an isolated repo (W2):
+    // diff/log/show/shortlog WROTE the named file; blame TRUNCATED an
+    // existing file to 0 bytes. The RES-1 fix flips this test red — rewrite
+    // it to expectAllUnknown as the fix's acceptance criterion. A fix that
+    // leaves it green has not closed the hole. MG1 (the fix-spec mutation)
+    // proves that mechanism today.
+    expectAllReadOnly([
+      'git diff "--output" victim',
+      'git diff --outp"ut" victim',
+      "git diff '--output' victim",
+      'git log "--output" victim',
+      'git show "--output" victim',
+      'git shortlog "--output" victim',
+      'git blame "--output" victim f',
+    ]);
+  });
+});
