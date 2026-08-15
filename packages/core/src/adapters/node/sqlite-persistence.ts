@@ -1306,9 +1306,23 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // Children leave with their root's cascade, never as standalone bulk
     // candidates — the sidebar's grouping key (`projectRoot ?? workspace`)
     // is the match key. The CTE walk lives in deleteSessionTree's engine.
+    //
+    // REVIEW 15.08 DEFECT 2: age is measured by the LAST HISTORY RECORD's
+    // `createdAt` (max over history_items.data JSON), NOT `sessions.updated_at`
+    // — that column is not touched by history writes (TASK.117) and on the
+    // live DB lags the real last activity by up to 3+ days, which would sweep
+    // a week-fresh session under a "older than 7 days" filter for an
+    // IRREVERSIBLE bulk delete. Fallback to `updated_at` for sessions with
+    // no history (never resumed/flushed) — their only activity witness.
     const rows = db
       .prepare(
-        `SELECT * FROM sessions WHERE COALESCE(project_root, workspace) = ? AND parent_session_id IS NULL AND updated_at < ? ORDER BY updated_at DESC`,
+        `SELECT s.*
+           FROM sessions s
+          WHERE COALESCE(s.project_root, s.workspace) = ?
+            AND s.parent_session_id IS NULL
+            AND COALESCE((SELECT MAX(json_extract(h.data, '$.createdAt'))
+                            FROM history_items h WHERE h.session_id = s.id), s.updated_at) < ?
+          ORDER BY s.updated_at DESC`,
       )
       .all(workspace, cutoffMs) as unknown as SessionRow[];
     return rows.map(rowToSessionMeta);
