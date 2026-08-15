@@ -60,7 +60,7 @@
  * (with a notice, text still sent) if the boot model turns out not to
  * accept them.
  */
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ClipboardEvent, KeyboardEvent } from "react";
 import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-store.js";
 import type { QueuedPromptImage } from "../store.js";
@@ -68,6 +68,7 @@ import { useSettingsStore } from "../settings-store.js";
 import { submitStartDraft, type StartSubmitResult } from "../start-session.js";
 import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, ImageIcon, Search, Terminal, Warning, X } from "./icons.js";
 import { modelDisplayName, modelMenuItems, pillLabel, providerModelsFor, resolvePid } from "./ModelPill.js";
+import { connectionDisplayName } from "./ConnectionTile.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import {
@@ -79,6 +80,7 @@ import {
 } from "./Composer.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
 import { activeConnection, activeProviderView } from "../../../shared/settings.js";
+import type { CatalogSummary, CustomProviderRecord, ProviderConnection } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
@@ -283,6 +285,97 @@ function defaultModelPickDeps(): ModelPickDeps {
  */
 export function pickModelForDraft(modelId: string, deps: ModelPickDeps = defaultModelPickDeps()): void {
   deps.tabsStore.getState().setDraftModel(modelId);
+}
+
+/** One selectable row inside a `StartModelMenuGroup` (TASK.106 cut-1 stage B). */
+export interface StartModelMenuItem {
+  id: string;
+  name: string;
+  /**
+   * True exactly for the item matching BOTH axes of the current pair
+   * (connection id + model id). The same model id can appear in two
+   * different connections' groups (e.g. a Kimi subscription connection and a
+   * Kimi API-key connection) — only the item belonging to the actually
+   * current/pinned connection is ever marked current.
+   */
+  current: boolean;
+}
+
+/** One connection's group in the New Session model popover (TASK.106 cut-1 stage B). */
+export interface StartModelMenuGroup {
+  /** The connection's real id — always defined, even for the active connection's group (the click handler decides whether to submit this id as-is or normalize it to `undefined`, §3 item 3). */
+  connectionId: string;
+  /** Group header text — `connectionDisplayName`'s auto-naming, the SAME label Settings/Welcome already show for this connection. */
+  label: string;
+  items: StartModelMenuItem[];
+}
+
+/**
+ * TASK.106 cut-1 stage B: groups the New Session model popover by EVERY
+ * connected connection, not just the active one. For each connection,
+ * `providerModelsFor` resolves its offered models exactly like the
+ * pre-existing single-connection call did — an empty/absent live fetch falls
+ * back to the provider's static catalog, `providerModelsFor`'s own behavior,
+ * not duplicated here. `current.connectionId` is the CALLER-resolved
+ * effective current connection (the draft's explicit pin, else the active
+ * connection — `SessionDraft.connectionId`'s "unset ⇒ active" convention,
+ * resolved once by the caller rather than re-derived per group here): the
+ * matching group appends `current.modelId` via `modelMenuItems` when the
+ * catalog doesn't already carry it (mirrors the single-connection chip's own
+ * fallback); every OTHER group shows exactly its resolved catalog, with no
+ * such synthetic entry — there is no "current model" to preserve for a
+ * connection that isn't the current pair. Exported for unit testing.
+ */
+export function buildStartModelMenuGroups(
+  connections: readonly ProviderConnection[],
+  catalog: CatalogSummary | undefined,
+  custom: readonly CustomProviderRecord[] | undefined,
+  current: { connectionId: string | undefined; modelId: string },
+): StartModelMenuGroup[] {
+  return connections.map((connection) => {
+    const catalogEntry = catalog?.find((entry) => entry.id === connection.providerId);
+    const label = connectionDisplayName(connection, catalogEntry?.name ?? "Custom", connections);
+    const catalogModels = providerModelsFor(connection.providerId, catalog, custom, connection.models);
+    const isCurrentConnection = connection.id === current.connectionId;
+    const baseItems = isCurrentConnection
+      ? modelMenuItems(current.modelId, catalogModels)
+      : (catalogModels ?? []).map((m) => ({ id: m.id, name: m.name ?? m.id }));
+    const items = baseItems.map((item) => ({
+      id: item.id,
+      name: item.name,
+      current: isCurrentConnection && item.id === current.modelId,
+    }));
+    return { connectionId: connection.id, label, items };
+  });
+}
+
+/**
+ * Normalizes a grouped model-menu row's connection id to what actually gets
+ * submitted on selection (TASK.106 cut-1 stage B, §3 item 3): the active
+ * connection's own group submits `undefined` — `SessionDraft.connectionId`'s
+ * "unset ⇒ active connection" convention means a redundant explicit pin of
+ * today's already-active connection is never written — every other
+ * connection submits its real id. Exported for unit testing.
+ */
+export function startModelRowConnectionId(rowConnectionId: string, activeConnectionId: string | undefined): string | undefined {
+  return rowConnectionId === activeConnectionId ? undefined : rowConnectionId;
+}
+
+/**
+ * A grouped model-menu row's click handler (TASK.106 cut-1 stage B): sets
+ * BOTH axes of the pair in one call — `setDraftModel` for the model id, and
+ * `setDraftConnectionId` for the row's connection (already normalized by the
+ * caller via `startModelRowConnectionId`) — the two axes always move
+ * together, the same discipline `resolvePillTarget` (`ModelPill.tsx:121`)
+ * applies to the live-session pill. Exported for unit testing.
+ */
+export function selectStartModelRow(
+  connectionId: string | undefined,
+  modelId: string,
+  deps: ModelPickDeps = defaultModelPickDeps(),
+): void {
+  pickModelForDraft(modelId, deps);
+  deps.tabsStore.getState().setDraftConnectionId(connectionId);
 }
 
 /**
@@ -622,7 +715,27 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const modelChipLabel = draft?.model === null && defaultEffort !== undefined
     ? pillLabel(modelChip.label, defaultEffort, ["off"])
     : modelChip.label;
-  const modelItems = modelMenuItems(modelChip.modelId, catalogModels);
+  // TASK.106 cut-1 stage B: the model popover's grouped list spans every
+  // connected connection, not just the active one; the "current pair" it
+  // checkmarks is the draft's explicit connection pin, else the active
+  // connection (`SessionDraft.connectionId`'s own "unset ⇒ active" convention).
+  const activeConnectionId = snapshot?.settings.provider.activeConnectionId;
+  const modelGroups = buildStartModelMenuGroups(
+    snapshot?.settings.provider.connections ?? [],
+    snapshot?.catalog,
+    snapshot?.settings.provider.custom,
+    { connectionId: draft?.connectionId ?? activeConnectionId, modelId: modelChip.modelId },
+  );
+  // Flattened for roving-focus indexing (group header rows are never
+  // focusable/counted — indexing is by clickable row only, §3 item 7).
+  const modelMenuRows = modelGroups.flatMap((group) =>
+    group.items.map((item, index) => ({
+      ...item,
+      connectionId: group.connectionId,
+      groupLabel: group.label,
+      isGroupStart: index === 0,
+    })),
+  );
   const projectRowCount = recents.length + 1; // +1 for the trailing "Browse…" row
   // TASK.39: hook-safe boolean (computed ahead of the `draft === null` early
   // return below, same discipline as the other plain derived values above)
@@ -876,7 +989,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     if (!modelMenuOpen) {
       return;
     }
-    setModelFocusIndex(Math.max(0, modelItems.findIndex((item) => item.id === modelChip.modelId)));
+    setModelFocusIndex(Math.max(0, modelMenuRows.findIndex((row) => row.current)));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- same narrow-deps
     // discipline as the project popover's seeding effect above.
   }, [modelMenuOpen]);
@@ -1052,8 +1165,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
     }
   }
 
-  function selectModel(modelId: string): void {
-    pickModelForDraft(modelId);
+  function selectModel(rowConnectionId: string, modelId: string): void {
+    selectStartModelRow(startModelRowConnectionId(rowConnectionId, activeConnectionId), modelId);
     closeModelMenu(true);
   }
 
@@ -1065,7 +1178,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   }
 
   function onModelMenuKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    const count = modelItems.length;
+    const count = modelMenuRows.length;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
@@ -1086,9 +1199,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
       case "Enter":
       case " ": {
         event.preventDefault();
-        const item = modelItems[modelFocusIndex];
-        if (item) {
-          selectModel(item.id);
+        const row = modelMenuRows[modelFocusIndex];
+        if (row) {
+          selectModel(row.connectionId, row.id);
         }
         break;
       }
@@ -1454,28 +1567,35 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
               {modelMenuOpen && (
                 <div className="start-model-menu" role="menu" aria-label="Model" onKeyDown={onModelMenuKeyDown}>
-                  {modelItems.map((item, index) => {
-                    const current = item.id === modelChip.modelId;
-                    return (
+                  {/* TASK.106 cut-1 stage B: one group per connection, SlashMenu.tsx's
+                      own "Fragment + role=presentation header before the first row of
+                      a new group" pattern — the header never joins roving focus/tab
+                      order (§3 item 7). */}
+                  {modelMenuRows.map((row, index) => (
+                    <Fragment key={`${row.connectionId}:${row.id}`}>
+                      {row.isGroupStart && (
+                        <div className="start-model-menu-group-label" role="presentation">
+                          {row.groupLabel}
+                        </div>
+                      )}
                       <button
-                        key={item.id}
                         ref={(el) => {
                           modelItemRefs.current[index] = el;
                         }}
                         type="button"
                         role="menuitemradio"
-                        aria-checked={current}
+                        aria-checked={row.current}
                         tabIndex={index === modelFocusIndex ? 0 : -1}
-                        className={`start-model-item${current ? " start-model-item-current" : ""}`}
-                        onClick={() => selectModel(item.id)}
+                        className={`start-model-item${row.current ? " start-model-item-current" : ""}`}
+                        onClick={() => selectModel(row.connectionId, row.id)}
                       >
                         <span className="start-model-item-check" aria-hidden="true">
-                          {current ? <Check /> : null}
+                          {row.current ? <Check /> : null}
                         </span>
-                        <span className="start-model-item-name">{item.name}</span>
+                        <span className="start-model-item-name">{row.name}</span>
                       </button>
-                    );
-                  })}
+                    </Fragment>
+                  ))}
                 </div>
               )}
                 </div>
