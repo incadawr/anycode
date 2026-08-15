@@ -4,7 +4,7 @@
  * MVP.3 criteria): event order/completeness with turnId, busy gate, cancel
  * mid-turn (cancelled + denyAll of parked asks), permission allow round-trip,
  * before/after snapshots, the fail-closed snapshot observer, disconnect denyAll,
- * replay on ui_ready, and mode changes only between turns.
+ * replay on ui_ready, and mode changes (mid-turn and between turns, TASK.37).
  *
  * Slice 2.2.3 additions (design §5, ruling §3): "Always allow" remember
  * round-trip (a remembered allow adds a session rule that auto-allows a
@@ -1474,7 +1474,13 @@ describe("Session — mode changes", () => {
     }
   });
 
-  it("rejects a mode change during an active turn and leaves the mode unchanged", async () => {
+  // MS1-MS3 (TASK.37): mid-turn set_mode is now accepted; the old busy-reject
+  // test above (D-S3-11) is gone. MS4 is not new code — the between-turns
+  // test above and the non-core rejection test (below, in the "engine
+  // shutdown seam" describe) stay green byte-identical and are listed in
+  // CUT-S3.md §6b so the reviewer knows they were considered.
+
+  it("MS1: mid-turn set_mode is accepted and persisted; an already-open ask is honored under its snapshotted mode", async () => {
     const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
     try {
       h.send({ type: "ui_ready" });
@@ -1482,13 +1488,107 @@ describe("Session — mode changes", () => {
 
       h.send({ type: "user_message", requestId: "r1", text: "write it" });
       const req = await h.waitFor(isPermissionRequest);
+      expect(req.mode).toBe("build");
 
       h.send({ type: "set_mode", mode: "yolo" });
-      await h.waitFor(isModeChangeRejected);
-      expect(h.config.mode).toBe("build");
+      const changed = await h.waitFor(isModeChanged);
+      expect(changed.mode).toBe("yolo");
+      expect(h.config.mode).toBe("yolo");
+      expect(h.touches).toContainEqual({ mode: "yolo" });
 
+      // The EXPLICIT answer rules, not the new yolo mode (DV-1).
       h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      const result = await h.waitFor(agentEventOf("tool_result"));
+      if (result.event.type === "tool_result") {
+        expect(result.event.outcome.status).toBe("denied");
+      }
       await h.waitFor(agentEventOf("loop_end"));
+    } finally {
+      h.close();
+    }
+  });
+
+  it("MS2: multi-tool turn — tool 1 asks under the old mode, tool 2 is allowed under the new mode without asking", async () => {
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), toolStep("c2", "Write", WRITE_INPUT), finishStep()],
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write twice" });
+      const req = await h.waitFor(isPermissionRequest);
+      expect(req.mode).toBe("build");
+
+      h.send({ type: "set_mode", mode: "yolo" });
+      await h.waitFor(isModeChanged);
+
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+      const c1Result = await h.waitFor(
+        (m): m is Of<"agent_event"> =>
+          m.type === "agent_event" && m.event.type === "tool_result" && m.event.outcome.toolCallId === "c1",
+      );
+      if (c1Result.event.type === "tool_result") {
+        expect(c1Result.event.outcome.status).toBe("success");
+      }
+
+      const c2Result = await h.waitFor(
+        (m): m is Of<"agent_event"> =>
+          m.type === "agent_event" && m.event.type === "tool_result" && m.event.outcome.toolCallId === "c2",
+      );
+      if (c2Result.event.type === "tool_result") {
+        expect(c2Result.event.outcome.status).toBe("success");
+      }
+
+      // c2 never asked: exactly one permission_request across the whole turn.
+      expect(h.received.filter(isPermissionRequest).length).toBe(1);
+      // One uninterrupted turn (single turn_started).
+      expect(h.received.filter(isTurnStarted).length).toBe(1);
+      await h.waitFor(agentEventOf("loop_end"));
+    } finally {
+      h.close();
+    }
+  });
+
+  it("MS3: switching into plan mid-turn denies the next tool without a modal; the transcript stays uninterrupted", async () => {
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), toolStep("c2", "Write", WRITE_INPUT), finishStep()],
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write twice" });
+      const req = await h.waitFor(isPermissionRequest);
+      expect(req.mode).toBe("build");
+
+      h.send({ type: "set_mode", mode: "plan" });
+      await h.waitFor(isModeChanged);
+      expect(h.touches).toContainEqual({ mode: "plan" });
+
+      // The explicit answer under the OLD (snapshotted) mode still executes.
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+      const c1Result = await h.waitFor(
+        (m): m is Of<"agent_event"> =>
+          m.type === "agent_event" && m.event.type === "tool_result" && m.event.outcome.toolCallId === "c1",
+      );
+      if (c1Result.event.type === "tool_result") {
+        expect(c1Result.event.outcome.status).toBe("success");
+      }
+
+      // c2 is denied without ever reaching the broker (no second permission_request).
+      const c2Result = await h.waitFor(
+        (m): m is Of<"agent_event"> =>
+          m.type === "agent_event" && m.event.type === "tool_result" && m.event.outcome.toolCallId === "c2",
+      );
+      if (c2Result.event.type === "tool_result") {
+        expect(c2Result.event.outcome.status).toBe("denied");
+        expect(c2Result.event.outcome.modelText).toContain("plan");
+      }
+
+      expect(h.received.filter(isPermissionRequest).length).toBe(1);
+      const loopEnd = await h.waitFor(agentEventOf("loop_end"));
+      expect(loopEnd.event).toMatchObject({ type: "loop_end", reason: "completed" });
     } finally {
       h.close();
     }

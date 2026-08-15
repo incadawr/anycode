@@ -5,7 +5,7 @@
  * directly rather than DOM-rendering the popover.
  */
 import { describe, expect, it } from "vitest";
-import { modeIndexForDigit, MODE_DESCRIPTIONS, nextRovingIndex } from "./ModeMenu.js";
+import { modeChangeDisabled, modeIndexForDigit, MODE_DESCRIPTIONS, nextRovingIndex } from "./ModeMenu.js";
 
 describe("nextRovingIndex", () => {
   it("advances by +1 (ArrowDown)", () => {
@@ -68,5 +68,20 @@ describe("MODE_DESCRIPTIONS", () => {
     expect(MODE_DESCRIPTIONS.build).toBe("Ask before edits");
     expect(MODE_DESCRIPTIONS.auto).toBe("Ask only for risky actions");
     expect(MODE_DESCRIPTIONS.yolo).toBe("Never ask");
+  });
+});
+
+describe("modeChangeDisabled (TASK.37)", () => {
+  it("MR1: a running turn no longer disables mode changes — THE task pin", () => {
+    expect(modeChangeDisabled("running", true)).toBe(false);
+  });
+
+  it("MR2: not-ready still gates, running or idle", () => {
+    expect(modeChangeDisabled("idle", false)).toBe(true);
+    expect(modeChangeDisabled("running", false)).toBe(true);
+  });
+
+  it("MR3: idle + ready is enabled", () => {
+    expect(modeChangeDisabled("idle", true)).toBe(false);
   });
 });

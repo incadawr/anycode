@@ -2021,3 +2021,310 @@ describe("AgentLoop eventTap seam (slice 6.6)", () => {
     expect(tapped).toEqual([{ type: "turn_start", turn: 1 }]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// AgentLoop.setMode (TASK.37, CUT-S3 §6a): the user-initiated mid-turn
+// permission-mode change. Reuses MockModelPort/makeLoop/makeTool/makeRegistry/
+// collect/toolResult/ModePermissionEngine and the recordingAllowBroker/
+// writeMock/makePlanLoop conventions from the plan-exit arc above. Where a
+// tool handler must call loop.setMode, the loop variable is declared before
+// the tool/loop are built and assigned once construction completes, so the
+// handler's closure reaches the live instance.
+
+describe("AgentLoop.setMode — mid-turn permission-mode change (TASK.37)", () => {
+  it("ML1: mid-turn switch lands on the very next check", async () => {
+    let loop: AgentLoop;
+    const modes: PermissionMode[] = [];
+    const engine: PermissionEngine = {
+      check: (request) => {
+        modes.push(request.mode);
+        return { decision: "allow" };
+      },
+    };
+    const switcherTool = makeTool({
+      metadata: { ...baseMetadata, name: "Switcher" },
+      handler: async () => {
+        loop.setMode("yolo");
+        return { ok: true, output: { switched: true } };
+      },
+    });
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "s1", name: "Switcher", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "w2", name: "Write", input: { value: "y" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "w3", name: "Write", input: { value: "z" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Switcher: switcherTool, Write: writeMock }),
+      permissionEngine: engine,
+      mode: "build",
+    });
+
+    const firstTurn = await collect(loop.runTurn("switch mid-turn"));
+
+    expect(modes).toEqual(["build", "yolo"]);
+    expect(toolResult(firstTurn, "Switcher")?.status).toBe("success");
+    expect(toolResult(firstTurn, "Write")?.status).toBe("success");
+    expect(firstTurn.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+
+    // Post-turn config.mode is "yolo": a follow-up scripted turn's first check
+    // (no options.mode override) is recorded as "yolo".
+    const secondTurn = await collect(loop.runTurn("confirm persisted mode"));
+    expect(modes.at(-1)).toBe("yolo");
+    expect(toolResult(secondTurn, "Write")?.status).toBe("success");
+  });
+
+  it("ML2: switching into plan makes the very next check a deny; the turn continues", async () => {
+    let loop: AgentLoop;
+    const seen: PermissionRequest[] = [];
+    const switcherTool = makeTool({
+      metadata: { ...baseMetadata, name: "Switcher" },
+      handler: async () => {
+        loop.setMode("plan");
+        return { ok: true, output: { switched: true } };
+      },
+    });
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "s1", name: "Switcher", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "w2", name: "Write", input: { value: "y" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Switcher: switcherTool, Write: writeMock }),
+      permissionEngine: new ModePermissionEngine(),
+      permissionBroker: recordingAllowBroker(seen),
+      mode: "build",
+    });
+
+    const events = await collect(loop.runTurn("switch to plan mid-turn"));
+
+    const writeOutcome = toolResult(events, "Write");
+    expect(writeOutcome?.status).toBe("denied");
+    expect(writeOutcome?.modelText).toContain("plan");
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("ML3: an already-open ask keeps its snapshotted mode, in both directions (DV-1)", async () => {
+    let loop: AgentLoop;
+    let brokerCalls = 0;
+    const recordedModes: PermissionMode[] = [];
+    const broker: PermissionBroker = {
+      requestPermission: async (request) => {
+        brokerCalls += 1;
+        recordedModes.push(request.mode);
+        if (brokerCalls === 1) {
+          loop.setMode("yolo");
+        }
+        return { behavior: "allow" };
+      },
+    };
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "w1", name: "Write", input: { value: "a" } } },
+        { type: "tool_call", toolCall: { id: "w2", name: "Write", input: { value: "b" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Write: writeMock }),
+      permissionEngine: new ModePermissionEngine(),
+      permissionBroker: broker,
+      mode: "build",
+    });
+
+    const events = await collect(loop.runTurn("open ask then switch"));
+
+    // The second check auto-allowed under yolo, never escalated to the broker.
+    expect(brokerCalls).toBe(1);
+    expect(recordedModes).toEqual(["build"]);
+
+    const outcomes = events
+      .filter((event): event is Extract<AgentEvent, { type: "tool_result" }> => event.type === "tool_result")
+      .map((event) => event.outcome);
+    expect(outcomes.find((o) => o.toolCallId === "w1")?.status).toBe("success");
+    expect(outcomes.find((o) => o.toolCallId === "w2")?.status).toBe("success");
+  });
+
+  it("ML4: setMode between turns mutates only config; the next turn's first check sees it", async () => {
+    const modes: PermissionMode[] = [];
+    const engine: PermissionEngine = {
+      check: (request) => {
+        modes.push(request.mode);
+        return { decision: "allow" };
+      },
+    };
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "w1", name: "Write", input: { value: "a" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Write: writeMock }),
+      permissionEngine: engine,
+      mode: "build",
+    });
+
+    loop.setMode("plan");
+    const events = await collect(loop.runTurn("first check after between-turns switch"));
+
+    expect(modes).toEqual(["plan"]);
+    expect(toolResult(events, "Write")?.status).toBe("success");
+  });
+
+  it("ML5: setMode never fires onModeChange, mid-turn or between turns", async () => {
+    let loop: AgentLoop;
+    const onModeChange = vi.fn();
+    const switcherTool = makeTool({
+      metadata: { ...baseMetadata, name: "Switcher" },
+      handler: async () => {
+        loop.setMode("yolo");
+        return { ok: true, output: { switched: true } };
+      },
+    });
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "s1", name: "Switcher", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Switcher: switcherTool }),
+      permissionEngine: makeEngine({ decision: "allow" }),
+      onModeChange,
+      mode: "build",
+    });
+
+    await collect(loop.runTurn("switch mid-turn"));
+    loop.setMode("plan");
+
+    expect(onModeChange).not.toHaveBeenCalled();
+  });
+
+  it("ML6: user's setMode wins a race against a concurrent ExitPlanMode approval", async () => {
+    let loop: AgentLoop;
+    const onModeChange = vi.fn();
+    const realEngine = new ModePermissionEngine();
+    const recordedModes: PermissionMode[] = [];
+    const engine: PermissionEngine = {
+      check: (request) => {
+        recordedModes.push(request.mode);
+        return realEngine.check(request);
+      },
+    };
+    const broker: PermissionBroker = {
+      requestPermission: async () => {
+        loop.setMode("auto");
+        return { behavior: "allow" };
+      },
+    };
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "p1", name: "ExitPlanMode", input: { plan: "the plan" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "w1", name: "Write", input: { value: "y" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ ExitPlanMode: exitPlanModeTool, Write: writeMock }),
+      permissionEngine: engine,
+      permissionBroker: broker,
+      mode: "plan",
+      planExitMode: "build",
+      onModeChange,
+    });
+
+    const firstTurn = await collect(loop.runTurn("try to exit while switching"));
+
+    const exit = toolResult(firstTurn, "ExitPlanMode");
+    expect(exit?.status).toBe("error");
+    expect(exit?.modelText).toContain("not in plan mode (current mode: auto)");
+    expect(onModeChange).not.toHaveBeenCalled();
+
+    // The turn's later checks (here: the next turn's, since this turn proposed
+    // nothing further) see "auto".
+    const secondTurn = await collect(loop.runTurn("later check sees auto"));
+    expect(toolResult(secondTurn, "Write")?.status).toBe("success");
+    expect(recordedModes.at(-1)).toBe("auto");
+  });
+
+  it("ML7: setMode overrides a per-turn options.mode snapshot too", async () => {
+    let loop: AgentLoop;
+    const modes: PermissionMode[] = [];
+    const engine: PermissionEngine = {
+      check: (request) => {
+        modes.push(request.mode);
+        return { decision: "allow" };
+      },
+    };
+    const switcherTool = makeTool({
+      metadata: { ...baseMetadata, name: "Switcher" },
+      handler: async () => {
+        loop.setMode("yolo");
+        return { ok: true, output: { switched: true } };
+      },
+    });
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "s1", name: "Switcher", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "w2", name: "Write", input: { value: "y" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "w3", name: "Write", input: { value: "z" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Switcher: switcherTool, Write: writeMock }),
+      permissionEngine: engine,
+      mode: "build",
+    });
+
+    const firstTurn = await collect(loop.runTurn("override then switch", { mode: "plan" }));
+    expect(modes).toEqual(["plan", "yolo"]);
+    expect(toolResult(firstTurn, "Write")?.status).toBe("success");
+
+    // config.mode is "yolo" afterwards: the next (non-overridden) turn's first
+    // check is recorded as "yolo".
+    await collect(loop.runTurn("confirm config.mode persisted"));
+    expect(modes.at(-1)).toBe("yolo");
+  });
+});
