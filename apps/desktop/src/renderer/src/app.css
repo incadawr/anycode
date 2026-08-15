@@ -2110,6 +2110,17 @@ body {
   animation: scale-in var(--dur-2) var(--ease-spring);
 }
 
+.start-model-menu-group-label {
+  /* Direct child of the height-capped scrolling column above. */
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-2) var(--sp-1);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
 .start-model-item {
   display: flex;
   /* Direct child of the height-capped scrolling column above. */
