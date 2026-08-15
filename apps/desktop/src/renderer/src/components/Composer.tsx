@@ -65,9 +65,24 @@ import {
  * "inFlight window" (a queued item was dispatched but its `turn_started` has
  * not arrived, so `turn.status` is still "idle") the tab is NOT safe to
  * direct-send into: the host would busy-reject it and the prompt would be lost.
- * Enqueue in that window instead. Exported for unit testing.
+ * Enqueue in that window instead.
+ *
+ * TASK.102 CUT-S2 §10.15.1: a child surface ALWAYS takes the direct path
+ * (returns false), regardless of turn/in-flight state — its renderer prompt
+ * queue has no drainer subscribed (§1.1: the renderer prompt-queue is never
+ * used for a child surface), so anything parked there would sit forever. The
+ * direct path is safe for a child: `host/session.ts`'s steer queue already
+ * accepts a `user_message` sent while the child is busy. Exported for unit
+ * testing.
  */
-export function shouldEnqueue(turnStatus: TurnState["status"], queueInFlight: DesktopState["queueInFlight"]): boolean {
+export function shouldEnqueue(
+  turnStatus: TurnState["status"],
+  queueInFlight: DesktopState["queueInFlight"],
+  isChildSurface = false,
+): boolean {
+  if (isChildSurface) {
+    return false;
+  }
   return turnStatus !== "idle" || queueInFlight !== null;
 }
 
@@ -936,6 +951,7 @@ export function Composer() {
   const sendToHost = useTabSend();
   const turn = useTabStore((state) => state.turn);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
+  const childSurface = useTabStore((state) => state.childSurface);
   const mode = useTabStore((state) => state.mode);
   const model = useTabStore((state) => state.model);
   const imageInput = useTabStore((state) => state.imageInput);
@@ -1191,7 +1207,7 @@ export function Composer() {
       sizeBytes: image.sizeBytes,
       attachment: image.attachment,
     }));
-    if (shouldEnqueue(turn.status, queueInFlight)) {
+    if (shouldEnqueue(turn.status, queueInFlight, childSurface)) {
       // NOT truly idle: either a turn is running, or a queued item was already
       // drained and is still in flight (turn momentarily "idle" but its
       // turn_started not yet acknowledged). Hold the message in the per-tab

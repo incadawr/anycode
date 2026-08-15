@@ -35,6 +35,7 @@ import type {
   TurnCheckpointControl,
 } from "../ports/checkpoints.js";
 import type { BackgroundTaskPort } from "../ports/tasks.js";
+import type { SessionSubagentPort } from "../ports/session-subagent.js";
 import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import type { CorePorts } from "../ports/index.js";
@@ -856,6 +857,69 @@ describe("executeToolCall — tasks plumbing (design slice-5.5-cut.md §2/R3)", 
     const ctx = makeCtx({ registry: makeRegistry({ Mock: captureTool(sink) }) });
     await executeToolCall(ctx, call());
     expect(sink.tasks).toBeUndefined();
+  });
+});
+
+describe("executeToolCall — sessionSubagents plumbing (TASK.102 CUT-S2 §2.2/§0.2)", () => {
+  const sessionSubagentsPort: SessionSubagentPort = {
+    run: async () => ({
+      status: "completed",
+      finalText: "done",
+      truncated: false,
+      turns: 1,
+      toolCalls: 0,
+      durationMs: 1,
+      childSessionId: "child-1",
+      parentSessionId: "parent-1",
+      spawnToolCallId: "call-1",
+    }),
+  };
+
+  function captureTool(sink: { sessionSubagents?: SessionSubagentPort }): AnyToolDefinition {
+    return makeTool({
+      handler: async (_input, ctx: ToolContext) => {
+        sink.sessionSubagents = ctx.sessionSubagents;
+        return { ok: true } as ToolResult;
+      },
+    });
+  }
+
+  it("threads DispatchContext.sessionSubagents into the handler's ctx (proves the port reaches handlerCtx)", async () => {
+    const sink: { sessionSubagents?: SessionSubagentPort } = {};
+    const ctx = makeCtx({
+      registry: makeRegistry({ Mock: captureTool(sink) }),
+      sessionSubagents: sessionSubagentsPort,
+    });
+    await executeToolCall(ctx, call());
+    expect(sink.sessionSubagents).toBe(sessionSubagentsPort);
+  });
+
+  it("leaves ctx.sessionSubagents undefined when the DispatchContext carries none (non-recursion lock #2)", async () => {
+    const sink: { sessionSubagents?: SessionSubagentPort } = { sessionSubagents: sessionSubagentsPort };
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: captureTool(sink) }) });
+    await executeToolCall(ctx, call());
+    expect(sink.sessionSubagents).toBeUndefined();
+  });
+
+  it("keeps ctx.subagents (inline) independent from ctx.sessionSubagents on the same call", async () => {
+    const inlinePort = { run: async () => ({}) } as unknown as import("../ports/subagent.js").SubagentPort;
+    const sink: { sessionSubagents?: SessionSubagentPort; subagents?: unknown } = {};
+    const ctx = makeCtx({
+      registry: makeRegistry({
+        Mock: makeTool({
+          handler: async (_input, toolCtx: ToolContext) => {
+            sink.sessionSubagents = toolCtx.sessionSubagents;
+            sink.subagents = toolCtx.subagents;
+            return { ok: true } as ToolResult;
+          },
+        }),
+      }),
+      subagents: inlinePort,
+      sessionSubagents: sessionSubagentsPort,
+    });
+    await executeToolCall(ctx, call());
+    expect(sink.subagents).toBe(inlinePort);
+    expect(sink.sessionSubagents).toBe(sessionSubagentsPort);
   });
 });
 

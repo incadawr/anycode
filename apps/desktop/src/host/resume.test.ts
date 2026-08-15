@@ -391,7 +391,7 @@ describe("resolveBootSession", () => {
       expect(result.sessionMeta.mode).toBe("build");
       expect(result.initialHistory).toEqual([]);
       expect(result.resumedMissing).toBe(false);
-      expect((await persistence.getSession("given-id"))?.id).toBe("given-id");
+      expect((await persistence.getSessionById("given-id"))?.id).toBe("given-id");
     } finally {
       await persistence.close();
     }
@@ -407,7 +407,7 @@ describe("resolveBootSession", () => {
       });
       expect(result.sessionMeta.id).toBeTruthy();
       expect(result.resumedMissing).toBe(false);
-      expect((await persistence.getSession(result.sessionMeta.id))?.workspace).toBe("/ws");
+      expect((await persistence.getSessionById(result.sessionMeta.id))?.workspace).toBe("/ws");
     } finally {
       await persistence.close();
     }
@@ -425,7 +425,7 @@ describe("resolveBootSession", () => {
       expect(result.resumedMissing).toBe(true);
       expect(result.initialHistory).toEqual([]);
       // Persisted with that same id so a subsequent write-behind flush lands.
-      expect((await persistence.getSession("ghost"))?.id).toBe("ghost");
+      expect((await persistence.getSessionById("ghost"))?.id).toBe("ghost");
     } finally {
       await persistence.close();
     }
@@ -462,7 +462,7 @@ describe("resolveBootSession", () => {
         connectionId: "conn-work",
       });
       expect(result.sessionMeta.connectionId).toBe("conn-work");
-      expect((await persistence.getSession("pinned"))?.connectionId).toBe("conn-work");
+      expect((await persistence.getSessionById("pinned"))?.connectionId).toBe("conn-work");
     } finally {
       await persistence.close();
     }
@@ -479,7 +479,7 @@ describe("resolveBootSession", () => {
         connectionId: "conn-different",
       });
       expect(result.sessionMeta.connectionId).toBe("conn-original");
-      expect((await persistence.getSession("s1"))?.connectionId).toBe("conn-original");
+      expect((await persistence.getSessionById("s1"))?.connectionId).toBe("conn-original");
     } finally {
       await persistence.close();
     }

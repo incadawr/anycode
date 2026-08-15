@@ -1139,6 +1139,67 @@ body {
   font-family: var(--font-mono);
 }
 
+/* TASK.102 CUT-S2 §2.5 (slice S2c C3): layout B's child breadcrumb bar. It
+   reuses `.session-header` wholesale for its box model — height, background,
+   border, and (crucially) the titlebar drag region + traffic-light/window-
+   controls clearance rules above, since it occupies the EXACT SAME strip
+   SessionHeader would. Only the breadcrumb-specific children below are new;
+   `.session-header`'s own comment ("any new interactive child MUST set
+   -webkit-app-region: no-drag") applies here too. */
+.child-breadcrumb-master {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.child-breadcrumb-master:hover {
+  color: var(--text-1);
+  text-decoration: underline;
+}
+
+.child-breadcrumb-sep {
+  color: var(--text-ghost);
+  flex: none;
+}
+
+.child-breadcrumb-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+}
+
+/* CUT-S3 §3.2: the breadcrumb's new "Split" button (layout B -> split C/D).
+   Same pill shape as `.tool-call-subagent-open-button` — the app's one
+   established "secondary pill button" recipe, reused rather than a new one. */
+.child-breadcrumb-split {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0.15rem 0.65rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.child-breadcrumb-split:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
 /* R20: the workspace chip is a copy button. Rest state stays visually
    identical to the old span — kill the UA button face, keep the chip's own
    border/padding/type (`.session-header-chip` supplies size, `-mono` the
@@ -3015,6 +3076,73 @@ body {
 }
 .tool-call-subagent-counters,
 .tool-call-workflow-counters { font-variant-numeric: tabular-nums; }  /* live digits (R13 precedent) */
+
+/* TASK.102 CUT-S2 §2.5 (slice S2c C3): the session-child badge, shown in the
+   ALWAYS-visible toggle header (an Agent card defaults to collapsed, see
+   ToolCallCard.tsx) — additive over `.tool-call-status-badge`, same shape,
+   mounted only for a card whose Agent call spawned a session-tier child this
+   renderer knows about. Color-coded like `.tool-call-status-badge` above,
+   plus a fourth `waiting_permission` tint that badge's vocabulary has no
+   equivalent for. */
+.tool-call-child-badge {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--bg-hover);
+  color: var(--text-3);
+  flex: none;
+}
+
+.tool-call-child-badge-running {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.tool-call-child-badge-done {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.tool-call-child-badge-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* waiting_permission outranks every other kind (childBadgeKind's frozen
+   priority, child-layout.ts) — the accent tint keeps it visually distinct
+   from the warning/success/danger trio above, so it never reads as just
+   another ordinary status color. */
+.tool-call-child-badge-waiting_permission {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Expanded-body row (SubagentStatus, ToolCallCard.tsx): badge + Open action,
+   mounted only alongside the header badge above (same `child` gate). */
+.tool-call-subagent-child-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.tool-call-subagent-open-button {
+  padding: 0.15rem 0.65rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.tool-call-subagent-open-button:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
 
 /* Workflow step checklist (R14 signature). Rows are ledger lines: no borders,
    no backgrounds, no hover — this is a record, not a control surface. */
@@ -5103,7 +5231,8 @@ body {
 }
 
 .session-content-split-open .git-panel,
-.session-content-split-open .preview-panel {
+.session-content-split-open .preview-panel,
+.session-content-split-open .child-split-pane {
   min-width: 0;
 }
 
@@ -6232,4 +6361,217 @@ body {
 
 .git-confirm-confirm:hover {
   background: color-mix(in srgb, var(--danger) 85%, black);
+}
+
+/* ── TASK.102 CUT-S3 §3.3/§3.5: the split layout's right-column stack ──
+   Same drawer recipe as `.git-panel`/`.preview-panel` above (relative,
+   flex column, `justify-self: end`, sidebar background, left border) — the
+   grid column itself comes from `computeSessionContentColumns` (App.tsx). */
+.child-split-pane {
+  position: relative;
+  display: flex;
+  width: 100%;
+  justify-self: end;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+}
+
+.child-split-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+/* `single` head (mokap C): persona anchor + optional model + "subagent" chip. */
+.child-split-head-persona {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+}
+
+.child-split-head-model {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.child-split-head-chip {
+  flex-shrink: 0;
+  padding: 0.15rem var(--sp-2);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+}
+
+/* `roster` head (mokap D): plain "Subagents" title, no persona/model/chip. */
+.child-split-head-title {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+}
+
+.child-split-head-counters {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums; /* live digits (R13 precedent) */
+}
+
+.child-split-head-expand,
+.child-split-head-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-1);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.child-split-head-expand:hover,
+.child-split-head-close:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+/* Roster accordion. `.child-split-rows` and its rows form a flex column so
+   the EXPANDED row (only) can grow to fill the pane's remaining height —
+   the collapsed rows stay their natural (row-line-only) height. */
+.child-split-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.child-split-row {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.child-split-row:last-child {
+  border-bottom: none;
+}
+
+.child-split-row:hover {
+  background: var(--bg-hover);
+}
+
+.child-split-row-expanded {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  cursor: default;
+  background: var(--bg-hover);
+}
+
+.child-split-row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.child-split-row-persona {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+}
+
+.child-split-row-model {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-2);
+}
+
+.child-split-row-counters {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Badge glyph, shared by the head (single) and every row — same four-kind
+   color vocabulary as `.tool-call-child-badge-*` (ToolCallCard.tsx), redrawn
+   here as a compact dot rather than a text pill (row space is tight). */
+.child-split-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: var(--r-full);
+  background: var(--bg-hover);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  line-height: 1;
+}
+
+.child-split-badge-running {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.child-split-badge-done {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.child-split-badge-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* waiting_permission outranks every other kind (childBadgeKind's frozen
+   priority, child-layout.ts) — the accent tint keeps it visually distinct. */
+.child-split-badge-waiting_permission {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Container for the expanded row's own surface (App.tsx-composed `children`:
+   a live SessionSurface wrapped in `.session-content`, or C4's read-only
+   ChildHistoryContent, same wrapper) — fills whatever vertical space its
+   flex parent (`.child-split-row-expanded` or `.child-split-pane` itself,
+   N=1) leaves it. */
+.child-split-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }

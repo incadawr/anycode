@@ -45,6 +45,7 @@ import type {
   CodexRateLimitsWire,
   CommandHookDeclaration,
   FileSystemPort,
+  FinalTextAccumulator,
   HistoryItem,
   ImageAttachment,
   LspServerStatus,
@@ -58,8 +59,15 @@ import type {
 } from "@anycode/core";
 import {
   SESSION_TITLE_MAX_LENGTH,
+  SUBAGENT_ACTIVITY_MAX_EVENTS,
+  appendFinalText,
+  createFinalTextAccumulator,
   deriveSessionTitle,
+  finalizeFinalText,
+  fixateFinalText,
+  resetFinalText,
   sanitizeTitleSource,
+  summarizeChildToolCall,
   withBackgroundTaskNotices,
   withPlanModeReminder,
 } from "@anycode/core";
@@ -77,6 +85,7 @@ import type {
   WirePort,
 } from "../shared/protocol.js";
 import { uiToHostMessageSchema } from "../shared/protocol.js";
+import { CHILD_STEER_QUEUE_MAX, type ChildRunStatus } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import type { IpcPermissionBroker } from "./permission-broker.js";
 import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-hook.js";
@@ -312,6 +321,120 @@ export class Outbound {
   }
 }
 
+// ── child-mode support (TASK.102 CUT-S2 §2.6.3, slice S2b B4) ──
+
+/**
+ * The child-mode terminal report Session hands to `ChildSessionOptions.
+ * onTerminal` — everything `apps/desktop/src/host/index.ts`'s child branch
+ * needs to build a `ChildTerminal` wire message (shared/child-sessions.ts),
+ * minus the `type` discriminant: posting to `process.parentPort` is that
+ * file's job, not Session's (Session never imports `process.parentPort`).
+ */
+export interface ChildTerminalReport {
+  status: ChildRunStatus;
+  finalText: string;
+  truncated: boolean;
+  turns: number;
+  toolCalls: number;
+  durationMs: number;
+  /**
+   * Count of eligible tool_result calls withheld past `SUBAGENT_ACTIVITY_MAX_EVENTS`
+   * over the child's WHOLE turn chain (CUT-S2 §10.7 п.4, parity with
+   * `runner.ts:573`'s inline `activitySuppressed`). Present only when >0.
+   */
+  activitySuppressed?: number;
+}
+
+/**
+ * The child-mode activity/progress report Session hands to
+ * `ChildSessionOptions.onProgress` (CUT-S2 §10.7 п.7) — mirrors
+ * `ChildProgress`'s (shared/child-sessions.ts) "progress" and "activity"
+ * variants minus the `type` discriminant, exactly like `ChildTerminalReport`
+ * above mirrors `ChildTerminal`. "attention" is deliberately NOT a variant
+ * here: that boundary is produced by the permission-tap (`tapChildPermissions`
+ * below) wrapping the broker's `emit`, not by Session's turn-event loop.
+ */
+export type ChildProgressReport =
+  | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
+  | { kind: "activity"; toolName: string; summary: string };
+
+/**
+ * Child-mode options (CUT-S2 §2.6.3). Presence of this option is what turns
+ * an otherwise-ordinary `Session` into a child-mode one: title derivation
+ * becomes a no-op (§5.14 — a child has no name), a `user_message` received
+ * while busy is queued (bounded by `CHILD_STEER_QUEUE_MAX`) instead of
+ * rejected, and `startProgrammaticTurn` becomes available to kick off the
+ * child's one and only externally-triggered turn chain.
+ */
+export interface ChildSessionOptions {
+  /**
+   * Fires exactly once, on this session's FIRST `ui_ready` — never before
+   * (the renderer/relay is not listening yet) and never again on a later
+   * reconnect (CUT-S2 §2.6.3: "child-ready host шлёт на ПЕРВЫЙ ui_ready").
+   */
+  onReady: () => void;
+  /**
+   * Durably flushes the child's history sink (the SAME `flushChecked()` a
+   * durable transcript read — CUT-S2 §0.5/§2.6.3's ordering guarantee: the
+   * terminal report is handed to `onTerminal` ONLY after this resolves. A
+   * rejection produces an `error` terminal instead (an honest failure beats
+   * a "completed" card whose "Open" reads an empty transcript).
+   */
+  flushHistory: () => Promise<void>;
+  /**
+   * Invoked exactly once per host lifetime: after the steer queue has
+   * fully drained (CUT-S2 §5.16 — a terminal published while the queue is
+   * non-empty would make steering a dead facade) AND `flushHistory` has
+   * resolved.
+   */
+  onTerminal: (report: ChildTerminalReport) => void;
+  /**
+   * Fires on every activity/progress boundary the child's turn-event loop
+   * crosses (CUT-S2 §10.7 п.7) — a buffered `tool_execution_start`/
+   * `tool_result` pair for "activity", and a leading-edge 1000ms-throttled
+   * `tool_result`/`turn_end` boundary for "progress". REQUIRED, not
+   * optional: §10.7 п.7 calls out that an easily-forgotten optional seam here
+   * is the same defect class as the rejected `includeChildren?` (§0.4) — a
+   * host that constructs a child Session and forgets to wire this would lose
+   * the whole live activity/progress feed silently instead of a compile
+   * error.
+   */
+  onProgress: (report: ChildProgressReport) => void;
+  /**
+   * DI clock for the progress throttle (CUT-S2 §10.7 п.3): defaults to
+   * `Date.now`. Injected by tests for deterministic leading-edge 1000ms
+   * boundary assertions; never used outside the progress-throttle path.
+   */
+  now?: () => number;
+}
+
+/**
+ * Permission-tap for a child session's broker (CUT-S2 §0.8/§2.6.3): wraps
+ * the `emit` closure an `IpcPermissionBroker` is constructed with (host/
+ * index.ts's child branch does the wrapping, since that is where the
+ * broker itself is built) so an "attention" signal reaches main — relayed
+ * over `process.parentPort` as `ChildProgress{kind:"attention"}` — around
+ * every permission ask: `true` right before a `permission_request` is
+ * forwarded, `false` right before a `permission_settled` is. Every message
+ * the broker ever emits (there are no other `HostToUiMessage` types an
+ * `IpcPermissionBroker` produces) is forwarded to the wrapped `emit`
+ * completely UNCHANGED — `onAttention` is a pure side effect that never
+ * alters, drops, or reorders what the UI wire itself sees.
+ */
+export function tapChildPermissions(
+  emit: (message: HostToUiMessage) => void,
+  onAttention: (waiting: boolean) => void,
+): (message: HostToUiMessage) => void {
+  return (message: HostToUiMessage): void => {
+    if (message.type === "permission_request") {
+      onAttention(true);
+    } else if (message.type === "permission_settled") {
+      onAttention(false);
+    }
+    emit(message);
+  };
+}
+
 /**
  * Narrow persistence callback injected into Session (design §4.2): Session
  * persists session-meta patches (title on the first user message, mode on a
@@ -520,6 +643,13 @@ export interface SessionOptions {
    * cost) but nothing is ever posted.
    */
   postPreviewArtifacts?: (paths: string[]) => void;
+  /**
+   * TASK.102 CUT-S2 §2.6.3: present ONLY for a child-mode host (host/index.ts's
+   * child branch). Absent -> every child-only branch below is inert and this
+   * Session is byte-identical to the pre-S2 root session (every legacy test
+   * omits this field).
+   */
+  child?: ChildSessionOptions;
 }
 
 export class Session {
@@ -602,6 +732,20 @@ export class Session {
   private abort: AbortController | null = null;
   private turnId: string | null = null;
   private currentTurn: Promise<void> | null = null;
+  /**
+   * TASK.102 CUT-S2 §10.12.1: flipped as the FIRST step of `shutdown()`,
+   * strictly before `abort.abort()`/`denyAll`/`dispose` so any teardown woken
+   * by the abort below already observes it. A SEMANTIC gate (distinct from
+   * the reentrant `currentTurn` wait in `shutdown()` below, which is a
+   * STRUCTURAL guarantee): once set, no NEW turn or tracked maintenance op
+   * (worktree exit, rewind, continuation) may ever be admitted — enforced at
+   * exactly four audited points: `route()`'s default-deny shutdown funnel
+   * (every wire message, future types included by construction),
+   * `startProgrammaticTurn`, and both child drain points
+   * (`onChildTurnSettled`, `finalizeChildTerminal`'s healthy-path re-check).
+   * Never cleared — a Session is never un-shut-down.
+   */
+  private shuttingDown = false;
 
   /**
 
@@ -612,6 +756,52 @@ export class Session {
   private uiReady = false;
   /** Slice P7.25/F3: unsubscribes the LSP status listener on shutdown (no leaked listener, no push-after-dispose). */
   private lspUnsubscribe: (() => void) | undefined;
+
+  // ── child-mode state (TASK.102 CUT-S2 §2.6.3); every field below is inert
+  // (never read or mutated) whenever `this.child === undefined`. ──
+
+  private readonly child: ChildSessionOptions | undefined;
+  /** Latches once `child.onReady()` has fired, so a later reconnect's ui_ready never fires it twice. */
+  private childReadySent = false;
+  /** Latches once `startProgrammaticTurn` has been called, so a second call is a refusal (one initial turn per host lifetime). */
+  private programmaticTurnStarted = false;
+  /** Host-side steer queue (§1.1/§2.6.3): a `user_message` received while busy is parked here instead of rejected, bounded by `CHILD_STEER_QUEUE_MAX`. */
+  private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[] }> = [];
+  /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
+  private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
+  /** Cumulative turn count across every runTurn() call this child session has made (summed from each call's own loop_end.turns). */
+  private childTurns = 0;
+  /** Cumulative tool_result count across the whole child session's turn chain. */
+  private childToolCalls = 0;
+  /** The last loop_end's status (workspace_transition mapped to "error" — a child never actually relocates); undefined until the first loop_end. */
+  private childLoopStatus: ChildRunStatus | undefined;
+  /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
+  private childTerminalFinalized = false;
+  /** Wall-clock start of the child's turn chain, set once by startProgrammaticTurn — the terminal report's durationMs baseline. */
+  private childStartedAt = 0;
+  /**
+   * DI clock for the progress leading-edge throttle (CUT-S2 §10.7 п.3);
+   * defaults to `Date.now`, overridable via `child.now` for deterministic
+   * tests. Inert (never called) whenever `this.child === undefined`.
+   */
+  private readonly now: () => number;
+  /**
+   * Buffers a validated child tool call's name+input from
+   * `tool_execution_start` until its paired `tool_result` arrives (mirrors
+   * `runner.ts`'s `pendingChildCalls`, W1-FIX) — keyed by toolCallId so
+   * multiple in-flight starts before any result cannot collide.
+   */
+  private readonly pendingChildCalls = new Map<string, { toolName: string; input: unknown }>();
+  /** Per-child-session activity-event emission counter (CUT-S2 §10.7 п.3), capped at `SUBAGENT_ACTIVITY_MAX_EVENTS` over the WHOLE turn chain — never reset per turn. */
+  private childActivityEmitted = 0;
+  /** Count of eligible tool_result calls withheld past the activity cap (CUT-S2 §10.7 п.4) — reported on the terminal only when >0. */
+  private childActivitySuppressed = 0;
+  /** NEW counter (CUT-S2 §10.7 п.3): count of `turn_end` events over the whole turn chain — the progress report's `turns` field, mirroring inline's local `turnEndCount` (runner.ts). Distinct from `childTurns`, which sums `loop_end.turns`. */
+  private childTurnEndCount = 0;
+  /** The most recent tool_result's outcome.toolName, updated UNCONDITIONALLY (even on invalid_input) — mirrors `runner.ts:502`. */
+  private childLastTool: string | undefined;
+  /** Wall-clock (per `this.now`) of the last emitted progress report — `undefined` until the first boundary, so the first boundary always emits (leading edge). */
+  private childLastProgressEmitAt: number | undefined;
 
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
@@ -648,6 +838,8 @@ export class Session {
     this.availableEffortLevels = options.availableEffortLevels;
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
+    this.child = options.child;
+    this.now = options.child?.now ?? Date.now;
     this.titleSet = options.hasTitle ?? false;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? []);
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
@@ -703,8 +895,25 @@ export class Session {
     });
   }
 
+  /**
+   * TASK.102 CUT-S2 §10.14.3 BLOCKER-1: arms the admission funnel BEFORE the
+   * rest of host teardown runs, closing the window between `handleShutdown`'s
+   * first step and its eventual `shutdown()` call during which the funnel
+   * (route()'s `this.shuttingDown` check) was ungated — a `rewind_request` or
+   * `user_message` arriving mid-teardown was still admitted against managers
+   * already being torn down. Idempotent with `shutdown()`'s own assignment
+   * below: no code path early-returns on the flag, so the real teardown still
+   * runs in full.
+   */
+  closeAdmissions(): void {
+    this.shuttingDown = true;
+  }
+
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
   async shutdown(): Promise<void> {
+    // TASK.102 CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
+    // denyAll/dispose below, so teardown woken by the abort already sees it.
+    this.shuttingDown = true;
     // Slice P7.25/F3: release the LSP status subscription so no transition after
     // this point can push onto a shut-down session, and no listener reference
     // leaks past the session's life. (The host reaps lspManager BEFORE calling
@@ -733,7 +942,26 @@ export class Session {
       console.error(`[host] engine dispose threw during shutdown: ${describeError(error)}`);
       disposal = Promise.resolve();
     }
-    await Promise.allSettled([...(this.currentTurn ? [this.currentTurn] : []), disposal]);
+    // TASK.102 CUT-S2 §10.12.1/§10.12.2: a snapshot-await of `this.currentTurn`
+    // (the pre-fix shape) misses a FRESH turn a drain synchronously
+    // re-points it to (onChildTurnSettled / finalizeChildTerminal's
+    // re-check) — that new turn's own teardown (including its own
+    // finalizeChildTerminal/flushHistory) would run on the disposed engine,
+    // unobserved. Reentrant wait instead: loop until the SAME promise is
+    // observed twice in a row (or null). Termination: admission happens at
+    // exactly four gated points (route() funnel / startProgrammaticTurn /
+    // both drain points), so no NEW op is admitted after the flag is set;
+    // `currentTurn` is the SINGLE wait primitive — it tracks turn teardown,
+    // worktree exits, rewinds and continuations — so iterations are bounded
+    // by ops admitted before the flag, plus one. The loop (vs a snapshot) is
+    // the STRUCTURAL backstop for an admission point a future audit misses —
+    // pinned by §10.12.2's white-box test.
+    let seen: Promise<void> | null = null;
+    while (this.currentTurn !== null && this.currentTurn !== seen) {
+      seen = this.currentTurn;
+      await Promise.allSettled([seen]);
+    }
+    await Promise.allSettled([disposal]);
   }
 
   private route(raw: unknown): void {
@@ -744,12 +972,53 @@ export class Session {
       return;
     }
     const message = parsed.data;
+    // TASK.102 CUT-S2 §10.12.1: the SINGLE admission funnel for every wire
+    // message once shutdown has begun — default-deny: new message types are
+    // shutdown-safe by construction, not by a per-case audit (the class of
+    // bug this replaces: §10.11.1's own point-gates missed ui_ready's
+    // continuation, exit_worktree, and rewind_request). Three carve-outs get
+    // an honest reply (each starts trackable work the caller is owed an
+    // answer about); everything else is a silent drop (the renderer is
+    // attached to a dying host — replies to informational requests are moot).
+    if (this.shuttingDown) {
+      switch (message.type) {
+        case "user_message":
+          this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          break;
+        case "exit_worktree":
+          this.outbound.sendDirect({
+            type: "worktree_notice",
+            message: "Cannot exit the worktree: the session is shutting down.",
+          });
+          break;
+        case "rewind_request":
+          this.outbound.sendDirect({
+            type: "rewind_result",
+            requestId: message.requestId,
+            ok: false,
+            reason: "shutting down",
+            conversationRestored: false,
+            restoredPaths: null,
+          });
+          break;
+        default:
+          break;
+      }
+      return;
+    }
     switch (message.type) {
       case "ui_ready":
 
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
         // below (which already pushes the current lsp_status).
         this.uiReady = true;
+        // TASK.102 CUT-S2 §2.6.3: child-ready fires on the FIRST ui_ready only —
+        // never before (nothing was listening yet) and never again on a later
+        // reconnect (Open re-attaching to an already-running child).
+        if (this.child !== undefined && !this.childReadySent) {
+          this.childReadySent = true;
+          this.child.onReady();
+        }
         const presentation = enginePresentation(this.engine, this.engineSettings);
         this.outbound.sendDirect({
           type: "host_ready",
@@ -972,7 +1241,16 @@ export class Session {
         // engine that hasn't wired one) defaults to `true`, byte-identical
         // to the pre-TASK.40 unconditional-for-core routing (CoreEngine's
         // supportsGitMutations was always `true`).
-        if (!isGitMutation(message.command) || (this.shell?.gitUserMutations ?? true)) {
+        // TASK.102 CUT-S2 §10.14.3 BLOCKER-2(b): a MUTATION admitted after the
+        // handoff has begun would write to the ABANDONED workspace main is
+        // about to `git worktree remove` — gated the same way as the
+        // gitUserMutations permission above (mutation branch only; read-only
+        // ops stay admitted, they are harmless and the renderer is leaving
+        // this workspace anyway). No git_result refusal reply exists at this
+        // gate (git_result is only ever emitted deep inside GitBridge after a
+        // command actually runs) — a silent drop mirrors the existing
+        // gitUserMutations refusal on this exact line.
+        if (!isGitMutation(message.command) || ((this.shell?.gitUserMutations ?? true) && !this.relocating)) {
           this.git?.handleCommand(message);
         }
         break;
@@ -1114,6 +1392,21 @@ export class Session {
    */
   private async onRewind(message: Extract<UiToHostMessage, { type: "rewind_request" }>): Promise<void> {
     const { requestId, checkpointId, scope } = message;
+    // TASK.102 CUT-S2 §10.14.3 BLOCKER-2(a): a rewind after the handoff has
+    // begun would restore the ABANDONED workspace main is about to `git
+    // worktree remove` — `busy` alone does not catch this window (relocating
+    // outlives the turn that set it; see onUserMessage's own gate above).
+    if (this.relocating) {
+      this.outbound.sendDirect({
+        type: "rewind_result",
+        requestId,
+        ok: false,
+        reason: "workspace transition in progress",
+        conversationRestored: false,
+        restoredPaths: null,
+      });
+      return;
+    }
     if (this.busy) {
       this.outbound.sendDirect({
         type: "rewind_result",
@@ -1149,7 +1442,21 @@ export class Session {
     }
     // Hold busy for the whole rewind (drift-flag-3): concurrent turn-starting /
     // mode / model messages observe busy=true while the store+git spawns run.
+    // TASK.102 CUT-S2 §10.12.1 (б): rewind is not abort-aware and a
+    // destructive two-tree git-restore split in half by shutdown is worse
+    // than one shutdown() awaits to completion — routed through
+    // `currentTurn`, the session's single wait primitive, via a
+    // self-managed deferred (no real turn promise exists to reuse here).
+    // Assignment can PREEMPT `currentTurn` from the tail of a prior turn's
+    // own teardown still in flight (the busy=false/tail-in-flight window) —
+    // an accepted trade: an awaited telemetry tail becomes an awaited
+    // destructive restore instead.
     this.busy = true;
+    let release!: () => void;
+    const op = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.currentTurn = op;
     try {
       const res = await this.checkpoints.rewind(checkpointId, {
         scope,
@@ -1210,6 +1517,8 @@ export class Session {
       });
     } finally {
       this.busy = false;
+      if (this.currentTurn === op) this.currentTurn = null;
+      release();
     }
   }
 
@@ -1218,20 +1527,102 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
     }
+    // TASK.102 CUT-S2 §10.10.1 п.5: a completed child is READ-ONLY (§6) —
+    // once the terminal has been dispatched there is no live turn chain left
+    // for a late message to join. Checked BEFORE the busy gate below because
+    // `busy` is already false by the time the terminal has committed (see
+    // acceptUserMessage's finally) — without this gate a late message would
+    // fall straight through into a real second turn whose result can never
+    // reach anyone (the child tab is already gone/closing).
+    if (this.child !== undefined && this.childTerminalFinalized) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
+      return;
+    }
     if (this.busy) {
+      // TASK.102 CUT-S2 §1.1/§2.6.3: a child session queues a busy-time
+      // user_message (steer) instead of rejecting it — the composer of a live
+      // child's own surface docks new instructions onto the running turn
+      // chain rather than losing them.
+      if (this.child !== undefined) {
+        this.enqueueSteerMessage(requestId, text, images);
+        return;
+      }
       // Protocol guard (the UI also blocks the composer): one turn at a time.
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "busy" });
       return;
     }
+    this.acceptUserMessage(requestId, text, images);
+  }
+
+  /**
+   * Parks a busy-time user_message in the child's host-side steer queue
+   * (CUT-S2 §1.1: the RENDERER prompt-queue is never used for a child
+   * surface — steering must affect the sync-join result, so it lives here,
+   * host-side, gating the terminal itself). Rejected exactly like a normal
+   * busy user_message would be once the bound is reached (§2.3's
+   * `CHILD_STEER_QUEUE_MAX`) or when the attachment isn't supported —
+   * neither consumes a queue slot.
+   */
+  private enqueueSteerMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
     const attachments = images?.length ? [...images] : undefined;
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
       return;
     }
+    if (this.steerQueue.length >= CHILD_STEER_QUEUE_MAX) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "busy" });
+      return;
+    }
+    this.steerQueue.push(attachments !== undefined ? { requestId, text, images: attachments } : { requestId, text });
+  }
+
+  /**
+   * Empties the steer queue with honest `turn_rejected "not_ready"` replies
+   * (§10.11.1 N1, extracted from §10.10.1 O7б's flush-failure path so
+   * `finalizeChildTerminal`'s shutdown branch can reuse it byte-identically):
+   * every queued message gets a reply, never a silent drop — used on the two
+   * paths that mean "no more turns will ever run against this child" (a
+   * broken durable sink, or shutdown already in progress).
+   */
+  private rejectQueuedSteerMessages(): void {
+    while (this.steerQueue.length > 0) {
+      const queued = this.steerQueue.shift();
+      if (queued !== undefined) {
+        this.outbound.emit({ type: "turn_rejected", requestId: queued.requestId, reason: "not_ready" });
+      }
+    }
+  }
+
+  /**
+   * Starts an ACCEPTED turn (the caller has already resolved relocating/busy
+   * and, for a steer message, the queue-admission checks). Shared by the
+   * direct `onUserMessage` path, the steer-queue drain (`onChildTurnSettled`),
+   * and `startProgrammaticTurn` — a child's programmatic initial turn goes
+   * through the EXACT same plan-mode-reminder/background-notices machinery a
+   * real user message would (CUT-S2 §2.6.3: "plan-reminder — нужен: mode
+   * может быть plan"), only title derivation is skipped for a child (§5.14 —
+   * a child never gets a name, on neither its initial turn nor a steer one).
+   *
+   * Returns whether a turn actually started (§10.11.1 N7): `false` on the
+   * `unsupported_images` refusal below — the ONLY way this can decline to
+   * start a turn — lets a caller draining a queued message (`finalizeChildTerminal`)
+   * tell "started, own `currentTurn` now covers it" apart from "refused, this
+   * queued item is fully spent and produced nothing to wait on."
+   */
+  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[]): boolean {
+    const attachments = images?.length ? [...images] : undefined;
+    if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
+      this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
+      return false;
+    }
     // Title derivation (design §4.2): the first accepted user message in a
     // title-less session names it (the picker is useless without titles). Done
-    // exactly once per session — the flag is set on the first attempt.
-    this.maybeDeriveTitle(text);
+    // exactly once per session — the flag is set on the first attempt. A
+    // child session skips this unconditionally (CUT-S2 §5.14): it has no
+    // name, on neither its programmatic initial turn nor a later steer one.
+    if (this.child === undefined) {
+      this.maybeDeriveTitle(text);
+    }
     // Background-task completion notices (slice 6.DP-2, mirror of
     // cli/main.ts:1328-1340): drained (not peeked) so a notice is delivered
     // exactly once; injected strictly AFTER the raw-text title derivation above
@@ -1262,40 +1653,392 @@ export class Session {
       }
     }
     this.busy = true;
-    this.currentTurn = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice).finally(async () => {
-      this.busy = false;
-      this.abort = null;
-      this.turnId = null;
-      this.snapshotPaths.clear();
-      this.flushPreviewArtifacts();
-      // Tier-2 title refinement (design §3): fired after the FIRST turn's
-      // teardown only (maybeRefineTitle no-ops once pendingTitleRefineText has
-      // been consumed) — fire-and-forget, never awaited here.
-      this.maybeRefineTitle();
-      // Slice 5.7: push a fresh git_status after the turn so a file the turn
-      // changed is reflected in the pill. Fire-and-forget — must NEVER block or
-      // throw into the turn (the bridge coalesces + swallows failures internally).
-      this.git?.refreshAfterTurn();
-      if (this.engine.capabilities.supportsTasks) this.pushTaskList();
-      // Codex-P2 fix (slice P7.8): wait for in-flight telemetry appends to
-      // settle before reading written/dropped counters, otherwise the panel
-      // shows the previous turn's counts (fail-soft: a flush error/timeout
-      // must never block the teardown push).
+    const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice).finally(
+      async () => {
+        // TASK.102 CUT-S2 §10.10.1 O1: `busy` means something different for a
+        // root session than for a child, and that asymmetry is now explicit
+        // instead of one flag doing two incompatible jobs. ROOT: `busy` means
+        // "a model turn is in flight" and clears as the very FIRST step of
+        // teardown, before any await below — the renderer's contract is
+        // "input is accepted right after loop_end" (P7.14's pause-on-reject
+        // exists for a genuine mid-stream anomaly, not for the host itself
+        // holding the gate across its own telemetry/fs tail). CHILD `busy`
+        // additionally guards the terminal-finalize window and is cleared by
+        // the branch at the end of this callback instead — F7's "root half"
+        // of holding busy across the whole teardown was overreach (STATE.md
+        // only ever described the child-side pause) and is reverted here.
+        if (this.child === undefined) {
+          this.busy = false;
+        }
+        this.abort = null;
+        this.turnId = null;
+        this.snapshotPaths.clear();
+        this.flushPreviewArtifacts();
+        // Tier-2 title refinement (design §3): fired after the FIRST turn's
+        // teardown only (maybeRefineTitle no-ops once pendingTitleRefineText has
+        // been consumed) — fire-and-forget, never awaited here.
+        this.maybeRefineTitle();
+        // Slice 5.7: push a fresh git_status after the turn so a file the turn
+        // changed is reflected in the pill. Fire-and-forget — must NEVER block or
+        // throw into the turn (the bridge coalesces + swallows failures internally).
+        this.git?.refreshAfterTurn();
+        if (this.engine.capabilities.supportsTasks) this.pushTaskList();
+        // Codex-P2 fix (slice P7.8): wait for in-flight telemetry appends to
+        // settle before reading written/dropped counters, otherwise the panel
+        // shows the previous turn's counts (fail-soft: a flush error/timeout
+        // must never block the teardown push).
+        try {
+          await this.envStatus?.flushTelemetry?.();
+        } catch {
+          // flushTelemetry never rejects by contract (node-telemetry.ts); this
+          // guard exists only to keep teardown byte-identical if that changes.
+        }
+        // Slice P7.8: refresh written/dropped telemetry counters after each turn
+        // (mirror of the pushTaskList refresh above) — seam-gated, no-op in
+        // legacy tests/harness.
+        this.pushEnvStatus();
+        // CUT-S2 §10.10.1 O7/O2: a queued steer message is drained into a
+        // brand-new turn (busy=true, a fresh currentTurn already assigned by
+        // ITS OWN acceptUserMessage call) before this turn is allowed to be
+        // "done" — publishing a terminal while the queue is non-empty would
+        // make steering a dead facade (§5.16). `busy` clears here only when
+        // finalizeChildTerminal actually committed a terminal ("terminal",
+        // not "drained") — a drained turn already owns `busy` itself and this
+        // callback must never clobber that back to false.
+        if (this.child !== undefined) {
+          const settling = this.onChildTurnSettled();
+          if (settling !== undefined && (await settling) === "terminal") {
+            this.busy = false;
+          }
+        }
+        // Identity-guarded (§10.10.1 O2): only THIS turn's own promise clears
+        // currentTurn — a plain unconditional null here (the naive fix the
+        // architect explicitly rejected) would clobber the FRESH currentTurn
+        // a synchronously-drained steer turn (onChildTurnSettled above)
+        // already assigned to itself. Moved to the very end of teardown (was
+        // the unconditional `this.currentTurn = null` ahead of the child
+        // branch) so shutdown()'s `await this.currentTurn` (`:914`) now
+        // covers the WHOLE teardown — including the child terminal
+        // finalize/flushHistory above — not just runTurn() itself.
+        if (this.currentTurn === turn) {
+          this.currentTurn = null;
+        }
+      },
+    );
+    this.currentTurn = turn;
+    return true;
+  }
+
+  /**
+   * Starts a child session's ONE externally-triggered turn chain (CUT-S2
+   * §2.6.3: main's `child-start`, released once `child-ready` was sent).
+   * Guarded against a repeat call — a child gets exactly one initial turn
+   * per host lifetime; any further input arrives as a steer message through
+   * the normal `user_message` route instead. Goes through the SAME
+   * plan-mode-reminder/background-notices machinery a real user message
+   * would (`acceptUserMessage`); only title derivation differs, and that is
+   * already unconditionally skipped for a child there.
+   */
+  startProgrammaticTurn(prompt: string): { ok: true } | { ok: false; reason: string } {
+    if (this.child === undefined) {
+      return { ok: false, reason: "not a child session" };
+    }
+    // TASK.102 CUT-S2 §10.11.1 N1: a child-start that lands after shutdown()
+    // has begun must never start a turn on an engine already mid-dispose.
+    if (this.shuttingDown) {
+      return { ok: false, reason: "shutting down" };
+    }
+    if (this.programmaticTurnStarted) {
+      return { ok: false, reason: "programmatic turn already started" };
+    }
+    if (this.busy) {
+      return { ok: false, reason: "session is busy" };
+    }
+    this.programmaticTurnStarted = true;
+    this.childStartedAt = Date.now();
+    this.acceptUserMessage(randomUUID(), prompt);
+    return { ok: true };
+  }
+
+  /**
+   * TASK.102 CUT-S2 §10.12.3: shifts queued steer messages until one
+   * actually STARTS a turn (`true` — the new turn owns busy/currentTurn) or
+   * the queue runs out (`false`). A refusal from `acceptUserMessage`
+   * (`unsupported_images` — it already emitted its own `turn_rejected`)
+   * spends the message and moves on: this is the N7 discipline
+   * ("a refusal from acceptUserMessage is never a live hand-off"), now
+   * shared by BOTH drain sites (`onChildTurnSettled` and
+   * `finalizeChildTerminal`'s healthy-path re-check) instead of duplicated.
+   */
+  private startNextQueuedSteerTurn(): boolean {
+    let next = this.steerQueue.shift();
+    while (next !== undefined) {
+      if (this.acceptUserMessage(next.requestId, next.text, next.images)) return true;
+      next = this.steerQueue.shift();
+    }
+    return false;
+  }
+
+  /**
+   * Runs after EVERY turn a child session completes (the programmatic
+   * initial one, and every steer-triggered one) — `acceptUserMessage`'s
+   * finally calls this unconditionally when `this.child` is set. Chains the
+   * next queued steer message if one is waiting; otherwise this IS the
+   * terminal moment (CUT-S2 §5.16: publishing a terminal while the queue is
+   * non-empty would make steering a dead facade — a message queued during
+   * the LAST turn's run must always get its own turn before the child ever
+   * reports done).
+   *
+   * F7 fix, return type widened under CUT-S2 §10.10.1 O7: returns `undefined`
+   * when it drained a queued steer message (the new turn already set
+   * `busy=true` itself — the caller must leave `busy` alone) and
+   * `finalizeChildTerminal()`'s own `"terminal" | "drained"` promise
+   * otherwise — `finalizeChildTerminal` can ALSO decide to drain (a message
+   * queued strictly during its `flushHistory` await, arriving too late for
+   * the top-level check right above), so the caller only clears `busy` when
+   * the settled value is literally `"terminal"` (§10.10.1's call-site
+   * contract), never on `"drained"`.
+   *
+   * §10.12.1/§10.12.3: the drain above only runs while `!this.shuttingDown`
+   * — once shutdown has begun, no new turn may start (the engine is already
+   * mid-dispose), so this goes straight to `finalizeChildTerminal()`, which
+   * empties the queue with honest rejects instead (shutdown = the second
+   * legal path to draining the queue, symmetric with the flush-failure path,
+   * §10.10.1 O7б). `startNextQueuedSteerTurn()` (§10.12.3) is shared with
+   * `finalizeChildTerminal`'s own re-check below, so a refusal from
+   * `acceptUserMessage` here is spent and moved past exactly like it is
+   * there — this call site used to invoke `acceptUserMessage` directly and
+   * trust its return value blindly, which stranded the child forever
+   * (`busy` held, no terminal ever published) the moment a queued message's
+   * OWN admission was refused (e.g. images support revoked between enqueue
+   * and drain) — the shared helper is what closes that hole on both sites.
+   */
+  private onChildTurnSettled(): Promise<"terminal" | "drained"> | undefined {
+    if (!this.shuttingDown && this.startNextQueuedSteerTurn()) return undefined;
+    return this.finalizeChildTerminal();
+  }
+
+  /**
+   * The child-mode terminal tap (CUT-S2 §0.5/§2.6.3): flushes the durable
+   * history sink BEFORE ever calling `onTerminal` — a durable "Open
+   * completed" transcript is the whole reason a child terminal is trusted at
+   * all — then hands off the accumulated final text/counters/status. A
+   * flush failure produces an honest `error` terminal (never a "completed"
+   * card whose durable transcript the flush never actually wrote).
+   *
+   * Healthy-path re-check (§10.10.1 O7): a steer message can arrive strictly
+   * DURING the `flushHistory` await above — too late for `onChildTurnSettled`'s
+   * own top-level queue check, and (pre-fix) past the once-latch too, so it
+   * would sit in the queue forever, never drained, never rejected (a literal
+   * facade of §5.16's "no terminal while the queue is non-empty"). Re-reading
+   * the queue here, AFTER the flush but BEFORE committing to a terminal,
+   * closes that window: non-empty ⇒ drain into a new turn and return
+   * `"drained"` instead — cheap and idempotent, the next settle re-runs this
+   * whole method (including `flushHistory`) from the top.
+   *
+   * §10.12.1: the re-check above only DRAINS while `!this.shuttingDown` —
+   * once shutdown has begun no new turn may ever start (the engine is
+   * already mid-dispose), so the queue is instead emptied with honest
+   * `turn_rejected "not_ready"` replies via `rejectQueuedSteerMessages()`,
+   * the SAME helper the flush-failure path below uses. Shutdown is therefore
+   * a SECOND legal path to committing a terminal while the queue was
+   * non-empty at some point — symmetric with the flush-failure path
+   * (§10.10.1 O7б): both mean "no more turns will ever run against this
+   * child," so both drain honestly instead of leaving messages stranded.
+   *
+   * §10.12.3: `acceptUserMessage` can itself refuse a queued message
+   * (currently only `unsupported_images`) without ever starting a turn — it
+   * already emitted its own `turn_rejected` for that one, but returning
+   * `"drained"` on its say-so alone would leave `busy` held with nothing
+   * left to ever clear it and no terminal ever published (the queued
+   * message lost AND the terminal silently withheld forever). The SHARED
+   * `startNextQueuedSteerTurn()` helper (both drain sites, §10.12.3) keeps
+   * trying the REST of the queue until one message actually starts a turn
+   * (a real `"drained"`) or the queue empties (falls through to committing
+   * the terminal below, exactly like an already-empty queue) — this is what
+   * makes `finalizeChildTerminal`'s "never reject" contract true: every path
+   * either hands off a live turn or reaches a terminal, never neither.
+   *
+   * Once-latch (F7, moved under O7): `childTerminalFinalized` is set
+   * SYNCHRONOUSLY, with no await in between, immediately before each
+   * `onTerminal` call on both the healthy and flush-failure paths below —
+   * required so the re-check above can decide to drain WITHOUT having
+   * already committed to a terminal. `busy` spanning the whole child
+   * teardown (this callback included) means a second settle cannot start
+   * while this one is still in flight, so true concurrent re-entry no longer
+   * exists by construction; the latch remains as defense against a call
+   * arriving strictly AFTER the terminal already committed, not as a mutex
+   * against a race that can no longer happen.
+   *
+   * O3: `onTerminal` never propagates a throw — wrapped in try/catch on both
+   * paths (console.error, same discipline as the `flushTelemetry` guard
+   * above) — since the real call site never wraps `await settling` in a try,
+   * and by the time it runs `currentTurn` may already be nulled elsewhere;
+   * an unguarded throw here becomes an unhandled rejection that kills the
+   * host.
+   */
+  private async finalizeChildTerminal(): Promise<"terminal" | "drained"> {
+    if (this.child === undefined || this.childTerminalFinalized) {
+      return "terminal";
+    }
+    const { text: finalText, truncated } = finalizeFinalText(this.childFinalText);
+    const durationMs = Date.now() - this.childStartedAt;
+    try {
+      await this.child.flushHistory();
+    } catch (error) {
+      // Flush-failure path (§10.10.1 O7б): the durable sink is broken, so
+      // running more steer turns against it is pointless — every message
+      // parked during the flush is rejected honestly instead of silently
+      // lost (the O7 bug), and the error terminal publishes as-is.
+      this.rejectQueuedSteerMessages();
+      this.childTerminalFinalized = true;
       try {
-        await this.envStatus?.flushTelemetry?.();
-      } catch {
-        // flushTelemetry never rejects by contract (node-telemetry.ts); this
-        // guard exists only to keep teardown byte-identical if that changes.
+        this.child.onTerminal({
+          status: "error",
+          finalText: `Child session history failed to persist durably: ${describeError(error)}`,
+          truncated: false,
+          turns: this.childTurns,
+          toolCalls: this.childToolCalls,
+          durationMs,
+          ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
+        });
+      } catch (onTerminalError) {
+        console.error(`[host] child.onTerminal threw (error terminal): ${describeError(onTerminalError)}`);
       }
-      // Slice P7.8: refresh written/dropped telemetry counters after each turn
-      // (mirror of the pushTaskList refresh above) — seam-gated, no-op in
-      // legacy tests/harness.
-      this.pushEnvStatus();
-      // Codex-P2 fix (slice P7.8 review): keep currentTurn non-null until the
-      // flush+push above have actually run, so shutdown()'s `await
-      // this.currentTurn` (session.ts:332-337) always waits for the full
-      // teardown instead of finding it already nulled mid-flush.
-      this.currentTurn = null;
+      return "terminal";
+    }
+    if (this.shuttingDown) {
+      // §10.12.1: shutdown = the second legal drain path (see docstring
+      // above) — reject-empty rather than start anything new.
+      this.rejectQueuedSteerMessages();
+    } else if (this.startNextQueuedSteerTurn()) {
+      // §10.12.3: shared helper — a refusal from `acceptUserMessage` itself
+      // must never be mistaken for a live hand-off (see docstring above).
+      return "drained";
+    }
+    this.childTerminalFinalized = true;
+    try {
+      this.child.onTerminal({
+        status: this.childLoopStatus ?? "error",
+        finalText,
+        truncated,
+        turns: this.childTurns,
+        toolCalls: this.childToolCalls,
+        durationMs,
+        ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
+      });
+    } catch (error) {
+      console.error(`[host] child.onTerminal threw: ${describeError(error)}`);
+    }
+    return "terminal";
+  }
+
+  /**
+   * Feeds one turn event into the child-mode accumulators (CUT-S2 §2.6.3).
+   * Called from `runTurn`'s event loop for every event, for a child session
+   * only — mirrors runner.ts's own local `currentTurnText`/`finalText`/
+   * `toolCalls`/`loopReason` bookkeeping (subagents/runner.ts), just spread
+   * across possibly-many `runTurn()` calls instead of one.
+   *
+   * CUT-S2 §10.7 additions: `tool_execution_start` buffers name+input by
+   * toolCallId; `tool_result` updates `childLastTool` UNCONDITIONALLY (even
+   * on invalid_input, mirroring `runner.ts:502`), then crosses the
+   * leading-edge-throttled progress boundary, then resolves the buffered
+   * pair into an activity report (skipped for invalid_input, capped at
+   * `SUBAGENT_ACTIVITY_MAX_EVENTS` over the whole turn chain); `turn_end`
+   * increments the NEW `childTurnEndCount` (the progress report's `turns`,
+   * distinct from `childTurns`) and crosses the same progress boundary.
+   */
+  private observeChildEvent(event: AgentEvent): void {
+    switch (event.type) {
+      case "turn_start":
+        this.childFinalText = resetFinalText(this.childFinalText);
+        break;
+      case "text_delta":
+        this.childFinalText = appendFinalText(this.childFinalText, event.text);
+        break;
+      case "stream_retry":
+        this.childFinalText = resetFinalText(this.childFinalText);
+        break;
+      case "tool_execution_start":
+        this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
+        break;
+      case "tool_result":
+        this.childToolCalls += 1;
+        this.childLastTool = event.outcome.toolName;
+        this.emitChildProgressBoundary();
+        this.emitChildActivity(event.outcome.toolCallId, event.outcome.status);
+        break;
+      case "turn_end":
+        this.childFinalText = fixateFinalText(this.childFinalText);
+        this.childTurnEndCount += 1;
+        this.emitChildProgressBoundary();
+        break;
+      case "loop_end":
+        // A child config never receives a WorktreeControlPort (buildChildConfig
+        // never sets `ports.worktrees`), so `workspace_transition` cannot
+        // actually happen here; treated defensively as an error rather than
+        // widening ChildRunStatus, mirroring runner.ts's own precedent.
+        this.childLoopStatus = event.reason === "workspace_transition" ? "error" : event.reason;
+        this.childTurns += event.turns;
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Resolves a buffered `tool_execution_start` against its paired
+   * `tool_result` into one activity report (CUT-S2 §10.7 п.3, 1:1 with
+   * `runner.ts:516-529`). Skipped entirely — consuming no cap slot and never
+   * incrementing `activitySuppressed` — when there was no matching start
+   * (a call that never actually dispatched) or the outcome is
+   * `invalid_input` (an SDK/dispatcher parse failure; the call never ran).
+   * Past `SUBAGENT_ACTIVITY_MAX_EVENTS` (counted over the WHOLE turn chain,
+   * never reset per turn), the event is withheld and `childActivitySuppressed`
+   * increments instead — the terminal report surfaces that count honestly.
+   */
+  private emitChildActivity(toolCallId: string, status: ToolCallOutcome["status"]): void {
+    const pending = this.pendingChildCalls.get(toolCallId);
+    this.pendingChildCalls.delete(toolCallId);
+    if (!pending || status === "invalid_input") {
+      return;
+    }
+    if (this.childActivityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS) {
+      this.childActivityEmitted += 1;
+      this.child?.onProgress({
+        kind: "activity",
+        toolName: pending.toolName,
+        summary: summarizeChildToolCall(pending.toolName, pending.input),
+      });
+    } else {
+      this.childActivitySuppressed += 1;
+    }
+  }
+
+  /**
+   * Crosses a progress-report boundary (CUT-S2 §10.7 п.3: `tool_result` and
+   * `turn_end`, mirroring the inline runner's own two `onProgress({kind:
+   * "progress",…})` call sites, runner.ts:503/537). Leading-edge throttled
+   * at 1000ms via the injected `this.now` — the FIRST boundary this session
+   * ever crosses always emits (`childLastProgressEmitAt` starts `undefined`);
+   * every later boundary within 1000ms of the last emission is silently
+   * skipped (never a trailing timer — the next boundary, or the always-
+   * authoritative terminal report, absorbs whatever a skip withheld, so no
+   * count is ever lost, only delayed by at most ~1s). `turns` reads the NEW
+   * `childTurnEndCount`, not `childTurns` (§10.7 п.3's explicit distinction).
+   */
+  private emitChildProgressBoundary(): void {
+    const now = this.now();
+    if (this.childLastProgressEmitAt !== undefined && now - this.childLastProgressEmitAt < 1000) {
+      return;
+    }
+    this.childLastProgressEmitAt = now;
+    this.child?.onProgress({
+      kind: "progress",
+      turns: this.childTurnEndCount,
+      toolCalls: this.childToolCalls,
+      ...(this.childLastTool !== undefined ? { lastTool: this.childLastTool } : {}),
     });
   }
 
@@ -1354,6 +2097,9 @@ export class Session {
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);
         this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
+        if (this.child !== undefined) {
+          this.observeChildEvent(event);
+        }
         if (event.type === "error") {
           // TASK.2 DoD-c: the raw provider failure reaches the process log
           // (stdio:"inherit" -> app log), not only the transcript block.

@@ -162,3 +162,54 @@ describe("toSdkMessages tool-result image strip on the openai-chat-completions t
     });
   });
 });
+
+describe("toSdkMessages presentation invisibility (TASK.102 slice S1 W3, CUT-S1 §3 W3 item 3)", () => {
+  const toolResultWithPresentation: ChatMessage = {
+    role: "tool",
+    content: [
+      {
+        type: "tool_result",
+        toolCallId: "call_42",
+        toolName: "Agent",
+        text: "child done",
+        status: "success",
+        presentation: {
+          subagent: {
+            kind: "subagent",
+            version: 1,
+            target: { kind: "inline" },
+            identity: { agentType: "explore", description: "d", model: null, engine: null },
+            counters: { turns: 1, toolCalls: 1, lastTool: "Bash" },
+            activity: { entries: [{ toolName: "Bash", summary: "echo hi" }], dropped: 0 },
+            final: { status: "completed", durationMs: 5 },
+          },
+        },
+      },
+    ],
+  };
+
+  it.each(["anthropic-messages", "openai-chat-completions"] as const)(
+    "never surfaces the word 'presentation' on the %s transport",
+    (transport) => {
+      const sdkMessages = toSdkMessages([toolResultWithPresentation], transport);
+      expect(JSON.stringify(sdkMessages)).not.toContain("presentation");
+      // Nor any of the card's own payload words, in case a future refactor
+      // inlines the object without the key name surviving.
+      expect(JSON.stringify(sdkMessages)).not.toContain("subagent");
+    },
+  );
+
+  it("the mapped tool-result output is otherwise byte-identical to the presentation-free path", () => {
+    const withPresentation = toSdkMessages([toolResultWithPresentation], "anthropic-messages");
+    const withoutPresentation = toSdkMessages(
+      [
+        {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "call_42", toolName: "Agent", text: "child done", status: "success" }],
+        },
+      ],
+      "anthropic-messages",
+    );
+    expect(withPresentation).toEqual(withoutPresentation);
+  });
+});

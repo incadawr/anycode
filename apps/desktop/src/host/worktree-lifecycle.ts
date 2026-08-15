@@ -61,7 +61,7 @@ export type WorktreeLifecycleResult<T> = { ok: true; value: T } | { ok: false; r
 
 export interface WorktreeLifecycleOptions {
   session: SessionMeta;
-  persistence: Pick<PersistencePort, "touchSession" | "listSessions" | "claimWorktree">;
+  persistence: Pick<PersistencePort, "touchSession" | "listSessionsForMaintenance" | "claimWorktree">;
   gitForWorkspace(workspace: string, signal?: AbortSignal): WorktreeGitPort;
   /** Adds/verifies the repository-local common-git exclude entry. */
   ensureNamespaceIgnored(
@@ -133,7 +133,7 @@ export async function cleanupExactOwnedBranch(
  */
 export class WorktreeLifecycleService {
   private readonly session: SessionMeta;
-  private readonly persistence: Pick<PersistencePort, "touchSession" | "listSessions" | "claimWorktree">;
+  private readonly persistence: Pick<PersistencePort, "touchSession" | "listSessionsForMaintenance" | "claimWorktree">;
   private readonly gitForWorkspace: (workspace: string, signal?: AbortSignal) => WorktreeGitPort;
   private readonly ensureNamespaceIgnored: WorktreeLifecycleOptions["ensureNamespaceIgnored"];
   private readonly fs: WorktreeFileSystem;
@@ -543,7 +543,10 @@ export class WorktreeLifecycleService {
 
   private async ensureNotClaimed(targetReal: string): Promise<WorktreeLifecycleResult<null>> {
     try {
-      const sessions = await this.persistence.listSessions();
+      // Maintenance selection (TASK.102 S2a §2.4): a running child session's
+      // worktree claim is a real, live claim — omitting children here would
+      // let this session enter a worktree a child is actively using.
+      const sessions = await this.persistence.listSessionsForMaintenance();
       for (const candidate of sessions) {
         if (candidate.id === this.session.id) continue;
         for (const candidatePath of [
@@ -566,7 +569,7 @@ export class WorktreeLifecycleService {
 
   private async ensureCleanupExclusive(targetReal: string): Promise<WorktreeLifecycleResult<boolean>> {
     try {
-      const sessions = await this.persistence.listSessions();
+      const sessions = await this.persistence.listSessionsForMaintenance();
       for (const candidate of sessions) {
         if (candidate.id === this.session.id) continue;
         for (const candidatePath of [

@@ -25,7 +25,7 @@
  * session.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
 import { useTabsStore } from "./tabs-store.js";
@@ -48,6 +48,7 @@ import type { UiToHostMessage } from "../../shared/protocol.js";
 import { FOCUS_MODE_MENU_EVENT } from "./components/ModeMenu.js";
 import { RUN_ACTION_EVENT } from "./slash-menu.js";
 import { ConnectedPermissionModal } from "./components/PermissionModal.js";
+import { Collapse as CollapseIcon } from "./components/icons.js";
 import { GitPanel } from "./components/GitPanel.js";
 import { GitConfirmDialog } from "./components/GitConfirmDialog.js";
 import { LspPanel } from "./components/LspPanel.js";
@@ -65,6 +66,11 @@ import { useOverlayFlag } from "./preview/overlay-flag.js";
 import { usePanelMountState } from "./preview/panel-bridge.js";
 import { computePreviewPanelOpen, usePreviewStore } from "./preview/preview-store.js";
 import type { PreviewPanelInfo } from "../../shared/preview-panel.js";
+import { buildChildBreadcrumb, childBadgeKind, childLayoutStore } from "./child-layout.js";
+import { childRelationStore, type ChildRelation } from "./child-sessions.js";
+import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
+import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
+import type { SubagentSubStatus } from "./store.js";
 import "./settings.css";
 
 /** localStorage key for the renderer-only sidebar collapse flag (design §2.1). */
@@ -96,10 +102,50 @@ function readPreviewWidth(): number {
     : PREVIEW_WIDTH_DEFAULT;
 }
 
+// CUT-S3 §3.1: the split stack's own width — same storage-key/clamp/default
+// shape as REVIEW_WIDTH_*/PREVIEW_WIDTH_* above, a fresh localStorage key so
+// all three panels' widths persist independently.
+const CHILD_SPLIT_WIDTH_STORAGE_KEY = "anycode.childSplit.width";
+const CHILD_SPLIT_WIDTH_DEFAULT = 480;
+const CHILD_SPLIT_WIDTH_MIN = 360;
+const CHILD_SPLIT_WIDTH_MAX = 960;
+
+function readChildSplitWidth(): number {
+  const stored = Number(window.localStorage.getItem(CHILD_SPLIT_WIDTH_STORAGE_KEY));
+  return Number.isFinite(stored) && stored >= CHILD_SPLIT_WIDTH_MIN && stored <= CHILD_SPLIT_WIDTH_MAX
+    ? stored
+    : CHILD_SPLIT_WIDTH_DEFAULT;
+}
+
 // Stable empty-array identity for the "no previews yet" selector default —
 // a fresh `[]` literal on every render would make zustand see a "changed"
 // value on every ActiveTabBody re-render even when nothing actually moved.
 const EMPTY_PREVIEWS: readonly PreviewPanelInfo[] = [];
+
+/** Stable empty identity for the split stack's row list when the layout isn't `split` at all (mirrors EMPTY_PREVIEWS above). */
+const EMPTY_CHILD_SPLIT_ROWS: readonly ChildSplitRow[] = [];
+
+/**
+ * CUT-S3 §3.3's "отсутствующая карточка → фолбэк ..., как в B" fallback,
+ * widened from B's breadcrumb-only `{agentType, description}` shape (used at
+ * every existing `card ?? {...}` call site below) to a full `SubagentSubStatus`
+ * — a split row's counters (`formatSubagentCounters`) need every field, not
+ * just the two the breadcrumb reads. Zero-valued rather than omitted: the
+ * card is genuinely unknown here (a stale/foreign spawnToolCallId), so "0
+ * turns, 0 tool calls, no result yet" is the honest reading, not a guess.
+ */
+const FALLBACK_SUBAGENT_CARD: SubagentSubStatus = {
+  agentType: "Subagent",
+  description: "",
+  model: null,
+  engine: null,
+  turns: 0,
+  toolCalls: 0,
+  lastTool: null,
+  activity: [],
+  activityDropped: 0,
+  final: null,
+};
 
 /**
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
@@ -164,18 +210,21 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
 }
 
 /**
- * Grid-column composer for `.session-content-split-open` (design D10): the
- * conversation column is always `minmax(0, 1fr)`; an open Review (git) panel
- * and/or an open Preview panel each add an `8px` resize-handle column
- * followed by their own width column. Preview is always the RIGHTMOST
- * column (both may be open at once) — exact copy of the git-panel pattern,
- * generalized to a second panel. Exported for the unit gate.
+ * Grid-column composer for `.session-content-split-open` (design D10,
+ * widened by CUT-S3 §3.1 with a third pair): the conversation column is
+ * always `minmax(0, 1fr)`; an open Review (git) panel, Preview panel, and/or
+ * the child split stack each add an `8px` resize-handle column followed by
+ * their own width column. The child stack is always the RIGHTMOST column of
+ * all three (any subset may be open at once) — exact copy of the git-panel
+ * pattern, generalized to a third panel. Exported for the unit gate.
  */
 export function computeSessionContentColumns(
   gitOpen: boolean,
   gitWidth: number,
   previewOpen: boolean,
   previewWidth: number,
+  childOpen: boolean,
+  childWidth: number,
 ): string {
   const columns = ["minmax(0, 1fr)"];
   if (gitOpen) {
@@ -183,6 +232,9 @@ export function computeSessionContentColumns(
   }
   if (previewOpen) {
     columns.push("8px", `${previewWidth}px`);
+  }
+  if (childOpen) {
+    columns.push("8px", `${childWidth}px`);
   }
   return columns.join(" ");
 }
@@ -270,16 +322,28 @@ export function dispatchTryAgain(
   return "sent";
 }
 
-interface ActiveTabBodyProps {
+export interface SessionSurfaceProps {
   tabId: string;
-  sidebarCollapsed: boolean;
-  onToggleSidebar(): void;
   /** R8: push one toast into the App-level queue (kind → tone/glyph in toasts.ts). */
   onToast(kind: ToastKind, text: string): void;
 }
 
-/** The active tab's whole chat UI — mounted exactly once, inside that tab's TabContext.Provider. */
-function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: ActiveTabBodyProps) {
+/**
+ * TASK.102 CUT-S2 §2.5 Produces: the one session surface — transcript,
+ * composer, and permission-modal binding — resolved ENTIRELY off
+ * `<TabContext>` (no store prop at all), so wrapping it in a DIFFERENT tab's
+ * `TabContext.Provider` makes it render THAT tab's live conversation with
+ * zero code changes here. `ActiveTabBody` below uses it for the master pane
+ * (byte-equivalent output to the pre-extraction inline JSX this slice
+ * replaced — same `.session-conversation` div, same banners, same
+ * `MessageList`/`Composer`/`ConnectedPermissionModal`/`TabNoticeCapture`);
+ * `ChildSessionPane` below wraps the SAME component in the child tab's own
+ * Provider for layout B's child view (§2.5's "child-view — та же
+ * SessionSurface поверх child-store"). S3's split/accordion layouts (§6)
+ * reuse this component unchanged — it is this slice's actual hand-off, not
+ * an implementation detail of `ActiveTabBody`.
+ */
+export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
   const connection = useTabStore((state) => state.connection);
   const transcript = useTabStore((state) => state.transcript);
   const turn = useTabStore((state) => state.turn);
@@ -291,6 +355,59 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const tabStoreApi = useTabStoreApi();
   const sendToHost = useTabSend();
   const handleTryAgain = useCallback(() => dispatchTryAgain(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
+
+  return (
+    <>
+      <div className="session-conversation">
+        {connection === "host_exited" && (
+          <div className="banner banner-host-exited" role="alert">
+            Host process exited — reconnecting…
+          </div>
+        )}
+        {connection === "awaiting_port" && (
+          <div className="banner banner-info">Waiting for the host connection…</div>
+        )}
+        {connection === "awaiting_host_ready" && <div className="banner banner-info">Connecting to host…</div>}
+        {lastFatal && (
+          <div className="banner banner-fatal" role="alert">
+            Host fatal: {lastFatal}
+          </div>
+        )}
+
+        <MessageList
+          key={tabId}
+          blocks={transcript}
+          turn={turn}
+          workspace={workspace}
+          connection={connection}
+          retry={retry}
+          onTryAgain={handleTryAgain}
+        />
+
+        <Composer />
+      </div>
+
+      {/* Permission modal: self-connecting wrapper, renders only when THIS
+          tab's store has a pending permission request. */}
+      <ConnectedPermissionModal />
+      {/* R8: store notice slot → App toast queue (render-less bridge). */}
+      <TabNoticeCapture tabId={tabId} onNotice={(notice) => onToast(notice.kind, notice.text)} />
+    </>
+  );
+}
+
+interface ActiveTabBodyProps {
+  tabId: string;
+  sidebarCollapsed: boolean;
+  onToggleSidebar(): void;
+  /** R8: push one toast into the App-level queue (kind → tone/glyph in toasts.ts). */
+  onToast(kind: ToastKind, text: string): void;
+}
+
+/** The active tab's whole chat UI — mounted exactly once, inside that tab's TabContext.Provider. */
+function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: ActiveTabBodyProps) {
+  const turn = useTabStore((state) => state.turn);
+  const workspace = useTabStore((state) => state.workspace);
   const engine = useTabStore((state) => state.engine);
   const shell = useTabStore((state) => state.shell);
   const gitPanelOpenRequested = useTabStore((state) => state.git.panelOpen);
@@ -300,14 +417,51 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const supportsCorePanels = engine === null;
   const supportsRewind = engine?.capabilities.supportsRewind ?? true;
   const tabTitle = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.title);
+
+  // TASK.102 CUT-S2 §2.5 (slice S2c C3): which surface this root tab's pane
+  // shows right now — its own master transcript, one child full-pane (layout
+  // B), or the master alongside a stack of children (CUT-S3 §0.1 split,
+  // layouts C/D — see child-layout.ts's module doc).
+  const childView = childLayoutStore((state) => state.view(tabId));
+  const parentSessionId = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.sessionId);
+  // CUT-S3 §3.1: `childSplitOpen` names the split layout; the resize handle
+  // + `ChildSplitPane` mount off it below, alongside git/preview (`splitOpen`).
+  const childSplitOpen = childView.kind === "split";
+  // The one child id whose SURFACE (live or read-only) needs to be resolved
+  // this render — layout B's single child, or split's currently-expanded
+  // row (CUT-S3 §3.3: the collapsed rows only need their own Agent card, not
+  // a relation lookup — resolved separately below, off the master transcript).
+  const focusedChildId =
+    childView.kind === "child" ? childView.spawnToolCallId : childView.kind === "split" ? childView.expandedId : undefined;
+  const childRelation = childRelationStore((state) =>
+    focusedChildId !== undefined && parentSessionId !== null && parentSessionId !== undefined
+      ? state.getRelation(parentSessionId, focusedChildId)
+      : undefined,
+  );
+  // TASK.102 CUT-S2 §10.8.1 point 3: a NON-live child (relation.live===false,
+  // OR no relation at all — the restart-Open case) is no longer a transient
+  // error state to self-heal out of. C4's read-only branch (`ChildHistoryPane`
+  // below, or CUT-S3's `ChildHistoryContent` in the split stack) is its
+  // permanent home: the pre-C4 self-heal effect that used to bounce this tab
+  // back to master the instant `childRelation` stopped being live is GONE —
+  // the child-view branch below now falls through from the live surface to
+  // the read-only one on the exact same render instead.
+  // CUT-S3 §3.3: the master's own transcript, read once here so every split
+  // row (collapsed or expanded) can resolve its own Agent card by
+  // `spawnToolCallId` — the same lookup ChildSessionPane/ChildHistoryPane
+  // already do below for layout B's single child.
+  const transcript = useTabStore((state) => state.transcript);
+
   const reviewRootRef = useRef<HTMLDivElement>(null);
   const [reviewWidth, setReviewWidth] = useState(readReviewWidth);
   // CUT.md §3 96-P2 items 2/6: the Preview panel's own width + D12 gating —
   // mounts iff the active tab has >=1 panel-container preview.
   const [previewWidth, setPreviewWidth] = useState(readPreviewWidth);
+  // CUT-S3 §3.1: the split stack's own width, same shape as review/preview.
+  const [childSplitWidth, setChildSplitWidth] = useState(readChildSplitWidth);
   const previews = usePreviewStore((state) => state.byTab[tabId]?.previews ?? EMPTY_PREVIEWS);
   const previewPanelOpen = computePreviewPanelOpen(previews);
-  const splitOpen = gitPanelOpen || previewPanelOpen;
+  const splitOpen = gitPanelOpen || previewPanelOpen || childSplitOpen;
 
   // R8(c): OS notification on running→idle while hidden/blurred (active tab
   // only — cross-tab completion is R10).
@@ -398,6 +552,104 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     window.addEventListener("pointerup", onUp, { once: true });
   }
 
+  // CUT-S3 §3.1: exact mirror of beginReviewResize/beginPreviewResize above, over childSplitWidth/CHILD_SPLIT_WIDTH_*.
+  function beginChildSplitResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = childSplitWidth;
+    const rootWidth = reviewRootRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    const maxWidth = Math.max(CHILD_SPLIT_WIDTH_MIN, Math.min(CHILD_SPLIT_WIDTH_MAX, rootWidth - 320));
+    let nextWidth = startWidth;
+
+    function onMove(moveEvent: PointerEvent): void {
+      nextWidth = Math.min(maxWidth, Math.max(CHILD_SPLIT_WIDTH_MIN, startWidth + startX - moveEvent.clientX));
+      setChildSplitWidth(nextWidth);
+    }
+
+    function onUp(): void {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.localStorage.setItem(CHILD_SPLIT_WIDTH_STORAGE_KEY, String(nextWidth));
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }
+
+  // CUT-S3 §3.3: the split stack's rows, `order`-ordered, each resolved off
+  // the master transcript exactly like ChildSessionPane/ChildHistoryPane
+  // resolve layout B's single child below — a missing card (an id this
+  // renderer never saw a subagent_start for) falls back to
+  // FALLBACK_SUBAGENT_CARD, mirroring B's own breadcrumb fallback.
+  const childSplitRows: readonly ChildSplitRow[] =
+    childView.kind === "split"
+      ? childView.order.map((id) => {
+          const block = transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === id);
+          const card: SubagentSubStatus = block && block.kind === "tool_call" && block.subagent ? block.subagent : FALLBACK_SUBAGENT_CARD;
+          return { spawnToolCallId: id, card, badge: childBadgeKind(card) };
+        })
+      : EMPTY_CHILD_SPLIT_ROWS;
+
+  // CUT-S3 §3.3: the split stack's expanded row surface — composed here
+  // (not in ChildSplitPane, §3.3's "композиция вместо экстракции") so the
+  // TabContext.Provider/tabRegistry wiring stays exactly where layout B's
+  // own ChildSessionPane/ChildHistoryPane already do it below.
+  let childSplitSurface: ReactNode = null;
+  if (childView.kind === "split") {
+    if (childRelation !== undefined && childRelation.live) {
+      const childStore = tabRegistry.getStore(childRelation.childTabId);
+      childSplitSurface = childStore ? (
+        <div className="session-content">
+          <TabContext.Provider value={{ tabId: childRelation.childTabId, store: childStore }}>
+            <SessionSurface tabId={childRelation.childTabId} onToast={onToast} />
+          </TabContext.Provider>
+        </div>
+      ) : (
+        <div className="main-empty">This child session is no longer available.</div>
+      );
+    } else {
+      childSplitSurface = (
+        <div className="session-content">
+          <ChildHistoryContent parentSessionId={parentSessionId} spawnToolCallId={childView.expandedId} />
+        </div>
+      );
+    }
+  }
+
+  // TASK.102 CUT-S2 §2.5 (C3) / §10.8.1 (C4): layout B's child branch — a
+  // breadcrumb bar in place of SessionHeader, above either the LIVE
+  // SessionSurface re-scoped to the child's own TabContext (ChildSessionPane,
+  // relation still live) or C4's read-only completed transcript
+  // (ChildHistoryPane, everything else: no relation yet seen this renderer
+  // session — the restart-Open case — or a relation that has flipped
+  // live:false). Every hook above this point keeps running for the MASTER tab
+  // regardless (background-completion notifications, preview-panel
+  // bookkeeping, etc.) — only the JSX choice changes here, so switching back
+  // to master via the breadcrumb never lost any of that state to begin with.
+  if (childView.kind === "child") {
+    if (childRelation !== undefined && childRelation.live) {
+      return (
+        <ChildSessionPane
+          parentTabId={tabId}
+          spawnToolCallId={childView.spawnToolCallId}
+          relation={childRelation}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={onToggleSidebar}
+          onToast={onToast}
+        />
+      );
+    }
+    return (
+      <ChildHistoryPane
+        parentTabId={tabId}
+        parentSessionId={parentSessionId}
+        spawnToolCallId={childView.spawnToolCallId}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={onToggleSidebar}
+      />
+    );
+  }
+
   return (
     <>
       <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} onToast={onToast} />
@@ -407,38 +659,20 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
         className={`session-content${splitOpen ? " session-content-split-open" : ""}`}
         style={
           splitOpen
-            ? { gridTemplateColumns: computeSessionContentColumns(gitPanelOpen, reviewWidth, previewPanelOpen, previewWidth) }
+            ? {
+                gridTemplateColumns: computeSessionContentColumns(
+                  gitPanelOpen,
+                  reviewWidth,
+                  previewPanelOpen,
+                  previewWidth,
+                  childSplitOpen,
+                  childSplitWidth,
+                ),
+              }
             : undefined
         }
       >
-        <div className="session-conversation">
-          {connection === "host_exited" && (
-            <div className="banner banner-host-exited" role="alert">
-              Host process exited — reconnecting…
-            </div>
-          )}
-          {connection === "awaiting_port" && (
-            <div className="banner banner-info">Waiting for the host connection…</div>
-          )}
-          {connection === "awaiting_host_ready" && <div className="banner banner-info">Connecting to host…</div>}
-          {lastFatal && (
-            <div className="banner banner-fatal" role="alert">
-              Host fatal: {lastFatal}
-            </div>
-          )}
-
-          <MessageList
-            key={tabId}
-            blocks={transcript}
-            turn={turn}
-            workspace={workspace}
-            connection={connection}
-            retry={retry}
-            onTryAgain={handleTryAgain}
-          />
-
-          <Composer />
-        </div>
+        <SessionSurface tabId={tabId} onToast={onToast} />
 
         {gitPanelOpen && (
           <div
@@ -461,17 +695,273 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
           />
         )}
         {previewPanelOpen && <PreviewPanel onToast={onToast} />}
+
+        {childView.kind === "split" && (
+          <div
+            className="review-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize Subagents panel"
+            onPointerDown={beginChildSplitResize}
+          />
+        )}
+        {childView.kind === "split" && (
+          <ChildSplitPane
+            rows={childSplitRows}
+            expandedId={childView.expandedId}
+            onExpandRow={(id) => childLayoutStore.getState().expandRow(tabId, id)}
+            onExitSplit={() => childLayoutStore.getState().exitSplit(tabId)}
+            onClose={() => childLayoutStore.getState().close(tabId)}
+          >
+            {childSplitSurface}
+          </ChildSplitPane>
+        )}
       </div>
 
-      {/* Permission modal: self-connecting wrapper, renders only when the
-          ACTIVE tab's store has a pending permission request. */}
-      <ConnectedPermissionModal />
       {gitPanelOpen && <GitConfirmDialog />}
       {supportsCorePanels && <LspPanel />}
       {supportsCorePanels && <HooksPanel />}
       {supportsRewind && <TimelinePanel />}
-      {/* R8: store notice slot → App toast queue (render-less bridge). */}
-      <TabNoticeCapture tabId={tabId} onNotice={(notice) => onToast(notice.kind, notice.text)} />
+    </>
+  );
+}
+
+interface ChildSessionPaneProps {
+  parentTabId: string;
+  spawnToolCallId: string;
+  /** Guaranteed `live: true` by the caller above — ActiveTabBody only renders this while the child is live. */
+  relation: ChildRelation;
+  sidebarCollapsed: boolean;
+  onToggleSidebar(): void;
+  onToast(kind: ToastKind, text: string): void;
+}
+
+/**
+ * TASK.102 CUT-S2 §2.5 (C3): layout B's child view — a breadcrumb bar
+ * (replacing SessionHeader) above the SAME SessionSurface the master pane
+ * uses, re-scoped to the child tab's own `<TabContext.Provider>` so its
+ * composer sends land on the child's connection and its permission modal
+ * binds to the child's own pending request, not the master's. Still rendered
+ * from INSIDE the master's own TabContext (ActiveTabBody never re-wraps
+ * itself) — `useTabStore`/`useTabsStore` below read the MASTER's title and
+ * transcript (to find the Agent card's own agentType/description for the
+ * breadcrumb), exactly like SessionHeader already does today.
+ *
+ * A dead/unknown child (`relation.live` flips between ActiveTabBody's own
+ * render-gate above and this component's, effectively the same render) falls
+ * back to a plain message rather than crash — belt-and-braces;
+ * ActiveTabBody's own effect already reverts the layout view to master on
+ * the very next tick for that case.
+ */
+function ChildSessionPane({
+  parentTabId,
+  spawnToolCallId,
+  relation,
+  sidebarCollapsed,
+  onToggleSidebar,
+  onToast,
+}: ChildSessionPaneProps) {
+  const masterTitle =
+    useTabsStore((state) => state.tabs.find((tab) => tab.tabId === parentTabId)?.title) ?? "Untitled task";
+  const card = useTabStore((state) => {
+    const block = state.transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === spawnToolCallId);
+    return block && block.kind === "tool_call" ? block.subagent : null;
+  });
+  const breadcrumb = buildChildBreadcrumb(masterTitle, card ?? { agentType: "Subagent", description: "" });
+  const childStore = tabRegistry.getStore(relation.childTabId);
+
+  return (
+    <>
+      <header className="session-header child-session-breadcrumb">
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="session-header-expand"
+            aria-label="Expand sidebar"
+            onClick={onToggleSidebar}
+          >
+            <CollapseIcon />
+          </button>
+        )}
+        <button
+          type="button"
+          className="child-breadcrumb-master"
+          onClick={() => childLayoutStore.getState().close(parentTabId)}
+        >
+          {breadcrumb.masterTitle}
+        </button>
+        <span className="child-breadcrumb-sep" aria-hidden="true">
+          ›
+        </span>
+        <span className="child-breadcrumb-current" title={breadcrumb.description || undefined}>
+          {breadcrumb.agentType}
+        </span>
+        <button
+          type="button"
+          className="child-breadcrumb-split"
+          onClick={() => childLayoutStore.getState().enterSplit(parentTabId)}
+        >
+          Split
+        </button>
+      </header>
+
+      <div className="session-content">
+        {childStore ? (
+          <TabContext.Provider value={{ tabId: relation.childTabId, store: childStore }}>
+            <SessionSurface tabId={relation.childTabId} onToast={onToast} />
+          </TabContext.Provider>
+        ) : (
+          <div className="main-empty">This child session is no longer available.</div>
+        )}
+      </div>
+    </>
+  );
+}
+
+interface ChildHistoryPaneProps {
+  parentTabId: string;
+  /** The master's own sessionId (ambient — NEVER a card-payload id, CUT-S2 §2.3's identity discipline mirrored renderer-side). Null/undefined only if this tab's own session row hasn't hydrated yet — treated as unavailable rather than crashing. */
+  parentSessionId: string | null | undefined;
+  spawnToolCallId: string;
+  sidebarCollapsed: boolean;
+  onToggleSidebar(): void;
+}
+
+/** Placeholder view-state before the channel round-trip resolves — distinct from `ChildHistoryViewState`'s three settled states (that type has no "loading" member: a channel response is always eventually one of ok+items/ok+empty/refused, never "still waiting" — this is purely a pre-response UI moment). */
+const CHILD_HISTORY_LOADING = { kind: "loading" as const };
+
+/**
+ * TASK.102 CUT-S2 §10.8.1 (slice S2c C4): layout B's READ-ONLY child view —
+ * the home for a child this tab's relation-store does NOT show as live
+ * (never seen live in this renderer process at all — the restart-Open case —
+ * or seen live and since exited). Fetches the completed transcript over
+ * `CHILD_HISTORY_CHANNEL`, keyed ONLY by the ambient `(parentSessionId,
+ * spawnToolCallId)` pair this component's own props carry — NEVER by any id
+ * riding a card's persisted `target` payload (the renderer mirror of §2.3's
+ * "identity from the actual sender, not the payload": a forged/stale blob
+ * gets main's honest authorization refusal, never someone else's history).
+ *
+ * Deliberately NOT `SessionSurface`: that component resolves entirely off a
+ * LIVE `TabContext` (a real per-tab zustand store from `tabRegistry`), which
+ * a completed child does not have (main reaps its host on the terminal
+ * transition, CUT-S2 §0). This pane instead feeds the SAME `MessageList` the
+ * live surface uses (identical React/Markdown rendering tract — XSS law, no
+ * second renderer) with a one-shot fetched block array, and never mounts
+ * `Composer` at all — "composer disabled" per §10.8.1 point 3's normative
+ * §2.5 rule, since there is no live connection to send a composer draft on.
+ */
+function ChildHistoryPane({ parentTabId, parentSessionId, spawnToolCallId, sidebarCollapsed, onToggleSidebar }: ChildHistoryPaneProps) {
+  const masterTitle =
+    useTabsStore((state) => state.tabs.find((tab) => tab.tabId === parentTabId)?.title) ?? "Untitled task";
+  const card = useTabStore((state) => {
+    const block = state.transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === spawnToolCallId);
+    return block && block.kind === "tool_call" ? block.subagent : null;
+  });
+  const breadcrumb = buildChildBreadcrumb(masterTitle, card ?? { agentType: "Subagent", description: "" });
+
+  return (
+    <>
+      <header className="session-header child-session-breadcrumb">
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="session-header-expand"
+            aria-label="Expand sidebar"
+            onClick={onToggleSidebar}
+          >
+            <CollapseIcon />
+          </button>
+        )}
+        <button
+          type="button"
+          className="child-breadcrumb-master"
+          onClick={() => childLayoutStore.getState().close(parentTabId)}
+        >
+          {breadcrumb.masterTitle}
+        </button>
+        <span className="child-breadcrumb-sep" aria-hidden="true">
+          ›
+        </span>
+        <span className="child-breadcrumb-current" title={breadcrumb.description || undefined}>
+          {breadcrumb.agentType}
+        </span>
+        <span className="child-breadcrumb-readonly" title="This child session has ended — its transcript is read-only.">
+          Read-only
+        </span>
+        <button
+          type="button"
+          className="child-breadcrumb-split"
+          onClick={() => childLayoutStore.getState().enterSplit(parentTabId)}
+        >
+          Split
+        </button>
+      </header>
+
+      <div className="session-content">
+        <ChildHistoryContent parentSessionId={parentSessionId} spawnToolCallId={spawnToolCallId} />
+      </div>
+    </>
+  );
+}
+
+interface ChildHistoryContentProps {
+  parentSessionId: string | null | undefined;
+  spawnToolCallId: string;
+}
+
+/**
+ * CUT-S3 §3.3: C4's read-only fetch/loading/unavailable/empty/blocks states,
+ * extracted from `ChildHistoryPane`'s body (everything below its breadcrumb
+ * header) so layout B (`ChildHistoryPane` above, unchanged rendering) and the
+ * split stack's read-only row (`ActiveTabBody`'s `childSplitSurface`, wrapped
+ * in its own `.session-content`) share the identical fetch/render logic
+ * instead of two tracts. Not exported — an implementation detail of this file.
+ */
+function ChildHistoryContent({ parentSessionId, spawnToolCallId }: ChildHistoryContentProps) {
+  const [state, setState] = useState<ChildHistoryViewState | typeof CHILD_HISTORY_LOADING>(CHILD_HISTORY_LOADING);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState(CHILD_HISTORY_LOADING);
+    if (parentSessionId === undefined || parentSessionId === null) {
+      setState({ kind: "unavailable" });
+      return;
+    }
+    window.anycode
+      .childHistory(parentSessionId, spawnToolCallId)
+      .then((result: ChildHistoryResult) => {
+        if (!cancelled) {
+          setState(projectChildHistoryResult(result));
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("[ChildHistoryContent] childHistory failed", error);
+        if (!cancelled) {
+          setState({ kind: "unavailable" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [parentSessionId, spawnToolCallId]);
+
+  return (
+    <>
+      {state.kind === "loading" && <div className="main-empty">Loading transcript…</div>}
+      {state.kind === "unavailable" && <div className="main-empty">This child session's transcript is unavailable.</div>}
+      {state.kind === "empty" && <div className="main-empty">This child session has no transcript yet.</div>}
+      {state.kind === "blocks" && (
+        <div className="session-conversation">
+          <MessageList
+            blocks={state.blocks}
+            turn={{ status: "idle", turnId: null, requestId: null }}
+            workspace={null}
+            connection="host_exited"
+            retry={null}
+            onTryAgain={() => {}}
+          />
+        </div>
+      )}
     </>
   );
 }

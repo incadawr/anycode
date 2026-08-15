@@ -65,7 +65,19 @@ export type SubagentProgress =
   // tool call for the renderer's live feed. `summary` is a pre-capped, sanitized
   // subject (never raw child input); bridged as a subagent_activity AgentEvent.
   | { kind: "tool"; toolName: string; summary: string }
-  | { kind: "end"; status: SubagentOutcome["status"]; turns: number; durationMs: number };
+  // `activitySuppressed` (slice S1 W2, CUT-S1 §0.5): count of tool-kind
+  // progress events this run withheld past SUBAGENT_ACTIVITY_MAX_EVENTS.
+  // Absent when the run never crossed the cap; feeds the persisted card's
+  // honest dropped-activity count.
+  | { kind: "end"; status: SubagentOutcome["status"]; turns: number; durationMs: number; activitySuppressed?: number }
+  // Permission-broker gate crossing (TASK.102 CUT-S2 §2.2/§0.8): ONLY the
+  // session-tier port (SessionSubagentPort) ever produces this — a child
+  // SESSION has its own IpcPermissionBroker whose ask/settle can suspend the
+  // whole run, which the parent's card should reflect as a "waiting for
+  // permission" badge. The in-process inline runner never emits it (an inline
+  // child's tool calls flow through the SAME broker as the parent, so there
+  // is no separate wait to surface).
+  | { kind: "attention"; waiting: boolean };
 
 export interface SubagentRunOptions {
   /** Linked to the Agent tool call's abort so parent-stop cascades into the child. */
@@ -73,6 +85,9 @@ export interface SubagentRunOptions {
   /** Invoked on each coarse child boundary (tool_result / turn_end) — see §3.3. */
   onProgress?: (progress: SubagentProgress) => void;
 }
+
+/** Return shape of `SubagentPort.engineProfile` (TASK.102 CUT-S4 §2.1). */
+export type EngineProfileInfo = { engine: "claude" | "codex"; systemPrompt: string };
 
 export interface SubagentPort {
   run(req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome>;
@@ -83,4 +98,12 @@ export interface SubagentPort {
    * agentInputSchema is untouched (agent_type is already a plain string).
    */
   listAgentTypes?(): string[];
+  /**
+   * Resolves an md-profile agent type that declares `engine:` frontmatter.
+   * null for built-ins and non-engine profiles. Optional: a fake/legacy port
+   * without it simply has no engine profiles to offer (TASK.102 CUT-S4 §2.1 —
+   * `tools/agent.ts` routes such a type to a child session BEFORE the tier
+   * branch instead of the deprecated one-shot path in `subagents/runner.ts`).
+   */
+  engineProfile?(agentType: string): EngineProfileInfo | null;
 }
