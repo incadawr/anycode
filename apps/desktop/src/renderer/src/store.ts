@@ -678,6 +678,20 @@ export interface DesktopState {
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
+  /**
+   * TASK.115 S1: toolCallIds of live Agent tool_call blocks whose child is
+   * currently blocked on a permission ask (mirrors `SubagentSubStatus.waiting`
+   * presence across the transcript, maintained incrementally by
+   * `patchSubagentAttention`/`patchSubagentEnd` rather than scanned). A SET,
+   * not a counter — a duplicate `waiting:true` for the same toolCallId must
+   * stay a single member, or the matching single `waiting:false`/settle would
+   * leave a phantom entry the row can never clear. `deriveCoarse`
+   * (tab-status-store.ts) reads only `.size > 0` so the parent row's
+   * `needsApproval` goes true while ANY child waits, in O(1) — never iterate
+   * the transcript here. Part of the session slice so a respawn/reset/rewind
+   * clears it alongside the blocks it indexes.
+   */
+  waitingSubagents: ReadonlySet<string>;
   /** Transient toast-channel notice; null when nothing is pending. Fed by the reducer, rendered by MVP.5. */
   notice: Notice | null;
   /** Last `context_usage` reading (design §2.12); null before the first one arrives in a session. */
@@ -917,6 +931,8 @@ interface SessionSlice {
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
+  /** TASK.115 S1: see `DesktopState.waitingSubagents`'s own doc comment. */
+  waitingSubagents: ReadonlySet<string>;
   notice: Notice | null;
   contextUsage: ContextUsage | null;
   mcpServers: McpServerStatus[];
@@ -951,6 +967,7 @@ function initialSessionSlice(): SessionSlice {
     turn: { status: "idle", turnId: null, requestId: null },
     transcript: [],
     permission: null,
+    waitingSubagents: new Set<string>(),
     notice: null,
     contextUsage: null,
     mcpServers: [],
@@ -1437,14 +1454,25 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * the same test `patchSubagentEnd`'s settle strip is built and tested
      * against) would still count as waiting. Answering the ask and settling
      * the card must strip the key the SAME way.
+     *
+     * TASK.115 S1: mirrors the same flip into `waitingSubagents` (a SET) in
+     * the SAME atomic update, gated on the identical guard (`matched` — an
+     * existing, unsettled subagent block for this exact toolCallId). A Set
+     * add/delete rather than a counter increment/decrement: a duplicate
+     * `waiting:true` for a toolCallId already in the set is a no-op add, so
+     * one `waiting:false` is always enough to clear it — a counter would
+     * require the two calls to balance, and a dropped/replayed duplicate
+     * would leave the parent row stuck showing "needs approval" forever.
      */
     function patchSubagentAttention(toolCallId: string, waiting: boolean): void {
       flushDeltas();
-      set((state) => ({
-        transcript: state.transcript.map((block) => {
+      set((state) => {
+        let matched = false;
+        const transcript = state.transcript.map((block) => {
           if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
             return block;
           }
+          matched = true;
           const subagent = { ...block.subagent };
           if (waiting) {
             subagent.waiting = true;
@@ -1452,8 +1480,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             delete subagent.waiting;
           }
           return { ...block, subagent };
-        }),
-      }));
+        });
+        if (!matched) {
+          return { transcript };
+        }
+        const waitingSubagents = new Set(state.waitingSubagents);
+        if (waiting) {
+          waitingSubagents.add(toolCallId);
+        } else {
+          waitingSubagents.delete(toolCallId);
+        }
+        return { transcript, waitingSubagents };
+      });
     }
 
     /**
@@ -1469,6 +1507,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * "+N earlier" count matches what the persisted canon will carry. The
      * settle also strips a stale `waiting` flag (TASK.102 CUT-S2 §2.5/§10.1)
      * — see the inline comment below.
+     *
+     * TASK.115 S1: the settle also drops `toolCallId` from `waitingSubagents`
+     * in the SAME update, gated on the same `matched` guard as
+     * `patchSubagentAttention` — unconditionally, whether or not a
+     * `waiting:false` ever arrived for this child. A card can settle
+     * (cancelled/error) while still mid-ask; without this, a settle that skips
+     * the matching attention(false) would leave the toolCallId in the set
+     * forever, and the parent row would keep showing "needs approval" for a
+     * child that no longer exists.
      */
     function patchSubagentEnd(
       toolCallId: string,
@@ -1478,11 +1525,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       activitySuppressed?: number,
     ): void {
       flushDeltas();
-      set((state) => ({
-        transcript: state.transcript.map((block) => {
+      set((state) => {
+        let matched = false;
+        const transcript = state.transcript.map((block) => {
           if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
             return block;
           }
+          matched = true;
           const settled: SubagentSubStatus = {
             ...block.subagent,
             turns,
@@ -1496,8 +1545,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // §2.5 priority order, so leaving it set would mask the outcome).
           delete settled.waiting;
           return { ...block, subagent: settled };
-        }),
-      }));
+        });
+        if (!matched) {
+          return { transcript };
+        }
+        const waitingSubagents = new Set(state.waitingSubagents);
+        waitingSubagents.delete(toolCallId);
+        return { transcript, waitingSubagents };
+      });
     }
 
     /**
@@ -1675,6 +1730,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * rest of the session slice — a faked full reset would blank the
      * LSP/hooks/git/env panels with no re-push to refill them (ratification
      * §1, rejected-mechanism note).
+     *
+     * TASK.115 S1: the transcript-scoped clear also empties `waitingSubagents`
+     * — unlike the panel fields above, it isn't independent session state; it
+     * only ever indexes toolCallIds of blocks live IN the transcript being
+     * wiped here, and a restored history never carries `waiting` (transient,
+     * live-only — see `SubagentSubStatus.waiting`'s doc comment), so nothing
+     * would ever repopulate a stale entry. Leaving it non-empty would strand
+     * the parent row showing "needs approval" for a child whose block no
+     * longer exists.
      */
     function applyRewindResult(message: Extract<HostToUiMessage, { type: "rewind_result" }>): void {
       const lastRewindResult: RewindResultInfo = {
@@ -1693,7 +1757,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       if (message.conversationRestored) {
         drainPendingDeltas();
-        set({ transcript: [] });
+        set({ transcript: [], waitingSubagents: new Set() });
       }
 
       const shortId = message.safetyCheckpointId?.slice(0, 8);
