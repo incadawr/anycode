@@ -13,9 +13,14 @@ import type { TabInfo } from "../tabs-store.js";
 import {
   applyHiddenProjects,
   buildSidebarGroups,
+  bulkDeleteConfirm,
   clampMenuLeft,
+  deleteOlderNotice,
   filterSidebarGroups,
   formatAge,
+  isRowDeletable,
+  parseOlderThanDays,
+  singleDeleteConfirm,
   type SidebarGroup,
   type SidebarRow,
 } from "./Sidebar.js";
@@ -379,5 +384,65 @@ describe("clampMenuLeft", () => {
 
   it("honors a custom margin", () => {
     expect(clampMenuLeft(-50, 100, 1200, 20)).toBe(20);
+  });
+});
+
+// TASK.114: session-delete message/verdict helpers (pure, node-env — same
+// discipline as buildSidebarGroups above).
+describe("isRowDeletable (TASK.114)", () => {
+  it("offers delete only on resumable rows", () => {
+    expect(isRowDeletable("resumable", false)).toBe(true);
+    expect(isRowDeletable("open", false)).toBe(false);
+  });
+
+  it("refuses while the project has a live tab (decision 4 — main would refuse too)", () => {
+    expect(isRowDeletable("resumable", true)).toBe(false);
+  });
+});
+
+describe("singleDeleteConfirm (TASK.114)", () => {
+  it("names the task and states irreversibility", () => {
+    expect(singleDeleteConfirm("Fix login")).toBe("Delete “Fix login” permanently? This cannot be undone.");
+  });
+});
+
+describe("parseOlderThanDays (TASK.114)", () => {
+  it("accepts whole days within 1..3650 (main's zod bounds)", () => {
+    expect(parseOlderThanDays("30")).toBe(30);
+    expect(parseOlderThanDays(" 7 ")).toBe(7);
+    expect(parseOlderThanDays("1")).toBe(1);
+    expect(parseOlderThanDays("3650")).toBe(3650);
+  });
+
+  it("rejects cancel, non-numeric, fractional, zero, and out-of-range input", () => {
+    expect(parseOlderThanDays(null)).toBeNull();
+    expect(parseOlderThanDays("")).toBeNull();
+    expect(parseOlderThanDays("abc")).toBeNull();
+    expect(parseOlderThanDays("3.5")).toBeNull();
+    expect(parseOlderThanDays("0")).toBeNull();
+    expect(parseOlderThanDays("3651")).toBeNull();
+    expect(parseOlderThanDays("-5")).toBeNull();
+  });
+});
+
+describe("bulkDeleteConfirm (TASK.114)", () => {
+  it("quotes the exact candidate count before anything is deleted (decision 5)", () => {
+    expect(bulkDeleteConfirm(1, 30)).toBe("Permanently delete 1 task older than 30 days? This cannot be undone.");
+    expect(bulkDeleteConfirm(42, 1)).toBe("Permanently delete 42 tasks older than 1 day? This cannot be undone.");
+  });
+});
+
+describe("deleteOlderNotice (TASK.114)", () => {
+  it("reports the deleted count", () => {
+    expect(deleteOlderNotice(3, 0)).toBe("Deleted 3 tasks.");
+  });
+
+  it("singularizes one task", () => {
+    expect(deleteOlderNotice(1, 0)).toBe("Deleted 1 task.");
+  });
+
+  it("never silently drops skipped actives", () => {
+    expect(deleteOlderNotice(3, 1)).toBe("Deleted 3 tasks. Skipped 1 open task.");
+    expect(deleteOlderNotice(3, 2)).toBe("Deleted 3 tasks. Skipped 2 open tasks.");
   });
 });
