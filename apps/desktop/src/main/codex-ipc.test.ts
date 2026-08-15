@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
+import type { TrustedBinaryConsent } from "../shared/settings.js";
 import type { CodexBinaryFs } from "./codex-binary.js";
 import { CODEX_DOCTOR_TTL_MS, createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardingSnapshot } from "./codex-ipc.js";
 
@@ -701,5 +702,98 @@ describe("doctor TTL cache (TASK.65)", () => {
     clock += 10_000;
     await controller.ensureChecked(); // within TTL ⇒ reused, not re-spawned
     expect(runDoctor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createCodexOnboardingController — consent threading (TASK.103)", () => {
+  const FILE_SIZE = 4096;
+  const FILE_MTIME = 1_700_000_000_000;
+
+  // PATH resolves to /usr/local/bin/codex, but /usr/local/bin itself is
+  // world-writable — the trust gate refuses it. EVERY OTHER path (every
+  // other rung's candidate) throws ENOENT: a fake fs that answered "exists,
+  // safe" for anything ending in "codex" would let discovery fall through
+  // to a DIFFERENT, unintentionally-safe candidate on the common/PATH rungs
+  // (e.g. /opt/homebrew/bin/codex) and mask the refusal this test exists to
+  // exercise — only the one deliberately-staged candidate may resolve.
+  const trustRefusedFs: CodexBinaryFs = {
+    realpath: (path) => path,
+    stat: (path) => {
+      if (path === "/usr/local/bin/codex") {
+        return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20, size: FILE_SIZE, mtimeMs: FILE_MTIME };
+      }
+      if (path === "/usr/local/bin" || path === "/usr/local" || path === "/usr" || path === "/") {
+        return {
+          isFile: () => false,
+          isDirectory: () => true,
+          mode: path === "/usr/local/bin" ? 0o777 : 0o755,
+          uid: ME.uid,
+          gid: 20,
+        };
+      }
+      throw new Error("ENOENT");
+    },
+  };
+
+  const matchingConsent: TrustedBinaryConsent = {
+    path: "/usr/local/bin/codex",
+    fingerprint: { mode: 0o755, uid: ME.uid, gid: 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+    grantedAt: "2026-08-15T00:00:00.000Z",
+  };
+
+  it("BD3 an all-refused ladder yields {status:'error', trustRefusal} — NOT not_installed; a plain nothing-found ladder stays not_installed byte-identically (regression)", async () => {
+    const runDoctor = vi.fn();
+    const deps = makeDeps({ bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev" }, fs: trustRefusedFs, runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(snapshot.report.status).toBe("error");
+    expect(snapshot.report.error).toMatch(/world-writable/);
+    expect(snapshot.report.trustRefusal).toEqual({ binaryPath: "/usr/local/bin/codex", reason: snapshot.report.error });
+    expect(snapshot.binaryPath).toBeNull();
+    expect(runDoctor).not.toHaveBeenCalled();
+
+    // Regression arm: a plain nothing-found ladder is untouched by this change.
+    const plainRunDoctor = vi.fn();
+    const plainDeps = makeDeps({ bootEnv: { PATH: "", HOME: "" }, fs: noBinaryFs, runDoctor: plainRunDoctor });
+    const plainController = createCodexOnboardingController(plainDeps);
+    const plainSnapshot = await plainController.recheck();
+    expect(plainSnapshot.report).toEqual({ status: "not_installed" });
+    expect(plainRunDoctor).not.toHaveBeenCalled();
+  });
+
+  it("BD4 deps.readTrustedBinaries reaches BOTH discovery and the doctor: a matching consent resolves the path and the runDoctor call receives consents", async () => {
+    const runDoctor = vi.fn(async (_binaryPath: string, _options?: unknown) => ({
+      status: "ready" as const,
+      version: "0.144.3",
+      account: { type: "chatgpt", plan: "plus" },
+      models: [],
+    }));
+    const deps = makeDeps({
+      bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev" },
+      fs: trustRefusedFs,
+      runDoctor,
+      readTrustedBinaries: () => [matchingConsent],
+    });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(snapshot.binaryPath).toBe("/usr/local/bin/codex");
+    expect(snapshot.report.status).toBe("ready");
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(runDoctor.mock.calls[0]?.[1]).toMatchObject({ consents: [matchingConsent] });
+  });
+
+  it("BD4 an absent readTrustedBinaries dep behaves as today's wall: runDoctor receives an empty consents array", async () => {
+    const runDoctor = vi.fn(async (_binaryPath: string, _options?: unknown) => ({
+      status: "ready" as const,
+      version: "0.144.3",
+      account: { type: "chatgpt", plan: "plus" },
+      models: [],
+    }));
+    // makeDeps's base object never sets readTrustedBinaries; no override here either.
+    const deps = makeDeps({ bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev" }, runDoctor });
+    expect(deps.readTrustedBinaries).toBeUndefined();
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    expect(runDoctor.mock.calls[0]?.[1]).toMatchObject({ consents: [] });
   });
 });

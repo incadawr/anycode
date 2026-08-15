@@ -19,16 +19,31 @@
  */
 import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, posix, win32 } from "node:path";
-import { checkCodexBinaryTrust, type CodexPathStat } from "../shared/codex-binary-trust.js";
+import {
+  checkConsentedBinaryTrust,
+  type BinaryTrustConsent,
+  type CodexPathStat,
+} from "../shared/codex-binary-trust.js";
 
 export interface ClaudeBinaryResolution {
   path: string | null;
   reason?: string;
+  /** Present iff THIS resolution's refusal came from the dedicated trust-gate call (TASK.103) — never a structural pre-check. */
+  trustRefusal?: { binaryPath: string; reason: string };
 }
 
 /** Stat shape mirrors `fs.Stats` exactly, so the production seam below is a straight passthrough. */
 export interface ClaudeBinaryFs {
-  stat(path: string): { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number };
+  stat(path: string): {
+    isFile(): boolean;
+    isDirectory(): boolean;
+    mode: number;
+    uid: number;
+    gid: number;
+    /** Present when the fs seam carries them (production `fs.Stats` always does); consent matching requires both — absence fails closed (shared/codex-binary-trust.ts). */
+    size?: number;
+    mtimeMs?: number;
+  };
   /** Symlinks resolved: `execve` reads the TARGET, so the target is what must be trusted. */
   realpath(path: string): string;
 }
@@ -57,8 +72,20 @@ function currentIdentity(): ClaudeIdentity {
   };
 }
 
-function toPathStat(path: string, stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
-  return { path, isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+function toPathStat(
+  path: string,
+  stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number; size?: number; mtimeMs?: number },
+): CodexPathStat {
+  return {
+    path,
+    isFile: stat.isFile(),
+    isDirectory: stat.isDirectory(),
+    mode: stat.mode,
+    uid: stat.uid,
+    gid: stat.gid,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
 }
 
 /**
@@ -99,18 +126,22 @@ export function checkClaudeBinaryPathTrust(
   fs: ClaudeBinaryFs = nodeFs,
   platform: NodeJS.Platform = process.platform,
   identity: ClaudeIdentity = currentIdentity(),
+  consents: readonly BinaryTrustConsent[] = [],
 ): string | null {
   if (platform === "win32") return null;
   try {
     const resolved = fs.realpath(path);
     const directories = ancestorDirectories(resolved, path).map((dir) => toPathStat(dir, fs.stat(dir)));
-    return checkCodexBinaryTrust({
-      file: toPathStat(resolved, fs.stat(resolved)),
-      directories,
-      uid: identity.uid,
-      egid: identity.egid ?? -1,
-      platform,
-    });
+    return checkConsentedBinaryTrust(
+      {
+        file: toPathStat(resolved, fs.stat(resolved)),
+        directories,
+        uid: identity.uid,
+        egid: identity.egid ?? -1,
+        platform,
+      },
+      consents,
+    );
   } catch {
     return "Claude binary path does not exist";
   }
@@ -122,6 +153,7 @@ export function resolveClaudeBinary(
   fs: ClaudeBinaryFs = nodeFs,
   platform = process.platform,
   identity: ClaudeIdentity = currentIdentity(),
+  consents: readonly BinaryTrustConsent[] = [],
 ): ClaudeBinaryResolution {
   if (raw === undefined || raw.trim() === "") return { path: null };
   const path = raw.trim();
@@ -136,8 +168,8 @@ export function resolveClaudeBinary(
   } catch {
     return { path: null, reason: "Claude binary path does not exist" };
   }
-  const untrusted = checkClaudeBinaryPathTrust(path, fs, platform, identity);
-  if (untrusted !== null) return { path: null, reason: untrusted };
+  const untrusted = checkClaudeBinaryPathTrust(path, fs, platform, identity, consents);
+  if (untrusted !== null) return { path: null, reason: untrusted, trustRefusal: { binaryPath: path, reason: untrusted } };
   return { path };
 }
 
@@ -156,6 +188,8 @@ export interface ClaudeBinaryDiscovery {
   source: ClaudeBinarySource;
   /** The last rejection reason seen while walking the ladder (diagnostic only — the ladder still fails closed on `path:null`). */
   reason?: string;
+  /** The FIRST trust refusal seen while walking the ladder (TASK.103) — highest-priority rung, i.e. the binary the user most likely means. */
+  trustRefusal?: { binaryPath: string; reason: string };
 }
 
 /** `claude` on POSIX, `claude.exe` on Windows — the file name every ladder rung looks for. */
@@ -211,6 +245,8 @@ export interface ClaudeDiscoveryInputs {
   platform?: NodeJS.Platform;
   /** Test seam; production reads the live process identity (uid + supplementary groups). */
   identity?: ClaudeIdentity;
+  /** Live per-path binary-trust consents (TASK.103); absent/default `[]` keeps today's wall byte-for-byte. */
+  consents?: readonly BinaryTrustConsent[];
 }
 
 /**
@@ -225,6 +261,7 @@ export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinar
   const fs = inputs.fs ?? nodeFs;
   const platform = inputs.platform ?? process.platform;
   const identity = inputs.identity ?? currentIdentity();
+  const consents = inputs.consents ?? [];
   const rungs: Array<{ source: ClaudeBinarySource; candidates: string[] }> = [
     { source: "env", candidates: inputs.envOverride !== undefined && inputs.envOverride.trim() !== "" ? [inputs.envOverride] : [] },
     { source: "settings", candidates: inputs.settingsPath !== undefined && inputs.settingsPath.trim() !== "" ? [inputs.settingsPath] : [] },
@@ -232,18 +269,27 @@ export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinar
     { source: "common", candidates: commonInstallLocations(inputs.env, platform) },
   ];
   let lastReason: string | undefined;
+  let firstTrustRefusal: { binaryPath: string; reason: string } | undefined;
   for (const rung of rungs) {
     for (const candidate of rung.candidates) {
-      const resolved = resolveClaudeBinary(candidate, fs, platform, identity);
+      const resolved = resolveClaudeBinary(candidate, fs, platform, identity, consents);
       if (resolved.path !== null) {
         return { path: resolved.path, source: rung.source };
       }
       if (resolved.reason !== undefined) {
         lastReason = resolved.reason;
       }
+      if (firstTrustRefusal === undefined && resolved.trustRefusal !== undefined) {
+        firstTrustRefusal = resolved.trustRefusal;
+      }
     }
   }
-  return { path: null, source: "none", ...(lastReason !== undefined ? { reason: lastReason } : {}) };
+  return {
+    path: null,
+    source: "none",
+    ...(lastReason !== undefined ? { reason: lastReason } : {}),
+    ...(firstTrustRefusal !== undefined ? { trustRefusal: firstTrustRefusal } : {}),
+  };
 }
 
 /**

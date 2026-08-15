@@ -27,7 +27,9 @@ import { ipcMain } from "electron";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
+import type { TrustedBinaryConsent } from "../shared/settings.js";
 import {
+  checkClaudeBinaryPathTrust,
   discoverClaudeBinary,
   resolveClaudeBinary,
   type ClaudeBinaryFs,
@@ -84,6 +86,8 @@ export interface ClaudeIpcDeps {
   bootEnv: NodeJS.ProcessEnv;
   /** Reads the currently-persisted `settings.claude.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
+  /** TASK.103: reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
+  readTrustedBinaries?: () => readonly TrustedBinaryConsent[];
   /** Persists a `settings.claude` patch (best-effort: a `read_only` refusal must not block the LIVE snapshot this session already computed from reaching the caller). NEVER carries account material — only status/version/at (custody). */
   writeClaudeSettings: (patch: {
     binaryPath?: string;
@@ -191,7 +195,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
     return promise;
   }
 
-  function discover(settingsPath: string | undefined): { path: string | null; source: ClaudeBinarySource } {
+  function discover(settingsPath: string | undefined): { path: string | null; source: ClaudeBinarySource; trustRefusal?: { binaryPath: string; reason: string } } {
     return discoverClaudeBinary({
       envOverride: deps.bootEnv[ENV_CLAUDE_BIN],
       ...(settingsPath !== undefined ? { settingsPath } : {}),
@@ -199,6 +203,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
+      consents: deps.readTrustedBinaries?.() ?? [],
     });
   }
 
@@ -215,16 +220,32 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
     }
   }
 
-  /** Runs the doctor against ONE explicit path+source, persists, notifies, and returns the fresh snapshot. */
-  async function checkPath(binaryPath: string | null, source: ClaudeBinarySource): Promise<ClaudeOnboardingSnapshot> {
+  /**
+   * Runs the doctor against ONE explicit path+source, persists, notifies,
+   * and returns the fresh snapshot. `discoveryTrustRefusal` (TASK.103,
+   * D-S4-6): when the caller's discovery ladder resolved NOTHING
+   * (`binaryPath === null`) because its highest-priority candidate was
+   * refused by the trust gate — not because nothing was found — this
+   * synthesizes an honest `{status:"error", trustRefusal}` instead of the
+   * default `{status:"not_installed"}` lie.
+   */
+  async function checkPath(
+    binaryPath: string | null,
+    source: ClaudeBinarySource,
+    discoveryTrustRefusal?: { binaryPath: string; reason: string },
+  ): Promise<ClaudeOnboardingSnapshot> {
+    const consents = deps.readTrustedBinaries?.() ?? [];
     const report: ClaudeDoctorReport =
       binaryPath === null
-        ? { status: "not_installed" }
+        ? discoveryTrustRefusal !== undefined
+          ? { status: "error", error: discoveryTrustRefusal.reason, trustRefusal: discoveryTrustRefusal }
+          : { status: "not_installed" }
         : await runDoctor(binaryPath, {
             env: deps.bootEnv,
             // Ambient by default (owner pivot): no profileDir override, so the
             // doctor diagnoses the SAME `~/.claude` the user's own terminal is
             // signed into.
+            consents,
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
     const snapshot: ClaudeOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
@@ -237,7 +258,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
   async function discoverAndCheck(): Promise<ClaudeOnboardingSnapshot> {
     const settingsPath = await deps.readBinaryPathSetting();
     const discovery = discover(settingsPath);
-    return checkPath(discovery.path, discovery.source);
+    return checkPath(discovery.path, discovery.source, discovery.trustRefusal);
   }
 
   /**
@@ -264,6 +285,12 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
       // `~/.claude` — the same one the doctor above diagnoses.
       openPath: deps.openPath,
       signal: controller.signal,
+      // TASK.103: claude-login.ts itself is untouched — its own default
+      // trust closure carries no consents, so a consent-aware closure is
+      // passed explicitly through its existing `trust` seam instead (mirror
+      // of codex-ipc.ts's loginStart).
+      trust: (path: string) =>
+        checkClaudeBinaryPathTrust(path, deps.fs, deps.platform ?? process.platform, deps.identity, deps.readTrustedBinaries?.() ?? []),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       probe: async () => {
         const snapshot = await runExclusive(discoverAndCheck);

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { CodexRpcClient, augmentPathForGui, buildDoctorChildEnv, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
 import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
 import type { CodexSupportManifest } from "../shared/codex-support.js";
+import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
+import { makeTrustedScratchDir } from "../shared/test-scratch.js";
 import type { ResolvedCodexProfile } from "./codex-profiles.js";
 
 /** A syntactically valid manifest with one arbitrary supported range — the doctor must follow IT, not any hardcode. */
@@ -31,8 +33,16 @@ const fixturePath = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mj
  */
 const TRUSTED = (): null => null;
 const scratchDir = mkdtempSync(join(tmpdir(), "anycode-codex-doctor-test-"));
+// TASK.103 (BD1): a TRUSTED-ANCESTOR scratch root, distinct from `scratchDir`
+// above (plain os.tmpdir(), which is itself world-writable+sticky on Linux —
+// see shared/test-scratch.ts's own header for why that cannot serve for a
+// real on-disk trust-gate test).
+const trustedScratchDir = makeTrustedScratchDir("codex-doctor-consent");
 
-afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
+afterAll(() => {
+  rmSync(scratchDir, { recursive: true, force: true });
+  rmSync(trustedScratchDir, { recursive: true, force: true });
+});
 
 /** Redirects every spawn to `node fixturePath <realArgs> <extraFlags>` — the same DI shape host's AppServerClient tests use (binaryArgs prefix), generalized to extra trailing flags the fixture's `flag()`/`value()` helpers read anywhere in argv. */
 function fakeSpawn(extraFlags: string[] = []) {
@@ -467,5 +477,51 @@ describe("CodexRpcClient", () => {
     expect(alive(pid!)).toBe(false);
 
     await first; // no double signal storm, no throw on the concurrent path either.
+  });
+});
+
+describe("runCodexDoctor — consent threading (TASK.103)", () => {
+  // POSIX-only: the trust gate has no POSIX mode bits to judge on win32 (it
+  // returns null unconditionally there — an unchecked path, not a
+  // verified-safe one), so there is nothing for this test to stage.
+  it.skipIf(process.platform === "win32")(
+    "BD1 a world-writable-directory binary is refused end to end; a matching consent lets the run proceed past the gate",
+    async () => {
+      const worldWritableDir = join(trustedScratchDir, `bd1-untrusted-${Date.now()}`);
+      mkdirSync(worldWritableDir);
+      chmodSync(worldWritableDir, 0o777);
+      const binary = join(worldWritableDir, "codex");
+      writeFileSync(binary, "#!/bin/sh\nexit 0\n");
+      chmodSync(binary, 0o755);
+
+      // No consents: the DEFAULT (real, un-stubbed) trust closure refuses —
+      // this test deliberately omits `trust` so main's production seam
+      // (checkCodexBinaryPathTrust) is what decides.
+      const refused = await runCodexDoctor(binary, { spawnImpl: fakeSpawn() });
+      expect(refused.status).toBe("error");
+      expect(refused.error).toMatch(/world-writable/);
+      expect(refused.trustRefusal).toEqual({ binaryPath: binary, reason: refused.error });
+
+      const resolvedBinary = realpathSync(binary);
+      const stat = statSync(resolvedBinary);
+      const consent: BinaryTrustConsent = {
+        path: resolvedBinary,
+        fingerprint: { mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs },
+        grantedAt: "2026-08-15T00:00:00.000Z",
+      };
+      const withConsent = await runCodexDoctor(binary, { spawnImpl: fakeSpawn(), consents: [consent] });
+      // Past the gate: reaches the preflight fake and completes a normal run
+      // (not the world-writable trust error).
+      expect(withConsent.status).not.toBe("error");
+      expect(withConsent.trustRefusal).toBeUndefined();
+    },
+  );
+
+  it("BD2 the refusal report carries a structured trustRefusal sourced from the injected trust seam", async () => {
+    const reason = "Codex binary (/fake/codex) is world-writable";
+    const report = await runCodexDoctor("/fake/codex", { trust: () => reason, spawnImpl: fakeSpawn() });
+    expect(report.status).toBe("error");
+    expect(report.error).toBe(reason);
+    expect(report.trustRefusal).toEqual({ binaryPath: "/fake/codex", reason });
   });
 });

@@ -1,6 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import {
   candidatesFromPath,
   checkCodexBinaryPathTrust,
@@ -20,6 +21,9 @@ interface FakeEntry {
   mode?: number;
   uid?: number;
   gid?: number;
+  /** TASK.103 fingerprint fields — optional so every pre-existing fixture keeps typechecking untouched. */
+  size?: number;
+  mtimeMs?: number;
 }
 
 /** Every directory from `dirname(path)` up to (and including) the filesystem root — mirrors `ancestorDirectories` in codex-binary.ts. */
@@ -61,11 +65,27 @@ function fakeFs(
     stat(path) {
       const file = files[path];
       if (file !== undefined) {
-        return { isFile: () => true, isDirectory: () => false, mode: file.mode ?? 0o755, uid: file.uid ?? ME.uid, gid: file.gid ?? 20 };
+        return {
+          isFile: () => true,
+          isDirectory: () => false,
+          mode: file.mode ?? 0o755,
+          uid: file.uid ?? ME.uid,
+          gid: file.gid ?? 20,
+          size: file.size,
+          mtimeMs: file.mtimeMs,
+        };
       }
       const dir = dirEntries[path];
       if (dir !== undefined) {
-        return { isFile: () => false, isDirectory: () => true, mode: dir.mode ?? 0o755, uid: dir.uid ?? ME.uid, gid: dir.gid ?? 20 };
+        return {
+          isFile: () => false,
+          isDirectory: () => true,
+          mode: dir.mode ?? 0o755,
+          uid: dir.uid ?? ME.uid,
+          gid: dir.gid ?? 20,
+          size: dir.size,
+          mtimeMs: dir.mtimeMs,
+        };
       }
       throw new Error("ENOENT");
     },
@@ -407,5 +427,87 @@ describe("installedCodexCandidates", () => {
     expect(installedCodexCandidates({ USERPROFILE: "C:\\Users\\dev" }, "win32", "x64", fs)).toEqual([
       "C:\\Users\\dev\\.anycode\\codex\\bin\\0.144.3\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
     ]);
+  });
+});
+
+// TASK.103 — consent threading through resolveCodexBinary/discoverCodexBinary.
+const FILE_SIZE = 4096;
+const FILE_MTIME = 1_700_000_000_000;
+
+/** A consent matching a fake file's DEFAULT stat (mode 0o755, uid ME.uid, gid 20 unless overridden) at the given path, fingerprint pinned to FILE_SIZE/FILE_MTIME. */
+function consentFor(path: string, stat: { mode?: number; uid?: number; gid?: number } = {}): BinaryTrustConsent {
+  return {
+    path,
+    fingerprint: { mode: stat.mode ?? 0o755, uid: stat.uid ?? ME.uid, gid: stat.gid ?? 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+    grantedAt: "2026-08-15T00:00:00.000Z",
+  };
+}
+
+describe("consent-aware trust threading (TASK.103)", () => {
+  it("BG1 resolveCodexBinary: no consents refuses with a trustRefusal; a matching consent resolves", () => {
+    const fs = fakeFs({ "/opt/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME } }, { "/opt": { mode: 0o777 } });
+    const noConsent = resolveCodexBinary("/opt/codex", fs, "darwin", ME);
+    expect(noConsent.path).toBeNull();
+    expect(noConsent.reason).toMatch(/world-writable/);
+    expect(noConsent.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: noConsent.reason });
+
+    const withConsent = resolveCodexBinary("/opt/codex", fs, "darwin", ME, [consentFor("/opt/codex")]);
+    expect(withConsent).toEqual({ path: "/opt/codex" });
+  });
+
+  it("BG2 the tag discriminates: a structural refusal carries no trustRefusal; a trust-gate refusal does", () => {
+    const structural = resolveCodexBinary("/opt/codex", fakeFs({ "/opt/codex": { mode: 0o644 } }), "darwin", ME);
+    expect(structural.path).toBeNull();
+    expect(structural.reason).toMatch(/executable/);
+    expect(structural.trustRefusal).toBeUndefined();
+
+    const trustGateRefused = resolveCodexBinary(
+      "/opt/codex",
+      fakeFs({ "/opt/codex": {} }, { "/opt": { mode: 0o777 } }),
+      "darwin",
+      ME,
+    );
+    expect(trustGateRefused.path).toBeNull();
+    expect(trustGateRefused.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: trustGateRefused.reason });
+  });
+
+  it("BG3 discoverCodexBinary carries the FIRST rung's trustRefusal; a matching consent resolves that rung", () => {
+    const fs = fakeFs(
+      { "/env/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME }, "/settings/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME } },
+      { "/env": { mode: 0o777 }, "/settings": { mode: 0o777 } },
+    );
+    const noConsent = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(noConsent.path).toBeNull();
+    expect(noConsent.source).toBe("none");
+    // env is the highest-priority rung — its refusal must win over settings',
+    // even though settings is refused too (BM8: reporting the LAST refusal
+    // instead would name the wrong, lower-priority binary).
+    expect(noConsent.trustRefusal?.binaryPath).toBe("/env/codex");
+
+    const withConsent = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+      consents: [consentFor("/env/codex")],
+    });
+    expect(withConsent).toEqual({ path: "/env/codex", source: "env" });
+  });
+
+  it("BG5 a stale consent (recorded mtimeMs, live stat now newer) refuses again with trustRefusal present — no auto-refresh", () => {
+    const fs = fakeFs({ "/opt/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME + 1000 } }, { "/opt": { mode: 0o777 } });
+    // consentFor pins FILE_MTIME, but the fake fs now reports FILE_MTIME+1000.
+    const result = resolveCodexBinary("/opt/codex", fs, "darwin", ME, [consentFor("/opt/codex")]);
+    expect(result.path).toBeNull();
+    expect(result.trustRefusal).toEqual({ binaryPath: "/opt/codex", reason: result.reason });
   });
 });

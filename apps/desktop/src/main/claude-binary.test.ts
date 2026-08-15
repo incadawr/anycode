@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import {
   candidatesFromPath,
   checkClaudeBinaryPathTrust,
@@ -19,6 +20,9 @@ interface FakeEntry {
   mode?: number;
   uid?: number;
   gid?: number;
+  /** TASK.103 fingerprint fields — optional so every pre-existing fixture keeps typechecking untouched. */
+  size?: number;
+  mtimeMs?: number;
 }
 
 /** Every directory from `dirname(path)` up to (and including) the filesystem root — mirrors `ancestorDirectories` in claude-binary.ts. */
@@ -47,11 +51,27 @@ function fakeFs(files: Readonly<Record<string, FakeEntry>>, dirs: Readonly<Recor
     stat(path) {
       const file = files[path];
       if (file !== undefined) {
-        return { isFile: () => true, isDirectory: () => false, mode: file.mode ?? 0o755, uid: file.uid ?? ME.uid, gid: file.gid ?? 20 };
+        return {
+          isFile: () => true,
+          isDirectory: () => false,
+          mode: file.mode ?? 0o755,
+          uid: file.uid ?? ME.uid,
+          gid: file.gid ?? 20,
+          size: file.size,
+          mtimeMs: file.mtimeMs,
+        };
       }
       const dir = dirEntries[path];
       if (dir !== undefined) {
-        return { isFile: () => false, isDirectory: () => true, mode: dir.mode ?? 0o755, uid: dir.uid ?? ME.uid, gid: dir.gid ?? 20 };
+        return {
+          isFile: () => false,
+          isDirectory: () => true,
+          mode: dir.mode ?? 0o755,
+          uid: dir.uid ?? ME.uid,
+          gid: dir.gid ?? 20,
+          size: dir.size,
+          mtimeMs: dir.mtimeMs,
+        };
       }
       throw new Error("ENOENT");
     },
@@ -194,5 +214,58 @@ describe("defaultClaudeProfileDir", () => {
 
   it("uses backslashes on win32", () => {
     expect(defaultClaudeProfileDir("C:\\Users\\me", "win32")).toBe("C:\\Users\\me\\.anycode\\claude\\profile-default");
+  });
+});
+
+// TASK.103 — condensed mirror of codex-binary.test.ts's BG1+BG3 (the two
+// implementations are deliberate duplicates — each carries its own pin).
+describe("consent-aware trust threading (TASK.103) — BG4", () => {
+  const FILE_SIZE = 4096;
+  const FILE_MTIME = 1_700_000_000_000;
+
+  function consentFor(path: string, stat: { mode?: number; uid?: number; gid?: number } = {}): BinaryTrustConsent {
+    return {
+      path,
+      fingerprint: { mode: stat.mode ?? 0o755, uid: stat.uid ?? ME.uid, gid: stat.gid ?? 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+  }
+
+  it("resolveClaudeBinary: no consents refuses with trustRefusal; a matching consent resolves", () => {
+    const fs = fakeFs({ "/opt/claude": { size: FILE_SIZE, mtimeMs: FILE_MTIME } }, { "/opt": { mode: 0o777 } });
+    const noConsent = resolveClaudeBinary("/opt/claude", fs, "darwin", ME);
+    expect(noConsent.path).toBeNull();
+    expect(noConsent.trustRefusal).toEqual({ binaryPath: "/opt/claude", reason: noConsent.reason });
+
+    const withConsent = resolveClaudeBinary("/opt/claude", fs, "darwin", ME, [consentFor("/opt/claude")]);
+    expect(withConsent).toEqual({ path: "/opt/claude" });
+  });
+
+  it("discoverClaudeBinary: carries the FIRST rung's trustRefusal; a matching consent resolves that rung", () => {
+    const fs = fakeFs(
+      { "/env/claude": { size: FILE_SIZE, mtimeMs: FILE_MTIME }, "/settings/claude": { size: FILE_SIZE, mtimeMs: FILE_MTIME } },
+      { "/env": { mode: 0o777 }, "/settings": { mode: 0o777 } },
+    );
+    const noConsent = discoverClaudeBinary({
+      envOverride: "/env/claude",
+      settingsPath: "/settings/claude",
+      env: {},
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(noConsent.path).toBeNull();
+    expect(noConsent.trustRefusal?.binaryPath).toBe("/env/claude");
+
+    const withConsent = discoverClaudeBinary({
+      envOverride: "/env/claude",
+      settingsPath: "/settings/claude",
+      env: {},
+      fs,
+      platform: "darwin",
+      identity: ME,
+      consents: [consentFor("/env/claude")],
+    });
+    expect(withConsent).toEqual({ path: "/env/claude", source: "env" });
   });
 });

@@ -18,6 +18,7 @@
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import { checkCodexBinaryPathTrust } from "./codex-binary.js";
 import { registerCodexChild } from "./codex-children.js";
 import {
@@ -695,6 +696,8 @@ export interface RunCodexDoctorOptions {
    * deps surface. Explicit here for tests.
    */
   versionPolicy?: CodexVersionPolicy;
+  /** Live per-path binary-trust consents (TASK.103), fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
+  consents?: readonly BinaryTrustConsent[];
 }
 
 /**
@@ -723,7 +726,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
 
   const client = new CodexRpcClient(spawnImpl);
   const versionPolicy = options.versionPolicy ?? activeCodexVersionPolicy();
-  const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform));
+  const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform, undefined, options.consents ?? []));
   /** RE-READ at every gate, never captured: an `AbortSignal` flips under a run in progress — that is its entire purpose, and a narrowed snapshot of it would be a lie. */
   const quitRequested = (): boolean => options.signal?.aborted === true;
 
@@ -744,7 +747,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     // the app-server spawn further down re-reads the filesystem for itself.
     const untrusted = trust(binaryPath);
     if (untrusted !== null) {
-      return { status: "error", error: untrusted };
+      return { status: "error", error: untrusted, trustRefusal: { binaryPath, reason: untrusted } };
     }
     // Home/auth-link guard for the profile the run executes AGAINST (cut §2.5
     // + amended §A1.2): before the FIRST spawn, exactly like the binary trust
@@ -785,7 +788,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     // stat->execve window is the residual (shared/codex-binary-trust.ts header).
     const untrustedAtSpawn = trust(binaryPath);
     if (untrustedAtSpawn !== null) {
-      return { status: "error", error: untrustedAtSpawn };
+      return { status: "error", error: untrustedAtSpawn, trustRefusal: { binaryPath, reason: untrustedAtSpawn } };
     }
     // The home guard that covers THIS spawn (same re-read discipline as the
     // binary trust line above): the one before the preflight is a whole

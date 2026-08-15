@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexRateLimits } from "../../../shared/codex-quota.js";
 import type { CodexProfileRecord } from "../../../shared/settings.js";
+import { binaryTrustRefusalOf } from "./BinaryTrustDialog.js";
 import {
   canRepairLink,
   canSignIn,
@@ -560,5 +561,52 @@ describe("deriveBinaryActions", () => {
   it("L12 counter-form: does not suppress the banner for an unparsable risk-accepted version (renderer parser need not match main's)", () => {
     const unparsableSupport: CodexSupportStatusResult = { ...support, riskAcceptedVersions: ["not-a-version"] };
     expect(deriveBinaryActions({ status: "update_required", version: "not-a-version" }, unparsableSupport).untestedVersion).toBe("not-a-version");
+  });
+});
+
+// TASK.103 (CUT-S4.md §12 step 8, row 36): pins the WIRING between this
+// pane's own report/snapshot shapes and BinaryTrustDialog.tsx's shared pure
+// reader — not a re-test of binaryTrustRefusalOf itself (BinaryTrustDialog.
+// test.ts's BU1 already covers that), but confirmation that a real
+// CodexOnboardingSnapshot's `.report` (this file's own duplicated wire type)
+// satisfies the reader's structural input, and that the pane's PRE-EXISTING
+// `describeCodexReportStatus` needs ZERO change to render a trust-refused
+// report correctly (D-S4-6: the detail is the policy reason verbatim,
+// already named by `unsafeReason` — no new branch, no string-matching).
+describe("binary-trust wiring (TASK.103)", () => {
+  it("a CodexOnboardingSnapshot carrying trustRefusal is read correctly by the shared dialog helper", () => {
+    const snapshot: CodexOnboardingSnapshot = {
+      report: {
+        status: "error",
+        error: "Codex binary's directory (/tmp/s4-trust) is world-writable",
+        trustRefusal: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "Codex binary's directory (/tmp/s4-trust) is world-writable" },
+      },
+      binaryPath: "/tmp/s4-trust/bin/codex",
+      source: "env",
+      checkedAt: "2026-08-15T00:00:00.000Z",
+    };
+    expect(binaryTrustRefusalOf(snapshot.report)).toEqual({
+      binaryPath: "/tmp/s4-trust/bin/codex",
+      reason: "Codex binary's directory (/tmp/s4-trust) is world-writable",
+    });
+  });
+
+  it("a report with NO trustRefusal (a plain error, or not_installed) is read as null — no Trust button offered", () => {
+    const notInstalled: CodexDoctorReport = { status: "not_installed" };
+    const plainError: CodexDoctorReport = { status: "error", error: "spawn ENOENT" };
+    expect(binaryTrustRefusalOf(notInstalled)).toBeNull();
+    expect(binaryTrustRefusalOf(plainError)).toBeNull();
+  });
+
+  it("describeCodexReportStatus needs no change for a trust-refused report — same 'Error' tone/detail as any other error status (D-S4-6)", () => {
+    const trustRefused: CodexDoctorReport = {
+      status: "error",
+      error: "Codex binary's directory (/tmp/s4-trust) is world-writable",
+      trustRefusal: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "Codex binary's directory (/tmp/s4-trust) is world-writable" },
+    };
+    const plainError: CodexDoctorReport = { status: "error", error: "Codex binary's directory (/tmp/s4-trust) is world-writable" };
+    expect(describeCodexReportStatus(trustRefused)).toEqual(describeCodexReportStatus(plainError));
+    expect(describeCodexReportStatus(trustRefused).tone).toBe("error");
+    expect(describeCodexReportStatus(trustRefused).detail).toBe("Codex binary's directory (/tmp/s4-trust) is world-writable");
   });
 });

@@ -19,12 +19,15 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { ipcMain } from "electron";
 import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
 import {
+  BINARY_TRUST_GRANT_CHANNEL,
+  BINARY_TRUST_REVOKE_CHANNEL,
   CONNECTION_CHECK_CHANNEL,
   CONNECTION_CREATE_CHANNEL,
   CONNECTION_DELETE_CHANNEL,
@@ -57,6 +60,7 @@ import type {
   SettingsMutationResult,
   SettingsPatch,
   SettingsSnapshot,
+  TrustedBinaryConsent,
 } from "../shared/settings.js";
 import {
   computeProviderReady,
@@ -147,6 +151,16 @@ export interface SettingsIpcDeps {
    * absent in a test deps bag simply omits `appVersion` from the snapshot.
    */
   getAppVersion?: () => string;
+  /**
+   * TASK.103 seam: realpath+stat of a binary the user asked to trust.
+   * Production: realpathSync -> statSync. Injectable so grant tests never
+   * depend on live fs layout.
+   */
+  statBinaryForTrust?: (path: string) =>
+    | { ok: true; resolvedPath: string; stat: { isFile: boolean; mode: number; uid: number; gid: number; size: number; mtimeMs: number } }
+    | { ok: false; error: string };
+  /** TASK.103: platform gate for the grant (win32 refuses — the unchecked path needs no consent). Defaults to process.platform. */
+  platform?: NodeJS.Platform;
 }
 
 /** Outcome of an explicit `connection-check` probe (TASK.45 W11). */
@@ -253,6 +267,17 @@ const ruleAddSchema: z.ZodType<PermissionRuleAddRequest> = z.object({
   toolName: z.string().min(1),
   pattern: z.string().optional(),
 });
+
+// TASK.103: grant/revoke request payloads — {path} ONLY. The fingerprint is
+// NEVER accepted from the caller; main computes it main-side from the live
+// filesystem (D-S4-5) via `statBinaryForTrust`.
+const binaryTrustGrantSchema = z.object({ path: z.string().min(1) });
+const binaryTrustRevokeSchema = z.object({ path: z.string().min(1) });
+
+/** Local structural check (no shared helper exists in this file to reuse — ANCHORS-S4 confirms `isPlainObjectLike` is a hedge, not a real symbol). */
+function isPlainObjectLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 // ── connection CRUD payload schemas (TASK.45 W9) ──
 const transportEnum = z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
@@ -525,6 +550,14 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   if ("provider" in rawPatch) {
     return { ok: false, reason: "invalid" };
   }
+  // TASK.103 custody: consent records are written ONLY by the dedicated
+  // grant/revoke channels — main computes the fingerprint from the live
+  // filesystem. A generic merge carrying them is refused loudly, never
+  // silently stripped (a buggy caller must not believe it persisted).
+  const securityPatch = rawPatch.security;
+  if (isPlainObjectLike(securityPatch) && "trustedBinaries" in securityPatch) {
+    return { ok: false, reason: "invalid" };
+  }
 
   return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
@@ -704,6 +737,92 @@ export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promis
       };
       await saveSettings(deps.settingsPath, settings);
     }
+    const snapshot = await snapshotFrom(deps, settings, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
+  });
+}
+
+/**
+ * binary-trust-grant (TASK.103, D-S4-5): the ONLY writer of
+ * `settings.security.trustedBinaries`. The request carries `{path}` ONLY —
+ * the fingerprint is computed HERE, main-side, from the live filesystem
+ * (`deps.statBinaryForTrust`), never accepted from the renderer. Structural
+ * targets (relative path, nonexistent, not a file, not executable, win32)
+ * are refused `invalid` before any write — a grant for something that
+ * cannot be run would only manufacture a confused state (D-S4-2). Re-
+ * granting a path REPLACES its record (upsert, no duplicates) — the exact
+ * `handleAddRule` discipline above, applied to a different array.
+ */
+export async function handleBinaryTrustGrant(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
+  const parsed = binaryTrustGrantSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid" };
+  }
+  const platform = deps.platform ?? process.platform;
+  if (platform === "win32") {
+    return { ok: false, reason: "invalid" };
+  }
+  if (!isAbsolute(parsed.data.path)) {
+    return { ok: false, reason: "invalid" };
+  }
+  const statResult = deps.statBinaryForTrust?.(parsed.data.path);
+  if (statResult === undefined || !statResult.ok) {
+    return { ok: false, reason: "invalid" };
+  }
+  const { resolvedPath, stat } = statResult;
+  if (!stat.isFile || (stat.mode & 0o111) === 0) {
+    return { ok: false, reason: "invalid" };
+  }
+
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const record: TrustedBinaryConsent = {
+      path: resolvedPath,
+      fingerprint: { mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs },
+      grantedAt: deps.now?.() ?? new Date().toISOString(),
+    };
+    const existing = loaded.settings.security.trustedBinaries ?? [];
+    const trustedBinaries = [...existing.filter((c) => c.path !== record.path), record];
+    const settings: AnycodeSettings = {
+      ...loaded.settings,
+      security: { ...loaded.settings.security, trustedBinaries },
+    };
+    if (!settingsSchema.safeParse(settings).success) {
+      return { ok: false, reason: "invalid" };
+    }
+    await saveSettings(deps.settingsPath, settings);
+    const snapshot = await snapshotFrom(deps, settings, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
+  });
+}
+
+/**
+ * binary-trust-revoke (TASK.103): removes exactly the named path's consent
+ * record. Idempotent — an unknown path is a no-op success with a fresh
+ * snapshot (D-S4-7).
+ */
+export async function handleBinaryTrustRevoke(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
+  const parsed = binaryTrustRevokeSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid" };
+  }
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const existing = loaded.settings.security.trustedBinaries ?? [];
+    const trustedBinaries = existing.filter((c) => c.path !== parsed.data.path);
+    const settings: AnycodeSettings = {
+      ...loaded.settings,
+      security: { ...loaded.settings.security, trustedBinaries },
+    };
+    await saveSettings(deps.settingsPath, settings);
     const snapshot = await snapshotFrom(deps, settings, false);
     await emitMutation(deps, snapshot);
     return { ok: true, snapshot };
@@ -1289,6 +1408,8 @@ export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vau
   ipcMain.handle(SECRET_SET_CHANNEL, (_event, raw: unknown) => handleSetSecret(deps, raw));
   ipcMain.handle(SECRET_CLEAR_CHANNEL, (_event, raw: unknown) => handleClearSecret(deps, raw));
   ipcMain.handle(PERMISSION_RULE_ADD_CHANNEL, (_event, raw: unknown) => handleAddRule(deps, raw));
+  ipcMain.handle(BINARY_TRUST_GRANT_CHANNEL, (_event, raw: unknown) => handleBinaryTrustGrant(deps, raw));
+  ipcMain.handle(BINARY_TRUST_REVOKE_CHANNEL, (_event, raw: unknown) => handleBinaryTrustRevoke(deps, raw));
   ipcMain.handle(OAUTH_START_CHANNEL, (_event, raw: unknown) => handleOAuthStart(deps, raw));
   ipcMain.handle(OAUTH_CANCEL_CHANNEL, (_event, raw: unknown) => handleOAuthCancel(deps, raw));
   // Connection CRUD (TASK.45 W9): main-authoritative, additive channels.

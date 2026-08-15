@@ -125,7 +125,17 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
       spawnImpl: fakeSpawn(),
       profileDir: freshProfileDir(),
     });
-    expect(report).toEqual({ status: "error", error: "Claude binary is world-writable" });
+    // TASK.103: the report now additionally carries a structured
+    // trustRefusal — see the "consent threading (TASK.103)" describe below,
+    // whose own test pins this shape directly. Extended here (not appended
+    // as a new test) because this is a strict toEqual against the trust-gate
+    // refusal shape and the additive field changes that shape; status/error
+    // stay the pre-existing pin, byte-identical.
+    expect(report).toEqual({
+      status: "error",
+      error: "Claude binary is world-writable",
+      trustRefusal: { binaryPath: "/fake/claude", reason: "Claude binary is world-writable" },
+    });
   });
 
   it("error: initialize handshake times out (CLI never answers)", async () => {
@@ -344,5 +354,25 @@ describe("runClaudeDoctor — cancellation awaits child teardown (never returns 
     });
     expect(report).toEqual({ status: "error", error: "claude doctor aborted" });
     expect(spawned).toEqual([]);
+  });
+});
+
+describe("runClaudeDoctor — consent threading (TASK.103)", () => {
+  // Mirror of codex-doctor.test.ts's BD2: the refusal report carries a
+  // structured trustRefusal sourced from the injected trust seam. (The BD1
+  // real-fs/consent-lifts-the-refusal case is codex-doctor.test.ts's own —
+  // duplicating the POSIX scratch staging here for the mirror engine is
+  // covered instead by claude-client.test.ts's BH2, main/claude-binary.test.ts's
+  // BG4, and this file's own `trust: TRUSTED` convention.)
+  it("the refusal report carries a structured trustRefusal sourced from the injected trust seam", async () => {
+    const reason = "Claude binary (/fake/claude) is world-writable";
+    const report = await runClaudeDoctor("/fake/claude", {
+      trust: () => reason,
+      spawnImpl: fakeSpawn(),
+      profileDir: freshProfileDir(),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toBe(reason);
+    expect(report.trustRefusal).toEqual({ binaryPath: "/fake/claude", reason });
   });
 });

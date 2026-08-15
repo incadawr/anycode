@@ -34,4 +34,11 @@ export interface ClaudeDoctorReport {
   status: ClaudeDoctorStatus;
   version?: string;
   error?: string;
+  /**
+   * Present when the refusal came from the binary-trust gate (TASK.103): the
+   * exact candidate path and the policy's reason. The consent card renders
+   * from THIS, never from string-matching `error`. Never persisted —
+   * lastCheck projections carry status/version/at only.
+   */
+  trustRefusal?: { binaryPath: string; reason: string };
 }

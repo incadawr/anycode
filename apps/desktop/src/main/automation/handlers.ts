@@ -760,6 +760,36 @@ export function codexPaneRefreshManifest(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("codexPaneRefreshManifest", []);
 }
 
+export function codexPaneTrustOpen(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("codexPaneTrustOpen", []);
+}
+
+// --- Binary-trust consent dialog probe/driver (TASK.103, CUT-S4.md §3.8):
+// thin wrappers, same discipline as the Codex pane probe/drivers above —
+// the facade owns every guard (dialog_not_open / button_not_present), this
+// layer only forwards method + args. ---
+
+export function binaryTrustDialogState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("binaryTrustDialogState", []);
+}
+
+export function binaryTrustDialogResolve(deps: HandlerDeps, accept: boolean): Promise<unknown> {
+  return deps.callFacade("binaryTrustDialogResolve", [accept]);
+}
+
+// --- Trusted-binaries Settings-section probe/driver (TASK.103, D-S4-7):
+// thin wrappers, same discipline as above — the facade owns every guard
+// (pane_not_mounted / button_not_present), this layer only forwards method +
+// args. ---
+
+export function trustedBinariesState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("trustedBinariesState", []);
+}
+
+export function trustedBinaryRevoke(deps: HandlerDeps, path: string): Promise<unknown> {
+  return deps.callFacade("trustedBinaryRevoke", [path]);
+}
+
 // --- Codex profile chip probe/driver (W4-F0, findings S1-1 probe (b)): thin
 // wrappers, same discipline as the start-screen probes above — the facade
 // owns every guard (not_present / did_not_open / unknown_option), this layer

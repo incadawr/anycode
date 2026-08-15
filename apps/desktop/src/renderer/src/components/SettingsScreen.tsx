@@ -97,6 +97,7 @@ import { ConnectionDrawer } from "./ConnectionDrawer.js";
 import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
+import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
 import { McpServersPane } from "./McpServersPane.js";
 import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane } from "./SubagentsPane.js";
@@ -165,7 +166,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   provider: ["api key", "model", "base url", "oauth", "sign in", "credentials"],
   codex: ["codex", "agent", "engine", "sign in", "chatgpt", "cli", "binary", "install", "update"],
   claude: ["claude", "agent", "engine", "sign in", "anthropic", "cli", "binary"],
-  permissions: ["always allow", "rules", "bash", "pattern", "tool"],
+  permissions: ["always allow", "rules", "bash", "pattern", "tool", "trusted", "binary", "consent", "security"],
   tools: ["concurrency", "stall timeout", "max turns", "tool"],
   mcp: ["mcp", "server", "status"],
   skills: ["skill", "skills", "import", "enable"],
@@ -1330,6 +1331,8 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
             {activePane === "claude" && <ClaudeEnginePane />}
 
             {activePane === "permissions" && <PermissionsEditor store={store} />}
+
+            {activePane === "permissions" && <TrustedBinariesSection store={store} />}
 
             {activePane === "tools" && (
               <section className="settings-section">
