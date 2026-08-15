@@ -2928,6 +2928,18 @@ body {
    (the ledger row); expanded it reads as before (name + badge) with the
    body below. The header/body divider lives on .tool-call-body's border-top
    so a collapsed card is a clean single row. */
+/* TASK.120: the toggle's row wrapper. An actionable child badge (see
+   .tool-call-child-badge-action below) rides BESIDE the toggle, not inside
+   it — a <button> cannot nest in the toggle <button>. Every non-actionable
+   card renders exactly one child here (the toggle itself, width:100%), so
+   the row stays a pass-through: it is the same one flex line the toggle
+   alone painted before this wrapper existed, and collapsed cards still fill
+   the card's clickable header exactly as before. */
+.tool-call-toggle-row {
+  display: flex;
+  align-items: center;
+}
+
 .tool-call-toggle {
   display: flex;
   align-items: center;
@@ -3165,6 +3177,38 @@ body {
 .tool-call-child-badge-waiting_permission {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* TASK.120: the waiting_permission badge rendered with an onOpen handler is
+   a real <button>, and THIS modifier carries ONLY its interactive layer —
+   UA button reset (border/font; the padding/radius/size atoms live on the
+   .tool-call-child-badge base, kept identical for both mounts), cursor,
+   and a hover state — so the three static kinds (and a waiting badge
+   without onOpen) keep none of it and still read as status chips. Hover
+   keeps the accent vocabulary the chip already used (the open-button
+   precedent: interactive, but no new color). Focus ring is NOT
+   re-specified — the global :focus-visible (tokens.css) covers this
+   element like any other focusable in the card. */
+.tool-call-child-badge-action {
+  flex: none;
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.tool-call-child-badge-action:hover {
+  background: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+/* Header-row mount only (the expanded child row keeps its own gap): the
+   badge rides at the row's end, flush with the card's rounded border
+   without this — mirror the toggle's own horizontal padding so the action
+   lines up with the ledger row's right edge. Scoped under the toggle row so
+   the identical badge in .tool-call-subagent-child-row is untouched. */
+.tool-call-toggle-row .tool-call-child-badge-action {
+  margin-right: var(--sp-3);
 }
 
 /* Expanded-body row (SubagentStatus, ToolCallCard.tsx): badge + Open action,
