@@ -5,6 +5,43 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.11] — 2026-08-15
+
+### Added
+
+- A subagent now runs as a session of its own instead of disappearing inside
+  its parent's transcript. Its card in the parent opens a split pane where the
+  child's own conversation is visible while it works; a message can be sent
+  into a running child, and its permission prompts are answered in its own
+  pane. Children handed to the Codex and Claude engines boot in child mode
+  with their own permission broker and their own model — they no longer
+  inherit the parent's silently — and a child whose engine record is missing
+  refuses honestly instead of starting on an empty transcript. The card
+  survives a reload: reopening a session redraws the children it spawned,
+  along with what they did.
+- Sessions can be deleted. Until now the list only ever grew: a session that
+  was a typo, a smoke run, or a dead experiment stayed there forever. Rows
+  now carry a delete action, and there is a bulk flow for clearing everything
+  older than a chosen age which counts the affected sessions first and states
+  that count before anything is removed. Deleting a session also deletes the
+  children it spawned, so a subagent tree never outlives its parent as an
+  orphan.
+- A child that stopped for a permission prompt is now visible from the
+  parent — the parent's own row reports it instead of appearing merely busy —
+  and the badge is a button: clicking it opens that child's pane with the
+  Allow/Deny prompt already on screen, so answering no longer means hunting
+  for the right session first.
+
+### Fixed
+
+- The Z.AI model catalog was stale and its errors were misread. The list now
+  matches the published line-up, newest first, so a new connection prefills a
+  current model. And a rejected key is no longer reported as a broken
+  endpoint: Z.AI answers an auth failure with HTTP 200 carrying an error body,
+  which used to read as a successful fetch that simply found no models — that
+  case is now named as the key problem it is, and a genuinely empty catalog is
+  reported as its own distinct outcome.
+
 ## [0.0.10] — 2026-08-08
 
 ### Added
