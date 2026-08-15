@@ -79,7 +79,7 @@ import {
   readComposerImageFile,
 } from "./Composer.js";
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
-import { activeConnection, activeProviderView } from "../../../shared/settings.js";
+import { activeProviderView, connectionById } from "../../../shared/settings.js";
 import type { CatalogSummary, CustomProviderRecord, ProviderConnection } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
@@ -696,14 +696,26 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const view = snapshot ? activeProviderView(snapshot.settings) : undefined;
   const providerId = view?.id;
   const pid = resolvePid(providerId);
-  // Live-fetched ids on the active connection take precedence over the catalog
-  // entry's static hints (a new draft always starts on the active connection).
-  const startConnection = snapshot ? activeConnection(snapshot.settings) : undefined;
+  const activeConnectionId = snapshot?.settings.provider.activeConnectionId;
+  // TASK.106 cut-1 P2 fix: the chip's own LABEL must resolve against the
+  // connection the draft is actually pinned to, else the active connection
+  // (`SessionDraft.connectionId`'s own "unset ⇒ active" convention) — not
+  // unconditionally the active connection. `modelDisplayName` falls back to
+  // the raw id on a catalog miss, so after a cross-connection pick (e.g.
+  // picking "Kimi K2" while Anthropic stays active) the active connection's
+  // catalog never contains the picked id and the chip would show the raw
+  // `kimi-k2-...` id instead of "Kimi K2". `resolvedDefault` below is
+  // deliberately left resolving off the active view (unchanged) — a pin only
+  // ever affects this label lookup, never which model plays default when the
+  // draft has no explicit pick at all.
+  const chipConnectionId = draft?.connectionId ?? activeConnectionId;
+  const chipConnection =
+    snapshot && chipConnectionId !== undefined ? connectionById(snapshot.settings, chipConnectionId) : undefined;
   const catalogModels = providerModelsFor(
-    providerId,
+    chipConnection?.providerId,
     snapshot?.catalog,
     snapshot?.settings.provider.custom,
-    startConnection?.models,
+    chipConnection?.models,
   );
   const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);
@@ -718,13 +730,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // TASK.106 cut-1 stage B: the model popover's grouped list spans every
   // connected connection, not just the active one; the "current pair" it
   // checkmarks is the draft's explicit connection pin, else the active
-  // connection (`SessionDraft.connectionId`'s own "unset ⇒ active" convention).
-  const activeConnectionId = snapshot?.settings.provider.activeConnectionId;
+  // connection — the SAME `chipConnectionId` the label above just resolved.
   const modelGroups = buildStartModelMenuGroups(
     snapshot?.settings.provider.connections ?? [],
     snapshot?.catalog,
     snapshot?.settings.provider.custom,
-    { connectionId: draft?.connectionId ?? activeConnectionId, modelId: modelChip.modelId },
+    { connectionId: chipConnectionId, modelId: modelChip.modelId },
   );
   // Flattened for roving-focus indexing (group header rows are never
   // focusable/counted — indexing is by clickable row only, §3 item 7).

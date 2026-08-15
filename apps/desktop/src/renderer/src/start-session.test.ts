@@ -7,7 +7,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { createTabsStore } from "./tabs-store.js";
+import { createSettingsStore } from "./settings-store.js";
+import { selectStartModelRow } from "./components/StartScreen.js";
 import type { CreateTabResult } from "../../shared/tabs.js";
+import type { SettingsSnapshot } from "../../shared/settings.js";
 
 function makeDeps(createTabResult: CreateTabResult, order: string[] = []) {
   const tabsStore = createTabsStore();
@@ -279,6 +282,57 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(res).toEqual({ ok: true, tabId: "t1" });
     expect(tabsStore.getState().tabs).toHaveLength(1);
     expect(tabsStore.getState().activeTabId).toBe("t1");
+  });
+});
+
+describe("TASK.106 cut-1 — DoD item 3: settings.provider.activeConnectionId invariant", () => {
+  function fakeSettingsSnapshot(): SettingsSnapshot {
+    return {
+      settings: {
+        version: 2,
+        provider: {
+          activeConnectionId: "conn-active",
+          connections: [
+            { id: "conn-active", providerId: "anthropic" },
+            { id: "conn-other", providerId: "kimi" },
+          ],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      secrets: [{ key: "provider.apiKey", set: false, source: "none", tier: "unavailable" }],
+      providerReady: false,
+      envOverrides: [],
+      readOnly: false,
+    };
+  }
+
+  it("a cross-connection model pick + submit leaves the global settings store's activeConnectionId untouched — the pin lives only on the draft, never written back to settings", async () => {
+    // An isolated settings-store instance, seeded directly (no bridge call —
+    // this test never mutates it through `setPatch`/`connectionUpdate`; it
+    // only ever READS it back at the end, to prove nothing else did either).
+    const settingsStore = createSettingsStore();
+    settingsStore.setState({ snapshot: fakeSettingsSnapshot() });
+
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+
+    // Cross-connection pick — StartScreen's own grouped-popover row click
+    // handler (`selectStartModelRow`, StartScreen.tsx), picking a model that
+    // belongs to a DIFFERENT connection than the (fake) active one.
+    selectStartModelRow("conn-other", "kimi-k2", { tabsStore });
+    expect(tabsStore.getState().draft?.connectionId).toBe("conn-other");
+
+    await submitStartDraft(deps);
+
+    // DoD item 2 (already covered elsewhere, re-asserted here for context):
+    // the pin rode all the way to createTab.
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", connectionId: "conn-other" });
+    // DoD item 3: the global default connection never moved.
+    expect(settingsStore.getState().snapshot?.settings.provider.activeConnectionId).toBe("conn-active");
   });
 });
 
