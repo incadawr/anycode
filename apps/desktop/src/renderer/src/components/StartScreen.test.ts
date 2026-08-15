@@ -33,6 +33,7 @@ import {
   type FolderPickDeps,
   type ModelPickDeps,
 } from "./StartScreen.js";
+import { providerModelsFor } from "./ModelPill.js";
 import { createTabsStore } from "../tabs-store.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { StartSubmitResult } from "../start-session.js";
@@ -553,6 +554,45 @@ describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B — grouped New Sess
 
     expect(groups[0]?.items.find((i) => i.current)).toEqual({ id: "claude-opus", name: "Claude Opus", current: true });
     expect(groups[1]?.items.some((i) => i.current)).toBe(false);
+  });
+});
+
+describe("TASK.106 cut-1 P2 fix: model chip label resolves against the PINNED connection's catalog, not always the active one", () => {
+  const catalog: CatalogSummary = [
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      authKind: "api_key",
+      models: [{ id: "claude-opus", name: "Claude Opus" }],
+    },
+    {
+      id: "kimi",
+      name: "Kimi",
+      authKind: "api_key",
+      models: [{ id: "kimi-k2-0905", name: "Kimi K2" }],
+    },
+  ];
+
+  it("computeModelChipDisplay: given the PINNED (not active) connection's catalog, resolves the real display name instead of falling back to the raw model id", () => {
+    // Active connection is Anthropic; the user picked Kimi K2 from the OTHER
+    // connection's group in the popover. The chip must still resolve "Kimi
+    // K2" — not the raw "kimi-k2-0905" id modelDisplayName falls back to on
+    // a catalog miss — because the caller resolves catalogModels off the
+    // PINNED connection (`draft.connectionId`), not the active one.
+    const pinnedConnectionCatalogModels = providerModelsFor("kimi", catalog, undefined, undefined);
+    const chip = computeModelChipDisplay("kimi-k2-0905", "claude-opus", pinnedConnectionCatalogModels);
+
+    expect(chip).toEqual({ modelId: "kimi-k2-0905", label: "Kimi K2", isDefault: false });
+  });
+
+  it("regression check: resolving off the ACTIVE connection's catalog instead (the pre-fix bug) would have fallen back to the raw id", () => {
+    // Same pick, but catalogModels resolved off the ACTIVE connection
+    // (Anthropic) instead of the pin — this is exactly what StartScreen.tsx
+    // did before the fix, and demonstrates why it produced the wrong label.
+    const activeConnectionCatalogModels = providerModelsFor("anthropic", catalog, undefined, undefined);
+    const chip = computeModelChipDisplay("kimi-k2-0905", "claude-opus", activeConnectionCatalogModels);
+
+    expect(chip.label).toBe("kimi-k2-0905");
   });
 });
 
