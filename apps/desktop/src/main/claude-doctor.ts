@@ -26,7 +26,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
-import { checkClaudeBinaryPathTrust } from "./claude-binary.js";
+import { classifyClaudeBinaryPathTrust, type ClaudeBinaryTrustGateOutcome } from "./claude-binary.js";
 import { augmentPathForGui } from "./codex-doctor.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
 import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
@@ -453,8 +453,8 @@ export interface RunClaudeDoctorOptions {
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
   /** Aborts the run (app quit): the in-flight phase gives up; its own bounded teardown still runs before it settles. */
   signal?: AbortSignal;
-  /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkClaudeBinaryPathTrust`). */
-  trust?: (binaryPath: string) => string | null;
+  /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`classifyClaudeBinaryPathTrust`). */
+  trust?: (binaryPath: string) => ClaudeBinaryTrustGateOutcome;
   /**
    * Isolated-profile override (owner pivot: OPTIONAL). Omitted (the product
    * default) means the probe sets no `CLAUDE_CONFIG_DIR` at all and diagnoses
@@ -479,7 +479,7 @@ export interface RunClaudeDoctorOptions {
 export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoctorOptions): Promise<ClaudeDoctorReport> {
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
-  const trust = options.trust ?? ((path: string) => checkClaudeBinaryPathTrust(path, undefined, platform, undefined, options.consents ?? []));
+  const trust = options.trust ?? ((path: string) => classifyClaudeBinaryPathTrust(path, undefined, platform, undefined, options.consents ?? []));
   const versionTimeoutMs = options.versionTimeoutMs ?? VERSION_PREFLIGHT_TIMEOUT_MS;
   const initTimeoutMs = options.initTimeoutMs ?? INIT_HANDSHAKE_TIMEOUT_MS;
   const watchdogMs =
@@ -495,7 +495,13 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     }
     const untrusted = trust(binaryPath);
     if (untrusted !== null) {
-      return { status: "error", error: untrusted, trustRefusal: { binaryPath, reason: untrusted } };
+      return {
+        status: "error",
+        error: untrusted.reason,
+        ...(untrusted.kind === "refused" && untrusted.consentable
+          ? { trustRefusal: { binaryPath: untrusted.resolvedPath, reason: untrusted.reason, staleConsent: untrusted.staleConsent } }
+          : {}),
+      };
     }
     const preflight = await preflightVersion(binaryPath, childEnv, spawnImpl, versionTimeoutMs, cancellation);
     if (preflight.error !== undefined) {
@@ -518,7 +524,13 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     // a whole `--version` round trip.
     const untrustedAtSpawn = trust(binaryPath);
     if (untrustedAtSpawn !== null) {
-      return { status: "error", error: untrustedAtSpawn, trustRefusal: { binaryPath, reason: untrustedAtSpawn } };
+      return {
+        status: "error",
+        error: untrustedAtSpawn.reason,
+        ...(untrustedAtSpawn.kind === "refused" && untrustedAtSpawn.consentable
+          ? { trustRefusal: { binaryPath: untrustedAtSpawn.resolvedPath, reason: untrustedAtSpawn.reason, staleConsent: untrustedAtSpawn.staleConsent } }
+          : {}),
+      };
     }
 
     const handshake = await runInitializeHandshake(binaryPath, childEnv, spawnImpl, initTimeoutMs, cancellation);
