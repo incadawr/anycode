@@ -421,13 +421,6 @@ export class AgentLoop {
     const signal = options?.signal;
     const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
 
-    // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved
-    // ExitPlanMode advancing plan -> planExitMode (design slice-4.3-cut.md
-    // §2.3), applied via the PlanModeControl mutation below rather than by
-    // re-reading config; (2) the user-initiated setMode() (TASK.37), which
-    // reaches this same running turn via activeDispatchCtx.
-    const mode = options?.mode ?? this.config.mode;
-
     // Pre-aborted: end immediately, before hooks or any model call.
     if (signal?.aborted) {
       yield* this.emitLoopEnd("cancelled", 0, signal);
@@ -464,6 +457,20 @@ export class AgentLoop {
         ...(options?.attachments?.length ? { images: options.attachments } : {}),
       });
     }
+
+    // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved
+    // ExitPlanMode advancing plan -> planExitMode (design slice-4.3-cut.md
+    // §2.3), applied via the PlanModeControl mutation below rather than by
+    // re-reading config; (2) the user-initiated setMode() (TASK.37), which
+    // reaches this same running turn via activeDispatchCtx. The mode is read
+    // HERE — after the UserPromptSubmit await above, not at generator entry —
+    // and consumed by the context literal below in the same synchronous
+    // stretch as the activeDispatchCtx publish, so a setMode() landing during
+    // the hook await lands in config.mode and this read picks it up
+    // (ARBITRATION-S3-W1 D-S3-16: reading it before the await silently
+    // reverted a user's mid-turn switch for the whole turn). No await may be
+    // introduced between this line and the publish.
+    const mode = options?.mode ?? this.config.mode;
 
     const dispatchCtx: DispatchContext = {
       registry: this.config.registry,
@@ -531,6 +538,8 @@ export class AgentLoop {
       };
     }
 
+    // Published in the same synchronous stretch as the mode read above — no
+    // await between them (ARBITRATION-S3-W1 D-S3-16).
     this.activeDispatchCtx = dispatchCtx;
     try {
       let turn = 0;
@@ -933,7 +942,12 @@ export class AgentLoop {
    * DispatchContext's mode, so the NEXT not-yet-taken permission check gates
    * under the new mode. An already-escalated ask is untouched by construction
    * (snapshot semantics, track DV-1): its PermissionRequest captured `mode` at
-   * dispatch time and is never rebuilt. Deliberately does NOT fire
+   * dispatch time and is never rebuilt. A call landing during the runTurn
+   * prologue (before activeDispatchCtx is published) is not lost either: the
+   * prologue reads config.mode AFTER its UserPromptSubmit await, in the same
+   * synchronous stretch as the publish (ARBITRATION-S3-W1 D-S3-16), so the
+   * config half of this write is what that turn gates under. Deliberately
+   * does NOT fire
    * config.onModeChange — that callback is the loop-INITIATED notification
    * channel (the ExitPlanMode arc); a user-initiated caller owns its own
    * persistence and notification (desktop: Session.onSetMode).
