@@ -79,7 +79,17 @@ export type FetchModelsFailureReason =
   | "response_too_large"
   | "timeout"
   | "network_error"
-  | "invalid_response";
+  | "invalid_response"
+  // TASK.113: Z.AI's anthropic-compatible /v1/models answers an auth failure
+  // with HTTP 200 + {"success":false,"code":1001,...} (measured live 2026-08-15;
+  // the sibling paas routes send an honest 401 for the same condition). `ok`
+  // alone cannot gate that — the BODY must be inspected before trusting it.
+  | "error_payload"
+  // TASK.113: a well-formed {data:[]} is a real, distinct outcome — the endpoint
+  // answered and lists zero models (no key on plan, no access). Returning it as
+  // a silent "success with nothing" hides the problem; flagging it as a generic
+  // error overstates it. It gets its own reason so the copy can say both.
+  | "empty_models";
 
 export type FetchModelsOutcome =
   | { ok: true; models: { id: string }[] }
@@ -187,9 +197,19 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   } catch {
     return { ok: false, reason: "invalid_response" };
   }
+  // TASK.113: check the body for an error BEFORE trusting its shape as a models
+  // list — a 200 with {"success":false,"code":...} is a refused request wearing
+  // a success status, and must not degrade into `invalid_response`'s "wasn't a
+  // recognizable models list" (let alone a silent empty success).
+  if (looksLikeErrorPayload(parsed)) {
+    return { ok: false, reason: "error_payload" };
+  }
   const models = extractModelIds(parsed);
   if (models === undefined) {
     return { ok: false, reason: "invalid_response" };
+  }
+  if (models.length === 0) {
+    return { ok: false, reason: "empty_models" };
   }
   return { ok: true, models };
 }
@@ -246,6 +266,32 @@ function extractModelIds(value: unknown): { id: string }[] | undefined {
     }
   }
   return models;
+}
+
+/**
+ * TASK.113: does this parsed 200-body carry an error instead of a models list?
+ * Fail-closed, never throws. Two signals, either suffices:
+ *  - `success === false` (strict boolean — Z.AI's anthropic-compat /v1/models
+ *    auth failure: 200 + {"code":1001,"msg":"...","success":false});
+ *  - an own `code` property (number|string) with NO `data` array alongside —
+ *    the common error-envelope shape that carries no models at all.
+ * A body WITH a valid `data` array is never an error, even if it also carries a
+ * `code` field (some providers stamp a benign code on success envelopes) — the
+ * models win.
+ */
+export function looksLikeErrorPayload(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const hasDataArray = "data" in value && Array.isArray((value as { data: unknown }).data);
+  if (hasDataArray) {
+    return false;
+  }
+  if ((value as { success?: unknown }).success === false) {
+    return true;
+  }
+  const code = (value as { code?: unknown }).code;
+  return code !== undefined && (typeof code === "number" || typeof code === "string");
 }
 
 // ── custom-provider CRUD ──

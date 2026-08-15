@@ -1724,7 +1724,10 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(await runPromise).toBe(0);
     const text = getText();
     expect(text).toContain("[model] glm-4.6");
-    expect(text).toContain("[model] provider: Z.AI (GLM) — models: glm-5.2, glm-4.6, glm-4.5, glm-4.5-air (switch: /model <id>)");
+    // TASK.113: the refreshed Z.AI catalog line, fresh-first.
+    expect(text).toContain(
+      "[model] provider: Z.AI (GLM) — models: glm-5.3, glm-5.2, glm-5.1, glm-5, glm-5-turbo, glm-4.7, glm-4.6, glm-4.5, glm-4.5-air (switch: /model <id>)",
+    );
     // /model show never reaches the model.
     expect(modelPort.calls).toBe(0);
   });
