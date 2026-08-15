@@ -42,6 +42,7 @@ import type {
   PermissionRuling,
 } from "../types/permissions.js";
 import { ModePermissionEngine } from "../permissions/index.js";
+import { InMemoryHookRunner } from "../dispatch/hook-runner.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
@@ -2325,6 +2326,118 @@ describe("AgentLoop.setMode — mid-turn permission-mode change (TASK.37)", () =
     // config.mode is "yolo" afterwards: the next (non-overridden) turn's first
     // check is recorded as "yolo".
     await collect(loop.runTurn("confirm config.mode persisted"));
+    expect(modes.at(-1)).toBe("yolo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.37 fix wave 1 (ARBITRATION-S3-W1 D-S3-16): the prologue hook-await
+// window. A setMode() landing while runTurn's UserPromptSubmit await is
+// pending must gate the turn it lands in, not be silently lost for the whole
+// turn (wave-1 BLOCKER B1). The real InMemoryHookRunner is used — the same
+// class the desktop host registers command hooks into — and the hook is held
+// open on an explicit gate promise, so the interleaving is deterministic
+// (no wall-clock timing).
+
+describe("AgentLoop.setMode — prologue hook-await window (TASK.37 W1, H-series)", () => {
+  function gatedUserPromptHooks(): { hooks: InMemoryHookRunner; release: () => void } {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hooks = new InMemoryHookRunner();
+    hooks.register({
+      event: "UserPromptSubmit",
+      hook: async () => {
+        await gate;
+        return {};
+      },
+    });
+    return { hooks, release };
+  }
+
+  it("H1: a setMode landing during the UserPromptSubmit await gates the whole turn (B1 pin)", async () => {
+    const { hooks, release } = gatedUserPromptHooks();
+    const seen: PermissionRequest[] = [];
+    const loop = makeLoop({
+      modelPort: new MockModelPort([
+        [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "w1", name: "Write", input: { value: "x" } } },
+          { type: "finish", finishReason: "tool_calls", usage: {} },
+        ],
+        [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      ]),
+      registry: makeRegistry({ Write: writeMock }),
+      permissionEngine: new ModePermissionEngine(),
+      permissionBroker: recordingAllowBroker(seen),
+      mode: "build",
+      hooks,
+    });
+
+    // Starting the collection begins the generator body, which parks inside
+    // the pending UserPromptSubmit await.
+    const pending = collect(loop.runTurn("write under the hook window"));
+    // One macrotask boundary — the shape an IPC-delivered set_mode has — then
+    // the switch lands while the hook is still pending.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    loop.setMode("plan");
+    release();
+    const events = await pending;
+
+    const writeOutcome = toolResult(events, "Write");
+    expect(writeOutcome?.status).toBe("denied");
+    expect(writeOutcome?.modelText).toContain("plan");
+    // The broker was never consulted: the turn gated under plan from its very
+    // first check — nothing asked under the stale build snapshot.
+    expect(seen).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("H2: an options.mode override wins over a hook-window setMode for THIS turn; the config half persists (RES-10 pin)", async () => {
+    const { hooks, release } = gatedUserPromptHooks();
+    const modes: PermissionMode[] = [];
+    const engine: PermissionEngine = {
+      check: (request) => {
+        modes.push(request.mode);
+        return { decision: "allow" };
+      },
+    };
+    const loop = makeLoop({
+      modelPort: new MockModelPort([
+        [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "w1", name: "Write", input: { value: "x" } } },
+          { type: "finish", finishReason: "tool_calls", usage: {} },
+        ],
+        [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+        [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "w2", name: "Write", input: { value: "y" } } },
+          { type: "finish", finishReason: "tool_calls", usage: {} },
+        ],
+        [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      ]),
+      registry: makeRegistry({ Write: writeMock }),
+      permissionEngine: engine,
+      mode: "build",
+      hooks,
+    });
+
+    const pending = collect(loop.runTurn("override then hook-window switch", { mode: "plan" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    loop.setMode("yolo");
+    release();
+    await pending;
+
+    // The explicit per-turn override took the turn's first check. Documented
+    // carve-out (RESIDUALS-S3.md#RES-10) — pinned so any change is conscious,
+    // not endorsed as reachable: no production caller passes options.mode.
+    expect(modes).toEqual(["plan"]);
+
+    // The setMode's config half persisted: the next (non-overridden) turn's
+    // first check gates under yolo.
+    await collect(loop.runTurn("confirm config half persisted"));
     expect(modes.at(-1)).toBe("yolo");
   });
 });

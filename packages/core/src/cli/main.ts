@@ -1401,9 +1401,14 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
             return null;
           },
 
-          // the single source of truth for the live mode — the loop reads it at
-          // each runTurn entry and the plan-exit arc writes it. getMode reads it;
-          // setMode mutates it between turns and persists best-effort.
+          // the config-level mode root — written by this REPL command, by the
+          // plan-exit arc, and by AgentLoop.setMode (TASK.37); the loop reads it
+          // in the runTurn prologue (after the UserPromptSubmit await —
+          // ARBITRATION-S3-W1). During a turn the LIVE policy root is the
+          // turn's DispatchContext.mode, which this direct write does NOT
+          // reach — a CLI /mode lands on the next turn (RESIDUALS-S3.md#RES-6:
+          // the REPL accepts input between turns by construction). getMode
+          // reads it; setMode mutates it and persists best-effort.
           getMode: () => loopConfig.mode,
           setMode: (m) => {
 
