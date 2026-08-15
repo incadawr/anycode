@@ -141,21 +141,42 @@ describe("computeGitPanelOpen (design TASK.40 §2(f)) — shell-owned, not engin
   });
 });
 
-describe("computeSessionContentColumns (design D10) — Preview is always the rightmost column", () => {
-  it("neither panel open: a single flexible column, no handles", () => {
-    expect(computeSessionContentColumns(false, 560, false, 640)).toBe("minmax(0, 1fr)");
+describe("computeSessionContentColumns (design D10, widened by CUT-S3 §3.1) — the child split stack is always the rightmost column", () => {
+  it("nothing open: a single flexible column, no handles", () => {
+    expect(computeSessionContentColumns(false, 560, false, 640, false, 480)).toBe("minmax(0, 1fr)");
   });
 
-  it("only the Review (git) panel open", () => {
-    expect(computeSessionContentColumns(true, 560, false, 640)).toBe("minmax(0, 1fr) 8px 560px");
+  it("only the Review (git) panel open (regression pin: byte-identical to pre-S3)", () => {
+    expect(computeSessionContentColumns(true, 560, false, 640, false, 480)).toBe("minmax(0, 1fr) 8px 560px");
   });
 
-  it("only the Preview panel open", () => {
-    expect(computeSessionContentColumns(false, 560, true, 640)).toBe("minmax(0, 1fr) 8px 640px");
+  it("only the Preview panel open (regression pin: byte-identical to pre-S3)", () => {
+    expect(computeSessionContentColumns(false, 560, true, 640, false, 480)).toBe("minmax(0, 1fr) 8px 640px");
   });
 
-  it("both open: Review's column precedes Preview's — Preview stays rightmost", () => {
-    expect(computeSessionContentColumns(true, 560, true, 640)).toBe("minmax(0, 1fr) 8px 560px 8px 640px");
+  it("Review + Preview open, no child: Review precedes Preview (regression pin: byte-identical to pre-S3)", () => {
+    expect(computeSessionContentColumns(true, 560, true, 640, false, 480)).toBe("minmax(0, 1fr) 8px 560px 8px 640px");
+  });
+
+  it("only the child split stack open", () => {
+    expect(computeSessionContentColumns(false, 560, false, 640, true, 480)).toBe("minmax(0, 1fr) 8px 480px");
+  });
+
+  it("Review + child, no Preview: child stays rightmost", () => {
+    expect(computeSessionContentColumns(true, 560, false, 640, true, 480)).toBe("minmax(0, 1fr) 8px 560px 8px 480px");
+  });
+
+  it("Preview + child, no Review: child stays rightmost", () => {
+    expect(computeSessionContentColumns(false, 560, true, 640, true, 480)).toBe("minmax(0, 1fr) 8px 640px 8px 480px");
+  });
+
+  it("all three open: Review, then Preview, then child — child is rightmost of all three", () => {
+    expect(computeSessionContentColumns(true, 560, true, 640, true, 480)).toBe("minmax(0, 1fr) 8px 560px 8px 640px 8px 480px");
+  });
+
+  it("the child column's width comes from the childWidth argument, not a hardcoded constant", () => {
+    expect(computeSessionContentColumns(false, 560, false, 640, true, 480)).toBe("minmax(0, 1fr) 8px 480px");
+    expect(computeSessionContentColumns(false, 560, false, 640, true, 720)).toBe("minmax(0, 1fr) 8px 720px");
   });
 });
 

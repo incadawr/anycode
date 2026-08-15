@@ -17,6 +17,7 @@ import type {
   SubagentRequest,
   SubagentRunOptions,
 } from "../ports/subagent.js";
+import type { SessionSubagentPort } from "../ports/session-subagent.js";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -530,4 +531,324 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
       expect(activity.summary.endsWith("…")).toBe(true);
     },
   );
+
+  // -------------------------------------------------------------------------
+  // activitySuppressed bridge (TASK.102 slice S1 W2, CUT-S1 §3 W2): the port's
+  // { kind:"end", activitySuppressed } progress field copies byte-identically
+  // onto the subagent_end AgentEvent, so the persisted card's dropped count
+  // (fed by this event, W3) is never silently zeroed at the bridge.
+
+  it("copies progress.activitySuppressed onto the subagent_end event byte-exactly", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "end", status: "completed", turns: 2, durationMs: 10, activitySuppressed: 17 });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 2, toolCalls: 500, durationMs: 10 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-suppressed", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const end = emitted.find((e) => e.type === "subagent_end");
+    expect(end).toEqual({
+      type: "subagent_end",
+      toolCallId: "call-suppressed",
+      status: "completed",
+      turns: 2,
+      durationMs: 10,
+      activitySuppressed: 17,
+    });
+  });
+
+  it("omits activitySuppressed from subagent_end when the port's end progress carries none (no silent zero)", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 5 });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 5 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-no-suppressed", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const end = emitted.find((e) => e.type === "subagent_end");
+    expect(end).toBeDefined();
+    expect(end && "activitySuppressed" in end).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mapProgressToEvent's attention case (TASK.102 CUT-S2 §2.2/§0.8): a
+// { kind:"attention" } SubagentProgress maps 1:1 onto a subagent_attention
+// AgentEvent stamped with the Agent tool call's id, mirroring the existing
+// start/progress/tool/end bridges.
+//
+// SCOPE, pinned per review finding 3 (these tests were previously titled
+// "session-tier" without actually exercising a session-tier port — see the
+// track memo): `agentTool` today is the PRE-B1 tool — `tools/schemas.ts` has
+// no `tier` field yet and this handler never reads `ctx.sessionSubagents`
+// (grep confirms). The two tests below drive a FAKE `SubagentPort` through
+// `ctx.subagents` (the only wired port today) purely to prove the SHARED
+// `mapProgressToEvent` function forwards an attention progress correctly
+// WHEN one arrives on ANY port. They prove neither:
+//   (a) that the REAL inline runner (subagents/runner.ts) ever produces one
+//       — it must not (ports/subagent.ts's doc comment: "the in-process
+//       inline runner never emits it"); that half is runner.ts's own tests'
+//       job, out of this file;
+//   (b) that the real session-tier port (SessionSubagentPort, built in slice
+//       B1, CUT-S2 §3 — NOT this slice) routes its attention progress through
+//       THIS SAME bridge. A B1 implementation that hand-rolls its own event
+//       mapping and forgets the attention case would leave these two tests
+//       green while the live waiting-badge never appears — B1's OWN tests
+//       (agent-session.test.ts per the CUT's test plan) are what must prove
+//       (b) end to end; this file does not, and must not attempt to.
+describe("agentTool — mapProgressToEvent's attention case (TASK.102 CUT-S2 §2.2, bridge-only — see scope comment above)", () => {
+  it("maps an attention progress (waiting:true) onto a subagent_attention event stamped with toolCallId — bridge only, not proof any real port emits one (see scope comment)", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
+        opts.onProgress?.({ kind: "attention", waiting: true });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-attn", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const attention = emitted.filter((e) => e.type === "subagent_attention");
+    expect(attention).toHaveLength(1);
+    expect(attention[0]).toEqual({
+      type: "subagent_attention",
+      toolCallId: "call-attn",
+      waiting: true,
+    });
+  });
+
+  it("maps an attention progress (waiting:false) onto a subagent_attention event with waiting:false — bridge only, not proof any real port emits one (see scope comment)", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "attention", waiting: false });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-attn-2", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const attention = emitted.find((e) => e.type === "subagent_attention");
+    expect(attention).toEqual({
+      type: "subagent_attention",
+      toolCallId: "call-attn-2",
+      waiting: false,
+    });
+  });
+
+  it("PIN (review finding 3): a request with no `tier` (today's ONLY option — `tools/schemas.ts` has no `tier` field yet) never reads ctx.sessionSubagents — a ctx carrying ONLY a session-tier port fails closed exactly like no port at all", async () => {
+    const sessionPort: SessionSubagentPort = {
+      run: async () => {
+        throw new Error("sessionSubagents.run must not be reached — this request never asks for tier:\"session\"");
+      },
+    };
+
+    const result = await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      // Deliberately no `subagents` — only the session-tier port. Today (pre-
+      // B1) this is the ONLY reachable outcome: the handler has no tier
+      // branch at all. Once B1 lands tier:"session" (CUT-S2 §2.1), an absent
+      // `tier` still means "inline" by contract, so this pin stays true and
+      // durable — it would only break if a future change started consulting
+      // ctx.sessionSubagents for a request that never asked for it.
+      makeCtx({ sessionSubagents: sessionPort }),
+    );
+
+    expect(result).toEqual({ ok: false, error: "Agent: subagents are unavailable in this context." });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Presentation attach (TASK.102 slice S1 W3, CUT-S1 §3 W3): the handler
+// accumulates every bridged progress event into a card-snapshot accumulator
+// (ALWAYS, regardless of whether ctx.emit is wired) and attaches the
+// finalized snapshot as `result.presentation.subagent` on ALL FOUR settle
+// branches (error / max_turns / cancelled / ok). A run that never reached
+// subagent_start (fails before the port calls onProgress even once) attaches
+// no presentation at all — the card is never fabricated from nothing.
+
+function scriptedPresentationPort(
+  outcome: SubagentOutcome,
+  opts?: { activitySuppressed?: number; toolCount?: number },
+): SubagentPort {
+  return {
+    run: async (_req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> => {
+      runOpts.onProgress?.({ kind: "start", agentType: "explore", description: "d", model: "glm-4.6" });
+      runOpts.onProgress?.({ kind: "progress", turns: 1, toolCalls: 0 });
+      const toolCount = opts?.toolCount ?? 2;
+      for (let i = 0; i < toolCount; i += 1) {
+        runOpts.onProgress?.({ kind: "tool", toolName: "Bash", summary: `cmd-${i}` });
+      }
+      runOpts.onProgress?.({
+        kind: "end",
+        status: outcome.status,
+        turns: outcome.turns,
+        durationMs: outcome.durationMs,
+        ...(opts?.activitySuppressed !== undefined ? { activitySuppressed: opts.activitySuppressed } : {}),
+      });
+      return outcome;
+    },
+  };
+}
+
+describe("agentTool — presentation attach across all four settle branches (TASK.102 slice S1 W3)", () => {
+  it("completed (ok branch) carries result.presentation.subagent with the finalized card", async () => {
+    const outcome: SubagentOutcome = {
+      status: "completed",
+      finalText: "done",
+      truncated: false,
+      turns: 1,
+      toolCalls: 2,
+      durationMs: 50,
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      makeCtx({ subagents: scriptedPresentationPort(outcome) }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.presentation?.subagent).toMatchObject({
+      kind: "subagent",
+      version: 1,
+      target: { kind: "inline" },
+      identity: { agentType: "explore", description: "d", model: "glm-4.6", engine: null },
+      final: { status: "completed", durationMs: 50 },
+    });
+    expect(result.presentation?.subagent?.activity.entries).toEqual([
+      { toolName: "Bash", summary: "cmd-0" },
+      { toolName: "Bash", summary: "cmd-1" },
+    ]);
+  });
+
+  it("max_turns (errorKind branch) carries presentation alongside the incomplete outcome", async () => {
+    const outcome: SubagentOutcome = {
+      status: "max_turns",
+      finalText: "partial",
+      truncated: false,
+      turns: 8,
+      toolCalls: 2,
+      durationMs: 999,
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      makeCtx({ subagents: scriptedPresentationPort(outcome) }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("max_turns");
+    expect(result.presentation?.subagent?.final).toEqual({ status: "max_turns", durationMs: 999 });
+  });
+
+  it("cancelled (errorKind branch) carries presentation", async () => {
+    const outcome: SubagentOutcome = {
+      status: "cancelled",
+      finalText: "",
+      truncated: false,
+      turns: 1,
+      toolCalls: 1,
+      durationMs: 5,
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      makeCtx({ subagents: scriptedPresentationPort(outcome) }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("cancelled");
+    expect(result.presentation?.subagent?.final).toEqual({ status: "cancelled", durationMs: 5 });
+  });
+
+  it("error (no-errorKind branch, no `output` field) STILL carries presentation as an independent field", async () => {
+    const outcome: SubagentOutcome = {
+      status: "error",
+      finalText: "boom",
+      truncated: false,
+      turns: 1,
+      toolCalls: 1,
+      durationMs: 7,
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      makeCtx({ subagents: scriptedPresentationPort(outcome) }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBeUndefined();
+    expect(result.output).toBeUndefined();
+    expect(result.presentation?.subagent?.final).toEqual({ status: "error", durationMs: 7 });
+  });
+
+  it("an error BEFORE the port ever calls onProgress (no subagent_start reached) attaches NO presentation", async () => {
+    const port: SubagentPort = {
+      run: async () => ({
+        status: "error",
+        finalText: "failed before start",
+        truncated: false,
+        turns: 0,
+        toolCalls: 0,
+        durationMs: 1,
+      }),
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      makeCtx({ subagents: port }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.presentation).toBeUndefined();
+  });
+
+  it("accumulates presentation even with no ctx.emit wired (accumulation is unconditional, emission is not)", async () => {
+    const outcome: SubagentOutcome = {
+      status: "completed",
+      finalText: "done",
+      truncated: false,
+      turns: 1,
+      toolCalls: 1,
+      durationMs: 5,
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      // No `emit` in ctx — the accumulator must still fill from onProgress.
+      makeCtx({ subagents: scriptedPresentationPort(outcome, { toolCount: 1 }) }),
+    );
+
+    expect(result.presentation?.subagent?.activity.entries).toEqual([{ toolName: "Bash", summary: "cmd-0" }]);
+  });
+
+  it("activitySuppressed from the end-progress event folds into presentation.subagent.activity.dropped", async () => {
+    const outcome: SubagentOutcome = {
+      status: "completed",
+      finalText: "done",
+      truncated: false,
+      turns: 1,
+      toolCalls: 500,
+      durationMs: 5,
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      makeCtx({ subagents: scriptedPresentationPort(outcome, { activitySuppressed: 9, toolCount: 3 }) }),
+    );
+
+    expect(result.presentation?.subagent?.activity.dropped).toBe(9);
+  });
 });

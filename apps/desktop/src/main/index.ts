@@ -47,7 +47,7 @@ import {
 import type { FileIoLogger } from "../settings/files.js";
 import { defaultSecretsPath, defaultSettingsPath, loadSettings } from "../settings/files.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
-import { activeConnection, activeProviderView, connectionById } from "../shared/settings.js";
+import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
 import {
   applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
@@ -1039,7 +1039,7 @@ async function startInitialTab(opts: {
   const resumeId = parkedResumeId;
   parkedResumeId = undefined;
 
-  const resumed = resumeId !== undefined ? await persistence.getSession(resumeId) : null;
+  const resumed = resumeId !== undefined ? await persistence.getRootSession(resumeId) : null;
   if (resumeId !== undefined && resumed === null) {
     console.warn(`[main] no session found for --resume ${resumeId}; starting a new session`);
   }
@@ -1152,7 +1152,15 @@ void app.whenReady().then(async () => {
   // the host writers.
   const dbPath = resolveDbPath();
   persistence = new SqlitePersistenceAdapter(dbPath);
-  await persistence.listSessions({ limit: 1 });
+  // Maintenance selection (TASK.102 S2a §2.4): a physical read that forces
+  // open()+migrate() to run now, not a UX selection — the boot-critical part
+  // is ANY query reaching the adapter (migrate() runs inside open() before
+  // this or any other statement executes, regardless of which query
+  // triggered it), not that this specific query returns every row. `limit:1`
+  // (TASK.102 S2 review MINOR, opus) keeps the probe O(1) at startup instead
+  // of pulling and projecting the whole sessions table — which grows with
+  // every child session S2 introduces — on every launch.
+  await persistence.listSessionsForMaintenance({ limit: 1 });
   console.log(`[main] persistence opened + migrated: ${dbPath}`);
 
   // One global, ledger-driven pass before any tab host can mutate worktree
@@ -1418,6 +1426,13 @@ void app.whenReady().then(async () => {
       const connection = connectionById(settings, connectionId);
       return connection === undefined ? undefined : { providerId: connection.providerId };
     },
+    // TASK.102 CUT-S2 §10.9.3 (F4): an EXPLICIT `Agent(tier:"session",
+    // provider:…)` request's provider-id -> connection-id resolution, wired
+    // to the pure policy in shared/settings.ts. This dep was previously
+    // ABSENT here, so every explicit cross-connection child spawn was
+    // rejected with `not_ready` in the built app regardless of policy.
+    resolveProviderConnection: (provider) =>
+      settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
     providerReady: () => providerReady,
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
@@ -2002,6 +2017,10 @@ void app.whenReady().then(async () => {
         // `navigateMdDoc` directly over it (main-side chain only; the
         // renderer-side MdLink click behavior stays unit-covered).
         mdDocDeps,
+        // TASK.102 S2d D1 (CUT-S2 §2.4/§4.1 additive `/child-runs`): the SAME
+        // persistence adapter opened at boot — absent, `/child-runs` degrades
+        // to `{ok:false, error:"persistence unavailable"}` rather than throwing.
+        persistence: persistence ?? undefined,
       });
     } catch (error) {
       console.error("[main] automation server failed to start", error);

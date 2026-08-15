@@ -54,6 +54,16 @@ export interface PortEnvelope {
    */
   connectionId?: string;
   providerId?: string;
+  /**
+   * Present ONLY for a child-session tab's port delivery (TASK.102 CUT-S2
+   * §2.5, stamped by `deliverTabPort` in S2b). Its presence is what lets
+   * `tab-registry.registerPort` (S2c) classify this port as a CHILD and skip
+   * the ordinary root-tab registration path (no `tabsStore.addTab`, no
+   * status-mirror, no prompt-queue-drainer) — a child session must never
+   * surface in the Sidebar/StartScreen/CommandPalette (§0.4 skip-hide
+   * contract). Absent on every root-tab envelope, unchanged from today.
+   */
+  child?: { parentTabId: string; parentSessionId: string; spawnToolCallId: string; childSessionId: string };
 }
 
 /** Page envelope for the host-exited notification (no ports attached). */

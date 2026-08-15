@@ -1282,6 +1282,108 @@ describe("subagent activity feed (slice P7.18/F16b)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Honest activitySuppressed count (TASK.102 slice S1 W2, CUT-S1 §0.5/§3 W2).
+// The activity feed silently stopped emitting past SUBAGENT_ACTIVITY_MAX_EVENTS
+// (P7.18/F16b); S1 makes the withheld count observable on subagent_end so the
+// persisted card's "+N earlier" is never a lie relative to what actually ran.
+
+describe("subagent activitySuppressed (TASK.102 slice S1 W2)", () => {
+  it("emits exactly SUBAGENT_ACTIVITY_MAX_EVENTS activity rows and reports the EXACT suppressed count on end", async () => {
+    const overflow = SUBAGENT_ACTIVITY_MAX_EVENTS + 37;
+    let step = 0;
+    const model = new ScriptedModelPort(() => {
+      step += 1;
+      return step === 1
+        ? multiToolStep(
+            Array.from({ length: overflow }, (_unused, i) => ({
+              id: `t${i}`,
+              name: "TodoRead",
+              input: {},
+            })),
+          )
+        : textStep("child done");
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    const activity = progress.filter((p) => p.kind === "tool");
+    expect(activity).toHaveLength(SUBAGENT_ACTIVITY_MAX_EVENTS);
+    const endEvents = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    expect(endEvents).toHaveLength(1);
+    expect(endEvents[0]!.activitySuppressed).toBe(overflow - SUBAGENT_ACTIVITY_MAX_EVENTS);
+  });
+
+  it("a child that never crosses the cap carries no activitySuppressed key on end (no silent zero)", async () => {
+    const model = new ScriptedModelPort(() => textStep("no tools needed"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    const endEvents = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    expect(endEvents).toHaveLength(1);
+    expect(endEvents[0] && "activitySuppressed" in endEvents[0]).toBe(false);
+  });
+
+  it("invalid_input child tool calls count toward NEITHER emitted activity NOR activitySuppressed", async () => {
+    // Fill the activity cap exactly with valid calls, THEN propose more calls
+    // that are invalid (SDK-level parse failure, ProposedToolCall.invalid) —
+    // if invalid_input calls counted as suppressed, activitySuppressed would
+    // include them; they must not, since they never actually ran.
+    const validCount = SUBAGENT_ACTIVITY_MAX_EVENTS;
+    const invalidCount = 4;
+    let step = 0;
+    const model = new ScriptedModelPort(() => {
+      step += 1;
+      if (step !== 1) {
+        return textStep("child done");
+      }
+      const validCalls = Array.from({ length: validCount }, (_unused, i) => ({
+        type: "tool_call" as const,
+        toolCall: { id: `valid-${i}`, name: "TodoRead", input: {} },
+      }));
+      const invalidCalls = Array.from({ length: invalidCount }, (_unused, i) => ({
+        type: "tool_call" as const,
+        toolCall: {
+          id: `invalid-${i}`,
+          name: "Bash",
+          input: {},
+          invalid: { reason: "unparseable arguments" },
+        },
+      }));
+      return [
+        { type: "start" as const },
+        ...validCalls,
+        ...invalidCalls,
+        { type: "finish" as const, finishReason: "tool_calls" as const, usage: {} },
+      ];
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    const activity = progress.filter((p) => p.kind === "tool");
+    expect(activity).toHaveLength(validCount);
+    const endEvents = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    // The valid calls exactly filled the cap; the invalid ones never reached
+    // dispatch, so they must not push activitySuppressed above zero.
+    expect(endEvents[0] && "activitySuppressed" in endEvents[0]).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Profile-declared model (`model:` frontmatter). Precedence is request >
 // profile > inherit-parent; a host with no resolver refuses honestly rather
 // than running the child on a model its author did not ask for.
@@ -1510,6 +1612,19 @@ describe("engine persona (one-shot foreign CLI run)", () => {
     expect(parentModel.calls).toBe(0);
   });
 
+  it("TASK.102 CUT-S4 §2.4: without runEngineChild, the error text names the S4 migration (deprecated-live workflow path) verbatim, not the pre-S4 'not supported' wording", async () => {
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [enginePersona], // no runEngineChild
+    });
+
+    const outcome = await runner.run({ agentType: "codex-worker", description: "d", prompt: "p" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(
+      'Agent: agent type "codex-worker" runs on the "codex" engine. Engine agents now run as child sessions via the Agent tool; this caller (workflow step or non-desktop host) cannot spawn one.',
+    );
+  });
+
   it("an engine persona without a host resolver fails BEFORE the semaphore — it never queues behind running children", async () => {
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -1568,5 +1683,55 @@ describe("engine persona (one-shot foreign CLI run)", () => {
     const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {});
     expect(outcome.status).toBe("completed");
     expect(outcome.finalText).toBe("built-in child report");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// engineProfile() port method (TASK.102 CUT-S4 §2.1): tools/agent.ts's new
+// routing branch resolves an md-profile's `engine:` frontmatter through this
+// method BEFORE the tier branch. Realized through the SAME thunk mechanism as
+// listAgentTypes (currentProfiles()) — no second list/cache. Built-in personas
+// always resolve to null (they never have an `engine`).
+
+describe("engineProfile() (TASK.102 CUT-S4 §2.1)", () => {
+  const codexPersona: PersonaDefinition = {
+    name: "codex-worker",
+    description: "runs on the codex engine",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    engine: "codex",
+  };
+
+  it("resolves an engine profile to {engine, systemPrompt}", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    expect(runner.engineProfile?.("codex-worker")).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
+  });
+
+  it("returns null for a built-in persona (never an engine profile)", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    expect(runner.engineProfile?.("general-purpose")).toBeNull();
+    expect(runner.engineProfile?.("explore")).toBeNull();
+  });
+
+  it("returns null for a non-engine md-profile", async () => {
+    const persona = await makeProfile("reviewer", { body: "P" });
+    const runner = createSubagentRunner(makeParent(), { profiles: [persona] });
+    expect(runner.engineProfile?.("reviewer")).toBeNull();
+  });
+
+  it("returns null for an unknown agent type", () => {
+    const runner = createSubagentRunner(makeParent());
+    expect(runner.engineProfile?.("no-such-type")).toBeNull();
+  });
+
+  it("live rescan: a profile added to the thunk's result AFTER construction becomes visible (same mechanism as listAgentTypes)", () => {
+    let live: PersonaDefinition[] = [];
+    const runner = createSubagentRunner(makeParent(), { profiles: () => live });
+
+    expect(runner.engineProfile?.("codex-worker")).toBeNull();
+
+    live = [codexPersona];
+
+    expect(runner.engineProfile?.("codex-worker")).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
   });
 });
