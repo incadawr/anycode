@@ -1,7 +1,7 @@
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, posix, win32 } from "node:path";
 import {
-  checkConsentedBinaryTrust,
+  classifyConsentedBinaryTrust,
   type BinaryTrustConsent,
   type CodexPathStat,
 } from "../shared/codex-binary-trust.js";
@@ -10,8 +10,10 @@ import { CODEX_TRIPLE_BY_PLATFORM, codexBinaryRelPath, codexPlatformSuffix } fro
 export interface CodexBinaryResolution {
   path: string | null;
   reason?: string;
-  /** Present iff THIS resolution's refusal came from the dedicated trust-gate call (TASK.103) — never a structural pre-check. */
-  trustRefusal?: { binaryPath: string; reason: string };
+  /** Present iff THIS resolution's refusal came from the dedicated trust-gate call — consentable or not; never a structural pre-check, never a missing path. */
+  trustRefused?: true;
+  /** The consent affordance payload — present iff the refusal is CONSENTABLE (D-S4-13). `binaryPath` is the gate's RESOLVED path (D-S4-14). */
+  trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
 }
 
 /** Stat shape mirrors `fs.Stats` exactly, so the production seam below is a straight passthrough. */
@@ -107,6 +109,15 @@ function ancestorDirectories(resolvedFile: string, originalPath: string): string
   return ordered;
 }
 
+/** The path-gate outcome (TASK.103 fix wave, D-S4-14/18). `null` = pass.
+ *  `missing` = the realpath/stat threw — the file is GONE; NEVER an offerable
+ *  refusal (D-S4-18). `refused` carries the shared classification plus the
+ *  REALPATH the gate judged — the only path a `trustRefusal` may ever name. */
+export type CodexBinaryTrustGateOutcome =
+  | null
+  | { kind: "missing"; reason: string }
+  | { kind: "refused"; reason: string; consentable: boolean; staleConsent: boolean; resolvedPath: string };
+
 /**
  * The execute-time trust gate (shared/codex-binary-trust.ts owns the policy;
  * this owns main's filesystem reads for it). Run at DISCOVERY by
@@ -116,6 +127,31 @@ function ancestorDirectories(resolvedFile: string, originalPath: string): string
  * to narrow. It narrows, and does not close, that window (see the policy
  * module's header — the residual is real and is not papered over here).
  */
+export function classifyCodexBinaryPathTrust(
+  path: string,
+  fs: CodexBinaryFs = nodeFs,
+  platform: NodeJS.Platform = process.platform,
+  identity: CodexIdentity = currentIdentity(),
+  consents: readonly BinaryTrustConsent[] = [],
+): CodexBinaryTrustGateOutcome {
+  if (platform === "win32") return null;
+  try {
+    // A symlink lets an attacker swap the LINK instead of the target, so the
+    // link's own ancestor chain is part of the trusted set too.
+    const resolved = fs.realpath(path);
+    const directories = ancestorDirectories(resolved, path).map((dir) => toPathStat(dir, fs.stat(dir)));
+    const verdict = classifyConsentedBinaryTrust(
+      { file: toPathStat(resolved, fs.stat(resolved)), directories, uid: identity.uid, egid: identity.egid ?? -1, platform },
+      consents,
+    );
+    if (verdict === null) return null;
+    return { kind: "refused", ...verdict, resolvedPath: resolved };
+  } catch {
+    return { kind: "missing", reason: "Codex binary path does not exist" };
+  }
+}
+
+/** `checkCodexBinaryPathTrust` byte-for-byte string wrapper over `classifyCodexBinaryPathTrust` — every existing `string|null` consumer (codex-login's injected closure among them) stays untouched. */
 export function checkCodexBinaryPathTrust(
   path: string,
   fs: CodexBinaryFs = nodeFs,
@@ -123,25 +159,8 @@ export function checkCodexBinaryPathTrust(
   identity: CodexIdentity = currentIdentity(),
   consents: readonly BinaryTrustConsent[] = [],
 ): string | null {
-  if (platform === "win32") return null;
-  try {
-    const resolved = fs.realpath(path);
-    // A symlink lets an attacker swap the LINK instead of the target, so the
-    // link's own ancestor chain is part of the trusted set too.
-    const directories = ancestorDirectories(resolved, path).map((dir) => toPathStat(dir, fs.stat(dir)));
-    return checkConsentedBinaryTrust(
-      {
-        file: toPathStat(resolved, fs.stat(resolved)),
-        directories,
-        uid: identity.uid,
-        egid: identity.egid ?? -1,
-        platform,
-      },
-      consents,
-    );
-  } catch {
-    return "Codex binary path does not exist";
-  }
+  const outcome = classifyCodexBinaryPathTrust(path, fs, platform, identity, consents);
+  return outcome === null ? null : outcome.reason;
 }
 
 /** Main validates an explicit absolute path; it never searches or shells out. */
@@ -165,8 +184,18 @@ export function resolveCodexBinary(
   } catch {
     return { path: null, reason: "Codex binary path does not exist" };
   }
-  const untrusted = checkCodexBinaryPathTrust(path, fs, platform, identity, consents);
-  if (untrusted !== null) return { path: null, reason: untrusted, trustRefusal: { binaryPath: path, reason: untrusted } };
+  const outcome = classifyCodexBinaryPathTrust(path, fs, platform, identity, consents);
+  if (outcome !== null) {
+    if (outcome.kind === "missing") return { path: null, reason: outcome.reason };
+    return {
+      path: null,
+      reason: outcome.reason,
+      trustRefused: true,
+      ...(outcome.consentable
+        ? { trustRefusal: { binaryPath: outcome.resolvedPath, reason: outcome.reason, staleConsent: outcome.staleConsent } }
+        : {}),
+    };
+  }
   return { path };
 }
 
@@ -190,7 +219,9 @@ export interface CodexBinaryDiscovery {
   /** The last rejection reason seen while walking the ladder (diagnostic only — the ladder still fails closed on `path:null`). */
   reason?: string;
   /** The FIRST trust refusal seen while walking the ladder (TASK.103) — highest-priority rung, i.e. the binary the user most likely means. */
-  trustRefusal?: { binaryPath: string; reason: string };
+  trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
+  /** The rung the carried `trustRefusal` came from — present iff `trustRefusal` is present (invariant tested by BG6). */
+  trustRefusalSource?: CodexBinarySource;
 }
 
 /** `codex` on POSIX, `codex.exe` on Windows — the file name every ladder rung looks for. */
@@ -316,7 +347,8 @@ export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDi
   // The FIRST trust refusal encountered (highest-priority rung) wins — it
   // names the binary the user most likely installed/means, not whichever
   // low-priority rung happened to be walked last (TASK.103, BM8).
-  let firstTrustRefusal: { binaryPath: string; reason: string } | undefined;
+  let firstTrustRefusal: { binaryPath: string; reason: string; staleConsent: boolean } | undefined;
+  let firstTrustRefusalSource: CodexBinarySource | undefined;
   for (const rung of rungs) {
     for (const candidate of rung.candidates) {
       const resolved = resolveCodexBinary(candidate, fs, platform, identity, consents);
@@ -328,6 +360,7 @@ export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDi
       }
       if (firstTrustRefusal === undefined && resolved.trustRefusal !== undefined) {
         firstTrustRefusal = resolved.trustRefusal;
+        firstTrustRefusalSource = rung.source;
       }
     }
   }
@@ -335,6 +368,6 @@ export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDi
     path: null,
     source: "none",
     ...(lastReason !== undefined ? { reason: lastReason } : {}),
-    ...(firstTrustRefusal !== undefined ? { trustRefusal: firstTrustRefusal } : {}),
+    ...(firstTrustRefusal !== undefined ? { trustRefusal: firstTrustRefusal, trustRefusalSource: firstTrustRefusalSource } : {}),
   };
 }

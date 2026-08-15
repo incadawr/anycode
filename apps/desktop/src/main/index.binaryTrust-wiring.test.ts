@@ -170,11 +170,14 @@ describe("main/index.ts — binary-trust grant/revoke production wiring (TASK.10
     await import("./index.js");
 
     const handleGrant = await waitForHandler(BINARY_TRUST_GRANT_CHANNEL);
-    const result = (await handleGrant({}, { path: scratchBin })) as SettingsMutationResult;
+    // D-S4-14: the grant now refuses non-canonical input — macOS tmp scratch
+    // dirs may sit behind symlinked components (`/tmp` -> `/private/tmp`), so
+    // drive the channel with the realpathed path, not the raw scratch path.
+    const resolvedPath = realpathSync(scratchBin);
+    const result = (await handleGrant({}, { path: resolvedPath })) as SettingsMutationResult;
 
     expect(result.ok).toBe(true);
 
-    const resolvedPath = realpathSync(scratchBin);
     const liveStat = statSync(resolvedPath);
     const expectedFingerprint = {
       mode: liveStat.mode,
@@ -206,8 +209,10 @@ describe("main/index.ts — binary-trust grant/revoke production wiring (TASK.10
     const handleGrant = await waitForHandler(BINARY_TRUST_GRANT_CHANNEL);
     const handleRevoke = await waitForHandler(BINARY_TRUST_REVOKE_CHANNEL);
 
-    await handleGrant({}, { path: scratchBin });
+    // D-S4-14: drive both channels with the realpathed path (see the grant
+    // test's comment above for why).
     const resolvedPath = realpathSync(scratchBin);
+    await handleGrant({}, { path: resolvedPath });
     expect(readTrustedBinaryConsentsSync(process.env.ANYCODE_SETTINGS_PATH)).toHaveLength(1);
 
     const revokeResult = (await handleRevoke({}, { path: resolvedPath })) as SettingsMutationResult;

@@ -5468,7 +5468,8 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
       notices: string[];
       // TASK.103 (BU5): the "Trust this binary…" button's structured facts,
       // or null (no button rendered) — mirrors realCodexPaneDom's `trust()`.
-      trust: { binaryPath: string; reason: string; buttonVisible: boolean } | null;
+      // BU10 (D-S4-17 fix wave): staleConsent gains a THIRD structured fact.
+      trust: { binaryPath: string; reason: string; buttonVisible: boolean; staleConsent: boolean } | null;
     }> = {},
   ) {
     const binary = overrides.binary ?? binaryState();
@@ -5589,12 +5590,27 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
   // rendered. must-fail-naive.
   it("BU5 codexPaneState().trust mirrors the DOM accessor's trust() read — present with the refusal, absent without", () => {
     const withTrust = buildFacade(
-      fakeCodexPaneDom({ trust: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true } }),
+      fakeCodexPaneDom({ trust: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: false } }),
     );
-    expect(withTrust.codexPaneState().trust).toEqual({ binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true });
+    expect(withTrust.codexPaneState().trust).toEqual({ binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: false });
 
     const withoutTrust = buildFacade(fakeCodexPaneDom());
     expect(withoutTrust.codexPaneState().trust).toBeUndefined();
+  });
+
+  // TASK.103 fix wave (D-S4-17, BU10): staleConsent rides codexPaneState().trust
+  // as a THIRD structured fact — read off the DOM accessor's own trust() read,
+  // never re-derived. must-fail-naive.
+  it("BU10 codexPaneState().trust.staleConsent mirrors the DOM accessor's trust() read", () => {
+    const stale = buildFacade(
+      fakeCodexPaneDom({ trust: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: true } }),
+    );
+    expect(stale.codexPaneState().trust?.staleConsent).toBe(true);
+
+    const fresh = buildFacade(
+      fakeCodexPaneDom({ trust: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "…world-writable", buttonVisible: true, staleConsent: false } }),
+    );
+    expect(fresh.codexPaneState().trust?.staleConsent).toBe(false);
   });
 
   // TASK.103 (BU5, D-S4-8): codexPaneTrustOpen — the SAME
@@ -5669,7 +5685,13 @@ describe("automation facade — binaryTrustDialogState / Resolve, trustedBinarie
   function fakeBinaryTrustDialogDom(
     overrides: Partial<BinaryTrustDialogState> & { open?: boolean } = {},
   ): BinaryTrustDialogDom & { clickAccept: ReturnType<typeof vi.fn>; clickDecline: ReturnType<typeof vi.fn> } {
-    const state: BinaryTrustDialogState = { open: overrides.open ?? false, visible: overrides.visible ?? false, binaryPath: overrides.binaryPath, reason: overrides.reason };
+    const state: BinaryTrustDialogState = {
+      open: overrides.open ?? false,
+      visible: overrides.visible ?? false,
+      binaryPath: overrides.binaryPath,
+      reason: overrides.reason,
+      staleConsent: overrides.staleConsent,
+    };
     return {
       state: () => state,
       clickAccept: vi.fn(() => state.open),
@@ -5682,9 +5704,18 @@ describe("automation facade — binaryTrustDialogState / Resolve, trustedBinarie
     expect(closed.binaryTrustDialogState()).toEqual({ open: false, visible: false });
 
     const open = buildTrustFacade({
-      binaryTrustDialogDom: fakeBinaryTrustDialogDom({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable" }),
+      binaryTrustDialogDom: fakeBinaryTrustDialogDom({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable", staleConsent: false }),
     });
-    expect(open.binaryTrustDialogState()).toEqual({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable" });
+    expect(open.binaryTrustDialogState()).toEqual({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable", staleConsent: false });
+  });
+
+  // TASK.103 fix wave (D-S4-17, BU10): staleConsent rides binaryTrustDialogState()
+  // as read off the dialog's own DOM accessor. must-fail-naive.
+  it("BU10 binaryTrustDialogState().staleConsent mirrors the DOM accessor's state() read", () => {
+    const stale = buildTrustFacade({
+      binaryTrustDialogDom: fakeBinaryTrustDialogDom({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable", staleConsent: true }),
+    });
+    expect(stale.binaryTrustDialogState().staleConsent).toBe(true);
   });
 
   it("BU6 binaryTrustDialogResolve(true) invokes clickAccept exactly once and nothing else; (false) invokes clickDecline exactly once and nothing else", () => {

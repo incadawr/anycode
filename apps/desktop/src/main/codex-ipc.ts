@@ -464,7 +464,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     binaryPath: string | null,
     source: CodexBinarySource,
     profile: ResolvedCodexProfile,
-    discoveryTrustRefusal?: { binaryPath: string; reason: string },
+    discoveryTrustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean; offerTrust: boolean },
   ): Promise<CodexOnboardingSnapshot> {
     // The choke point every doctor spawn in this module funnels through, and
     // therefore where the shutdown gate has to be re-read — an entrance check is
@@ -479,7 +479,19 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     const report: CodexDoctorReport =
       binaryPath === null
         ? discoveryTrustRefusal !== undefined
-          ? { status: "error", error: discoveryTrustRefusal.reason, trustRefusal: discoveryTrustRefusal }
+          ? {
+              status: "error",
+              error: discoveryTrustRefusal.reason,
+              ...(discoveryTrustRefusal.offerTrust
+                ? {
+                    trustRefusal: {
+                      binaryPath: discoveryTrustRefusal.binaryPath,
+                      reason: discoveryTrustRefusal.reason,
+                      staleConsent: discoveryTrustRefusal.staleConsent,
+                    },
+                  }
+                : {}),
+            }
           : { status: "not_installed" }
         : await runDoctor(binaryPath, {
             env: deps.bootEnv,
@@ -528,7 +540,17 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
       consents: deps.readTrustedBinaries?.() ?? [],
     });
-    return checkPath(discovery.path, discovery.source, resolution.profile, discovery.trustRefusal);
+    return checkPath(
+      discovery.path,
+      discovery.source,
+      resolution.profile,
+      discovery.trustRefusal !== undefined
+        ? {
+            ...discovery.trustRefusal,
+            offerTrust: discovery.trustRefusalSource === "env" || discovery.trustRefusalSource === "settings",
+          }
+        : undefined,
+    );
   }
 
   /**
@@ -593,11 +615,13 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       if (picked.canceled || filePath === undefined) {
         return { ok: false, reason: "cancelled" };
       }
+      // consents deliberately NOT passed here — the doctor's gate is the
+      // consent-honoring authority on this route (D-S4-21).
       const resolved = resolveCodexBinary(filePath, deps.fs, deps.platform ?? process.platform, deps.identity);
-      if (resolved.path === null) {
+      if (resolved.path === null && resolved.trustRefused !== true) {
         return { ok: false, reason: "invalid" };
       }
-      const confirmedPath = resolved.path;
+      const confirmedPath = resolved.path ?? filePath.trim();
       // A picked binary is diagnosed against the ACTIVE profile; a broken
       // active-profile record must not block validating the binary itself,
       // so resolution failure falls back to the system pseudo-profile here

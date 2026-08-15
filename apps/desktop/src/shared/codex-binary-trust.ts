@@ -57,6 +57,19 @@
  * `main/settings-ipc.ts`), computed from the live filesystem at grant time —
  * this module never mints, refreshes, or trusts a caller-supplied
  * fingerprint.
+ *
+ * ── CONSENTABILITY (S4-W2, D-S4-13) ─────────────────────────────────────────
+ * Not every refusal is an offer to consent. A file owned by a third party
+ * (not us, not root) is NEVER consentable, whatever reason string
+ * `unsafeReason`'s ordering happens to emit for it (world-writable is
+ * checked before ownership, so a world-writable third-party-owned file
+ * still reports the world-writable string) — that file's OWNER can restore
+ * the entire `{mode, uid, gid, size, mtimeMs}` fingerprint at will
+ * (`utimensat` is theirs), so a pin can never bind them. This is judged on
+ * the underlying FACT (`file.uid !== input.uid && file.uid !== ROOT_UID`),
+ * never re-derived from the reason string. `classifyConsentedBinaryTrust`
+ * is the shape-carrying verdict this rule lives in; `checkConsentedBinaryTrust`
+ * stays the byte-identical `string | null` wrapper every existing caller uses.
  */
 
 /** The subset of `fs.Stats` this policy reads. Callers pass `statSync` output straight in. */
@@ -210,6 +223,49 @@ export function consentCoversBinary(
 }
 
 /**
+ * The classified consent verdict (TASK.103 fix wave, D-S4-13/17). `null` =
+ * base policy passes or a consent covers the file. A refusal carries:
+ * - `consentable`: false for STRUCTURAL refusals (not a file, not
+ *   executable, an ancestor that is not a directory) AND for the
+ *   third-party-owned-FILE fact (`file.uid !== input.uid && file.uid !==
+ *   ROOT_UID`) — the file's owner can restore all five fingerprint fields
+ *   (`utimensat` is theirs), so a pin cannot bind them; judged on the FACT,
+ *   never on which reason string `unsafeReason`'s ordering happened to emit.
+ * - `staleConsent`: a consent record exists for this resolved path but no
+ *   longer matches the live fingerprint (meaningful only when `consentable`;
+ *   false otherwise). Pure; never mutates or refreshes a record.
+ */
+export interface BinaryTrustRefusalClass {
+  reason: string;
+  consentable: boolean;
+  staleConsent: boolean;
+}
+
+export function classifyConsentedBinaryTrust(
+  input: CodexBinaryTrustInput,
+  consents: readonly BinaryTrustConsent[],
+): BinaryTrustRefusalClass | null {
+  const base = checkCodexBinaryTrust(input);
+  if (base === null) return null;
+  if (!input.file.isFile || (input.file.mode & 0o111) === 0) {
+    return { reason: base, consentable: false, staleConsent: false };
+  }
+  for (const directory of input.directories) {
+    if (!directory.isDirectory) return { reason: base, consentable: false, staleConsent: false };
+  }
+  // D-S4-13: the file-owner FACT is never consentable — the owner can forge
+  // the whole 5-tuple (B-2, proved). Checked as a fact, not a reason shape:
+  // a world-writable third-party-owned file emits the world-writable reason
+  // but its owner keeps utimensat power all the same.
+  if (input.file.uid !== input.uid && input.file.uid !== ROOT_UID) {
+    return { reason: base, consentable: false, staleConsent: false };
+  }
+  if (consentCoversBinary(consents, input.file)) return null;
+  const staleConsent = consents.some((c) => c.path === input.file.path);
+  return { reason: base, consentable: true, staleConsent };
+}
+
+/**
  * The consent-aware trust verdict (TASK.103). Base policy first; a PASS needs
  * no consent. A STRUCTURAL refusal (not a file, not executable, an ancestor
  * that is not a directory) is never consentable — re-derived from the input,
@@ -222,11 +278,5 @@ export function checkConsentedBinaryTrust(
   input: CodexBinaryTrustInput,
   consents: readonly BinaryTrustConsent[],
 ): string | null {
-  const base = checkCodexBinaryTrust(input);
-  if (base === null) return null;
-  if (!input.file.isFile || (input.file.mode & 0o111) === 0) return base;
-  for (const directory of input.directories) {
-    if (!directory.isDirectory) return base;
-  }
-  return consentCoversBinary(consents, input.file) ? null : base;
+  return classifyConsentedBinaryTrust(input, consents)?.reason ?? null;
 }

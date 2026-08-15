@@ -1603,7 +1603,7 @@ export interface CodexPaneState {
    * attributes, never parsed out of rendered copy. `buttonVisible` is the
    * `offsetParent !== null` convention `TryAgainButtonDom` already uses.
    */
-  trust?: { binaryPath: string; reason: string; buttonVisible: boolean };
+  trust?: { binaryPath: string; reason: string; buttonVisible: boolean; staleConsent: boolean };
 }
 
 /**
@@ -1634,7 +1634,7 @@ export interface CodexPaneDom {
    * off its `data-trust-binary-path`/`data-trust-reason` attributes, or
    * `null` when the button isn't rendered (no trust refusal).
    */
-  trust(): { binaryPath: string; reason: string; buttonVisible: boolean } | null;
+  trust(): { binaryPath: string; reason: string; buttonVisible: boolean; staleConsent: boolean } | null;
 }
 
 /**
@@ -1651,6 +1651,8 @@ export interface BinaryTrustDialogState {
   binaryPath?: string;
   reason?: string;
   visible: boolean;
+  /** TASK.103 fix wave (D-S4-17): read off the dialog's own `data-trust-stale-consent` attribute when open. */
+  staleConsent?: boolean;
 }
 
 /**
@@ -4021,6 +4023,7 @@ function realCodexPaneDom(): CodexPaneDom {
         binaryPath: button.getAttribute("data-trust-binary-path") ?? "",
         reason: button.getAttribute("data-trust-reason") ?? "",
         buttonVisible: button.offsetParent !== null,
+        staleConsent: button.getAttribute("data-trust-stale-consent") === "true",
       };
     },
   };
@@ -4060,6 +4063,7 @@ function realBinaryTrustDialogDom(): BinaryTrustDialogDom {
         binaryPath: el.getAttribute("data-trust-binary-path") ?? undefined,
         reason: el.getAttribute("data-trust-reason") ?? undefined,
         visible: el.open,
+        staleConsent: el.getAttribute("data-trust-stale-consent") === "true",
       };
     },
     clickAccept: () => {

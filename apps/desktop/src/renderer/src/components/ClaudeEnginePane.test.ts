@@ -294,13 +294,17 @@ describe("binary-trust wiring (TASK.103)", () => {
       report: {
         status: "error",
         error: "Claude binary (/opt/claude) is world-writable",
-        trustRefusal: { binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable" },
+        trustRefusal: { binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable", staleConsent: false },
       },
       binaryPath: "/opt/claude",
       source: "env",
       checkedAt: "2026-08-15T00:00:00.000Z",
     };
-    expect(binaryTrustRefusalOf(snapshot.report)).toEqual({ binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable" });
+    expect(binaryTrustRefusalOf(snapshot.report)).toEqual({
+      binaryPath: "/opt/claude",
+      reason: "Claude binary (/opt/claude) is world-writable",
+      staleConsent: false,
+    });
   });
 
   it("a report with NO trustRefusal is read as null — no Trust button offered", () => {
@@ -314,7 +318,7 @@ describe("binary-trust wiring (TASK.103)", () => {
     const trustRefused: ClaudeDoctorReport = {
       status: "error",
       error: "Claude binary (/opt/claude) is world-writable",
-      trustRefusal: { binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable" },
+      trustRefusal: { binaryPath: "/opt/claude", reason: "Claude binary (/opt/claude) is world-writable", staleConsent: false },
     };
     const plainError: ClaudeDoctorReport = { status: "error", error: "Claude binary (/opt/claude) is world-writable" };
     expect(describeClaudeReportStatus(trustRefused)).toEqual(describeClaudeReportStatus(plainError));

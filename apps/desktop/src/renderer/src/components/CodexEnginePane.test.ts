@@ -579,7 +579,11 @@ describe("binary-trust wiring (TASK.103)", () => {
       report: {
         status: "error",
         error: "Codex binary's directory (/tmp/s4-trust) is world-writable",
-        trustRefusal: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "Codex binary's directory (/tmp/s4-trust) is world-writable" },
+        trustRefusal: {
+          binaryPath: "/tmp/s4-trust/bin/codex",
+          reason: "Codex binary's directory (/tmp/s4-trust) is world-writable",
+          staleConsent: false,
+        },
       },
       binaryPath: "/tmp/s4-trust/bin/codex",
       source: "env",
@@ -588,6 +592,7 @@ describe("binary-trust wiring (TASK.103)", () => {
     expect(binaryTrustRefusalOf(snapshot.report)).toEqual({
       binaryPath: "/tmp/s4-trust/bin/codex",
       reason: "Codex binary's directory (/tmp/s4-trust) is world-writable",
+      staleConsent: false,
     });
   });
 
@@ -602,7 +607,11 @@ describe("binary-trust wiring (TASK.103)", () => {
     const trustRefused: CodexDoctorReport = {
       status: "error",
       error: "Codex binary's directory (/tmp/s4-trust) is world-writable",
-      trustRefusal: { binaryPath: "/tmp/s4-trust/bin/codex", reason: "Codex binary's directory (/tmp/s4-trust) is world-writable" },
+      trustRefusal: {
+        binaryPath: "/tmp/s4-trust/bin/codex",
+        reason: "Codex binary's directory (/tmp/s4-trust) is world-writable",
+        staleConsent: false,
+      },
     };
     const plainError: CodexDoctorReport = { status: "error", error: "Codex binary's directory (/tmp/s4-trust) is world-writable" };
     expect(describeCodexReportStatus(trustRefused)).toEqual(describeCodexReportStatus(plainError));
