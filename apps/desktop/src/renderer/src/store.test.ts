@@ -1739,6 +1739,148 @@ describe("desktop store — subagent_attention permission-wait flag (TASK.102 CU
     const seeded = store.getState().transcript;
     attention(store, turnId, "foreign-call", true);
     expect(store.getState().transcript).toEqual(seeded);
+    // Neither the unseeded nor the foreign attempt should have touched the
+    // waitingSubagents Set (TASK.115 S1: same guard as the transcript patch).
+    expect(store.getState().waitingSubagents.size).toBe(0);
+  });
+});
+
+// TASK.115 S1: `DesktopState.waitingSubagents` — the Set a hidden child's
+// permission-wait flag feeds into, so the PARENT row's sidebar indicator
+// (tab-status-store.ts's deriveCoarse) can go true while a child is blocked
+// on an ask the parent's own `permission` field knows nothing about.
+describe("desktop store — waitingSubagents (TASK.115 S1: parent-row awareness of a blocked child)", () => {
+  function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+  }
+
+  function addAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+  }
+
+  function seedSubagent(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId, agentType: "general-purpose", description: "build X" },
+    });
+  }
+
+  function attention(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string, waiting: boolean): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_attention", toolCallId, waiting },
+    });
+  }
+
+  it("waiting:true adds the toolCallId; the matching waiting:false removes it", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+    expect(store.getState().waitingSubagents.size).toBe(0);
+
+    attention(store, turnId, "call-1", true);
+    expect(store.getState().waitingSubagents).toEqual(new Set(["call-1"]));
+
+    attention(store, turnId, "call-1", false);
+    expect(store.getState().waitingSubagents.size).toBe(0);
+  });
+
+  it("a duplicate waiting:true for the same toolCallId is idempotent in the Set — ONE waiting:false still clears it (the main risk a counter would get wrong)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+
+    attention(store, turnId, "call-1", true);
+    attention(store, turnId, "call-1", true); // duplicate, e.g. a replayed event
+    expect(store.getState().waitingSubagents).toEqual(new Set(["call-1"]));
+
+    attention(store, turnId, "call-1", false);
+    expect(store.getState().waitingSubagents.has("call-1")).toBe(false);
+  });
+
+  it("subagent_end removes the toolCallId even when waiting:false never arrived (a settle wins over a stale wait)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+    attention(store, turnId, "call-1", true);
+    expect(store.getState().waitingSubagents.has("call-1")).toBe(true);
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "cancelled", turns: 1, durationMs: 100 },
+    });
+
+    expect(store.getState().waitingSubagents.has("call-1")).toBe(false);
+  });
+
+  it("two children waiting at once: settling one leaves the other's entry (the indicator stays up for the child still blocked)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    addAgentToolCall(store, turnId, "call-2");
+    seedSubagent(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-2");
+
+    attention(store, turnId, "call-1", true);
+    attention(store, turnId, "call-2", true);
+    expect(store.getState().waitingSubagents).toEqual(new Set(["call-1", "call-2"]));
+
+    attention(store, turnId, "call-1", false);
+    expect(store.getState().waitingSubagents).toEqual(new Set(["call-2"]));
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-2", status: "completed", turns: 4, durationMs: 900 },
+    });
+    expect(store.getState().waitingSubagents.size).toBe(0);
+  });
+
+  it("a host_ready respawn clears waitingSubagents along with the rest of the session slice — no phantom parent warning survives a respawn", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+    attention(store, turnId, "call-1", true);
+    expect(store.getState().waitingSubagents.size).toBe(1);
+
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    expect(store.getState().waitingSubagents.size).toBe(0);
+  });
+
+  it("a tab with no children ever has an empty waitingSubagents Set (regression: an ordinary session is untouched)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().appendUserText("req-1", "hi there");
+    expect(store.getState().waitingSubagents.size).toBe(0);
   });
 });
 
@@ -3757,6 +3899,42 @@ describe("desktop store — rewind_result reducer (slice P7.26/R2, design slice-
       safetyCheckpointId: "abcdef1234567890",
     });
     expect(store.getState().notice).toEqual({ kind: "rewind_restored", text: "Restored — safety checkpoint abcdef12" });
+  });
+
+  it("TASK.115 S1: ok + conversationRestored:true also clears waitingSubagents — a rewound child block can't leave a phantom parent warning", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "turn-1" });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "turn-1",
+      event: {
+        type: "tool_call",
+        toolCall: { id: "call-1", name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "turn-1",
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "general-purpose", description: "build X" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "turn-1",
+      event: { type: "subagent_attention", toolCallId: "call-1", waiting: true },
+    });
+    expect(store.getState().waitingSubagents.size).toBe(1);
+
+    store.getState().applyHostMessage({
+      type: "rewind_result",
+      requestId: "rw-1",
+      ok: true,
+      conversationRestored: true,
+      restoredPaths: 0,
+      safetyCheckpointId: "cp-safety",
+    });
+
+    expect(store.getState().waitingSubagents.size).toBe(0);
   });
 
   it("ok + conversationRestored:false (files-only scope) leaves the transcript untouched", () => {

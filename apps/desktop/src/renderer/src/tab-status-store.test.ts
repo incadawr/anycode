@@ -23,13 +23,14 @@ function coarse(turn: TurnState["status"], needsApproval: boolean, live: boolean
   return { turn, needsApproval, live };
 }
 
-/** Builds a deriveCoarse input (a slice of DesktopState) from primitives. */
+/** Builds a deriveCoarse input (a slice of DesktopState) from primitives. `waitingSubagents` defaults to empty (regression: an ordinary tab with no children). */
 function deriveInput(
   turn: TurnState["status"],
   connection: DesktopState["connection"],
   permission: DesktopState["permission"],
-): Pick<DesktopState, "turn" | "connection" | "permission"> {
-  return { turn: { status: turn, turnId: null, requestId: null }, connection, permission };
+  waitingSubagents: ReadonlySet<string> = new Set(),
+): Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents"> {
+  return { turn: { status: turn, turnId: null, requestId: null }, connection, permission, waitingSubagents };
 }
 
 /** A stand-in non-null permission request — deriveCoarse only checks `!== null`. */
@@ -219,6 +220,19 @@ describe("tab-status-store — pure projections", () => {
     });
     expect(deriveCoarse(deriveInput("running", "host_exited", null)).live).toBe(false);
     expect(deriveCoarse(deriveInput("idle", "awaiting_host_ready", null)).live).toBe(false);
+    expect(deriveCoarse(deriveInput("idle", "ready", null)).needsApproval).toBe(false);
+  });
+
+  it("16b. TASK.115 S1: deriveCoarse.needsApproval is true from a waiting CHILD alone, with the tab's own permission null", () => {
+    expect(deriveCoarse(deriveInput("running", "ready", null, new Set(["call-1"]))).needsApproval).toBe(true);
+  });
+
+  it("16c. TASK.115 S1: deriveCoarse.needsApproval goes false once the last waiting child clears (empty Set, not just non-null check)", () => {
+    expect(deriveCoarse(deriveInput("idle", "ready", null, new Set())).needsApproval).toBe(false);
+  });
+
+  it("16d. TASK.115 S1 regression: a tab with no children (deriveInput's default empty Set) keeps the pre-existing own-permission-only projection", () => {
+    expect(deriveCoarse(deriveInput("idle", "ready", SOME_PERMISSION)).needsApproval).toBe(true);
     expect(deriveCoarse(deriveInput("idle", "ready", null)).needsApproval).toBe(false);
   });
 

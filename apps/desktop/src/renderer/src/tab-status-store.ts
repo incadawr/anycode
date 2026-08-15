@@ -67,11 +67,24 @@ export function isTurnCompletion(prev: TurnState["status"], next: TurnState["sta
   return prev === "running" && next === "idle";
 }
 
-/** Dumb projection DesktopState → CoarseStatus; all transition semantics live in `applyCoarse`. */
-export function deriveCoarse(state: Pick<DesktopState, "turn" | "connection" | "permission">): CoarseStatus {
+/**
+ * Dumb projection DesktopState → CoarseStatus; all transition semantics live
+ * in `applyCoarse`. `needsApproval` is true on the tab's OWN pending
+ * permission ask OR on any live child waiting on ITS OWN permission ask
+ * (TASK.115 S1) — children are hidden from the sidebar entirely, so without
+ * this the parent row never surfaces a blocked child. Reads
+ * `state.waitingSubagents.size` (a Set maintained incrementally by
+ * `patchSubagentAttention`/`patchSubagentEnd`, store.ts) rather than scanning
+ * the transcript: this function runs on EVERY setState of every tab store
+ * (tab-registry.ts's per-tab mirror subscription), including high-frequency
+ * stream deltas, so it must stay O(1).
+ */
+export function deriveCoarse(
+  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents">,
+): CoarseStatus {
   return {
     turn: state.turn.status,
-    needsApproval: state.permission !== null,
+    needsApproval: state.permission !== null || state.waitingSubagents.size > 0,
     live: state.connection === "ready",
   };
 }
