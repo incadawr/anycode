@@ -120,6 +120,27 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
   });
 
+  it("TASK.106 cut-1 stage A: forwards a Core draft's cross-connection pick as connectionId", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftConnectionId("conn-x");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", connectionId: "conn-x" });
+  });
+
+  it("a Core draft with no explicit connection pick omits connectionId from createTab (active-connection default)", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
+  });
+
   it("R3-2 facet ii: switching a draft codex->core after picking a profile never forwards the stale codexProfileId to the Core create request", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");

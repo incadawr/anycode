@@ -1554,6 +1554,11 @@ void app.whenReady().then(async () => {
     // TASK.45 W10: a NEW core session pins to the active connection; a RESUMED
     // one re-pins to its stored connection (or refuses `connection_missing`).
     activeConnectionId: () => settings?.provider.activeConnectionId,
+    // TASK.106 cut-1 stage A: the New Session picker's explicit connection
+    // pick is validated against this live registry BEFORE tab-ipc trusts it
+    // (same source `connectionById` every other connection-identity check in
+    // this file already reads).
+    connectionExists: (id) => settings !== null && connectionById(settings, id) !== undefined,
     // S4-1 arm 2: consume-once import-model override for the first resume of an
     // imported session (see the holder above). Undefined until the rollout IPC
     // wires it below; harmless (no override) for any resume before then.

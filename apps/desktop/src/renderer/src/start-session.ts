@@ -39,22 +39,28 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
 }
 
 /**
- * Keeps the historical Core create payload byte-for-byte additive. For a
- * non-core (Codex) draft, also forwards the draft's own model/preset/profile
- * picks (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers
- * both already existed — this is the missing wire between them). All three
- * are opaque ids; omitted entirely when never explicitly picked, so the host
- * (or main's profile registry) applies its own default rather than receiving
- * a stale/invalid id.
+ * Keeps the historical Core create payload byte-for-byte additive apart from
+ * the TASK.106 cut-1 stage A `connectionId` pick below. For a non-core
+ * (Codex) draft, also forwards the draft's own model/preset/profile picks
+ * (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers both
+ * already existed — this is the missing wire between them). All are opaque
+ * ids; omitted entirely when never explicitly picked, so the host (or main's
+ * registry) applies its own default rather than receiving a stale/invalid id.
  */
 export function createStartTabRequest(
-  draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset" | "codexProfileId">,
+  draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset" | "codexProfileId" | "connectionId">,
 ): CreateTabRequest {
   if (draft.workspace === null) {
     throw new Error("A workspace is required to create a tab");
   }
   if (draft.engine === "core") {
-    return { kind: "new", workspace: draft.workspace };
+    return {
+      kind: "new",
+      workspace: draft.workspace,
+      // TASK.106 cut-1 stage A: the New Session model picker's cross-connection
+      // pick. Absent ⇒ main falls back to the active connection, unchanged.
+      ...(draft.connectionId !== undefined ? { connectionId: draft.connectionId } : {}),
+    };
   }
   return {
     kind: "new",
