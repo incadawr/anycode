@@ -221,6 +221,8 @@ export interface ClaudeBinaryDiscovery {
   trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
   /** The rung the carried `trustRefusal` came from — present iff `trustRefusal` is present (invariant tested by BG7). */
   trustRefusalSource?: ClaudeBinarySource;
+  /** Present iff the ladder was terminated by an EXPLICIT-rung (env/settings) trust refusal whose refusal is NON-consentable (D-S4-13) — the consentable stop already speaks through `trustRefusal`/`trustRefusalSource` above (D-S4-22). */
+  trustRefused?: true;
 }
 
 /** `claude` on POSIX, `claude.exe` on Windows — the file name every ladder rung looks for. */
@@ -283,10 +285,14 @@ export interface ClaudeDiscoveryInputs {
 /**
  * Walks the discovery ladder in priority order, returning the FIRST rung that
  * resolves to an absolute, existing, executable file. A rung that finds
- * nothing simply falls through to the next one — it does not abort the
- * ladder. Version compatibility is diagnosed by the doctor
- * (main/claude-doctor.ts) against whatever this function returns, not by
- * trying further rungs.
+ * NOTHING simply falls through to the next one — it does not abort the
+ * ladder. An EXPLICIT rung (`env`/`settings`) that FOUND its binary and had
+ * it TRUST-REFUSED stops the ladder instead of falling through: a lower
+ * rung's success must never silently substitute for a binary the user
+ * explicitly named (D-S4-22) — see the hard-stop below. Ambient rungs
+ * (`path`/`common`) keep walking on a refusal exactly as before. Version
+ * compatibility is diagnosed by the doctor (main/claude-doctor.ts) against
+ * whatever this function returns, not by trying further rungs.
  */
 export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinaryDiscovery {
   const fs = inputs.fs ?? nodeFs;
@@ -300,6 +306,10 @@ export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinar
     { source: "common", candidates: commonInstallLocations(inputs.env, platform) },
   ];
   let lastReason: string | undefined;
+  // The FIRST trust refusal encountered while walking the ladder wins.
+  // Post-D-S4-22 this capture only ever fires for an AMBIENT rung's refusal:
+  // an explicit (env/settings) refusal stops the ladder below, before ever
+  // reaching this capture.
   let firstTrustRefusal: { binaryPath: string; reason: string; staleConsent: boolean } | undefined;
   let firstTrustRefusalSource: ClaudeBinarySource | undefined;
   for (const rung of rungs) {
@@ -307,6 +317,19 @@ export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinar
       const resolved = resolveClaudeBinary(candidate, fs, platform, identity, consents);
       if (resolved.path !== null) {
         return { path: resolved.path, source: rung.source };
+      }
+      // D-S4-22: an EXPLICIT rung (env/settings) that found its candidate and
+      // had it trust-refused stops the ladder here. Ambient rungs fall
+      // through unchanged (S4/RES-16).
+      if (resolved.trustRefused === true && (rung.source === "env" || rung.source === "settings")) {
+        return {
+          path: null,
+          source: "none",
+          ...(resolved.reason !== undefined ? { reason: resolved.reason } : {}),
+          ...(resolved.trustRefusal !== undefined
+            ? { trustRefusal: resolved.trustRefusal, trustRefusalSource: rung.source }
+            : { trustRefused: true }),
+        };
       }
       if (resolved.reason !== undefined) {
         lastReason = resolved.reason;
