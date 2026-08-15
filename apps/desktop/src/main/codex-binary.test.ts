@@ -589,3 +589,108 @@ describe("consent-aware trust threading (TASK.103)", () => {
     expect(discovered.trustRefusalSource).toBe("env");
   });
 });
+
+// D-S4-22 — explicit-rung hard-stop: a trust-refused env/settings candidate
+// must not let a lower rung silently substitute a different binary. Ambient
+// rungs (path/common/installed) keep the pre-existing fall-through behavior
+// (pinned by the untouched test at :339-351).
+describe("BG8 explicit-rung hard-stop (D-S4-22)", () => {
+  it("BG8 (a) an env-rung consentable refusal hard-stops the ladder even though settings resolves — THE observed live defect, verbatim", () => {
+    const fs = fakeFs(
+      { "/env/codex": {}, "/settings/codex": {} },
+      { "/env": { mode: 0o777 } }, // env candidate's directory is world-writable: consentable refusal
+    );
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefusal).toEqual({ binaryPath: "/env/codex", reason: result.reason, staleConsent: false });
+    expect(result.trustRefusalSource).toBe("env");
+    expect(result.trustRefused).toBeUndefined();
+  });
+
+  it("BG8 (b) a settings-rung consentable refusal hard-stops the ladder even though PATH resolves", () => {
+    const fs = fakeFs(
+      { "/settings/codex": {}, "/usr/local/bin/codex": {} },
+      { "/settings": { mode: 0o777 } },
+    );
+    const result = discoverCodexBinary({
+      settingsPath: "/settings/codex",
+      env: { PATH: "/usr/local/bin" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefusal).toEqual({ binaryPath: "/settings/codex", reason: result.reason, staleConsent: false });
+    expect(result.trustRefusalSource).toBe("settings");
+  });
+
+  it("BG8 (c) a consent matching the env binary's fingerprint still resolves it — consent lifts the wall even with a lower rung available", () => {
+    const fs = fakeFs(
+      { "/env/codex": { size: FILE_SIZE, mtimeMs: FILE_MTIME }, "/settings/codex": {} },
+      { "/env": { mode: 0o777 } },
+    );
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+      consents: [consentFor("/env/codex")],
+    });
+    expect(result).toEqual({ path: "/env/codex", source: "env" });
+  });
+
+  // Ambient side of PIN B.1's boundary: the guard at :339-351 above (a
+  // path-rung refusal falling through to a common-rung success) stays green
+  // UNMODIFIED. This pins the SAME-rung variant: two PATH-rung candidates,
+  // the first refused, the second valid — the ladder keeps walking within an
+  // ambient rung exactly as it does across ambient rungs.
+  it("BG8 (d) same-rung ambient variant: two PATH dirs, first refused, second valid — the ladder keeps walking (ambient rungs never hard-stop)", () => {
+    const fs = fakeFs({ "/a/codex": {}, "/b/codex": {} }, { "/a": { mode: 0o777 } });
+    const result = discoverCodexBinary({
+      env: { PATH: "/a:/b", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: "/b/codex", source: "path" });
+  });
+
+  it("BG8 (e) an env-rung NON-consentable refusal (third-party-owned) hard-stops with no trustRefusal payload", () => {
+    const fs = fakeFs({ "/env/codex": { uid: 777 }, "/settings/codex": {} });
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex",
+      settingsPath: "/settings/codex",
+      env: { PATH: "" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefused).toBe(true);
+    expect(result.trustRefusal).toBeUndefined();
+  });
+
+  it("BG8 (f) a MISSING env override (stat throws) falls through to a valid lower rung — the :324-332 doc-comment case stays green", () => {
+    const fs = fsWith(["/usr/local/bin/codex"]);
+    const result = discoverCodexBinary({
+      envOverride: "/env/codex-gone",
+      env: { PATH: "/usr/local/bin" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: "/usr/local/bin/codex", source: "path" });
+  });
+});

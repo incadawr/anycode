@@ -200,8 +200,10 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
   ): {
     path: string | null;
     source: ClaudeBinarySource;
+    reason?: string;
     trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
     trustRefusalSource?: ClaudeBinarySource;
+    trustRefused?: true;
   } {
     return discoverClaudeBinary({
       envOverride: deps.bootEnv[ENV_CLAUDE_BIN],
@@ -239,7 +241,14 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
   async function checkPath(
     binaryPath: string | null,
     source: ClaudeBinarySource,
-    discoveryTrustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean; offerTrust: boolean },
+    /**
+     * D-S4-22: present whenever discovery stopped the ladder on an explicit-
+     * rung (env/settings) trust refusal — consentable (`binaryPath`/
+     * `staleConsent` present, read only when `offerTrust` is true) or not
+     * (both absent; `offerTrust` is always false in that case, so the
+     * `trustRefusal` payload below is never synthesized for it).
+     */
+    discoveryTrustRefusal?: { binaryPath?: string; reason: string; staleConsent?: boolean; offerTrust: boolean },
   ): Promise<ClaudeOnboardingSnapshot> {
     const consents = deps.readTrustedBinaries?.() ?? [];
     const report: ClaudeDoctorReport =
@@ -248,7 +257,9 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
           ? {
               status: "error",
               error: discoveryTrustRefusal.reason,
-              ...(discoveryTrustRefusal.offerTrust
+              ...(discoveryTrustRefusal.offerTrust &&
+              discoveryTrustRefusal.binaryPath !== undefined &&
+              discoveryTrustRefusal.staleConsent !== undefined
                 ? {
                     trustRefusal: {
                       binaryPath: discoveryTrustRefusal.binaryPath,
@@ -285,7 +296,12 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
             ...discovery.trustRefusal,
             offerTrust: discovery.trustRefusalSource === "env" || discovery.trustRefusalSource === "settings",
           }
-        : undefined,
+        : // D-S4-22: the ladder hard-stopped on an explicit-rung refusal that
+          // is NOT consentable (D-S4-13) — an honest error, never the
+          // `not_installed` lie for a binary that exists and was refused.
+          discovery.trustRefused === true && discovery.reason !== undefined
+          ? { reason: discovery.reason, offerTrust: false }
+          : undefined,
     );
   }
 
