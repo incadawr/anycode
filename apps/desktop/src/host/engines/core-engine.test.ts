@@ -37,10 +37,18 @@ describe("CoreEngine", () => {
       metaTokens: 6,
       totalEstimatedTokens: 21,
     }));
+    // TASK.37: CoreEngine.setMode now delegates to loop.setMode (D-S3-3) rather
+    // than writing config directly, so the fake must reproduce the real loop's
+    // documented contract (always mutates the shared config object) for the
+    // config-mutation assertion below to mean anything.
+    const setMode = vi.fn((mode: AgentLoopConfig["mode"]) => {
+      config.mode = mode;
+    });
     const loop = {
       runTurn,
       history: { items: historyItems, replaceAll },
       contextBreakdown,
+      setMode,
     } as unknown as AgentLoop;
     const switchModel = vi.fn(() => ({ model: "next", reasoningEffort: "high" as const }));
     const engine = new CoreEngine({ loop, config, switchModelImpl: switchModel });

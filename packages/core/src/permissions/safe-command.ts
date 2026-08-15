@@ -18,8 +18,18 @@
  * The exported constants (READ_ONLY_BINARIES, GIT_SAFE_SUBCOMMANDS,
  * GIT_BARE_ONLY_SUBCOMMANDS, WRITE_CAPABLE_FLAGS) are the shipped "strictest
  * reasonable default": slice 5.2 reads them to seed its OS-sandbox profile and
- * U1-P5 tunes their composition. This module performs zero I/O and depends on no
- * core types.
+ * U1-P5 tunes their composition. This module performs zero I/O and depends on
+ * the one exported Bash splitter (`splitBashSegments` from `./rules.js`, the
+ * ONE splitter — invariant 2) and no other core types.
+ *
+ * TASK.35 (`classifyBashCommandLine`, below `classifyBashCommand`): widens
+ * auto-allow to Bash PIPELINES under grammar v1 (`|` only). A line the
+ * splitter reads as one segment routes to `classifyBashCommand` on the
+ * ORIGINAL string, bit-for-bit — the single-command path below is completely
+ * unmodified by this addition. The widening surface is exactly all-`|`
+ * multi-segment pipelines whose every segment independently proves read-only
+ * through a doubly-conservative per-segment screen (raw metacharacter screen,
+ * THEN quote-aware tokenization) — see `classifyPipelineSegment`.
  *
  * KNOWN, SANCTIONED LIMITS (all lexical; true enforcement is the OS layer in
  * slice 5.2):
@@ -34,16 +44,21 @@
  *  - The write-flag safety net matches whole flag tokens (and `--long=value`),
  *    not bundled short flags (`-ao`) or attached short values (`-ofile`). It is
  *    NOT the source of safety: every allowlisted binary is read-only BY NATURE,
- *    and the WRITE_CAPABLE_FLAGS screen is only a defense-in-depth backstop for a
- *    binary that is read-only except for one rare output flag (e.g. `tree -o`).
+ *    and the WRITE_CAPABLE_FLAGS screen is pure defense in depth — no entry may
+ *    LEAN on it (TASK.35 fix wave 1 removed `tree` for exactly that reason; see
+ *    the READ_ONLY_BINARIES doc below).
  *    A binary whose write/exec surface the screen cannot exhaust is NOT a
  *    candidate for the allowlist: ripgrep (`--pre`/`--pre-glob` run an arbitrary
  *    program per file, `--hostname-bin` runs one unconditionally, `-z` spawns
- *    external decompressors) and `file` (`-C`/`--compile` writes a `magic.mgc`
- *    into cwd) are therefore DELIBERATELY excluded — fail-closed, plain search is
+ *    external decompressors), `file` (`-C`/`--compile` writes a `magic.mgc`
+ *    into cwd), and `tree` (`-o FILE` writes, and `-no FILE`/`-o<FILE>` cluster
+ *    spellings evade any verbatim flag net — TASK.35 fix wave 1) are therefore
+ *    DELIBERATELY excluded — fail-closed, plain search is
  *    covered by grep/egrep/fgrep. Any binary ADDED via U1-P5 tuning must be
  *    read-only by nature (not merely "denylist a few flags") before it is trusted.
  */
+
+import { splitBashSegments } from "./rules.js";
 
 export type BashCommandClass = "read-only" | "unknown";
 
@@ -71,16 +86,18 @@ const SHELL_METACHARACTERS: ReadonlySet<string> = new Set([
  * arbitrary programs and `file -C` writes to cwd — write/exec surfaces the flag
  * screen cannot exhaust. Plain search is served by grep/egrep/fgrep instead.
  *
- * `tree` is the ONE entry whose read-only-ness leans on the WRITE_CAPABLE_FLAGS
- * net rather than being read-only by nature: `tree -o FILE` writes, but `-o` is
- * in the net so `tree -o out.txt` demotes to "unknown" (pinned by regression
- * test). It is retained because that single output flag is fully covered; a tool
- * with more than one such flag would not qualify.
+ * `tree` was REMOVED (TASK.35 fix wave 1, W1-BLOCKER-1): `tree -o FILE` writes
+ * its listing to FILE, and the verbatim flag net cannot exhaust that surface —
+ * short clusters and attached values (`tree -no FILE`, `tree -o<FILE>`) spell
+ * the same write without ever producing the token `-o`. Under the module-doc
+ * admission criterion (a binary whose write surface the screen cannot exhaust
+ * is not a candidate) `tree` never qualified; it now asks like any other
+ * non-allowlisted binary. No entry may lean on the flag net for its safety.
  */
 export const READ_ONLY_BINARIES: ReadonlySet<string> = new Set([
   "ls", "cat", "head", "tail", "wc", "pwd", "whoami", "id", "uname",
   "stat", "du", "df", "echo", "printf",
-  "grep", "egrep", "fgrep", "tree",
+  "grep", "egrep", "fgrep",
   "readlink", "basename", "dirname", "realpath",
   "cksum", "md5sum", "sha1sum",
   "date", "true", "false",
@@ -246,4 +263,229 @@ export function classifyBashCommand(command: string): BashCommandClass {
 
   // 5. Every conservative check passed.
   return "read-only";
+}
+
+/** Classification of a full Bash command LINE (TASK.35). `class` is the
+ * allow-relevant verdict; `shellExpression` is a PRESENTATION-ONLY fact
+ * (true when the line is more than one plain simple command — pipeline,
+ * forbidden separator, substitution, unbalanced quote, or any shell
+ * metacharacter in a single command) consumed by the permission modal's
+ * «unknown shell expression» copy. It never feeds the allow decision. */
+export interface BashCommandLineClassification {
+  class: BashCommandClass;
+  shellExpression: boolean;
+}
+
+/** The one accepted sed script shape: `<n>p` or `<n>,<m>p` (DV-5). */
+const SED_PRINT_SCRIPT_RE = /^[0-9]+(,[0-9]+)?p$/;
+
+interface SegmentToken {
+  /** Token exactly as written, quotes included. */
+  raw: string;
+  /** Token with quote characters removed (shell word after quote removal). */
+  unquoted: string;
+}
+
+/**
+ * Quote-aware word splitter for ONE pipeline segment (TASK.35). Input is a
+ * segment that already passed `hasUnsafeCharacter` (no metacharacters,
+ * control chars, backslash, `$`, or backtick remain) — the walls below are
+ * kept anyway as a defensive floor that does not depend on the caller.
+ * Returns `undefined` on any wall hit or an unterminated quote.
+ */
+function tokenizeSegment(segment: string): SegmentToken[] | undefined {
+  const tokens: SegmentToken[] = [];
+  let raw = "";
+  let unquoted = "";
+  let hasToken = false;
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment.charAt(i);
+    const code = segment.charCodeAt(i);
+    // Hard walls (unreachable after the §4.2 raw screen, kept fail-closed):
+    // escapes and expansions have no tokenization here at all.
+    if (ch === "\\" || ch === "$" || ch === "`") {
+      return undefined;
+    }
+    if ((code < 0x20 && code !== 0x09) || code === 0x7f) {
+      return undefined;
+    }
+    if (inSingle) {
+      raw += ch;
+      hasToken = true;
+      if (ch === "'") {
+        inSingle = false;
+      } else {
+        unquoted += ch;
+      }
+      continue;
+    }
+    if (inDouble) {
+      raw += ch;
+      hasToken = true;
+      if (ch === '"') {
+        inDouble = false;
+      } else {
+        unquoted += ch;
+      }
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      raw += ch;
+      hasToken = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      raw += ch;
+      hasToken = true;
+      continue;
+    }
+    if (ch === " " || ch === "\t") {
+      if (hasToken) {
+        tokens.push({ raw, unquoted });
+        raw = "";
+        unquoted = "";
+        hasToken = false;
+      }
+      continue;
+    }
+    raw += ch;
+    unquoted += ch;
+    hasToken = true;
+  }
+  if (inSingle || inDouble) {
+    return undefined;
+  }
+  if (hasToken) {
+    tokens.push({ raw, unquoted });
+  }
+  return tokens;
+}
+
+/** Classifies a `sed -n '<addr>p' <path>` pipeline segment (DV-5, §4.3). Every
+ * other sed form asks — this is a branch in the pipeline segment classifier
+ * only, `sed` is NOT added to READ_ONLY_BINARIES. */
+function classifySedPipelineTokens(tokens: SegmentToken[]): BashCommandClass {
+  // Exactly `sed -n '<addr>p' <path>`, four tokens, fixed positions (DV-5).
+  if (tokens.length !== 4) {
+    return "unknown";
+  }
+  const flag = tokens[1]!;
+  const script = tokens[2]!;
+  const operand = tokens[3]!;
+  // `-n` must be written plainly: a quoted "-n" or a bundled `-ni`/`-ne` asks.
+  if (flag.raw !== "-n") {
+    return "unknown";
+  }
+  // Script is matched after quote removal ('1,5p' / "1,5p" / 1,5p all fine);
+  // anything beyond `<n>p` / `<n>,<m>p` — `w`, `s///`, `i`, `d`, `$`, `;`,
+  // steps — fails here or already died on the §4.2 raw screen.
+  if (!SED_PRINT_SCRIPT_RE.test(script.unquoted)) {
+    return "unknown";
+  }
+  // Exactly one path operand; a dash-leading token (raw or unquoted) could be
+  // parsed by sed as another option (or stdin `-`) — refused.
+  if (operand.unquoted === "" || operand.unquoted.startsWith("-") || operand.raw.startsWith("-")) {
+    return "unknown";
+  }
+  return "read-only";
+}
+
+/** Classifies ONE pipeline segment (TASK.35, §4.2). Doubly conservative: the
+ * quote-UNAWARE raw screen runs first (same maximum-conservatism rule as the
+ * single-command path), THEN quote-aware tokenization — tokenization exists
+ * to CATCH what quotes hide, never to ADMIT what quotes wrap. */
+function classifyPipelineSegment(segment: string): BashCommandClass {
+  // 1. Quote-UNAWARE raw screen — the same maximum-conservatism rule as the
+  //    single-command path: any shell metacharacter or control character
+  //    anywhere in the segment (redirects < >, $, backtick, \, = env
+  //    assignment, glob * ? [ ], brace { }, ~, !, #, NUL/ESC/CR/DEL…) demotes
+  //    it, even inside quotes. Only plain quote characters survive to the
+  //    tokenizer: quote-awareness exists to CATCH hidden flags, not to ADMIT
+  //    quoted metacharacters (CUT-S2 D-S2-5).
+  if (hasUnsafeCharacter(segment)) {
+    return "unknown";
+  }
+  // 2. Quote-aware word split with quote removal (§5). Fail or empty => unknown.
+  const tokens = tokenizeSegment(segment);
+  if (tokens === undefined || tokens.length === 0) {
+    return "unknown";
+  }
+  // 3. The command word must be quote-free (D-S2-6): a quoted or
+  //    quote-assembled binary name never auto-runs. LIVE but security-inert
+  //    (ARBITRATION-S2-W1 D-W1-2): removing it would only admit
+  //    quoted-directory-prefix spellings (`"a"/cat x`) whose executed basename
+  //    is identical to an already-sanctioned unquoted twin (RES-6 basename
+  //    trust). Kept as a zero-cost strictness rule, not as a load-bearing
+  //    security guard — do NOT delete as "dead code" (MUTATION-S2.md W1
+  //    corrections; A7's slash-after-quote vectors go red on deletion).
+  const first = tokens[0]!;
+  if (first.raw !== first.unquoted) {
+    return "unknown";
+  }
+  const binary = basename(first.raw);
+  // 4. v1: no git segments in pipelines (DV-5 — the examples table wins).
+  if (binary === "git") {
+    return "unknown";
+  }
+  // 5. The one sed subgrammar (DV-5); every other sed form asks.
+  if (binary === "sed") {
+    return classifySedPipelineTokens(tokens);
+  }
+  // 6. Allowlist basename — same basename-trust limit as the single path.
+  if (!READ_ONLY_BINARIES.has(binary)) {
+    return "unknown";
+  }
+  // 7. Bare-only binaries: any argument may carry an effect (`date -s`).
+  if (NO_ARGUMENT_BINARIES.has(binary) && tokens.length > 1) {
+    return "unknown";
+  }
+  // 8. Write-flag screen on RAW and UNQUOTED forms — unquoted is the
+  //    load-bearing one (`cat "--in-place" f | wc` — MV5's sole surviving
+  //    discriminator; the original DV-5 example `tree "-o" x` now dies at
+  //    the step-6 allowlist miss, W1 removed tree); raw is defense in depth.
+  for (const token of tokens.slice(1)) {
+    if (isWriteFlag(token.raw, WRITE_CAPABLE_FLAGS) || isWriteFlag(token.unquoted, WRITE_CAPABLE_FLAGS)) {
+      return "unknown";
+    }
+  }
+  return "read-only";
+}
+
+/**
+ * Classifies a full Bash command line, pipelines included (TASK.35, DV-5).
+ * Grammar v1: the ONLY accepted compound form is `cmd | cmd | …` — every
+ * separator `|`, no blank segments, every segment independently provable
+ * read-only via the pipeline segment screens. A single-segment line routes to
+ * classifyBashCommand on the ORIGINAL string, bit-for-bit. Everything else —
+ * `;`/`&`/`&&`/`||`/`|&`/newline chains, substitutions, redirects,
+ * unbalanced quotes — is "unknown" (fail-closed).
+ */
+export function classifyBashCommandLine(command: string): BashCommandLineClassification {
+  const split = splitBashSegments(command);
+  if (split === undefined) {
+    // Substitution or unterminated quote: unsegmentable, never auto-allow.
+    return { class: "unknown", shellExpression: true };
+  }
+  if (split.segments.length === 1) {
+    // Single plain command: the pre-TASK.35 path, verdict-for-verdict.
+    return { class: classifyBashCommand(command), shellExpression: hasUnsafeCharacter(command) };
+  }
+  if (split.separators.some((separator) => separator !== "|")) {
+    return { class: "unknown", shellExpression: true };
+  }
+  if (split.segments.some((segment) => segment.trim() === "")) {
+    // A blank between pipes (`a | | b`, leading/trailing pipe, `|&` middle):
+    // malformed or smuggled — never auto-allow (invariant 4).
+    return { class: "unknown", shellExpression: true };
+  }
+  for (const segment of split.segments) {
+    if (classifyPipelineSegment(segment) !== "read-only") {
+      return { class: "unknown", shellExpression: true };
+    }
+  }
+  return { class: "read-only", shellExpression: true };
 }

@@ -195,9 +195,11 @@ describe("filterSlashItems", () => {
     const build = buildItems.find((item) => item.name === "Plan mode")!;
     expect(build.description).toBe("Turn plan mode on");
 
-    const runningItems = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ running: true }));
-    const runningPlan = runningItems.find((item) => item.name === "Plan mode")!;
-    expect(runningPlan.disabled).toBe(true);
+    // TASK.37 (D-S3-13): a running turn no longer gates the plan-mode toggle
+    // (MR4 pins the mid-turn arc); not-ready is the sole surviving gate.
+    const notReadyItems = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ ready: false }));
+    const notReadyPlan = notReadyItems.find((item) => item.name === "Plan mode")!;
+    expect(notReadyPlan.disabled).toBe(true);
 
     const modelItems = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ model: "gpt-5.6-terra" }));
     const model = modelItems.find((item) => item.name === "Model")!;
@@ -214,6 +216,12 @@ describe("filterSlashItems", () => {
 
     const enabledItems = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ modelDisabled: false }));
     expect(enabledItems.find((item) => item.name === "Model")!.disabled).toBe(false);
+  });
+
+  it("MR4 (TASK.37): the plan-mode command is enabled while running; not-ready still gates it", () => {
+    const planModeCommand = SLASH_COMMANDS.find((command) => command.id === "plan-mode")!;
+    expect(planModeCommand.enabled(ctx({ running: true, ready: true }))).toBe(true);
+    expect(planModeCommand.enabled(ctx({ running: false, ready: false }))).toBe(false);
   });
 });
 

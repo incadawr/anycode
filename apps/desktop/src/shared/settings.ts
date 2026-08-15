@@ -37,6 +37,11 @@ export const SECRET_CLEAR_CHANNEL = "anycode:secret-clear";
 /** invoke channel: dedup-append an always-allow rule ({toolName, pattern?}). */
 export const PERMISSION_RULE_ADD_CHANNEL = "anycode:permission-rule-add";
 
+/** invoke channel: grant per-path binary-trust consent ({path}); TASK.103 — main computes the fingerprint, the request never carries one. */
+export const BINARY_TRUST_GRANT_CHANNEL = "anycode:binary-trust-grant";
+/** invoke channel: revoke a per-path binary-trust consent ({path}); TASK.103 — idempotent. */
+export const BINARY_TRUST_REVOKE_CHANNEL = "anycode:binary-trust-revoke";
+
 // ── OAuth invoke channels (slice 2.5 §4.1; wired to main's OAuth engine in 2.5.2) ──
 
 /**
@@ -77,6 +82,24 @@ export const CONNECTION_CHECK_CHANNEL = "anycode:connection-check";
 export interface AlwaysAllowRule {
   toolName: string;
   pattern?: string;
+}
+
+/**
+ * One per-path binary-trust consent (TASK.103), as persisted in
+ * `settings.security.trustedBinaries`. Structurally REDECLARED here (not
+ * imported) to keep this value-only module's zero-import rule — same
+ * precedent as `AlwaysAllowRule` above. This shape MUST match
+ * `BinaryTrustConsent` in `shared/codex-binary-trust.ts` field-for-field;
+ * the two meet (and are cross-checked) only where a caller crosses the
+ * seam (settings-ipc.ts) — see RESIDUALS-S4.md#RES-11.
+ */
+export interface TrustedBinaryConsent {
+  /** The binary's realpath at grant time. */
+  path: string;
+  /** RAW stat 5-tuple, compared with strict equality by the policy. */
+  fingerprint: { mode: number; uid: number; gid: number; size: number; mtimeMs: number };
+  /** ISO timestamp of the grant. */
+  grantedAt: string;
 }
 
 /**
@@ -210,7 +233,16 @@ export interface AnycodeSettings {
   permissions: { alwaysAllow: AlwaysAllowRule[] };
   ui: { theme: "system" | "light" | "dark" };
   /** Consent flag for weak secret storage on Linux/headless (§4), default false. */
-  security: { allowWeakSecretStorage: boolean };
+  security: {
+    allowWeakSecretStorage: boolean;
+    /**
+     * Per-path binary-trust consents (TASK.103), additive-optional — absent
+     * = today's byte-identical round-trip. Written ONLY through the
+     * dedicated grant/revoke channels (never through generic `settings-set`,
+     * which refine-rejects this field — D-S4-5).
+     */
+    trustedBinaries?: TrustedBinaryConsent[];
+  };
   /**
    * Per-action keyboard-shortcut overrides (F20, slice-P7.24-cut.md §1,
    * additive-optional; version NOT bumped). Absent = every action uses its

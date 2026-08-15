@@ -212,7 +212,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: (ctx) => (ctx.mode === "plan" ? "Turn plan mode off" : "Turn plan mode on"),
     icon: "plan",
     run: { kind: "set_mode_toggle" },
-    enabled: (ctx) => !(ctx.running || !ctx.ready),
+    // TASK.37: mid-turn mode changes are now accepted (D-S3-7a) — a running
+    // turn no longer gates this toggle; not-ready is the sole surviving gate.
+    enabled: (ctx) => ctx.ready,
     source: "core",
     // set_mode is rejected host-side without supportsCorePermissions (Session.onSetMode) — a dead toggle otherwise.
     visible: (ctx) => ctx.supportsCorePermissions,

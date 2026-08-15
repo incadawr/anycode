@@ -45,8 +45,14 @@ export class CoreEngine implements SessionEngine {
     return this.options.config.mode;
   }
 
+  /**
+   * Routes through the loop (TASK.37), not a bare config write: the loop
+   * mutates the same shared config object AND the in-flight turn's dispatch
+   * context, so a mid-turn change reaches the next permission check. Between
+   * turns this is behavior-identical to the old `config.mode = mode`.
+   */
   setMode(mode: AgentLoopConfig["mode"]): void {
-    this.options.config.mode = mode;
+    this.options.loop.setMode(mode);
   }
 
   reasoningEffort() {

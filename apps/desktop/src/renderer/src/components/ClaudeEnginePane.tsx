@@ -22,6 +22,9 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import type { ClaudeDoctorReport } from "../../../shared/claude-doctor.js";
+import type { SettingsMutationResult } from "../../../shared/settings.js";
+import { describeMutationFailure } from "../settings-store.js";
+import { BinaryTrustDialog, binaryTrustRefusalOf } from "./BinaryTrustDialog.js";
 
 /**
  * Duplicated structurally from main/claude-ipc.ts's own
@@ -234,6 +237,8 @@ export interface ClaudeBridge {
   loginCancel(): Promise<void>;
   /** Doctor-spawn-loop fix: pushes a fresh snapshot after every recheck/pick/login step. */
   onSnapshotChanged(callback: (snapshot: ClaudeOnboardingSnapshot) => void): () => void;
+  /** TASK.103 (D-S4-8): grants a per-path binary-trust consent. `path` ONLY — the fingerprint is computed entirely main-side. */
+  trustBinary(path: string): Promise<SettingsMutationResult>;
 }
 
 export interface ClaudeEnginePaneProps {
@@ -247,6 +252,8 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
+  // TASK.103 (D-S4-8): the binary-trust consent dialog's open state.
+  const [trustDialogOpen, setTrustDialogOpen] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     setChecking(true);
@@ -284,6 +291,31 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
     }
   }
 
+  /**
+   * TASK.103 (D-S4-8, §4 step 4): the claude mirror of CodexEnginePane's
+   * `acceptTrust` — on `ok` fires the pane's existing `recheck()` (no
+   * profileId argument here; this pane has no profile registry) so the
+   * card resolves through the same push/apply path every other action uses.
+   */
+  async function acceptTrust(): Promise<void> {
+    const refusal = binaryTrustRefusalOf(snapshot?.report);
+    if (refusal === null) return;
+    setNotice(null);
+    setBusy(true);
+    try {
+      const result = await bridge.trustBinary(refusal.binaryPath);
+      if (result.ok) {
+        setTrustDialogOpen(false);
+        const fresh = await bridge.recheck();
+        setSnapshot(fresh);
+      } else {
+        setNotice(`Could not trust this binary: ${describeMutationFailure(result.reason)}`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function signIn(): Promise<void> {
     setNotice(null);
     await runClaudeSignIn(bridge, {
@@ -295,6 +327,8 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
   }
 
   const status = describeClaudeReportStatus(checking ? undefined : snapshot?.report);
+  // TASK.103 (D-S4-6): the consent card source — the structured field only.
+  const trustRefusal = binaryTrustRefusalOf(snapshot?.report);
 
   return (
     <section className="settings-section">
@@ -350,7 +384,20 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
         <button type="button" className="settings-button" disabled={busy || signingIn} onClick={() => void pick()}>
           Choose binary…
         </button>
+        {trustRefusal !== null && (
+          <button type="button" className="settings-button" disabled={busy} onClick={() => setTrustDialogOpen(true)}>
+            Trust this binary…
+          </button>
+        )}
       </div>
+      <BinaryTrustDialog
+        open={trustDialogOpen && trustRefusal !== null}
+        binaryPath={trustRefusal?.binaryPath ?? ""}
+        reason={trustRefusal?.reason ?? ""}
+        staleConsent={trustRefusal?.staleConsent ?? false}
+        onAccept={() => void acceptTrust()}
+        onDecline={() => setTrustDialogOpen(false)}
+      />
     </section>
   );
 }

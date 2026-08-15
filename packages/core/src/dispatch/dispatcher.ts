@@ -58,6 +58,7 @@ import {
   previewFirstChars,
   type ResultPreviewDirection,
 } from "../util/result-budget.js";
+import { resolveWorkspaceWriteFacts } from "../util/path-containment.js";
 
 export interface DispatchContext {
   registry: ToolRegistry;
@@ -259,6 +260,21 @@ export async function executeToolCall(
       // hook rewriting. Resolver failures are caught by the defensive net.
       let metadata = tool.resolveMetadata?.(input) ?? tool.metadata;
 
+      // TASK.32 (DV-2/DV-3): dispatch-site workspace facts for the Write/Edit
+      // containment proof. Computed here — via ports, before the request is
+      // built — because the engine is sync and pure. Tool gate is literal:
+      // exactly Write and Edit. Fail-closed: unprovable => the block is
+      // absent => the engine keeps today's ruling. `ctx.ports.fs` may be
+      // absent in mocked contexts; the resolver tolerates undefined.
+      const workspace =
+        toolName === "Write" || toolName === "Edit"
+          ? await resolveWorkspaceWriteFacts(
+              ctx.ports.fs,
+              ctx.cwd,
+              isRecord(input) && typeof input.file_path === "string" ? input.file_path : "",
+            )
+          : undefined;
+
       // 4. permission gate: engine ruling merged with any hook decision (deny > ask > allow).
       const request: PermissionRequest = {
         toolName,
@@ -266,6 +282,7 @@ export async function executeToolCall(
         metadata,
         mode: ctx.mode,
         toolCallId,
+        ...(workspace !== undefined ? { workspace } : {}),
       };
       const ruling = ctx.permissionEngine.check(request);
       let decision = ruling.decision;

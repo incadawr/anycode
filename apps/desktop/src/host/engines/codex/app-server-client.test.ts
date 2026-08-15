@@ -1,14 +1,16 @@
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { makeTrustedScratchDir } from "../../../shared/test-scratch.js";
+import type { BinaryTrustConsent } from "../../../shared/codex-binary-trust.js";
 import {
   AppServerClient,
   AppServerClientError,
   buildCodexChildEnv,
+  checkCodexBinaryTrustOnDisk,
 } from "./app-server-client.js";
 import { EngineVersionError } from "./protocol.js";
 
@@ -543,4 +545,40 @@ describe("AppServerClient", () => {
     }
     expect(alive(grandchildPid)).toBe(false);
   });
+});
+
+describe("checkCodexBinaryTrustOnDisk — consent threading (TASK.103)", () => {
+  // POSIX-only: no mode bits to stage on win32 (the gate returns null there
+  // unconditionally, unchecked rather than verified-safe).
+  it.skipIf(process.platform === "win32")(
+    "BH1 refused bare; a matching consent built from the REAL stat lifts it; touch drifts mtimeMs and it refuses again",
+    () => {
+      const binary = join(scratchDir, "bh1-consent-binary");
+      writeFileSync(binary, "#!/bin/sh\nexit 0\n");
+      chmodSync(binary, 0o777);
+
+      const bare = checkCodexBinaryTrustOnDisk(binary);
+      expect(bare).toMatch(/world-writable/);
+
+      const resolved = realpathSync(binary);
+      const stat = statSync(resolved);
+      const consent: BinaryTrustConsent = {
+        path: resolved,
+        fingerprint: { mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs },
+        grantedAt: "2026-08-15T00:00:00.000Z",
+      };
+      const withConsent = checkCodexBinaryTrustOnDisk(binary, process.platform, [consent]);
+      expect(withConsent).toBeNull();
+
+      // Explicit far-future mtime, not a bare `touch`: some filesystems have
+      // coarse mtime granularity, and a same-tick rewrite could tie with the
+      // recorded value by accident, silently failing to exercise the drift
+      // this test exists to prove (the fixture-arming trap job 1 flagged for
+      // BT3 — armed here with an unmistakably different timestamp).
+      const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
+      utimesSync(resolved, future, future);
+      const afterTouch = checkCodexBinaryTrustOnDisk(binary, process.platform, [consent]);
+      expect(afterTouch).toMatch(/world-writable/);
+    },
+  );
 });

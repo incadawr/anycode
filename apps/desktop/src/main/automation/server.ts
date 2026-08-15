@@ -101,6 +101,11 @@ import {
   codexPaneInstall,
   codexPaneRecheckAll,
   codexPaneRefreshManifest,
+  codexPaneTrustOpen,
+  binaryTrustDialogState,
+  binaryTrustDialogResolve,
+  trustedBinariesState,
+  trustedBinaryRevoke,
   codexProfileChipState,
   codexProfileChipOpen,
   codexProfileChipPick,
@@ -516,6 +521,11 @@ const codexImportOpenBody = z.object({ open: z.boolean() }).strict();
 const codexImportProfileBody = z.object({ profileId: z.string().min(1).max(64) }).strict();
 const codexImportRolloutBody = z.object({ index: z.number().int().nonnegative().max(500) }).strict();
 const codexImportModelBody = z.object({ model: z.string().min(1).max(256) }).strict();
+// TASK.103 (CUT-S4.md §3.8): the binary-trust dialog resolve + the
+// trusted-binaries revoke bodies — same `.strict()` discipline as every
+// other route body above.
+const binaryTrustDialogResolveBody = z.object({ accept: z.boolean() }).strict();
+const trustedBinaryRevokeBody = z.object({ path: z.string().min(1) }).strict();
 
 /** A malformed body/route/etc. carried as a typed rejection the request loop maps to a status. */
 class HttpError extends Error {
@@ -995,6 +1005,32 @@ async function route(
   if (method === "POST" && pathname === "/settings/codex/manifest-refresh") {
     parseBody(rawBody, emptyBody);
     return codexPaneRefreshManifest(deps);
+  }
+  // TASK.103 (D-S4-6/D-S4-8): a real click on the pane's own "Trust this
+  // binary…" button — opens BinaryTrustDialog.tsx, no other IPC.
+  if (method === "POST" && pathname === "/settings/codex/trust") {
+    parseBody(rawBody, emptyBody);
+    return codexPaneTrustOpen(deps);
+  }
+  // TASK.103 (CUT-S4.md §3.8): the binary-trust consent dialog probe/driver —
+  // GET reads the real `<dialog>`'s state, POST fires a real click on
+  // Accept (`accept:true`) or Cancel (`accept:false`).
+  if (method === "GET" && pathname === "/settings/binary-trust-dialog") {
+    return binaryTrustDialogState(deps);
+  }
+  if (method === "POST" && pathname === "/settings/binary-trust-dialog") {
+    const body = parseBody(rawBody, binaryTrustDialogResolveBody);
+    return binaryTrustDialogResolve(deps, body.accept);
+  }
+  // TASK.103 (D-S4-7): the Permissions pane's "Trusted binaries" section
+  // probe/driver — GET reads the rendered rows, POST fires a real click on
+  // the named row's Revoke button.
+  if (method === "GET" && pathname === "/settings/trusted-binaries") {
+    return trustedBinariesState(deps);
+  }
+  if (method === "POST" && pathname === "/settings/trusted-binaries/revoke") {
+    const body = parseBody(rawBody, trustedBinaryRevokeBody);
+    return trustedBinaryRevoke(deps, body.path);
   }
   // Rollout-import dialog routes (W4-F0, findings S1-1 probe (c)): mirror the
   // SAME DOM paths CodexRolloutImportDialog.tsx itself uses (the pane's

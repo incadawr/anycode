@@ -255,3 +255,210 @@ describe("ModePermissionEngine — mode × 11-tool snapshot (real tool metadata)
     }
   });
 });
+
+/**
+ * TASK.32 honest Edit mode (CUT-S1 §7a): a Write/Edit whose dispatch-site-
+ * resolved target provably sits inside the workspace is allowed TERMINALLY in
+ * edit mode — before baseRuling's needsApproval escalation ever sees it (DV-4).
+ * Uses REAL writeTool/editTool/bashTool metadata (needsApproval:true) so a
+ * naive implementation that teaches baseRuling's edit branch to allow (and
+ * lets the later escalation re-ask) goes red here.
+ */
+describe("ModePermissionEngine — TASK.32 edit-mode workspace containment", () => {
+  const engine = new ModePermissionEngine();
+
+  const facts = (root: string, resolvedPath: string) => ({ root, resolvedPath });
+
+  it("E1: edit + contained Write => allow, terminally (DV-4)", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("allow");
+    expect(ruling.reason).toContain("workspace");
+  });
+
+  it("E2: edit + contained Edit => allow", () => {
+    const ruling = engine.check({
+      toolName: "Edit",
+      input: {},
+      metadata: editTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("allow");
+    expect(ruling.reason).toContain("workspace");
+  });
+
+  it("E3: edit + resolved target outside => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/tmp/x.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+    expect(ruling.reason).toBeTruthy();
+  });
+
+  it("E4: edit + resolvedPath escaping via .. => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/../etc/passwd"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E5: prefix collision /ws-evil vs /ws => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws-evil/x.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E6: absent workspace block => today's ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+    });
+    expect(ruling.decision).toBe("ask");
+    expect(ruling.reason).toContain("write/side-effecting");
+  });
+
+  it("E7: build + contained Write => ask", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "build",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E8: plan + contained Write => deny", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "plan",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("deny");
+  });
+
+  it("E9: yolo/auto + contained Write => allow (unchanged)", () => {
+    for (const mode of ["yolo", "auto"] as const) {
+      const ruling = engine.check({
+        toolName: "Write",
+        input: {},
+        metadata: writeTool.metadata,
+        mode,
+        workspace: facts("/ws", "/ws/a/b.md"),
+      });
+      expect(ruling.decision, mode).toBe("allow");
+    }
+  });
+
+  it("E10: Bash in edit with a workspace block => ask", () => {
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: {},
+      metadata: bashTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws/a/b.md"),
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("E11: non-absolute facts => ask", () => {
+    const r1 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("ws", "/ws/x"),
+    });
+    expect(r1.decision).toBe("ask");
+    const r2 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "x"),
+    });
+    expect(r2.decision).toBe("ask");
+  });
+
+  it("E12: root itself resolvable: facts(\"/ws\",\"/ws\") => allow", () => {
+    const ruling = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/ws", "/ws"),
+    });
+    expect(ruling.decision).toBe("allow");
+  });
+
+  // ARBITRATION-S1-W1 N2: a workspace root that IS the filesystem root makes
+  // lexical containment vacuously true for every absolute path, so edit mode
+  // must not widen on it — falls through to baseRuling's ordinary ask.
+  // Windows drive-root form (`C:\`) is untestable on a POSIX host
+  // (`isAbsolute("C:\\")` is false there and already refused by D-S1-9); not
+  // tested here.
+  it("E13: degenerate root \"/\" => ask (vacuous containment, ARBITRATION-S1-W1 N2)", () => {
+    const r1 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/", "/etc/passwd"),
+    });
+    expect(r1.decision).toBe("ask");
+    expect(r1.reason).toBe("Write: write/side-effecting tool requires approval in edit mode");
+
+    const r2 = engine.check({
+      toolName: "Write",
+      input: {},
+      metadata: writeTool.metadata,
+      mode: "edit",
+      workspace: facts("/", "/x"),
+    });
+    expect(r2.decision).toBe("ask");
+  });
+
+  // Fix cycle 2 (W2-MAJOR-2): the degenerate-root refusal keyed on the RAW
+  // root string, so a non-canonical vacuous root ("//", "/.", ...) — which
+  // resolves to "/" but is not its own raw dirname — slipped past the guard
+  // and reached isWithinWorkspace's vacuous "allow". The guard must run on
+  // the RESOLVED root. Literal "/" is included as a control: it must stay
+  // "ask" exactly as under the old (E13) guard.
+  it("E14: non-canonical vacuous roots (\"//\", \"///\", \"/.\", \"/..\", \"/x/..\") plus literal \"/\" => ask (ARBITRATION-S1-W1 N2, widened W2-MAJOR-2)", () => {
+    const vacuousRoots = ["//", "///", "/.", "/..", "/x/..", "/"];
+    for (const root of vacuousRoots) {
+      const ruling = engine.check({
+        toolName: "Write",
+        input: {},
+        metadata: writeTool.metadata,
+        mode: "edit",
+        workspace: facts(root, "/etc/passwd"),
+      });
+      expect(ruling.decision).toBe("ask");
+      expect(ruling.reason).toBe("Write: write/side-effecting tool requires approval in edit mode");
+    }
+  });
+});

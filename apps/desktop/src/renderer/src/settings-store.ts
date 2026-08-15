@@ -54,6 +54,12 @@ export interface SettingsBridge {
   setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult>;
   clearSecret(key: SecretKey): Promise<SettingsMutationResult>;
   addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult>;
+  // TASK.103: revoke ONE trusted-binary consent by path (idempotent — an
+  // unknown path is a no-op `{ok:true}`, D-S4-7). Grant itself is NOT part
+  // of this bridge: it lives on `codex.trustBinary`/`claude.trustBinary`
+  // (per-engine, cut §3.8/D-S4-8), since a grant always starts from a
+  // specific engine pane's refusal card, never from this Settings section.
+  binaryTrustRevoke(path: string): Promise<SettingsMutationResult>;
   // Slice 2.5 (design §4.5): interactive OAuth sign-in / cancel. Neither call
   // ever carries a token value — providerId in, a fresh SettingsSnapshot (or a
   // typed refusal reason) out.
@@ -120,6 +126,14 @@ export interface SettingsAppState {
   addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult>;
   /** Removes one rule from `permissions.alwaysAllow` by sending the array minus that rule (arrays replace wholesale, design §3). */
   removeRule(rule: AlwaysAllowRule): Promise<SettingsMutationResult>;
+  /**
+   * TASK.103: revoke one trusted-binary consent by path, via the dedicated
+   * channel (never a `setPatch({security:{trustedBinaries:...}}))` — that
+   * generic path refuses the field outright, D-S4-5). Mirrors every other
+   * mutation action's discipline: refreshes the snapshot on success, sets a
+   * `notice` on refusal.
+   */
+  revokeBinaryTrust(path: string): Promise<SettingsMutationResult>;
   /** Persists `security.allowWeakSecretStorage=true`, then retries the parked secret-set exactly once. Clears `pendingConsent` on every path out (success, refusal, or consent-persist itself failing). No-op (returns null) if nothing is pending. */
   acceptWeakStorageConsent(): Promise<SettingsMutationResult | null>;
   /** Discards the parked secret without ever retrying the write. */
@@ -436,6 +450,16 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
         const current = get().snapshot;
         const alwaysAllow = withoutRule(current?.settings.permissions.alwaysAllow ?? [], rule);
         const result = await api().set({ permissions: { alwaysAllow } });
+        if (result.ok) {
+          commitSnapshot(result.snapshot);
+        } else {
+          set({ notice: describeMutationFailure(result.reason) });
+        }
+        return result;
+      },
+
+      async revokeBinaryTrust(path: string): Promise<SettingsMutationResult> {
+        const result = await api().binaryTrustRevoke(path);
         if (result.ok) {
           commitSnapshot(result.snapshot);
         } else {

@@ -1376,8 +1376,10 @@ export class Session {
    *  - no checkpoints seam -> {ok:false, reason:"checkpoints unavailable"}.
    *
    * On an accepted rewind, HOLD this.busy for the whole async operation
-   * (drift-flag-3) so a mid-rewind user_message/set_mode/set_model hits the busy
-   * gate — restored in `finally`. The service writes the mandatory fail-closed
+   * (drift-flag-3) so a mid-rewind user_message/set_model hits the busy
+   * gate — restored in `finally`. Since TASK.37, `set_mode` is no longer in
+   * this list: it is accepted during a rewind too (D-S3-4a — harmless, a
+   * rewind neither reads nor writes mode). The service writes the mandatory fail-closed
    * pre-rewind safety checkpoint + two-tree file restore internally; the host only
    * applies the returned conversation snapshot (`loop.history.replaceAll`, exactly
    * the CLI's /rewind path, cli/main.ts).
@@ -1441,7 +1443,8 @@ export class Session {
       return;
     }
     // Hold busy for the whole rewind (drift-flag-3): concurrent turn-starting /
-    // mode / model messages observe busy=true while the store+git spawns run.
+    // model messages observe busy=true while the store+git spawns run. Since
+    // TASK.37, mode messages are no longer in this list (D-S3-4a).
     // TASK.102 CUT-S2 §10.12.1 (б): rewind is not abort-aware and a
     // destructive two-tree git-restore split in half by shutdown is worse
     // than one shutdown() awaits to completion — routed through
@@ -2303,14 +2306,15 @@ export class Session {
     });
   }
 
+  /**
+   * User-initiated permission-mode change (TASK.37): accepted while busy — the
+   * mode is policy for the NEXT permission decision, which CoreEngine delivers
+   * into the running loop (AgentLoop.setMode). An open permission ask is
+   * untouched (snapshot semantics): it completes under the mode captured in
+   * its PermissionRequest. Engines that manage their own permission posture
+   * still reject regardless of busy state.
+   */
   private onSetMode(mode: PermissionMode): void {
-    if (this.busy) {
-      this.outbound.emit({
-        type: "mode_change_rejected",
-        reason: "cannot change mode during an active turn",
-      });
-      return;
-    }
     if (!this.engine.capabilities.supportsCorePermissions || this.engine.setMode === undefined) {
       this.outbound.emit({
         type: "mode_change_rejected",
@@ -2332,8 +2336,9 @@ export class Session {
    *
    *  - it never calls `engine.setMode` — the loop already mutated `config.mode`
    *    before notifying, so setting it again would be a redundant second write;
-   *  - it never consults `this.busy` — it fires from INSIDE a running turn,
-   *    which is exactly the state `onSetMode` refuses.
+   *  - it never consults `this.busy` — it fires from INSIDE a running turn
+   *    (and since TASK.37, `onSetMode` accepts mid-turn changes too; the two
+   *    paths still differ in who calls `engine.setMode` and who emits).
    *
    * Everything downstream is unchanged: the same `mode_changed` message the UI
    * store already handles (the mode chip recolors itself), and the same

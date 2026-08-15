@@ -13,15 +13,23 @@
  * `classify` dependency is injected (defaulting to the real classifyBashCommand)
  * so the engine can be unit-tested independently of the classifier and so a
  * configurable allowlist (U1-P5) can later supply an alternate policy.
+ *
+ * TASK.35: the default classifier is now pipeline-aware (`classifyBashCommandLine`)
+ * — single commands are routed bit-for-bit unchanged (D-S2-4), Bash `|`
+ * pipelines additionally auto-narrow when every segment proves read-only. The
+ * injected-classifier seam type is unchanged.
  */
 
 import type { PermissionEngine, PermissionRequest, PermissionRuling } from "../types/permissions.js";
-import { classifyBashCommand, type BashCommandClass } from "./safe-command.js";
+import { classifyBashCommandLine, type BashCommandClass } from "./safe-command.js";
+
+/** Default classifier (TASK.35): pipeline-aware, single commands unchanged. */
+const defaultClassify = (command: string): BashCommandClass => classifyBashCommandLine(command).class;
 
 export class SafeCommandPermissionEngine implements PermissionEngine {
   constructor(
     private readonly base: PermissionEngine,
-    private readonly classify: (command: string) => BashCommandClass = classifyBashCommand,
+    private readonly classify: (command: string) => BashCommandClass = defaultClassify,
   ) {}
 
   check(request: PermissionRequest): PermissionRuling {

@@ -367,6 +367,9 @@ declare global {
         rolloutList(profileId: string): Promise<CodexRolloutListResult>;
         rolloutPreview(profileId: string, fileName: string): Promise<CodexRolloutPreviewResult>;
         rolloutImport(profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult>;
+        // TASK.103 (D-S4-8): the consent-card "Trust this binary" action.
+        // `path` ONLY — the fingerprint is computed entirely main-side.
+        trustBinary(path: string): Promise<SettingsMutationResult>;
       };
       // SLICE-CC A4 (cut §1.2): Claude onboarding invoke-API — a minimal
       // subset of `codex` above (no login/profile/quota surface in CC-A). No
@@ -379,6 +382,9 @@ declare global {
         // invoke-API — no token/credential value ever crosses this bridge.
         loginStart(): Promise<ClaudeLoginStartResult>;
         loginCancel(): Promise<void>;
+        // TASK.103 (D-S4-8): the consent-card "Trust this binary" action —
+        // the codex mirror, same GRANT channel (engine-agnostic, D-S4-1).
+        trustBinary(path: string): Promise<SettingsMutationResult>;
         // Doctor-spawn-loop fix: pushes the fresh snapshot itself after every
         // recheck/pick/login step — same "thin unsubscribe-returning wrapper"
         // shape as `onProviderHealthChanged` below, but payload-carrying (same
@@ -393,6 +399,8 @@ declare global {
         setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult>;
         clearSecret(key: SecretKey): Promise<SettingsMutationResult>;
         addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult>;
+        // TASK.103 (D-S4-7): revokes ONE trusted-binary consent by path.
+        binaryTrustRevoke(path: string): Promise<SettingsMutationResult>;
         // Slice 2.5 (design §4.5): interactive OAuth sign-in / cancel. No token
         // ever returns — oauthStart resolves with a fresh snapshot on success.
         // `connectionId` (TASK.45 W12-FIX §1, additive/optional): scopes the

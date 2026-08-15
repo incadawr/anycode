@@ -1596,6 +1596,15 @@ export interface CodexPaneState {
   binary: CodexPaneBinaryState | null;
   rows: CodexPaneRowState[];
   notices: string[];
+  /**
+   * TASK.103 (D-S4-6): present iff the binary/manifest block's doctor report
+   * carries a structured `trustRefusal` — absent (not present-with-null)
+   * otherwise. `binaryPath`/`reason` are read off the "Trust this
+   * binary…" button's OWN `data-trust-binary-path`/`data-trust-reason`
+   * attributes, never parsed out of rendered copy. `buttonVisible` is the
+   * `offsetParent !== null` convention `TryAgainButtonDom` already uses.
+   */
+  trust?: { binaryPath: string; reason: string; buttonVisible: boolean; staleConsent: boolean };
 }
 
 /**
@@ -1621,6 +1630,64 @@ export interface CodexPaneDom {
   clickInstall(): boolean;
   /** A real `.click()` on the accounts block's "Import a Codex session…" button; `false` when absent. */
   clickImportSession(): boolean;
+  /**
+   * TASK.103 (D-S4-6): the "Trust this binary…" button's structured facts
+   * off its `data-trust-binary-path`/`data-trust-reason` attributes, or
+   * `null` when the button isn't rendered (no trust refusal).
+   */
+  trust(): { binaryPath: string; reason: string; buttonVisible: boolean; staleConsent: boolean } | null;
+}
+
+/**
+ * `binaryTrustDialogState()`'s shape (TASK.103, CUT-S4.md §3.8): a live DOM
+ * read of `BinaryTrustDialog.tsx`'s own `<dialog>`. `open: false` (dialog not
+ * mounted) reads every other field at its empty default, same "valid
+ * reading, not an error" posture as `CodexPaneState.mounted`. `binaryPath`/
+ * `reason` are read off the dialog's OWN `data-trust-binary-path`/
+ * `data-trust-reason` attributes — never parsed out of the rendered copy
+ * paragraphs (D-S4-6's "no string-matching" carried into automation).
+ */
+export interface BinaryTrustDialogState {
+  open: boolean;
+  binaryPath?: string;
+  reason?: string;
+  visible: boolean;
+  /** TASK.103 fix wave (D-S4-17): read off the dialog's own `data-trust-stale-consent` attribute when open. */
+  staleConsent?: boolean;
+}
+
+/**
+ * DOM accessor DI for the binary-trust dialog probe/driver (TASK.103), same
+ * injectable-for-tests discipline as `CodexPaneDom`. The click methods fire
+ * REAL `.click()` calls on the dialog's own Accept/Cancel buttons.
+ */
+export interface BinaryTrustDialogDom {
+  state(): BinaryTrustDialogState;
+  clickAccept(): boolean;
+  clickDecline(): boolean;
+}
+
+/**
+ * `trustedBinariesState()`'s row shape (TASK.103, D-S4-7): `path` off the
+ * row's own `data-trusted-binary-path` attribute (never parsed out of the
+ * rendered `<code>` text); `visible` is the `offsetParent !== null`
+ * convention (`TryAgainButtonDom`/`CodexPaneDom.trust` precedent).
+ */
+export interface TrustedBinariesState {
+  rows: Array<{ path: string; visible: boolean }>;
+}
+
+/**
+ * DOM accessor DI for the Trusted-binaries Settings-section probe/driver
+ * (TASK.103), same injectable-for-tests discipline as `CodexPaneDom`.
+ * `mounted()` reads the section's OWN `.trusted-binaries-section` root, not
+ * merely `#settings-pane-permissions` presence — the pane can be open on a
+ * DIFFERENT pane while this section is unmounted.
+ */
+export interface TrustedBinariesSectionDom {
+  mounted(): boolean;
+  rows(): Array<{ path: string; visible: boolean }>;
+  clickRevoke(path: string): boolean;
 }
 
 /** One selectable row of the codex account-profile chip's rendered popover (W4-F0 probe (b)) — read off the REAL `.model-pill-item` button (label text, `disabled` attribute, `aria-checked`). */
@@ -2088,6 +2155,29 @@ export interface AutomationFacade {
   codexPaneInstall(): FacadeResult;
   codexPaneRecheckAll(): FacadeResult;
   codexPaneRefreshManifest(): FacadeResult;
+  // TASK.103 (D-S4-6/D-S4-8): opens the binary-trust consent dialog via a
+  // REAL click on the pane's own "Trust this binary…" button — the SAME
+  // `codexPaneRecheckAll` mechanism (a plain labeled action-row button,
+  // `clickAction`), not a new DOM method.
+  codexPaneTrustOpen(): FacadeResult;
+  // ── Binary-trust consent dialog probe/driver (TASK.103, CUT-S4.md §3.8) —
+  // `binaryTrustDialogState` reads the REAL `<dialog>` BinaryTrustDialog.tsx
+  // mounts (disambiguated from ConsentDialog.tsx's own `.consent-dialog` by
+  // `data-binary-trust-dialog`); `binaryTrustDialogResolve` fires a real
+  // click on Accept (`true`) or Cancel (`false`) — the exact nodes the
+  // user's click hits, never a re-implementation of the grant/decline call.
+  // `open:false` (dialog unmounted) reads every other field at its empty
+  // default, same "valid reading, not an error" posture as `codexPaneState`. ──
+  binaryTrustDialogState(): BinaryTrustDialogState;
+  binaryTrustDialogResolve(accept: boolean): FacadeResult;
+  // ── Trusted-binaries Settings-section probe/driver (TASK.103, D-S4-7) —
+  // `trustedBinariesState` reads the Permissions pane's section (caller must
+  // have opened `/settings/pane` = permissions first, same precondition
+  // every other pane-scoped probe here carries; not-open ⇒ `rows: []`, a
+  // valid reading not an error). `trustedBinaryRevoke` fires a real click on
+  // the named row's own Revoke button. ──
+  trustedBinariesState(): TrustedBinariesState;
+  trustedBinaryRevoke(path: string): FacadeResult;
   // ── Codex profile chip probe/driver (W4-F0, findings S1-1 probe (b)) —
   // `codexProfileChipOpen` drives a real click on the chip button;
   // `codexProfileChipPick` clicks the Nth RENDERED option row (rows carry no
@@ -3951,6 +4041,112 @@ function realCodexPaneDom(): CodexPaneDom {
       button.click();
       return true;
     },
+    trust: () => {
+      const button = findAction("Trust this binary…");
+      if (!button) {
+        return null;
+      }
+      return {
+        binaryPath: button.getAttribute("data-trust-binary-path") ?? "",
+        reason: button.getAttribute("data-trust-reason") ?? "",
+        buttonVisible: button.offsetParent !== null,
+        staleConsent: button.getAttribute("data-trust-stale-consent") === "true",
+      };
+    },
+  };
+}
+
+/**
+ * The real binary-trust dialog DOM accessor (TASK.103, CUT-S4.md §3.8):
+ * queries live at call time, same laziness discipline as `realCodexPaneDom`.
+ * Disambiguated from ConsentDialog.tsx's own `.consent-dialog` node by the
+ * `data-binary-trust-dialog` attribute BinaryTrustDialog.tsx stamps — never
+ * class name alone, since both dialogs reuse the same `consent-dialog*`
+ * classes wholesale (D-S4-8: zero app.css additions). `visible` reads the
+ * native `<dialog>` element's OWN `.open` boolean property (the browser's
+ * top-layer promotion signal, set synchronously inside the component's
+ * `showModal()` effect) rather than `offsetParent` — an open modal `<dialog>`
+ * is promoted to the top layer with UA-stylesheet `position: fixed`, for
+ * which `offsetParent` is spec'd to read `null` regardless of actual
+ * visibility, so that convention (used elsewhere in this file for in-flow
+ * buttons) would be a false negative here. The DOM-presence-vs-native-open
+ * gap it exists to catch: a React commit lands the `<dialog>` node in the
+ * DOM one tick before its own `useEffect` calls `showModal()` — `open:true`
+ * with `visible:false` in that transient window is a genuine, meaningful
+ * reading, not noise.
+ */
+function realBinaryTrustDialogDom(): BinaryTrustDialogDom {
+  function dialog(): HTMLDialogElement | null {
+    return document.querySelector<HTMLDialogElement>("dialog[data-binary-trust-dialog]");
+  }
+  return {
+    state: () => {
+      const el = dialog();
+      if (!el) {
+        return { open: false, visible: false };
+      }
+      return {
+        open: true,
+        binaryPath: el.getAttribute("data-trust-binary-path") ?? undefined,
+        reason: el.getAttribute("data-trust-reason") ?? undefined,
+        visible: el.open,
+        staleConsent: el.getAttribute("data-trust-stale-consent") === "true",
+      };
+    },
+    clickAccept: () => {
+      const button = dialog()?.querySelector<HTMLButtonElement>(".consent-accept-button") ?? null;
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+    clickDecline: () => {
+      const button = dialog()?.querySelector<HTMLButtonElement>(".consent-decline-button") ?? null;
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real Trusted-binaries Settings-section DOM accessor (TASK.103,
+ * D-S4-7): queries live at call time, same laziness discipline as
+ * `realCodexPaneDom`. Scoped to the Permissions pane's own container
+ * (`#settings-pane-permissions`, the SettingsScreen.tsx convention every
+ * pane-scoped probe in this file relies on) so a row never reads as present
+ * while a DIFFERENT pane is active. `.trusted-binary-row`/
+ * `.trusted-binary-revoke` are dedicated automation-query classes
+ * (TrustedBinariesSection.tsx) — deliberately not the reused
+ * `.settings-mcp-row` alone, so this probe can never accidentally read a
+ * Codex/MCP pane's own rows.
+ */
+function realTrustedBinariesSectionDom(): TrustedBinariesSectionDom {
+  function section(): HTMLElement | null {
+    return document.querySelector<HTMLElement>("#settings-pane-permissions .trusted-binaries-section");
+  }
+  function rowEls(): HTMLElement[] {
+    return Array.from(section()?.querySelectorAll<HTMLElement>(".trusted-binary-row") ?? []);
+  }
+  return {
+    mounted: () => section() !== null,
+    rows: () =>
+      rowEls().map((row) => ({
+        path: row.getAttribute("data-trusted-binary-path") ?? "",
+        visible: row.offsetParent !== null,
+      })),
+    clickRevoke: (path) => {
+      const row = rowEls().find((r) => r.getAttribute("data-trusted-binary-path") === path);
+      const button = row?.querySelector<HTMLButtonElement>(".trusted-binary-revoke") ?? null;
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
   };
 }
 
@@ -4177,6 +4373,19 @@ export function createAutomationFacade(
   codexPaneDom: CodexPaneDom = realCodexPaneDom(),
   codexProfileChipDom: CodexProfileChipDom = realCodexProfileChipDom(),
   codexImportDom: CodexImportDialogDom = realCodexImportDialogDom(),
+  // TASK.103: appended at the END of this long positional-parameter list on
+  // purpose — every existing test call site in automation.test.ts supplies
+  // these DI params POSITIONALLY, so inserting new ones anywhere upstream
+  // (even right beside their nearest thematic neighbor, `codexPaneDom`)
+  // silently reassigns every parameter after the insertion point. Caught
+  // exactly this way: `tsc` red on three existing positional calls when a
+  // first draft inserted these two between `codexPaneDom` and
+  // `codexProfileChipDom`.
+  binaryTrustDialogDom: BinaryTrustDialogDom = realBinaryTrustDialogDom(),
+  trustedBinariesSectionDom: TrustedBinariesSectionDom = realTrustedBinariesSectionDom(),
+  // Positions 27-28 above are pinned by `buildTrustFacade`'s annotated
+  // positional call; `childLayoutStore` has no positional call site and so
+  // follows them at 29 rather than displacing them.
   childLayoutStore: ChildLayoutStoreApi = defaultChildLayoutStore,
 ): AutomationFacade {
   /**
@@ -4385,12 +4594,11 @@ export function createAutomationFacade(
         return { ok: false, reason: "invalid_mode" };
       }
       const state = store.getState();
-      // Mirrors Composer.handleModeChange's guard (design §3.2): ready && idle.
+      // Mirrors Composer.handleModeChange's guard (TASK.37): ready only — a
+      // running turn no longer refuses; the mode applies to the turn's next
+      // permission decision.
       if (state.connection !== "ready") {
         return { ok: false, reason: "not_ready" };
-      }
-      if (state.turn.status !== "idle") {
-        return { ok: false, reason: "busy" };
       }
       const message: UiToHostMessage = { type: "set_mode", mode };
       registry.sendToTab(tabId, message);
@@ -6296,6 +6504,7 @@ export function createAutomationFacade(
         binary: codexPaneDom.binary(),
         rows: codexPaneDom.rows(),
         notices: codexPaneDom.notices(),
+        trust: codexPaneDom.trust() ?? undefined,
       };
     },
 
@@ -6348,6 +6557,63 @@ export function createAutomationFacade(
         return { ok: false, reason: "button_disabled" };
       }
       codexPaneDom.clickAction("Refresh manifest");
+      return { ok: true };
+    },
+
+    codexPaneTrustOpen(): FacadeResult {
+      if (!codexPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const button = codexPaneDom.actionButton("Trust this binary…");
+      if (button === null) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      if (button.disabled) {
+        return { ok: false, reason: "button_disabled" };
+      }
+      // Fire-and-return: opens the dialog — the caller polls
+      // binaryTrustDialogState for its open/visible/path/reason.
+      codexPaneDom.clickAction("Trust this binary…");
+      return { ok: true };
+    },
+
+    binaryTrustDialogState(): BinaryTrustDialogState {
+      return binaryTrustDialogDom.state();
+    },
+
+    binaryTrustDialogResolve(accept: boolean): FacadeResult {
+      const state = binaryTrustDialogDom.state();
+      if (!state.open) {
+        return { ok: false, reason: "dialog_not_open" };
+      }
+      // Fire-and-return (shortcutsPressChord posture): Accept triggers a
+      // grant IPC round-trip + a recheck — the caller polls codexPaneState
+      // for the card to resolve. Decline writes nothing.
+      const clicked = accept ? binaryTrustDialogDom.clickAccept() : binaryTrustDialogDom.clickDecline();
+      if (!clicked) {
+        return { ok: false, reason: "button_not_present" };
+      }
+      return { ok: true };
+    },
+
+    trustedBinariesState(): TrustedBinariesState {
+      if (!trustedBinariesSectionDom.mounted()) {
+        // A valid reading, not an error (CodexPaneState precedent): the
+        // Permissions pane isn't the currently-active pane, or Settings is
+        // closed — the caller must open `/settings/pane`=permissions first.
+        return { rows: [] };
+      }
+      return { rows: trustedBinariesSectionDom.rows() };
+    },
+
+    trustedBinaryRevoke(path: string): FacadeResult {
+      if (!trustedBinariesSectionDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const clicked = trustedBinariesSectionDom.clickRevoke(path);
+      if (!clicked) {
+        return { ok: false, reason: "button_not_present" };
+      }
       return { ok: true };
     },
 

@@ -121,11 +121,27 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
 
   it("error: trust gate refuses the path before any spawn happens", async () => {
     const report = await runClaudeDoctor("/fake/claude", {
-      trust: () => "Claude binary is world-writable",
+      trust: () => ({
+        kind: "refused",
+        reason: "Claude binary is world-writable",
+        consentable: true,
+        staleConsent: false,
+        resolvedPath: "/fake/claude",
+      }),
       spawnImpl: fakeSpawn(),
       profileDir: freshProfileDir(),
     });
-    expect(report).toEqual({ status: "error", error: "Claude binary is world-writable" });
+    // TASK.103: the report now additionally carries a structured
+    // trustRefusal — see the "consent threading (TASK.103)" describe below,
+    // whose own test pins this shape directly. Extended here (not appended
+    // as a new test) because this is a strict toEqual against the trust-gate
+    // refusal shape and the additive field changes that shape; status/error
+    // stay the pre-existing pin, byte-identical.
+    expect(report).toEqual({
+      status: "error",
+      error: "Claude binary is world-writable",
+      trustRefusal: { binaryPath: "/fake/claude", reason: "Claude binary is world-writable", staleConsent: false },
+    });
   });
 
   it("error: initialize handshake times out (CLI never answers)", async () => {
@@ -344,5 +360,55 @@ describe("runClaudeDoctor — cancellation awaits child teardown (never returns 
     });
     expect(report).toEqual({ status: "error", error: "claude doctor aborted" });
     expect(spawned).toEqual([]);
+  });
+});
+
+describe("runClaudeDoctor — consent threading (TASK.103)", () => {
+  // Mirror of codex-doctor.test.ts's BD2: the refusal report carries a
+  // structured trustRefusal sourced from the injected trust seam. (The BD1
+  // real-fs/consent-lifts-the-refusal case is codex-doctor.test.ts's own —
+  // duplicating the POSIX scratch staging here for the mirror engine is
+  // covered instead by claude-client.test.ts's BH2, main/claude-binary.test.ts's
+  // BG4, and this file's own `trust: TRUSTED` convention.)
+  it("the refusal report carries a structured trustRefusal sourced from the injected trust seam", async () => {
+    const reason = "Claude binary (/fake/claude) is world-writable";
+    const report = await runClaudeDoctor("/fake/claude", {
+      trust: () => ({ kind: "refused", reason, consentable: true, staleConsent: false, resolvedPath: "/fake/claude" }),
+      spawnImpl: fakeSpawn(),
+      profileDir: freshProfileDir(),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toBe(reason);
+    expect(report.trustRefusal).toEqual({ binaryPath: "/fake/claude", reason, staleConsent: false });
+  });
+
+  it("BD10-mirror the report mirrors the injected trust outcome's kind/consentable/staleConsent (D-S4-13/17/18) — condensed vs codex BD10", async () => {
+    // (a) consentable + stale.
+    const staleReport = await runClaudeDoctor("/fake/claude", {
+      trust: () => ({ kind: "refused", reason: "stale reason", consentable: true, staleConsent: true, resolvedPath: "/real/claude" }),
+      spawnImpl: fakeSpawn(),
+      profileDir: freshProfileDir(),
+    });
+    expect(staleReport.status).toBe("error");
+    expect(staleReport.trustRefusal).toEqual({ binaryPath: "/real/claude", reason: "stale reason", staleConsent: true });
+
+    // (b) non-consentable: honest error, no affordance.
+    const ownedReport = await runClaudeDoctor("/fake/claude", {
+      trust: () => ({ kind: "refused", reason: "owned by another user", consentable: false, staleConsent: false, resolvedPath: "/real/claude" }),
+      spawnImpl: fakeSpawn(),
+      profileDir: freshProfileDir(),
+    });
+    expect(ownedReport.status).toBe("error");
+    expect(ownedReport.trustRefusal).toBeUndefined();
+
+    // (c) missing: never an offerable refusal.
+    const missingReport = await runClaudeDoctor("/fake/claude", {
+      trust: () => ({ kind: "missing", reason: "Claude binary path does not exist" }),
+      spawnImpl: fakeSpawn(),
+      profileDir: freshProfileDir(),
+    });
+    expect(missingReport.status).toBe("error");
+    expect(missingReport.error).toBe("Claude binary path does not exist");
+    expect(missingReport.trustRefusal).toBeUndefined();
   });
 });

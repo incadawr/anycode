@@ -14,13 +14,36 @@
  * yolo/auto are untouched. The existing five tools are unaffected: their
  * write tools already resolve to ask/deny before this step ever sees
  * "allow", and their read-only tools all have needsApproval === false.
+ *
+ * TASK.32 addition (honest Edit mode): in edit mode, a Write/Edit whose
+ * dispatch-site-resolved target provably sits inside the workspace
+ * (`request.workspace`, computed by the dispatcher — see path-containment.ts)
+ * is allowed TERMINALLY, before baseRuling and the needsApproval escalation
+ * above ever run. The early return is load-bearing: Write/Edit carry
+ * needsApproval:true, so an allow produced later in this method would be
+ * re-escalated to ask by the block above.
  */
 
+import { dirname, isAbsolute, resolve } from "node:path";
 import type { PermissionEngine, PermissionRequest, PermissionRuling } from "../types/permissions.js";
+import { isWithinWorkspace } from "./workspace-policy.js";
 
 export class ModePermissionEngine implements PermissionEngine {
   check(request: PermissionRequest): PermissionRuling {
     const { mode, metadata, toolName } = request;
+
+    // TASK.32 honest Edit mode: a Write/Edit whose dispatch-site-resolved
+    // target provably sits inside the workspace is allowed TERMINALLY. The
+    // early return (before baseRuling and before the needsApproval escalation
+    // below) is load-bearing (DV-4): Write/Edit carry needsApproval:true, so
+    // an allow produced later in this method would be re-escalated to ask.
+    if (mode === "edit" && isContainedWorkspaceWrite(request)) {
+      return {
+        decision: "allow",
+        reason: `${toolName}: allowed in edit mode (target inside workspace)`,
+      };
+    }
+
     const ruling = this.baseRuling(request);
 
     if (
@@ -78,4 +101,33 @@ export class ModePermissionEngine implements PermissionEngine {
         };
     }
   }
+}
+
+/** Tools the edit-mode workspace containment may widen. Literal names, exactly
+ * these two (TASK.32 boundary 2): bridged mcp__* write tools, Bash, and any
+ * future NotebookEdit-class tool keep today's ruling. */
+const WORKSPACE_WRITE_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit"]);
+
+function isContainedWorkspaceWrite(request: PermissionRequest): boolean {
+  if (!WORKSPACE_WRITE_TOOLS.has(request.toolName)) return false;
+  const ws = request.workspace;
+  if (ws === undefined) return false;
+  // Defensive fail-closed (D-S1-9): isWithinWorkspace resolves a relative
+  // candidate AGAINST the root, which would turn a sloppy caller's relative
+  // resolvedPath into a false "inside". Facts must be absolute real paths.
+  if (!isAbsolute(ws.root) || !isAbsolute(ws.resolvedPath)) return false;
+  // Degenerate-root refusal (ARBITRATION-S1-W1 N2, widened W2-MAJOR-2): a
+  // workspace root that is the filesystem root — its own dirname: POSIX "/",
+  // a Windows drive/UNC root — makes lexical containment vacuously true for
+  // EVERY absolute path, so it proves nothing; edit mode must not widen on
+  // it. The check runs on the RESOLVED root, not the raw string: non-canonical
+  // vacuous forms ("//", "///", "/.", "/..", "/x/..") all resolve to "/" but
+  // do not equal their own raw dirname, so a raw-string comparison lets them
+  // slip through and reach isWithinWorkspace's vacuous "allow" below — the
+  // same class of degenerate root this guard was built to refuse, closed on
+  // the incidental canonicalization of the string instead of by this guard.
+  // Fail-closed to the ordinary edit-mode ask.
+  const r = resolve(ws.root);
+  if (dirname(r) === r) return false;
+  return isWithinWorkspace(ws.resolvedPath, ws.root);
 }

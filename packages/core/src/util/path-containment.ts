@@ -18,6 +18,7 @@
 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
+import type { PermissionWorkspaceFacts } from "../types/permissions.js";
 
 /**
  * Realpath of the DEEPEST existing ancestor of `path`, with any not-yet-existing
@@ -34,7 +35,49 @@ import type { FileSystemPort } from "../ports/file-system.js";
  * escape the catalog. With `lstat`, a dangling link IS "present" and `realpath`
  * on it THROWS, so we fail closed (undefined). A live symlink resolves to its
  * real target and is then containment-checked normally.
+ *
+ * B1/M1 (fix cycle 1, TASK.32 S1 adversarial review): presence is TRI-STATE,
+ * not boolean. Only an `lstat` rejection whose `.code` is literally `"ENOENT"`
+ * proves genuine absence. Any OTHER `lstat` failure (EACCES/EIO/ESTALE under a
+ * network/removable mount, EMFILE/ENFILE under fd pressure, ENAMETOOLONG, ...)
+ * means an EXISTING component's status could not be read — treating that as
+ * "absent" (the old `catch { return false }`) let the walk skip PAST a live
+ * component and lexically reconstruct ITS OWN path from the parent's realpath,
+ * exactly like the dangling-symlink bug this function was built to close: if
+ * that skipped component is itself a symlink to outside, the reconstructed
+ * path lies about where a subsequent write actually lands (B1). Likewise, a
+ * port that offers `realpath` without `lstat` can never prove a component is
+ * NOT a symlink at all — per the port contract (`ports/file-system.ts` `lstat`
+ * doc: "callers that need symlink safety and find it absent must fail
+ * closed"), so lstat's absence is now also UNKNOWN, never a silent fallback to
+ * `exists` (which itself follows the final symlink) (M1). Both cases fail
+ * closed to `undefined` here, one level below every caller (`resolveTrustedRoot`,
+ * `resolveWorkspaceWriteFacts`, `isUnderOwnRootsResolved`).
  */
+type Presence = "present" | "absent" | "unknown";
+
+/** Narrows a thrown value's errno `.code`, mirroring `cli/settings-rules.ts`'s
+ * `errno()` helper. Node's fs/promises rejects with `NodeJS.ErrnoException`; a
+ * `FileSystemPort` implementation is expected to match that shape.
+ *
+ * Fix cycle 2 (W2-NIT-1): `.code` is read behind a `try/catch` because a
+ * `FileSystemPort` is an external boundary — nothing stops an adapter (or a
+ * test double) from rejecting with an object whose `code` is a THROWING
+ * getter. That read used to happen unguarded inside `probePresence`'s catch,
+ * so the throw escaped `probePresence`, then `realpathExistingAncestor` (its
+ * loop has no try), turning every caller's fail-closed `catch { return
+ * false }` (`isUnderOwnRootsResolved` included) into an uncaught exception —
+ * the opposite of fail-closed. An unreadable `.code` is treated as
+ * `undefined`, i.e. NOT `"ENOENT"`, so `probePresence` still resolves to
+ * `"unknown"` and every caller keeps failing closed. */
+function errnoCode(err: unknown): string | undefined {
+  try {
+    return (err as NodeJS.ErrnoException | undefined)?.code;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function realpathExistingAncestor(
   fs: FileSystemPort,
   path: string,
@@ -42,21 +85,28 @@ export async function realpathExistingAncestor(
   if (typeof fs.realpath !== "function") {
     return undefined;
   }
-  const probePresence = async (p: string): Promise<boolean> => {
-    if (typeof fs.lstat === "function") {
-      try {
-        await fs.lstat(p);
-        return true; // present as a regular file/dir OR a dangling symlink
-      } catch {
-        return false;
-      }
+  const probePresence = async (p: string): Promise<Presence> => {
+    if (typeof fs.lstat !== "function") {
+      // M1: a port without `lstat` cannot prove absence of a symlink — per
+      // the port contract this must fail closed, not fall back to `exists`.
+      return "unknown";
     }
-    return fs.exists(p);
+    try {
+      await fs.lstat(p);
+      return "present"; // present as a regular file/dir OR a dangling symlink
+    } catch (err) {
+      // B1: ONLY ENOENT proves genuine absence; any other errno is unknown.
+      return errnoCode(err) === "ENOENT" ? "absent" : "unknown";
+    }
   };
   let current = resolve(path);
   const tail: string[] = [];
   for (;;) {
-    if (await probePresence(current)) {
+    const presence = await probePresence(current);
+    if (presence === "unknown") {
+      return undefined; // presence unprovable — fail closed
+    }
+    if (presence === "present") {
       try {
         const real = await fs.realpath(current);
         return tail.length > 0 ? join(real, ...tail.slice().reverse()) : real;
@@ -209,4 +259,63 @@ export async function isUnderOwnRootsResolved(
     }
   }
   return false;
+}
+
+/**
+ * Dispatch-site workspace-containment facts for a Write/Edit permission check
+ * (TASK.32 DV-3). Resolves BOTH sides to real paths so the pure engine can
+ * decide lexically: the workspace root via `realpath` (must EXIST — a missing
+ * root cannot anchor trust), the target via `realpathExistingAncestor`.
+ * Fail-closed to `undefined` (= containment unprovable) on: port missing or
+ * lacking `realpath`, relative `filePath`, any `.`/`..` segment in the RAW
+ * `filePath` (lexical dot-collapse happens before symlink resolution, so a
+ * `..` after a symlink component would be proven against the wrong directory
+ * — see CUT-S1 D-S1-3), unresolvable root or target, or any throw. NEVER
+ * throws. NUL in `filePath` refused (ARBITRATION-S1-W1 N1) — no real
+ * filesystem path contains NUL, so a NUL-bearing string must never mint facts.
+ */
+export async function resolveWorkspaceWriteFacts(
+  fs: FileSystemPort | undefined,
+  workspaceRoot: string,
+  filePath: string,
+): Promise<PermissionWorkspaceFacts | undefined> {
+  try {
+    if (typeof fs?.realpath !== "function") return undefined;
+    if (!isAbsolute(filePath)) return undefined;
+    if (filePath.split(/[\\/]/).some((seg) => seg === "." || seg === "..")) {
+      return undefined;
+    }
+    if (filePath.includes("\0")) return undefined;
+    let root: string;
+    try {
+      root = await fs.realpath(workspaceRoot);
+    } catch {
+      return undefined;
+    }
+    const resolvedPath = await realpathExistingAncestor(fs, filePath);
+    if (resolvedPath === undefined) return undefined;
+    // Inode-alias refusal (ARBITRATION-S1-W2 MAJOR-1): path containment proves
+    // where the NAME lives, not where the write's EFFECT lands. An existing
+    // regular file with st_nlink > 1 has hard-link aliases this resolver cannot
+    // enumerate; writeFile truncates in place, mutating every alias — possibly
+    // outside the workspace. Facts are minted only when the leaf is: absent
+    // (creation mints a fresh inode), a directory (POSIX forbids directory hard
+    // links; a Write there fails EISDIR in the handler, unchanged), or a regular
+    // file PROVABLY single-linked. Unknown link count — port without nlink,
+    // nlink 0 or >1, non-file/non-dir leaf, non-ENOENT lstat failure — fails
+    // closed: no facts, edit mode keeps today's ask.
+    if (typeof fs.lstat !== "function") return undefined; // TS narrowing; unreachable in practice — the realpath-only-port case above already returned undefined via realpathExistingAncestor's own lstat-less refusal
+    try {
+      const leaf = await fs.lstat(resolvedPath);
+      if (!leaf.isDirectory && !(leaf.isFile && !leaf.isSymbolicLink && leaf.nlink === 1)) {
+        return undefined;
+      }
+    } catch (err) {
+      if (errnoCode(err) !== "ENOENT") return undefined;
+      // ENOENT: not-yet-existing leaf — creation mints a fresh inode; proceed.
+    }
+    return { root, resolvedPath };
+  } catch {
+    return undefined;
+  }
 }

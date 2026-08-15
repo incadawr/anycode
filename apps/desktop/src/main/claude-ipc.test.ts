@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createClaudeOnboardingController, isClaudeSnapshotChangeMaterial, type ClaudeIpcDeps, type ClaudeOnboardingSnapshot, type DialogLike } from "./claude-ipc.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
+import type { TrustedBinaryConsent } from "../shared/settings.js";
 import type { RunClaudeDoctorOptions } from "./claude-doctor.js";
 import type { ClaudeLoginOutcome, RunClaudeLoginOptions } from "./claude-login.js";
 
@@ -368,5 +369,170 @@ describe("isClaudeSnapshotChangeMaterial", () => {
     const previous = fakeSnapshot({ report: { status: "error", error: "timed out" } });
     const next = fakeSnapshot({ report: { status: "error", error: "connection refused" } });
     expect(isClaudeSnapshotChangeMaterial(previous, next)).toBe(false);
+  });
+});
+
+// TASK.103 — condensed claude mirror of codex-ipc.test.ts's BD3+BD4 (the two
+// onboarding controllers are deliberate duplicates — each carries its own pin).
+describe("createClaudeOnboardingController — consent threading (TASK.103) — BD5", () => {
+  const FILE_SIZE = 4096;
+  const FILE_MTIME = 1_700_000_000_000;
+
+  /** `filePath` stats as an executable file; `worldWritableDir` (its parent) stats world-writable; every OTHER ancestor is an ordinary safe directory. */
+  function fakeTrustRefusedFs(filePath: string, worldWritableDir: string) {
+    return {
+      stat: (path: string) => {
+        if (path === filePath) {
+          return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: 0, gid: 0, size: FILE_SIZE, mtimeMs: FILE_MTIME };
+        }
+        if (path === worldWritableDir) {
+          return { isFile: () => false, isDirectory: () => true, mode: 0o777, uid: 0, gid: 0 };
+        }
+        return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: 0, gid: 0 };
+      },
+      realpath: (path: string) => path,
+    };
+  }
+
+  const matchingConsent: TrustedBinaryConsent = {
+    path: "/opt/claude",
+    fingerprint: { mode: 0o755, uid: 0, gid: 0, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+    grantedAt: "2026-08-15T00:00:00.000Z",
+  };
+
+  it("a trust-refused discovery yields {status:'error', trustRefusal} — NOT not_installed; a plain nothing-found ladder stays not_installed (regression)", async () => {
+    const runDoctor = vi.fn();
+    const controller = createClaudeOnboardingController(
+      baseDeps({
+        readBinaryPathSetting: async () => "/opt/claude",
+        fs: fakeTrustRefusedFs("/opt/claude", "/opt"),
+        runDoctor,
+      }),
+    );
+    const snapshot = await controller.recheck();
+    expect(snapshot.report.status).toBe("error");
+    expect(snapshot.report.error).toMatch(/world-writable/);
+    expect(snapshot.report.trustRefusal).toEqual({ binaryPath: "/opt/claude", reason: snapshot.report.error, staleConsent: false });
+    expect(snapshot.binaryPath).toBeNull();
+    expect(runDoctor).not.toHaveBeenCalled();
+
+    // Regression arm: untouched by this change.
+    const plainRunDoctor = vi.fn();
+    const plainController = createClaudeOnboardingController(baseDeps({ runDoctor: plainRunDoctor }));
+    const plainSnapshot = await plainController.recheck();
+    expect(plainSnapshot.report).toEqual({ status: "not_installed" });
+    expect(plainRunDoctor).not.toHaveBeenCalled();
+  });
+
+  it("deps.readTrustedBinaries reaches BOTH discovery and the doctor: a matching consent resolves the path and threads consents into runDoctor; absent dep behaves as today's wall", async () => {
+    const runDoctor = vi.fn(async (_binaryPath: string, _options?: unknown) => ({ status: "ready" as const, version: "2.1.212" }));
+    const controller = createClaudeOnboardingController(
+      baseDeps({
+        readBinaryPathSetting: async () => "/opt/claude",
+        fs: fakeTrustRefusedFs("/opt/claude", "/opt"),
+        runDoctor,
+        readTrustedBinaries: () => [matchingConsent],
+      }),
+    );
+    const snapshot = await controller.recheck();
+    expect(snapshot.binaryPath).toBe("/opt/claude");
+    expect(snapshot.report.status).toBe("ready");
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(runDoctor.mock.calls[0]?.[1]).toMatchObject({ consents: [matchingConsent] });
+
+    // Absent dep: today's wall ([] consents), same fs, so the trust refusal stands.
+    const noConsentRunDoctor = vi.fn();
+    const noConsentController = createClaudeOnboardingController(
+      baseDeps({ readBinaryPathSetting: async () => "/opt/claude", fs: fakeTrustRefusedFs("/opt/claude", "/opt"), runDoctor: noConsentRunDoctor }),
+    );
+    const refusedSnapshot = await noConsentController.recheck();
+    expect(refusedSnapshot.report.status).toBe("error");
+    expect(noConsentRunDoctor).not.toHaveBeenCalled();
+  });
+
+  describe("pickBinary — trust threading (D-S4-15, BD7; condensed mirror of codex BD6 a+b)", () => {
+    const pickedPath = "/opt/claude";
+
+    /** Mirrors codex-ipc.test.ts's pickerRunDoctor: decides EXACTLY like the
+     * real doctor would for this fixture, honoring the SAME consents `checkPath`
+     * reads — the picker route relies on the doctor's OWN gate to re-refuse an
+     * uncovered pick (D-S4-15). */
+    function pickerRunDoctor() {
+      return vi.fn(async (binaryPath: string, options?: { consents?: readonly TrustedBinaryConsent[] }) => {
+        const covered = (options?.consents ?? []).some((c) => c.path === binaryPath);
+        if (covered) {
+          return { status: "ready" as const, version: "2.1.212" };
+        }
+        const reason = "Claude binary's directory (/opt) is world-writable";
+        return { status: "error" as const, error: reason, trustRefusal: { binaryPath, reason, staleConsent: false } };
+      });
+    }
+
+    it("BD7 (a) a granted consent is honored on the picker route — the doctor runs against the picked path and reports ready", async () => {
+      const runDoctor = pickerRunDoctor();
+      const controller = createClaudeOnboardingController(
+        baseDeps({
+          dialog: fakeDialog({ canceled: false, filePaths: [pickedPath] }),
+          fs: fakeTrustRefusedFs(pickedPath, "/opt"),
+          runDoctor,
+          readTrustedBinaries: () => [matchingConsent],
+        }),
+      );
+      const result = await controller.pickBinary();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("unreachable — asserted above");
+      expect(result.snapshot.report.status).toBe("ready");
+      expect(runDoctor).toHaveBeenCalledTimes(1);
+      expect(runDoctor.mock.calls[0]?.[0]).toBe(pickedPath);
+    });
+
+    it("BD7 (b) a trust-refused pick with NO consent reports honestly — {ok:true, snapshot} carrying an error report + trustRefusal, NOT {ok:false, reason:'invalid'}", async () => {
+      const runDoctor = pickerRunDoctor();
+      const controller = createClaudeOnboardingController(
+        baseDeps({
+          dialog: fakeDialog({ canceled: false, filePaths: [pickedPath] }),
+          fs: fakeTrustRefusedFs(pickedPath, "/opt"),
+          runDoctor,
+        }),
+      );
+      const result = await controller.pickBinary();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("unreachable — asserted above");
+      expect(result.snapshot.report.status).toBe("error");
+      expect(result.snapshot.report.error).toMatch(/world-writable/);
+      expect(result.snapshot.report.trustRefusal).toEqual({
+        binaryPath: pickedPath,
+        reason: result.snapshot.report.error,
+        staleConsent: false,
+      });
+      expect(runDoctor).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("discoverAndCheck — rung-gated Trust affordance (D-S4-16, BD9; condensed mirror of codex BD8 a+b)", () => {
+    it("BD9 (a) an env-rung refusal carries the affordance — explicit rung, user-named", async () => {
+      const controller = createClaudeOnboardingController(
+        baseDeps({
+          bootEnv: { ANYCODE_CLAUDE_BIN: "/env/claude" },
+          fs: fakeTrustRefusedFs("/env/claude", "/env"),
+        }),
+      );
+      const snapshot = await controller.recheck();
+      expect(snapshot.report.status).toBe("error");
+      expect(snapshot.report.trustRefusal).toEqual({ binaryPath: "/env/claude", reason: snapshot.report.error, staleConsent: false });
+    });
+
+    it("BD9 (b) the SAME refusal shape reachable only via the ambient PATH rung loses the affordance — honest text, no button", async () => {
+      const controller = createClaudeOnboardingController(
+        baseDeps({
+          bootEnv: { PATH: "/usr/local/bin" },
+          fs: fakeTrustRefusedFs("/usr/local/bin/claude", "/usr/local/bin"),
+        }),
+      );
+      const snapshot = await controller.recheck();
+      expect(snapshot.report.status).toBe("error");
+      expect(snapshot.report.error).toMatch(/world-writable/);
+      expect(snapshot.report.trustRefusal).toBeUndefined();
+    });
   });
 });

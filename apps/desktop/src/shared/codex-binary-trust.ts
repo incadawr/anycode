@@ -43,6 +43,33 @@
  *     `win32`. That `null` is an UNCHECKED path, not a verified-safe one —
  *     callers must not read it as a guarantee.
  * None of the above is a closed guarantee; callers must not describe it as one.
+ *
+ * ── CONSENT (TASK.103) ──────────────────────────────────────────────────────
+ * The wall above has no off-switch — this module also carries the ONE
+ * off-switch there is: a per-path, fingerprint-pinned, explicit consent.
+ * `checkConsentedBinaryTrust` wraps `checkCodexBinaryTrust` unchanged (the
+ * base policy above stays byte-identical) and lifts ONLY an ownership/
+ * writability refusal when a consent record's fingerprint — the RAW
+ * `{mode, uid, gid, size, mtimeMs}` 5-tuple, strict-equal, no tolerance —
+ * matches the resolved binary's CURRENT stat. Structural refusals (not a
+ * file, not executable, a non-directory ancestor) are never consentable. The
+ * consent record itself is authored ONLY by main (grant handler,
+ * `main/settings-ipc.ts`), computed from the live filesystem at grant time —
+ * this module never mints, refreshes, or trusts a caller-supplied
+ * fingerprint.
+ *
+ * ── CONSENTABILITY (S4-W2, D-S4-13) ─────────────────────────────────────────
+ * Not every refusal is an offer to consent. A file owned by a third party
+ * (not us, not root) is NEVER consentable, whatever reason string
+ * `unsafeReason`'s ordering happens to emit for it (world-writable is
+ * checked before ownership, so a world-writable third-party-owned file
+ * still reports the world-writable string) — that file's OWNER can restore
+ * the entire `{mode, uid, gid, size, mtimeMs}` fingerprint at will
+ * (`utimensat` is theirs), so a pin can never bind them. This is judged on
+ * the underlying FACT (`file.uid !== input.uid && file.uid !== ROOT_UID`),
+ * never re-derived from the reason string. `classifyConsentedBinaryTrust`
+ * is the shape-carrying verdict this rule lives in; `checkConsentedBinaryTrust`
+ * stays the byte-identical `string | null` wrapper every existing caller uses.
  */
 
 /** The subset of `fs.Stats` this policy reads. Callers pass `statSync` output straight in. */
@@ -55,6 +82,9 @@ export interface CodexPathStat {
   gid: number;
   /** The path this stat was read from — carried only so a refusal message can name it. */
   path: string;
+  /** Present when the stat source carries them (production fs.Stats always does); consent matching REQUIRES both — absence fails closed. */
+  size?: number;
+  mtimeMs?: number;
 }
 
 export interface CodexBinaryTrustInput {
@@ -149,4 +179,104 @@ export function checkCodexBinaryTrust(input: CodexBinaryTrustInput): string | nu
     if (reason !== null) return reason;
   }
   return null;
+}
+
+/** The stat 5-tuple a consent pins (DV-6). RAW fs.Stats values, compared with strict equality — any drift makes the consent inert. */
+export interface BinaryTrustFingerprint {
+  mode: number;
+  uid: number;
+  gid: number;
+  size: number;
+  mtimeMs: number;
+}
+
+/** One per-path consent record as persisted in settings.json (settings.security.trustedBinaries). `path` is the binary's realpath at grant time. */
+export interface BinaryTrustConsent {
+  path: string;
+  fingerprint: BinaryTrustFingerprint;
+  grantedAt: string;
+}
+
+/**
+ * True iff a consent record covers THIS resolved file in its CURRENT state:
+ * exact path equality (never prefix/normalization — a symlink swapped in at
+ * the consented location resolves elsewhere and simply does not match) and
+ * strict equality of all five fingerprint fields against the live stat. A
+ * stat source that carries no size/mtimeMs can never match — absence fails
+ * closed. Pure; never mutates or refreshes a record.
+ */
+export function consentCoversBinary(
+  consents: readonly BinaryTrustConsent[],
+  file: CodexPathStat,
+): boolean {
+  const { size, mtimeMs } = file;
+  if (size === undefined || mtimeMs === undefined) return false;
+  return consents.some(
+    (c) =>
+      c.path === file.path &&
+      c.fingerprint.mode === file.mode &&
+      c.fingerprint.uid === file.uid &&
+      c.fingerprint.gid === file.gid &&
+      c.fingerprint.size === size &&
+      c.fingerprint.mtimeMs === mtimeMs,
+  );
+}
+
+/**
+ * The classified consent verdict (TASK.103 fix wave, D-S4-13/17). `null` =
+ * base policy passes or a consent covers the file. A refusal carries:
+ * - `consentable`: false for STRUCTURAL refusals (not a file, not
+ *   executable, an ancestor that is not a directory) AND for the
+ *   third-party-owned-FILE fact (`file.uid !== input.uid && file.uid !==
+ *   ROOT_UID`) — the file's owner can restore all five fingerprint fields
+ *   (`utimensat` is theirs), so a pin cannot bind them; judged on the FACT,
+ *   never on which reason string `unsafeReason`'s ordering happened to emit.
+ * - `staleConsent`: a consent record exists for this resolved path but no
+ *   longer matches the live fingerprint (meaningful only when `consentable`;
+ *   false otherwise). Pure; never mutates or refreshes a record.
+ */
+export interface BinaryTrustRefusalClass {
+  reason: string;
+  consentable: boolean;
+  staleConsent: boolean;
+}
+
+export function classifyConsentedBinaryTrust(
+  input: CodexBinaryTrustInput,
+  consents: readonly BinaryTrustConsent[],
+): BinaryTrustRefusalClass | null {
+  const base = checkCodexBinaryTrust(input);
+  if (base === null) return null;
+  if (!input.file.isFile || (input.file.mode & 0o111) === 0) {
+    return { reason: base, consentable: false, staleConsent: false };
+  }
+  for (const directory of input.directories) {
+    if (!directory.isDirectory) return { reason: base, consentable: false, staleConsent: false };
+  }
+  // D-S4-13: the file-owner FACT is never consentable — the owner can forge
+  // the whole 5-tuple (B-2, proved). Checked as a fact, not a reason shape:
+  // a world-writable third-party-owned file emits the world-writable reason
+  // but its owner keeps utimensat power all the same.
+  if (input.file.uid !== input.uid && input.file.uid !== ROOT_UID) {
+    return { reason: base, consentable: false, staleConsent: false };
+  }
+  if (consentCoversBinary(consents, input.file)) return null;
+  const staleConsent = consents.some((c) => c.path === input.file.path);
+  return { reason: base, consentable: true, staleConsent };
+}
+
+/**
+ * The consent-aware trust verdict (TASK.103). Base policy first; a PASS needs
+ * no consent. A STRUCTURAL refusal (not a file, not executable, an ancestor
+ * that is not a directory) is never consentable — re-derived from the input,
+ * not string-matched. An ownership/writability refusal (any unsafeReason
+ * shape, file-level or directory-level) is lifted iff a consent covers the
+ * resolved file's current fingerprint; otherwise the base refusal returns
+ * verbatim, and the caller re-asks (stale consent is inert — track DV-6).
+ */
+export function checkConsentedBinaryTrust(
+  input: CodexBinaryTrustInput,
+  consents: readonly BinaryTrustConsent[],
+): string | null {
+  return classifyConsentedBinaryTrust(input, consents)?.reason ?? null;
 }

@@ -19,16 +19,33 @@
  */
 import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, posix, win32 } from "node:path";
-import { checkCodexBinaryTrust, type CodexPathStat } from "../shared/codex-binary-trust.js";
+import {
+  classifyConsentedBinaryTrust,
+  type BinaryTrustConsent,
+  type CodexPathStat,
+} from "../shared/codex-binary-trust.js";
 
 export interface ClaudeBinaryResolution {
   path: string | null;
   reason?: string;
+  /** Present iff THIS resolution's refusal came from the dedicated trust-gate call — consentable or not; never a structural pre-check, never a missing path. */
+  trustRefused?: true;
+  /** The consent affordance payload — present iff the refusal is CONSENTABLE (D-S4-13). `binaryPath` is the gate's RESOLVED path (D-S4-14). */
+  trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
 }
 
 /** Stat shape mirrors `fs.Stats` exactly, so the production seam below is a straight passthrough. */
 export interface ClaudeBinaryFs {
-  stat(path: string): { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number };
+  stat(path: string): {
+    isFile(): boolean;
+    isDirectory(): boolean;
+    mode: number;
+    uid: number;
+    gid: number;
+    /** Present when the fs seam carries them (production `fs.Stats` always does); consent matching requires both — absence fails closed (shared/codex-binary-trust.ts). */
+    size?: number;
+    mtimeMs?: number;
+  };
   /** Symlinks resolved: `execve` reads the TARGET, so the target is what must be trusted. */
   realpath(path: string): string;
 }
@@ -57,8 +74,20 @@ function currentIdentity(): ClaudeIdentity {
   };
 }
 
-function toPathStat(path: string, stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number }): CodexPathStat {
-  return { path, isFile: stat.isFile(), isDirectory: stat.isDirectory(), mode: stat.mode, uid: stat.uid, gid: stat.gid };
+function toPathStat(
+  path: string,
+  stat: { isFile(): boolean; isDirectory(): boolean; mode: number; uid: number; gid: number; size?: number; mtimeMs?: number },
+): CodexPathStat {
+  return {
+    path,
+    isFile: stat.isFile(),
+    isDirectory: stat.isDirectory(),
+    mode: stat.mode,
+    uid: stat.uid,
+    gid: stat.gid,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
 }
 
 /**
@@ -88,32 +117,53 @@ function ancestorDirectories(resolvedFile: string, originalPath: string): string
   return ordered;
 }
 
+/** The path-gate outcome (TASK.103 fix wave, D-S4-14/18). `null` = pass.
+ *  `missing` = the realpath/stat threw — the file is GONE; NEVER an offerable
+ *  refusal (D-S4-18). `refused` carries the shared classification plus the
+ *  REALPATH the gate judged — the only path a `trustRefusal` may ever name. */
+export type ClaudeBinaryTrustGateOutcome =
+  | null
+  | { kind: "missing"; reason: string }
+  | { kind: "refused"; reason: string; consentable: boolean; staleConsent: boolean; resolvedPath: string };
+
 /**
  * The execute-time trust gate. Run at DISCOVERY by `resolveClaudeBinary` below
  * AND again immediately before every spawn in main/claude-doctor.ts —
  * re-validation at spawn narrows (does not close) the TOCTOU window, exactly
  * the same discipline as main/codex-binary.ts's `checkCodexBinaryPathTrust`.
  */
+export function classifyClaudeBinaryPathTrust(
+  path: string,
+  fs: ClaudeBinaryFs = nodeFs,
+  platform: NodeJS.Platform = process.platform,
+  identity: ClaudeIdentity = currentIdentity(),
+  consents: readonly BinaryTrustConsent[] = [],
+): ClaudeBinaryTrustGateOutcome {
+  if (platform === "win32") return null;
+  try {
+    const resolved = fs.realpath(path);
+    const directories = ancestorDirectories(resolved, path).map((dir) => toPathStat(dir, fs.stat(dir)));
+    const verdict = classifyConsentedBinaryTrust(
+      { file: toPathStat(resolved, fs.stat(resolved)), directories, uid: identity.uid, egid: identity.egid ?? -1, platform },
+      consents,
+    );
+    if (verdict === null) return null;
+    return { kind: "refused", ...verdict, resolvedPath: resolved };
+  } catch {
+    return { kind: "missing", reason: "Claude binary path does not exist" };
+  }
+}
+
+/** `checkClaudeBinaryPathTrust` byte-for-byte string wrapper over `classifyClaudeBinaryPathTrust` — every existing `string|null` consumer (claude-login's injected closure among them) stays untouched. */
 export function checkClaudeBinaryPathTrust(
   path: string,
   fs: ClaudeBinaryFs = nodeFs,
   platform: NodeJS.Platform = process.platform,
   identity: ClaudeIdentity = currentIdentity(),
+  consents: readonly BinaryTrustConsent[] = [],
 ): string | null {
-  if (platform === "win32") return null;
-  try {
-    const resolved = fs.realpath(path);
-    const directories = ancestorDirectories(resolved, path).map((dir) => toPathStat(dir, fs.stat(dir)));
-    return checkCodexBinaryTrust({
-      file: toPathStat(resolved, fs.stat(resolved)),
-      directories,
-      uid: identity.uid,
-      egid: identity.egid ?? -1,
-      platform,
-    });
-  } catch {
-    return "Claude binary path does not exist";
-  }
+  const outcome = classifyClaudeBinaryPathTrust(path, fs, platform, identity, consents);
+  return outcome === null ? null : outcome.reason;
 }
 
 /** Main validates an explicit absolute path; it never searches or shells out. */
@@ -122,6 +172,7 @@ export function resolveClaudeBinary(
   fs: ClaudeBinaryFs = nodeFs,
   platform = process.platform,
   identity: ClaudeIdentity = currentIdentity(),
+  consents: readonly BinaryTrustConsent[] = [],
 ): ClaudeBinaryResolution {
   if (raw === undefined || raw.trim() === "") return { path: null };
   const path = raw.trim();
@@ -136,8 +187,18 @@ export function resolveClaudeBinary(
   } catch {
     return { path: null, reason: "Claude binary path does not exist" };
   }
-  const untrusted = checkClaudeBinaryPathTrust(path, fs, platform, identity);
-  if (untrusted !== null) return { path: null, reason: untrusted };
+  const outcome = classifyClaudeBinaryPathTrust(path, fs, platform, identity, consents);
+  if (outcome !== null) {
+    if (outcome.kind === "missing") return { path: null, reason: outcome.reason };
+    return {
+      path: null,
+      reason: outcome.reason,
+      trustRefused: true,
+      ...(outcome.consentable
+        ? { trustRefusal: { binaryPath: outcome.resolvedPath, reason: outcome.reason, staleConsent: outcome.staleConsent } }
+        : {}),
+    };
+  }
   return { path };
 }
 
@@ -156,6 +217,12 @@ export interface ClaudeBinaryDiscovery {
   source: ClaudeBinarySource;
   /** The last rejection reason seen while walking the ladder (diagnostic only — the ladder still fails closed on `path:null`). */
   reason?: string;
+  /** The FIRST trust refusal seen while walking the ladder (TASK.103) — highest-priority rung, i.e. the binary the user most likely means. */
+  trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
+  /** The rung the carried `trustRefusal` came from — present iff `trustRefusal` is present (invariant tested by BG7). */
+  trustRefusalSource?: ClaudeBinarySource;
+  /** Present iff the ladder was terminated by an EXPLICIT-rung (env/settings) trust refusal whose refusal is NON-consentable (D-S4-13) — the consentable stop already speaks through `trustRefusal`/`trustRefusalSource` above (D-S4-22). */
+  trustRefused?: true;
 }
 
 /** `claude` on POSIX, `claude.exe` on Windows — the file name every ladder rung looks for. */
@@ -211,20 +278,27 @@ export interface ClaudeDiscoveryInputs {
   platform?: NodeJS.Platform;
   /** Test seam; production reads the live process identity (uid + supplementary groups). */
   identity?: ClaudeIdentity;
+  /** Live per-path binary-trust consents (TASK.103); absent/default `[]` keeps today's wall byte-for-byte. */
+  consents?: readonly BinaryTrustConsent[];
 }
 
 /**
  * Walks the discovery ladder in priority order, returning the FIRST rung that
  * resolves to an absolute, existing, executable file. A rung that finds
- * nothing simply falls through to the next one — it does not abort the
- * ladder. Version compatibility is diagnosed by the doctor
- * (main/claude-doctor.ts) against whatever this function returns, not by
- * trying further rungs.
+ * NOTHING simply falls through to the next one — it does not abort the
+ * ladder. An EXPLICIT rung (`env`/`settings`) that FOUND its binary and had
+ * it TRUST-REFUSED stops the ladder instead of falling through: a lower
+ * rung's success must never silently substitute for a binary the user
+ * explicitly named (D-S4-22) — see the hard-stop below. Ambient rungs
+ * (`path`/`common`) keep walking on a refusal exactly as before. Version
+ * compatibility is diagnosed by the doctor (main/claude-doctor.ts) against
+ * whatever this function returns, not by trying further rungs.
  */
 export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinaryDiscovery {
   const fs = inputs.fs ?? nodeFs;
   const platform = inputs.platform ?? process.platform;
   const identity = inputs.identity ?? currentIdentity();
+  const consents = inputs.consents ?? [];
   const rungs: Array<{ source: ClaudeBinarySource; candidates: string[] }> = [
     { source: "env", candidates: inputs.envOverride !== undefined && inputs.envOverride.trim() !== "" ? [inputs.envOverride] : [] },
     { source: "settings", candidates: inputs.settingsPath !== undefined && inputs.settingsPath.trim() !== "" ? [inputs.settingsPath] : [] },
@@ -232,18 +306,46 @@ export function discoverClaudeBinary(inputs: ClaudeDiscoveryInputs): ClaudeBinar
     { source: "common", candidates: commonInstallLocations(inputs.env, platform) },
   ];
   let lastReason: string | undefined;
+  // The FIRST trust refusal encountered while walking the ladder wins.
+  // Post-D-S4-22 this capture only ever fires for an AMBIENT rung's refusal:
+  // an explicit (env/settings) refusal stops the ladder below, before ever
+  // reaching this capture.
+  let firstTrustRefusal: { binaryPath: string; reason: string; staleConsent: boolean } | undefined;
+  let firstTrustRefusalSource: ClaudeBinarySource | undefined;
   for (const rung of rungs) {
     for (const candidate of rung.candidates) {
-      const resolved = resolveClaudeBinary(candidate, fs, platform, identity);
+      const resolved = resolveClaudeBinary(candidate, fs, platform, identity, consents);
       if (resolved.path !== null) {
         return { path: resolved.path, source: rung.source };
+      }
+      // D-S4-22: an EXPLICIT rung (env/settings) that found its candidate and
+      // had it trust-refused stops the ladder here. Ambient rungs fall
+      // through unchanged (S4/RES-16).
+      if (resolved.trustRefused === true && (rung.source === "env" || rung.source === "settings")) {
+        return {
+          path: null,
+          source: "none",
+          ...(resolved.reason !== undefined ? { reason: resolved.reason } : {}),
+          ...(resolved.trustRefusal !== undefined
+            ? { trustRefusal: resolved.trustRefusal, trustRefusalSource: rung.source }
+            : { trustRefused: true }),
+        };
       }
       if (resolved.reason !== undefined) {
         lastReason = resolved.reason;
       }
+      if (firstTrustRefusal === undefined && resolved.trustRefusal !== undefined) {
+        firstTrustRefusal = resolved.trustRefusal;
+        firstTrustRefusalSource = rung.source;
+      }
     }
   }
-  return { path: null, source: "none", ...(lastReason !== undefined ? { reason: lastReason } : {}) };
+  return {
+    path: null,
+    source: "none",
+    ...(lastReason !== undefined ? { reason: lastReason } : {}),
+    ...(firstTrustRefusal !== undefined ? { trustRefusal: firstTrustRefusal, trustRefusalSource: firstTrustRefusalSource } : {}),
+  };
 }
 
 /**

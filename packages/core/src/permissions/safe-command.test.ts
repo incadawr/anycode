@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyBashCommand,
+  classifyBashCommandLine,
   GIT_BARE_ONLY_SUBCOMMANDS,
   GIT_SAFE_SUBCOMMANDS,
   READ_ONLY_BINARIES,
@@ -102,8 +103,9 @@ describe("classifyBashCommand — adversarial vectors (all MUST be unknown)", ()
     // rg/file were removed from READ_ONLY_BINARIES: their write/exec surface
     // (ripgrep --pre/--hostname-bin/-z run arbitrary programs; file -C writes
     // magic.mgc) cannot be exhausted by the flag screen, so both fall through to
-    // "unknown" as non-allowlisted binaries. tree stays allowlisted but `-o` is
-    // caught by the WRITE_CAPABLE_FLAGS net (pins that coverage).
+    // "unknown" as non-allowlisted binaries. tree was removed too (TASK.35 fix
+    // wave 1, W1-BLOCKER-1): `-no FILE`/`-o<FILE>` cluster spellings evade the
+    // verbatim net, so its `-o` write surface is not exhaustible either.
     expectAllUnknown([
       "rg --pre rm needle f.txt", // --pre runs `rm f.txt` per matched file (proven RCE)
       "rg --hostname-bin ./x.sh needle f.txt", // runs ./x.sh unconditionally
@@ -113,7 +115,7 @@ describe("classifyBashCommand — adversarial vectors (all MUST be unknown)", ()
       "file -C", // writes magic.mgc into cwd (proven FS write)
       "file --compile", // long form of -C
       "file f", // plain file also demoted after removal
-      "tree -o out.txt", // tree kept, but -o output flag caught by the net
+      "tree -o out.txt", // tree removed (TASK.35 W1): unknown via allowlist miss
     ]);
   });
 
@@ -313,5 +315,352 @@ describe("safe-command exported constants", () => {
     expect(WRITE_CAPABLE_FLAGS.has("--output")).toBe(true);
     expect(WRITE_CAPABLE_FLAGS.has("-i")).toBe(true);
     expect(WRITE_CAPABLE_FLAGS.has("-l")).toBe(false);
+  });
+});
+
+/** Asserts a batch of command LINES all classify as "unknown" (classifyBashCommandLine). */
+function expectAllLineUnknown(commands: string[]): void {
+  for (const command of commands) {
+    expect(classifyBashCommandLine(command).class, `expected "unknown" for: ${JSON.stringify(command)}`).toBe(
+      "unknown",
+    );
+  }
+}
+
+/** Asserts a batch of command LINES all classify as "read-only" (classifyBashCommandLine). */
+function expectAllLineReadOnly(commands: string[]): void {
+  for (const command of commands) {
+    expect(classifyBashCommandLine(command).class, `expected "read-only" for: ${JSON.stringify(command)}`).toBe(
+      "read-only",
+    );
+  }
+}
+
+describe("classifyBashCommandLine — single-command routing (bit-for-bit)", () => {
+  it("C1: routes every single-segment command to classifyBashCommand's own verdict, bit-for-bit", () => {
+    const commands = [
+      "ls",
+      "ls -la",
+      "/bin/ls",
+      "git status",
+      "git log --oneline",
+      "grep foo f",
+      "date",
+      "tree -o out.txt",
+      "sed -i s/a/b/ f",
+      "rm -rf x",
+      "echo 'a|b'",
+      'grep "a;b" f',
+      "ls > f",
+      "FOO=bar ls",
+      "cat $(echo f)",
+      "",
+      "   ",
+    ];
+    for (const command of commands) {
+      expect(
+        classifyBashCommandLine(command).class,
+        `expected classifyBashCommandLine to match classifyBashCommand for: ${JSON.stringify(command)}`,
+      ).toBe(classifyBashCommand(command));
+    }
+  });
+
+  it("C2: bare 'sed -n ...p' with NO pipe still asks in v1 (RES-3 — routing pinned explicitly)", () => {
+    expect(classifyBashCommandLine("sed -n '1,5p' f").class).toBe("unknown");
+  });
+});
+
+describe("classifyBashCommandLine — pipeline positives (DV-5 acceptance, all MUST be read-only)", () => {
+  it("P1: the founding owner case", () => {
+    expectAllLineReadOnly(["sed -n '420,433p' file | cat -A"]);
+  });
+
+  it("P2: grep piped through head", () => {
+    expectAllLineReadOnly(["grep -n TODO file | head -20"]);
+  });
+
+  it("P3/P4: cat/wc and a three-segment pipeline", () => {
+    expectAllLineReadOnly(["cat file.txt | wc -l", "ls -la | grep foo | head -5"]);
+  });
+
+  it("P5: sed script quoting variants (double-quoted / unquoted) inside a pipeline", () => {
+    expectAllLineReadOnly(["sed -n \"1,5p\" f | cat", "sed -n 1p f | cat"]);
+  });
+
+  it("P6: quoted argument containing a space", () => {
+    expectAllLineReadOnly(['grep "hello world" f | wc -l']);
+  });
+
+  it("P7: basename-trust parity for absolute paths in a pipeline", () => {
+    expectAllLineReadOnly(["/bin/cat f | /usr/bin/head -1"]);
+  });
+
+  it("P8: bare-only binary, bare, piped", () => {
+    expectAllLineReadOnly(["date | cat"]);
+  });
+
+  it("P9: printf piped through wc", () => {
+    expectAllLineReadOnly(["printf %s x | wc -c"]);
+  });
+});
+
+describe("classifyBashCommandLine — pipeline adversarial (all MUST be unknown)", () => {
+  it("A1: separator confusion with safe-looking neighbors (the discriminators)", () => {
+    expectAllLineUnknown([
+      "cat f || cat g",
+      "cat f && cat g",
+      "cat f; cat g",
+      "cat f & cat g",
+      "cat f\ncat g",
+      "cat f |& cat g",
+    ]);
+  });
+
+  it("A2: blank segments with safe neighbors", () => {
+    expectAllLineUnknown(["cat f | | wc -l", "| cat f", "cat f |", "cat f |  | head -1"]);
+  });
+
+  it("A3: effectful/unknown segment binaries", () => {
+    expectAllLineUnknown([
+      "cat f | tee out",
+      "cat f | sh",
+      "echo x | bash",
+      "cat f | xargs rm",
+      "cat f | rg pat",
+      "cat f | file -",
+      "foo | cat",
+    ]);
+  });
+
+  it("A4: git exclusion in pipelines (examples table wins)", () => {
+    expectAllLineUnknown([
+      "git status | cat",
+      "git log --oneline | head -3",
+      "cat f | git status",
+      "git diff | wc -l",
+    ]);
+  });
+
+  it("A5: redirects inside segments (the RCE-class case)", () => {
+    expectAllLineUnknown([
+      "cat f > x | wc -l",
+      "cat f | wc -l > out",
+      "cat f | wc 2>&1",
+      "cat < f | wc -l",
+      "cat f | head -1 >> log",
+    ]);
+  });
+
+  it("A6: quote-hidden flags (THE DV-5 case)", () => {
+    expectAllLineUnknown([
+      'tree "-o" x | cat',
+      "tree '-o' x | cat",
+      'cat f | tree "-o" pwn',
+      'tree -"o" x | cat',
+      'tree "-"o x | cat',
+      'head "--output=x" f | cat',
+      'cat "--in-place" f | wc',
+    ]);
+  });
+
+  it("A7: quoted command word", () => {
+    expectAllLineUnknown([
+      '"cat" f | wc -l',
+      'ca"t" f | wc -l',
+      "''ls | cat",
+      'cat f | "wc" -l',
+      "\"sed\" -n '1p' f | cat",
+      // W1 (ARBITRATION-S2-W1 D-W1-3): slash-after-quote vectors — basename()
+      // slices at the LAST `/`, so quote characters sitting before that slash
+      // are sliced off with the directory prefix and the suffix can land on an
+      // allowlist entry. These are the ONLY spellings whose refusal step 3
+      // independently carries (MV2's detector).
+      '"a"/cat x | wc -l',
+      '"/bin"/ls | cat',
+    ]);
+  });
+
+  it("A8: expansions/assignments inside segments (raw screen)", () => {
+    expectAllLineUnknown([
+      "cat $x | wc -l",
+      "cat ~/f | wc -l",
+      "cat f* | wc -l",
+      "cat {a,b} | wc -l",
+      "cat f | wc -l #c",
+      "FOO=1 cat f | wc -l",
+      "cat f | env wc",
+    ]);
+  });
+
+  it("A9: control/unicode smuggling", () => {
+    expectAllLineUnknown(["cat f\r| wc -l", "cat f\x00 | wc -l", "сat f | wc -l", "cat f | wс -l"]);
+  });
+
+  it("A10: bare-only binary violated in a pipeline", () => {
+    expectAllLineUnknown(["date -u | cat", "date +%s | cat"]);
+  });
+
+  it("A11: write flags plainly present", () => {
+    expectAllLineUnknown(["cat -o out | wc -l", "grep --output=f x | cat", "cat f | md5sum -O out"]);
+  });
+
+  it("A12: substitution at line level", () => {
+    expectAllLineUnknown(["cat $(x) | wc -l", "cat `x` | wc", "cat <(x) | wc"]);
+  });
+});
+
+describe("classifyBashCommandLine — sed pipeline subgrammar", () => {
+  it("S1-S3: the one accepted sed subgrammar, in and mid-pipeline, quoted path with space", () => {
+    expectAllLineReadOnly([
+      "sed -n '1p' f | cat",
+      "sed -n '7,9p' 'my file.txt' | wc -l",
+      "cat f | sed -n '1,5p' g",
+    ]);
+  });
+
+  it("S5: no -n flag", () => {
+    expectAllLineUnknown(["sed '1p' f | cat"]);
+  });
+
+  it("S6: bundled / in-place flag in the -n slot", () => {
+    expectAllLineUnknown(["sed -ni '1p' f | cat", "sed -i '1p' f | cat"]);
+  });
+
+  it("S7: five tokens (-e, or a second file operand)", () => {
+    expectAllLineUnknown(["sed -n -e '1p' f | cat", "sed -n '1p' f g | cat"]);
+  });
+
+  it("S8: script regex anchoring", () => {
+    expectAllLineUnknown(["sed -n '1px' f | cat", "sed -n '1,5pp' f | cat"]);
+  });
+
+  it("S9: a write command as the script", () => {
+    expectAllLineUnknown(["sed -n 'w out' f | cat"]);
+  });
+
+  it("S10: dash-leading operand (option smuggling / stdin)", () => {
+    expectAllLineUnknown(["sed -n '1p' -i | cat", "sed -n '1p' - | cat"]);
+  });
+
+  it("S11: metacharacters in the script die on the segment raw screen", () => {
+    expectAllLineUnknown(["sed -n '$p' f | cat", "sed -n '1~2p' f | cat", "sed -n '1,5p;2d' f | cat"]);
+  });
+
+  it("S13: long-form --quiet is refused", () => {
+    expectAllLineUnknown(["sed --quiet '1p' f | cat"]);
+  });
+
+  it("S14: stdin-only 3-token form is refused (RES-4)", () => {
+    expectAllLineUnknown(["cat f | sed -n '1p'"]);
+  });
+});
+
+describe("classifyBashCommandLine — shellExpression flag", () => {
+  it("F1: a plain high-risk single command has no shell-expression flag", () => {
+    expect(classifyBashCommandLine("rm -rf /")).toEqual({ class: "unknown", shellExpression: false });
+  });
+
+  it("F2: an unknown pipeline IS a shell expression", () => {
+    expect(classifyBashCommandLine("git status | cat")).toEqual({ class: "unknown", shellExpression: true });
+  });
+
+  it("F3: a single command with a metacharacter is a shell expression", () => {
+    expect(classifyBashCommandLine("ls > f")).toEqual({ class: "unknown", shellExpression: true });
+  });
+
+  it("F4: a plain safe single command is not a shell expression", () => {
+    expect(classifyBashCommandLine("ls -la")).toEqual({ class: "read-only", shellExpression: false });
+  });
+
+  it("F5: an accepted pipeline is still honestly a shell expression", () => {
+    expect(classifyBashCommandLine("cat f | wc -l")).toEqual({ class: "read-only", shellExpression: true });
+  });
+
+  it("F6: a substitution is a shell expression", () => {
+    expect(classifyBashCommandLine("cat $(x)")).toEqual({ class: "unknown", shellExpression: true });
+  });
+
+  it("F7: a plain unknown binary is not a shell expression — no hint deserved", () => {
+    expect(classifyBashCommandLine("npm install")).toEqual({ class: "unknown", shellExpression: false });
+  });
+});
+
+describe("TASK.35 fix wave 1 — tree removal and divergence pins (V-series)", () => {
+  it("V1: single-path tree invocations all ask after the W1 allowlist removal", () => {
+    expectAllUnknown([
+      "tree",
+      "tree x",
+      "tree -L 2",
+      "tree -no /tmp/pwn",
+      "tree -o/tmp/pwn",
+      'tree "-o" pwn',
+    ]);
+  });
+
+  it("V2: pipeline tree invocations all ask — the W1-BLOCKER-1 vectors", () => {
+    expectAllLineUnknown([
+      "tree -no /tmp/PWN | cat",
+      "tree -o/tmp/PWN | cat",
+      "cat f | tree -no /tmp/PWN",
+      "tree | head -5",
+    ]);
+  });
+
+  it("V3: allowlist exclusion pins — tree and sed must never be READ_ONLY_BINARIES entries", () => {
+    // tree: W1-BLOCKER-1 — its write surface is not exhaustible by the
+    // verbatim flag net (`-no FILE` / `-o<FILE>` cluster spellings).
+    // sed: legal ONLY via the 4-token pipeline subgrammar; an allowlist entry
+    // would silently legalize bare `sed -n '1p' f` and every non-subgrammar
+    // single-command form (C2 is the behavioral twin detector, proven by MV4).
+    expect(READ_ONLY_BINARIES.has("tree")).toBe(false);
+    expect(READ_ONLY_BINARIES.has("sed")).toBe(false);
+  });
+
+  it("V4: unbalanced-quote divergence is pinned narrowing-only (D-S2-4 caveat, RES-11)", () => {
+    // Base laxity, documented not endorsed: the single-command path never sees
+    // quote state, so `cat 'f` (a /bin/sh syntax error) classifies read-only
+    // there. The line classifier refuses it (splitter refusal). The divergence
+    // must only ever point in the strict direction; this pin notices a flip.
+    expect(classifyBashCommand("cat 'f")).toBe("read-only");
+    expect(classifyBashCommandLine("cat 'f").class).toBe("unknown");
+    expect(classifyBashCommandLine('cat "f').class).toBe("unknown");
+  });
+});
+
+describe("TASK.35 fix wave 2 — RES-1 witness pins (GP-series)", () => {
+  it("GP1: RES-1's former witness is refused by the `=` screen, NOT the flag net", () => {
+    // `git diff "--output=victim"` asks TODAY, but the refusal is carried by
+    // the step-1 quote-UNAWARE metacharacter screen (`=` is in
+    // SHELL_METACHARACTERS) — the git flag loop never sees the token (and
+    // could not catch it: the raw token starts with `"`). The flag-free twin
+    // proves the attribution: no write flag anywhere, same verdict. This pin
+    // exists so the `=`-form can never again be cited as evidence that the
+    // flag net catches quoted write flags — it does not (see GP2). MG2
+    // proves this pin load-bearing.
+    expect(classifyBashCommand('git diff "--output=victim"')).toBe("unknown");
+    expect(classifyBashCommand('git diff "--zzzz=victim"')).toBe("unknown");
+  });
+
+  it("GP2: RES-1's LIVE spellings — quote-hidden git write flags classify read-only TODAY (base P1, documented NOT endorsed)", () => {
+    // Divergence pin in the spirit of V4: these are FALSE ALLOWS on the
+    // frozen single-command path (base debt, RESIDUALS-S2.md RES-1 —
+    // owner-facing, NOT fixed by this track). isWriteFlag sees the raw
+    // token (`"--output"` starts with `"`; `--outp"ut"` normalization only
+    // strips a `=value` suffix), so classifyGit's flag loop passes them.
+    // Executed against real git 2.37.1 in an isolated repo (W2):
+    // diff/log/show/shortlog WROTE the named file; blame TRUNCATED an
+    // existing file to 0 bytes. The RES-1 fix flips this test red — rewrite
+    // it to expectAllUnknown as the fix's acceptance criterion. A fix that
+    // leaves it green has not closed the hole. MG1 (the fix-spec mutation)
+    // proves that mechanism today.
+    expectAllReadOnly([
+      'git diff "--output" victim',
+      'git diff --outp"ut" victim',
+      "git diff '--output' victim",
+      'git log "--output" victim',
+      'git show "--output" victim',
+      'git shortlog "--output" victim',
+      'git blame "--output" victim f',
+    ]);
   });
 });

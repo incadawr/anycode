@@ -24,6 +24,7 @@ import { ENV_CODEX_BIN } from "../shared/engines.js";
 import { CODEX_ONBOARDING_SHUTDOWN_BUDGET_MS } from "../shared/codex-timeouts.js";
 import { closeAllCodexChildren } from "./codex-children.js";
 import {
+  checkCodexBinaryPathTrust,
   discoverCodexBinary,
   resolveCodexBinary,
   type CodexBinaryFs,
@@ -44,7 +45,7 @@ import {
   type CodexProfilesSettingsSlice,
   type ResolvedCodexProfile,
 } from "./codex-profiles.js";
-import type { CodexProfileRecord } from "../shared/settings.js";
+import type { CodexProfileRecord, TrustedBinaryConsent } from "../shared/settings.js";
 
 // ── invoke/push channels (duplicated literals — see file header) ──
 
@@ -97,6 +98,8 @@ export interface CodexIpcDeps {
   bootEnv: NodeJS.ProcessEnv;
   /** Reads the currently-persisted `settings.codex.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
+  /** TASK.103: reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
+  readTrustedBinaries?: () => readonly TrustedBinaryConsent[];
   /** Reads the persisted `settings.codex` profile slice fresh every call — the registry never caches settings state. */
   readCodexSettings: () => Promise<CodexProfilesSettingsSlice | undefined>;
   /**
@@ -408,6 +411,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
+      consents: deps.readTrustedBinaries?.() ?? [],
     });
   }
 
@@ -446,8 +450,29 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     }
   }
 
-  /** Runs the doctor against ONE explicit path+source+profile, persists, notifies, and returns the fresh snapshot. */
-  async function checkPath(binaryPath: string | null, source: CodexBinarySource, profile: ResolvedCodexProfile): Promise<CodexOnboardingSnapshot> {
+  /**
+   * Runs the doctor against ONE explicit path+source+profile, persists,
+   * notifies, and returns the fresh snapshot. `discoveryTrustRefusal`
+   * (TASK.103, D-S4-6): when the caller's discovery ladder resolved NOTHING
+   * (`binaryPath === null`) because its highest-priority candidate was
+   * refused by the trust gate — not because nothing was found — this
+   * synthesizes an honest `{status:"error", trustRefusal}` instead of the
+   * default `{status:"not_installed"}` lie ("No Codex CLI was found" for a
+   * binary that exists but is refused).
+   */
+  async function checkPath(
+    binaryPath: string | null,
+    source: CodexBinarySource,
+    profile: ResolvedCodexProfile,
+    /**
+     * D-S4-22: present whenever discovery stopped the ladder on an explicit-
+     * rung (env/settings) trust refusal — consentable (`binaryPath`/
+     * `staleConsent` present, read only when `offerTrust` is true) or not
+     * (both absent; `offerTrust` is always false in that case, so the
+     * `trustRefusal` payload below is never synthesized for it).
+     */
+    discoveryTrustRefusal?: { binaryPath?: string; reason: string; staleConsent?: boolean; offerTrust: boolean },
+  ): Promise<CodexOnboardingSnapshot> {
     // The choke point every doctor spawn in this module funnels through, and
     // therefore where the shutdown gate has to be re-read — an entrance check is
     // worth nothing across an `await`. `shutdown()` snapshots `activeRuns` and
@@ -457,15 +482,33 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     if (shuttingDown) {
       return shutdownSnapshot();
     }
+    const consents = deps.readTrustedBinaries?.() ?? [];
     const report: CodexDoctorReport =
       binaryPath === null
-        ? { status: "not_installed" }
+        ? discoveryTrustRefusal !== undefined
+          ? {
+              status: "error",
+              error: discoveryTrustRefusal.reason,
+              ...(discoveryTrustRefusal.offerTrust &&
+              discoveryTrustRefusal.binaryPath !== undefined &&
+              discoveryTrustRefusal.staleConsent !== undefined
+                ? {
+                    trustRefusal: {
+                      binaryPath: discoveryTrustRefusal.binaryPath,
+                      reason: discoveryTrustRefusal.reason,
+                      staleConsent: discoveryTrustRefusal.staleConsent,
+                    },
+                  }
+                : {}),
+            }
+          : { status: "not_installed" }
         : await runDoctor(binaryPath, {
             env: deps.bootEnv,
             // Quit aborts the doctor and awaits its bounded teardown; without
             // this signal the child outlives the app (W2-review Critical).
             signal: lifetime.signal,
             profile,
+            consents,
             ...(profileGuard !== undefined ? { profileGuard } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
@@ -504,8 +547,24 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
+      consents: deps.readTrustedBinaries?.() ?? [],
     });
-    return checkPath(discovery.path, discovery.source, resolution.profile);
+    return checkPath(
+      discovery.path,
+      discovery.source,
+      resolution.profile,
+      discovery.trustRefusal !== undefined
+        ? {
+            ...discovery.trustRefusal,
+            offerTrust: discovery.trustRefusalSource === "env" || discovery.trustRefusalSource === "settings",
+          }
+        : // D-S4-22: the ladder hard-stopped on an explicit-rung refusal that
+          // is NOT consentable (D-S4-13) — an honest error, never the
+          // `not_installed` lie for a binary that exists and was refused.
+          discovery.trustRefused === true && discovery.reason !== undefined
+          ? { reason: discovery.reason, offerTrust: false }
+          : undefined,
+    );
   }
 
   /**
@@ -570,11 +629,13 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       if (picked.canceled || filePath === undefined) {
         return { ok: false, reason: "cancelled" };
       }
+      // consents deliberately NOT passed here — the doctor's gate is the
+      // consent-honoring authority on this route (D-S4-21).
       const resolved = resolveCodexBinary(filePath, deps.fs, deps.platform ?? process.platform, deps.identity);
-      if (resolved.path === null) {
+      if (resolved.path === null && resolved.trustRefused !== true) {
         return { ok: false, reason: "invalid" };
       }
-      const confirmedPath = resolved.path;
+      const confirmedPath = resolved.path ?? filePath.trim();
       // A picked binary is diagnosed against the ACTIVE profile; a broken
       // active-profile record must not block validating the binary itself,
       // so resolution failure falls back to the system pseudo-profile here
@@ -630,6 +691,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         if (shuttingDown) {
           return { ok: false, reason: "busy" };
         }
+        const consents = deps.readTrustedBinaries?.() ?? [];
         const discovery = discoverCodexBinary({
           envOverride: deps.bootEnv[ENV_CODEX_BIN],
           ...(settingsPath !== undefined ? { settingsPath } : {}),
@@ -637,6 +699,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
           ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
+          consents,
         });
         if (discovery.path === null) {
           return { ok: false, reason: "unsupported" };
@@ -654,6 +717,13 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             // runner overwrites any ambient CODEX_HOME with it, so codex
             // writes the credential into the profile tree, never ~/.codex.
             profile,
+            // TASK.103: codex-login.ts itself is untouched (D-S4-9's naming
+            // convention doesn't apply here, but the file-list's "no file
+            // edits" discipline does) — its OWN default trust closure
+            // carries no consents, so a consent-aware closure is passed
+            // explicitly through its existing `trust` seam instead.
+            trust: (path: string) =>
+              checkCodexBinaryPathTrust(path, deps.fs, deps.platform ?? process.platform, deps.identity, consents),
             ...(profileGuard !== undefined ? { profileGuard } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           }),

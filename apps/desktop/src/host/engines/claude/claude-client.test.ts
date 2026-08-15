@@ -1,17 +1,25 @@
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+import { makeTrustedScratchDir } from "../../../shared/test-scratch.js";
+import type { BinaryTrustConsent } from "../../../shared/codex-binary-trust.js";
 import {
   CLAUDE_GUI_SURFACE_PROMPT,
   ClaudeClient,
   ClaudeClientError,
   buildClaudeChildEnv,
   buildClaudeSpawnArgs,
+  checkClaudeBinaryTrustOnDisk,
   redactHomePaths,
 } from "./claude-client.js";
 import { EngineVersionError } from "./protocol.js";
+
+// Executables the real trust gate DOES stat — see test-scratch.ts's module doc
+// on why os.tmpdir() cannot serve this (its ancestor chain is world-writable
+// on Linux, so a naive tmpdir fixture would be refused for the wrong reason).
+const scratchDir = makeTrustedScratchDir("claude-client");
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
 const fixturesDir = fileURLToPath(new URL("../../../../../../references/claude-code-2.1.212/fixtures/", import.meta.url));
@@ -37,6 +45,7 @@ afterAll(() => {
       // best-effort cleanup only
     }
   }
+  rmSync(scratchDir, { recursive: true, force: true });
 });
 
 function alive(pid: number): boolean {
@@ -469,4 +478,38 @@ describe("redactHomePaths (custody C2)", () => {
       await client.close();
     }
   });
+});
+
+describe("checkClaudeBinaryTrustOnDisk — consent threading (TASK.103) — BH2", () => {
+  // POSIX-only mirror of app-server-client.test.ts's BH1 — no mode bits to
+  // stage on win32 (the gate returns null there unconditionally).
+  it.skipIf(process.platform === "win32")(
+    "refused bare; a matching consent built from the REAL stat lifts it; touch drifts mtimeMs and it refuses again",
+    () => {
+      const binary = join(scratchDir, "bh2-consent-binary");
+      writeFileSync(binary, "#!/bin/sh\nexit 0\n");
+      chmodSync(binary, 0o777);
+
+      const bare = checkClaudeBinaryTrustOnDisk(binary);
+      expect(bare).toMatch(/world-writable/);
+
+      const resolved = realpathSync(binary);
+      const stat = statSync(resolved);
+      const consent: BinaryTrustConsent = {
+        path: resolved,
+        fingerprint: { mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs },
+        grantedAt: "2026-08-15T00:00:00.000Z",
+      };
+      const withConsent = checkClaudeBinaryTrustOnDisk(binary, process.platform, [consent]);
+      expect(withConsent).toBeNull();
+
+      // Explicit far-future mtime — same fixture-arming rationale as BH1:
+      // an unmistakably different timestamp, not a same-tick `touch` that
+      // could tie on a coarse-granularity filesystem.
+      const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
+      utimesSync(resolved, future, future);
+      const afterTouch = checkClaudeBinaryTrustOnDisk(binary, process.platform, [consent]);
+      expect(afterTouch).toMatch(/world-writable/);
+    },
+  );
 });
