@@ -15,7 +15,7 @@ type JanitorGitPort = Pick<
 >;
 
 export interface WorktreeJanitorOptions {
-  persistence: Pick<PersistencePort, "listSessions" | "touchSession">;
+  persistence: Pick<PersistencePort, "listSessionsForMaintenance" | "touchSession">;
   gitForWorkspace(workspace: string): JanitorGitPort;
   exists(target: string): Promise<boolean>;
   log?: (message: string) => void;
@@ -32,7 +32,10 @@ export interface WorktreeJanitorResult {
  * namespace/prefix discovery is never authority to remove a user resource.
  */
 export async function runWorktreeJanitor(options: WorktreeJanitorOptions): Promise<WorktreeJanitorResult> {
-  const sessions = await options.persistence.listSessions();
+  // Maintenance selection (TASK.102 S2a §2.4): MUST see child sessions too —
+  // a live child's worktree claim is a real claim, and omitting it here would
+  // let the janitor reap a resource still owned by a running child.
+  const sessions = await options.persistence.listSessionsForMaintenance();
   const claimedPaths = buildClaims(sessions);
   const result: WorktreeJanitorResult = { examined: 0, cleaned: 0, retained: 0 };
 

@@ -36,6 +36,7 @@ import type {
 } from "../types/tools.js";
 import type { CorePorts } from "../ports/index.js";
 import type { SubagentPort } from "../ports/subagent.js";
+import type { SessionSubagentPort } from "../ports/session-subagent.js";
 import type { SkillPort } from "../ports/skills.js";
 import type { WorkflowPort } from "../ports/workflow.js";
 import type { BackgroundTaskPort } from "../ports/tasks.js";
@@ -73,6 +74,14 @@ export interface DispatchContext {
    * the second non-recursion lock).
    */
   subagents?: SubagentPort;
+  /**
+   * Session-tier subagent entry (TASK.102 CUT-S2 §2.2/§0.2), threaded into
+   * every ToolContext right alongside `subagents` above. Optional: absent =>
+   * the Agent tool's `tier:"session"` branch fails closed as "unavailable"
+   * (a child loop's DispatchContext leaves it unset, the second of three
+   * non-recursion locks — CUT-S2 §0.2).
+   */
+  sessionSubagents?: SessionSubagentPort;
   /**
    * Discovered-skills entry (design §2.2), threaded into every ToolContext.
    * Optional: absent => the Skill tool fails closed as "unavailable" (a child
@@ -320,6 +329,7 @@ export async function executeToolCall(
         cwd: ctx.cwd,
         ports: ctx.ports,
         subagents: ctx.subagents,
+        sessionSubagents: ctx.sessionSubagents,
         skills: ctx.skills,
         workflows: ctx.workflows,
         tasks: ctx.tasks,

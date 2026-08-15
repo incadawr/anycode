@@ -57,6 +57,7 @@ import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
 import type { GitDestructiveIntent, RetryOffer } from "./store.js";
 import { createTabRegistry, type TabRegistry } from "./tab-registry.js";
 import { createTabsStore, type TabsStoreApi } from "./tabs-store.js";
+import { childLayoutStore } from "./child-layout.js";
 import { createSettingsStore, type SettingsStoreApi } from "./settings-store.js";
 import type { GitCommand, HostToUiMessage, WireCheckpointMeta, WireEnvStatus, WireGitStatus } from "../../shared/protocol.js";
 import { uiToHostMessageSchema } from "../../shared/protocol.js";
@@ -511,6 +512,48 @@ describe("automation facade — stop / selectTab", () => {
 
     expect(result).toEqual({ ok: false, reason: "unknown_tab" });
     expect(tabsStore.getState().activeTabId).toBe("tab-a");
+  });
+});
+
+describe("automation facade — childOpen (TASK.102 S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
+  it("switches the root tab's pane onto the given child — the SAME call ToolCallCard.tsx's Open button makes", () => {
+    childLayoutStore.getState().reset();
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    registry.registerPort("tab-a", "/ws/a", asPort(new FakeMessagePort()));
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    expect(childLayoutStore.getState().view("tab-a")).toEqual({ kind: "master" });
+    const result = facade.childOpen("tab-a", "call-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(childLayoutStore.getState().view("tab-a")).toEqual({ kind: "child", spawnToolCallId: "call-1" });
+  });
+
+  it("retargets to a DIFFERENT child on a second call (child-layout.ts's own 'unconditional retarget' contract)", () => {
+    childLayoutStore.getState().reset();
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    registry.registerPort("tab-a", "/ws/a", asPort(new FakeMessagePort()));
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    facade.childOpen("tab-a", "call-1");
+    const result = facade.childOpen("tab-a", "call-2");
+
+    expect(result).toEqual({ ok: true });
+    expect(childLayoutStore.getState().view("tab-a")).toEqual({ kind: "child", spawnToolCallId: "call-2" });
+  });
+
+  it("childOpen on an unknown root tab -> {ok:false}, view unchanged (a child tabId is never in tabsStore either)", () => {
+    childLayoutStore.getState().reset();
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.childOpen("ghost", "call-1");
+
+    expect(result).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(childLayoutStore.getState().view("ghost")).toEqual({ kind: "master" });
   });
 });
 

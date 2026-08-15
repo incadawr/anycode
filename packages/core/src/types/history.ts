@@ -7,6 +7,7 @@
 
 import type { ToolCallStatus } from "./tools.js";
 import type { ImageAttachment } from "./images.js";
+import type { ToolResultPresentation } from "./subagent-card.js";
 
 export interface AssistantTextPart {
   type: "text";
@@ -33,6 +34,13 @@ export interface ToolResultPart {
   images?: ImageAttachment[];
   /** Kept for persistence/analytics; only `text` reaches the model. */
   status: ToolCallStatus;
+  /**
+   * Persistence/hydration only (TASK.102 slice S1, CUT-S1 §2.3): NOT part of
+   * messageTokenText (context/history.ts) and never mapped onto an SDK
+   * message (provider/sdk-mapping.ts) — the model never sees this field on
+   * any transport.
+   */
+  presentation?: ToolResultPresentation;
 }
 
 export type ChatMessage =

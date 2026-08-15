@@ -7,6 +7,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -974,7 +975,7 @@ async function readSessionTitle(
 ): Promise<{ id: string; title: string | undefined }> {
   const persistence = new SqlitePersistenceAdapter(dbPath);
   try {
-    const sessions = await persistence.listSessions({ workspace });
+    const sessions = await persistence.listRootSessions({ workspace });
     expect(sessions.length).toBeGreaterThan(0);
     const session = sessions[0]!;
     return { id: session.id, title: session.title };
@@ -1142,7 +1143,7 @@ describe("CLI session titling (design feature-session-titles.md §3, slice-4.4-T
 async function listWorkspaceSessions(dbPath: string, workspace: string) {
   const persistence = new SqlitePersistenceAdapter(dbPath);
   try {
-    return await persistence.listSessions({ workspace });
+    return await persistence.listRootSessions({ workspace });
   } finally {
     await persistence.close();
   }
@@ -1191,6 +1192,59 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const sessions = await listWorkspaceSessions(dbPath, workspace);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.id).toBe(firstId);
+  });
+
+  it("a fresher CHILD session row never hijacks --continue — workspace resume is wired root-only (TASK.102 S2a A2)", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    await seedSession(dbPath, workspace, "Fix the flaky test");
+    const { id: rootId } = await readSessionTitle(dbPath, workspace);
+
+    // A child of that root, stamped strictly fresher than the root row: with
+    // the wiring on a generic (non-root) list, --continue would resume the
+    // child; with a post-LIMIT root filter, the limit:1 page would hold only
+    // the child and --continue would warn "no prior session" and fork a
+    // fresh row. Either failure mode breaks the asserts below.
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    try {
+      await persistence.createSession({
+        id: "child-hijack",
+        workspace,
+        model: "m",
+        mode: "build",
+        parentSessionId: rootId,
+        spawnToolCallId: "call-1",
+      });
+    } finally {
+      await persistence.close();
+    }
+    const db = new DatabaseSync(dbPath);
+    db.prepare("UPDATE sessions SET updated_at = (SELECT MAX(updated_at) + 60000 FROM sessions) WHERE id = ?").run(
+      "child-hijack",
+    );
+    db.close();
+
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+    const runPromise = runCli({
+      argv: ["--continue"],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort: new CountingModelPort(),
+      cwd: workspace,
+    });
+    input.write("keep going\n");
+    input.end();
+
+    expect(await runPromise).toBe(0);
+    expect(getText()).toContain(`Continuing ${rootId.slice(0, 8)}`);
+
+    // Root-only continuity: the ROOT was resumed (no forked third row), and
+    // the child never surfaced in the workspace listing.
+    const sessions = await listWorkspaceSessions(dbPath, workspace);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.id).toBe(rootId);
   });
 
   it("scenario 2: --continue with no prior session for this workspace warns and starts fresh (exit 0)", async () => {
@@ -1572,7 +1626,7 @@ class TextModelPort implements ModelPort {
 async function readSessionModel(dbPath: string, workspace: string): Promise<string> {
   const persistence = new SqlitePersistenceAdapter(dbPath);
   try {
-    const sessions = await persistence.listSessions({ workspace });
+    const sessions = await persistence.listRootSessions({ workspace });
     expect(sessions.length).toBeGreaterThan(0);
     return sessions[0]!.model;
   } finally {

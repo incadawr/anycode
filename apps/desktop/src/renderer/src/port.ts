@@ -25,7 +25,7 @@
  * it, so a single teardown call stops both.
  */
 import type { HostToUiMessage, UiToHostMessage } from "../../shared/protocol.js";
-import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../../shared/envelopes.js";
+import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../../shared/envelopes.js";
 import type { TermToHostMessage, TermToUiMessage } from "../../shared/terminal.js";
 import { TERMINAL_PORT_ENVELOPE_TYPE } from "../../shared/terminal.js";
 
@@ -100,6 +100,52 @@ export interface HostPortMeta {
    * the active connection's catalog + write-target.
    */
   pinnedConnection?: { connectionId: string; providerId: string };
+  /**
+   * TASK.102 CUT-S2 §2.5: present only for a child-session tab's port
+   * delivery — carried straight through from the envelope's own `child`
+   * field (`shared/envelopes.ts`'s `PortEnvelope`, frozen by S2a/S2b's
+   * `deliverTabPort`) to the classification point, `tab-registry.ts`'s
+   * `registerPort` (`classifyPortEnvelope`, slice S2c C1). This module
+   * only validates the field's shape (`parseChildEnvelopeField` below) and
+   * forwards it untouched — it does not itself decide root vs. child.
+   * Absent for every ordinary root-tab envelope, unchanged from today.
+   */
+  child?: PortEnvelope["child"];
+}
+
+/**
+ * Validates the raw `child` field lifted off an incoming port envelope
+ * (TASK.102 CUT-S2 §2.5) before it is trusted: every sub-field must be a
+ * string, or the whole thing is dropped rather than forwarded partially
+ * typed (the envelope crosses `window.postMessage`, so its shape is
+ * `unknown` at this boundary, same discipline as `tabId`/`workspace`
+ * below). Exported and pure — no `window` — so it is unit-testable without
+ * the DOM that `onHostPort` itself requires.
+ */
+export function parseChildEnvelopeField(value: unknown): PortEnvelope["child"] | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const candidate = value as {
+    parentTabId?: unknown;
+    parentSessionId?: unknown;
+    spawnToolCallId?: unknown;
+    childSessionId?: unknown;
+  };
+  if (
+    typeof candidate.parentTabId === "string" &&
+    typeof candidate.parentSessionId === "string" &&
+    typeof candidate.spawnToolCallId === "string" &&
+    typeof candidate.childSessionId === "string"
+  ) {
+    return {
+      parentTabId: candidate.parentTabId,
+      parentSessionId: candidate.parentSessionId,
+      spawnToolCallId: candidate.spawnToolCallId,
+      childSessionId: candidate.childSessionId,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -121,7 +167,13 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
     }
     const port = event.ports[0];
     if (port) {
-      const envelope = data as { tabId?: unknown; workspace?: unknown; connectionId?: unknown; providerId?: unknown };
+      const envelope = data as {
+        tabId?: unknown;
+        workspace?: unknown;
+        connectionId?: unknown;
+        providerId?: unknown;
+        child?: unknown;
+      };
       const tabId = typeof envelope.tabId === "string" ? envelope.tabId : "";
       const wsFromEnvelope = typeof envelope.workspace === "string" ? envelope.workspace : "";
       // TASK.45 W10-FIX F2: both pin fields present -> the tab is pinned; either
@@ -130,10 +182,15 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         typeof envelope.connectionId === "string" && typeof envelope.providerId === "string"
           ? { connectionId: envelope.connectionId, providerId: envelope.providerId }
           : undefined;
+      // TASK.102 CUT-S2 §2.5: forwarded through to the classification point
+      // untouched — this module does not decide root vs. child, it only
+      // validates shape (see `parseChildEnvelopeField`).
+      const child = parseChildEnvelopeField(envelope.child);
       cb(port, {
         tabId,
         workspace: wsFromEnvelope,
         ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
+        ...(child !== undefined ? { child } : {}),
       });
     }
   }
@@ -205,12 +262,17 @@ export interface ConnectionRegistry {
    *
    * TASK.45 W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
    * provider connection on its per-tab store so the ModelPill targets it.
+   *
+   * TASK.102 CUT-S2 §2.5: `child` (additive) is the envelope's own `child`
+   * field, forwarded untouched — the registry (not this module) decides
+   * what it means (`classifyPortEnvelope`, skip-hide contract).
    */
   registerPort(
     tabId: string,
     workspace: string,
     port: MessagePort,
     pinnedConnection?: { connectionId: string; providerId: string },
+    child?: PortEnvelope["child"],
   ): boolean;
   /** Flips the given tab's connection/banner state to host-exited; a no-op for a tab that isn't registered. */
   markHostExited(tabId: string): void;
@@ -242,7 +304,7 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
       console.warn("[port] dropping port envelope with no tabId", meta);
       return;
     }
-    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection);
+    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child);
     if (!attached) {
       console.warn("[port] dropping port for a closed/unknown tab", meta.tabId);
     }

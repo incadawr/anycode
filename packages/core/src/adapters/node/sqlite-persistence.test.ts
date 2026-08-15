@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { SqlitePersistenceAdapter, WriteBehindHistorySink, type HistorySinkLogger } from "./sqlite-persistence.js";
 import type { CheckpointRecord } from "../../ports/checkpoints.js";
 import type { PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
@@ -65,13 +66,13 @@ describe("SqlitePersistenceAdapter", () => {
         updatedAt: 1_000,
       });
 
-      const fetched = await adapter.getSession("s1");
+      const fetched = await adapter.getRootSession("s1");
       expect(fetched).toEqual(created);
     });
 
     it("getSession returns null for an unknown id", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
-      expect(await adapter.getSession("missing")).toBeNull();
+      expect(await adapter.getRootSession("missing")).toBeNull();
     });
 
     it("listSessions filters by workspace, respects limit, and orders by updatedAt desc", async () => {
@@ -82,10 +83,10 @@ describe("SqlitePersistenceAdapter", () => {
       vi.setSystemTime(3_000);
       await adapter.createSession({ id: "c", workspace: "/w2", model: "m", mode: "build" });
 
-      const w1Sessions = await adapter.listSessions({ workspace: "/w1" });
+      const w1Sessions = await adapter.listRootSessions({ workspace: "/w1" });
       expect(w1Sessions.map((s) => s.id)).toEqual(["b", "a"]);
 
-      const limited = await adapter.listSessions({ limit: 1 });
+      const limited = await adapter.listRootSessions({ limit: 1 });
       expect(limited.map((s) => s.id)).toEqual(["c"]);
     });
 
@@ -96,7 +97,7 @@ describe("SqlitePersistenceAdapter", () => {
       vi.setSystemTime(5_000);
       await adapter.touchSession("s1", { title: "My session", mode: "plan", model: "m2" });
 
-      const updated = await adapter.getSession("s1");
+      const updated = await adapter.getRootSession("s1");
       expect(updated).toEqual({
         id: "s1",
         workspace: "/w",
@@ -113,7 +114,7 @@ describe("SqlitePersistenceAdapter", () => {
       await adapter.createSession({ id: "s1", workspace: "/w", model: "m1", mode: "build" });
       vi.setSystemTime(9_000);
       await adapter.touchSession("s1");
-      expect((await adapter.getSession("s1"))?.updatedAt).toBe(9_000);
+      expect((await adapter.getRootSession("s1"))?.updatedAt).toBe(9_000);
     });
 
     it("persists generic external-engine metadata without interpreting it", async () => {
@@ -130,7 +131,7 @@ describe("SqlitePersistenceAdapter", () => {
       vi.setSystemTime(5_000);
       await adapter.touchSession("s1", { externalSessionRef: "native-thread-resumed" });
 
-      expect(await adapter.getSession("s1")).toMatchObject({
+      expect(await adapter.getRootSession("s1")).toMatchObject({
         engineId: "codex",
         externalSessionRef: "native-thread-resumed",
         updatedAt: 5_000,
@@ -173,11 +174,11 @@ describe("SqlitePersistenceAdapter", () => {
 
       const created = await adapter.createSession(input);
       expect(created).toEqual({ ...input, createdAt: 1_000, updatedAt: 1_000 });
-      expect(await adapter.getSession("s-wt")).toEqual(created);
-      expect(await adapter.listSessions({ workspace: input.workspace })).toEqual([created]);
+      expect(await adapter.getRootSession("s-wt")).toEqual(created);
+      expect(await adapter.listRootSessions({ workspace: input.workspace })).toEqual([created]);
 
       await adapter.touchSession("s-wt", { worktreeExitNoticePending: false });
-      expect((await adapter.getSession("s-wt"))?.worktreeExitNoticePending).toBeUndefined();
+      expect((await adapter.getRootSession("s-wt"))?.worktreeExitNoticePending).toBeUndefined();
     });
 
     it("round-trips the exact cleanup branch through create/get/list", async () => {
@@ -200,8 +201,8 @@ describe("SqlitePersistenceAdapter", () => {
       const created = await adapter.createSession(input);
 
       expect(created).toEqual({ ...input, createdAt: 1_000, updatedAt: 1_000 });
-      expect(await adapter.getSession(input.id)).toEqual(created);
-      expect(await adapter.listSessions({ workspace: input.workspace })).toEqual([created]);
+      expect(await adapter.getRootSession(input.id)).toEqual(created);
+      expect(await adapter.listRootSessions({ workspace: input.workspace })).toEqual([created]);
 
       vi.setSystemTime(2_000);
       await adapter.touchSession(input.id, {
@@ -211,7 +212,7 @@ describe("SqlitePersistenceAdapter", () => {
           ownedByAnyCode: input.worktreeCleanup.ownedByAnyCode,
         },
       });
-      expect((await adapter.getSession(input.id))?.worktreeCleanup).toEqual({
+      expect((await adapter.getRootSession(input.id))?.worktreeCleanup).toEqual({
         path: input.worktreeCleanup.path,
         mode: input.worktreeCleanup.mode,
         ownedByAnyCode: input.worktreeCleanup.ownedByAnyCode,
@@ -228,22 +229,22 @@ describe("SqlitePersistenceAdapter", () => {
         connectionId: "conn-abc",
       });
       expect(created.connectionId).toBe("conn-abc");
-      expect((await adapter.getSession("s-conn"))?.connectionId).toBe("conn-abc");
-      expect((await adapter.listSessions({ workspace: "/repo" }))[0]?.connectionId).toBe("conn-abc");
+      expect((await adapter.getRootSession("s-conn"))?.connectionId).toBe("conn-abc");
+      expect((await adapter.listRootSessions({ workspace: "/repo" }))[0]?.connectionId).toBe("conn-abc");
     });
 
     it("omits connectionId entirely for a session created without one (legacy metadata)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       const created = await adapter.createSession({ id: "s-legacy", workspace: "/repo", model: "m", mode: "build" });
       expect("connectionId" in created).toBe(false);
-      expect("connectionId" in ((await adapter.getSession("s-legacy")) ?? {})).toBe(false);
+      expect("connectionId" in ((await adapter.getRootSession("s-legacy")) ?? {})).toBe(false);
     });
 
     it("patches connectionId through touchSession", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "s-touch", workspace: "/repo", model: "m", mode: "build" });
       await adapter.touchSession("s-touch", { connectionId: "conn-xyz" });
-      expect((await adapter.getSession("s-touch"))?.connectionId).toBe("conn-xyz");
+      expect((await adapter.getRootSession("s-touch"))?.connectionId).toBe("conn-xyz");
     });
 
     it("round-trips a codexProfileId through create/get/list (codex-profiles W3-F)", async () => {
@@ -256,22 +257,144 @@ describe("SqlitePersistenceAdapter", () => {
         codexProfileId: "work",
       });
       expect(created.codexProfileId).toBe("work");
-      expect((await adapter.getSession("s-profile"))?.codexProfileId).toBe("work");
-      expect((await adapter.listSessions({ workspace: "/repo" }))[0]?.codexProfileId).toBe("work");
+      expect((await adapter.getRootSession("s-profile"))?.codexProfileId).toBe("work");
+      expect((await adapter.listRootSessions({ workspace: "/repo" }))[0]?.codexProfileId).toBe("work");
     });
 
     it("omits codexProfileId entirely for a session created without one (legacy/system metadata)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       const created = await adapter.createSession({ id: "s-legacy-profile", workspace: "/repo", model: "m", mode: "build" });
       expect("codexProfileId" in created).toBe(false);
-      expect("codexProfileId" in ((await adapter.getSession("s-legacy-profile")) ?? {})).toBe(false);
+      expect("codexProfileId" in ((await adapter.getRootSession("s-legacy-profile")) ?? {})).toBe(false);
     });
 
     it("patches codexProfileId through touchSession", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "s-touch-profile", workspace: "/repo", model: "m", mode: "build" });
       await adapter.touchSession("s-touch-profile", { codexProfileId: "personal" });
-      expect((await adapter.getSession("s-touch-profile"))?.codexProfileId).toBe("personal");
+      expect((await adapter.getRootSession("s-touch-profile"))?.codexProfileId).toBe("personal");
+    });
+
+    it("round-trips parentSessionId/spawnToolCallId through create/get (TASK.102 S2a A1)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "parent-1", workspace: "/repo", model: "m", mode: "build" });
+      const created = await adapter.createSession({
+        id: "child-1",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        parentSessionId: "parent-1",
+        spawnToolCallId: "call-1",
+      });
+      expect(created.parentSessionId).toBe("parent-1");
+      expect(created.spawnToolCallId).toBe("call-1");
+      // getRootSession must NOT see a child (that is A2's contract, pinned
+      // here too since the row already carries a parent at this point).
+      expect(await adapter.getRootSession("child-1")).toBeNull();
+      const fetched = await adapter.getSessionById("child-1");
+      expect(fetched?.parentSessionId).toBe("parent-1");
+      expect(fetched?.spawnToolCallId).toBe("call-1");
+    });
+
+    it("omits parentSessionId/spawnToolCallId entirely for a root session (legacy-equivalent shape)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const created = await adapter.createSession({ id: "root-1", workspace: "/repo", model: "m", mode: "build" });
+      expect("parentSessionId" in created).toBe(false);
+      expect("spawnToolCallId" in created).toBe(false);
+      const fetched = await adapter.getRootSession("root-1");
+      expect(fetched !== null && "parentSessionId" in fetched).toBe(false);
+      expect(fetched !== null && "spawnToolCallId" in fetched).toBe(false);
+    });
+
+    it("rejects a second child session with the same (parentSessionId, spawnToolCallId) — unique index (migration v13)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "parent-1", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "child-1",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        parentSessionId: "parent-1",
+        spawnToolCallId: "call-1",
+      });
+
+      await expect(
+        adapter.createSession({
+          id: "child-2",
+          workspace: "/repo",
+          model: "m",
+          mode: "build",
+          parentSessionId: "parent-1",
+          spawnToolCallId: "call-1",
+        }),
+      ).rejects.toThrow();
+
+      // A DIFFERENT parent may reuse the same spawnToolCallId — the unique
+      // index is on the (parent, spawn) PAIR, not spawnToolCallId alone.
+      await adapter.createSession({ id: "parent-2", workspace: "/repo", model: "m", mode: "build" });
+      await expect(
+        adapter.createSession({
+          id: "child-3",
+          workspace: "/repo",
+          model: "m",
+          mode: "build",
+          parentSessionId: "parent-2",
+          spawnToolCallId: "call-1",
+        }),
+      ).resolves.toBeTruthy();
+
+      // Any number of root sessions (parentSessionId absent -> NULL) stay
+      // unaffected: the unique index is scoped to `WHERE parent_session_id
+      // IS NOT NULL`, and SQLite excludes NULL from a UNIQUE constraint.
+      await expect(
+        adapter.createSession({ id: "root-x", workspace: "/repo", model: "m", mode: "build" }),
+      ).resolves.toBeTruthy();
+      await expect(
+        adapter.createSession({ id: "root-y", workspace: "/repo", model: "m", mode: "build" }),
+      ).resolves.toBeTruthy();
+    });
+
+    it("rejects a one-sided (parentSessionId, spawnToolCallId) pair in EITHER direction — CHECK constraint (TASK.102 S2 review MAJOR, opus+Luna)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "parent-1", workspace: "/repo", model: "m", mode: "build" });
+
+      // parentSessionId without spawnToolCallId is legal TypeScript
+      // (spawnToolCallId is optional on SessionMeta) but structurally
+      // meaningless: the row would be invisible to listRootSessions/
+      // getRootSession AND unreachable via getChildSession (which requires an
+      // exact spawnToolCallId match), while the partial unique index never
+      // catches it (a NULL spawnToolCallId never collides with another NULL).
+      await expect(
+        adapter.createSession({
+          id: "half-child-1", workspace: "/repo", model: "m", mode: "build",
+          parentSessionId: "parent-1",
+        }),
+      ).rejects.toThrow(/CHECK constraint failed/);
+
+      // Mirror direction: spawnToolCallId without parentSessionId would leak
+      // the row into listRootSessions/getRootSession as an ordinary root.
+      await expect(
+        adapter.createSession({
+          id: "half-child-2", workspace: "/repo", model: "m", mode: "build",
+          spawnToolCallId: "call-orphan",
+        }),
+      ).rejects.toThrow(/CHECK constraint failed/);
+    });
+
+    it("normalizes an empty-string parentSessionId/spawnToolCallId to the same NULL pair an absent one gets — an empty string is NOT NULL in SQL (excluded from listRootSessions) but read back as root by rowToSessionMeta's length>0 guard; createSession must not let that pair ever reach the row", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const created = await adapter.createSession({
+        id: "empty-strings", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "", spawnToolCallId: "",
+      });
+      expect("parentSessionId" in created).toBe(false);
+      expect("spawnToolCallId" in created).toBe(false);
+
+      // SQL and the projection must agree: an empty-string pair is a root
+      // everywhere, never a child hidden from listRootSessions/getRootSession
+      // by the WHERE clause while still looking rootlike in the projection.
+      expect((await adapter.listRootSessions()).map((s) => s.id)).toContain("empty-strings");
+      expect(await adapter.getRootSession("empty-strings")).not.toBeNull();
     });
 
     it("atomically enters and exits a worktree, clearing false/default metadata on exit", async () => {
@@ -291,7 +414,7 @@ describe("SqlitePersistenceAdapter", () => {
         },
         continuationPending: true,
       });
-      expect(await adapter.getSession("s1")).toEqual({
+      expect(await adapter.getRootSession("s1")).toEqual({
         id: "s1",
         workspace: "/repo/.anycode/worktrees/task-5",
         projectRoot: "/repo",
@@ -322,7 +445,7 @@ describe("SqlitePersistenceAdapter", () => {
           branch: "anycode-wt/task-5",
         },
       });
-      expect(await adapter.getSession("s1")).toEqual({
+      expect(await adapter.getRootSession("s1")).toEqual({
         id: "s1",
         workspace: "/repo",
         continuationPending: true,
@@ -340,7 +463,7 @@ describe("SqlitePersistenceAdapter", () => {
 
       vi.setSystemTime(4_000);
       await adapter.touchSession("s1", { continuationPending: false, worktreeCleanup: null });
-      expect(await adapter.getSession("s1")).toEqual({
+      expect(await adapter.getRootSession("s1")).toEqual({
         id: "s1",
         workspace: "/repo",
         model: "m",
@@ -371,7 +494,7 @@ describe("SqlitePersistenceAdapter", () => {
       const outcomes = await Promise.all([claim("claim-a"), claim("claim-b")]);
 
       expect(outcomes.filter(Boolean)).toHaveLength(1);
-      const sessions = await adapter.listSessions();
+      const sessions = await adapter.listRootSessions();
       expect(sessions.filter((meta) => meta.worktree?.path === target)).toHaveLength(1);
 
       const reserved = "/repo/.anycode/worktrees/reserved";
@@ -388,7 +511,7 @@ describe("SqlitePersistenceAdapter", () => {
       });
       const reservations = await Promise.all([reserve("claim-a"), reserve("claim-b")]);
       expect(reservations.filter(Boolean)).toHaveLength(1);
-      expect((await adapter.listSessions()).filter((meta) => meta.worktreeCleanup?.path === reserved)).toEqual([
+      expect((await adapter.listRootSessions()).filter((meta) => meta.worktreeCleanup?.path === reserved)).toEqual([
         expect.objectContaining({
           worktreeCleanup: {
             path: reserved,
@@ -419,7 +542,7 @@ describe("SqlitePersistenceAdapter", () => {
 
       await expect(reserve(first)).resolves.toBe(true);
       await expect(reserve(second)).resolves.toBe(false);
-      expect((await adapter.getSession("self"))?.worktreeCleanup).toEqual({
+      expect((await adapter.getRootSession("self"))?.worktreeCleanup).toEqual({
         path: first,
         mode: "auto",
         ownedByAnyCode: true,
@@ -441,8 +564,8 @@ describe("SqlitePersistenceAdapter", () => {
         continuationPending: true,
         worktreeCleanup: null,
       })).resolves.toBe(true);
-      expect((await adapter.getSession("self"))?.worktree).toMatchObject({ path: first, branch: "anycode-wt/first" });
-      expect((await adapter.getSession("self"))?.worktreeCleanup).toBeUndefined();
+      expect((await adapter.getRootSession("self"))?.worktree).toMatchObject({ path: first, branch: "anycode-wt/first" });
+      expect((await adapter.getRootSession("self"))?.worktreeCleanup).toBeUndefined();
     });
 
     it("treats an unconfirmed exit transition as an atomic path claim", async () => {
@@ -481,7 +604,7 @@ describe("SqlitePersistenceAdapter", () => {
         worktree,
         continuationPending: true,
       })).resolves.toBe(false);
-      expect((await adapter.getSession("contender"))?.worktree).toBeUndefined();
+      expect((await adapter.getRootSession("contender"))?.worktree).toBeUndefined();
     });
   });
 
@@ -507,7 +630,7 @@ describe("SqlitePersistenceAdapter", () => {
 
     const adapter = new SqlitePersistenceAdapter(dbPath);
     for (const id of ["partial", "malformed"]) {
-      const session = await adapter.getSession(id);
+      const session = await adapter.getRootSession(id);
       expect(session).toMatchObject({ id, projectRoot: "/repo" });
       expect(session?.worktree).toBeUndefined();
     }
@@ -544,7 +667,7 @@ describe("SqlitePersistenceAdapter", () => {
         continuationPending: true,
       }),
     ).rejects.toThrow("reject enter");
-    expect(await adapter.getSession("s1")).toEqual(original);
+    expect(await adapter.getRootSession("s1")).toEqual(original);
     await adapter.close();
 
     raw = new DatabaseSync(dbPath);
@@ -557,7 +680,7 @@ describe("SqlitePersistenceAdapter", () => {
       worktree,
       continuationPending: true,
     });
-    const entered = await adapter.getSession("s1");
+    const entered = await adapter.getRootSession("s1");
     await adapter.close();
 
     raw = new DatabaseSync(dbPath);
@@ -575,7 +698,7 @@ describe("SqlitePersistenceAdapter", () => {
         continuationPending: false,
       }),
     ).rejects.toThrow("reject exit");
-    expect(await adapter.getSession("s1")).toEqual(entered);
+    expect(await adapter.getRootSession("s1")).toEqual(entered);
     await adapter.close();
   });
 
@@ -597,7 +720,7 @@ describe("SqlitePersistenceAdapter", () => {
 
     for (let open = 0; open < 2; open += 1) {
       const adapter = new SqlitePersistenceAdapter(dbPath);
-      expect(await adapter.getSession("legacy-v5")).toEqual({
+      expect(await adapter.getRootSession("legacy-v5")).toEqual({
         id: "legacy-v5",
         workspace: "/repo",
         model: "m",
@@ -613,7 +736,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -668,7 +791,7 @@ describe("SqlitePersistenceAdapter", () => {
     // legacy row (no connection_id) reads back with NO connectionId field.
     for (let open = 0; open < 2; open += 1) {
       const adapter = new SqlitePersistenceAdapter(dbPath);
-      const legacy = await adapter.getSession("legacy-v9");
+      const legacy = await adapter.getRootSession("legacy-v9");
       expect(legacy?.id).toBe("legacy-v9");
       expect(legacy !== null && "connectionId" in legacy).toBe(false);
       await adapter.close();
@@ -679,7 +802,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -716,7 +839,7 @@ describe("SqlitePersistenceAdapter", () => {
     // legacy row (no codex_profile_id) reads back with NO codexProfileId field.
     for (let open = 0; open < 2; open += 1) {
       const adapter = new SqlitePersistenceAdapter(dbPath);
-      const legacy = await adapter.getSession("legacy-v10");
+      const legacy = await adapter.getRootSession("legacy-v10");
       expect(legacy?.id).toBe("legacy-v10");
       expect(legacy !== null && "codexProfileId" in legacy).toBe(false);
       await adapter.close();
@@ -727,13 +850,150 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
     expect(migrated.prepare("SELECT codex_profile_id FROM sessions WHERE id = ?").get("legacy-v10")).toEqual({
       codex_profile_id: null,
     });
+    migrated.close();
+  });
+
+  // TASK.102, found by the owner's live run on a real development database.
+  // A migration version is a claim on a namespace shared by every branch that
+  // ever opened this database, and the runner skips anything <= the recorded
+  // MAX. A database carrying a HIGHER max than our own migration therefore
+  // skips it silently and forever: the columns never appear and the host dies
+  // on first insert with "table sessions has no column named
+  // parent_session_id". Every other migration test above seeds a max BELOW
+  // ours, so none of them can observe this — which is precisely why it reached
+  // a real machine. Seeds the shape a real dev database had: v12 columns, but
+  // 13/14/15 already recorded by an unmerged branch's own migrations.
+  it("applies the child-session migration on a database whose recorded max version is HIGHER than v12 (foreign branch took 13-15)", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-foreign-max-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const old = new DatabaseSync(dbPath);
+    old.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at)
+        VALUES (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        engine_id TEXT, external_session_ref TEXT, project_root TEXT,
+        worktree_id TEXT, worktree_path TEXT, worktree_branch TEXT, worktree_base_ref TEXT,
+        worktree_owned_by_anycode INTEGER, continuation_pending INTEGER NOT NULL DEFAULT 0,
+        continuation_mode TEXT, worktree_exit_notice_pending INTEGER NOT NULL DEFAULT 0,
+        worktree_cleanup_path TEXT, worktree_cleanup_mode TEXT,
+        worktree_cleanup_owned_by_anycode INTEGER, worktree_cleanup_branch TEXT, worktree_transition_json TEXT,
+        connection_id TEXT, codex_profile_id TEXT
+      );
+      CREATE TABLE claude_transcript_items (
+        session_ref TEXT NOT NULL, turn_ordinal INTEGER NOT NULL, position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_ref, item_id)
+      );
+      INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
+        VALUES ('root-foreign', '/repo', 'm', 'build', 1, 2, '/repo');
+    `);
+    old.close();
+
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    // The load-bearing assertion: creating a CHILD session is the exact
+    // operation that died on the owner's machine. It exercises the columns
+    // through the production write path, so it fails if the migration was
+    // skipped — a PRAGMA check alone would only prove the DDL, not that the
+    // adapter can use it.
+    await adapter.createSession({
+      id: "child-foreign",
+      workspace: "/repo",
+      model: "m",
+      mode: "build",
+      parentSessionId: "root-foreign",
+      spawnToolCallId: "call-foreign",
+    });
+    const child = await adapter.getChildSession("root-foreign", "call-foreign");
+    expect(child?.id).toBe("child-foreign");
+    expect(child?.parentSessionId).toBe("root-foreign");
+    await adapter.close();
+
+    const migrated = new DatabaseSync(dbPath);
+    expect(
+      (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
+        ({ version }) => version,
+      ),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    migrated.close();
+  });
+
+  it("migrates a pre-child-session (v12) database to v16 adding parent_session_id/spawn_tool_call_id and is idempotent across opens (TASK.102 S2a A1, REAL adapter not a mock)", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v12-child-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const old = new DatabaseSync(dbPath);
+    old.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at) VALUES (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        engine_id TEXT, external_session_ref TEXT, project_root TEXT,
+        worktree_id TEXT, worktree_path TEXT, worktree_branch TEXT, worktree_base_ref TEXT,
+        worktree_owned_by_anycode INTEGER, continuation_pending INTEGER NOT NULL DEFAULT 0,
+        continuation_mode TEXT, worktree_exit_notice_pending INTEGER NOT NULL DEFAULT 0,
+        worktree_cleanup_path TEXT, worktree_cleanup_mode TEXT,
+        worktree_cleanup_owned_by_anycode INTEGER, worktree_cleanup_branch TEXT, worktree_transition_json TEXT,
+        connection_id TEXT, codex_profile_id TEXT
+      );
+      CREATE TABLE claude_transcript_items (
+        session_ref TEXT NOT NULL, turn_ordinal INTEGER NOT NULL, position_in_turn INTEGER NOT NULL,
+        item_id TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_ref, item_id)
+      );
+      INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
+        VALUES ('legacy-v12', '/repo', 'm', 'build', 1, 2, '/repo');
+    `);
+    old.close();
+
+    // Opening the pre-migration DB must not crash, must migrate to v16, and a
+    // legacy row (NULL parent_session_id) reads back as a ROOT session — no
+    // parentSessionId/spawnToolCallId field at all (the same "absence, not a
+    // false flag" discipline every other additive column above follows).
+    for (let open = 0; open < 2; open += 1) {
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      const legacy = await adapter.getRootSession("legacy-v12");
+      expect(legacy?.id).toBe("legacy-v12");
+      expect(legacy !== null && "parentSessionId" in legacy).toBe(false);
+      expect(legacy !== null && "spawnToolCallId" in legacy).toBe(false);
+      await adapter.close();
+    }
+
+    const migrated = new DatabaseSync(dbPath);
+    expect(
+      (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
+        ({ version }) => version,
+      ),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
+    expect(
+      (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
+    ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
+    expect(
+      migrated.prepare("SELECT parent_session_id, spawn_tool_call_id FROM sessions WHERE id = ?").get("legacy-v12"),
+    ).toEqual({ parent_session_id: null, spawn_tool_call_id: null });
+
+    // The unique partial index is live post-migration, on the REAL database
+    // (not a mock): two children of the same parent sharing a spawn call id
+    // collide; a root row (NULL parent) never does.
+    migrated.prepare(
+      `INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, parent_session_id, spawn_tool_call_id)
+       VALUES (?, '/repo', 'm', 'build', 3, 3, ?, ?)`,
+    ).run("child-a", "legacy-v12", "call-1");
+    expect(() =>
+      migrated.prepare(
+        `INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, parent_session_id, spawn_tool_call_id)
+         VALUES (?, '/repo', 'm', 'build', 4, 4, ?, ?)`,
+      ).run("child-b", "legacy-v12", "call-1"),
+    ).toThrow();
     migrated.close();
   });
 
@@ -785,9 +1045,9 @@ describe("SqlitePersistenceAdapter", () => {
     old.close();
 
     const adapter = new SqlitePersistenceAdapter(dbPath);
-    expect((await adapter.getSession("exact"))?.worktreeCleanup?.branch).toBe("anycode-wt/legacy");
-    expect((await adapter.getSession("foreign"))?.worktreeCleanup?.branch).toBeUndefined();
-    expect((await adapter.getSession("mismatch"))?.worktreeCleanup?.branch).toBeUndefined();
+    expect((await adapter.getRootSession("exact"))?.worktreeCleanup?.branch).toBe("anycode-wt/legacy");
+    expect((await adapter.getRootSession("foreign"))?.worktreeCleanup?.branch).toBeUndefined();
+    expect((await adapter.getRootSession("mismatch"))?.worktreeCleanup?.branch).toBeUndefined();
     await adapter.close();
   });
 
@@ -807,13 +1067,13 @@ describe("SqlitePersistenceAdapter", () => {
     old.close();
 
     const adapter = new SqlitePersistenceAdapter(dbPath);
-    await expect(adapter.getSession("legacy")).resolves.toMatchObject({
+    await expect(adapter.getRootSession("legacy")).resolves.toMatchObject({
       id: "legacy",
       workspace: "/w",
       model: "m",
       mode: "build",
     });
-    const legacy = await adapter.getSession("legacy");
+    const legacy = await adapter.getRootSession("legacy");
     expect(legacy?.engineId).toBeUndefined();
     expect(legacy?.externalSessionRef).toBeUndefined();
     await adapter.close();
@@ -879,6 +1139,68 @@ describe("SqlitePersistenceAdapter", () => {
     await reopened.close();
   });
 
+  it(
+    "round-trips a ToolResultPart.presentation (subagent card) exactly through " +
+      "appendHistory/loadHistory AND replaceHistory/loadHistory (TASK.102 slice S1 W3, " +
+      "CUT-S1 §3 W3 item 5 — the REAL adapter, not a mock sink)",
+    async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+      const presentation = {
+        subagent: {
+          kind: "subagent" as const,
+          version: 1 as const,
+          target: { kind: "inline" as const },
+          identity: { agentType: "explore", description: "look around", model: "glm-4.6", engine: "codex" as const },
+          counters: { turns: 3, toolCalls: 5, lastTool: "Bash" },
+          activity: {
+            entries: [
+              { toolName: "Bash", summary: "echo hi" },
+              { toolName: "Read", summary: "/a.ts" },
+            ],
+            dropped: 12,
+          },
+          final: { status: "max_turns" as const, durationMs: 4321 },
+        },
+      };
+
+      const items: HistoryItem[] = [
+        makeItem({
+          id: "t1",
+          createdAt: 12,
+          message: {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                toolCallId: "call-agent-1",
+                toolName: "Agent",
+                text: "child result text",
+                status: "max_turns",
+                presentation,
+              },
+            ],
+          },
+        }),
+      ];
+
+      await adapter.appendHistory(session.id, items);
+      const appended = await adapter.loadHistory(session.id);
+      expect(appended).toEqual(items);
+      expect(
+        (appended[0]!.message as { content: Array<{ presentation?: unknown }> }).content[0]!.presentation,
+      ).toEqual(presentation);
+
+      // replaceHistory (compaction path) round-trips the same shape.
+      await adapter.replaceHistory(session.id, items);
+      const replaced = await adapter.loadHistory(session.id);
+      expect(replaced).toEqual(items);
+
+      await adapter.close();
+    },
+  );
+
   it("preserves append order across multiple calls", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
@@ -930,9 +1252,9 @@ describe("SqlitePersistenceAdapter", () => {
 
     // Reopening an already-migrated database must not fail or re-apply migration 1.
     const reopened = new SqlitePersistenceAdapter(dbPath);
-    expect(await reopened.getSession("s1")).toEqual(session);
+    expect(await reopened.getRootSession("s1")).toEqual(session);
     await reopened.createSession({ id: "s2", workspace: "/w", model: "m", mode: "build" });
-    expect((await reopened.listSessions()).map((s) => s.id).sort()).toEqual(["s1", "s2"]);
+    expect((await reopened.listRootSessions()).map((s) => s.id).sort()).toEqual(["s1", "s2"]);
     await reopened.close();
   });
 
@@ -941,6 +1263,355 @@ describe("SqlitePersistenceAdapter", () => {
     await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
     await expect(adapter.close()).resolves.toBeUndefined();
     await expect(adapter.close()).resolves.toBeUndefined();
+  });
+
+  describe("root-only vs maintenance visibility (TASK.102 S2a A2, contract suite)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("listRootSessions hides child sessions, both with and without a workspace filter", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "root-1", workspace: "/w1", model: "m", mode: "build" });
+      vi.setSystemTime(2_000);
+      const child = await adapter.createSession({
+        id: "child-1",
+        workspace: "/w1",
+        model: "m",
+        mode: "build",
+        parentSessionId: "root-1",
+        spawnToolCallId: "call-1",
+      });
+      vi.setSystemTime(3_000);
+      await adapter.createSession({ id: "root-2", workspace: "/w2", model: "m", mode: "build" });
+
+      // A child row never carries a title at creation (CUT-S2 §5.14: the
+      // child has no name; the host-side title-no-op is B4's test, the data
+      // value is pinned here — the projection always spells the key with an
+      // undefined value, same as every untitled root).
+      expect(child.title).toBeUndefined();
+
+      expect((await adapter.listRootSessions()).map((s) => s.id)).toEqual(["root-2", "root-1"]);
+      expect((await adapter.listRootSessions({ workspace: "/w1" })).map((s) => s.id)).toEqual(["root-1"]);
+    });
+
+    it("LIMIT applies AFTER the root filter in SQL — ten fresher children plus one old root at limit:1 still return the ROOT (anti-facade CUT-S2 §5.6)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "old-root", workspace: "/w1", model: "m", mode: "build" });
+      for (let i = 0; i < 10; i++) {
+        vi.setSystemTime(2_000 + i * 100);
+        await adapter.createSession({
+          id: `child-${i}`,
+          workspace: "/w1",
+          model: "m",
+          mode: "build",
+          parentSessionId: "old-root",
+          spawnToolCallId: `call-${i}`,
+        });
+      }
+
+      // Every child row is fresher than the root: a post-query JS filter
+      // over a LIMIT-first page would return [] here (the page holds only
+      // the freshest child), and a filterless list would return a child.
+      const limited = await adapter.listRootSessions({ limit: 1 });
+      expect(limited.map((s) => s.id)).toEqual(["old-root"]);
+
+      const limitedScoped = await adapter.listRootSessions({ workspace: "/w1", limit: 1 });
+      expect(limitedScoped.map((s) => s.id)).toEqual(["old-root"]);
+    });
+
+    it("listSessionsForMaintenance sees EVERY row including children, with their parent linkage intact (REAL adapter)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "root-1", workspace: "/w1", model: "m", mode: "build" });
+      vi.setSystemTime(2_000);
+      await adapter.createSession({
+        id: "child-1",
+        workspace: "/w1",
+        model: "m",
+        mode: "build",
+        parentSessionId: "root-1",
+        spawnToolCallId: "call-1",
+      });
+      vi.setSystemTime(3_000);
+      await adapter.createSession({ id: "root-2", workspace: "/w2", model: "m", mode: "build" });
+
+      const all = await adapter.listSessionsForMaintenance();
+      expect(all.map((s) => s.id).sort()).toEqual(["child-1", "root-1", "root-2"]);
+      const childRow = all.find((s) => s.id === "child-1");
+      expect(childRow).toMatchObject({ parentSessionId: "root-1", spawnToolCallId: "call-1" });
+    });
+
+    it("listSessionsForMaintenance accepts an optional limit — a cheap startup probe does not have to pull every row to force migrate() (TASK.102 S2 review MINOR, opus)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "root-1", workspace: "/w1", model: "m", mode: "build" });
+      vi.setSystemTime(2_000);
+      await adapter.createSession({
+        id: "child-1", workspace: "/w1", model: "m", mode: "build",
+        parentSessionId: "root-1", spawnToolCallId: "call-1",
+      });
+      vi.setSystemTime(3_000);
+      await adapter.createSession({ id: "root-2", workspace: "/w2", model: "m", mode: "build" });
+
+      // Omitting limit keeps the existing "sees everyone" contract every
+      // maintenance consumer (janitor, worktree-ownership) relies on.
+      expect((await adapter.listSessionsForMaintenance()).length).toBe(3);
+      // A caller that only needs proof the schema is open+migrated (main's
+      // startup probe) can ask for a single row instead of paying for the
+      // full table every launch.
+      expect((await adapter.listSessionsForMaintenance({ limit: 1 })).length).toBe(1);
+    });
+  });
+
+  describe("child sessions — authorized access + cascade delete (TASK.102 S2a A3)", () => {
+    it("getChildSession returns the child ONLY for the exact (parentSessionId, spawnToolCallId) pair", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "parent-a", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({ id: "parent-b", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "child-1",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        parentSessionId: "parent-a",
+        spawnToolCallId: "call-1",
+      });
+
+      const found = await adapter.getChildSession("parent-a", "call-1");
+      expect(found?.id).toBe("child-1");
+    });
+
+    it("getChildSession with a WRONG parent returns null — authorization, not a bare id lookup", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "parent-a", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({ id: "parent-b", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "child-1",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        parentSessionId: "parent-a",
+        spawnToolCallId: "call-1",
+      });
+
+      // Right spawnToolCallId, WRONG parent — must fail closed to null, never
+      // fall through to a bare-id lookup that ignores the claimed parent.
+      expect(await adapter.getChildSession("parent-b", "call-1")).toBeNull();
+      // Unknown spawnToolCallId under the right parent.
+      expect(await adapter.getChildSession("parent-a", "call-unknown")).toBeNull();
+      // Unknown parent entirely.
+      expect(await adapter.getChildSession("parent-unknown", "call-1")).toBeNull();
+    });
+
+    it("listChildSessions returns only that parent's children, never a root or a sibling's children", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "parent-a", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({ id: "parent-b", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({ id: "root-standalone", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "a-child-1", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "parent-a", spawnToolCallId: "call-1",
+      });
+      await adapter.createSession({
+        id: "a-child-2", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "parent-a", spawnToolCallId: "call-2",
+      });
+      await adapter.createSession({
+        id: "b-child-1", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "parent-b", spawnToolCallId: "call-1",
+      });
+
+      const aChildren = await adapter.listChildSessions("parent-a");
+      expect(aChildren.map((s) => s.id).sort()).toEqual(["a-child-1", "a-child-2"]);
+      expect(await adapter.listChildSessions("root-standalone")).toEqual([]);
+      expect(await adapter.listChildSessions("parent-unknown")).toEqual([]);
+    });
+
+    it("deleteSessionTree cascades to descendants + their history/checkpoints/shadow-table rows, leaving a sibling root untouched", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({
+        id: "root-1", workspace: "/repo", model: "m", mode: "build",
+        engineId: "codex", externalSessionRef: "codex-thread-root-1",
+      });
+      await adapter.createSession({
+        id: "child-1", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "root-1", spawnToolCallId: "call-1",
+      });
+      await adapter.createSession({
+        id: "child-2", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "root-1", spawnToolCallId: "call-2",
+        engineId: "claude", externalSessionRef: "claude-session-child-2",
+      });
+      // A sibling root, structurally unrelated — must survive untouched.
+      await adapter.createSession({ id: "root-2", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "root-2-child", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "root-2", spawnToolCallId: "call-1",
+      });
+
+      await adapter.appendHistory("root-1", [makeItem({ id: "h-root-1" })]);
+      await adapter.appendHistory("child-1", [makeItem({ id: "h-child-1" })]);
+      await adapter.appendHistory("child-2", [makeItem({ id: "h-child-2" })]);
+      await adapter.appendHistory("root-2", [makeItem({ id: "h-root-2" })]);
+      await adapter.saveCheckpoint(makeCheckpoint({ id: "cp-root-1", sessionId: "root-1" }));
+      await adapter.saveCheckpoint(makeCheckpoint({ id: "cp-child-1", sessionId: "child-1" }));
+      await adapter.saveCheckpoint(makeCheckpoint({ id: "cp-root-2", sessionId: "root-2" }));
+      await adapter.recordCodexThreadItem("codex-thread-root-1", {
+        itemId: "exec-1", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo hi",
+      });
+      await adapter.recordClaudeTranscriptItem("claude-session-child-2", {
+        itemId: "0:0", turnOrdinal: 0, positionInTurn: 0,
+        data: { id: "a", createdAt: 0, message: { role: "user", content: "hi" } },
+      });
+
+      const result = await adapter.deleteSessionTree("root-1");
+
+      expect(result.deletedSessionIds.sort()).toEqual(["child-1", "child-2", "root-1"]);
+      expect(result.externalSessionRefs.sort()).toEqual(["claude-session-child-2", "codex-thread-root-1"]);
+
+      // Every row of the deleted tree is gone — sessions AND every dependent table.
+      expect(await adapter.getSessionById("root-1")).toBeNull();
+      expect(await adapter.getSessionById("child-1")).toBeNull();
+      expect(await adapter.getSessionById("child-2")).toBeNull();
+      expect(await adapter.loadHistory("root-1")).toEqual([]);
+      expect(await adapter.loadHistory("child-1")).toEqual([]);
+      expect(await adapter.loadHistory("child-2")).toEqual([]);
+      expect(await adapter.listCheckpoints("root-1")).toEqual([]);
+      expect(await adapter.listCheckpoints("child-1")).toEqual([]);
+      expect(await adapter.listCodexThreadItems("codex-thread-root-1")).toEqual([]);
+      expect(await adapter.listClaudeTranscriptItems("claude-session-child-2")).toEqual([]);
+
+      // The sibling root and ITS child and history/checkpoints are untouched.
+      expect(await adapter.getSessionById("root-2")).not.toBeNull();
+      expect(await adapter.getSessionById("root-2-child")).not.toBeNull();
+      expect(await adapter.loadHistory("root-2")).toHaveLength(1);
+      expect(await adapter.listCheckpoints("root-2")).toHaveLength(1);
+    });
+
+    it("deleteSessionTree never wipes a SURVIVING sibling's shadow history when a deleted session's externalSessionRef collides with the sibling's own ref in the OTHER engine's table (TASK.102 S2 review BLOCKER, Luna)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      // Two unrelated roots that happen to carry the SAME literal
+      // externalSessionRef string, one on each engine — collision is
+      // possible because the two shadow tables are keyed independently
+      // (codex_thread_items.thread_id vs claude_transcript_items.session_ref)
+      // and nothing enforces global uniqueness of that opaque native id
+      // across engines.
+      await adapter.createSession({
+        id: "root-codex", workspace: "/repo", model: "m", mode: "build",
+        engineId: "codex", externalSessionRef: "same-ref",
+      });
+      await adapter.createSession({
+        id: "root-claude", workspace: "/repo", model: "m", mode: "build",
+        engineId: "claude", externalSessionRef: "same-ref",
+      });
+      await adapter.recordCodexThreadItem("same-ref", {
+        itemId: "exec-1", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo hi",
+      });
+      await adapter.recordClaudeTranscriptItem("same-ref", {
+        itemId: "0:0", turnOrdinal: 0, positionInTurn: 0,
+        data: { id: "a", createdAt: 0, message: { role: "user", content: "hi" } },
+      });
+
+      const result = await adapter.deleteSessionTree("root-codex");
+
+      expect(result.deletedSessionIds).toEqual(["root-codex"]);
+      expect(await adapter.getSessionById("root-codex")).toBeNull();
+      // The deleted (codex) session's own shadow row is gone.
+      expect(await adapter.listCodexThreadItems("same-ref")).toEqual([]);
+
+      // The SURVIVING claude sibling and its shadow history under the SAME
+      // ref string must be untouched — a blind "try both tables for every
+      // ref" delete would wipe this even though root-claude was never part
+      // of the deleted tree.
+      expect(await adapter.getSessionById("root-claude")).not.toBeNull();
+      expect(await adapter.listClaudeTranscriptItems("same-ref")).toHaveLength(1);
+    });
+
+    it("deleteSessionTree walks the recursive CTE past a grandchild — the schema itself does not forbid a child's child, so the cascade must not silently stop at depth 1", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "root-1", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "child-1", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "root-1", spawnToolCallId: "call-1",
+      });
+      await adapter.createSession({
+        id: "grandchild-1", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "child-1", spawnToolCallId: "call-1",
+      });
+      await adapter.appendHistory("grandchild-1", [makeItem({ id: "h-grandchild-1" })]);
+      await adapter.saveCheckpoint(makeCheckpoint({ id: "cp-grandchild-1", sessionId: "grandchild-1" }));
+
+      const result = await adapter.deleteSessionTree("root-1");
+
+      expect(result.deletedSessionIds.sort()).toEqual(["child-1", "grandchild-1", "root-1"]);
+      expect(await adapter.getSessionById("grandchild-1")).toBeNull();
+      expect(await adapter.loadHistory("grandchild-1")).toEqual([]);
+      expect(await adapter.listCheckpoints("grandchild-1")).toEqual([]);
+    });
+
+    it("deleteSessionTree terminates when parent_session_id forms a cycle (a row referencing itself) — no CHECK forbids this today, and a recursive UNION ALL CTE would spin the same id forever instead of erroring (TASK.102 S2 review MAJOR, opus)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      // Nothing in the schema or createSession rejects a row naming itself as
+      // its own parent — the collision is legal by construction today, so the
+      // cascade itself must not assume an acyclic parent_session_id graph.
+      await adapter.createSession({
+        id: "cyclic-1", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "cyclic-1", spawnToolCallId: "call-self",
+      });
+
+      const result = await adapter.deleteSessionTree("cyclic-1");
+
+      expect(result.deletedSessionIds).toEqual(["cyclic-1"]);
+      expect(await adapter.getSessionById("cyclic-1")).toBeNull();
+    });
+
+    it("deleteSessionTree of an unknown id is a no-op returning empty arrays", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "root-1", workspace: "/repo", model: "m", mode: "build" });
+      const result = await adapter.deleteSessionTree("does-not-exist");
+      expect(result).toEqual({ deletedSessionIds: [], externalSessionRefs: [] });
+      expect(await adapter.getSessionById("root-1")).not.toBeNull();
+    });
+
+    it("deleteSessionTree is fully transactional — a mid-transaction failure ROLLS BACK every table, not just sessions", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-delete-tree-rollback-"));
+      const dbPath = join(tmpDir, "anycode.sqlite");
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      await adapter.createSession({ id: "root-1", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "child-1", workspace: "/repo", model: "m", mode: "build",
+        parentSessionId: "root-1", spawnToolCallId: "call-1",
+      });
+      await adapter.appendHistory("root-1", [makeItem({ id: "h-root-1" })]);
+      await adapter.appendHistory("child-1", [makeItem({ id: "h-child-1" })]);
+      await adapter.saveCheckpoint(makeCheckpoint({ id: "cp-root-1", sessionId: "root-1" }));
+      await adapter.close();
+
+      // Inject a failure partway through the cascade: a trigger that aborts
+      // any DELETE against `sessions` — history_items/checkpoints deletes
+      // (which run BEFORE the sessions delete in the implementation) succeed
+      // first, so this pins that even a LATE failure unwinds everything
+      // already done earlier in the SAME transaction.
+      const raw = new DatabaseSync(dbPath);
+      raw.exec(`CREATE TRIGGER reject_session_delete BEFORE DELETE ON sessions
+        WHEN OLD.id = 'root-1'
+        BEGIN SELECT RAISE(ABORT, 'injected mid-transaction failure'); END`);
+      raw.close();
+
+      const reopened = new SqlitePersistenceAdapter(dbPath);
+      await expect(reopened.deleteSessionTree("root-1")).rejects.toThrow(/injected mid-transaction failure/);
+
+      // NOTHING moved: not the sessions, not the history, not the checkpoints.
+      expect(await reopened.getSessionById("root-1")).not.toBeNull();
+      expect(await reopened.getSessionById("child-1")).not.toBeNull();
+      expect(await reopened.loadHistory("root-1")).toHaveLength(1);
+      expect(await reopened.loadHistory("child-1")).toHaveLength(1);
+      expect(await reopened.listCheckpoints("root-1")).toHaveLength(1);
+      await reopened.close();
+    });
   });
 
   describe("checkpoints (CheckpointStore, migration v2)", () => {
@@ -1052,7 +1723,7 @@ describe("SqlitePersistenceAdapter", () => {
       // Opening with the current adapter must apply v2 and make checkpoints usable,
       // while the pre-existing v1 session data survives untouched.
       const adapter = new SqlitePersistenceAdapter(dbPath);
-      expect((await adapter.getSession("s1"))?.id).toBe("s1");
+      expect((await adapter.getRootSession("s1"))?.id).toBe("s1");
       await adapter.saveCheckpoint(makeCheckpoint({ id: "c1", sessionId: "s1", commitHash: "abc", createdAt: 5 }));
       expect(await adapter.getCheckpoint("c1")).toEqual(
         makeCheckpoint({ id: "c1", sessionId: "s1", commitHash: "abc", createdAt: 5 }),
@@ -1630,6 +2301,77 @@ describe("SqlitePersistenceAdapter", () => {
   });
 });
 
+/**
+ * A separate real OS thread (`node:worker_threads`) that opens its OWN
+ * `DatabaseSync` connection to the same file, takes an immediate write lock,
+ * signals the main thread, holds the lock synchronously (`Atomics.wait`,
+ * blocks only the worker's own thread) for `holdMs`, then commits. Simulates
+ * a second concurrently-forked child's writer racing this adapter's
+ * `open()`/`createSession` against the same on-disk file — the exact
+ * collision the S2d live smoke caught (TASK.102 CUT-S2 §10.15.2).
+ */
+const BUSY_LOCK_WORKER_SRC = `
+  const { parentPort, workerData } = require("node:worker_threads");
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(workerData.dbPath);
+  db.exec("BEGIN IMMEDIATE");
+  parentPort.postMessage("locked");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.holdMs);
+  db.exec("COMMIT");
+  db.close();
+  parentPort.postMessage("done");
+`;
+
+describe("SqlitePersistenceAdapter — concurrent writers (TASK.102 CUT-S2 §10.15.2)", () => {
+  let tmpDir: string;
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits out a concurrent writer's BEGIN IMMEDIATE window instead of failing with 'database is locked'", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-busy-timeout-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+
+    // Seed the schema first (mirrors production: by the time concurrently
+    // forked children boot, the schema is already migrated) so the worker's
+    // BEGIN IMMEDIATE below contends on an already-provisioned file, the same
+    // as `migrate()`'s own write-lock acquisition on a fresh `open()` does.
+    const seed = new SqlitePersistenceAdapter(dbPath);
+    await seed.createSession({ id: "seed", workspace: "/seed", model: "m", mode: "build" });
+    await seed.close();
+
+    const holdMs = 250;
+    const worker = new Worker(BUSY_LOCK_WORKER_SRC, { eval: true, workerData: { dbPath, holdMs } });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        worker.once("error", reject);
+        worker.on("message", (msg: string) => {
+          if (msg === "locked") resolve();
+        });
+      });
+
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      const start = Date.now();
+      const created = await adapter.createSession({ id: "concurrent", workspace: "/w2", model: "m", mode: "build" });
+      const elapsed = Date.now() - start;
+
+      expect(created.id).toBe("concurrent");
+      // Proves the adapter actually WAITED for the worker's commit rather than
+      // winning the lock by luck on an already-released window.
+      expect(elapsed).toBeGreaterThanOrEqual(holdMs / 2);
+
+      await adapter.close();
+    } finally {
+      // The worker exits on its own once its script finishes (COMMIT+close);
+      // wait for it so no dangling thread handle leaks past this test.
+      await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+    }
+  });
+});
+
 describe("WriteBehindHistorySink", () => {
   class RecordingPersistence implements PersistencePort {
     readonly calls: { op: "append" | "replaceHistory"; items: readonly HistoryItem[] }[] = [];
@@ -1669,10 +2411,25 @@ describe("WriteBehindHistorySink", () => {
     createSession(): Promise<SessionMeta> {
       throw new Error("not used in this test");
     }
-    getSession(): Promise<SessionMeta | null> {
+    getRootSession(): Promise<SessionMeta | null> {
       throw new Error("not used in this test");
     }
-    listSessions(): Promise<SessionMeta[]> {
+    listRootSessions(): Promise<SessionMeta[]> {
+      throw new Error("not used in this test");
+    }
+    listSessionsForMaintenance(): Promise<SessionMeta[]> {
+      throw new Error("not used in this test");
+    }
+    getSessionById(): Promise<SessionMeta | null> {
+      throw new Error("not used in this test");
+    }
+    getChildSession(): Promise<SessionMeta | null> {
+      throw new Error("not used in this test");
+    }
+    listChildSessions(): Promise<SessionMeta[]> {
+      throw new Error("not used in this test");
+    }
+    deleteSessionTree(): Promise<{ deletedSessionIds: string[]; externalSessionRefs: string[] }> {
       throw new Error("not used in this test");
     }
     touchSession(): Promise<void> {
@@ -1875,30 +2632,44 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     }
   }
 
-  async function seedFullSession(adapter: SqlitePersistenceAdapter, id: string, ref: string): Promise<void> {
+  /**
+   * Seeds a session with a history row, a checkpoint, and ONE shadow-mirror
+   * row in the table its engine actually writes (a codex session mirrors to
+   * codex_thread_items, a claude session to claude_transcript_items — the
+   * engine-scoped reality deleteSessionTree's ref deletes are built for).
+   */
+  async function seedFullSession(
+    adapter: SqlitePersistenceAdapter,
+    id: string,
+    ref: string,
+    engine: "codex" | "claude" = "codex",
+  ): Promise<void> {
     await adapter.createSession({
       id,
       workspace: "/w",
       model: "m",
       mode: "build",
-      engineId: "codex",
+      engineId: engine,
       externalSessionRef: ref,
     });
     await adapter.appendHistory(id, [makeItem({ id: `${id}-h1` })]);
     await adapter.saveCheckpoint(makeCheckpoint({ id: `${id}-c1`, sessionId: id }));
-    await adapter.recordCodexThreadItem(ref, {
-      itemId: `${id}-cx1`,
-      turnOrdinal: 0,
-      positionInTurn: 0,
-      seqInTurn: 0,
-      command: "ls",
-    });
-    await adapter.recordClaudeTranscriptItem(ref, {
-      itemId: `${id}-cl1`,
-      turnOrdinal: 0,
-      positionInTurn: 0,
-      data: makeItem({ id: `${id}-cl1` }),
-    });
+    if (engine === "codex") {
+      await adapter.recordCodexThreadItem(ref, {
+        itemId: `${id}-cx1`,
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        seqInTurn: 0,
+        command: "ls",
+      });
+    } else {
+      await adapter.recordClaudeTranscriptItem(ref, {
+        itemId: `${id}-cl1`,
+        turnOrdinal: 0,
+        positionInTurn: 0,
+        data: makeItem({ id: `${id}-cl1` }),
+      });
+    }
   }
 
   it("cascades through all four linked tables in one delete, leaving a sibling untouched", async () => {
@@ -1915,22 +2686,23 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     expect(summary.counts).toEqual({
       historyItems: 1,
       checkpoints: 1,
-      claudeTranscriptItems: 1,
+      // Engine-scoped: the codex-seeded victim's claude count is 0 and vice
+      // versa — deleteSessionTree scopes each shadow delete to the deleted
+      // row's own engine (TASK.102 S2 review BLOCKER, Luna).
+      claudeTranscriptItems: 0,
       codexThreadItems: 1,
     });
 
     // Zero orphan rows for the deleted session in every linked table.
     expect(orphanCount(dbPath, "history_items", "session_id", ["victim"])).toBe(0);
     expect(orphanCount(dbPath, "checkpoints", "session_id", ["victim"])).toBe(0);
-    expect(orphanCount(dbPath, "claude_transcript_items", "session_ref", ["ref-victim"])).toBe(0);
     expect(orphanCount(dbPath, "codex_thread_items", "thread_id", ["ref-victim"])).toBe(0);
-    expect(await adapter.getSession("victim")).toBeNull();
+    expect(await adapter.getSessionById("victim")).toBeNull();
 
     // The sibling session keeps every row.
-    expect(await adapter.getSession("keeper")).not.toBeNull();
+    expect(await adapter.getSessionById("keeper")).not.toBeNull();
     expect(orphanCount(dbPath, "history_items", "session_id", ["keeper"])).toBe(1);
     expect(orphanCount(dbPath, "checkpoints", "session_id", ["keeper"])).toBe(1);
-    expect(orphanCount(dbPath, "claude_transcript_items", "session_ref", ["ref-keeper"])).toBe(1);
     expect(orphanCount(dbPath, "codex_thread_items", "thread_id", ["ref-keeper"])).toBe(1);
     await adapter.close();
   });
@@ -1941,17 +2713,17 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     const summary = await adapter.deleteSession("missing");
     expect(summary.deleted).toEqual([]);
     expect(summary.counts).toEqual({ historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 });
-    expect(await adapter.getSession("s1")).not.toBeNull();
+    expect(await adapter.getSessionById("s1")).not.toBeNull();
   });
 
   it("deleteSessions aggregates multiple roots in one transaction", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
-    await seedFullSession(adapter, "a", "ref-a");
-    await seedFullSession(adapter, "b", "ref-b");
+    await seedFullSession(adapter, "a", "ref-a", "codex");
+    await seedFullSession(adapter, "b", "ref-b", "claude");
     const summary = await adapter.deleteSessions(["a", "b", "missing"]);
     expect(summary.deleted).toEqual(["a", "b"]);
-    expect(summary.counts).toEqual({ historyItems: 2, checkpoints: 2, claudeTranscriptItems: 2, codexThreadItems: 2 });
-    expect(await adapter.listSessions()).toEqual([]);
+    expect(summary.counts).toEqual({ historyItems: 2, checkpoints: 2, claudeTranscriptItems: 1, codexThreadItems: 1 });
+    expect(await adapter.listRootSessions()).toEqual([]);
   });
 
   it("listSessionsOlderThan matches the sidebar grouping key and the updatedAt cutoff", async () => {
@@ -1975,71 +2747,73 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     expect((await adapter.listSessionsOlderThan("/other", now + 1000)).map((s) => s.id)).toEqual(["other"]);
   });
 
-  describe("with TASK.102 child sessions (parent_session_id grafted on)", () => {
-    /** Grafts TASK.102's link columns onto a fresh :memory: schema (no CHECK — link-only). */
-    async function makeChildCapableAdapter(): Promise<SqlitePersistenceAdapter> {
-      const adapter = new SqlitePersistenceAdapter(":memory:");
-      await adapter.listSessions({ limit: 1 }); // force open + migrate
-      const db = (adapter as unknown as { db: DatabaseSync }).db;
-      db.exec("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
-      db.exec("ALTER TABLE sessions ADD COLUMN spawn_tool_call_id TEXT");
-      return adapter;
-    }
-
-    async function linkChild(adapter: SqlitePersistenceAdapter, childId: string, parentId: string): Promise<void> {
-      const db = (adapter as unknown as { db: DatabaseSync }).db;
-      db.prepare("UPDATE sessions SET parent_session_id = ?, spawn_tool_call_id = ? WHERE id = ?").run(
-        parentId,
-        `spawn-${childId}`,
-        childId,
-      );
-    }
-
+  describe("with TASK.102 child sessions (native parent_session_id columns)", () => {
     it("deleting a parent cascades to children AND grandchildren", async () => {
-      const adapter = await makeChildCapableAdapter();
+      const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
-      await adapter.createSession({ id: "child", workspace: "/w", model: "m", mode: "build" });
-      await adapter.createSession({ id: "grandchild", workspace: "/w", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "child", workspace: "/w", model: "m", mode: "build",
+        parentSessionId: "root", spawnToolCallId: "spawn-child",
+      });
+      await adapter.createSession({
+        id: "grandchild", workspace: "/w", model: "m", mode: "build",
+        parentSessionId: "child", spawnToolCallId: "spawn-grandchild",
+      });
       await adapter.appendHistory("child", [makeItem({ id: "child-h" })]);
-      await linkChild(adapter, "child", "root");
-      await linkChild(adapter, "grandchild", "child");
 
       const summary = await adapter.deleteSession("root");
       expect(summary.deleted).toEqual(["root"]);
       expect(summary.removedIds.sort()).toEqual(["child", "grandchild", "root"]);
       expect(summary.counts.historyItems).toBe(1);
-      expect(await adapter.listSessions()).toEqual([]);
+      expect(await adapter.listRootSessions()).toEqual([]);
     });
 
     it("deleting a child removes only its own subtree; the parent survives", async () => {
-      const adapter = await makeChildCapableAdapter();
+      const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
-      await adapter.createSession({ id: "child", workspace: "/w", model: "m", mode: "build" });
-      await adapter.createSession({ id: "grandchild", workspace: "/w", model: "m", mode: "build" });
-      await linkChild(adapter, "child", "root");
-      await linkChild(adapter, "grandchild", "child");
+      await adapter.createSession({
+        id: "child", workspace: "/w", model: "m", mode: "build",
+        parentSessionId: "root", spawnToolCallId: "spawn-child",
+      });
+      await adapter.createSession({
+        id: "grandchild", workspace: "/w", model: "m", mode: "build",
+        parentSessionId: "child", spawnToolCallId: "spawn-grandchild",
+      });
 
       const summary = await adapter.deleteSession("child");
       expect(summary.removedIds.sort()).toEqual(["child", "grandchild"]);
-      expect((await adapter.listSessions()).map((s) => s.id)).toEqual(["root"]);
+      expect((await adapter.listRootSessions()).map((s) => s.id)).toEqual(["root"]);
     });
 
     it("listSessionsOlderThan excludes children — they leave with their root", async () => {
-      const adapter = await makeChildCapableAdapter();
+      const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
-      await adapter.createSession({ id: "child", workspace: "/w", model: "m", mode: "build" });
-      await linkChild(adapter, "child", "root");
+      await adapter.createSession({
+        id: "child", workspace: "/w", model: "m", mode: "build",
+        parentSessionId: "root", spawnToolCallId: "spawn-child",
+      });
       const candidates = await adapter.listSessionsOlderThan("/w", Date.now() + 1);
       expect(candidates.map((s) => s.id)).toEqual(["root"]);
     });
   });
 
-  it("root-only delete on the vanilla v12 schema (no parent_session_id) never touches sibling rows", async () => {
+  it("deleteSessionTree engine parity: deleteSession's summary mirrors the reviewed cascade", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
-    await adapter.createSession({ id: "a", workspace: "/w", model: "m", mode: "build" });
-    await adapter.createSession({ id: "b", workspace: "/w", model: "m", mode: "build" });
-    const summary = await adapter.deleteSession("a");
-    expect(summary.removedIds).toEqual(["a"]);
-    expect((await adapter.listSessions()).map((s) => s.id)).toEqual(["b"]);
+    await seedFullSession(adapter, "root", "ref-root");
+    await adapter.createSession({
+      id: "child", workspace: "/w", model: "m", mode: "build",
+      parentSessionId: "root", spawnToolCallId: "spawn-child",
+      engineId: "claude", externalSessionRef: "ref-child",
+    });
+    await adapter.recordClaudeTranscriptItem("ref-child", {
+      itemId: "child-cl1", turnOrdinal: 0, positionInTurn: 0,
+      data: makeItem({ id: "child-cl1" }),
+    });
+
+    const summary = await adapter.deleteSession("root");
+    expect(summary.deleted).toEqual(["root"]);
+    expect(summary.removedIds.sort()).toEqual(["child", "root"]);
+    expect(summary.counts).toEqual({ historyItems: 1, checkpoints: 1, claudeTranscriptItems: 1, codexThreadItems: 1 });
+    expect(await adapter.listRootSessions()).toEqual([]);
   });
 });

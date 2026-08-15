@@ -10,7 +10,7 @@ import { globTool } from "./glob.js";
 import { todoReadTool } from "./todo-read.js";
 import { todoWriteTool } from "./todo-write.js";
 import { webFetchTool } from "./web-fetch.js";
-import { agentTool } from "./agent.js";
+import { createAgentTool, type CreateAgentToolOptions } from "./agent.js";
 import { skillTool } from "./skill.js";
 import { workflowTool } from "./workflow.js";
 
@@ -49,13 +49,22 @@ export class ToolRegistry {
   }
 }
 
+export interface CreateDefaultToolRegistryOptions {
+  /**
+   * Forwarded verbatim to createAgentTool (TASK.102 CUT-S2 §2.1). Absent —
+   * every existing call site (CLI, subagent runner, host test-harness) stays
+   * byte-compatible with the restricted, inline-only Agent declaration.
+   */
+  agent?: CreateAgentToolOptions;
+}
+
 /**
  * Builds a registry with the twelve built-ins: Read, Write, Edit, Bash, Grep
  * (Phase 0) + Glob, TodoRead, TodoWrite, WebFetch (Phase 1, design §2.14) +
  * Agent (Phase 3 slice 3.1, design §3.4) + Skill (Phase 3 slice 3.3, design
  * §2.7) + Workflow (Phase 3 slice 3.4, design §2.7).
  */
-export function createDefaultToolRegistry(): ToolRegistry {
+export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOptions): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(readTool);
   registry.register(writeTool);
@@ -66,7 +75,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(todoReadTool);
   registry.register(todoWriteTool);
   registry.register(webFetchTool);
-  registry.register(agentTool);
+  registry.register(createAgentTool(opts?.agent));
   registry.register(skillTool);
   registry.register(workflowTool);
   return registry;

@@ -125,6 +125,7 @@ import type {
 } from "../../shared/protocol.js";
 import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
+import { decodeSubagentCardSnapshot, projectSubagentCard } from "./subagent-card.js";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
@@ -150,11 +151,12 @@ export interface ToolCallSnapshot {
  * `activityDropped` 0, `final` null, `engine` from the event or null — the
  * card shows a spinner while `final` is null); `subagent_progress` refreshes
  * the counters; `subagent_activity` appends a live per-child-tool row (slice
- * P7.18/F16b, ring-capped — see `SUBAGENT_ACTIVITY_RING`); `subagent_end`
- * fills `final`, flipping the card to the terminal status. The full child
- * result/text is NOT here — it arrives capped in the ordinary `tool_result`
- * that settles this same tool_call (design §3.3: no nested stream
- * forwarding).
+ * P7.18/F16b, ring-capped — see `SUBAGENT_ACTIVITY_RING`); `subagent_attention`
+ * toggles `waiting` (session-tier children only, TASK.102 CUT-S2 §2.5);
+ * `subagent_end` fills `final`, flipping the card to the terminal status. The
+ * full child result/text is NOT here — it arrives capped in the ordinary
+ * `tool_result` that settles this same tool_call (design §3.3: no nested
+ * stream forwarding).
  */
 export interface SubagentSubStatus {
   agentType: string;
@@ -179,6 +181,30 @@ export interface SubagentSubStatus {
   /** Count of activity rows dropped from the front of the ring once the cap was exceeded (honest overflow counter, not a wire field). */
   activityDropped: number;
   final: { status: "completed" | "max_turns" | "cancelled" | "error"; durationMs: number } | null;
+  /**
+   * PRESENCE, not value, is the signal: `true` while a session-tier child
+   * session is blocked on a permission ask, and the key is ABSENT — never
+   * `false` — the moment the ask is answered or the card settles. A single
+   * encoding is load-bearing here (TASK.102 CUT-S2 §2.5 review finding 2):
+   * both `patchSubagentAttention(false)` and `patchSubagentEnd`'s settle
+   * strip the key in the SAME way, so any reader — including the future
+   * badge-priority VM (CUT-S2 §2.5) — can test `"waiting" in subagent`
+   * (or truthiness) and get the right answer either way. Typed `?: true`
+   * rather than `?: boolean` so a value-based `waiting === false` write can
+   * never even compile. Absent for inline subagents and for cards hydrated
+   * from the durable S1 snapshot (attention is transient live-only state the
+   * snapshot never carries — CUT-S1 §2.1, CUT-S2 §2.5).
+   */
+  waiting?: true;
+  /**
+   * PRESENCE-encoded (`?: true`, same discipline as `waiting` above): set
+   * ONLY by `projectSubagentCard` when the terminal S1 snapshot's
+   * `target.kind === "session"` — i.e. this Agent call spawned a session-tier
+   * child (TASK.102 CUT-S2 §2.5/§10.8). Live subagent_* patches never set it
+   * (the live Open path resolves through the child relation-store instead);
+   * inline cards and legacy hydrations never have the key.
+   */
+  sessionChild?: true;
 }
 
 /** Ring cap for `SubagentSubStatus.activity` (design slice-P7.18-cut.md §4 W2): oldest row drops, `activityDropped` increments. Renderer-side bound independent of the core's own per-run emission cap. */
@@ -604,6 +630,17 @@ export interface DesktopState {
    * outside the session slice a host_ready reset clears.
    */
   pinnedConnection: { connectionId: string; providerId: string } | null;
+  /**
+   * TASK.102 CUT-S2 §10.15.1: true for a child-session tab's store, set once
+   * at `registerPort` (tab-registry.ts's child branch) and never flipped back
+   * — same "control-plane, outside the session slice" shape as
+   * `pinnedConnection` above, so a host_ready respawn never drops it. Lets
+   * the composer force the direct-send path for a child surface (its
+   * rendererside prompt queue has no drainer subscribed, §1.1: the renderer
+   * prompt-queue is never used for a child surface) instead of parking a
+   * steer message where it would sit forever.
+   */
+  childSurface: boolean;
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
@@ -760,6 +797,8 @@ export interface DesktopState {
   setHostExited(): void;
   /** Records the tab's pinned connection from the tab-port envelope (TASK.45 W10-FIX F2). */
   setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void;
+  /** Marks this tab's store as a child surface (TASK.102 CUT-S2 §10.15.1); set once, never cleared. */
+  setChildSurface(): void;
   /** Sets or clears (null) the transient notice; the toast UI (MVP.5) dismisses through this. */
   setNotice(notice: Notice | null): void;
   /** Appends the local user's message to the transcript (the wire never echoes user input back, §3). */
@@ -1053,6 +1092,18 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         return;
       }
       const result = results.get(part.toolCallId);
+      // Persisted subagent card (TASK.102 slice S1, CUT-S1 §3 W5 point 1):
+      // the paired tool_result's `presentation.subagent` is the durable
+      // terminal snapshot a settled Agent call wrote (core W1-W3) — decode
+      // is the LAST line of defense here (`loadHistory` parses the item's
+      // JSON with no validation of its own, sqlite-persistence.ts), so any
+      // structurally-wrong blob degrades to `null` rather than failing the
+      // whole session's hydration. Workflow sub-status has no persisted
+      // counterpart (out of S1 scope) — a hydrated tool_call never has one
+      // to replay.
+      const snap = result?.presentation?.subagent !== undefined
+        ? decodeSubagentCardSnapshot(result.presentation.subagent, { toolCallId: part.toolCallId, toolName: part.toolName })
+        : null;
       blocks.push({
         kind: "tool_call",
         id,
@@ -1062,9 +1113,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         status: result ? result.status : "proposed",
         modelText: result ? result.text : null,
         snapshots: { before: null, after: null },
-
-        // are ephemeral) — a hydrated tool_call never has a sub-status to replay.
-        subagent: null,
+        subagent: snap !== null ? projectSubagentCard(snap) : null,
         workflow: null,
       });
     });
@@ -1284,6 +1333,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * (defensive, same posture as `patchFileSnapshot`) or belongs to a
      * different/unknown turn's toolCallId (foreign events are ignored by
      * construction — the map below simply finds nothing to patch).
+     *
+     * Terminal guard (TASK.102 slice S1, CUT-S1 §3 W5 point 3): a duplicate
+     * `subagent_start` arriving AFTER the block's sub-status already settled
+     * (`final !== null` — either from a live `subagent_end` or from the
+     * persisted canon a `tool_result`/hydration already applied) is a no-op.
+     * Without this a stale replay could stomp the honest terminal record
+     * with a fresh "running" spinner.
      */
     function patchSubagentStart(
       toolCallId: string,
@@ -1295,7 +1351,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       flushDeltas();
       set((state) => ({
         transcript: state.transcript.map((block) =>
-          block.kind === "tool_call" && block.toolCallId === toolCallId
+          block.kind === "tool_call" && block.toolCallId === toolCallId && (block.subagent === null || block.subagent.final === null)
             ? {
                 ...block,
                 subagent: {
@@ -1320,13 +1376,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * Refreshes the live counters on `subagent_progress`. Requires a
      * sub-status already seeded by `subagent_start` to merge into — a
      * progress event with no prior start (or a foreign toolCallId) is a
-     * no-op, same guard rationale as `patchSubagentStart` above.
+     * no-op, same guard rationale as `patchSubagentStart` above. Terminal
+     * guard (CUT-S1 §3 W5 point 3): once `final` is set (live end, or a
+     * settled canon already applied), a late/replayed progress event is
+     * ALSO a no-op — the terminal record never regresses to "running".
      */
     function patchSubagentProgress(toolCallId: string, turns: number, toolCalls: number, lastTool: string | null): void {
       flushDeltas();
       set((state) => ({
         transcript: state.transcript.map((block) =>
-          block.kind === "tool_call" && block.toolCallId === toolCallId && block.subagent
+          block.kind === "tool_call" && block.toolCallId === toolCallId && block.subagent && block.subagent.final === null
             ? { ...block, subagent: { ...block.subagent, turns, toolCalls, lastTool } }
             : block,
         ),
@@ -1341,13 +1400,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * unseeded or foreign toolCallId is a no-op, nothing invented). Ring-caps
      * at `SUBAGENT_ACTIVITY_RING`: once full, the oldest row drops and
      * `activityDropped` increments — an honest count of rows the renderer
-     * chose not to keep, never a wire-reported value.
+     * chose not to keep, never a wire-reported value. Terminal guard
+     * (CUT-S1 §3 W5 point 3): once `final` is set, a late/replayed activity
+     * row is a no-op too — the persisted canon's activity list is authoritative
+     * once settled, never appended to by a stale live event afterward.
      */
     function patchSubagentActivity(toolCallId: string, toolName: string, summary: string): void {
       flushDeltas();
       set((state) => ({
         transcript: state.transcript.map((block) => {
-          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent) return block;
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
+            return block;
+          }
           const activity = [...block.subagent.activity, { toolName, summary }];
           const overflow = activity.length - SUBAGENT_ACTIVITY_RING;
           const ringed = overflow > 0 ? activity.slice(overflow) : activity;
@@ -1358,23 +1422,81 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     }
 
     /**
+     * Toggles the session-tier permission-wait flag on `subagent_attention`
+     * (TASK.102 CUT-S2 §2.5; store case pulled forward into S2a — CUT-S2
+     * §10.1). Same existing-subagent + matching-toolCallId guard as
+     * `patchSubagentProgress`, including its terminal guard: once `final` is
+     * set, a late/replayed attention event is a no-op — a settled card never
+     * regresses to "waiting for permission". Only a session-tier child's
+     * permission broker ever produces the event; inline subagents never do.
+     *
+     * `waiting:false` DELETES the key rather than writing it (review finding
+     * 2): `SubagentSubStatus.waiting` is a presence-based flag end to end —
+     * writing an explicit `false` here would leave the key present with a
+     * falsy value, which a presence-only reader (`"waiting" in subagent`,
+     * the same test `patchSubagentEnd`'s settle strip is built and tested
+     * against) would still count as waiting. Answering the ask and settling
+     * the card must strip the key the SAME way.
+     */
+    function patchSubagentAttention(toolCallId: string, waiting: boolean): void {
+      flushDeltas();
+      set((state) => ({
+        transcript: state.transcript.map((block) => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
+            return block;
+          }
+          const subagent = { ...block.subagent };
+          if (waiting) {
+            subagent.waiting = true;
+          } else {
+            delete subagent.waiting;
+          }
+          return { ...block, subagent };
+        }),
+      }));
+    }
+
+    /**
      * Records the terminal outcome on `subagent_end`: fills `final`, which
      * flips the card from spinner to a settled status label. Same
-     * existing-subagent + matching-toolCallId guard as `patchSubagentProgress`.
+     * existing-subagent + matching-toolCallId guard as `patchSubagentProgress`,
+     * including its terminal guard (CUT-S1 §3 W5 point 3) — a duplicate end
+     * arriving after the block already settled is a no-op, so a replayed
+     * event can never overwrite the honest terminal record with a different
+     * outcome. `activitySuppressed` (CUT-S1 §0.5, core runner honesty count —
+     * events the runner withheld past its own per-run cap) folds into
+     * `activityDropped` at the SAME moment `final` is set, so the live
+     * "+N earlier" count matches what the persisted canon will carry. The
+     * settle also strips a stale `waiting` flag (TASK.102 CUT-S2 §2.5/§10.1)
+     * — see the inline comment below.
      */
     function patchSubagentEnd(
       toolCallId: string,
       status: "completed" | "max_turns" | "cancelled" | "error",
       turns: number,
       durationMs: number,
+      activitySuppressed?: number,
     ): void {
       flushDeltas();
       set((state) => ({
-        transcript: state.transcript.map((block) =>
-          block.kind === "tool_call" && block.toolCallId === toolCallId && block.subagent
-            ? { ...block, subagent: { ...block.subagent, turns, final: { status, durationMs } } }
-            : block,
-        ),
+        transcript: state.transcript.map((block) => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
+            return block;
+          }
+          const settled: SubagentSubStatus = {
+            ...block.subagent,
+            turns,
+            activityDropped: block.subagent.activityDropped + (activitySuppressed ?? 0),
+            final: { status, durationMs },
+          };
+          // The settle strips any stale permission-wait flag in the SAME
+          // atomic update (TASK.102 CUT-S2 §2.5/§10.1): a child cancelled or
+          // errored mid-ask must land as a terminal card, never one still
+          // claiming to wait (`waiting` outranks the terminal badge in the
+          // §2.5 priority order, so leaving it set would mask the outcome).
+          delete settled.waiting;
+          return { ...block, subagent: settled };
+        }),
       }));
     }
 
@@ -1666,12 +1788,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         case "tool_execution_start":
           patchToolCall(event.toolCallId, { status: "running" });
           return;
-        case "tool_result":
+        case "tool_result": {
+          // Live-canon (TASK.102 slice S1, CUT-S1 §3 W5 point 2): a settled
+          // Agent call's tool_result carries the SAME persisted snapshot
+          // (core W3) the ring-capped live subagent_* patches were
+          // approximating — on settle it becomes the authoritative source,
+          // replacing `subagent` WHOLESALE rather than merging (any
+          // divergence between the live ring and the true dropped count
+          // collapses to the honest persisted value the instant the call
+          // settles). A missing/malformed presentation leaves the live
+          // sub-status (if any) untouched.
+          const presented = event.outcome.result?.presentation?.subagent;
+          const decoded = presented !== undefined
+            ? decodeSubagentCardSnapshot(presented, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
+            : null;
           patchToolCall(event.outcome.toolCallId, {
             status: event.outcome.status,
             modelText: event.outcome.modelText,
+            ...(decoded !== null ? { subagent: projectSubagentCard(decoded) } : {}),
           });
           return;
+        }
 
         // ── loop end: footer block + turn goes idle again (immediate) ──
         case "loop_end": {
@@ -1867,7 +2004,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           patchSubagentProgress(event.toolCallId, event.turns, event.toolCalls, event.lastTool ?? null);
           return;
         case "subagent_end":
-          patchSubagentEnd(event.toolCallId, event.status, event.turns, event.durationMs);
+          patchSubagentEnd(event.toolCallId, event.status, event.turns, event.durationMs, event.activitySuppressed);
           return;
         // Per-child-tool activity (slice P7.18/F16b, design §4 W2): additive
         // AgentEvent variant riding the same agent_event envelope, appended to
@@ -1875,6 +2012,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // (patchSubagentActivity no-ops on a foreign/unseeded toolCallId).
         case "subagent_activity":
           patchSubagentActivity(event.toolCallId, event.toolName, event.summary);
+          return;
+        // Session-tier permission-wait flag (TASK.102 CUT-S2 §2.2/§2.5,
+        // store case pulled into S2a per §10.1): additive AgentEvent variant
+        // riding the same agent_event envelope; toggles
+        // `SubagentSubStatus.waiting` under the same S1 guards as
+        // progress/activity (unseeded/foreign toolCallId or settled `final`
+        // ⇒ no-op). Only a session-tier child ever produces it.
+        case "subagent_attention":
+          patchSubagentAttention(event.toolCallId, event.waiting);
           return;
 
         // ── Phase 3 workflow coarse-progress (design §2.3/§6, task 3.4.5):
@@ -1979,6 +2125,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // W10-FIX F2: pin is control-plane, set at port attach — OUTSIDE the session
       // slice so a host_ready respawn reset never drops it.
       pinnedConnection: null,
+      childSurface: false,
       workspace: null,
       model: null,
       mode: null,
@@ -2390,6 +2537,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
         set({ pinnedConnection });
+      },
+
+      setChildSurface(): void {
+        set({ childSurface: true });
       },
 
       setHostExited(): void {

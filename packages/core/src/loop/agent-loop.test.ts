@@ -411,6 +411,57 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
     expect("images" in parts[0]!).toBe(false);
   });
 
+  // ---------------------------------------------------------------------------
+  // presentation (TASK.102 slice S1 W3, CUT-S1 §3 W3): same carry-through
+  // precedent as images just above — a handler result's `presentation` rides
+  // ToolCallOutcome.result into the ToolResultPart via buildToolResultMessage.
+
+  it("carries a tool result's presentation from outcome.result into the tool message", async () => {
+    const presentation = {
+      subagent: {
+        kind: "subagent" as const,
+        version: 1 as const,
+        target: { kind: "inline" as const },
+        identity: { agentType: "explore", description: "d", model: null, engine: null },
+        counters: { turns: 1, toolCalls: 0, lastTool: null },
+        activity: { entries: [], dropped: 0 },
+        final: { status: "completed" as const, durationMs: 5 },
+      },
+    };
+    const presentationTool = makeTool({
+      handler: async () => ({ ok: true, output: { result: "ok" }, presentation }),
+    });
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      completeStep,
+    ]);
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: presentationTool }) });
+    await collect(loop.runTurn("spawn a subagent"));
+    const toolMsg = loop.history.toMessages().find((m) => m.role === "tool");
+    const parts = toolMsg?.content as unknown as Array<Record<string, unknown>>;
+    expect(parts[0]).toMatchObject({ type: "tool_result", presentation });
+  });
+
+  it("does NOT create a presentation key on a tool result without one (byte-lock)", async () => {
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      completeStep,
+    ]);
+    const loop = makeLoop({ modelPort });
+    await collect(loop.runTurn("plain tool"));
+    const toolMsg = loop.history.toMessages().find((m) => m.role === "tool");
+    const parts = toolMsg?.content as unknown as Array<Record<string, unknown>>;
+    expect("presentation" in parts[0]!).toBe(false);
+  });
+
   it("threads AgentLoopConfig.media into the dispatched tool ctx", async () => {
     const media: MediaCapabilityPort = { imageInputEnabled: () => true };
     let seen: MediaCapabilityPort | undefined;

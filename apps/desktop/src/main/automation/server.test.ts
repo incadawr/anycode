@@ -375,6 +375,150 @@ describe("routing reaches the handler layer", () => {
     expect(body.snapshot).toEqual({ tabs: [], activeTabId: null, states: {} });
     expect(body.tabs).toEqual([{ tabId: "t1", workspace: "/a", sessionId: "s1", state: "running", pid: 4242 }]);
   });
+
+  it("GET /state projects manager.listChildRuns() as childRuns (TASK.102 S2d D1), [] when the manager lacks it", async () => {
+    const childRuns = [
+      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 777 },
+    ];
+    const manager = fakeManager({ listChildRuns: () => childRuns });
+    const h = await boot({ manager });
+    const res = await fetch(url(h, "/state"), { headers: auth() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.childRuns).toEqual(childRuns);
+
+    const h2 = await boot({ manager: fakeManager() });
+    const res2 = await fetch(url(h2, "/state"), { headers: auth() });
+    const body2 = (await res2.json()) as Record<string, unknown>;
+    expect(body2.childRuns).toEqual([]);
+  });
+});
+
+describe("GET /child-runs (TASK.102 S2d D1, dev-only durable maintenance list)", () => {
+  it("401s without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/child-runs"));
+    expect(res.status).toBe(401);
+  });
+
+  it("filters listSessionsForMaintenance to child rows (parentSessionId present)", async () => {
+    const root = { id: "sess-root", workspace: "/ws", model: "m1", mode: "build" as const, createdAt: 1, updatedAt: 1 };
+    const child = {
+      id: "sess-c1",
+      workspace: "/ws",
+      model: "m1",
+      mode: "build" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      parentSessionId: "sess-root",
+      spawnToolCallId: "call-1",
+    };
+    const listSessionsForMaintenance = vi.fn(async () => [root, child]);
+    const h = await boot({ persistence: { listSessionsForMaintenance, deleteSessionTree: vi.fn() } });
+    const res = await fetch(url(h, "/child-runs"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, sessions: [child] });
+  });
+
+  it("answers unavailable (never throws) when no persistence dep was wired", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/child-runs"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, error: "persistence unavailable", errorKind: "unavailable" });
+  });
+});
+
+describe("POST /sessions/:id/delete-tree (TASK.102 S2d D3, CUT-S2 §4.2 п.12 dev-only cascade delete)", () => {
+  it("calls deleteSessionTree with the path id and returns its result", async () => {
+    const deleteSessionTree = vi.fn(async () => ({ deletedSessionIds: ["root-1", "child-1"], externalSessionRefs: [] }));
+    const h = await boot({ persistence: { listSessionsForMaintenance: vi.fn(async () => []), deleteSessionTree } });
+    const res = await fetch(url(h, "/sessions/root-1/delete-tree"), { method: "POST", headers: auth() });
+    expect(res.status).toBe(200);
+    expect(deleteSessionTree).toHaveBeenCalledWith("root-1");
+    expect(await res.json()).toEqual({ ok: true, deletedSessionIds: ["root-1", "child-1"], externalSessionRefs: [] });
+  });
+
+  it("answers unavailable (never throws) when no persistence dep was wired", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/sessions/root-1/delete-tree"), { method: "POST", headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, error: "persistence unavailable", errorKind: "unavailable" });
+  });
+});
+
+describe("POST /tabs/:tabId/child/open (TASK.102 S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
+  it("401s without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/child/open"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ spawnToolCallId: "call-1" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("forwards {tabId, spawnToolCallId} to the facade's childOpen", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/child/open"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ spawnToolCallId: "call-1" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls[0]).toContain('"childOpen"');
+    expect(calls[0]).toContain('["tab-a","call-1"]');
+  });
+
+  describe("zod fail-closed on the body — callFacade never reached", () => {
+    const BAD_BODIES: ReadonlyArray<{ label: string; body: unknown }> = [
+      { label: "empty object (no spawnToolCallId)", body: {} },
+      { label: "empty spawnToolCallId", body: { spawnToolCallId: "" } },
+      { label: "an extra field (strict)", body: { spawnToolCallId: "call-1", extra: true } },
+    ];
+
+    for (const bad of BAD_BODIES) {
+      it(`${bad.label} -> 400`, async () => {
+        const { window, calls } = fakeWindowCapture();
+        const h = await boot({ getWindow: () => window });
+        const res = await fetch(url(h, "/tabs/tab-a/child/open"), {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify(bad.body),
+        });
+        expect(res.status).toBe(400);
+        expect(calls).toHaveLength(0);
+      });
+    }
+  });
+});
+
+describe("GET /tabs/:tabId/child/layout (TASK.102 S3c, CUT-S3 §6.2 read-only probe)", () => {
+  it("401s without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/child/layout"));
+    expect(res.status).toBe(401);
+  });
+
+  it("forwards {tabId} to the facade's childLayoutState", async () => {
+    const facadeResult = { ok: true, view: { kind: "master" } };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/child/layout"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"childLayoutState"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("decodes a URL-encoded tabId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true, view: { kind: "master" } });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, `/tabs/${encodeURIComponent("tab a")}/child/layout`), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a"]');
+  });
 });
 
 describe("git routes (slice-5.8-R8-cut.md §2.3)", () => {

@@ -28,10 +28,14 @@ import { z } from "zod";
 import { gitCommandMessageSchema } from "../../shared/protocol.js";
 import {
   createTabNew,
+  childOpen,
+  childLayoutState,
   getSessions,
   getState,
   getStateForTab,
   health,
+  listChildRunsMaintenance,
+  deleteSessionTreeMaintenance,
   makeFacadeCaller,
   quit,
   resumeTab,
@@ -153,6 +157,7 @@ import {
 } from "./handlers.js";
 import type { PreviewHostHandle } from "../preview/preview-host.js";
 import type { MdDocDeps } from "../preview/md-doc.js";
+import type { PersistencePort } from "@anycode/core";
 
 /** 256 KB body cap (design §5): larger requests are refused before parsing. */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -179,6 +184,12 @@ export interface AutomationServerDeps {
    * identical live `previewHost`, not a second copy of the wiring.
    */
   mdDocDeps?: MdDocDeps;
+  /**
+   * Forwarded to `HandlerDeps.persistence` (TASK.102 S2d D1 `/child-runs`,
+   * widened by S2d D3 for `/sessions/:id/delete-tree`, CUT-S2 §4.2 п.12).
+   * Absent -> both routes degrade to `PERSISTENCE_UNAVAILABLE`, never throw.
+   */
+  persistence?: Pick<PersistencePort, "listSessionsForMaintenance" | "deleteSessionTree">;
 }
 
 export interface AutomationServerHandle {
@@ -301,6 +312,11 @@ const modelPillPickBody = z.discriminatedUnion("kind", [
 // pick body above — a plain `{open: boolean}` body, since the driver is a
 // single binary toggle (unlike the model-pill's multi-kind pick union). ──
 const ctxPopoverOpenBody = z.object({ open: z.boolean() }).strict();
+
+// TASK.102 S2d D1: `tabId` (the ROOT tab whose pane switches) rides in the
+// path (`/tabs/:tabId/child/open`), same posture as the ctx-popover body
+// above — a single required field naming which child.
+const childOpenBody = z.object({ spawnToolCallId: z.string().min(1) }).strict();
 
 // ── settings bodies (slice-P7.16-cut.md §5 W4): GLOBAL (app-level) routes, no
 // `:tabId` segment — Settings is not per-tab (same posture as the
@@ -636,6 +652,21 @@ async function route(
   if (method === "GET" && pathname === "/sessions") {
     return getSessions(deps);
   }
+  // TASK.102 S2d D1 (CUT-S2 §2.4/§4.1 additive): dev-only maintenance list of
+  // every DURABLE child-session row — see `listChildRunsMaintenance`'s own
+  // doc for how this differs from `/state`'s in-memory `childRuns`.
+  if (method === "GET" && pathname === "/child-runs") {
+    return listChildRunsMaintenance(deps);
+  }
+  // TASK.102 S2d D3 (CUT-S2 §4.2 п.12): dev-only direct cascade-delete —
+  // see `deleteSessionTreeMaintenance`'s own doc for why this exists (no
+  // production delete-session UI yet, CUT-S2 §6 names automation as the
+  // interim caller). `parts` shape mirrors `/child-runs` above one level
+  // deeper: `["sessions", ":id", "delete-tree"]`.
+  if (method === "POST" && parts[0] === "sessions" && parts.length === 3 && parts[2] === "delete-tree") {
+    parseBody(rawBody, emptyBody);
+    return deleteSessionTreeMaintenance(deps, decodeURIComponent(parts[1]!));
+  }
   if (method === "GET" && pathname === "/screenshot") {
     return screenshot(deps);
   }
@@ -688,6 +719,14 @@ async function route(
   // — same per-block-scoped GET shape as the agent-card probe above.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "try-again-button") {
     return tryAgainButtonState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // Child-layout probe (TASK.102 S3c, CUT-S3 §6.2): `/tabs/:tabId/child/layout`
+  // — read-only counterpart of `POST .../child/open` below, same
+  // `parts.length === 4` shape as the try-again-button/agent-card GET probes
+  // above. Every layout TRANSITION stays a real DOM click in the smoke
+  // (§6.1); this route only ever reads `childLayoutStore.view(rootTabId)`.
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "layout") {
+    return childLayoutState(deps, decodeURIComponent(parts[1]!));
   }
   // Preview probes (night-track wave-1 cut §2.8, 96-E): `/tabs/:tabId/previews`
   // — same per-tab GET shape as the todo-panel/model-pill probes above, but
@@ -1233,6 +1272,14 @@ async function route(
     const body = parseBody(rawBody, composerKeyBody);
     return composerKey(deps, tabId, body.key);
   }
+  // TASK.102 S2d D1 (CUT-S2 §4.2 п.5): `/tabs/:tabId/child/open` — same
+  // `parts.length === 4` shape as the slash-menu routes above, just with
+  // `child`/`open` in the `parts[2]`/`parts[3]` slots.
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "open") {
+    const tabId = decodeURIComponent(parts[1]!);
+    const body = parseBody(rawBody, childOpenBody);
+    return childOpen(deps, tabId, body.spawnToolCallId);
+  }
   // Dev-only host-kill lever (TASK.33 FIX-A): `/tabs/:tabId/host/kill` — same
   // `parts.length === 4` shape as the model-pill pick / ctx-popover open /
   // slash-menu routes above, forces the tab's real host child to exit so the
@@ -1395,6 +1442,7 @@ export function startAutomationServer(deps: AutomationServerDeps): Promise<Autom
     activeConnectionId: deps.activeConnectionId,
     previewHost: deps.previewHost,
     mdDocDeps: deps.mdDocDeps,
+    persistence: deps.persistence,
   };
 
   const server = createServer((req, res) => {

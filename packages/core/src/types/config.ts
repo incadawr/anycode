@@ -221,6 +221,20 @@ export const SUBAGENT_ACTIVITY_MAX_EVENTS = 500;
  */
 export const SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS = 80;
 
+/**
+ * Persisted subagent card constants (TASK.102 slice S1, CUT-S1 §2.2). The ring
+ * cap MUST equal the renderer's own SUBAGENT_ACTIVITY_RING (store.ts) — the S1
+ * renderer test asserts this equality directly (a parity test, not a shared
+ * import) so a future drift between the two is caught by the compiler, not by
+ * eyes: after a reload, "+N earlier" must never read shorter than the live feed.
+ */
+export const SUBAGENT_CARD_ACTIVITY_RING = 100;
+/** Combined UTF-8 byte cap across all retained activity entries' toolName+summary. */
+export const SUBAGENT_CARD_ACTIVITY_MAX_BYTES = 32_768;
+export const SUBAGENT_CARD_AGENT_TYPE_MAX_CHARS = 100;
+export const SUBAGENT_CARD_DESCRIPTION_MAX_CHARS = 500;
+export const SUBAGENT_CARD_MODEL_MAX_CHARS = 200;
+
 // ---------------------------------------------------------------------------
 // Phase 3 slice 3.2 constants (MCP client, design slice-3.2-cut.md §3.3)
 
