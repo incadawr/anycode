@@ -106,6 +106,23 @@ export type SessionMetaPatch = Partial<
   continuationMode?: "model" | "none" | null;
 };
 
+/**
+ * Result of a hard session delete (TASK.114). `deleted` are the root ids that
+ * were actually removed this call; `removedIds` is every row that left
+ * `sessions` (roots plus cascaded children); `counts` are the per-table rows
+ * the cascade deleted. Unknown ids are a no-op (absent from `deleted`).
+ */
+export interface SessionDeleteSummary {
+  deleted: string[];
+  removedIds: string[];
+  counts: {
+    historyItems: number;
+    checkpoints: number;
+    claudeTranscriptItems: number;
+    codexThreadItems: number;
+  };
+}
+
 export interface PersistencePort {
   createSession(meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta>;
   getSession(id: string): Promise<SessionMeta | null>;
@@ -117,5 +134,24 @@ export interface PersistencePort {
   /** Atomic swap of the whole history (compaction); MUST be transactional. */
   replaceHistory(sessionId: string, items: readonly HistoryItem[]): Promise<void>;
   loadHistory(sessionId: string): Promise<HistoryItem[]>;
+  /**
+   * TASK.114: hard-delete one session and its cascade (children of TASK.102
+   * when the `parent_session_id` column exists, history, checkpoints, and the
+   * shadow mirrors keyed by `external_session_ref`) in ONE transaction. The
+   * active-session gate lives with the caller (main), NOT here. An unknown id
+   * is a no-op, never a domain throw.
+   */
+  deleteSession(rootId: string): Promise<SessionDeleteSummary>;
+  /**
+   * TASK.114 bulk-delete candidates: sessions of this project whose
+   * `updatedAt` is older than `cutoffMs`. The `workspace` argument is the
+   * project-identity key (`projectRoot ?? workspace`, the sidebar's grouping
+   * key). Child sessions (`parent_session_id NOT NULL`, when that column
+   * exists) are excluded — they leave with their root's cascade, never on
+   * their own.
+   */
+  listSessionsOlderThan(workspace: string, cutoffMs: number): Promise<SessionMeta[]>;
+  /** TASK.114: deleteSession for each id in ONE transaction; summaries are aggregated. */
+  deleteSessions(ids: readonly string[]): Promise<SessionDeleteSummary>;
   close(): Promise<void>;
 }

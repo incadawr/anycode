@@ -32,6 +32,36 @@ export const TAB_CLOSE_CHANNEL = "anycode:tab-close";
 /** invoke channel: list persisted sessions for the picker. */
 export const SESSIONS_LIST_CHANNEL = "anycode:sessions-list";
 
+/** invoke channel: hard-delete one session and its cascade (TASK.114). */
+export const SESSION_DELETE_CHANNEL = "anycode:session-delete";
+
+/** invoke channel: bulk-delete a project's sessions older than N days (TASK.114); `dryRun` counts without deleting. */
+export const SESSIONS_DELETE_OLDER_CHANNEL = "anycode:sessions-delete-older";
+
+/** Aggregate of a session delete call (mirrors core's SessionDeleteSummary, value-only re-declaration). */
+export interface SessionDeleteSummaryWire {
+  deleted: string[];
+  /** Roots main refused as active (open in a tab / live tab on the workspace) — never reached persistence. */
+  skippedActive: string[];
+  removedIds: string[];
+  counts: {
+    historyItems: number;
+    checkpoints: number;
+    claudeTranscriptItems: number;
+    codexThreadItems: number;
+  };
+}
+
+/** Result of a session-delete request; `active` = the session is open in a tab or its project has a live tab. */
+export type DeleteSessionResult =
+  | { ok: true; summary: SessionDeleteSummaryWire }
+  | { ok: false; reason: "active" | "not_found" };
+
+/** Result of a bulk delete-older request (TASK.114); with `dryRun: true` nothing was deleted — `summary.deleted` is the candidate count source. */
+export type DeleteSessionsOlderResult =
+  | { ok: true; summary: SessionDeleteSummaryWire }
+  | { ok: false; reason: "unknown_workspace" };
+
 /** invoke channel: open the folder-picker dialog for the New Session start screen (slice P7.12 §4.4). No request payload. */
 export const WORKSPACE_PICK_CHANNEL = "anycode:workspace-pick";
 

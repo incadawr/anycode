@@ -21,6 +21,8 @@ import type { PersistencePort, SessionMeta } from "@anycode/core";
 import {
   ENGINES_LIST_CHANNEL,
   SESSIONS_LIST_CHANNEL,
+  SESSIONS_DELETE_OLDER_CHANNEL,
+  SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
@@ -30,6 +32,9 @@ import type {
   CloseTabResult,
   CreateTabRequest,
   CreateTabResult,
+  DeleteSessionResult,
+  DeleteSessionsOlderResult,
+  SessionDeleteSummaryWire,
   SessionSummary,
   WorkspacePickResult,
 } from "../shared/tabs.js";
@@ -81,7 +86,10 @@ export interface TabIpcDeps {
    * `SessionMetaPatch.connectionId` (already part of the core port — ZERO core
    * delta). No other new port methods needed.
    */
-  persistence: Pick<PersistencePort, "getSession" | "listSessions" | "touchSession">;
+  persistence: Pick<
+    PersistencePort,
+    "getSession" | "listSessions" | "touchSession" | "deleteSession" | "listSessionsOlderThan" | "deleteSessions"
+  >;
   dialog: DialogLike;
   /** Production gate proves the path is still a registered worktree on the persisted branch. */
   validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
@@ -174,6 +182,93 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
 ]);
 
 const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
+
+/** TASK.114: single hard-delete — the id only; the active/not-found verdicts are main's, below. */
+const sessionDeleteRequestSchema = z.object({ sessionId: z.string().min(1) });
+
+/**
+ * TASK.114: bulk delete of one project's sessions older than N whole days.
+ * `dryRun` counts the candidates (and the active skips) without deleting —
+ * the renderer's confirm dialog shows exactly this number BEFORE committing.
+ */
+const sessionsDeleteOlderRequestSchema = z.object({
+  workspace: z.string().min(1).max(4096),
+  olderThanDays: z.number().int().min(1).max(3650),
+  dryRun: z.boolean().optional(),
+});
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function emptyDeleteSummaryWire(): SessionDeleteSummaryWire {
+  return {
+    deleted: [],
+    skippedActive: [],
+    removedIds: [],
+    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+  };
+}
+
+/**
+ * TASK.114 active-session gate (the persistence layer itself never checks
+ * liveness): a session is undeletable while it is bound to a tab
+ * (`sessionOpenInTab`) OR while ANY open tab lives on its project — the
+ * second clause closes the spawn-window race (a running host whose row is
+ * not flushed yet) and covers a tab's running TASK.102 children, which never
+ * carry `openInTabId`.
+ */
+export function isSessionActive(deps: TabIpcDeps, sessionId: string, projectKey: string): boolean {
+  if (deps.manager.sessionOpenInTab(sessionId) !== undefined) {
+    return true;
+  }
+  return deps.manager.listTabs().some((tab) => tab.workspace === projectKey);
+}
+
+/** TASK.114: hard-delete one session. Exported for tests (tab-ipc.test.ts). */
+export async function handleSessionDelete(deps: TabIpcDeps, sessionId: string): Promise<DeleteSessionResult> {
+  const meta = await deps.persistence.getSession(sessionId);
+  if (meta === null) {
+    return { ok: false, reason: "not_found" };
+  }
+  const projectKey = meta.projectRoot ?? meta.workspace;
+  if (isSessionActive(deps, sessionId, projectKey)) {
+    return { ok: false, reason: "active" };
+  }
+  const summary = await deps.persistence.deleteSession(sessionId);
+  return { ok: true, summary: { ...summary, skippedActive: [] } };
+}
+
+/**
+ * TASK.114: bulk delete. Candidates come from `listSessionsOlderThan` (roots
+ * only — children ride their root's cascade); active ones are SKIPPED, not
+ * blocking, and reported in `skippedActive`. `dryRun` returns the exact same
+ * selection with zero deletion so the confirm dialog can quote the count.
+ * Exported for tests (tab-ipc.test.ts).
+ */
+export async function handleSessionsDeleteOlder(
+  deps: TabIpcDeps,
+  req: { workspace: string; olderThanDays: number; dryRun?: boolean },
+): Promise<DeleteSessionsOlderResult> {
+  const cutoff = Date.now() - req.olderThanDays * DAY_MS;
+  const candidates = await deps.persistence.listSessionsOlderThan(req.workspace, cutoff);
+  const deletable: string[] = [];
+  const skippedActive: string[] = [];
+  for (const meta of candidates) {
+    const projectKey = meta.projectRoot ?? meta.workspace;
+    if (isSessionActive(deps, meta.id, projectKey)) {
+      skippedActive.push(meta.id);
+    } else {
+      deletable.push(meta.id);
+    }
+  }
+  if (req.dryRun === true) {
+    const summary = emptyDeleteSummaryWire();
+    summary.deleted = deletable;
+    summary.skippedActive = skippedActive;
+    return { ok: true, summary };
+  }
+  const deleted = await deps.persistence.deleteSessions(deletable);
+  return { ok: true, summary: { ...deleted, skippedActive } };
+}
 
 /** exported for tests (tab-ipc.test.ts): the persistence->picker projection. */
 export function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSummary {
@@ -464,6 +559,22 @@ export function registerTabIpc(deps: TabIpcDeps): void {
   ipcMain.handle(SESSIONS_LIST_CHANNEL, async (): Promise<SessionSummary[]> => {
     const sessions = await deps.persistence.listSessions();
     return sessions.map((meta) => toSummary(meta, deps.manager));
+  });
+
+  ipcMain.handle(SESSION_DELETE_CHANNEL, async (_event, raw: unknown): Promise<DeleteSessionResult> => {
+    const parsed = sessionDeleteRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, reason: "not_found" };
+    }
+    return handleSessionDelete(deps, parsed.data.sessionId);
+  });
+
+  ipcMain.handle(SESSIONS_DELETE_OLDER_CHANNEL, async (_event, raw: unknown): Promise<DeleteSessionsOlderResult> => {
+    const parsed = sessionsDeleteOlderRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, reason: "unknown_workspace" };
+    }
+    return handleSessionsDeleteOlder(deps, parsed.data);
   });
 
   ipcMain.handle(WORKSPACE_PICK_CHANNEL, async (): Promise<WorkspacePickResult> => handleWorkspacePick(deps));
