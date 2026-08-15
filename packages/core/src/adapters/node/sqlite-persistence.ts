@@ -28,6 +28,7 @@ import type {
 } from "../../ports/checkpoints.js";
 import type {
   PersistencePort,
+  SessionDeleteSummary,
   SessionMeta,
   SessionMetaPatch,
   SessionWorktree,
@@ -1011,6 +1012,130 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       .prepare("SELECT * FROM claude_transcript_items WHERE session_ref = ? ORDER BY turn_ordinal ASC, position_in_turn ASC")
       .all(sessionRef) as unknown as ClaudeTranscriptItemRow[];
     return rows.map(rowToClaudeTranscriptItem);
+  }
+
+  // -------------------------------------------------------------------------
+  // Session hard-delete (TASK.114). The schema declares no ON DELETE CASCADE
+  // and we deliberately keep `PRAGMA foreign_keys` off, so the cascade below
+  // is manual, in ONE transaction, in our order. Child sessions (TASK.102)
+  // are discovered through a `parent_session_id` column that this branch's
+  // schema does not ship yet — the sqlite_master probe below makes the whole
+  // child walk conditional: absent column ⇒ root-only delete (no DDL invented
+  // for a sibling task); present column ⇒ recursive cascade with zero code
+  // change. The active-session gate is the caller's job (main/tab-ipc.ts).
+
+  /** True iff the sessions table carries TASK.102's parent link (schema from a later landing). */
+  private hasParentColumn(db: DatabaseSync): boolean {
+    const row = db
+      .prepare("SELECT COUNT(*) AS n FROM pragma_table_info('sessions') WHERE name = 'parent_session_id'")
+      .get() as { n: number };
+    return row.n > 0;
+  }
+
+  /** Root id plus every descendant via parent_session_id (cycle-guarded), or just [rootId] on the v12 schema. */
+  private sessionCascadeIds(db: DatabaseSync, rootId: string): string[] {
+    if (!this.hasParentColumn(db)) {
+      return [rootId];
+    }
+    const rows = db
+      .prepare(
+        `WITH RECURSIVE cascade(id) AS (
+           SELECT id FROM sessions WHERE id = ?
+           UNION
+           SELECT s.id FROM sessions s JOIN cascade c ON s.parent_session_id = c.id
+         )
+         SELECT DISTINCT id FROM cascade`,
+      )
+      .all(rootId) as unknown as { id: string }[];
+    return rows.map((row) => row.id);
+  }
+
+  private static emptyDeleteSummary(): SessionDeleteSummary {
+    return {
+      deleted: [],
+      removedIds: [],
+      counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+    };
+  }
+
+  private static mergeDeleteSummary(target: SessionDeleteSummary, add: SessionDeleteSummary): void {
+    target.deleted.push(...add.deleted);
+    target.removedIds.push(...add.removedIds);
+    target.counts.historyItems += add.counts.historyItems;
+    target.counts.checkpoints += add.counts.checkpoints;
+    target.counts.claudeTranscriptItems += add.counts.claudeTranscriptItems;
+    target.counts.codexThreadItems += add.counts.codexThreadItems;
+  }
+
+  /** One root's cascade inside an ALREADY-open transaction; unknown id is a no-op. */
+  private deleteSessionInTx(db: DatabaseSync, rootId: string): SessionDeleteSummary {
+    const summary = SqlitePersistenceAdapter.emptyDeleteSummary();
+    const ids = this.sessionCascadeIds(db, rootId);
+    const existing = db
+      .prepare(`SELECT id FROM sessions WHERE id IN (${ids.map(() => "?").join(",")})`)
+      .all(...ids) as unknown as { id: string }[];
+    if (existing.length === 0) {
+      return summary;
+    }
+    const liveIds = existing.map((row) => row.id);
+    const placeholders = liveIds.map(() => "?").join(",");
+    summary.counts.historyItems = Number(
+      db.prepare(`DELETE FROM history_items WHERE session_id IN (${placeholders})`).run(...liveIds).changes,
+    );
+    summary.counts.checkpoints = Number(
+      db.prepare(`DELETE FROM checkpoints WHERE session_id IN (${placeholders})`).run(...liveIds).changes,
+    );
+    // The shadow mirrors carry no FK — they key on the session's external
+    // engine reference, so collect the refs BEFORE deleting the sessions rows.
+    const refs = db
+      .prepare(`SELECT external_session_ref AS ref FROM sessions WHERE id IN (${placeholders}) AND external_session_ref IS NOT NULL`)
+      .all(...liveIds) as unknown as { ref: string }[];
+    if (refs.length > 0) {
+      const refPlaceholders = refs.map(() => "?").join(",");
+      const refValues = refs.map((row) => row.ref);
+      summary.counts.claudeTranscriptItems = Number(
+        db.prepare(`DELETE FROM claude_transcript_items WHERE session_ref IN (${refPlaceholders})`).run(...refValues).changes,
+      );
+      summary.counts.codexThreadItems = Number(
+        db.prepare(`DELETE FROM codex_thread_items WHERE thread_id IN (${refPlaceholders})`).run(...refValues).changes,
+      );
+    }
+    db.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...liveIds);
+    summary.deleted.push(rootId);
+    summary.removedIds.push(...liveIds);
+    return summary;
+  }
+
+  async deleteSession(rootId: string): Promise<SessionDeleteSummary> {
+    return this.deleteSessions([rootId]);
+  }
+
+  async deleteSessions(ids: readonly string[]): Promise<SessionDeleteSummary> {
+    const summary = SqlitePersistenceAdapter.emptyDeleteSummary();
+    if (ids.length === 0) {
+      return summary;
+    }
+    this.transaction((db) => {
+      for (const id of ids) {
+        SqlitePersistenceAdapter.mergeDeleteSummary(summary, this.deleteSessionInTx(db, id));
+      }
+    });
+    return summary;
+  }
+
+  async listSessionsOlderThan(workspace: string, cutoffMs: number): Promise<SessionMeta[]> {
+    const db = this.open();
+    // Children leave with their root's cascade, never as standalone bulk
+    // candidates — the parent filter is compiled in only when the column
+    // exists (same sqlite_master gate as the cascade). The match key mirrors
+    // the sidebar's grouping key (`projectRoot ?? workspace`).
+    const childFilter = this.hasParentColumn(db) ? " AND parent_session_id IS NULL" : "";
+    const rows = db
+      .prepare(
+        `SELECT * FROM sessions WHERE COALESCE(project_root, workspace) = ? AND updated_at < ?${childFilter} ORDER BY updated_at DESC`,
+      )
+      .all(workspace, cutoffMs) as unknown as SessionRow[];
+    return rows.map(rowToSessionMeta);
   }
 
   async close(): Promise<void> {

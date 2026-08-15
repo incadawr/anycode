@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SqlitePersistenceAdapter, WriteBehindHistorySink, type HistorySinkLogger } from "./sqlite-persistence.js";
 import type { CheckpointRecord } from "../../ports/checkpoints.js";
-import type { PersistencePort, SessionMeta } from "../../ports/persistence.js";
+import type { PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
 import type { HistoryItem } from "../../types/history.js";
 
 function makeItem(overrides: Partial<HistoryItem> = {}): HistoryItem {
@@ -1681,6 +1681,15 @@ describe("WriteBehindHistorySink", () => {
     loadHistory(): Promise<HistoryItem[]> {
       throw new Error("not used in this test");
     }
+    deleteSession(): Promise<SessionDeleteSummary> {
+      throw new Error("not used in this test");
+    }
+    listSessionsOlderThan(): Promise<SessionMeta[]> {
+      throw new Error("not used in this test");
+    }
+    deleteSessions(): Promise<SessionDeleteSummary> {
+      throw new Error("not used in this test");
+    }
     close(): Promise<void> {
       throw new Error("not used in this test");
     }
@@ -1829,5 +1838,208 @@ describe("WriteBehindHistorySink", () => {
       { op: "replaceHistory", items: [replacement] },
       { op: "append", items: [last] },
     ]);
+  });
+});
+
+/**
+ * TASK.114: session hard-delete cascade. All tests run on :memory: databases
+ * only — the owner's live DB (~/.anycode/anycode.sqlite) is never opened.
+ */
+describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
+  let deleteTmpDir: string | undefined;
+
+  beforeEach(() => {
+    // Sibling describes fake system time and their useRealTimers lands in
+    // THEIR afterEach — after our test has already run under a frozen clock
+    // (vitest hooks are scoped per-describe). The delete cutoff is wall-clock,
+    // so re-arm the real clock at the head of every test in this block.
+    vi.useRealTimers();
+  });
+
+  afterEach(async () => {
+    if (deleteTmpDir !== undefined) {
+      await rm(deleteTmpDir, { recursive: true, force: true });
+      deleteTmpDir = undefined;
+    }
+  });
+
+  /** Counts the rows of `table` still pointing at any of `ids` via `column`. */
+  function orphanCount(dbPath: string, table: string, column: string, ids: readonly string[]): number {
+    const db = new DatabaseSync(dbPath);
+    try {
+      const placeholders = ids.map(() => "?").join(",");
+      const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} IN (${placeholders})`).get(...ids) as { n: number };
+      return row.n;
+    } finally {
+      db.close();
+    }
+  }
+
+  async function seedFullSession(adapter: SqlitePersistenceAdapter, id: string, ref: string): Promise<void> {
+    await adapter.createSession({
+      id,
+      workspace: "/w",
+      model: "m",
+      mode: "build",
+      engineId: "codex",
+      externalSessionRef: ref,
+    });
+    await adapter.appendHistory(id, [makeItem({ id: `${id}-h1` })]);
+    await adapter.saveCheckpoint(makeCheckpoint({ id: `${id}-c1`, sessionId: id }));
+    await adapter.recordCodexThreadItem(ref, {
+      itemId: `${id}-cx1`,
+      turnOrdinal: 0,
+      positionInTurn: 0,
+      seqInTurn: 0,
+      command: "ls",
+    });
+    await adapter.recordClaudeTranscriptItem(ref, {
+      itemId: `${id}-cl1`,
+      turnOrdinal: 0,
+      positionInTurn: 0,
+      data: makeItem({ id: `${id}-cl1` }),
+    });
+  }
+
+  it("cascades through all four linked tables in one delete, leaving a sibling untouched", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "anycode-del-"));
+    deleteTmpDir = tmp;
+    const dbPath = join(tmp, "test.sqlite");
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    await seedFullSession(adapter, "victim", "ref-victim");
+    await seedFullSession(adapter, "keeper", "ref-keeper");
+
+    const summary = await adapter.deleteSession("victim");
+    expect(summary.deleted).toEqual(["victim"]);
+    expect(summary.removedIds).toEqual(["victim"]);
+    expect(summary.counts).toEqual({
+      historyItems: 1,
+      checkpoints: 1,
+      claudeTranscriptItems: 1,
+      codexThreadItems: 1,
+    });
+
+    // Zero orphan rows for the deleted session in every linked table.
+    expect(orphanCount(dbPath, "history_items", "session_id", ["victim"])).toBe(0);
+    expect(orphanCount(dbPath, "checkpoints", "session_id", ["victim"])).toBe(0);
+    expect(orphanCount(dbPath, "claude_transcript_items", "session_ref", ["ref-victim"])).toBe(0);
+    expect(orphanCount(dbPath, "codex_thread_items", "thread_id", ["ref-victim"])).toBe(0);
+    expect(await adapter.getSession("victim")).toBeNull();
+
+    // The sibling session keeps every row.
+    expect(await adapter.getSession("keeper")).not.toBeNull();
+    expect(orphanCount(dbPath, "history_items", "session_id", ["keeper"])).toBe(1);
+    expect(orphanCount(dbPath, "checkpoints", "session_id", ["keeper"])).toBe(1);
+    expect(orphanCount(dbPath, "claude_transcript_items", "session_ref", ["ref-keeper"])).toBe(1);
+    expect(orphanCount(dbPath, "codex_thread_items", "thread_id", ["ref-keeper"])).toBe(1);
+    await adapter.close();
+  });
+
+  it("is a no-op for an unknown id (no throw, zero counts)", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    const summary = await adapter.deleteSession("missing");
+    expect(summary.deleted).toEqual([]);
+    expect(summary.counts).toEqual({ historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 });
+    expect(await adapter.getSession("s1")).not.toBeNull();
+  });
+
+  it("deleteSessions aggregates multiple roots in one transaction", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await seedFullSession(adapter, "a", "ref-a");
+    await seedFullSession(adapter, "b", "ref-b");
+    const summary = await adapter.deleteSessions(["a", "b", "missing"]);
+    expect(summary.deleted).toEqual(["a", "b"]);
+    expect(summary.counts).toEqual({ historyItems: 2, checkpoints: 2, claudeTranscriptItems: 2, codexThreadItems: 2 });
+    expect(await adapter.listSessions()).toEqual([]);
+  });
+
+  it("listSessionsOlderThan matches the sidebar grouping key and the updatedAt cutoff", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const dayMs = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    await adapter.createSession({ id: "old", workspace: "/w", projectRoot: "/w", model: "m", mode: "build" });
+    await adapter.createSession({ id: "old-relocated", workspace: "/w/.wt/x", projectRoot: "/w", model: "m", mode: "build" });
+    // The sibling lives in another project — the /w query must not see it.
+    await adapter.createSession({ id: "other", workspace: "/other", model: "m", mode: "build" });
+    const candidates = await adapter.listSessionsOlderThan("/w", now - 30 * dayMs);
+    // created just now → nothing is older than 30 days yet
+    expect(candidates).toEqual([]);
+    const everything = await adapter.listSessionsOlderThan("/w", now + 1000);
+    // The worktree-relocated session groups under /w via projectRoot; the
+    // /other project is out of scope even though it is just as old. (Cutoff
+    // is now+1s, never a bare `now` — node:sqlite binds JS numbers at ms
+    // magnitude as REAL, so an INTEGER column compares EQUAL at the boundary:
+    // cutoff must clear the write timestamp visibly.)
+    expect(everything.map((s) => s.id).sort()).toEqual(["old", "old-relocated"]);
+    expect((await adapter.listSessionsOlderThan("/other", now + 1000)).map((s) => s.id)).toEqual(["other"]);
+  });
+
+  describe("with TASK.102 child sessions (parent_session_id grafted on)", () => {
+    /** Grafts TASK.102's link columns onto a fresh :memory: schema (no CHECK — link-only). */
+    async function makeChildCapableAdapter(): Promise<SqlitePersistenceAdapter> {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.listSessions({ limit: 1 }); // force open + migrate
+      const db = (adapter as unknown as { db: DatabaseSync }).db;
+      db.exec("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
+      db.exec("ALTER TABLE sessions ADD COLUMN spawn_tool_call_id TEXT");
+      return adapter;
+    }
+
+    async function linkChild(adapter: SqlitePersistenceAdapter, childId: string, parentId: string): Promise<void> {
+      const db = (adapter as unknown as { db: DatabaseSync }).db;
+      db.prepare("UPDATE sessions SET parent_session_id = ?, spawn_tool_call_id = ? WHERE id = ?").run(
+        parentId,
+        `spawn-${childId}`,
+        childId,
+      );
+    }
+
+    it("deleting a parent cascades to children AND grandchildren", async () => {
+      const adapter = await makeChildCapableAdapter();
+      await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
+      await adapter.createSession({ id: "child", workspace: "/w", model: "m", mode: "build" });
+      await adapter.createSession({ id: "grandchild", workspace: "/w", model: "m", mode: "build" });
+      await adapter.appendHistory("child", [makeItem({ id: "child-h" })]);
+      await linkChild(adapter, "child", "root");
+      await linkChild(adapter, "grandchild", "child");
+
+      const summary = await adapter.deleteSession("root");
+      expect(summary.deleted).toEqual(["root"]);
+      expect(summary.removedIds.sort()).toEqual(["child", "grandchild", "root"]);
+      expect(summary.counts.historyItems).toBe(1);
+      expect(await adapter.listSessions()).toEqual([]);
+    });
+
+    it("deleting a child removes only its own subtree; the parent survives", async () => {
+      const adapter = await makeChildCapableAdapter();
+      await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
+      await adapter.createSession({ id: "child", workspace: "/w", model: "m", mode: "build" });
+      await adapter.createSession({ id: "grandchild", workspace: "/w", model: "m", mode: "build" });
+      await linkChild(adapter, "child", "root");
+      await linkChild(adapter, "grandchild", "child");
+
+      const summary = await adapter.deleteSession("child");
+      expect(summary.removedIds.sort()).toEqual(["child", "grandchild"]);
+      expect((await adapter.listSessions()).map((s) => s.id)).toEqual(["root"]);
+    });
+
+    it("listSessionsOlderThan excludes children — they leave with their root", async () => {
+      const adapter = await makeChildCapableAdapter();
+      await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
+      await adapter.createSession({ id: "child", workspace: "/w", model: "m", mode: "build" });
+      await linkChild(adapter, "child", "root");
+      const candidates = await adapter.listSessionsOlderThan("/w", Date.now() + 1);
+      expect(candidates.map((s) => s.id)).toEqual(["root"]);
+    });
+  });
+
+  it("root-only delete on the vanilla v12 schema (no parent_session_id) never touches sibling rows", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "a", workspace: "/w", model: "m", mode: "build" });
+    await adapter.createSession({ id: "b", workspace: "/w", model: "m", mode: "build" });
+    const summary = await adapter.deleteSession("a");
+    expect(summary.removedIds).toEqual(["a"]);
+    expect((await adapter.listSessions()).map((s) => s.id)).toEqual(["b"]);
   });
 });

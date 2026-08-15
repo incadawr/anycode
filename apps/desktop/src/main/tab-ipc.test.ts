@@ -9,10 +9,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { homedir } from "node:os";
-import type { CreateTabRequest } from "../shared/tabs.js";
+import type { CreateTabRequest, SessionDeleteSummaryWire } from "../shared/tabs.js";
 import {
   createTabRequestSchema,
   handleCreate,
+  handleSessionDelete,
+  handleSessionsDeleteOlder,
   handleWorkspacePick,
   toSummary,
   type DialogLike,
@@ -70,6 +72,17 @@ const persistenceStub: TabIpcDeps["persistence"] = {
   getSession: async () => null,
   listSessions: async () => [],
   touchSession: async () => {},
+  deleteSession: async () => ({
+    deleted: [],
+    removedIds: [],
+    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+  }),
+  listSessionsOlderThan: async () => [],
+  deleteSessions: async () => ({
+    deleted: [],
+    removedIds: [],
+    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+  }),
 };
 
 /**
@@ -1230,5 +1243,163 @@ describe('e2e-negative: engine:"claude" is refused by spawnableWhenKnown, NOT by
 
     expect(res.ok).toBe(true);
     expect(forked).toEqual(["/fake/host.js"]);
+  });
+});
+
+/**
+ * TASK.114: session hard-delete handlers. The persistence cascade itself is
+ * pinned in core's sqlite-persistence.test.ts; here the gate is main's:
+ * active sessions refuse, unknown ids refuse, bulk skips actives and a
+ * dry-run deletes nothing.
+ */
+describe("handleSessionDelete (TASK.114)", () => {
+  function metaOf(id: string, workspace = "/proj"): SessionMeta {
+    return { id, workspace, model: "m", mode: "build", createdAt: 1, updatedAt: 1 };
+  }
+
+  function makePersistence(over: Partial<TabIpcDeps["persistence"]> = {}) {
+    const deletedWith: string[][] = [];
+    const persistence: TabIpcDeps["persistence"] = {
+      ...persistenceStub,
+      deleteSession: async (id: string) => {
+        deletedWith.push([id]);
+        return { deleted: [id], removedIds: [id], counts: { historyItems: 1, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } };
+      },
+      ...over,
+    };
+    return { persistence, deletedWith };
+  }
+
+  function makeManagerWith(opts: { openInTab?: Record<string, string>; tabs?: Array<{ tabId: string; workspace: string; sessionId: string }> }) {
+    const base = makeManager();
+    const manager = {
+      ...base.manager,
+      sessionOpenInTab: (id: string) => opts.openInTab?.[id],
+      listTabs: () =>
+        (opts.tabs ?? []).map((t) => ({ tabId: t.tabId, workspace: t.workspace, sessionId: t.sessionId, state: "running", pid: 1 })),
+    } as unknown as TabHostManager;
+    return manager;
+  }
+
+  it("refuses an unknown session (not_found), persistence untouched", async () => {
+    const { persistence, deletedWith } = makePersistence({ getSession: async () => null });
+    const manager = makeManagerWith({});
+    const res = await handleSessionDelete({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, "nope");
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+    expect(deletedWith).toEqual([]);
+  });
+
+  it("refuses a session open in a tab (active)", async () => {
+    const { persistence, deletedWith } = makePersistence({ getSession: async () => metaOf("s1") });
+    const manager = makeManagerWith({ openInTab: { s1: "tab-1" } });
+    const res = await handleSessionDelete({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, "s1");
+    expect(res).toEqual({ ok: false, reason: "active" });
+    expect(deletedWith).toEqual([]);
+  });
+
+  it("refuses a session whose project has ANY live tab (spawn-window race)", async () => {
+    const { persistence, deletedWith } = makePersistence({ getSession: async () => metaOf("s1", "/proj") });
+    const manager = makeManagerWith({ tabs: [{ tabId: "tab-9", workspace: "/proj", sessionId: "other" }] });
+    const res = await handleSessionDelete({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, "s1");
+    expect(res).toEqual({ ok: false, reason: "active" });
+    expect(deletedWith).toEqual([]);
+  });
+
+  it("deletes an idle session and returns the cascade summary", async () => {
+    const { persistence } = makePersistence({ getSession: async () => metaOf("s1") });
+    const manager = makeManagerWith({});
+    const res = await handleSessionDelete({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, "s1");
+    expect(res).toEqual({
+      ok: true,
+      summary: {
+        deleted: ["s1"],
+        skippedActive: [],
+        removedIds: ["s1"],
+        counts: { historyItems: 1, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+      },
+    });
+  });
+});
+
+describe("handleSessionsDeleteOlder (TASK.114)", () => {
+  function metaOf(id: string, workspace = "/proj", updatedAt = 1): SessionMeta {
+    return { id, workspace, model: "m", mode: "build", createdAt: updatedAt, updatedAt };
+  }
+
+  function makeBulkPersistence(candidates: SessionMeta[]) {
+    const listArgs: Array<{ workspace: string; cutoff: number }> = [];
+    const deletedIds: string[][] = [];
+    const persistence: TabIpcDeps["persistence"] = {
+      ...persistenceStub,
+      listSessionsOlderThan: async (workspace: string, cutoff: number) => {
+        listArgs.push({ workspace, cutoff });
+        return candidates;
+      },
+      deleteSessions: async (ids: readonly string[]) => {
+        deletedIds.push([...ids]);
+        return {
+          deleted: [...ids],
+          removedIds: [...ids],
+          counts: { historyItems: ids.length, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+        };
+      },
+    };
+    return { persistence, listArgs, deletedIds };
+  }
+
+  const idleManager = () =>
+    ({ ...makeManager().manager, listTabs: () => [] }) as unknown as TabHostManager;
+
+  it("deletes candidates, skips actives, and reports both", async () => {
+    const candidates = [metaOf("old-1"), metaOf("old-2"), metaOf("old-3")];
+    const { persistence, deletedIds } = makeBulkPersistence(candidates);
+    const manager = {
+      ...makeManager().manager,
+      sessionOpenInTab: (id: string) => (id === "old-2" ? "tab-7" : undefined),
+      listTabs: () => [],
+    } as unknown as TabHostManager;
+    const res = await handleSessionsDeleteOlder({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, {
+      workspace: "/proj",
+      olderThanDays: 30,
+    });
+    expect(deletedIds).toEqual([["old-1", "old-3"]]);
+    expect(res).toEqual({
+      ok: true,
+      summary: expect.objectContaining({ deleted: ["old-1", "old-3"], skippedActive: ["old-2"] }),
+    });
+  });
+
+  it("dryRun reports the exact selection and deletes NOTHING", async () => {
+    const candidates = [metaOf("old-1"), metaOf("old-2")];
+    const { persistence, deletedIds } = makeBulkPersistence(candidates);
+    const res = await handleSessionsDeleteOlder({ manager: idleManager(), persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, {
+      workspace: "/proj",
+      olderThanDays: 30,
+      dryRun: true,
+    });
+    expect(deletedIds).toEqual([]);
+    expect(res).toEqual({
+      ok: true,
+      summary: expect.objectContaining({
+        deleted: ["old-1", "old-2"],
+        skippedActive: [],
+        counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+      }),
+    });
+  });
+
+  it("passes a cutoff of olderThanDays whole days", async () => {
+    const { persistence, listArgs } = makeBulkPersistence([]);
+    const before = Date.now();
+    await handleSessionsDeleteOlder({ manager: idleManager(), persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, {
+      workspace: "/proj",
+      olderThanDays: 30,
+      dryRun: true,
+    });
+    const after = Date.now();
+    expect(listArgs).toHaveLength(1);
+    expect(listArgs[0]!.workspace).toBe("/proj");
+    expect(listArgs[0]!.cutoff).toBeGreaterThanOrEqual(before - 30 * 24 * 60 * 60 * 1000);
+    expect(listArgs[0]!.cutoff).toBeLessThanOrEqual(after - 30 * 24 * 60 * 60 * 1000);
   });
 });
