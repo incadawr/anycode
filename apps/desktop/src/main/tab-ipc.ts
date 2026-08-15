@@ -236,21 +236,30 @@ function emptyDeleteSummaryWire(): SessionDeleteSummaryWire {
 
 /**
  * TASK.114 active-session gate (the persistence layer itself never checks
- * liveness): a session is undeletable while it is bound to a tab
- * (`sessionOpenInTab`) OR while ANY open tab lives on its project — the
- * second clause closes the spawn-window race (a running host whose row is
- * not flushed yet) and covers a tab's running TASK.102 children, which never
- * carry `openInTabId`. A worktree tab's `workspace` is the WORKTREE path,
- * while the session's identity key is its `projectRoot ?? workspace` — so a
- * tab counts as "on this project" when it matches EITHER the session's
- * project key or its raw workspace (the worktree-relocated session's own
- * `workspace` is the worktree path, matching its tab exactly).
+ * liveness): a session is undeletable while THAT session is bound to a live
+ * tab. Two accessors answer the same question, because `sessionOpenInTab`
+ * alone has a spawn-window race — a running host whose session row is not
+ * flushed yet is reachable through `listTabs()` before the index answers for
+ * it — and a worktree-relocated tab is reached the same way.
+ *
+ * Narrowed by the owner's live smoke 15.08 (TASK.114 defect 3). The original
+ * clause refused a session while ANY tab lived on its project, which hid the
+ * delete affordance from EVERY row of a project as soon as one session there
+ * was open — i.e. in the state the app is normally in. A sibling session is
+ * not a conflict: the sidebar lists roots only, `deleteSessionTree` walks the
+ * target's own tree, and the store is one database either way. TASK.102
+ * children need no clause of their own — a child runs inside its root's host,
+ * so a root with no tab has no running child to protect.
  */
-export function isSessionActive(deps: TabIpcDeps, sessionId: string, projectKey: string, workspace?: string): boolean {
+export function isSessionActive(deps: TabIpcDeps, sessionId: string): boolean {
   if (deps.manager.sessionOpenInTab(sessionId) !== undefined) {
     return true;
   }
-  return deps.manager.listTabs().some((tab) => tab.workspace === projectKey || (workspace !== undefined && tab.workspace === workspace));
+  // Second accessor, same question: a tab may carry the session id without the
+  // openInTab index answering for it (spawn window, relocated worktree tab).
+  // Matching on the ID — never on the workspace — is what keeps a SIBLING
+  // session of the same project deletable.
+  return deps.manager.listTabs().some((tab) => tab.sessionId === sessionId);
 }
 
 /** TASK.114: hard-delete one session. Exported for tests (tab-ipc.test.ts). */
@@ -259,8 +268,7 @@ export async function handleSessionDelete(deps: TabIpcDeps, sessionId: string): 
   if (meta === null) {
     return { ok: false, reason: "not_found" };
   }
-  const projectKey = meta.projectRoot ?? meta.workspace;
-  if (isSessionActive(deps, sessionId, projectKey, meta.workspace)) {
+  if (isSessionActive(deps, sessionId)) {
     return { ok: false, reason: "active" };
   }
   const summary = await deps.persistence.deleteSession(sessionId);
@@ -283,8 +291,7 @@ export async function handleSessionsDeleteOlder(
   const deletable: string[] = [];
   const skippedActive: string[] = [];
   for (const meta of candidates) {
-    const projectKey = meta.projectRoot ?? meta.workspace;
-    if (isSessionActive(deps, meta.id, projectKey, meta.workspace)) {
+    if (isSessionActive(deps, meta.id)) {
       skippedActive.push(meta.id);
     } else {
       deletable.push(meta.id);

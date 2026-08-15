@@ -952,6 +952,20 @@ body {
   font-size: var(--fs-2xs);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;  /* ages tick + right-align as a column (R15 tabular law) */
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+/* TASK.114 review (live smoke 15.08): the delete affordance reused the close
+   (×) geometry verbatim — absolutely positioned over the row's right edge.
+   Safe for an OPEN row, which paints nothing there; a resumable row paints
+   the age label in that exact spot, so the trash glyph landed on top of it.
+   Swap instead of stack: the age fades on the same hover/focus trigger that
+   reveals the delete, and only while the delete is actually revealable — a
+   disabled delete stays hidden (live-tab guard), so its row must keep the age
+   rather than clear the slot for nothing. */
+.sidebar-row-wrap:hover:has(.sidebar-row-delete:not(:disabled)) .sidebar-row-age,
+.sidebar-row-wrap:has(.sidebar-row-delete:focus-visible:not(:disabled)) .sidebar-row-age {
+  opacity: 0;
 }
 
 .sidebar-row-title mark,

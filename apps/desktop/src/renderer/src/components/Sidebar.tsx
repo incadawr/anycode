@@ -319,14 +319,20 @@ export function clampMenuLeft(triggerLeft: number, menuWidth: number, viewportWi
 // confirm dialogs are the irreversibility brake (task decisions 1/4/5).
 
 /**
- * TASK.114 gate (decision 4): a resumable row's delete affordance is offered
- * ONLY while its project has no live tab — main's `isSessionActive` refuses
- * exactly then (a session open in a tab OR any live tab on the project), so
- * the renderer never offers an action main would refuse. Open rows carry no
- * delete at all (they are live by definition).
+ * TASK.114 gate (decision 4, narrowed after the owner's live smoke 15.08):
+ * a resumable row offers delete unless THAT session is open in a live tab —
+ * the same question main's `isSessionActive` asks, so the renderer never
+ * offers an action main would refuse. Open rows carry no delete at all (they
+ * are live by definition), and a resumable row is deduped against live tabs
+ * when the groups are built — so `sessionOpenInTab` is a belt-and-braces
+ * guard for the window where the session index is staler than `tabs`.
+ *
+ * It was `projectHasLiveTab` before, which hid the affordance from EVERY row
+ * of a project as soon as one session there was open. A sibling session is
+ * not a conflict — see the gate's own comment in main/tab-ipc.ts.
  */
-export function isRowDeletable(kind: SidebarRow["kind"], projectHasLiveTab: boolean): boolean {
-  return kind === "resumable" && !projectHasLiveTab;
+export function isRowDeletable(kind: SidebarRow["kind"], sessionOpenInTab: boolean): boolean {
+  return kind === "resumable" && !sessionOpenInTab;
 }
 
 /** Confirm copy for a single hard delete — names the task, states irreversibility. */
@@ -1015,7 +1021,7 @@ export function Sidebar({
                         type="button"
                         className="sidebar-row-delete"
                         aria-label={`Delete ${row.title}`}
-                        disabled={!isRowDeletable(row.kind, tabs.some((t) => (t.projectRoot ?? t.workspace) === group.workspace))}
+                        disabled={!isRowDeletable(row.kind, tabs.some((t) => t.sessionId === row.sessionId))}
                         onClick={() => void deleteSessionById(row.sessionId!, row.title)}
                       >
                         <Trash />

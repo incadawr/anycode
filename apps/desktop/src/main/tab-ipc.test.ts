@@ -1420,17 +1420,30 @@ describe("handleSessionDelete (TASK.114)", () => {
     expect(deletedWith).toEqual([]);
   });
 
-  it("refuses a session whose project has ANY live tab (spawn-window race)", async () => {
+  it("refuses a session carried by a tab the openInTab index has not answered for yet (spawn-window race)", async () => {
     const { persistence, deletedWith } = makePersistence({ getRootSession: async () => metaOf("s1", "/proj") });
-    const manager = makeManagerWith({ tabs: [{ tabId: "tab-9", workspace: "/proj", sessionId: "other" }] });
+    const manager = makeManagerWith({ tabs: [{ tabId: "tab-9", workspace: "/proj", sessionId: "s1" }] });
     const res = await handleSessionDelete({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, "s1");
     expect(res).toEqual({ ok: false, reason: "active" });
     expect(deletedWith).toEqual([]);
   });
 
+  // Live smoke 15.08 (defect 3): the gate used to refuse on ANY live tab of
+  // the project, so one open session made every OTHER session there
+  // undeletable — the state the app is normally in. A sibling is not a
+  // conflict: roots only, and the cascade walks the target's own tree.
+  it("deletes a session while a SIBLING session of the same project is open", async () => {
+    const { persistence, deletedWith } = makePersistence({ getRootSession: async () => metaOf("s1", "/proj") });
+    const manager = makeManagerWith({ tabs: [{ tabId: "tab-9", workspace: "/proj", sessionId: "other" }] });
+    const res = await handleSessionDelete({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, "s1");
+    expect(res).toEqual({ ok: true, summary: expect.objectContaining({ deleted: ["s1"] }) });
+    expect(deletedWith).toEqual([["s1"]]);
+  });
+
   it("refuses a worktree-relocated session whose live tab runs in the worktree (workspace ≠ projectRoot)", async () => {
-    // The session groups under /proj (projectRoot) but its tab's workspace is
-    // the worktree path — the gate must match EITHER key.
+    // The session groups under /proj (projectRoot) while its tab's workspace
+    // is the worktree path: the gate matches on the session ID, so neither
+    // key has to line up for the refusal to hold.
     const { persistence, deletedWith } = makePersistence({
       getRootSession: async () => ({ ...metaOf("s1", "/proj/.wt/x"), projectRoot: "/proj" }),
     });
