@@ -4357,12 +4357,11 @@ export function createAutomationFacade(
         return { ok: false, reason: "invalid_mode" };
       }
       const state = store.getState();
-      // Mirrors Composer.handleModeChange's guard (design §3.2): ready && idle.
+      // Mirrors Composer.handleModeChange's guard (TASK.37): ready only — a
+      // running turn no longer refuses; the mode applies to the turn's next
+      // permission decision.
       if (state.connection !== "ready") {
         return { ok: false, reason: "not_ready" };
-      }
-      if (state.turn.status !== "idle") {
-        return { ok: false, reason: "busy" };
       }
       const message: UiToHostMessage = { type: "set_mode", mode };
       registry.sendToTab(tabId, message);

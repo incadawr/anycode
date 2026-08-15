@@ -7,13 +7,14 @@
  *
  * Extracted from Composer's old 5-radio `.composer-modes` row (UI-5). The parent
  * owns the wire traffic: `onChange` is Composer's `handleModeChange`, which keeps
- * the `set_mode` send + the `running || !ready || next === mode` guard byte-for-
- * byte. `disabled` mirrors Composer's mode-change disabled rule (a running turn
- * or a not-`ready` connection); a disabled chip can't open.
+ * the `set_mode` send + the `modeChangeDisabled(turn.status, ready) || next ===
+ * mode` guard. `disabled` mirrors a not-`ready` connection (TASK.37: a running
+ * turn no longer gates mode changes); a disabled chip can't open.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { PermissionMode } from "@anycode/core";
+import type { TurnState } from "../store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Check, Chevron } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson, same fix ModelPill's own popover
@@ -89,6 +90,19 @@ export function modeIndexForDigit(code: string, count: number): number | null {
   }
   const index = Number(match[1]) - 1;
   return index < count ? index : null;
+}
+
+/**
+ * Mode-change availability (TASK.37): gated on connection readiness ONLY. The
+ * signature deliberately still takes the turn status and ignores it — the mode
+ * is policy for the NEXT permission decision, so a running turn no longer
+ * disables the chip, the keyboard summon, or the slash toggle (contrast
+ * modelPickDisabled, which keeps its between-turns busy gate: model switching
+ * remains turn-boundary-only per TASK.37's own scope). Host stays the source
+ * of truth; not-ready has no host to send to. Exported for unit testing.
+ */
+export function modeChangeDisabled(_turnStatus: TurnState["status"], ready: boolean): boolean {
+  return !ready;
 }
 
 export interface ModeMenuProps {

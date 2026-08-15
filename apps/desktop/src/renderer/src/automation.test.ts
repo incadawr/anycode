@@ -441,16 +441,30 @@ describe("automation facade — setMode", () => {
     expect(port.sent).toEqual([{ type: "ui_ready" }]);
   });
 
-  it("rejects while a turn is running (mode unchanged), sending nothing", () => {
+  it("MA1: sends set_mode while a turn is running (TASK.37 — busy no longer refuses), valid against uiToHostMessageSchema", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
     port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 
     const result = facade.setMode(tabId, "plan");
 
-    expect(result).toEqual({ ok: false, reason: "busy" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
-    expect(registry.getStore(tabId)!.getState().mode).toBe("build");
+    expect(result).toEqual({ ok: true });
+    const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
+    expect(sentMessages).toEqual([{ type: "set_mode", mode: "plan" }]);
+    expect(uiToHostMessageSchema.safeParse(sentMessages[0]).success).toBe(true);
+  });
+
+  it("MA2: not-ready still refuses, sending nothing", () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port)); // never emits host_ready -> stays awaiting_host_ready
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.setMode("tab-a", "plan");
+
+    expect(result).toEqual({ ok: false, reason: "not_ready" });
+    expect(port.sent).toEqual([{ type: "ui_ready" }]); // only the handshake, no set_mode
   });
 
   it("sends set_mode when ready+idle+valid, valid against uiToHostMessageSchema", () => {

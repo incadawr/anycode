@@ -2,10 +2,10 @@
  * Message input + turn controls (design §5, restructured in UI-5). Sends
  * `user_message` / `cancel_turn` / `set_mode` through the active tab's
  * connection (Phase-2 §4.3: `useTabSend`, the migrated equivalent of the old
- * singleton `sendToHost`). The composer (and mode switcher) is blocked whenever
- * a turn is running; the mode switcher is additionally blocked while the
- * connection isn't `ready` (set_mode is only valid between turns, and there's
- * no host to send it to before host_ready anyway).
+ * singleton `sendToHost`). The composer is blocked whenever a turn is running;
+ * the mode switcher is blocked only while the connection isn't `ready`
+ * (TASK.37: set_mode is valid mid-turn and applies to the next permission
+ * decision).
  *
  * UI-5 layout: an elevated card holding a borderless auto-growing textarea, a
  * footer with the escalation-graded ModeMenu chip on the left and a context
@@ -27,7 +27,7 @@ import {
   visiblePasteBlocks,
   type PasteBlock,
 } from "../paste.js";
-import { ModeMenu } from "./ModeMenu.js";
+import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
 import { EngineModelMenu, EnginePresetMenu, engineControlDisabled } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
@@ -1230,7 +1230,7 @@ export function Composer() {
   }
 
   function handleModeChange(next: PermissionMode): void {
-    if (running || !ready || next === mode) {
+    if (modeChangeDisabled(turn.status, ready) || next === mode) {
       return;
     }
     sendToHost({ type: "set_mode", mode: next });
@@ -1479,7 +1479,7 @@ export function Composer() {
               presentation-driven control — core's ModeMenu/permission
               vocabulary is never used for it (`supportsCorePermissions`
               stays false for Codex, so the two are mutually exclusive). */}
-          {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={running || !ready} onChange={handleModeChange} />}
+          {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={modeChangeDisabled(turn.status, ready)} onChange={handleModeChange} />}
           {engine?.permissions && (
             <EnginePresetMenu
               permissions={engine.permissions}

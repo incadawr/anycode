@@ -339,7 +339,7 @@ export type UiToHostMessage =
       // ignores this field until 2.2.3 (no-op by construction).
       remember?: { pattern?: string };
     } // MVP UI only ever sends allow/deny (no input editing); 2.2 adds optional `remember`
-  | { type: "set_mode"; mode: PermissionMode } // only valid between turns
+  | { type: "set_mode"; mode: PermissionMode } // valid between turns AND mid-turn (TASK.37): applies to the next not-yet-taken permission decision; an already-open ask completes under its snapshotted mode
   | { type: "set_reasoning_effort"; effort: ReasoningEffort }
   // Slice P7.15 (F14): mid-session model switch (mirror of the CLI `/model`
   // re-budget, host-side switch not a respawn). Untrusted -> validated by

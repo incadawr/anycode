@@ -13,7 +13,8 @@
  *
  * Wire: picking a model sends `set_model`; picking an effort sends the
  * existing `set_reasoning_effort` (host guard silently drops both while
- * busy — mirrors ModeMenu's `set_mode`). `modelPickDisabled` is the
+ * busy; since TASK.37 `set_mode` is the exception — mode changes are
+ * accepted mid-turn). `modelPickDisabled` is the
  * client-side mirror of that guard (F15's `shouldEnqueue` plus `!ready`) so
  * the chip itself goes unclickable rather than offering a pick the host
  * would reject.
