@@ -393,7 +393,9 @@ export type FetchModelsFailureReason =
   | "response_too_large"
   | "timeout"
   | "network_error"
-  | "invalid_response";
+  | "invalid_response"
+  | "error_payload"
+  | "empty_models";
 
 export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
 

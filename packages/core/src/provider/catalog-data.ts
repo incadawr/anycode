@@ -51,10 +51,25 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // TASK.113 (2026-08-15): refreshed to the live docs.z.ai model line (guides/llm
+    // sidebar + each page's spec box and code samples). Fresh-first so the first
+    // chip — the empty-model prefill — is the newest model. reasoning/effortLevels
+    // stay only where a source confirmed them (glm-5.2's native 3-state UI); the
+    // rest of the 5.x/4.7 line advertises "multiple thinking modes" without a
+    // confirmed level set, so those fields stay absent rather than guessed.
+    // GLM-5.3's id is owner-confirmed live on the coding plan (works via manual
+    // entry); docs.z.ai carries the page but no code sample yet ("API coming
+    // soon"). 4.5/4.5-air numbers predate this pass and are kept as-is.
     models: [
-      // GLM-5.2 serves a 1M context window with 128K max output (docs.z.ai, IndexShare sparse attention).
+      // GLM-5.3/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
+      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
       { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
-      { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200_000, maxOutputTokens: 32_768 },
+      // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
+      { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      { id: "glm-5", name: "GLM-5", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      { id: "glm-5-turbo", name: "GLM-5 Turbo", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      { id: "glm-4.7", name: "GLM-4.7", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200_000, maxOutputTokens: 131_072 },
       { id: "glm-4.5", name: "GLM-4.5", contextWindow: 128_000, maxOutputTokens: 32_768 },
       { id: "glm-4.5-air", name: "GLM-4.5 Air", contextWindow: 128_000, maxOutputTokens: 32_768 },
     ],

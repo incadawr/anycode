@@ -1060,10 +1060,11 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
 
   it("re-budgets window/maxOutput/context and collapses effort on a non-reasoning model", () => {
     const out = makeSwitcher()("glm-4.6", "high");
-    // glm-4.6: 200k window, not reasoning-capable.
+    // glm-4.6: 200k window, not reasoning-capable. TASK.113: maxOutput is now
+    // the docs.z.ai spec-box 128K (was understated 32K before the refresh).
     expect(out.setContextWindowCalls).toEqual([200_000]);
     expect(out.config.context).toEqual({ contextWindowTokens: 200_000 });
-    expect(out.config.maxOutputTokens).toBe(32_768);
+    expect(out.config.maxOutputTokens).toBe(131_072);
     // Effort collapses: config.reasoningEffort undefined, payload "off", no levels.
     expect(out.config.reasoningEffort).toBeUndefined();
     expect(out.result.reasoningEffort).toBe("off");

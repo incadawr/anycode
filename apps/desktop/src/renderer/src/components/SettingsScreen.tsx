@@ -381,6 +381,13 @@ const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
   timeout: "The endpoint did not respond in time.",
   network_error: "Could not reach that endpoint.",
   invalid_response: "The endpoint's response wasn't a recognizable models list.",
+  // TASK.113: Z.AI's anthropic-compat /v1/models reports auth failures as
+  // HTTP 200 + {"success":false,"code":...} — name the likely cause instead of
+  // letting it read as an empty success or a generic broken endpoint.
+  error_payload: "The endpoint returned an error inside a 200 response — most likely the API key was rejected; check the key.",
+  // TASK.113: a well-formed empty list is its own honest outcome, not a silent
+  // success: the endpoint answered but listed zero models.
+  empty_models: "The endpoint returned an empty model list — check the API key or plan, or enter the model id manually.",
 };
 
 /** User-facing text for a failed `/v1/models` fetch. */

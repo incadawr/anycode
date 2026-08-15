@@ -337,6 +337,90 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: false, reason: "invalid_response" });
   });
 
+  // ── TASK.113: HTTP 200 bodies that are NOT successes ──
+
+  // RED-PROOF: the exact live Z.AI anthropic-compat behavior measured 2026-08-15
+  // (no key → 200 + {"code":1001,"msg":"Authentication...","success":false}).
+  // `response.ok` passes this; only the body says "refused". Before TASK.113 this
+  // fell into `invalid_response` by luck of the missing `data` field, and any
+  // provider answering `data: []` in the same envelope would have surfaced as a
+  // silent "fetch succeeded, zero models".
+  it("RED-PROOF (TASK.113): reports a 200 body carrying success:false + code as error_payload, not ok", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          code: 1001,
+          msg: "Authentication parameter not received in Header, unable to authenticate",
+          success: false,
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: false, reason: "error_payload" });
+  });
+
+  // Error-envelope shape without a `success` flag: an own `code` field and no
+  // data array is an error body, not "unrecognizable" — the user should see the
+  // cause, not a shrug.
+  it("RED-PROOF (TASK.113): reports a 200 error-envelope with code (no data) as error_payload, not invalid_response", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "bad key" }, code: "invalid_api_key" }));
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: false, reason: "error_payload" });
+  });
+
+  // Discriminants — real successes must not trip the error-payload detector:
+  it("keeps a 200 body with success:true and a models list as ok", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ success: true, data: [{ id: "glm-5.3" }] }));
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: true, models: [{ id: "glm-5.3" }] });
+  });
+
+  it("keeps a 200 body whose data array wins over a benign code field as ok", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ code: "ok", data: [{ id: "m" }] }));
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: true, models: [{ id: "m" }] });
+  });
+
+  // data: [] is a distinct, honest outcome (TASK.113): the endpoint answered and
+  // listed zero models — neither a success the pickers would render as "fetched,
+  // nothing here" nor a generic http_error. It must differ from a non-empty list.
+  it("RED-PROOF (TASK.113): distinguishes a well-formed empty list (empty_models) from a non-empty success", async () => {
+    const empty = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    });
+    const emptyResult = await fetchCustomProviderModels({ baseUrl: empty.origin });
+    expect(emptyResult).toEqual({ ok: false, reason: "empty_models" });
+
+    const nonEmpty = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "m" }] }));
+    });
+    const nonEmptyResult = await fetchCustomProviderModels({ baseUrl: nonEmpty.origin });
+    expect(nonEmptyResult).toEqual({ ok: true, models: [{ id: "m" }] });
+  });
+
+  // Shape-without-meaning stays invalid_response (TASK.67/TASK.113 boundary):
+  // no data, no code, no success:false — merely an unrecognizable body.
+  it("keeps a 200 body without data/code/success as invalid_response (not error_payload)", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ object: "list", results: [] }));
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: false, reason: "invalid_response" });
+  });
+
   // RED-PROOF: a cap that only checked Content-Length would pass this case —
   // the server declares no length at all (chunked) and streams past the cap.
   it("RED-PROOF: caps an oversized body even with no Content-Length header (streamed)", async () => {
@@ -695,7 +779,10 @@ describe("handleCustomProviderUpdate — origin-rebind custody guard (FX3-L1 G-A
     const recorder: FetchLike = async (url, init) => {
       const headers = init.headers as Record<string, string>;
       requests.push({ url, auth: headers.Authorization ?? headers["x-api-key"] });
-      return new Response(JSON.stringify({ data: [] }), {
+      // TASK.113: `{data:[]}` is no longer a silent success (empty_models), so
+      // this stub (whose body was always empty) now serves one non-empty model —
+      // the assertion under test is WHERE the key travels, not the list content.
+      return new Response(JSON.stringify({ data: [{ id: "m" }] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
