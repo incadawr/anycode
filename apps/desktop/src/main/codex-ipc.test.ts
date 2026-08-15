@@ -943,3 +943,100 @@ describe("createCodexOnboardingController — consent threading (TASK.103)", () 
     });
   });
 });
+
+describe("discoverAndCheck / loginStart — explicit-rung hard-stop (D-S4-22)", () => {
+  /**
+   * env candidate "/env/codex" resolves to a file that is SELF-owned but
+   * whose directory is world-writable (consentable refusal) — and PATH
+   * points at a SEPARATE, perfectly safe "/usr/local/bin/codex" that would
+   * otherwise win the ladder. This is the observed live defect, staged at
+   * the IPC layer: pre-fix, discovery silently substitutes the PATH
+   * candidate and the doctor reports "ready" for a DIFFERENT binary than
+   * the one the user explicitly configured via ANYCODE_CODEX_BIN.
+   */
+  const explicitHardStopFs: CodexBinaryFs = {
+    realpath: (path) => path,
+    stat: (path) => {
+      if (path === "/env/codex") {
+        return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+      }
+      if (path === "/env") {
+        return { isFile: () => false, isDirectory: () => true, mode: 0o777, uid: ME.uid, gid: 20 };
+      }
+      if (path === "/usr/local/bin/codex") {
+        return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+      }
+      if (path === "/usr/local/bin" || path === "/usr/local" || path === "/usr" || path === "/") {
+        return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: ME.uid, gid: 20 };
+      }
+      throw new Error("ENOENT");
+    },
+  };
+
+  /** Same shape, but the env candidate is owned by a THIRD PARTY (uid 777) — a non-consentable refusal (D-S4-13). */
+  const nonConsentableHardStopFs: CodexBinaryFs = {
+    realpath: (path) => path,
+    stat: (path) => {
+      if (path === "/env/codex") {
+        return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: 777, gid: 20 };
+      }
+      if (path === "/env") {
+        return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: ME.uid, gid: 20 };
+      }
+      if (path === "/usr/local/bin/codex") {
+        return { isFile: () => true, isDirectory: () => false, mode: 0o755, uid: ME.uid, gid: 20 };
+      }
+      if (path === "/usr/local/bin" || path === "/usr/local" || path === "/usr" || path === "/") {
+        return { isFile: () => false, isDirectory: () => true, mode: 0o755, uid: ME.uid, gid: 20 };
+      }
+      throw new Error("ENOENT");
+    },
+  };
+
+  it("D-S4-22 (consentable) a consentable env-rung refusal hard-stops even though a lower rung resolves — the observed live defect, verbatim", async () => {
+    const runDoctor = vi.fn();
+    const deps = makeDeps({
+      bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev", ANYCODE_CODEX_BIN: "/env/codex" },
+      fs: explicitHardStopFs,
+      runDoctor,
+    });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(snapshot.binaryPath).toBeNull();
+    expect(snapshot.source).toBe("none");
+    expect(snapshot.report.status).toBe("error");
+    expect(snapshot.report.trustRefusal).toEqual({ binaryPath: "/env/codex", reason: snapshot.report.error, staleConsent: false });
+    expect(runDoctor).not.toHaveBeenCalled();
+  });
+
+  it("D-S4-22 (non-consentable) hard-stops non-consentably ⇒ {status:'error', error} with NO trustRefusal, and NOT not_installed", async () => {
+    const runDoctor = vi.fn();
+    const deps = makeDeps({
+      bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev", ANYCODE_CODEX_BIN: "/env/codex" },
+      fs: nonConsentableHardStopFs,
+      runDoctor,
+    });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(snapshot.binaryPath).toBeNull();
+    expect(snapshot.source).toBe("none");
+    expect(snapshot.report.status).toBe("error");
+    expect(snapshot.report.error).toMatch(/another user/);
+    expect(snapshot.report.trustRefusal).toBeUndefined();
+    expect(snapshot.report).not.toEqual({ status: "not_installed" });
+    expect(runDoctor).not.toHaveBeenCalled();
+  });
+
+  it("D-S4-22 loginStart under a hard-stopped discovery refuses unsupported — no spawn attempted", async () => {
+    const runLogin = vi.fn();
+    const deps = makeDeps({
+      bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev", ANYCODE_CODEX_BIN: "/env/codex" },
+      fs: explicitHardStopFs,
+      runLogin,
+    });
+    const controller = createCodexOnboardingController(deps);
+    const result = await controller.loginStart();
+    expect(result).toEqual({ ok: false, reason: "unsupported" });
+    expect(runLogin).not.toHaveBeenCalled();
+  });
+});

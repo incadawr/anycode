@@ -310,3 +310,79 @@ describe("consent-aware trust threading (TASK.103) — BG4", () => {
     expect(vanished.trustRefusal).toBeUndefined();
   });
 });
+
+// D-S4-22 — condensed mirror of codex-binary.test.ts's BG8 arms (a)+(d)+(e)
+// (the two implementations are deliberate duplicates — each carries its own
+// pin, per W2 §2.3).
+describe("BG9 explicit-rung hard-stop (D-S4-22)", () => {
+  const FILE_SIZE = 4096;
+  const FILE_MTIME = 1_700_000_000_000;
+
+  function consentFor(path: string, stat: { mode?: number; uid?: number; gid?: number } = {}): BinaryTrustConsent {
+    return {
+      path,
+      fingerprint: { mode: stat.mode ?? 0o755, uid: stat.uid ?? ME.uid, gid: stat.gid ?? 20, size: FILE_SIZE, mtimeMs: FILE_MTIME },
+      grantedAt: "2026-08-15T00:00:00.000Z",
+    };
+  }
+
+  it("BG9 (a) an env-rung consentable refusal hard-stops the ladder even though settings resolves", () => {
+    const fs = fakeFs({ "/env/claude": {}, "/settings/claude": {} }, { "/env": { mode: 0o777 } });
+    const result = discoverClaudeBinary({
+      envOverride: "/env/claude",
+      settingsPath: "/settings/claude",
+      env: {},
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefusal).toEqual({ binaryPath: "/env/claude", reason: result.reason, staleConsent: false });
+    expect(result.trustRefusalSource).toBe("env");
+  });
+
+  it("BG9 (a-consent) a consent matching the env binary's fingerprint still resolves it, even with settings available", () => {
+    const fs = fakeFs(
+      { "/env/claude": { size: FILE_SIZE, mtimeMs: FILE_MTIME }, "/settings/claude": {} },
+      { "/env": { mode: 0o777 } },
+    );
+    const result = discoverClaudeBinary({
+      envOverride: "/env/claude",
+      settingsPath: "/settings/claude",
+      env: {},
+      fs,
+      platform: "darwin",
+      identity: ME,
+      consents: [consentFor("/env/claude")],
+    });
+    expect(result).toEqual({ path: "/env/claude", source: "env" });
+  });
+
+  it("BG9 (d) same-rung ambient variant: two PATH dirs, first refused, second valid — the ladder keeps walking", () => {
+    const fs = fakeFs({ "/a/claude": {}, "/b/claude": {} }, { "/a": { mode: 0o777 } });
+    const result = discoverClaudeBinary({
+      env: { PATH: "/a:/b" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result).toEqual({ path: "/b/claude", source: "path" });
+  });
+
+  it("BG9 (e) an env-rung NON-consentable refusal (third-party-owned) hard-stops with no trustRefusal payload", () => {
+    const fs = fakeFs({ "/env/claude": { uid: 777 }, "/settings/claude": {} });
+    const result = discoverClaudeBinary({
+      envOverride: "/env/claude",
+      settingsPath: "/settings/claude",
+      env: {},
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefused).toBe(true);
+    expect(result.trustRefusal).toBeUndefined();
+  });
+});
