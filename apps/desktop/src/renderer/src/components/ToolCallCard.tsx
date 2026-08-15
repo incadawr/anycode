@@ -76,6 +76,50 @@ const CHILD_BADGE_LABELS: Record<ChildBadgeKind, string> = {
 };
 
 /**
+ * TASK.120: whether the session-child badge is an ACTION (a real `<button>`
+ * firing `onOpen`, the same handler the Open button uses) rather than a
+ * static status chip. Only `waiting_permission` is actionable — the other
+ * three kinds are outcomes, and their card already carries the Open button.
+ * The affordance exists ONLY together with an `onOpen` handler: with
+ * `onOpen === undefined` the badge renders exactly as before this task (no
+ * cursor, no hover state, no button in the markup), whatever its kind.
+ * Exported for direct unit testing (same pure-logic-only rationale as
+ * `formatSubagentCounters` above).
+ */
+export function isClickableChildBadge(badge: ChildBadgeKind, onOpen: (() => void) | undefined): boolean {
+  return badge === "waiting_permission" && onOpen !== undefined;
+}
+
+/** Badge title when it acts as the TASK.120 open-on-request action; states the
+ *  effect of the click, since the visible label itself carries only state. */
+const CHILD_BADGE_ACTION_TITLE = "Open the subagent session on its permission request";
+
+/**
+ * The session-child badge's single render site for both mounts (the
+ * always-visible header row and `SubagentStatus`'s expanded child row):
+ * `isClickableChildBadge` decides the element. Non-actionable states render
+ * the plain `<span>` byte-identical to pre-TASK.120 markup; the actionable
+ * state renders a real `<button>` on the same `onOpen` the Open button uses.
+ * The `-action` modifier class carries ONLY the interactive affordances
+ * (cursor, hover) so the static form keeps none of them.
+ */
+function ChildBadge({ badge, onOpen }: { badge: ChildBadgeKind; onOpen?: () => void }) {
+  if (!isClickableChildBadge(badge, onOpen)) {
+    return <span className={`tool-call-child-badge tool-call-child-badge-${badge}`}>{CHILD_BADGE_LABELS[badge]}</span>;
+  }
+  return (
+    <button
+      type="button"
+      className={`tool-call-child-badge tool-call-child-badge-${badge} tool-call-child-badge-action`}
+      title={CHILD_BADGE_ACTION_TITLE}
+      onClick={onOpen}
+    >
+      {CHILD_BADGE_LABELS[badge]}
+    </button>
+  );
+}
+
+/**
  * Pure formatter for the sub-status counter line, exported for direct unit
  * testing (this package's renderer tests are pure-logic only — no jsdom, see
  * ToolCallCard.test.ts).
@@ -362,7 +406,9 @@ function useChildSessionAction(
  *  child badge (+ Open button, only when the child is still live) — mounts
  *  only when `child` is set (TASK.102 CUT-S2 §2.5 C3); every inline-subagent
  *  card (the default `child` prop, `undefined`) renders byte-identically to
- *  before this slice. */
+ *  before this slice. TASK.120: while the child waits on a permission ask the
+ *  badge itself is an action (ChildBadge) firing the same `onOpen` as the
+ *  Open button beside it. */
 function SubagentStatus({
   subagent,
   child,
@@ -389,9 +435,7 @@ function SubagentStatus({
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
       {child !== undefined && (
         <div className="tool-call-subagent-child-row">
-          <span className={`tool-call-child-badge tool-call-child-badge-${child.badge}`}>
-            {CHILD_BADGE_LABELS[child.badge]}
-          </span>
+          <ChildBadge badge={child.badge} onOpen={child.onOpen} />
           {child.onOpen !== undefined && (
             <button type="button" className="tool-call-subagent-open-button" onClick={child.onOpen}>
               Open
@@ -847,6 +891,103 @@ function diffPath(block: ToolCallBlock): string {
   return typeof record.file_path === "string" ? record.file_path : block.toolName;
 }
 
+/**
+ * The card's header row (TASK.120): the disclosure toggle, plus — while a
+ * session-tier child is blocked on a permission ask — the actionable child
+ * badge riding BESIDE the toggle (a `<button>` cannot nest in the toggle
+ * `<button>`). Every non-actionable card renders exactly one child here (the
+ * toggle itself, width:100%), so the row is a layout pass-through for it.
+ *
+ * Exported (same rationale as `AgentCardBody` above) so ToolCallCard.test.ts
+ * can render the row directly via react-dom/server: the badge mounts only
+ * when `useChildSessionAction` resolves a child, and that hook reads the
+ * tabs + child-relation zustand stores, whose server snapshot (SSR) is
+ * frozen at the INITIAL state — `renderToStaticMarkup` cannot see any seed,
+ * so there is no path from ToolCallCard's own props to the actionable-badge
+ * markup in a static render. The row takes the resolved `childAction` as a
+ * plain prop instead.
+ */
+export function ToolCallHeaderRow({
+  block,
+  expanded,
+  bodyId,
+  onToggleExpanded,
+  childAction,
+}: {
+  block: ToolCallBlock;
+  expanded: boolean;
+  bodyId: string;
+  onToggleExpanded: () => void;
+  childAction?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
+}) {
+  const isAgent = block.toolName === "Agent";
+  // TASK.120: an actionable badge (waiting for permission + onOpen) cannot
+  // render inside the toggle <button> — nested buttons are invalid HTML — so
+  // it is hoisted out into this row wrapper; every other kind keeps its
+  // original in-toggle placement, byte-identical markup.
+  const headerBadgeActionable =
+    childAction !== undefined && isClickableChildBadge(childAction.badge, childAction.onOpen);
+  return (
+    <div className="tool-call-toggle-row">
+      <button
+        type="button"
+        className="tool-call-toggle"
+        aria-expanded={expanded}
+        aria-controls={bodyId}
+        onClick={onToggleExpanded}
+      >
+        <span className="tool-call-caret" aria-hidden="true">
+          <Chevron />
+        </span>
+        {isAgent && !expanded ? (
+          <span className="subagent-collapsed-line">
+            <BotIcon />
+            <span className="subagent-name">SubAgent</span>
+            {block.subagent && <span className="subagent-persona">{block.subagent.agentType}</span>}
+            {/* The collapsed row is the DEFAULT state, so a model that only
+                showed once expanded would be invisible in practice. */}
+            {block.subagent?.model != null && (
+              <span className="subagent-collapsed-model">{block.subagent.model}</span>
+            )}
+            <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
+          </span>
+        ) : (
+          <>
+            <span className="tool-call-name">{block.toolName}</span>
+            {!expanded && (
+              <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
+            )}
+          </>
+        )}
+        <span className="tool-call-status-badge">{STATUS_LABELS[block.status]}</span>
+        {/* TASK.102 CUT-S2 §2.5 (C3): the session-child badge lives in the
+            ALWAYS-visible toggle row, not just the expanded body below — an
+            Agent card defaults to COLLAPSED in every status
+            (defaultExpanded above), so a "waiting for permission" signal
+            that only showed once expanded would be invisible in practice
+            (the owner's live-smoke checklist, CUT-S2 §8 point 4, checks the
+            badge on the — by default collapsed — master card). TASK.120:
+            while the child is blocked on a permission ask the badge is
+            hoisted out of this button (see headerBadgeActionable above). */}
+        {childAction !== undefined && !headerBadgeActionable && (
+          <ChildBadge badge={childAction.badge} onOpen={undefined} />
+        )}
+        {isAgent && !expanded && block.subagent && block.subagent.final === null && (
+          <span className="subagent-collapsed-progress">
+            <Spinner className="icon-spin" />
+            {formatSubagentCounters(block.subagent)}
+          </span>
+        )}
+      </button>
+      {/* TASK.120: the actionable badge — same onOpen as the Open button,
+          riding at the row's end, clear of the toggle's own click target. */}
+      {childAction !== undefined && headerBadgeActionable && (
+        <ChildBadge badge={childAction.badge} onOpen={childAction.onOpen} />
+      )}
+    </div>
+  );
+}
+
 export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; enter?: boolean }) {
   // Default-unless-user-overrode disclosure (design §1.A): the default is
   // derived from status every render, so an untouched card auto-collapses on
@@ -890,56 +1031,17 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
       className={`tool-call-card tool-call-status-${block.status}${enter ? " message-enter" : ""}`}
       data-tool-call-id={block.toolCallId}
     >
-      <button
-        type="button"
-        className="tool-call-toggle"
-        aria-expanded={expanded}
-        aria-controls={bodyId}
-        onClick={() => setUserExpanded(!expanded)}
-      >
-        <span className="tool-call-caret" aria-hidden="true">
-          <Chevron />
-        </span>
-        {isAgent && !expanded ? (
-          <span className="subagent-collapsed-line">
-            <BotIcon />
-            <span className="subagent-name">SubAgent</span>
-            {block.subagent && <span className="subagent-persona">{block.subagent.agentType}</span>}
-            {/* The collapsed row is the DEFAULT state, so a model that only
-                showed once expanded would be invisible in practice. */}
-            {block.subagent?.model != null && (
-              <span className="subagent-collapsed-model">{block.subagent.model}</span>
-            )}
-            <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
-          </span>
-        ) : (
-          <>
-            <span className="tool-call-name">{block.toolName}</span>
-            {!expanded && (
-              <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
-            )}
-          </>
-        )}
-        <span className="tool-call-status-badge">{STATUS_LABELS[block.status]}</span>
-        {/* TASK.102 CUT-S2 §2.5 (C3): the session-child badge lives in the
-            ALWAYS-visible toggle row, not just the expanded body below — an
-            Agent card defaults to COLLAPSED in every status
-            (defaultExpanded above), so a "waiting for permission" signal
-            that only showed once expanded would be invisible in practice
-            (the owner's live-smoke checklist, CUT-S2 §8 point 4, checks the
-            badge on the — by default collapsed — master card). */}
-        {childAction !== undefined && (
-          <span className={`tool-call-child-badge tool-call-child-badge-${childAction.badge}`}>
-            {CHILD_BADGE_LABELS[childAction.badge]}
-          </span>
-        )}
-        {isAgent && !expanded && block.subagent && block.subagent.final === null && (
-          <span className="subagent-collapsed-progress">
-            <Spinner className="icon-spin" />
-            {formatSubagentCounters(block.subagent)}
-          </span>
-        )}
-      </button>
+      {/* TASK.120: the toggle gains a row wrapper because an actionable child
+          badge rides BESIDE it, not inside it — a <button> cannot nest in the
+          toggle <button>. Every non-actionable card renders exactly one child
+          here (the toggle itself), so its layout is unchanged. */}
+      <ToolCallHeaderRow
+        block={block}
+        expanded={expanded}
+        bodyId={bodyId}
+        onToggleExpanded={() => setUserExpanded(!expanded)}
+        childAction={childAction}
+      />
       {expanded && (
         // aria-live="off" (design §1.9): a user-driven expand must not dump
         // the body into the polite column's announcement queue; the badge in
