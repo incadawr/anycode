@@ -13,6 +13,9 @@ coverage/
 # Agent worktrees (harness-agnostic)
 .agents/
 
+# AnyCode's own local state inside a checkout it works on (worktrees, agents, skills)
+.anycode/
+
 # JetBrains IDE
 .idea/
 
