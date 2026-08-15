@@ -843,13 +843,13 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   }
   const wantContinue = parsedArgs.continueSession && requestedResumeId === undefined && !wantPicker;
 
-  let resumedSession = requestedResumeId ? await persistence.getSession(requestedResumeId) : null;
+  let resumedSession = requestedResumeId ? await persistence.getRootSession(requestedResumeId) : null;
   if (requestedResumeId && !resumedSession) {
     bootWrite(`[warn] no session found for --resume ${requestedResumeId}; starting a new session instead\n`);
   }
   if (!resumedSession && wantContinue) {
 
-    const [last] = await persistence.listSessions({ workspace: cwd, limit: 1 });
+    const [last] = await persistence.listRootSessions({ workspace: cwd, limit: 1 });
     if (last) {
       resumedSession = last;
       bootWrite(
@@ -865,7 +865,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     // non-interactive case). MCP is already started (§2.6) but the write-behind
     // history sink is not created yet (below), so an abort only has to dispose
     // MCP + close the DB — there is nothing queued to flush — before exiting 130.
-    const metas = await persistence.listSessions({ workspace: cwd, limit: SESSIONS_PICKER_LIMIT });
+    const metas = await persistence.listRootSessions({ workspace: cwd, limit: SESSIONS_PICKER_LIMIT });
     if (metas.length === 0) {
       bootWrite("[sessions] no sessions for this workspace; starting a new session\n");
     } else {
@@ -1463,7 +1463,9 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
           // sessions through a narrow list callback — this workspace by default,
           // all workspaces on `/sessions all` (the handler drops the filter).
           sessions: {
-            list: (o) => persistence.listSessions(o),
+            // Root-only (TASK.102 S2a §2.4): /sessions [all] must never
+            // surface a child session, even with the workspace filter dropped.
+            list: (o) => persistence.listRootSessions(o),
             currentId: session.id,
             workspace: cwd,
           },

@@ -41,6 +41,7 @@ import type { HookRunner } from "../types/hooks.js";
 import type { PermissionBroker, PermissionEngine, PermissionMode } from "../types/permissions.js";
 import type { CorePorts, ModelPort } from "../ports/index.js";
 import type { SubagentPort } from "../ports/subagent.js";
+import type { SessionSubagentPort } from "../ports/session-subagent.js";
 import type { SkillPort } from "../ports/skills.js";
 import type { WorkflowPort } from "../ports/workflow.js";
 import type { BackgroundTaskPort } from "../ports/tasks.js";
@@ -144,6 +145,16 @@ export interface AgentLoopConfig {
    * imports the runner (subagents/ -> loop/, no back-edge).
    */
   subagents?: SubagentPort;
+  /**
+   * Session-tier subagent entry (TASK.102 CUT-S2 §2.2/§0.2). Placed into the
+   * DispatchContext (right alongside `subagents` above) so the Agent tool's
+   * `tier:"session"` branch can spawn a full child session in its own
+   * process. Attached by the desktop root host's wiring ONLY (host/index.ts,
+   * S2b) — never set for a child loop's own config (buildChildConfig does not
+   * copy it), which is non-recursion lock #2 of 3 (CUT-S2 §0.2). Type-only
+   * reference — the loop never imports the RPC client that implements it.
+   */
+  sessionSubagents?: SessionSubagentPort;
   /**
    * Discovered-skills entry (design §2.2/§3.3). Placed into the DispatchContext
    * so the Skill tool can load a body lazily. Attached by the CLI/host wiring;
@@ -457,6 +468,7 @@ export class AgentLoop {
       ports: this.config.ports,
       cwd: this.config.cwd,
       subagents: this.config.subagents,
+      sessionSubagents: this.config.sessionSubagents,
       skills: this.config.skills,
       workflows: this.config.workflows,
       tasks: this.config.tasks,
@@ -1056,6 +1068,7 @@ function buildToolResultMessage(call: ProposedToolCall, outcome: ToolCallOutcome
         text: outcome.modelText,
         status: outcome.status,
         ...(outcome.result?.images?.length ? { images: outcome.result.images } : {}),
+        ...(outcome.result?.presentation !== undefined ? { presentation: outcome.result.presentation } : {}),
       },
     ],
   };

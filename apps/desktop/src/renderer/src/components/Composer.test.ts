@@ -107,6 +107,11 @@ describe("shouldEnqueue (F15 — enqueue-vs-direct decision uses the truly-idle 
   it("enqueues during the in-flight window: turn momentarily idle but a drained item is still in flight (the lost-prompt bug)", () => {
     expect(shouldEnqueue("idle", IN_FLIGHT)).toBe(true);
   });
+
+  it("TASK.102 CUT-S2 §10.15.1: a child surface ALWAYS direct-sends (false), even while running or in-flight — its renderer queue has no drainer, so parking there would strand the message forever", () => {
+    expect(shouldEnqueue("running", null, true)).toBe(false);
+    expect(shouldEnqueue("idle", IN_FLIGHT, true)).toBe(false);
+  });
 });
 
 describe("hasSendableDraft (F15 — the running-mode Queue button gate mirrors canSend)", () => {

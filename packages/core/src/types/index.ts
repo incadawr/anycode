@@ -99,6 +99,18 @@ export {
   SKILL_DESCRIPTION_MAX_CHARS,
   SKILL_NAME_MAX_CHARS,
   SKILLS_PROMPT_SECTION_MAX_CHARS,
+  // TASK.102 CUT-S2 §10.7 п.7: additive addition to this curated list so the
+  // desktop host's child-mode Session (host/session.ts) can cap its activity
+  // feed at the SAME count the in-process inline runner enforces
+  // (runner.ts:519), imported from @anycode/core's root — the host never
+  // imports a core subpath.
+  SUBAGENT_ACTIVITY_MAX_EVENTS,
+  SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS,
+  SUBAGENT_CARD_ACTIVITY_MAX_BYTES,
+  SUBAGENT_CARD_ACTIVITY_RING,
+  SUBAGENT_CARD_AGENT_TYPE_MAX_CHARS,
+  SUBAGENT_CARD_DESCRIPTION_MAX_CHARS,
+  SUBAGENT_CARD_MODEL_MAX_CHARS,
   SUBAGENT_OUTPUT_MAX_BYTES,
   MAX_WORKFLOWS,
   MAX_WORKFLOW_STEPS,

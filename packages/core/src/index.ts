@@ -88,6 +88,18 @@ export * from "./repoMap/index.js";
 export { estimateTokensFromText } from "./context/tokens.js";
 export { ConversationHistory } from "./context/history.js";
 export type { HistorySink } from "./context/history.js";
+// Persisted subagent card snapshot contract (TASK.102 slice S1, CUT-S1 §2.3):
+// re-exported directly (types/index.ts's curated list does not cover every
+// types/ file — see ports/index.ts's own ImageAttachment precedent) so the
+// desktop renderer's decode/project module (S1 W4) can type-only import
+// SubagentCardSnapshotV1 the same way it already type-only imports ToolResultPart.
+export type {
+  SubagentCardActivityEntry,
+  SubagentCardFinalStatus,
+  SubagentCardSnapshotV1,
+  SubagentCardTarget,
+  ToolResultPresentation,
+} from "./types/subagent-card.js";
 export { HeuristicTokenizer, createDefaultTokenizer } from "./context/tokenizer.js";
 export type { Tokenizer } from "./context/tokenizer.js";
 export {

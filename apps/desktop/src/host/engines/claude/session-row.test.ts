@@ -157,6 +157,75 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
   });
 });
 
+// TASK.102 CUT-S4 §4.3: `index.ts`'s `bootClaudeSession` is not importable in
+// a test (it touches `process.parentPort` at module scope — the established
+// host-test idiom, see `index.test.ts`'s own header). This mirrors the exact
+// `sessionRow` object literal that function now builds — identity plus
+// `parentSessionId`/`spawnToolCallId` ONLY when `args.child !== undefined` —
+// the same "reproduce the DECISION's shape locally" precedent
+// `child-session-wire.test.ts`'s header documents for boot.ts's lock #1: a
+// mirror, not an import, because there is no exported production function to
+// import here (the ternary lives inline in `bootClaudeSession`). What IS
+// proven end-to-end, through the REAL `ClaudeSessionRowWriter`, is the part
+// that matters for the owner invariant: `create()` receives
+// `parentSessionId`/`spawnToolCallId` for a child, and does NOT for a root —
+// core's `listRootSessions` filters on `parent_session_id IS NULL`
+// (adapters/node/sqlite-persistence.ts), so this is exactly the field whose
+// presence/absence decides Sidebar visibility.
+describe("ClaudeSessionRowWriter — child stamp (CUT-S4 §4.3, mirrors bootClaudeSession's sessionRow literal)", () => {
+  function buildSessionRow(child: { parentSessionId: string; spawnToolCallId: string } | undefined) {
+    return {
+      workspace: "/work",
+      engineId: "claude" as const,
+      externalSessionRef: "native-ref-1",
+      ...(child !== undefined ? { parentSessionId: child.parentSessionId, spawnToolCallId: child.spawnToolCallId } : {}),
+    };
+  }
+
+  it("a ROOT boot's identity carries no parentSessionId/spawnToolCallId (byte-identical to pre-S4)", async () => {
+    const rec = recorder();
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-root",
+      identity: buildSessionRow(undefined),
+      rowExists: false,
+      port: rec.port,
+      onError: () => {},
+    });
+
+    writer.materialize({ model: "opus[1m]", mode: "ask" });
+    await writer.settled();
+
+    expect(rec.creates).toEqual([{ id: "row-root", row: { ...IDENTITY, model: "opus[1m]", mode: "ask" } }]);
+    expect(rec.creates[0]!.row).not.toHaveProperty("parentSessionId");
+    expect(rec.creates[0]!.row).not.toHaveProperty("spawnToolCallId");
+  });
+
+  it("a CHILD boot's identity carries parentSessionId/spawnToolCallId through to create() — the field listRootSessions excludes on", async () => {
+    const rec = recorder();
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-child",
+      identity: buildSessionRow({ parentSessionId: "parent-1", spawnToolCallId: "call-1" }),
+      rowExists: false,
+      port: rec.port,
+      onError: () => {},
+    });
+
+    // A plan-mode parent (child-permission-map.ts maps plan -> "read-only")
+    // — the SAME `mode` the engine's own onFirstSystemInit reports back,
+    // proving the "mode column carries the assigned preset" half of §4.2's
+    // persistence-honesty requirement travels through this same writer.
+    writer.materialize({ model: "opus[1m]", mode: "read-only" });
+    await writer.settled();
+
+    expect(rec.creates).toEqual([
+      {
+        id: "row-child",
+        row: { ...IDENTITY, parentSessionId: "parent-1", spawnToolCallId: "call-1", model: "opus[1m]", mode: "read-only" },
+      },
+    ]);
+  });
+});
+
 describe("ClaudeSessionRowWriter — a resume writes straight through", () => {
   function resumed(rec: Recorder): ClaudeSessionRowWriter {
     return new ClaudeSessionRowWriter({

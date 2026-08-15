@@ -17,9 +17,15 @@ import {
   SUBAGENT_ACTIVITY_RING,
   type FrameScheduler,
   type GitDestructiveIntent,
+  type SubagentSubStatus,
   type TranscriptBlock,
 } from "./store.js";
 import { createAutomationFacade, type AnycodeBridge } from "./automation.js";
+// Pure formatter reused ONLY for assertion (TASK.102 slice S1 W5, CUT-S1 §3
+// W5 test 9): NOT a component render — ToolCallCard.tsx itself is untouched
+// by this slice. Same "pure function exported from a .tsx, imported by a
+// .test.ts" precedent as ToolCallCard.test.ts's own import below it.
+import { activityRows } from "./components/ToolCallCard.js";
 import { createTabRegistry } from "./tab-registry.js";
 import { createTabsStore } from "./tabs-store.js";
 import type {
@@ -38,6 +44,7 @@ import type {
   GitCommitInfo,
   LspServerStatus,
   McpServerStatus,
+  SubagentCardSnapshotV1,
 } from "@anycode/core";
 import type { CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
 
@@ -1601,6 +1608,140 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
   });
 });
 
+// subagent_attention → SubagentSubStatus.waiting (TASK.102 CUT-S2 §2.5; the
+// store case was pulled forward into S2a by CUT-S2 §10.1 — the variant is
+// A4's, and the sequence contract is frozen in §2.5, so the case closes with
+// its designed behavior rather than a stub). Only a session-tier child's
+// permission broker ever emits the event.
+describe("desktop store — subagent_attention permission-wait flag (TASK.102 CUT-S2 §2.5/§10.1)", () => {
+  function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+  }
+
+  function seedSubagent(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId, agentType: "general-purpose", description: "build X" },
+    });
+  }
+
+  function attention(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string, waiting: boolean): void {
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_attention", toolCallId, waiting },
+    });
+  }
+
+  const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
+    store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
+
+  it("waiting:true raises the flag on a seeded, unsettled card; the matching waiting:false REMOVES it (presence-based encoding, review finding 2)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+
+    attention(store, turnId, "call-1", true);
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { waiting: true, final: null } });
+
+    attention(store, turnId, "call-1", false);
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: null } });
+    expect(block !== undefined && block.kind === "tool_call" && block.subagent !== null && "waiting" in block.subagent).toBe(
+      false,
+    );
+  });
+
+  it("attention(false) removes the `waiting` key entirely — same encoding as the subagent_end settle (review finding 2: the two paths must agree, or a presence-based badge-priority reader would misread waiting:false as still-waiting)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+
+    attention(store, turnId, "call-1", true);
+    attention(store, turnId, "call-1", false);
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: null } });
+    expect(block !== undefined && block.kind === "tool_call" && block.subagent !== null && "waiting" in block.subagent).toBe(
+      false,
+    );
+  });
+
+  it("an attention event AFTER the sub-status settled is a no-op — a terminal card never regresses to waiting (S1 terminal guard)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 2, durationMs: 500 },
+    });
+
+    const settled = store.getState().transcript;
+    attention(store, turnId, "call-1", true);
+    expect(store.getState().transcript).toEqual(settled);
+  });
+
+  it("subagent_end STRIPS a stale waiting:true in the same settle — a child cancelled mid-ask lands terminal, not 'waiting'", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    seedSubagent(store, turnId, "call-1");
+    attention(store, turnId, "call-1", true);
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { waiting: true } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "cancelled", turns: 1, durationMs: 100 },
+    });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: { status: "cancelled", durationMs: 100 } } });
+    // Key present ⇒ the badge-priority VM (CUT-S2 §2.5, C1) would rank
+    // waiting above the terminal badge — the settle must remove the key
+    // entirely, not merely set it false.
+    expect(block !== undefined && block.kind === "tool_call" && block.subagent !== null && "waiting" in block.subagent).toBe(
+      false,
+    );
+  });
+
+  it("attention for an unseeded or foreign toolCallId is a no-op (same posture as subagent_progress)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+
+    // Unseeded: the Agent tool_call block exists but no subagent_start ran.
+    const unseeded = store.getState().transcript;
+    attention(store, turnId, "call-1", true);
+    expect(store.getState().transcript).toEqual(unseeded);
+
+    // Foreign toolCallId: seeded call-1 must stay untouched.
+    seedSubagent(store, turnId, "call-1");
+    const seeded = store.getState().transcript;
+    attention(store, turnId, "foreign-call", true);
+    expect(store.getState().transcript).toEqual(seeded);
+  });
+});
+
 describe("desktop store — subagent activity feed (slice P7.18/F16b, design/slice-P7.18-cut.md §4 W2)", () => {
   function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
@@ -1737,6 +1878,486 @@ describe("desktop store — subagent activity feed (slice P7.18/F16b, design/sli
     });
 
     expect(store.getState().transcript).toEqual(seeded);
+  });
+});
+
+describe("desktop store — persisted subagent card (TASK.102 slice S1 W5, CUT-S1 §3 W5)", () => {
+  function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+  }
+
+  const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
+    store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
+
+  function requireSubagent(block: TranscriptBlock | undefined): SubagentSubStatus {
+    if (block?.kind !== "tool_call" || !block.subagent) {
+      throw new Error("expected a seeded/hydrated subagent block");
+    }
+    return block.subagent;
+  }
+
+  /** A valid persisted v1 snapshot (CUT-S1 §2.1), same shape the core W1-W3 writer produces. Callers override via structuredClone + assignment to keep each test's fixture independent. */
+  function presentation(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      kind: "subagent" as const,
+      version: 1 as const,
+      target: { kind: "inline" as const },
+      identity: { agentType: "explore", description: "survey the repo", model: "claude-sonnet", engine: "claude" as const },
+      counters: { turns: 3, toolCalls: 4, lastTool: "Grep" },
+      activity: {
+        entries: [
+          { toolName: "Read", summary: "src/index.ts" },
+          { toolName: "Bash", summary: "npm test" },
+        ],
+        dropped: 1,
+      },
+      final: { status: "completed" as const, durationMs: 4200 },
+      ...overrides,
+    };
+  }
+
+  it("1. hydrates a FULL SubagentSubStatus (persona/model/engine/counters/activity/dropped/final) from a valid v1 presentation on the paired Agent tool_result", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Agent", text: "done", status: "success", presentation: { subagent: presentation() } }],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({
+      status: "success",
+      subagent: {
+        agentType: "explore",
+        description: "survey the repo",
+        model: "claude-sonnet",
+        engine: "claude",
+        turns: 3,
+        toolCalls: 4,
+        lastTool: "Grep",
+        activity: [
+          { toolName: "Read", summary: "src/index.ts" },
+          { toolName: "Bash", summary: "npm test" },
+        ],
+        activityDropped: 1,
+        final: { status: "completed", durationMs: 4200 },
+      },
+    });
+  });
+
+  it("2. a legacy tool_result with no presentation field hydrates subagent:null, byte-identical to pre-S1 behavior", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: { role: "tool", content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Agent", text: "done", status: "success" }] },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ status: "success", modelText: "done", subagent: null });
+  });
+
+  it("3. a malformed/unknown-version presentation payload hydrates subagent:null without failing hydration of the rest of the session", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      { id: "u1", createdAt: 1, message: { role: "user", content: "hi" } },
+      {
+        id: "a1",
+        createdAt: 2,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 3,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-1",
+              toolName: "Agent",
+              text: "done",
+              status: "success",
+              // A garbage/future-version blob — deliberately not shaped like
+              // ToolResultPresentation (that's the point of this test), so
+              // it's typed past the compiler the same way the "genuinely
+              // unknown AgentEvent variant" fixture above does.
+              presentation: { subagent: { kind: "subagent", version: 99, garbage: true } } as unknown as { subagent: SubagentCardSnapshotV1 },
+            },
+          ],
+        },
+      },
+      { id: "u2", createdAt: 4, message: { role: "user", content: "next" } },
+    ];
+
+    expect(() =>
+      store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false }),
+    ).not.toThrow();
+
+    expect(store.getState().transcript.map((b) => b.kind)).toEqual(["user_text", "tool_call", "user_text"]);
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ status: "success", subagent: null });
+  });
+
+  it("4. two parallel Agent tool_calls in the same assistant item each hydrate their OWN snapshot, strictly by toolCallId", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: {} },
+            { type: "tool_call", toolCallId: "call-2", toolName: "Agent", input: {} },
+          ],
+        },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-1",
+              toolName: "Agent",
+              text: "d1",
+              status: "success",
+              presentation: { subagent: presentation({ identity: { agentType: "explore", description: "d1", model: null, engine: null } }) },
+            },
+            {
+              type: "tool_result",
+              toolCallId: "call-2",
+              toolName: "Agent",
+              text: "d2",
+              status: "success",
+              presentation: {
+                subagent: presentation({ identity: { agentType: "codex-builder", description: "d2", model: "gpt-5", engine: "codex" } }),
+              },
+            },
+          ],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const b1 = requireSubagent(findByToolCallId(store, "call-1"));
+    const b2 = requireSubagent(findByToolCallId(store, "call-2"));
+    expect(b1).toMatchObject({ agentType: "explore", description: "d1", model: null, engine: null });
+    expect(b2).toMatchObject({ agentType: "codex-builder", description: "d2", model: "gpt-5", engine: "codex" });
+  });
+
+  it("5. a subagent presentation planted on a non-Agent tool result is ignored (decode rejects on toolName mismatch)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Bash", input: { command: "ls" } }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Bash", text: "a.ts", status: "success", presentation: { subagent: presentation() } }],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ toolName: "Bash", status: "success", modelText: "a.ts", subagent: null });
+  });
+
+  it("6. a repeated identical session_history carrying an Agent tool_result presentation is idempotent (dedup by block id, no re-decoded duplicate)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Agent", text: "done", status: "success", presentation: { subagent: presentation() } }],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+    const first = store.getState().transcript;
+    expect(first).toHaveLength(1);
+
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+    expect(store.getState().transcript).toHaveLength(1);
+    expect(store.getState().transcript).toEqual(first);
+  });
+
+  it("7. hydration followed by a live replay of subagent_start/activity/end/tool_result for the SAME already-settled toolCallId does not duplicate the activity feed and keeps the terminal canon", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const snap = presentation();
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Agent", text: "done", status: "success", presentation: { subagent: snap } }],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const hydrated = requireSubagent(findByToolCallId(store, "call-1"));
+    expect(hydrated.final).toEqual({ status: "completed", durationMs: 4200 });
+
+    // A resumed host might replay the same turn's now-stale coarse-progress
+    // events for an id that is ALREADY terminal from persisted history.
+    const turnId = "turn-1";
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "REPLAY-SHOULD-NOT-WIN", description: "d" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_activity", toolCallId: "call-1", toolName: "Bash", summary: "REPLAY-SHOULD-NOT-APPEND" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "error", turns: 99, durationMs: 1 },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_result",
+        outcome: { toolCallId: "call-1", toolName: "Agent", status: "success", modelText: "done", durationMs: 1, result: { ok: true, presentation: { subagent: snap } } },
+      },
+    });
+
+    const after = requireSubagent(findByToolCallId(store, "call-1"));
+    expect(after).toEqual(hydrated);
+
+    // Pinning assert (CUT-S1 §9.2): exactly one tool_call block for call-1
+    // survives this hydration+replay sequence. This does NOT cover replaying
+    // a `tool_call` event for an already-hydrated toolCallId (which would
+    // append a SECOND block — hydrateSessionHistory's dedup keys on the
+    // history-item id, `appendBlock` on the live path does not dedup by
+    // toolCallId at all). That sequence is not exercised here because the
+    // wire cannot produce it: CUT-S1 §9.1 shows the boot `session_history`
+    // snapshot and the post-boot replay ring are disjoint by construction —
+    // `sessionHistory` freezes in the Session constructor from the
+    // pre-process persisted state, a respawned host is a fresh process with
+    // an empty ring, and every `host_ready` handshake runs the renderer's
+    // `performReset()` (clearing the transcript) before hydration+replay
+    // resume. So a `tool_call` for `call-1` never replays after it was
+    // already hydrated. Idempotent append is therefore neither asserted nor
+    // required by this test.
+    expect(store.getState().transcript.filter((b) => b.kind === "tool_call" && b.toolCallId === "call-1")).toHaveLength(1);
+  });
+
+  it("8. a duplicate subagent_start delivered AFTER subagent_end does not reset the terminal snapshot (terminal guard); a duplicate progress/activity/end after settle are no-ops too", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    const send = (event: unknown) => store.getState().applyHostMessage({ type: "agent_event", turnId, event } as HostToUiMessage);
+
+    send({ type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "original" });
+    send({ type: "subagent_activity", toolCallId: "call-1", toolName: "Read", summary: "a.ts" });
+    send({ type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 3, durationMs: 4200 });
+
+    const settled = requireSubagent(findByToolCallId(store, "call-1"));
+    expect(settled.final).toEqual({ status: "completed", durationMs: 4200 });
+
+    send({ type: "subagent_start", toolCallId: "call-1", agentType: "REPLAY", description: "REPLAY" });
+    send({ type: "subagent_progress", toolCallId: "call-1", turns: 999, toolCalls: 999, lastTool: "REPLAY" });
+    send({ type: "subagent_activity", toolCallId: "call-1", toolName: "REPLAY", summary: "REPLAY" });
+    send({ type: "subagent_end", toolCallId: "call-1", status: "error", turns: 1, durationMs: 1 });
+
+    const after = requireSubagent(findByToolCallId(store, "call-1"));
+    expect(after).toEqual(settled);
+  });
+
+  it("9. subagent_end{activitySuppressed} folds into activityDropped live, the canonical tool_result agrees, and '+N earlier' matches before/after a reload (CUT-S1 §0.5 honest activityDropped)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    const send = (event: unknown) => store.getState().applyHostMessage({ type: "agent_event", turnId, event } as HostToUiMessage);
+
+    send({ type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "d" });
+    send({ type: "subagent_activity", toolCallId: "call-1", toolName: "Read", summary: "src/index.ts" });
+    send({ type: "subagent_activity", toolCallId: "call-1", toolName: "Bash", summary: "npm test" });
+    // No ring-cap evictions here (only 2 entries); the +7 is honestly the
+    // runner's own activitySuppressed count (CUT-S1 §0.5), folded on settle.
+    send({ type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 3, durationMs: 4200, activitySuppressed: 7 });
+
+    let live = requireSubagent(findByToolCallId(store, "call-1"));
+    expect(live.activityDropped).toBe(7);
+    const liveRows = activityRows(live);
+    expect(liveRows[0]).toEqual({ key: "dropped", text: "+7 earlier", leading: true });
+
+    // The paired tool_result now lands with the persisted canon carrying the SAME dropped count.
+    const snap = presentation({
+      identity: { agentType: "explore", description: "d", model: null, engine: null },
+      counters: { turns: 3, toolCalls: 2, lastTool: "Bash" },
+      activity: {
+        entries: [
+          { toolName: "Read", summary: "src/index.ts" },
+          { toolName: "Bash", summary: "npm test" },
+        ],
+        dropped: 7,
+      },
+    });
+    send({
+      type: "tool_result",
+      outcome: { toolCallId: "call-1", toolName: "Agent", status: "success", modelText: "done", durationMs: 1, result: { ok: true, presentation: { subagent: snap } } },
+    });
+
+    live = requireSubagent(findByToolCallId(store, "call-1"));
+    expect(live.activityDropped).toBe(7);
+
+    // Reload: a fresh store hydrates from the SAME persisted snapshot.
+    const { scheduler: scheduler2 } = createManualScheduler();
+    const freshStore = createDesktopStore(scheduler2);
+    freshStore.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: { role: "tool", content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Agent", text: "done", status: "success", presentation: { subagent: snap } }] },
+      },
+    ];
+    freshStore.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+    const rehydrated = requireSubagent(freshStore.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === "call-1"));
+
+    expect(rehydrated.activityDropped).toBe(7);
+    expect(activityRows(rehydrated)).toEqual(liveRows);
+  });
+
+  it("10. a tool_result presentation lands on a tool_call block with NO live sub-status yet (e.g. events replayed after a tab reconnect) and the card gets its subagent from canon", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1"); // no subagent_start ever sent
+
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: null });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_result",
+        outcome: { toolCallId: "call-1", toolName: "Agent", status: "success", modelText: "done", durationMs: 1, result: { ok: true, presentation: { subagent: presentation() } } },
+      },
+    });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({
+      subagent: { agentType: "explore", description: "survey the repo", final: { status: "completed", durationMs: 4200 } },
+    });
+  });
+
+  it("11. documents the current pair-cut semantics at the SESSION_HISTORY_MAX_ITEMS tail boundary: an Agent tool_call whose paired tool_result was truncated away hydrates status:'proposed', subagent:null (NOT a fix — CUT-S1 §5 anti-facade #4)", () => {
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Agent", input: { description: "explore", prompt: "look around" } }],
+        },
+      },
+      // The paired tool-role item that WOULD carry the presentation was cut
+      // by the host's own tail-500 (host/session.ts SESSION_HISTORY_MAX_ITEMS)
+      // — simulated here simply by omitting it (same fixture shape as the
+      // existing "leaves a tool_call part unpaired" test above).
+    ];
+
+    const blocks = projectHistoryToBlocks(items);
+    expect(blocks).toEqual([
+      {
+        kind: "tool_call",
+        id: "a1:0",
+        toolCallId: "call-1",
+        toolName: "Agent",
+        input: { description: "explore", prompt: "look around" },
+        status: "proposed",
+        modelText: null,
+        snapshots: { before: null, after: null },
+        subagent: null,
+        workflow: null,
+      },
+    ]);
   });
 });
 
@@ -2010,6 +2631,90 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     expect(projectHistoryToBlocks([{ id: "image", createdAt: 1, message: { role: "user", content: "Look:", images } }])).toEqual([
       { kind: "user_text", id: "image:0", text: "Look:", images },
     ]);
+  });
+
+  /** A valid persisted v1 snapshot (CUT-S1 §2.1) with an overridable `target` — mirrors the S1 W5 describe block's own `presentation()` helper, kept local here since that one is scoped to its own describe. */
+  function subagentPresentation(target: { kind: "inline" } | { kind: "session"; childSessionId: string; parentSessionId: string; spawnToolCallId: string }) {
+    return {
+      kind: "subagent" as const,
+      version: 1 as const,
+      target,
+      identity: { agentType: "explore", description: "survey the repo", model: null, engine: null },
+      counters: { turns: 1, toolCalls: 1, lastTool: "Read" },
+      activity: { entries: [], dropped: 0 },
+      final: { status: "completed" as const, durationMs: 100 },
+    };
+  }
+
+  it("projectHistoryToBlocks discriminates sessionChild PER CARD (TASK.102 CUT-S2 §10.8.1 b): a session-target Agent card gets sessionChild:true, a sibling inline-target Agent card in the SAME history has no such key — not a global flag", () => {
+    const items: WireHistoryItem[] = [
+      {
+        id: "s1",
+        createdAt: 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "call-session", toolName: "Agent", input: {} }],
+        },
+      },
+      {
+        id: "s2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-session",
+              toolName: "Agent",
+              text: "done",
+              status: "success",
+              presentation: {
+                subagent: subagentPresentation({
+                  kind: "session",
+                  childSessionId: "child-1",
+                  parentSessionId: "parent-1",
+                  spawnToolCallId: "call-session",
+                }),
+              },
+            },
+          ],
+        },
+      },
+      {
+        id: "s3",
+        createdAt: 3,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "call-inline", toolName: "Agent", input: {} }],
+        },
+      },
+      {
+        id: "s4",
+        createdAt: 4,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-inline",
+              toolName: "Agent",
+              text: "done",
+              status: "success",
+              presentation: { subagent: subagentPresentation({ kind: "inline" }) },
+            },
+          ],
+        },
+      },
+    ];
+
+    const blocks = projectHistoryToBlocks(items);
+    const sessionCard = blocks.find((b) => b.kind === "tool_call" && b.toolCallId === "call-session");
+    const inlineCard = blocks.find((b) => b.kind === "tool_call" && b.toolCallId === "call-inline");
+    if (sessionCard?.kind !== "tool_call" || inlineCard?.kind !== "tool_call") {
+      throw new Error("expected both Agent cards to hydrate as tool_call blocks");
+    }
+    expect(sessionCard.subagent?.sessionChild).toBe(true);
+    expect(inlineCard.subagent && "sessionChild" in inlineCard.subagent).toBe(false);
   });
 
   it("pairs multiple tool_call parts of one assistant item against the run of tool-role items that follow it, by toolCallId", () => {

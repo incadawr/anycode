@@ -287,6 +287,12 @@ export interface WebFetchOutput {
  * agent_type is a plain string, NOT a zod-enum: the handler validates it
  * against the persona registry so slice 3.3 can add md-profiles without
  * touching this frozen schema (design §3.4). Absent => "general-purpose".
+ *
+ * `tier`/`provider` (TASK.102 CUT-S2 §2.1) are the FULL declaration — only
+ * used when `createAgentTool({sessionTier:true})` builds the root desktop
+ * host's tool (tools/agent.ts). `model` stays valid for BOTH tiers (CUT-S2
+ * §1 p.2: the inline `model` override is an existing, tested capability —
+ * narrowing it to session-only would be a regression outside S2's mandate).
  */
 export const agentInputSchema = z.object({
   description: z.string().min(1).describe("Short 3-5 word description of the subagent task"),
@@ -295,6 +301,23 @@ export const agentInputSchema = z.object({
     .string()
     .optional()
     .describe("Persona to run (e.g. \"general-purpose\", \"explore\"); default general-purpose"),
+  tier: z
+    .enum(["inline", "session"])
+    .optional()
+    .describe(
+      '"inline" (default): lightweight in-process subagent — cheap, invisible, result-only. ' +
+        '"session": a full child session in its own process — the user can open it, watch the live transcript and steer it; ' +
+        "its transcript persists with this conversation. Use \"session\" for long or complex build/debug work, " +
+        "when the user should be able to inspect or steer the delegation, or to run it on a different provider connection.",
+    ),
+  provider: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Session tier only: id of the provider connection to run the child session on " +
+        "(defaults to this session's own connection). Invalid for inline tier.",
+    ),
   model: z
     .string()
     .min(1)
@@ -305,6 +328,36 @@ export const agentInputSchema = z.object({
 });
 
 export type AgentInput = z.output<typeof agentInputSchema>;
+
+/**
+ * RESTRICTED declaration (CUT-S2 §2.1/§5.13): used by `createAgentTool()`
+ * (default, `sessionTier` absent/false) — CLI, any child session, any host
+ * without a SessionSubagentPort. Deliberately a SEPARATE zod object, not the
+ * full schema with `tier`/`provider` merely marked optional: the
+ * non-recursion lock #1 must hold at the SERIALIZED JSON declaration a model
+ * sees (z.toJSONSchema), so `"session"` and `"provider"` must be physically
+ * ABSENT from `properties`, not just unset at runtime. `tier` is still a
+ * (single-value) enum rather than dropped outright — CUT-S2 §1 p.5: a model
+ * that hallucinates `tier:"session"` here gets a schema-validation error, not
+ * a silently-downgraded inline run (zod-strip would hide the mismatch).
+ */
+export const restrictedAgentInputSchema = z
+  .object({
+    description: agentInputSchema.shape.description,
+    prompt: agentInputSchema.shape.prompt,
+    agent_type: agentInputSchema.shape.agent_type,
+    tier: z.enum(["inline"]).optional().describe('Only "inline" subagents are available in this context.'),
+    model: agentInputSchema.shape.model,
+  })
+  // `.strict()`, not the plain object (F15): a bare z.object() STRIPS unknown
+  // keys by default (zod's own behavior) rather than rejecting them, so a
+  // smuggled/hallucinated `provider` on a restricted host would silently do
+  // nothing instead of failing loud. The non-recursion lock must reject
+  // unrecognized input the same way it already rejects `tier:"session"`
+  // above, not quietly drop it.
+  .strict();
+
+export type RestrictedAgentInput = z.output<typeof restrictedAgentInputSchema>;
 
 export interface AgentOutput {
   status: "completed" | "max_turns" | "cancelled" | "error";

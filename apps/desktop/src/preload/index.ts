@@ -17,7 +17,7 @@
  * Sandboxed CJS build — nothing else belongs here.
  */
 import { contextBridge, ipcRenderer } from "electron";
-import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../shared/envelopes.js";
 import {
   MCP_CONFIG_DELETE_CHANNEL,
   MCP_CONFIG_GET_CHANNEL,
@@ -143,6 +143,11 @@ import type {
   SessionSummary,
   WorkspacePickResult,
 } from "../shared/tabs.js";
+// TASK.102 CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
+// shared/protocol.ts (unrestricted read access; only EDITING
+// apps/desktop/src/shared/** is out of this slice's fence) — the same import
+// store.ts already uses for the live session_history hydration path.
+import type { WireHistoryItem } from "../shared/protocol.js";
 import {
   UPDATE_CHECK_CHANNEL,
   UPDATE_DOWNLOAD_CHANNEL,
@@ -267,6 +272,16 @@ const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
 const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
 /** Night-track wave-1: user click on a local .html/.htm/.md artifact link opens/reopens it in PreviewHost. */
 const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
+// TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
+// history channel — main/tab-ipc.ts holds the byte-identical source of truth
+// for both the channel literal and `ChildHistoryResult`'s shape, same
+// duplicated-literal convention as every other channel in this file (the
+// natural shared home, apps/desktop/src/shared/**, is frozen for this slice).
+const CHILD_HISTORY_CHANNEL = "anycode:child-history";
+
+export type ChildHistoryResult =
+  | { ok: true; items: WireHistoryItem[] }
+  | { ok: false; reason: "invalid_id" | "not_found" };
 
 export interface CodexOnboardingSnapshot {
   report: CodexDoctorReport;
@@ -487,7 +502,21 @@ export type ClaudeLoginStartResult =
 
 ipcRenderer.on(
   PORT_ENVELOPE_TYPE,
-  (event, payload: { tabId: string; workspace: string; connectionId?: string; providerId?: string }) => {
+  (
+    event,
+    payload: {
+      tabId: string;
+      workspace: string;
+      connectionId?: string;
+      providerId?: string;
+      // TASK.102 CUT-S2 §2.5 (review wave R, F10 fix): present ONLY for a
+      // child-session tab's port delivery (`deliverTabPort`, main/tabs.ts).
+      // Forwarded untouched below, same as connectionId/providerId — this
+      // module does not decide root vs. child, it only relays what main
+      // stamped (`classifyPortEnvelope`, child-sessions.ts, decides that).
+      child?: PortEnvelope["child"];
+    },
+  ) => {
     // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
     // when present — additive control-plane, no session-stream change. Both fields
     // ride together (main only sets them together) or are absent for an unpinned tab.
@@ -499,6 +528,12 @@ ipcRenderer.on(
         ...(payload.connectionId !== undefined && payload.providerId !== undefined
           ? { connectionId: payload.connectionId, providerId: payload.providerId }
           : {}),
+        // TASK.102 CUT-S2 §2.5 (F10 fix): without this, EVERY child-session
+        // port envelope loses its `child` field crossing this bridge, so
+        // `tab-registry.ts`'s `classifyPortEnvelope` always saw "root" —
+        // every child registered as an ordinary visible tab, the exact
+        // facade §5.3/§0.4 forbid.
+        ...(payload.child !== undefined ? { child: payload.child } : {}),
       },
       "*",
       event.ports,
@@ -537,6 +572,12 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(TAB_CLOSE_CHANNEL, { tabId }) as Promise<CloseTabResult>,
   listSessions: (): Promise<SessionSummary[]> =>
     ipcRenderer.invoke(SESSIONS_LIST_CHANNEL) as Promise<SessionSummary[]>,
+  // TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
+  // transcript lookup — main authorizes by (parentSessionId, spawnToolCallId)
+  // relationship (`getChildSession`) before ever touching `loadHistory`; no
+  // childSessionId ever crosses this bridge (the renderer does not need one).
+  childHistory: (parentSessionId: string, spawnToolCallId: string): Promise<ChildHistoryResult> =>
+    ipcRenderer.invoke(CHILD_HISTORY_CHANNEL, { parentSessionId, spawnToolCallId }) as Promise<ChildHistoryResult>,
   pickWorkspace: (): Promise<WorkspacePickResult> =>
     ipcRenderer.invoke(WORKSPACE_PICK_CHANNEL) as Promise<WorkspacePickResult>,
   listAvailableEngines: (): Promise<AvailableEngines> =>

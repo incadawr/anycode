@@ -660,6 +660,36 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
   };
 }
 
+/**
+ * Resolves an EXPLICIT `Agent(tier:"session", provider:<providerId>)` spawn
+ * request's catalog provider id to a live connection (TASK.102 CUT-S2 §10.9.3
+ * F4). `main/tabs.ts`'s `resolveProviderConnection` dep needs this pure policy
+ * so `main/index.ts`'s composition root can wire it without duplicating the
+ * rule inline. Policy (frozen by the cut): `providerId === ""` (the
+ * bare/custom sentinel, see `ProviderConnection.providerId` doc above) never
+ * resolves — a bare/custom connection has no catalog identity to match
+ * against; otherwise the ACTIVE connection wins if its `providerId` matches,
+ * else the first connection in `provider.connections` storage order whose
+ * `providerId` matches; no match -> `undefined` (the caller fails the spawn
+ * closed with `not_ready`, cut §2.7 — never a silent fallback to the parent's
+ * own connection). Pure/synchronous — main already holds the connections
+ * registry in memory (the same fact `env(connectionId)`/`describeConnection`
+ * rely on, `tabs.ts` dep-doc), so this never needs to be async.
+ */
+export function resolveProviderConnection(
+  settings: AnycodeSettings,
+  providerId: string,
+): ProviderConnection | undefined {
+  if (providerId === "") {
+    return undefined;
+  }
+  const active = activeConnection(settings);
+  if (active !== undefined && active.providerId === providerId) {
+    return active;
+  }
+  return settings.provider.connections.find((connection) => connection.providerId === providerId);
+}
+
 // ── internal type helper (not exported; erased at compile time) ──
 
 /** Deep-partial that replaces arrays wholesale and recurses into plain objects. */
