@@ -839,6 +839,62 @@ describe("handleCreate — New Session picker connectionId pin (TASK.106 cut-1 s
     const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
     expect("connectionId" in call).toBe(false);
   });
+
+  it("an explicit valid connectionId primes the fork env via ensureConnectionEnv BEFORE createTab (TASK.106 cut-1 review fix P1)", async () => {
+    const order: string[] = [];
+    const { manager, createTab } = makeManager({}, order);
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const connectionExists = vi.fn(() => true);
+    const ensureConnectionEnv = vi.fn(async (id: string) => {
+      order.push(`ensureConnectionEnv:${id}`);
+    });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      connectionExists,
+      ensureConnectionEnv,
+    };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", connectionId: "conn-picked" });
+
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/x" });
+    expect(ensureConnectionEnv).toHaveBeenCalledWith("conn-picked");
+    expect(order.indexOf("ensureConnectionEnv:conn-picked")).toBeLessThan(order.indexOf("createTab"));
+  });
+
+  it("ensureConnectionEnv throwing refuses not_ready and never reaches createTab", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const connectionExists = vi.fn(() => true);
+    const ensureConnectionEnv = vi.fn(async () => {
+      throw new Error("vault read failed");
+    });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      connectionExists,
+      ensureConnectionEnv,
+    };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", connectionId: "conn-picked" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("no ensureConnectionEnv dep wired (legacy wiring) ⇒ a known connectionId still reaches createTab, unchanged", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const connectionExists = vi.fn(() => true);
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, connectionExists };
+
+    const res = await handleCreate(deps, { kind: "new", workspace: "/x", connectionId: "conn-picked" });
+
+    expect(res).toEqual({ ok: true, tabId: "tab-1", workspace: "/x" });
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn-picked" }));
+  });
 });
 
 describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () => {

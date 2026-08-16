@@ -137,6 +137,19 @@ export interface TabIpcDeps {
    */
   connectionExists?(connectionId: string): boolean;
   /**
+   * TASK.106 cut-1 review fix (P1, owner live smoke): primes the per-connection
+   * fork env for an explicit NEW-tab connection pick, mirroring what
+   * `resolveResumePin` already does for a RESUMED tab's stored pin. Without this,
+   * `hostEnvByConnection` (main/index.ts) is only ever filled by the resume path
+   * and `refreshProviderState`'s already-live tabs — a `new` request pinned to a
+   * non-active connection reached `manager.createTab` with no primed env and was
+   * refused fail-closed by the spawn guard (main/tabs.ts). Called ONLY after
+   * `connectionExists` has already validated the id. Absent = legacy wiring /
+   * unit fixtures with no env cache to prime (byte-identical to before this fix).
+   * A rejection is fail-closed `not_ready`, never a silent spawn on unprimed env.
+   */
+  ensureConnectionEnv?(connectionId: string): Promise<void>;
+  /**
    * Resolves the connection a RESUMED session is pinned to (TASK.45 W10). Absent
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
    */
@@ -482,6 +495,19 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
         return { ok: false, reason: "not_ready" };
       }
       explicitConnectionId = req.connectionId;
+      // TASK.106 cut-1 review fix (P1): prime the fork env for this pick BEFORE
+      // createTab — a validated-but-unprimed id would reach the spawn guard
+      // (main/tabs.ts) with no entry in `hostEnvByConnection` and be refused
+      // fail-closed there instead. A throw (vault read failure, same class
+      // `resolveResumePin` already guards against) is `not_ready`, never a
+      // silent spawn on the wrong/unprimed env.
+      if (deps.ensureConnectionEnv !== undefined) {
+        try {
+          await deps.ensureConnectionEnv(explicitConnectionId);
+        } catch {
+          return { ok: false, reason: "not_ready" };
+        }
+      }
     }
     // Guard capacity BEFORE prompting: never make the user pick a folder we
     // cannot open (UI also disables "+" at capacity, this is the backstop).

@@ -1585,7 +1585,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   {modelMenuRows.map((row, index) => (
                     <Fragment key={`${row.connectionId}:${row.id}`}>
                       {row.isGroupStart && (
-                        <div className="start-model-menu-group-label" role="presentation">
+                        <div className="start-model-menu-group-label" role="presentation" data-connection-id={row.connectionId}>
                           {row.groupLabel}
                         </div>
                       )}
@@ -1598,6 +1598,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
                         aria-checked={row.current}
                         tabIndex={index === modelFocusIndex ? 0 : -1}
                         className={`start-model-item${row.current ? " start-model-item-current" : ""}`}
+                        data-connection-id={row.connectionId}
+                        data-model-id={row.id}
                         onClick={() => selectModel(row.connectionId, row.id)}
                       >
                         <span className="start-model-item-check" aria-hidden="true">
