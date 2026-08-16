@@ -405,21 +405,32 @@ export interface StartScreenDom {
   /** A real `.click()` on the model control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
   clickModelChip(): void;
   /**
-   * The rendered popover's grouped rows (TASK.106 cut-1), read straight off
-   * the DOM in the SAME order `buildStartModelMenuGroups`/`modelMenuRows`
-   * render them — one entry per `.start-model-menu-group-label`, its items
-   * the `.start-model-item` buttons that follow it up to the next label.
+   * The rendered popover's grouped rows (TASK.106 cut-1; §6 rail form),
+   * read straight off the DOM in the SAME order `StartScreen.tsx` renders
+   * them — one entry per `.start-model-rail-btn` (the rail tab, the old
+   * group header promoted to a selectable button), its items the
+   * `.start-model-item` buttons of the RIGHT PANE when that connection is
+   * the rail-selected one (the rail form renders one group's rows at a
+   * time), plus every `.start-model-popular-chip` under a synthetic
+   * `Popular` group so the always-visible quick picks stay addressable.
    * `connectionId`/`id` are read off the `data-connection-id`/`data-model-id`
    * attributes `StartScreen.tsx` stamps on those exact nodes (the automation
-   * channel's one product-code hook here, same posture as `ToolCallCard.tsx`'s
-   * `data-tool-call-id`) — display labels alone cannot be trusted to key a
-   * click, since two connections can carry the same auto-generated name.
+   * channel's one product-code hook here, same posture as
+   * `ToolCallCard.tsx`'s `data-tool-call-id`) — display labels alone cannot
+   * be trusted to key a click, since two connections can carry the same
+   * auto-generated name.
    */
   modelMenuGroups(): Array<{
     connectionId: string;
     label: string;
     items: Array<{ id: string; name: string; current: boolean }>;
   }>;
+  /**
+   * TASK.106 §6 rail form: a real `.click()` on the rail tab matching this
+   * connection — makes the right pane render that connection's models.
+   * `false` if no such rail tab is rendered.
+   */
+  clickModelRailTab(connectionId: string): boolean;
   /** A real `.click()` on the item button matching this connection+model pair; `false` if no such row is rendered. */
   clickModelItem(connectionId: string, modelId: string): boolean;
 }
@@ -2262,40 +2273,90 @@ function realStartScreenDom(): StartScreenDom {
       document.querySelector<HTMLButtonElement>(".start-model .model-pill-chip")?.click();
     },
     modelMenuGroups: () => {
+      // TASK.106 §6 rail form: the popover renders a Popular chip strip, a
+      // connection rail, and ONE rail-selected connection's item rows. The
+      // probe rebuilds the old "every group with its items" shape from that
+      // structure: rail tabs become the group entries (label + id); the
+      // selected tab's group carries the rendered .start-model-item rows;
+      // Popular chips ride a synthetic leading group so the always-visible
+      // quick picks stay addressable by pair alone.
       const menu = document.querySelector(".start-model-menu");
       if (!menu) {
         return [];
       }
       const groups: Array<{ connectionId: string; label: string; items: Array<{ id: string; name: string; current: boolean }> }> = [];
-      for (const child of Array.from(menu.children)) {
-        if (child.classList.contains("start-model-menu-group-label")) {
-          groups.push({
-            connectionId: child.getAttribute("data-connection-id") ?? "",
-            label: child.textContent?.trim() ?? "",
-            items: [],
-          });
-        } else if (child.classList.contains("start-model-item")) {
-          const group = groups[groups.length - 1];
-          if (!group) {
-            continue;
-          }
-          group.items.push({
-            id: child.getAttribute("data-model-id") ?? "",
-            name: child.querySelector(".start-model-item-name")?.textContent?.trim() ?? "",
-            current: child.getAttribute("aria-checked") === "true",
-          });
+      const popular: Array<{ id: string; name: string; current: boolean }> = [];
+      const itemsOf: Record<string, Array<{ id: string; name: string; current: boolean }>> = {};
+      for (const chip of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-popular-chip"))) {
+        popular.push({
+          id: chip.getAttribute("data-model-id") ?? "",
+          name: chip.querySelector(".start-model-popular-name")?.textContent?.trim() ?? "",
+          current: chip.getAttribute("aria-checked") === "true",
+        });
+      }
+      for (const tab of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-rail-btn"))) {
+        const connectionId = tab.getAttribute("data-connection-id") ?? "";
+        groups.push({
+          connectionId,
+          label: tab.querySelector(".start-model-rail-name")?.textContent?.trim() ?? "",
+          items: [],
+        });
+        itemsOf[connectionId] = groups[groups.length - 1]!.items;
+      }
+      for (const item of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-list .start-model-item"))) {
+        const connectionId = item.getAttribute("data-connection-id") ?? "";
+        const bucket = itemsOf[connectionId];
+        if (!bucket) {
+          continue;
         }
+        bucket.push({
+          id: item.getAttribute("data-model-id") ?? "",
+          name: item.querySelector(".start-model-item-name")?.textContent?.trim() ?? "",
+          current: item.getAttribute("aria-checked") === "true",
+        });
+      }
+      if (popular.length > 0) {
+        groups.unshift({ connectionId: "__popular__", label: "Popular", items: popular });
       }
       return groups;
     },
-    clickModelItem: (connectionId, modelId) => {
-      const button = document.querySelector<HTMLButtonElement>(
-        `.start-model-item[data-connection-id="${CSS.escape(connectionId)}"][data-model-id="${CSS.escape(modelId)}"]`,
+    clickModelRailTab: (connectionId) => {
+      const tab = document.querySelector<HTMLButtonElement>(
+        `.start-model-rail-btn[data-connection-id="${CSS.escape(connectionId)}"]`,
       );
-      if (!button) {
+      if (!tab) {
         return false;
       }
-      button.click();
+      tab.click();
+      return true;
+    },
+    clickModelItem: (connectionId, modelId) => {
+      // TASK.106 §6 rail form: a row only exists in the DOM when its
+      // connection is rail-selected (or when it's a Popular chip, which is
+      // always rendered). Try the direct hit first; on a miss, drive the
+      // rail tab for that connection first and retry once — the same real
+      // clicks a user would make, no synthetic store poke.
+      const hit = () =>
+        document.querySelector<HTMLButtonElement>(
+          `.start-model-menu [data-connection-id="${CSS.escape(connectionId)}"][data-model-id="${CSS.escape(modelId)}"]`,
+        );
+      const button = hit();
+      if (button) {
+        button.click();
+        return true;
+      }
+      const tab = document.querySelector<HTMLButtonElement>(
+        `.start-model-rail-btn[data-connection-id="${CSS.escape(connectionId)}"]`,
+      );
+      if (!tab) {
+        return false;
+      }
+      tab.click();
+      const retry = hit();
+      if (!retry) {
+        return false;
+      }
+      retry.click();
       return true;
     },
   };

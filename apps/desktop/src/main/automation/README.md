@@ -312,21 +312,28 @@ curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/model-menu/select -d '{"connect
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/submit -d '{}'
 ```
 
-Model-menu (TASK.106 cut-1): mirrors the grouped New Session model popover
-(`buildStartModelMenuGroups`/`modelMenuRows`, `StartScreen.tsx`) — one group
-per connected connection, sorted/labeled the same way the popover itself
-renders them. `GET /start-screen/model-menu` is a DOM probe, same "no
-mirrored state" discipline as the todo-panel/model-pill probes above:
-`{open:false, groups:[]}` is a normal reading (the popover isn't rendered),
-not an error. `connectionId`/`id` are read off the `data-connection-id`/
-`data-model-id` attributes `StartScreen.tsx` stamps on the group-label and
-item nodes — the one product-code hook this route needed, same posture as
+Model-menu (TASK.106 cut-1; §6 rail form): mirrors the New Session model
+popover (`buildStartModelMenuGroups`, `StartScreen.tsx`) — since §6 the
+popover is two-pane (a connection rail on the left, the rail-selected
+connection's models on the right, a Popular chip strip on top), and the
+probe rebuilds the old "one group per connection" shape from that DOM: rail
+tabs become the group entries; the rail-selected group carries the rendered
+item rows (other groups report `items: []` until their rail tab is clicked);
+Popular chips lead as a synthetic `label:"Popular"` group. `GET
+/start-screen/model-menu` is a DOM probe, same "no mirrored state"
+discipline as the todo-panel/model-pill probes above: `{open:false,
+groups:[]}` is a normal reading (the popover isn't rendered), not an error.
+`connectionId`/`id` are read off the `data-connection-id`/`data-model-id`
+attributes `StartScreen.tsx` stamps on the rail-tab/popular-chip/item nodes
+— the one product-code hook this route needed, same posture as
 `ToolCallCard.tsx`'s `data-tool-call-id` for the agent-card probe. `POST
 /start-screen/model-menu` toggles the popover open/closed with a real click
 on the chip, same discipline as `/start-screen/project-menu`. `POST
-/start-screen/model-menu/select` drives a real click on the row matching
-`{connectionId, modelId}` — it opens the popover first if it isn't already
-open, so a caller never has to sequence an explicit open before selecting.
+/start-screen/model-menu/select` drives real clicks on the row matching
+`{connectionId, modelId}` — a rail-tab click first when that connection's
+rows aren't rendered yet (the §6 rail form renders one group at a time),
+then the row; it opens the popover first if it isn't already open, so a
+caller never has to sequence an explicit open before selecting.
 
 #### Engine metadata on the tab snapshot (codex-fixes TASK.42, cut §3.7)
 
