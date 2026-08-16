@@ -329,6 +329,24 @@ export interface StartScreenState {
   availableEngines?: EngineId[];
 }
 
+/**
+ * `startScreenModelMenuState`'s ok-shape (TASK.106 cut-1): a DOM read of the
+ * New Session model popover's grouped rows, same "no mirrored state"
+ * discipline as `StartScreenState` above — `open: false` with `groups: []`
+ * is a normal reading (the popover isn't rendered), not an error. `groups`
+ * mirrors `buildStartModelMenuGroups`/`modelMenuRows` (StartScreen.tsx) one
+ * for one, read straight off the rendered DOM via `StartScreenDom.modelMenuGroups`.
+ */
+export interface StartScreenModelMenuState {
+  ok: true;
+  open: boolean;
+  groups: Array<{
+    connectionId: string;
+    label: string;
+    items: Array<{ id: string; name: string; current: boolean }>;
+  }>;
+}
+
 /** DOM accessor DI for the transcript-scroll probe (design §3.3), injectable for tests exactly like `AnycodeBridge`. */
 export interface TranscriptDom {
   /**
@@ -382,6 +400,28 @@ export interface StartScreenDom {
   projectMenuOpen(): boolean;
   /** A real `.click()` on the project control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
   clickProjectChip(): void;
+  /** Whether the model popover (`.start-model-menu`) is currently in the DOM (TASK.106 cut-1). */
+  modelMenuOpen(): boolean;
+  /** A real `.click()` on the model control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
+  clickModelChip(): void;
+  /**
+   * The rendered popover's grouped rows (TASK.106 cut-1), read straight off
+   * the DOM in the SAME order `buildStartModelMenuGroups`/`modelMenuRows`
+   * render them — one entry per `.start-model-menu-group-label`, its items
+   * the `.start-model-item` buttons that follow it up to the next label.
+   * `connectionId`/`id` are read off the `data-connection-id`/`data-model-id`
+   * attributes `StartScreen.tsx` stamps on those exact nodes (the automation
+   * channel's one product-code hook here, same posture as `ToolCallCard.tsx`'s
+   * `data-tool-call-id`) — display labels alone cannot be trusted to key a
+   * click, since two connections can carry the same auto-generated name.
+   */
+  modelMenuGroups(): Array<{
+    connectionId: string;
+    label: string;
+    items: Array<{ id: string; name: string; current: boolean }>;
+  }>;
+  /** A real `.click()` on the item button matching this connection+model pair; `false` if no such row is rendered. */
+  clickModelItem(connectionId: string, modelId: string): boolean;
 }
 
 /**
@@ -1892,6 +1932,12 @@ export interface AutomationFacade {
   // method until B5-auto wires the real draft action + main-side HTTP route.
   startScreenSetEngine?(engineId: string): Promise<FacadeResult>;
   startScreenToggleProjectMenu(open: boolean): Promise<FacadeResult>;
+  // ── model-menu grouped picker (TASK.106 cut-1): mirrors the project-menu
+  // driver's discipline one for one — a DOM probe for the rendered groups,
+  // and a real-click driver for open/close and per-row select. ──
+  startScreenModelMenuState(): StartScreenModelMenuState;
+  startScreenToggleModelMenu(open: boolean): Promise<FacadeResult>;
+  startScreenSelectModelRow(connectionId: string, modelId: string): Promise<FacadeResult>;
   startScreenSubmit(): Promise<{ ok: true; tabId: string } | { ok: false; message: string }>;
   // ── prompt queue (design/slice-P7.14-cut.md §5 W3) — all over the SAME
   // store actions Composer/PromptQueue.tsx call; `sendPrompt` above is
@@ -2210,6 +2256,47 @@ function realStartScreenDom(): StartScreenDom {
     projectMenuOpen: () => document.querySelector(".start-project-menu") !== null,
     clickProjectChip: () => {
       document.querySelector<HTMLButtonElement>(".start-folder")?.click();
+    },
+    modelMenuOpen: () => document.querySelector(".start-model-menu") !== null,
+    clickModelChip: () => {
+      document.querySelector<HTMLButtonElement>(".start-model .model-pill-chip")?.click();
+    },
+    modelMenuGroups: () => {
+      const menu = document.querySelector(".start-model-menu");
+      if (!menu) {
+        return [];
+      }
+      const groups: Array<{ connectionId: string; label: string; items: Array<{ id: string; name: string; current: boolean }> }> = [];
+      for (const child of Array.from(menu.children)) {
+        if (child.classList.contains("start-model-menu-group-label")) {
+          groups.push({
+            connectionId: child.getAttribute("data-connection-id") ?? "",
+            label: child.textContent?.trim() ?? "",
+            items: [],
+          });
+        } else if (child.classList.contains("start-model-item")) {
+          const group = groups[groups.length - 1];
+          if (!group) {
+            continue;
+          }
+          group.items.push({
+            id: child.getAttribute("data-model-id") ?? "",
+            name: child.querySelector(".start-model-item-name")?.textContent?.trim() ?? "",
+            current: child.getAttribute("aria-checked") === "true",
+          });
+        }
+      }
+      return groups;
+    },
+    clickModelItem: (connectionId, modelId) => {
+      const button = document.querySelector<HTMLButtonElement>(
+        `.start-model-item[data-connection-id="${CSS.escape(connectionId)}"][data-model-id="${CSS.escape(modelId)}"]`,
+      );
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
     },
   };
 }
@@ -4809,6 +4896,46 @@ export function createAutomationFacade(
       // very next synchronous line.
       const committed = await waitUntil(() => startScreenDom.projectMenuOpen() === open, START_SCREEN_COMMIT_DEADLINE_MS);
       return committed ? { ok: true } : { ok: false, reason: open ? "did_not_open" : "did_not_close" };
+    },
+
+    startScreenModelMenuState(): StartScreenModelMenuState {
+      return { ok: true, open: startScreenDom.modelMenuOpen(), groups: startScreenDom.modelMenuGroups() };
+    },
+
+    async startScreenToggleModelMenu(open: boolean): Promise<FacadeResult> {
+      if (tabsStore.getState().draft === null) {
+        return { ok: false, reason: "no_draft" };
+      }
+      if (startScreenDom.modelMenuOpen() === open) {
+        return { ok: true };
+      }
+      // A real click on the model control's chip — not a synthetic store
+      // poke, same posture as startScreenToggleProjectMenu/clickProjectChip
+      // above (the popover's open state is local component useState).
+      startScreenDom.clickModelChip();
+      const committed = await waitUntil(() => startScreenDom.modelMenuOpen() === open, START_SCREEN_COMMIT_DEADLINE_MS);
+      return committed ? { ok: true } : { ok: false, reason: open ? "did_not_open" : "did_not_close" };
+    },
+
+    async startScreenSelectModelRow(connectionId: string, modelId: string): Promise<FacadeResult> {
+      if (tabsStore.getState().draft === null) {
+        return { ok: false, reason: "no_draft" };
+      }
+      if (!startScreenDom.modelMenuOpen()) {
+        startScreenDom.clickModelChip();
+        const opened = await waitUntil(() => startScreenDom.modelMenuOpen(), START_SCREEN_COMMIT_DEADLINE_MS);
+        if (!opened) {
+          return { ok: false, reason: "did_not_open" };
+        }
+      }
+      // A real click on the matching row (§ above) — sets both axes of the
+      // pair at once via StartScreen.tsx's own selectModel/selectStartModelRow,
+      // no synthetic store poke.
+      if (!startScreenDom.clickModelItem(connectionId, modelId)) {
+        return { ok: false, reason: "not_present" };
+      }
+      const closed = await waitUntil(() => !startScreenDom.modelMenuOpen(), START_SCREEN_COMMIT_DEADLINE_MS);
+      return closed ? { ok: true } : { ok: false, reason: "did_not_close" };
     },
 
     startScreenSubmit(): Promise<{ ok: true; tabId: string } | { ok: false; message: string }> {

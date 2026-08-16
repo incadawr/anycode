@@ -1559,6 +1559,11 @@ void app.whenReady().then(async () => {
     // (same source `connectionById` every other connection-identity check in
     // this file already reads).
     connectionExists: (id) => settings !== null && connectionById(settings, id) !== undefined,
+    // TASK.106 cut-1 review fix (P1, owner live smoke): primes the fork env for
+    // an explicit New Session connection pick — the same function the resume
+    // path (`resolveResumePin` above) already uses to prime a stored pin, so a
+    // non-active pick is no longer the only pin path that skips priming.
+    ensureConnectionEnv: ensurePinnedEnv,
     // S4-1 arm 2: consume-once import-model override for the first resume of an
     // imported session (see the holder above). Undefined until the rollout IPC
     // wires it below; harmless (no override) for any resume before then.
