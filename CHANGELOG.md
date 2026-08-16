@@ -5,6 +5,42 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.12] — 2026-08-17
+
+### Added
+
+- A connection can be pointed at an HTTP(S) proxy. Behind a corporate proxy the
+  app was simply unusable and there was nothing to configure: an app started
+  from the Dock never sees a shell's `https_proxy`. A connection now carries one
+  Proxy URL field, and everything that connection starts goes through it — the
+  session's own requests as well as the Claude and Codex engines' child
+  processes. Local endpoints (LM Studio, ollama, anything on loopback) keep
+  going direct, and a proxy already exported by the shell still wins. The field
+  accepts the `user:pass@` form authenticated proxies need; it is stored as
+  plain text and handed to every process the connection starts, which the field
+  says outright.
+- Subagents get a turn budget that can actually be raised. The limit was eight
+  turns, hard-clamped: a delegated task that needed a tenth step died with no
+  way for anyone — the caller, a workflow, or the settings — to give it more.
+  The default is now forty, an explicit request is honoured up to a runaway
+  ceiling, and Settings → Tools carries the knob.
+- Editing inside the workspace stops asking. A write to a path inside the
+  directory the session was opened on goes through without a prompt, while
+  anything outside it still requires one — and a path that cannot be resolved is
+  refused rather than assumed safe.
+- Shell commands that provably only read are auto-approved, pipelines included:
+  a chain whose every stage is a known read-only command no longer interrupts
+  the turn. The grammar is deliberately narrow, and anything it cannot prove
+  read-only asks as before.
+- The permission mode can be changed while a turn is running, instead of only
+  between turns. It takes effect from the next tool call; a prompt already on
+  screen is answered under the mode that raised it.
+- An engine binary is trusted per path. Pointing the app at a Claude or Codex
+  executable now shows a consent card naming the file and the reason, the trust
+  is invalidated if that file changes, and it can be revoked in settings. A
+  binary you configured explicitly and then refused is no longer silently
+  replaced by a different one further down the search order.
+
 ## [0.0.11] — 2026-08-15
 
 ### Added
