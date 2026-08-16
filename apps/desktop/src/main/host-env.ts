@@ -14,7 +14,7 @@
 
 import { ENV_AUTH_MODE } from "../shared/credentials.js";
 import type { AnycodeSettings, CustomProviderRecord, SecretEnvKey, SecretKey } from "../shared/settings.js";
-import { activeProviderView, SECRET_ENV_KEYS } from "../shared/settings.js";
+import { activeProviderView, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
 
 // ── env var names (mirror core/provider/env.ts by contract; local literals so
 // main never value-imports the core runtime, same reasoning as main/index.ts) ──
@@ -48,6 +48,50 @@ export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
  * never baked into the shared boot env, so a legacy (unpinned) tab carries none.
  */
 export const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
+
+/**
+ * The four proxy env vars a connection's `proxyUrl` materialises as (TASK.132),
+ * treated as ONE atomic family — see `applyConnectionProxy`. Both cases of both
+ * names are emitted because the consumers disagree: node/undici reads the
+ * uppercase pair, while curl-convention tools (and several CLI runtimes) prefer
+ * the lowercase one. `ALL_PROXY` is deliberately absent — undici ignores it and
+ * overriding it would change terminal-launch semantics for the engine children.
+ */
+const PROXY_FAMILY_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const;
+
+/**
+ * The exemption list, its own atomic pair for the same reason as the family
+ * above — and a sharper one: undici resolves `no_proxy` BEFORE `NO_PROXY`, so
+ * writing only the lowercase key would SHADOW a shell-exported uppercase
+ * exemption and quietly route the very hosts the user excluded through the
+ * proxy. Measured on Electron 43: shell `NO_PROXY=target.invalid` + our
+ * `no_proxy=localhost,…` → the proxy received CONNECT for target.invalid;
+ * with the lowercase key absent the same request went direct.
+ */
+const NO_PROXY_KEYS = ["NO_PROXY", "no_proxy"] as const;
+
+/**
+ * Loopback exemption written alongside a settings-provided proxy (TASK.132):
+ * without it a local endpoint (LM Studio/ollama) or a loopback MCP server would
+ * be dialled THROUGH the proxy and break.
+ *
+ * BOTH IPv6 spellings are listed on purpose. undici splits each entry on
+ * `host:port`, so a bare `::1` parses as host `:` + port `1` and matches
+ * nothing — measured: with `NO_PROXY=localhost,127.0.0.1,::1` a fetch of
+ * `http://[::1]:PORT` still reached the proxy, while `[::1]` sent it direct.
+ * curl-convention consumers (the engine CLIs) compare against the unbracketed
+ * form instead, and an entry the other side cannot parse is inert rather than
+ * harmful, so listing both is what covers every consumer.
+ */
+const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,[::1],::1";
+
+/**
+ * Node's opt-in switch for env-driven proxying of the GLOBAL fetch (undici's
+ * `EnvHttpProxyAgent`). Measured on Electron 43 / node 24: without it the proxy
+ * vars are inert for `globalThis.fetch`, which is how the host talks to a
+ * provider.
+ */
+const ENV_NODE_USE_ENV_PROXY = "NODE_USE_ENV_PROXY";
 
 /** The vault key allow-list (2.2 = one key; 2.5.2 generalises via isKnownSecretKey). */
 export const SECRET_KEYS: readonly SecretKey[] = ["provider.apiKey"];
@@ -361,6 +405,58 @@ export function applyCodexProfilesHomeOverride(env: NodeJS.ProcessEnv, override:
   }
 }
 
+/**
+ * Materialises the active connection's `proxyUrl` (TASK.132) into a host fork's
+ * env as the HTTP(S)_PROXY family + the loopback `NO_PROXY` exemption +
+ * `NODE_USE_ENV_PROXY=1`. The host's own global fetch honours it through
+ * undici's env-proxy agent; the claude/codex children inherit the family
+ * through their existing env allow-lists and proxy themselves natively.
+ *
+ * The shell-wins check is FAMILY-ATOMIC, not the per-var `fillFromSettings`
+ * used everywhere else in this module, and that difference is load-bearing:
+ * filling only the vars the shell left blank (shell `HTTPS_PROXY=X` + our
+ * `https_proxy=Y`) would let the settings value beat the shell's under the
+ * lowercase-first precedence curl and undici follow. If the shell configured
+ * ANY of the four, it owns all four.
+ *
+ * With no (or an unparseable) `proxyUrl` this emits NOTHING — not even
+ * `NODE_USE_ENV_PROXY` — so a fork's env stays byte-identical to pre-TASK.132
+ * in every case, including a shell that already exports a proxy: that proxy
+ * rides the `{...bootEnv}` spread and remains as inert as it was before. A
+ * value that fails `isProxyUrl` is fail-soft for the same reason a hand-edited
+ * settings.json must not break every request: it degrades to "no proxy", never
+ * to a broken env.
+ *
+ * `NODE_USE_ENV_PROXY` is set whenever the field expresses proxy intent, even
+ * when the shell supplied the proxy VALUE — the field's job there is to switch
+ * the MECHANISM on. A shell-set value (e.g. `0`) still wins.
+ */
+export function applyConnectionProxy(
+  env: NodeJS.ProcessEnv,
+  bootEnv: NodeJS.ProcessEnv,
+  proxyUrl: string | undefined,
+): void {
+  if (proxyUrl === undefined || proxyUrl.trim() === "" || !isProxyUrl(proxyUrl)) {
+    return;
+  }
+  if (!PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name))) {
+    for (const name of PROXY_FAMILY_KEYS) {
+      env[name] = proxyUrl;
+    }
+  }
+  // The exemption is a property of switching proxying ON, not of where the
+  // proxy VALUE came from: even when the shell owns the family, this field is
+  // what activates it, so local endpoints need the same protection. Atomic for
+  // the shadowing reason in NO_PROXY_KEYS — a shell that named its own
+  // exemptions keeps both keys untouched.
+  if (!NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))) {
+    for (const name of NO_PROXY_KEYS) {
+      env[name] = LOOPBACK_NO_PROXY;
+    }
+  }
+  fillFromSettings(env, ENV_NODE_USE_ENV_PROXY, "1");
+}
+
 
 
 /** Reads a secret value from the vault (decrypt); undefined = unset/undecryptable. */
@@ -522,6 +618,11 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).
   fillFromSettings(env, ENV_REASONING_EFFORT, view.reasoningEffort);
+  // Connection-level HTTP(S) proxy (TASK.132). Sourced from the active-connection
+  // view so the custom/legacy/catalog branches all get it uniformly, and so a
+  // per-tab pin (`buildHostEnvFor(settingsPinnedTo(...))`, main/index.ts) picks
+  // up ITS connection's proxy without any extra plumbing.
+  applyConnectionProxy(env, bootEnv, view.proxyUrl);
 
   return env;
 }

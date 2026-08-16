@@ -40,6 +40,7 @@ import type {
   SecretStatus,
   SettingsMutationResult,
 } from "../../../shared/settings.js";
+import { isProxyUrl } from "../../../shared/settings.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId } from "./ConnectionTile.js";
 import {
@@ -112,6 +113,39 @@ export function resolveDrawerOAuthStartArgs(
 }
 
 /**
+ * Pre-flight for the proxy field (TASK.132): true when the typed value is
+ * non-empty and not something main will accept. Main is still the authority —
+ * its `.strict()` payload schema refuses the same value — but that refusal
+ * arrives as the drawer's generic "The changes couldn't be saved.", which for
+ * this field is a dead end: the most likely mistake is a scheme-less
+ * `proxy.host:3128`, and nothing on screen would say so. Blank is never blocked
+ * (it is the clear sentinel). Shares `isProxyUrl` with main rather than
+ * re-deriving the rule. Exported for direct testing (no jsdom).
+ */
+export function proxyUrlSaveBlocked(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed !== "" && !isProxyUrl(trimmed);
+}
+
+/** The one message both create and save show for a proxy value main would refuse (TASK.132). */
+export const PROXY_URL_ERROR = "Proxy URL must be an http:// or https:// address, e.g. http://proxy.example.com:3128.";
+
+/**
+ * The proxy fragment BOTH create paths spread into their `connection-create`
+ * payload (TASK.132) — the catalog-provider create and the new-custom-endpoint
+ * create, which mints its record first and the connection second. It exists as
+ * one named thing because the second path originally omitted the field and
+ * silently dropped a typed proxy; a shared fragment makes the rule reviewable
+ * and testable, unlike two hand-written spreads. Create has no clear sentinel:
+ * a blank field means "no proxy", so the key is omitted rather than sent as
+ * `""` (which the create schema refuses).
+ */
+export function connectionCreateProxyField(proxyUrl: string): { proxyUrl?: string } {
+  const trimmed = proxyUrl.trim();
+  return trimmed === "" ? {} : { proxyUrl: trimmed };
+}
+
+/**
  * The connection-update payload the unified `save` sends (TASK.45 W12-FIX §3;
  * TASK.58 folded the former separate `saveMetadata` into `save`):
  * `transport` is sent UNCONDITIONALLY (never omitted) — the local state
@@ -129,6 +163,7 @@ export function buildConnectionUpdatePayload(params: {
   transport: ProviderTransportId | "";
   baseUrl: string;
   showBaseUrl: boolean;
+  proxyUrl: string;
   authOptional: boolean;
 }): ConnectionUpdateRequest {
   return {
@@ -137,6 +172,10 @@ export function buildConnectionUpdatePayload(params: {
     model: params.model.trim(),
     transport: params.transport,
     baseUrl: params.showBaseUrl ? params.baseUrl.trim() : "",
+    // Sent unconditionally, same rationale as `transport` (TASK.132): emptying
+    // the field must CLEAR the persisted proxy, and `""` is the channel's
+    // clear sentinel — omitting it would leave the old proxy in force.
+    proxyUrl: params.proxyUrl.trim(),
     // Sent unconditionally, same rationale as `transport`: `false` must CLEAR
     // a previously-persisted flag, not leave it untouched.
     authOptional: params.authOptional,
@@ -305,6 +344,7 @@ export function ConnectionDrawerFields({
   });
   const [baseUrl, setBaseUrl] = useState(editConnection?.baseUrl ?? "");
   const [transport, setTransport] = useState<ProviderTransportId | "">(editConnection?.transport ?? "");
+  const [proxyUrl, setProxyUrl] = useState(editConnection?.proxyUrl ?? "");
   const [noAuth, setNoAuth] = useState(editConnection?.authOptional === true);
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
@@ -389,6 +429,10 @@ export function ConnectionDrawerFields({
       setError('Enter a name and base URL, plus an API key or check "This endpoint doesn\'t need an API key".');
       return;
     }
+    if (proxyUrlSaveBlocked(proxyUrl)) {
+      setError(PROXY_URL_ERROR);
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -410,6 +454,10 @@ export function ConnectionDrawerFields({
         providerId: newId,
         ...(label.trim() ? { label: label.trim() } : {}),
         ...(transport ? { transport } : {}),
+        // TASK.132: the proxy field is rendered in this pre-create state too, so
+        // it has to travel on THIS create as well — omitting it here silently
+        // dropped a typed proxy for every new custom endpoint.
+        ...connectionCreateProxyField(proxyUrl),
       });
       const createdId = resolveCreatedConnectionId(connResult);
       if (createdId === undefined) {
@@ -438,6 +486,10 @@ export function ConnectionDrawerFields({
     if (providerId === "") {
       return;
     }
+    if (proxyUrlSaveBlocked(proxyUrl)) {
+      setError(PROXY_URL_ERROR);
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -446,6 +498,7 @@ export function ConnectionDrawerFields({
         ...(label.trim() ? { label: label.trim() } : {}),
         ...(transport ? { transport } : {}),
         ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+        ...connectionCreateProxyField(proxyUrl),
         ...(noAuth ? { authOptional: true } : {}),
       });
       const createdId = resolveCreatedConnectionId(result);
@@ -492,6 +545,10 @@ export function ConnectionDrawerFields({
       setError("Pick a model before saving — without one this connection can't open a tab.");
       return;
     }
+    if (proxyUrlSaveBlocked(proxyUrl)) {
+      setError(PROXY_URL_ERROR);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -503,6 +560,7 @@ export function ConnectionDrawerFields({
           transport,
           baseUrl,
           showBaseUrl,
+          proxyUrl,
           authOptional: noAuth,
         }),
       );
@@ -694,6 +752,25 @@ export function ConnectionDrawerFields({
             </option>
           ))}
         </select>
+      </label>
+
+      {/* TASK.132: plain text, not a password field — the value is infra config
+          the user must be able to proofread (a typo'd host:port is otherwise
+          undiagnosable), and the hint states the plaintext storage outright. */}
+      <label className="settings-field">
+        <span className="settings-field-label">Proxy URL (optional)</span>
+        <input
+          className="settings-field-input"
+          type="text"
+          value={proxyUrl}
+          disabled={readOnly}
+          placeholder="http://user:pass@proxy.example.com:3128"
+          onChange={(e) => setProxyUrl(e.target.value)}
+        />
+        <span className="settings-field-hint">
+          Requests from this connection go through this HTTP(S) proxy. Stored as plain text, and passed to every
+          process this connection starts — including shell commands the model runs.
+        </span>
       </label>
 
       {isNewCustomEndpoint && (

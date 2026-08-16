@@ -107,6 +107,17 @@ const connectionSchema = z.object({
   model: z.string().optional(),
   transport: transportSchema.optional(),
   baseUrl: z.string().optional(),
+  // HTTP(S) proxy (TASK.132) — deliberately as lenient as `baseUrl` above, NOT
+  // a `.refine(isProxyUrl)`: `connections` is a plain `z.array` with no
+  // per-element tolerance, so a strict refine here would let ONE hand-edited
+  // value fail the whole document and reset every other section to defaults.
+  // Strictness lives at the IPC boundary (main/settings-ipc.ts payload
+  // schemas), and `buildHostEnv` gates emission on `isProxyUrl` fail-soft, so
+  // a garbage value can only ever mean "no proxy emitted". The predicate itself
+  // lives in `shared/settings.ts` (not here beside `isHttpsOrLocalhostUrl`)
+  // because the drawer pre-flights the field with the SAME rule and the
+  // renderer must not pull this zod module in to get it.
+  proxyUrl: z.string().optional(),
   reasoningEffort: reasoningEffortSchema.optional(),
   authOptional: z.boolean().optional(),
   // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —

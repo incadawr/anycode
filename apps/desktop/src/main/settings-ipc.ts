@@ -42,6 +42,7 @@ import {
   SETTINGS_SET_CHANNEL,
   activeConnection,
   activeProviderView,
+  isProxyUrl,
 } from "../shared/settings.js";
 import type {
   AnycodeSettings,
@@ -294,6 +295,10 @@ const connectionCreateSchema = z
     model: z.string().optional(),
     transport: transportEnum.optional(),
     baseUrl: z.string().optional(),
+    // HTTP(S) proxy (TASK.132). The strict `isProxyUrl` gate lives HERE, at the
+    // trust boundary — the persisted schema stays lenient so one hand-edited
+    // value can never corrupt the whole document (settings/schema.ts).
+    proxyUrl: z.string().refine(isProxyUrl).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
     authOptional: z.boolean().optional(),
     setActive: z.boolean().optional(),
@@ -309,6 +314,10 @@ const connectionUpdateSchema = z
     // — at create time an omitted transport already means "use the default".
     transport: z.union([transportEnum, z.literal("")]).optional(),
     baseUrl: z.string().optional(),
+    // HTTP(S) proxy (TASK.132) with the same `""` clear-sentinel convention as
+    // `transport` above; a non-empty value must pass the strict `isProxyUrl`
+    // gate before it can reach disk.
+    proxyUrl: z.union([z.string().refine(isProxyUrl), z.literal("")]).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
     // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
@@ -1145,6 +1154,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.transport !== undefined ? { transport: req.transport } : {}),
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
+      ...(req.proxyUrl !== undefined ? { proxyUrl: req.proxyUrl } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
     };
@@ -1187,14 +1197,21 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // baseUrl/model `""`-convention on this same channel) — normalize BEFORE
     // comparing/persisting so `""` never lands on disk as a value.
     const normalizedTransport = req.transport === "" ? undefined : req.transport;
+    // TASK.132: same `""`-sentinel normalization as `transport`, for the same
+    // reason — `""` never lands on disk as a value.
+    const normalizedProxyUrl = req.proxyUrl === "" ? undefined : req.proxyUrl;
     // TASK.45 §3 (Фаза 3): editing a significant ENDPOINT field invalidates the
     // last observed health — a health status confirmed against the OLD
     // model/transport/baseUrl must not linger under the new one. A label-only
     // edit (or a no-op resend of the same value) leaves health untouched.
+    // A proxy edit joins that set (TASK.132): it changes the NETWORK PATH the
+    // request takes, so health observed through the old path is just as stale
+    // as health observed against the old transport.
     const endpointChanged =
       (req.model !== undefined && req.model !== existing.model) ||
       (req.transport !== undefined && normalizedTransport !== existing.transport) ||
-      (req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl);
+      (req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl) ||
+      (req.proxyUrl !== undefined && normalizedProxyUrl !== existing.proxyUrl);
     // A baseUrl change re-points the connection at a DIFFERENT endpoint, so a
     // live-fetched model list from the old one must not linger (same staleness
     // rationale as the lastHealth reset, scoped to baseUrl only — a model/
@@ -1231,6 +1248,17 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         updatedConnection.authOptional = true;
       } else {
         delete updatedConnection.authOptional;
+      }
+    }
+    // Proxy clear (`""`) must remove the key entirely (TASK.132) — identical
+    // shape and rationale to the transport branch above: `normalizedProxyUrl
+    // === undefined` means EITHER "not sent" or "sent as `""`", so the two
+    // cases need an explicit branch, not a spread.
+    if (req.proxyUrl !== undefined) {
+      if (normalizedProxyUrl === undefined) {
+        delete updatedConnection.proxyUrl;
+      } else {
+        updatedConnection.proxyUrl = normalizedProxyUrl;
       }
     }
     if (baseUrlChanged) {

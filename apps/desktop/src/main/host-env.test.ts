@@ -12,6 +12,7 @@ import {
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
   applyCodexProfilesHomeOverride,
+  applyConnectionProxy,
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
@@ -30,7 +31,7 @@ import {
   snapshotBootEnv,
 } from "./host-env.js";
 import { resolveProviderSelection, type ProviderSelectionDeps } from "./token-broker.js";
-import { providerV2, type SingletonFixture } from "../shared/provider-v2-fixture.js";
+import { connectionFixture, providerV2, providerV2Multi, type SingletonFixture } from "../shared/provider-v2-fixture.js";
 
 /**
  * A v2 settings object whose `provider` block is built from a legacy-singleton
@@ -499,6 +500,215 @@ describe("buildHostEnv — custom-provider route (F-G-B, cut §9.2)", () => {
     // baseUrl + connection credential, byte-for-byte the pre-F-G-B path.
     expect(env.ANYCODE_BASE_URL).toBe("https://legacy-base.example.com");
     expect(env.ANYCODE_API_KEY).toBe("sk-connection");
+  });
+});
+
+describe("buildHostEnv — connection proxy (TASK.132)", () => {
+  /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
+  const PROXY = "http://user:pass@proxy.example.com:3128";
+  const SHELL_PROXY = "http://shell-proxy.internal:8080";
+  /** The COMPLETE env surface `applyConnectionProxy` may ever touch — the byte-identity guarantee is asserted over exactly this set. */
+  const PROXY_KEYS = [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "NODE_USE_ENV_PROXY",
+  ] as const;
+
+  it("emits the whole family, the loopback NO_PROXY and NODE_USE_ENV_PROXY for a proxied connection", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+      getSecret: noSecret,
+    });
+    // Verbatim, userinfo intact — a re-encoded or stripped credential would
+    // authenticate against the proxy differently than the shell export does.
+    expect(env.HTTPS_PROXY).toBe(PROXY);
+    expect(env.HTTP_PROXY).toBe(PROXY);
+    expect(env.https_proxy).toBe(PROXY);
+    expect(env.http_proxy).toBe(PROXY);
+    // Both IPv6 spellings: a bare `::1` parses as host `:` port `1` under
+    // undici's `host:port` split and matches nothing — measured on Electron 43,
+    // `http://[::1]:PORT` still reached the proxy with `::1` alone. Dropping
+    // `[::1]` here silently un-exempts every IPv6 loopback endpoint.
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
+    expect(env.no_proxy).toBe("localhost,127.0.0.1,[::1],::1");
+    expect(env.NODE_USE_ENV_PROXY).toBe("1");
+  });
+
+  // Byte-identity guarantee #1: a shell that already exports a proxy sees the
+  // EXACT pre-TASK.132 env — the vars ride the {...bootEnv} spread and stay as
+  // inert as they were, because NODE_USE_ENV_PROXY is never added unprompted.
+  it("with no connection proxy, a shell-exported proxy is passed through untouched and NODE_USE_ENV_PROXY is NOT added", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { HTTPS_PROXY: SHELL_PROXY },
+      settings: settings({ provider: { id: "z-ai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    expect(env.HTTPS_PROXY).toBe(SHELL_PROXY);
+    for (const key of PROXY_KEYS.filter((k) => k !== "HTTPS_PROXY")) {
+      expect(env[key]).toBeUndefined();
+    }
+  });
+
+  // Byte-identity guarantee #2: nothing at all on a clean env.
+  it("with no connection proxy and a clean boot env, not one proxy var is emitted", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "z-ai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    for (const key of PROXY_KEYS) {
+      expect(env[key]).toBeUndefined();
+    }
+  });
+
+  // Family-ATOMIC env-wins. Per-var `fillFromSettings` would fill the three
+  // vars the shell left blank, and the settings value would then beat the
+  // shell's `HTTPS_PROXY` under lowercase-first precedence — reverting to a
+  // per-var fill turns this red on `http_proxy`/`https_proxy`.
+  it("a shell-set HTTPS_PROXY makes the shell own the WHOLE family; only the mechanism flag is added", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { HTTPS_PROXY: SHELL_PROXY },
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+      getSecret: noSecret,
+    });
+    expect(env.HTTPS_PROXY).toBe(SHELL_PROXY);
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.https_proxy).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    // The exemption is NOT part of that hand-over: the shell named no
+    // exemptions, and this field is what switches proxying on, so loopback
+    // endpoints still get covered (asserted on its own below).
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
+    // The field still expresses proxy INTENT, so the mechanism goes on even
+    // though the shell supplied the value.
+    expect(env.NODE_USE_ENV_PROXY).toBe("1");
+  });
+
+  // The exemption list is atomic too, and for a sharper reason than the family:
+  // undici resolves `no_proxy` BEFORE `NO_PROXY`, so filling the lowercase twin
+  // beside a shell-set uppercase one SHADOWS the user's exemptions entirely.
+  // Measured on Electron 43 — with both keys set this way, a request to the
+  // shell-exempted host reached the proxy; with the lowercase key absent it
+  // went direct. A per-var fill here turns this red on `no_proxy`.
+  it("a shell-set NO_PROXY owns BOTH exemption keys — the lowercase twin must not shadow it", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { NO_PROXY: "corp.internal" },
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+      getSecret: noSecret,
+    });
+    expect(env.NO_PROXY).toBe("corp.internal");
+    expect(env.no_proxy).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBe(PROXY);
+    expect(env.NODE_USE_ENV_PROXY).toBe("1");
+  });
+
+  // Same rule from the other side: a shell that exported only the LOWERCASE
+  // key keeps it, and no uppercase default appears next to it.
+  it("a shell-set lowercase no_proxy also owns both exemption keys", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { no_proxy: "corp.internal" },
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+      getSecret: noSecret,
+    });
+    expect(env.no_proxy).toBe("corp.internal");
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBe(PROXY);
+  });
+
+  // The exemption belongs to the MECHANISM, not to the proxy value's source:
+  // this field is what turns proxying on, so loopback endpoints need covering
+  // even when the shell supplied the proxy itself.
+  it("a shell-owned family still gets the loopback exemption when the shell named none", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { HTTPS_PROXY: SHELL_PROXY },
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+      getSecret: noSecret,
+    });
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
+    expect(env.no_proxy).toBe("localhost,127.0.0.1,[::1],::1");
+  });
+
+  // `envPresent` treats a blank value as unset everywhere in this module, and
+  // that is the intended reading here too: `HTTPS_PROXY=""` is how a shell
+  // says "no proxy", not "a proxy I refuse to name".
+  it("a blank shell family var counts as unset — settings fill the family", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { HTTPS_PROXY: "" },
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+      getSecret: noSecret,
+    });
+    expect(env.HTTPS_PROXY).toBe(PROXY);
+    expect(env.http_proxy).toBe(PROXY);
+  });
+
+  // Fail-soft: a hand-edited settings.json (the persisted schema is lenient on
+  // purpose) degrades to "no proxy", never to a broken fork env.
+  it("a malformed or unsupported-scheme proxyUrl emits nothing at all", async () => {
+    for (const bad of ["proxy:3128", "socks5://p", "not a url", "https://"]) {
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: bad } }),
+        getSecret: noSecret,
+      });
+      for (const key of PROXY_KEYS) {
+        expect(env[key]).toBeUndefined();
+      }
+    }
+  });
+
+  it("a shell-set NODE_USE_ENV_PROXY wins — an explicit 0 is never overwritten to 1", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { NODE_USE_ENV_PROXY: "0" },
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+      getSecret: noSecret,
+    });
+    expect(env.NODE_USE_ENV_PROXY).toBe("0");
+    expect(env.HTTPS_PROXY).toBe(PROXY);
+  });
+
+  // Per-tab pin parity: `buildHostEnvFor(settingsPinnedTo(...))` (main/index.ts)
+  // only swaps which connection is active, so the proxy must follow the ACTIVE
+  // connection and nothing else.
+  it("only the ACTIVE connection's proxy is emitted (per-tab pin parity)", async () => {
+    const proxied = connectionFixture({ connectionId: "conn-proxied", id: "z-ai", model: "m", proxyUrl: PROXY });
+    const direct = connectionFixture({ connectionId: "conn-direct", id: "z-ai", model: "m" });
+    const pinnedTo = (activeConnectionId: string): AnycodeSettings => ({
+      ...settings(),
+      provider: providerV2Multi(activeConnectionId, [proxied, direct]),
+    });
+
+    const viaProxied = await buildHostEnv({ bootEnv: {}, settings: pinnedTo("conn-proxied"), getSecret: noSecret });
+    expect(viaProxied.HTTPS_PROXY).toBe(PROXY);
+    expect(viaProxied.NODE_USE_ENV_PROXY).toBe("1");
+
+    const viaDirect = await buildHostEnv({ bootEnv: {}, settings: pinnedTo("conn-direct"), getSecret: noSecret });
+    for (const key of PROXY_KEYS) {
+      expect(viaDirect[key]).toBeUndefined();
+    }
+  });
+});
+
+describe("applyConnectionProxy (TASK.132) — the exported env mutator", () => {
+  it("is a no-op for an absent or blank proxyUrl", () => {
+    const env: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+    applyConnectionProxy(env, {}, undefined);
+    applyConnectionProxy(env, {}, "   ");
+    expect(env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  // The boot snapshot is main's long-lived read-only source (ruling §3.3) — a
+  // mutator that wrote back into it would corrupt every later fork's env.
+  it("never writes into the bootEnv snapshot it reads", () => {
+    const bootEnv: NodeJS.ProcessEnv = {};
+    const env: NodeJS.ProcessEnv = { ...bootEnv };
+    applyConnectionProxy(env, bootEnv, "https://proxy.example.com:8443");
+    expect(bootEnv).toEqual({});
+    expect(env.https_proxy).toBe("https://proxy.example.com:8443");
   });
 });
 
