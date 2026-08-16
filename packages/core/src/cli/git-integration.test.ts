@@ -103,13 +103,26 @@ function collectOutput(output: PassThrough): () => string {
   return () => text;
 }
 
-/** Resolves once `needle` has landed in the REPL output (never a blind write). */
+/**
+ * Resolves once `needle` has landed in the REPL output (never a blind write).
+ *
+ * The explicit timeout is the point: `vi.waitFor` defaults to ONE second, and
+ * what is being awaited here is a real CLI boot plus a real `git` subprocess.
+ * That fits a warm dev machine and not a cold CI runner — this file went red on
+ * Linux CI at exactly this call while every assertion in it still held. A
+ * longer budget cannot mask a real failure (the needle either lands or the wait
+ * still throws); it only stops the clock from deciding the verdict. Stays under
+ * the 30s per-test timeout so a genuine hang is still reported as this wait.
+ */
 async function waitForText(getText: () => string, needle: string): Promise<void> {
-  await vi.waitFor(() => {
-    if (!getText().includes(needle)) {
-      throw new Error(`still waiting for ${JSON.stringify(needle)}`);
-    }
-  });
+  await vi.waitFor(
+    () => {
+      if (!getText().includes(needle)) {
+        throw new Error(`still waiting for ${JSON.stringify(needle)}`);
+      }
+    },
+    { timeout: 20_000, interval: 50 },
+  );
 }
 
 afterEach(() => {
