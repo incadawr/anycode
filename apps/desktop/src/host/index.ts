@@ -1935,6 +1935,7 @@ async function boot(): Promise<void> {
       ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
       maxTurns: envConfig.maxTurns,
+      subagentMaxTurns: envConfig.subagentMaxTurns,
       maxOutputTokens: bootMaxOutputTokens,
       reasoningEffort: bootReasoningEffort,
       // Base prompt (identity/conventions/safety/tool-discipline/env, design

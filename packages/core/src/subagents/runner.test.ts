@@ -32,7 +32,12 @@ import type {
   PermissionRequest,
 } from "../types/permissions.js";
 import type { HookRunner, SubagentStopHookInput } from "../types/hooks.js";
-import { MAX_CONCURRENT_SUBAGENTS, SUBAGENT_ACTIVITY_MAX_EVENTS } from "../types/config.js";
+import {
+  DEFAULT_SUBAGENT_MAX_TURNS,
+  MAX_CONCURRENT_SUBAGENTS,
+  SUBAGENT_ACTIVITY_MAX_EVENTS,
+  SUBAGENT_MAX_TURNS_CEILING,
+} from "../types/config.js";
 import type { EngineChildSpec, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type { ToolContext } from "../types/tools.js";
 import { SPAWN_TOOLS, buildChildConfig, createSubagentRunner, withSubagents } from "./runner.js";
@@ -251,11 +256,31 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(child.history).not.toBe(buildChildConfig(parent, getPersona("general-purpose"), REQ).history);
   });
 
-  it("caps maxTurns at DEFAULT_SUBAGENT_MAX_TURNS (min of request and 8)", () => {
+  // Budget resolution: request > parent.subagentMaxTurns > DEFAULT, and ONLY
+  // the runaway ceiling clamps. The regression this guards: DEFAULT used to be
+  // the clamp too (`Math.min(req ?? 8, 8)`), so nothing could raise the budget
+  // above 8 — not the caller, not a setting, not an env var.
+  it("resolves maxTurns request-first and clamps only at SUBAGENT_MAX_TURNS_CEILING", () => {
     const parent = makeParent();
-    expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 100 }).maxTurns).toBe(8);
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).maxTurns).toBe(DEFAULT_SUBAGENT_MAX_TURNS);
+    // An explicit request ABOVE the default is honored, not clamped down to it.
+    expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 120 }).maxTurns).toBe(120);
+    // Below the default is honored too — a caller may still ask for less.
     expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 3 }).maxTurns).toBe(3);
-    expect(buildChildConfig(parent, getPersona("explore"), REQ).maxTurns).toBe(8);
+    // The runaway ceiling is the only clamp.
+    expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 10_000 }).maxTurns).toBe(
+      SUBAGENT_MAX_TURNS_CEILING,
+    );
+  });
+
+  it("takes the host/settings default from parent.subagentMaxTurns, and lets an explicit request win", () => {
+    const parent = { ...makeParent(), subagentMaxTurns: 75 };
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).maxTurns).toBe(75);
+    expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 12 }).maxTurns).toBe(12);
+    // The settings default is bounded by the ceiling as well.
+    expect(
+      buildChildConfig({ ...makeParent(), subagentMaxTurns: 9_999 }, getPersona("explore"), REQ).maxTurns,
+    ).toBe(SUBAGENT_MAX_TURNS_CEILING);
   });
 
   it("gives the child a fresh history that never reaches the parent's persistence sink (ephemeral, R5)", () => {

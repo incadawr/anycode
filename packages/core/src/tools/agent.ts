@@ -121,7 +121,7 @@ function outcomeToResult(
     const partial = outcome.finalText.trim();
     const error = partial
       ? `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing. Partial result:\n\n${partial}`
-      : `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing and produced no partial result. The task was not completed — refine the prompt, narrow the scope, or raise maxTurns.`;
+      : `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)").`;
     return { ok: false, errorKind: "max_turns", error, output: toAgentOutput(outcome), ...presentation };
   }
   // cancelled (TASK.44): preserve cancellation semantics — never success.

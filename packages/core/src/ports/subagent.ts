@@ -15,7 +15,7 @@ export interface SubagentRequest {
   /** 3-5 word label for UI/logs. */
   description: string;
   prompt: string;
-  /** Requested turn budget, capped at DEFAULT_SUBAGENT_MAX_TURNS by the runner. */
+  /** Requested turn budget; wins over the host default, capped at SUBAGENT_MAX_TURNS_CEILING. */
   maxTurns?: number;
   /**
    * Exact model id to run the child loop on (slice 4.6, design §2.5). Resolved

@@ -8,6 +8,7 @@ export const ENV_API_KEY = "ANYCODE_API_KEY";
 export const ENV_BASE_URL = "ANYCODE_BASE_URL";
 export const ENV_MODEL = "ANYCODE_MODEL";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
+export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
@@ -59,6 +60,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
   const baseUrl = rawBaseUrl && rawBaseUrl.trim() !== "" ? rawBaseUrl : DEFAULT_BASE_URL;
 
   const maxTurns = readOptionalInteger(env, ENV_MAX_TURNS);
+  const subagentMaxTurns = readOptionalInteger(env, ENV_SUBAGENT_MAX_TURNS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
   const contextWindowTokens = readOptionalInteger(env, ENV_CONTEXT_WINDOW);
   const maxRetries = readOptionalInteger(env, ENV_MAX_RETRIES);
@@ -76,6 +78,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
     baseUrl,
     model,
     maxTurns,
+    subagentMaxTurns,
     maxOutputTokens,
     reasoningEffort,
     contextWindowTokens,

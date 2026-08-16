@@ -26,7 +26,7 @@ import { z } from "zod";
 import type { WorkflowDefinition, WorkflowStepDefinition } from "../ports/workflow.js";
 import { scanTemplateRefs } from "./template.js";
 import {
-  DEFAULT_SUBAGENT_MAX_TURNS,
+  SUBAGENT_MAX_TURNS_CEILING,
   MAX_WORKFLOW_STEPS,
   WORKFLOW_TEMPLATE_MAX_BYTES,
 } from "../types/config.js";
@@ -66,7 +66,7 @@ const stepSchema = z.object({
   agentType: z.string().min(1),
   promptTemplate: templateStringSchema,
   dependsOn: z.array(z.string()).optional(),
-  maxTurns: z.number().int().min(1).max(DEFAULT_SUBAGENT_MAX_TURNS).optional(),
+  maxTurns: z.number().int().min(1).max(SUBAGENT_MAX_TURNS_CEILING).optional(),
 });
 
 const definitionSchema = z.object({

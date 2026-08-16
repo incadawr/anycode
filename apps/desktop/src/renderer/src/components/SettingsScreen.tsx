@@ -260,11 +260,17 @@ export function parseOptionalInt(text: string): number | undefined {
 }
 
 /** Same blank-omission convention the retired v1 provider patch used, for the `tools` mirror fields. */
-export function buildToolsPatch(concurrencyText: string, stallTimeoutText: string, maxTurnsText = ""): SettingsPatch {
-  const tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number } = {};
+export function buildToolsPatch(
+  concurrencyText: string,
+  stallTimeoutText: string,
+  maxTurnsText = "",
+  subagentMaxTurnsText = "",
+): SettingsPatch {
+  const tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number; subagentMaxTurns?: number } = {};
   const concurrency = parseOptionalInt(concurrencyText);
   const stallTimeoutMs = parseOptionalInt(stallTimeoutText);
   const maxTurns = parseOptionalInt(maxTurnsText);
+  const subagentMaxTurns = parseOptionalInt(subagentMaxTurnsText);
   if (concurrency !== undefined) {
     tools.concurrency = concurrency;
   }
@@ -272,6 +278,7 @@ export function buildToolsPatch(concurrencyText: string, stallTimeoutText: strin
     tools.stallTimeoutMs = stallTimeoutMs;
   }
   if (maxTurns !== undefined) tools.maxTurns = maxTurns;
+  if (subagentMaxTurns !== undefined) tools.subagentMaxTurns = subagentMaxTurns;
   return { tools };
 }
 
@@ -1080,6 +1087,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
   const [concurrency, setConcurrency] = useState("");
   const [stallTimeoutMs, setStallTimeoutMs] = useState("");
   const [maxTurns, setMaxTurns] = useState("");
+  const [subagentMaxTurns, setSubagentMaxTurns] = useState("");
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
   // 96-E (cut §1(e)/§2.7): the ONE real persisted field in this pane besides
   // theme — absent settings.preview.autoOpen reads as ON (owner default),
@@ -1155,6 +1163,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
       setConcurrency(snapshot.settings.tools.concurrency?.toString() ?? "");
       setStallTimeoutMs(snapshot.settings.tools.stallTimeoutMs?.toString() ?? "");
       setMaxTurns(snapshot.settings.tools.maxTurns?.toString() ?? "");
+      setSubagentMaxTurns(snapshot.settings.tools.subagentMaxTurns?.toString() ?? "");
       setTheme(snapshot.settings.ui.theme);
       setAutoOpenPreview(snapshot.settings.preview?.autoOpen ?? true);
       setPreviewDisplayMode(snapshot.settings.preview?.displayMode ?? "panel");
@@ -1187,7 +1196,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
   const readOnly = snapshot.readOnly;
 
   async function saveTools(): Promise<void> {
-    await store.getState().setPatch(buildToolsPatch(concurrency, stallTimeoutMs, maxTurns));
+    await store.getState().setPatch(buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns));
   }
 
   function changeTheme(next: "system" | "light" | "dark"): void {
@@ -1372,6 +1381,11 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                   <span className="settings-field-label">Maximum turns</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={maxTurns}
                     disabled={readOnly} placeholder="100" onChange={(e) => setMaxTurns(e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Maximum turns (subagents)</span>
+                  <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
+                    disabled={readOnly} placeholder="40" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
                 </label>
                 <div className="settings-field-row">
                   <button type="button" className="settings-button settings-button-primary" disabled={readOnly} onClick={() => void saveTools()}>

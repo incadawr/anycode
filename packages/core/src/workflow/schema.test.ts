@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkflowDefinition, type WorkflowParseContext } from "./schema.js";
 import {
-  DEFAULT_SUBAGENT_MAX_TURNS,
+  SUBAGENT_MAX_TURNS_CEILING,
   MAX_WORKFLOW_STEPS,
   WORKFLOW_TEMPLATE_MAX_BYTES,
 } from "../types/config.js";
@@ -284,14 +284,14 @@ describe("parseWorkflowDefinition — caps", () => {
     expect(result.definition?.steps).toHaveLength(MAX_WORKFLOW_STEPS);
   });
 
-  it("rejects a maxTurns above DEFAULT_SUBAGENT_MAX_TURNS", () => {
+  it("rejects a maxTurns above SUBAGENT_MAX_TURNS_CEILING", () => {
     const raw = minimalRaw({
       steps: [
         {
           id: "a",
           agentType: "general-purpose",
           promptTemplate: "x",
-          maxTurns: DEFAULT_SUBAGENT_MAX_TURNS + 1,
+          maxTurns: SUBAGENT_MAX_TURNS_CEILING + 1,
         },
       ],
     });
@@ -307,14 +307,14 @@ describe("parseWorkflowDefinition — caps", () => {
     expect(result.definition).toBeUndefined();
   });
 
-  it("accepts a maxTurns of exactly DEFAULT_SUBAGENT_MAX_TURNS", () => {
+  it("accepts a maxTurns of exactly SUBAGENT_MAX_TURNS_CEILING", () => {
     const raw = minimalRaw({
       steps: [
         {
           id: "a",
           agentType: "general-purpose",
           promptTemplate: "x",
-          maxTurns: DEFAULT_SUBAGENT_MAX_TURNS,
+          maxTurns: SUBAGENT_MAX_TURNS_CEILING,
         },
       ],
     });
