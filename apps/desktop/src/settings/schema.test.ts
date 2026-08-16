@@ -20,6 +20,7 @@ import {
   SETTINGS_SET_CHANNEL,
   activeConnection,
   activeProviderView,
+  isProxyUrl,
   type AnycodeSettings,
 } from "../shared/settings.js";
 import { providerV2 } from "../shared/provider-v2-fixture.js";
@@ -651,6 +652,81 @@ describe("isLoopbackUrl (FX3-L1 G-A — loopback waiver for the origin-rebind cu
   it("rejects a malformed URL (fail-closed, never throws)", () => {
     expect(isLoopbackUrl("not a url")).toBe(false);
     expect(isLoopbackUrl("")).toBe(false);
+  });
+});
+
+describe("isProxyUrl (TASK.132 — single source of truth for settings-ipc's refine and host-env's emission gate)", () => {
+  it("accepts http and https, with or without a port", () => {
+    expect(isProxyUrl("http://proxy.example.com:3128")).toBe(true);
+    expect(isProxyUrl("https://proxy.example.com")).toBe(true);
+    expect(isProxyUrl("http://127.0.0.1:8888")).toBe(true);
+  });
+
+  // The DELIBERATE inversion of isHttpsOrLocalhostUrl's rule: an authenticated
+  // proxy is the dominant real-world case, and the credential is infrastructure
+  // config with no vault home (owner decision). Reverting to a shared
+  // no-userinfo predicate turns this red.
+  it("accepts embedded user:pass@ userinfo — the authenticated-proxy case the field exists for", () => {
+    expect(isProxyUrl("http://user:pass@proxy.example.com:3128")).toBe(true);
+    expect(isProxyUrl("https://user:pass@proxy.example.com:3128")).toBe(true);
+  });
+
+  // Only what undici's env-proxy agent and the engine CLIs actually speak.
+  it("rejects every non-HTTP(S) scheme", () => {
+    expect(isProxyUrl("socks5://proxy.example.com:1080")).toBe(false);
+    expect(isProxyUrl("socks5h://proxy.example.com:1080")).toBe(false);
+    expect(isProxyUrl("ftp://proxy.example.com")).toBe(false);
+  });
+
+  it("rejects a scheme-less host:port, garbage and the empty string (fail-closed, never throws)", () => {
+    expect(isProxyUrl("proxy.example.com:3128")).toBe(false);
+    expect(isProxyUrl("not a url")).toBe(false);
+    expect(isProxyUrl("")).toBe(false);
+  });
+
+  it("rejects an http(s) URL with no hostname", () => {
+    expect(isProxyUrl("http://")).toBe(false);
+  });
+});
+
+describe("connection.proxyUrl (TASK.132) — persisted schema stays LENIENT on purpose", () => {
+  const withProxy = (proxyUrl: string): Record<string, unknown> => ({
+    ...cloneDefaults(),
+    provider: {
+      activeConnectionId: "c1",
+      connections: [{ id: "c1", providerId: "z-ai", proxyUrl }],
+    },
+  });
+
+  it("parses a valid proxyUrl and preserves it verbatim, userinfo included", () => {
+    const parsed = settingsSchema.safeParse(withProxy("http://user:pass@proxy.example.com:3128"));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.proxyUrl).toBe("http://user:pass@proxy.example.com:3128");
+    }
+  });
+
+  // The whole-document-corruption guard: `connections` is a plain z.array with
+  // NO per-element tolerance, so a strict `.refine(isProxyUrl)` here would make
+  // one hand-edited value reset EVERY other section to defaults. Adding that
+  // refine to connectionSchema turns this red.
+  it("still parses `ok` with a NON-URL proxyUrl — one hand-edited value can never corrupt the document", () => {
+    const parsed = parseSettings(withProxy("definitely not a url"));
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.provider.connections[0]?.proxyUrl).toBe("definitely not a url");
+  });
+
+  it("rejects a wrong-TYPED proxyUrl (the shape is still enforced)", () => {
+    const bad = { ...cloneDefaults(), provider: { connections: [{ id: "c1", providerId: "z-ai", proxyUrl: 3128 }] } };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("a connection with no proxyUrl round-trips with the key absent", () => {
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify({ ...cloneDefaults(), provider: providerV2({ id: "z-ai" }) })));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect("proxyUrl" in (parsed.data.provider.connections[0] ?? {})).toBe(false);
+    }
   });
 });
 

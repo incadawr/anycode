@@ -9,10 +9,12 @@ import { describe, expect, it } from "vitest";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
 import {
   buildConnectionUpdatePayload,
+  connectionCreateProxyField,
   liveModelSuggestions,
   modelAfterCatalogPrefill,
   modelSaveBlocked,
   providerSelectDisplayValue,
+  proxyUrlSaveBlocked,
   resolveCreatedConnectionId,
   resolveCreatedCustomProviderId,
   resolveDrawerOAuthStartArgs,
@@ -115,9 +117,18 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "",
       baseUrl: "",
       showBaseUrl: false,
+      proxyUrl: "",
       authOptional: false,
     });
-    expect(payload).toEqual({ id: "conn-1", label: "Prod", model: "glm-4.6", transport: "", baseUrl: "", authOptional: false });
+    expect(payload).toEqual({
+      id: "conn-1",
+      label: "Prod",
+      model: "glm-4.6",
+      transport: "",
+      baseUrl: "",
+      proxyUrl: "",
+      authOptional: false,
+    });
   });
 
   it("sends the explicit transport value when one is selected (regress)", () => {
@@ -128,6 +139,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "openai-responses",
       baseUrl: "",
       showBaseUrl: false,
+      proxyUrl: "",
       authOptional: false,
     });
     expect(payload.transport).toBe("openai-responses");
@@ -141,6 +153,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "",
       baseUrl: "https://x",
       showBaseUrl: true,
+      proxyUrl: "",
       authOptional: false,
     });
     expect(shown.baseUrl).toBe("https://x");
@@ -151,6 +164,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       transport: "",
       baseUrl: "https://x",
       showBaseUrl: false,
+      proxyUrl: "",
       authOptional: false,
     });
     expect(hidden.baseUrl).toBe("");
@@ -161,9 +175,95 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
   // omitted. Reverting to a `...(authOptional ? {...} : {})` spread turns the
   // second assertion red.
   it("sends authOptional unconditionally — true to set, false to clear", () => {
-    const base = { connectionId: "conn-1", label: "", model: "", transport: "" as const, baseUrl: "", showBaseUrl: false };
+    const base = {
+      connectionId: "conn-1",
+      label: "",
+      model: "",
+      transport: "" as const,
+      baseUrl: "",
+      showBaseUrl: false,
+      proxyUrl: "",
+    };
     expect(buildConnectionUpdatePayload({ ...base, authOptional: true }).authOptional).toBe(true);
     expect(buildConnectionUpdatePayload({ ...base, authOptional: false }).authOptional).toBe(false);
+  });
+});
+
+describe("buildConnectionUpdatePayload — proxyUrl (TASK.132)", () => {
+  const base = {
+    connectionId: "conn-1",
+    label: "",
+    model: "",
+    transport: "" as const,
+    baseUrl: "",
+    showBaseUrl: false,
+    authOptional: false,
+  };
+
+  it("sends the trimmed proxy value when one is typed", () => {
+    expect(buildConnectionUpdatePayload({ ...base, proxyUrl: "  http://proxy.example.com:3128  " }).proxyUrl).toBe(
+      "http://proxy.example.com:3128",
+    );
+  });
+
+  it("preserves user:pass@ userinfo verbatim (the authenticated-proxy case)", () => {
+    expect(buildConnectionUpdatePayload({ ...base, proxyUrl: "http://user:pass@proxy.example.com:3128" }).proxyUrl).toBe(
+      "http://user:pass@proxy.example.com:3128",
+    );
+  });
+
+  // Same unconditional-send discipline as transport/authOptional: emptying the
+  // field must CLEAR the persisted proxy, and `""` is the channel's clear
+  // sentinel. A `...(proxyUrl ? {proxyUrl} : {})` spread turns this red — the
+  // old proxy would silently stay in force.
+  it('sends proxyUrl:"" when the field is cleared, never omits it', () => {
+    const payload = buildConnectionUpdatePayload({ ...base, proxyUrl: "" });
+    expect(payload.proxyUrl).toBe("");
+    expect("proxyUrl" in payload).toBe(true);
+    // A whitespace-only field is a cleared field, not a proxy named "   ".
+    expect(buildConnectionUpdatePayload({ ...base, proxyUrl: "   " }).proxyUrl).toBe("");
+  });
+});
+
+// Covers the RULE both create paths share. It cannot catch a caller that stops
+// spreading it (no jsdom in this package, so the component bodies are not
+// exercised) — which is exactly how the new-custom-endpoint path first shipped
+// with the field dropped; the shared fragment is what makes that reviewable.
+describe("connectionCreateProxyField (TASK.132: one fragment for both create paths)", () => {
+  it("sends the trimmed proxy when one is typed", () => {
+    expect(connectionCreateProxyField("  http://proxy.example.com:3128 ")).toEqual({
+      proxyUrl: "http://proxy.example.com:3128",
+    });
+  });
+
+  it('omits the key entirely when blank — create has no "" clear sentinel and its schema refuses one', () => {
+    expect(connectionCreateProxyField("")).toEqual({});
+    expect(connectionCreateProxyField("   ")).toEqual({});
+    expect("proxyUrl" in connectionCreateProxyField("")).toBe(false);
+  });
+});
+
+describe("proxyUrlSaveBlocked (TASK.132: a scheme-less proxy must not fail as a generic save error)", () => {
+  it("blocks a value main's payload schema would refuse", () => {
+    // The realistic mistake: host:port copied out of a corporate wiki page.
+    expect(proxyUrlSaveBlocked("proxy.example.com:3128")).toBe(true);
+    expect(proxyUrlSaveBlocked("socks5://proxy.example.com:1080")).toBe(true);
+    expect(proxyUrlSaveBlocked("nonsense")).toBe(true);
+  });
+
+  it("passes what main accepts, userinfo included", () => {
+    expect(proxyUrlSaveBlocked("http://proxy.example.com:3128")).toBe(false);
+    expect(proxyUrlSaveBlocked("https://proxy.example.com")).toBe(false);
+    expect(proxyUrlSaveBlocked("http://user:pass@proxy.example.com:3128")).toBe(false);
+  });
+
+  it("never blocks a blank field — empty IS the clear sentinel", () => {
+    expect(proxyUrlSaveBlocked("")).toBe(false);
+    expect(proxyUrlSaveBlocked("   ")).toBe(false);
+  });
+
+  it("judges the trimmed value, matching what buildConnectionUpdatePayload sends", () => {
+    expect(proxyUrlSaveBlocked("  http://proxy.example.com:3128  ")).toBe(false);
   });
 });
 

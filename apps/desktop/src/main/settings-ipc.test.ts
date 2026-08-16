@@ -1789,6 +1789,104 @@ describe("handleConnectionUpdate — resets health on a significant ENDPOINT fie
   });
 });
 
+describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, only-truthy on disk", () => {
+  const PROXY = "http://user:pass@proxy.example.com:3128";
+
+  it("create persists a valid proxyUrl verbatim, userinfo included", async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "m",
+      proxyUrl: PROXY,
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.proxyUrl).toBe(PROXY);
+  });
+
+  // Strictness lives HERE, not in the persisted schema (settings/schema.ts is
+  // deliberately lenient so one bad value cannot corrupt the document).
+  it("create refuses an invalid proxyUrl `invalid` and persists nothing", async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      proxyUrl: "socks5://proxy.example.com:1080",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toEqual([]);
+  });
+
+  it("create with no proxyUrl leaves the key off disk entirely", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect("proxyUrl" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  it("update sets a proxy on an existing connection", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", proxyUrl: PROXY });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.proxyUrl).toBe(PROXY);
+  });
+
+  // The `""` clear sentinel must DELETE the key, not persist an empty string —
+  // spreading `undefined` over the existing value would leave the old proxy in
+  // force (the exact asymmetry the transport branch closes).
+  it('update with the "" sentinel deletes the key from disk', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", proxyUrl: PROXY }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", proxyUrl: "" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect("proxyUrl" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  it("update refuses an invalid proxyUrl `invalid` and leaves the stored value untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", proxyUrl: PROXY }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      proxyUrl: "proxy.example.com:3128",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.proxyUrl).toBe(PROXY);
+  });
+
+  // A proxy change alters the NETWORK PATH, so health observed through the old
+  // path is stale — same rationale as the model/transport/baseUrl terms.
+  it("changing the proxy resets lastHealth to unchecked", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-08-17T03:00:00.000Z" });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", proxyUrl: PROXY });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "unchecked",
+      at: "2026-08-17T03:00:00.000Z",
+    });
+  });
+
+  it("resending the SAME proxy leaves health untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m", proxyUrl: PROXY }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", proxyUrl: PROXY, label: "Work" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("ready");
+  });
+});
+
 describe("handleConnectionUpdate — a baseUrl change drops the live-fetched model list", () => {
   /** Stamps a live-fetched list onto conn-1 on disk (what provider-ipc's connection-scoped fetch persists). */
   async function stampFetchedModels(): Promise<void> {

@@ -25,6 +25,8 @@ export interface SingletonFixture {
   model?: string;
   baseUrl?: string;
   transport?: ProviderTransportId;
+  /** HTTP(S) proxy the connection routes through (TASK.132) — lets a fixture express a proxied connection. */
+  proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
 }
 
@@ -35,7 +37,7 @@ export function fixtureConnectionId(providerId: string | undefined): string {
 
 /** One connection object from a singleton description (id defaults to the deterministic fixture id). */
 export function connectionFixture(singleton: SingletonFixture & { connectionId?: string }): ProviderConnection {
-  const { id, connectionId, label, model, baseUrl, transport, reasoningEffort } = singleton;
+  const { id, connectionId, label, model, baseUrl, transport, proxyUrl, reasoningEffort } = singleton;
   return {
     id: connectionId ?? fixtureConnectionId(id),
     providerId: id ?? "",
@@ -43,6 +45,7 @@ export function connectionFixture(singleton: SingletonFixture & { connectionId?:
     ...(model !== undefined ? { model } : {}),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(transport !== undefined ? { transport } : {}),
+    ...(proxyUrl !== undefined ? { proxyUrl } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
   };
 }
@@ -58,6 +61,7 @@ export function providerV2(singleton: SingletonFixture = {}): ProviderSettingsV2
     singleton.model !== undefined ||
     singleton.baseUrl !== undefined ||
     singleton.transport !== undefined ||
+    singleton.proxyUrl !== undefined ||
     singleton.reasoningEffort !== undefined;
   if (!hasConfig) {
     return { connections: [] };

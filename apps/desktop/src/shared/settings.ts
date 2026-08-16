@@ -157,6 +157,34 @@ export interface ProviderConnection {
   model?: string;
   transport?: ProviderTransportId;
   baseUrl?: string;
+  /**
+   * HTTP(S) proxy this connection's traffic is routed through (TASK.132, owner
+   * 17.08). Main emits it into the host fork's env as the HTTP(S)_PROXY family
+   * plus `NODE_USE_ENV_PROXY=1` (main/host-env.ts `applyConnectionProxy`), so
+   * node's global fetch inside the host AND the engine children — which already
+   * pass the proxy family through their env allow-lists — all honour it; a
+   * shell-provided proxy env always wins over this field.
+   *
+   * CUSTODY: stored VERBATIM and may carry `user:pass@` userinfo (authenticated
+   * proxies are the dominant real-world case), so the credential lives in plain
+   * text in the 0644 settings.json, rides the renderer snapshot, and is visible
+   * in the env of every child process the host spawns. That exposure is the
+   * owner's decision, not an oversight: this is network infrastructure config
+   * with parity to a shell-exported `https_proxy`, it has no vault key, and
+   * children inheriting it is precisely the feature — it is deliberately NOT
+   * scrubbed the way `ANYCODE_API_KEY` is (host/boot.ts `scrubSecretEnv`).
+   *
+   * Read that last part literally: Bash tool children inherit the host's whole
+   * `process.env` (core's node-execution adapter), so a model that runs `env`
+   * can read this proxy's password into its own transcript. Scrubbing it there
+   * is not obviously right either — it would break `npm`/`git`/`curl` inside
+   * the very corporate-proxy setup this field exists for — so the trade sits
+   * with the owner as TASK.135 rather than being decided silently here.
+   *
+   * Only a non-empty value is ever persisted (only-truthy-on-disk, same
+   * discipline as `transport`/`authOptional`).
+   */
+  proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
   /**
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
@@ -215,6 +243,8 @@ export interface ActiveProviderView {
   model?: string;
   baseUrl?: string;
   transport?: ProviderTransportId;
+  /** The active connection's HTTP(S) proxy (TASK.132); `buildHostEnv` reads it from here so every branch and every per-tab pin resolves it uniformly. */
+  proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
 }
 
@@ -578,6 +608,8 @@ export interface ConnectionCreateRequest {
   model?: string;
   transport?: ProviderTransportId;
   baseUrl?: string;
+  /** HTTP(S) proxy for this connection (see `ProviderConnection.proxyUrl`); validated against `isProxyUrl` at the main boundary, omitted = no proxy. */
+  proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
   /** "No API key" declaration (see `ProviderConnection.authOptional`); only `true` is persisted. */
   authOptional?: boolean;
@@ -598,6 +630,15 @@ export interface ConnectionUpdateRequest {
    */
   transport?: ProviderTransportId | "";
   baseUrl?: string;
+  /**
+   * HTTP(S) proxy for this connection (TASK.132), same `""`-sentinel convention
+   * as `transport` above: absent = keep the current value, a non-empty value =
+   * set it (validated against `isProxyUrl` at the main boundary), `""` = clear
+   * the proxy. `""` is NEVER itself persisted — the handler normalizes it to
+   * `undefined` and deletes the key, so a cleared connection carries no
+   * `proxyUrl`.
+   */
+  proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
   /**
    * "No API key" declaration: absent = keep the current value, `true` = set,
@@ -670,6 +711,38 @@ export function connectionById(settings: AnycodeSettings, connectionId: string):
 }
 
 /**
+ * The ONE proxy-URL predicate (TASK.132) — `http:`/`https:` only, because that
+ * is the whole set node's `NODE_USE_ENV_PROXY` (undici's `EnvHttpProxyAgent`)
+ * and both engine CLIs speak; `socks5:`/`ftp:`/scheme-less values are rejected
+ * rather than persisted into an env var no consumer honours.
+ *
+ * Embedded `user:pass@` userinfo is deliberately ALLOWED — the exact inversion
+ * of `settings/schema.ts`'s `isHttpsOrLocalhostUrl` rule. That rule exists
+ * because a provider API credential belongs in the vault and must never
+ * round-trip through settings.json; a proxy credential is network
+ * infrastructure with no vault home (owner decision), authenticated proxies are
+ * the dominant real-world case, and the value is byte-for-byte what a
+ * shell-exported `https_proxy` already carries in plain text through every
+ * child's env.
+ *
+ * It lives in this zero-import module rather than beside its sibling predicates
+ * in `settings/schema.ts` because all three consumers need it and one of them
+ * is the renderer: settings-ipc's create/update payload refine (trust
+ * boundary), host-env's fail-soft emission gate, and ConnectionDrawer's
+ * pre-flight — which must not pull a zod module into the renderer bundle just
+ * to name the rule. One predicate, three call sites, no drifting copy.
+ */
+export function isProxyUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (url.protocol === "http:" || url.protocol === "https:") && url.hostname !== "";
+}
+
+/**
  * Legacy-shaped projection of the active connection (TASK.45 W9 §4.1): every
  * pre-W12 read-site consumes this in place of the removed v1
  * `settings.provider.{id,model,baseUrl,transport,reasoningEffort}` singleton, so
@@ -688,6 +761,7 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     model: connection.model,
     baseUrl: connection.baseUrl,
     transport: connection.transport,
+    proxyUrl: connection.proxyUrl,
     reasoningEffort: connection.reasoningEffort,
   };
 }
