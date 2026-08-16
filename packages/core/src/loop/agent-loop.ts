@@ -119,6 +119,14 @@ export interface AgentLoopConfig {
   cwd: string;
   /** Turn budget for one runTurn call; DEFAULT_MAX_TURNS when omitted. */
   maxTurns?: number;
+  /**
+   * Turn budget handed to subagent children spawned from this loop
+   * (ANYCODE_SUBAGENT_MAX_TURNS / `tools.subagentMaxTurns`); a spawn request
+   * with its own maxTurns still wins. DEFAULT_SUBAGENT_MAX_TURNS when omitted.
+   * Read by buildChildConfig — this loop's own budget is `maxTurns` above and
+   * is never inherited by children.
+   */
+  subagentMaxTurns?: number;
   /** Passed out-of-band as ModelRequest.system on every step; never enters history. */
   systemPrompt?: string;
   maxOutputTokens?: number;

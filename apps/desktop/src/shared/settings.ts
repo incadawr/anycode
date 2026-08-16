@@ -228,7 +228,7 @@ export interface AnycodeSettings {
    */
   provider: ProviderSettingsV2;
   /** Mirrors of the ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS env (env > settings). */
-  tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number };
+  tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number; subagentMaxTurns?: number };
   /** Persisted always-allow rules seeded into every new host session (§5). */
   permissions: { alwaysAllow: AlwaysAllowRule[] };
   ui: { theme: "system" | "light" | "dark" };

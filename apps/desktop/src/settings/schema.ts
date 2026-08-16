@@ -311,6 +311,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       concurrency: z.number().optional(),
       stallTimeoutMs: z.number().optional(),
       maxTurns: z.number().optional(),
+      subagentMaxTurns: z.number().optional(),
     }),
     permissions: z.object({
       alwaysAllow: z.array(alwaysAllowRuleSchema),
