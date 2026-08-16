@@ -2110,17 +2110,6 @@ body {
   animation: scale-in var(--dur-2) var(--ease-spring);
 }
 
-.start-model-menu-group-label {
-  /* Direct child of the height-capped scrolling column above. */
-  flex-shrink: 0;
-  padding: var(--sp-2) var(--sp-2) var(--sp-1);
-  font-size: var(--fs-2xs);
-  font-weight: var(--w-medium);
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-  color: var(--text-3);
-}
-
 .start-model-item {
   display: flex;
   /* Direct child of the height-capped scrolling column above. */
@@ -2165,8 +2154,168 @@ body {
   font-size: var(--fs-sm);
 }
 
-.start-model-item-current .start-model-item-name {
+.start-model-menu-current .start-model-item-name {
   color: var(--accent);
+}
+
+/* ── TASK.106 §6: rail form (owner decision 16.08) — two-pane picker ── */
+
+/* The rail-form popover: wider than the old flat list, height capped by the
+   panes below rather than the menu's own 18rem scroll cap. */
+.start-model-menu-rail {
+  min-width: 30rem;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+}
+
+/* "Popular" strip: one horizontal row of chips above the panes. */
+.start-model-popular {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) calc(var(--sp-2) - 1px);
+  border-bottom: 1px solid var(--border);
+}
+
+.start-model-popular-label {
+  flex-shrink: 0;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.start-model-popular-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.start-model-popular-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: calc(var(--sp-1) - 1px) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-card);
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.start-model-popular-chip:hover,
+.start-model-popular-chip:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.start-model-popular-chip-current {
+  border-color: var(--accent);
+}
+
+.start-model-popular-chip-current .start-model-popular-name {
+  color: var(--accent);
+  font-weight: var(--w-medium);
+}
+
+.start-model-popular-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.start-model-popular-conn {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+/* Two panes: rail (left) + list (right), a fixed min height so a 1-model
+   connection doesn't collapse the popover. */
+.start-model-panels {
+  display: flex;
+  min-height: 15rem;
+}
+
+.start-model-rail {
+  width: 11rem;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  border-radius: var(--r-md) 0 0 var(--r-md);
+}
+
+.start-model-rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.start-model-rail-btn:hover,
+.start-model-rail-btn:focus-visible {
+  background: var(--bg-hover);
+}
+
+.start-model-rail-btn-selected {
+  background: var(--accent-soft);
+}
+
+.start-model-rail-btn-selected .start-model-rail-name {
+  color: var(--accent);
+  font-weight: var(--w-medium);
+}
+
+.start-model-rail-name-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.start-model-rail-name {
+  font-size: var(--fs-xs);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-model-rail-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-ghost);
+}
+
+/* The right pane re-uses .start-model-item rows; it needs its own scroll
+   cap now that the menu itself no longer scrolls as one column. */
+.start-model-list {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--sp-1);
+  overflow-y: auto;
+  max-height: 18rem;
 }
 
 /* ── transcript (design §2.1/§2.2/§2.4 — UI-6) ── */

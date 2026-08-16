@@ -1392,6 +1392,7 @@ function fakeStartScreenDom(overrides: Partial<StartScreenDom> = {}): StartScree
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
     ...overrides,
   };
@@ -2008,6 +2009,7 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
 
@@ -2519,6 +2521,7 @@ describe("automation facade — ctxPopoverState / ctxPopoverOpen (design/slice-P
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom3: ModelPillDom = {
@@ -2779,6 +2782,7 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom: ModelPillDom = {
@@ -3142,6 +3146,7 @@ describe("automation facade — agentCardState (design/slice-P7.18-cut.md §4 W4
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom4: ModelPillDom = {
@@ -3292,6 +3297,7 @@ describe("automation facade — agentCardExpand (design/slice-P7.18-cut.md §4 W
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom5: ModelPillDom = {
@@ -3445,6 +3451,7 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom4: ModelPillDom = {
@@ -3856,6 +3863,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom5: ModelPillDom = {
@@ -5549,6 +5557,7 @@ describe("automation facade — modelPillState catalog parity (W4-F0, findings S
     modelMenuOpen: () => false,
     clickModelChip: () => {},
     modelMenuGroups: () => [],
+    clickModelRailTab: () => false,
     clickModelItem: () => false,
   };
 

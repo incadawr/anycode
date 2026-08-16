@@ -60,7 +60,7 @@
  * (with a notice, text still sent) if the boot model turns out not to
  * accept them.
  */
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ClipboardEvent, KeyboardEvent } from "react";
 import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-store.js";
 import type { QueuedPromptImage } from "../store.js";
@@ -301,10 +301,12 @@ export interface StartModelMenuItem {
   current: boolean;
 }
 
-/** One connection's group in the New Session model popover (TASK.106 cut-1 stage B). */
+/** One connection's group in the New Session model popover (TASK.106 cut-1 stage B; rail form §6 keeps it as the rail's data source). */
 export interface StartModelMenuGroup {
   /** The connection's real id — always defined, even for the active connection's group (the click handler decides whether to submit this id as-is or normalize it to `undefined`, §3 item 3). */
   connectionId: string;
+  /** The connection's provider id (TASK.106 §6): the Popular strip matches picks by provider, not connection — see `buildStartModelPopularRows`. */
+  providerId: string;
   /** Group header text — `connectionDisplayName`'s auto-naming, the SAME label Settings/Welcome already show for this connection. */
   label: string;
   items: StartModelMenuItem[];
@@ -345,8 +347,61 @@ export function buildStartModelMenuGroups(
       name: item.name,
       current: isCurrentConnection && item.id === current.modelId,
     }));
-    return { connectionId: connection.id, label, items };
+    return { connectionId: connection.id, providerId: connection.providerId, label, items };
   });
+}
+
+/**
+ * The "Popular" strip's static pick list (TASK.106 §6, owner decision
+ * 16.08): 2–3 flagship models across the static catalog, ORDER = display
+ * order. Curatorial, not runtime — "популярные" here means the models a
+ * fresh user most plausibly wants one click away, the same posture as the
+ * catalog's own ordering. Each entry resolves against the rendered groups
+ * (`buildStartModelPopularRows` below); entries whose connection is not
+ * connected or whose id the catalog no longer carries drop out silently.
+ */
+export const POPULAR_MODEL_PICKS: ReadonlyArray<{ connectionProviderId: string; modelId: string }> = [
+  { connectionProviderId: "z-ai", modelId: "glm-5.3" },
+  { connectionProviderId: "anthropic", modelId: "claude-sonnet-4-20250514" },
+  { connectionProviderId: "moonshot", modelId: "kimi-k2-0711-preview" },
+];
+
+/**
+ * Resolves the Popular strip against the popover's live groups (TASK.106
+ * §6): a popular pick appears in the strip only when its provider has a
+ * connected group AND that group's catalog carries the model id. `current`
+ * marks the current pair (connection + model — the same pair discipline as
+ * the group rows). Match is by PROVIDER id, not connection id: a popular
+ * pick names the provider it was curated for, and the strip should offer it
+ * from whichever connected connection serves that provider (custom names /
+ * second connections of the same provider included). Exported for unit
+ * testing.
+ */
+export function buildStartModelPopularRows(
+  groups: readonly StartModelMenuGroup[],
+  picks: ReadonlyArray<{ connectionProviderId: string; modelId: string }>,
+  current: { connectionId: string | undefined; modelId: string },
+): Array<StartModelMenuItem & { connectionId: string }> {
+  const rows: Array<StartModelMenuItem & { connectionId: string }> = [];
+  for (const pick of picks) {
+    // Provider-keyed match (see doc comment): the strip offers the pick from
+    // whichever connected connection serves its provider.
+    const group = groups.find((candidate) => candidate.providerId === pick.connectionProviderId);
+    if (!group) {
+      continue;
+    }
+    const item = group.items.find((entry) => entry.id === pick.modelId);
+    if (!item) {
+      continue;
+    }
+    rows.push({
+      connectionId: group.connectionId,
+      id: item.id,
+      name: item.name,
+      current: group.connectionId === current.connectionId && item.id === current.modelId,
+    });
+  }
+  return rows;
 }
 
 /**
@@ -681,9 +736,16 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelFocusIndex, setModelFocusIndex] = useState(0);
+  // TASK.106 §6 (rail form): the popover's left rail selection — which
+  // connection's models the right pane renders. Local UI state (like
+  // modelMenuOpen itself), deliberately NOT draft state: browsing another
+  // connection's list must not touch the draft until a row is picked.
+  const [modelRailConnectionId, setModelRailConnectionId] = useState<string | null>(null);
   const modelRootRef = useRef<HTMLDivElement>(null);
   const modelChipRef = useRef<HTMLButtonElement>(null);
   const modelItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const modelRailRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const modelRailFocusIndex = useRef<number>(0);
 
   // Plain derived values (not hooks) — safe to compute ahead of the
   // `draft === null` early return below and reference from the effects'
@@ -737,16 +799,36 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.settings.provider.custom,
     { connectionId: chipConnectionId, modelId: modelChip.modelId },
   );
-  // Flattened for roving-focus indexing (group header rows are never
-  // focusable/counted — indexing is by clickable row only, §3 item 7).
-  const modelMenuRows = modelGroups.flatMap((group) =>
-    group.items.map((item, index) => ({
-      ...item,
-      connectionId: group.connectionId,
-      groupLabel: group.label,
-      isGroupStart: index === 0,
-    })),
-  );
+  // TASK.106 §6 (rail form, owner decision 16.08): the popover is now
+  // two-pane — a connection rail on the left, the selected connection's
+  // models on the right — plus a "Popular" strip of 2–3 quick picks across
+  // the top. `buildStartModelMenuGroups` still builds one group per
+  // connection exactly as before (it IS the rail's data), but only the
+  // rail-selected connection's group is RENDERED as rows; which one is
+  // `modelRailConnectionId`, seeded to the current pair's connection on
+  // every open (see the seeding effect below) and reset there so each open
+  // starts on the user's current connection.
+  const modelRailConnection =
+    modelGroups.find((group) => group.connectionId === modelRailConnectionId) ??
+    modelGroups.find((group) => group.connectionId === chipConnectionId) ??
+    modelGroups[0];
+  // The rail-selected group's rows are ALL the right pane renders (rail form:
+  // one group at a time, not the old flat concat). Header info rides the rail
+  // button instead of an in-list header row.
+  const modelMenuRows: Array<StartModelMenuItem & { connectionId: string; groupLabel?: string }> = (modelRailConnection?.items ?? []).map((item) => ({
+    ...item,
+    connectionId: modelRailConnection!.connectionId,
+    groupLabel: modelRailConnection!.label,
+  }));
+  // The "Popular" strip (§6 "избранное/2–3 популярных"): a static curatorial
+  // pick of flagship catalog ids — NOT runtime recency (that needs its own
+  // persisted store, deliberately out of scope for this cut). Resolved
+  // against the live groups so a popular pick whose connection is gone or
+  // whose id the catalog no longer carries simply drops out of the strip.
+  const modelPopularRows = buildStartModelPopularRows(modelGroups, POPULAR_MODEL_PICKS, {
+    connectionId: chipConnectionId,
+    modelId: modelChip.modelId,
+  });
   const projectRowCount = recents.length + 1; // +1 for the trailing "Browse…" row
   // TASK.39: hook-safe boolean (computed ahead of the `draft === null` early
   // return below, same discipline as the other plain derived values above)
@@ -995,19 +1077,30 @@ export function StartScreen({ onToast }: StartScreenProps) {
     }
   }, [projectMenuOpen, projectFocusIndex]);
 
-  // Seed the model popover's roving focus at the current pick whenever it opens.
+  // Seed the model popover's roving focus at the current pick whenever it
+  // opens. TASK.106 §6 rail form: the rail selection is reset to the current
+  // pair's connection on every open (browsing elsewhere last time must not
+  // leak into this open), the list index is seeded to the current model row
+  // within that group (mirroring the pre-rail seeding's findIndex(row.current)
+  // behavior for the single rendered group), and DOM focus lands on the
+  // rail's current-connection button — the two-pane equivalent of the old
+  // "focus the current row" seed.
   useEffect(() => {
     if (!modelMenuOpen) {
       return;
     }
+    setModelRailConnectionId(chipConnectionId ?? null);
     setModelFocusIndex(Math.max(0, modelMenuRows.findIndex((row) => row.current)));
+    const railIndex = Math.max(0, modelGroups.findIndex((g) => g.connectionId === (chipConnectionId ?? modelGroups[0]?.connectionId)));
+    modelRailFocusIndex.current = railIndex;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- same narrow-deps
-    // discipline as the project popover's seeding effect above.
+    // discipline as the project popover's seeding effect above; re-running on
+    // every groups/rows tick would fight the user's own rail/arrow input.
   }, [modelMenuOpen]);
 
   useEffect(() => {
     if (modelMenuOpen) {
-      modelItemRefs.current[modelFocusIndex]?.focus();
+      (modelRailRefs.current[modelRailFocusIndex.current] ?? modelItemRefs.current[modelFocusIndex] ?? null)?.focus();
     }
   }, [modelMenuOpen, modelFocusIndex]);
 
@@ -1181,6 +1274,19 @@ export function StartScreen({ onToast }: StartScreenProps) {
     closeModelMenu(true);
   }
 
+  /** Rail tab click (TASK.106 §6): switches which connection's models the right pane renders. Pure browse — the draft pair is untouched until a row is picked. */
+  function selectModelRail(connectionId: string): void {
+    setModelRailConnectionId(connectionId);
+    setModelFocusIndex(0);
+    setModelRailFocus(0);
+  }
+
+  /** Moves DOM focus into the rail's Nth button (ref-indexed roving, not tab-order). */
+  function setModelRailFocus(index: number): void {
+    modelRailFocusIndex.current = index;
+    modelRailRefs.current[index]?.focus();
+  }
+
   function onModelChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -1198,6 +1304,20 @@ export function StartScreen({ onToast }: StartScreenProps) {
       case "ArrowUp":
         event.preventDefault();
         setModelFocusIndex((i) => nextRovingIndex(i, -1, count));
+        break;
+      case "ArrowRight":
+        // Rail → list (§6): focus the right pane's current row. No-op when
+        // already there — the rail doesn't render when the list is focused.
+        if (modelRailConnection) {
+          event.preventDefault();
+          modelItemRefs.current[modelFocusIndex]?.focus();
+        }
+        break;
+      case "ArrowLeft":
+        // List → rail (§6): return focus to the rail button of the
+        // connection whose models the list is rendering.
+        event.preventDefault();
+        setModelRailFocus(modelGroups.findIndex((g) => g.connectionId === modelRailConnection?.connectionId));
         break;
       case "Home":
         event.preventDefault();
@@ -1221,6 +1341,41 @@ export function StartScreen({ onToast }: StartScreenProps) {
         closeModelMenu(true);
         break;
       case "Tab":
+        setModelMenuOpen(false);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** The rail's own keydown (TASK.106 §6): vertical roving inside the rail, ArrowRight/Enter into the list, Escape/Tab close. Every handled key STOPS PROPAGATION — the events would otherwise bubble into onModelMenuKeyDown (the menu container's own handler) and double-drive the list roving/Enter-select. */
+  function onModelRailKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number): void {
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        event.stopPropagation();
+        setModelRailFocus(nextRovingIndex(index, 1, modelGroups.length));
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        event.stopPropagation();
+        setModelRailFocus(nextRovingIndex(index, -1, modelGroups.length));
+        break;
+      case "ArrowRight":
+      case "Enter":
+      case " ":
+        event.preventDefault();
+        event.stopPropagation();
+        setModelFocusIndex(0);
+        modelItemRefs.current[0]?.focus();
+        break;
+      case "Escape":
+        event.preventDefault();
+        event.stopPropagation();
+        closeModelMenu(true);
+        break;
+      case "Tab":
+        event.stopPropagation();
         setModelMenuOpen(false);
         break;
       default:
@@ -1577,38 +1732,107 @@ export function StartScreen({ onToast }: StartScreenProps) {
               </button>
 
               {modelMenuOpen && (
-                <div className="start-model-menu" role="menu" aria-label="Model" onKeyDown={onModelMenuKeyDown}>
-                  {/* TASK.106 cut-1 stage B: one group per connection, SlashMenu.tsx's
-                      own "Fragment + role=presentation header before the first row of
-                      a new group" pattern — the header never joins roving focus/tab
-                      order (§3 item 7). */}
-                  {modelMenuRows.map((row, index) => (
-                    <Fragment key={`${row.connectionId}:${row.id}`}>
-                      {row.isGroupStart && (
-                        <div className="start-model-menu-group-label" role="presentation" data-connection-id={row.connectionId}>
-                          {row.groupLabel}
-                        </div>
-                      )}
-                      <button
-                        ref={(el) => {
-                          modelItemRefs.current[index] = el;
-                        }}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={row.current}
-                        tabIndex={index === modelFocusIndex ? 0 : -1}
-                        className={`start-model-item${row.current ? " start-model-item-current" : ""}`}
-                        data-connection-id={row.connectionId}
-                        data-model-id={row.id}
-                        onClick={() => selectModel(row.connectionId, row.id)}
-                      >
-                        <span className="start-model-item-check" aria-hidden="true">
-                          {row.current ? <Check /> : null}
-                        </span>
-                        <span className="start-model-item-name">{row.name}</span>
-                      </button>
-                    </Fragment>
-                  ))}
+                <div className="start-model-menu start-model-menu-rail" role="menu" aria-label="Model" onKeyDown={onModelMenuKeyDown}>
+                  {/* TASK.106 §6 (owner decision 16.08): "Popular" strip —
+                      2–3 curated flagship picks, one click each, always
+                      visible above the two panes. Rows carry the same
+                      data-attrs as list rows (the automation channel's
+                      clickModelItem keys off them). */}
+                  {modelPopularRows.length > 0 && (
+                    <div className="start-model-popular" role="presentation">
+                      <span className="start-model-popular-label">Popular</span>
+                      <div className="start-model-popular-items">
+                        {modelPopularRows.map((row) => (
+                          <button
+                            key={`pop:${row.connectionId}:${row.id}`}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={row.current}
+                            tabIndex={-1}
+                            className={`start-model-popular-chip${row.current ? " start-model-popular-chip-current" : ""}`}
+                            data-connection-id={row.connectionId}
+                            data-model-id={row.id}
+                            onClick={() => selectModel(row.connectionId, row.id)}
+                            onKeyDown={(event) => {
+                              // Mouse-parity keyboard activation: Enter/Space
+                              // picks THIS chip. Stops propagation so the
+                              // container's roving handler can't also
+                              // "select" whatever row the list's focus index
+                              // points at (the chip strip sits outside the
+                              // roving flow by design — tabIndex=-1).
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                selectModel(row.connectionId, row.id);
+                              }
+                            }}
+                          >
+                            <span className="start-model-item-check" aria-hidden="true">{row.current ? <Check /> : null}</span>
+                            <span className="start-model-popular-name">{row.name}</span>
+                            <span className="start-model-popular-conn">{modelGroups.find((g) => g.connectionId === row.connectionId)?.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Two panes: connection rail (left) + the rail-selected
+                      connection's models (right). The rail is the old group
+                      header set, promoted to a selectable column — the
+                      §3-item-7 discipline survives: headers were never in
+                      roving focus as headers, now they're real tabs with
+                      their own arrow set (onModelRailKeyDown). */}
+                  <div className="start-model-panels">
+                    <div className="start-model-rail" role="tablist" aria-label="Provider">
+                      {modelGroups.map((group, index) => {
+                        const selected = group.connectionId === modelRailConnection?.connectionId;
+                        return (
+                          <button
+                            key={group.connectionId}
+                            ref={(el) => {
+                              modelRailRefs.current[index] = el;
+                            }}
+                            type="button"
+                            role="tab"
+                            aria-selected={selected}
+                            tabIndex={index === modelRailFocusIndex.current ? 0 : -1}
+                            className={`start-model-rail-btn${selected ? " start-model-rail-btn-selected" : ""}`}
+                            data-connection-id={group.connectionId}
+                            data-model-count={group.items.length}
+                            onClick={() => selectModelRail(group.connectionId)}
+                            onKeyDown={(event) => onModelRailKeyDown(event, index)}
+                          >
+                            <span className="start-model-rail-name-row">
+                              <span className="start-model-rail-name">{group.label}</span>
+                              <span className="start-model-rail-count">{group.items.length}</span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="start-model-list">
+                      {modelMenuRows.map((row, index) => (
+                        <button
+                          key={`${row.connectionId}:${row.id}`}
+                          ref={(el) => {
+                            modelItemRefs.current[index] = el;
+                          }}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={row.current}
+                          tabIndex={index === modelFocusIndex ? 0 : -1}
+                          className={`start-model-item${row.current ? " start-model-item-current" : ""}`}
+                          data-connection-id={row.connectionId}
+                          data-model-id={row.id}
+                          onClick={() => selectModel(row.connectionId, row.id)}
+                        >
+                          <span className="start-model-item-check" aria-hidden="true">
+                            {row.current ? <Check /> : null}
+                          </span>
+                          <span className="start-model-item-name">{row.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
                 </div>
