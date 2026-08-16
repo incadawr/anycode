@@ -20,6 +20,8 @@ export interface CoreEnvConfig {
   model: string;
   /** Turn budget override for the main loop (ANYCODE_MAX_TURNS). */
   maxTurns?: number;
+  /** Turn budget override for subagent child loops (ANYCODE_SUBAGENT_MAX_TURNS). */
+  subagentMaxTurns?: number;
   /** Output-token override (ANYCODE_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
   /** Opt-in reasoning budget (ANYCODE_REASONING_EFFORT). */
@@ -194,8 +196,25 @@ export const DEFAULT_RETRY_AFTER_CAP_MS = 60_000;
 // ---------------------------------------------------------------------------
 // Phase 3 slice 3.1 constants (subagents, design §3.5)
 
-/** Turn budget cap for a subagent child loop (vs DEFAULT_MAX_TURNS=100 for the parent). */
-export const DEFAULT_SUBAGENT_MAX_TURNS = 8;
+/**
+ * Default turn budget for a subagent child loop (vs DEFAULT_MAX_TURNS=100 for
+ * the parent). This is a DEFAULT, not a ceiling: an explicit request or the
+ * `subagentMaxTurns` setting raises it, bounded only by
+ * SUBAGENT_MAX_TURNS_CEILING.
+ *
+ * The value was 8 from the alpha baseline through 2026-08-16, and 8 was also
+ * hard-clamped in the runner, so recon over a handful of files routinely died
+ * at `max_turns` with no reachable way to raise it (the Agent tool declares no
+ * maxTurns and the `tools.maxTurns` setting feeds the PARENT loop only).
+ */
+export const DEFAULT_SUBAGENT_MAX_TURNS = 40;
+
+/**
+ * Hard ceiling on a subagent turn budget — the runaway guard that the default
+ * above used to double as. Only bounds an EXPLICIT request (workflow step or
+ * settings override); it is never the value a caller gets by omission.
+ */
+export const SUBAGENT_MAX_TURNS_CEILING = 200;
 
 /** Semaphore width in the subagent runner: at most this many child loops run at once (atop toolConcurrency=4). */
 export const MAX_CONCURRENT_SUBAGENTS = 2;

@@ -25,6 +25,8 @@ export const ENV_BASE_URL = "ANYCODE_BASE_URL";
 export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
 export const ENV_STALL_TIMEOUT_MS = "ANYCODE_STALL_TIMEOUT_MS";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
+/** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
+export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
  * Reasoning-effort inheritance rung (F14, slice-P7.15-cut.md §2.4). Literal
  * mirrors core's `provider/env.ts:11` (host already reads this into
@@ -225,6 +227,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_TOOL_CONCURRENCY,
   ENV_STALL_TIMEOUT_MS,
   ENV_MAX_TURNS,
+  ENV_SUBAGENT_MAX_TURNS,
   ENV_REASONING_EFFORT,
   ENV_PROVIDER_TRANSPORT,
 ];
@@ -514,6 +517,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_TOOL_CONCURRENCY, numToStr(settings.tools.concurrency));
   fillFromSettings(env, ENV_STALL_TIMEOUT_MS, numToStr(settings.tools.stallTimeoutMs));
   fillFromSettings(env, ENV_MAX_TURNS, numToStr(settings.tools.maxTurns));
+  fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
   // Reasoning-effort inheritance rung (F14 §2.4): a new host boot inherits the
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).

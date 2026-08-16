@@ -28,6 +28,7 @@ import type { ModelPort } from "../ports/model.js";
 import { capUtf8Bytes } from "../util/bytes.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
+  SUBAGENT_MAX_TURNS_CEILING,
   MAX_CONCURRENT_SUBAGENTS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SUBAGENT_OUTPUT_MAX_BYTES,
@@ -150,7 +151,14 @@ export function buildChildConfig(
     // is inherited (same workspace fs/exec/http).
     ports: { ...parent.ports, todos: new InMemoryTodoStore() },
     cwd: parent.cwd,
-    maxTurns: Math.min(req.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS, DEFAULT_SUBAGENT_MAX_TURNS),
+    // Budget resolution, most specific first: explicit request > host/settings
+    // default (parent.subagentMaxTurns) > DEFAULT_SUBAGENT_MAX_TURNS. Only the
+    // runaway ceiling clamps — until 2026-08-16 the DEFAULT was the clamp, so
+    // a caller could lower the budget but nothing could raise it.
+    maxTurns: Math.min(
+      req.maxTurns ?? parent.subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS,
+      SUBAGENT_MAX_TURNS_CEILING,
+    ),
     // Harness prelude (tool discipline over the child's OWN registry, env, memory)
     // + persona/profile body + finality note. toolNames come from the registry
     // built above (post SPAWN_TOOLS skip), so the child's prompt structurally

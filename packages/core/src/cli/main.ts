@@ -1096,6 +1096,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         // Parallel cap override for read-only tool batches (§2.7); env ANYCODE_TOOL_CONCURRENCY.
         toolConcurrency: envConfig.toolConcurrency,
         maxTurns: envConfig.maxTurns,
+        subagentMaxTurns: envConfig.subagentMaxTurns,
         maxOutputTokens: bootMaxOutputTokens,
         reasoningEffort: bootReasoningEffort,
         // Base prompt (identity/conventions/safety/tool-discipline/env, design

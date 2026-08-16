@@ -20,7 +20,7 @@ export interface WorkflowStepDefinition {
   promptTemplate: string;
   /** Step ids this step waits for; results become template variables. Absent = source step. */
   dependsOn?: readonly string[];
-  /** Optional per-step turn budget; the runner caps it at DEFAULT_SUBAGENT_MAX_TURNS regardless. */
+  /** Optional per-step turn budget; the runner caps it at SUBAGENT_MAX_TURNS_CEILING. */
   maxTurns?: number;
 }
 
