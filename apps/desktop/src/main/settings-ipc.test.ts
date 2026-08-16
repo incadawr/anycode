@@ -2503,9 +2503,18 @@ describe("handleBinaryTrustGrant — refusals (TASK.103)", () => {
 });
 
 describe("handleBinaryTrustRevoke — surgical + idempotent (TASK.103)", () => {
+  // `uid: 501` is not decoration: the fake stat reports owner 501
+  // (TRUST_STAT_DEFAULTS), and without an explicit dep the grant judges
+  // ownership against the REAL `process.getuid()`. That passes on a macOS dev
+  // box (first user is 501) and fails on Linux CI (uid 1001), where the grant
+  // is refused and these setup calls silently write nothing.
   it("BS6 removes exactly the named path; a sibling record survives", async () => {
-    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex") }), { path: "/opt/codex" });
-    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/claude") }), { path: "/opt/claude" });
+    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), uid: 501 }), {
+      path: "/opt/codex",
+    });
+    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/claude"), uid: 501 }), {
+      path: "/opt/claude",
+    });
     const res = await handleBinaryTrustRevoke(makeDeps(), { path: "/opt/codex" });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
@@ -2513,7 +2522,9 @@ describe("handleBinaryTrustRevoke — surgical + idempotent (TASK.103)", () => {
   });
 
   it("BS6 an unknown path is an idempotent ok:true no-op, with a fresh snapshot", async () => {
-    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex") }), { path: "/opt/codex" });
+    await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), uid: 501 }), {
+      path: "/opt/codex",
+    });
     const res = await handleBinaryTrustRevoke(makeDeps(), { path: "/opt/does-not-exist" });
     expect(res.ok).toBe(true);
     if (res.ok) {
