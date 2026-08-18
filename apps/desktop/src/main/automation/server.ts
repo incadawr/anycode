@@ -67,6 +67,9 @@ import {
   startScreenSetModel,
   startScreenSetEngine,
   startScreenToggleProjectMenu,
+  startScreenModelMenuState,
+  startScreenToggleModelMenu,
+  startScreenSelectModelRow,
   startScreenSubmit,
   queuePrompt,
   queueEdit,
@@ -284,6 +287,14 @@ const startScreenWorkspaceBody = z.object({ workspace: z.string().min(1).max(409
 // plain binary toggle, same shape as `ctxPopoverOpenBody` above. ──
 const startScreenModelBody = z.object({ model: z.string().min(1).max(256).nullable() }).strict();
 const startScreenProjectMenuBody = z.object({ open: z.boolean() }).strict();
+
+// ── model-menu grouped picker bodies (TASK.106 cut-1): `open` mirrors
+// startScreenProjectMenuBody's plain binary-toggle shape; `select`'s body
+// carries both axes of the pair (§ above) — `connectionId`/`modelId` bound
+// the same way `queueTabIdBody`'s fields do (a bare non-empty id, no format
+// assumed here since the facade/DOM are the actual authority on validity). ──
+const startScreenModelMenuBody = z.object({ open: z.boolean() }).strict();
+const startScreenModelMenuSelectBody = z.object({ connectionId: z.string().min(1).max(256), modelId: z.string().min(1).max(256) }).strict();
 
 // ── engine selection body (codex-fixes TASK.42, cut §3.7): `engineId` is a
 // bare string here (not the shared `EngineId` enum) — same "server.ts owns
@@ -777,6 +788,13 @@ async function route(
   if (method === "GET" && pathname === "/start-screen") {
     return startScreenState(deps);
   }
+  // Model-menu grouped picker probe (TASK.106 cut-1): a DEDICATED route, same
+  // "GET /start-screen stays byte-untouched" posture as the settings/mcp/skills
+  // dedicated-route precedent below — this is a DOM probe of the popover's
+  // rendered groups, not a new field on startScreenState's own shape.
+  if (method === "GET" && pathname === "/start-screen/model-menu") {
+    return startScreenModelMenuState(deps);
+  }
   // Settings probe (slice-P7.16-cut.md §5 W4): global (app-level), no
   // `:tabId` segment — same GET-with-no-body shape as GET /start-screen above.
   if (method === "GET" && pathname === "/settings") {
@@ -914,6 +932,20 @@ async function route(
   if (method === "POST" && pathname === "/start-screen/project-menu") {
     const body = parseBody(rawBody, startScreenProjectMenuBody);
     return startScreenToggleProjectMenu(deps, body.open);
+  }
+  // Model-menu grouped picker driver (TASK.106 cut-1): mirrors the
+  // project-menu driver above one for one — `/model-menu` toggles the
+  // popover open/closed, `/model-menu/select` drives a real click on the
+  // row matching {connectionId, modelId} (auto-opening the popover first if
+  // it isn't already open — the facade's own discipline, not re-implemented
+  // here).
+  if (method === "POST" && pathname === "/start-screen/model-menu") {
+    const body = parseBody(rawBody, startScreenModelMenuBody);
+    return startScreenToggleModelMenu(deps, body.open);
+  }
+  if (method === "POST" && pathname === "/start-screen/model-menu/select") {
+    const body = parseBody(rawBody, startScreenModelMenuSelectBody);
+    return startScreenSelectModelRow(deps, body.connectionId, body.modelId);
   }
   // Codex profile chip driver (W4-F0 probe (b)): one route, a union body —
   // `{open}` mirrors a real click on the chip button, `{pick}` a real click

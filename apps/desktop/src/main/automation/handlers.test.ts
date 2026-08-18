@@ -49,6 +49,9 @@ import {
   startScreenSetModel,
   startScreenSetEngine,
   startScreenToggleProjectMenu,
+  startScreenModelMenuState,
+  startScreenToggleModelMenu,
+  startScreenSelectModelRow,
   startScreenSubmit,
   queuePrompt,
   queueEdit,
@@ -688,6 +691,30 @@ describe("start-screen thin facade commands forward method + args (design/slice-
     const deps = fakeDeps();
     await startScreenToggleProjectMenu(deps, false);
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenToggleProjectMenu", [false]);
+  });
+
+  it("startScreenModelMenuState -> callFacade('startScreenModelMenuState', []) (TASK.106 cut-1)", async () => {
+    const deps = fakeDeps();
+    await startScreenModelMenuState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("startScreenModelMenuState", []);
+  });
+
+  it("startScreenToggleModelMenu(true) -> callFacade('startScreenToggleModelMenu', [true]) (TASK.106 cut-1)", async () => {
+    const deps = fakeDeps();
+    await startScreenToggleModelMenu(deps, true);
+    expect(deps.callFacade).toHaveBeenCalledWith("startScreenToggleModelMenu", [true]);
+  });
+
+  it("startScreenToggleModelMenu(false) -> callFacade('startScreenToggleModelMenu', [false]) (TASK.106 cut-1)", async () => {
+    const deps = fakeDeps();
+    await startScreenToggleModelMenu(deps, false);
+    expect(deps.callFacade).toHaveBeenCalledWith("startScreenToggleModelMenu", [false]);
+  });
+
+  it("startScreenSelectModelRow -> callFacade('startScreenSelectModelRow', [connectionId, modelId]) (TASK.106 cut-1)", async () => {
+    const deps = fakeDeps();
+    await startScreenSelectModelRow(deps, "conn-second", "m2");
+    expect(deps.callFacade).toHaveBeenCalledWith("startScreenSelectModelRow", ["conn-second", "m2"]);
   });
 });
 

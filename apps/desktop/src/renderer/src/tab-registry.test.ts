@@ -934,6 +934,80 @@ describe("tab-registry — queueInitialPrompt engine-effort seam (TASK.81)", () 
   });
 });
 
+describe("tab-registry — queueInitialPrompt core reasoning-effort seam (TASK.131)", () => {
+  /** Filters port.sent down to just the message `type`s, in send order. */
+  function sentTypes(port: FakeMessagePort): string[] {
+    return port.sent.map((m) => (m as { type: string }).type);
+  }
+
+  it("sends set_reasoning_effort — core's OWN message, not set_engine_effort — before the initial user_message", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there", undefined, undefined, undefined, undefined, "high");
+    expect(sentTypes(port)).toEqual(["ui_ready"]); // not dispatched yet
+
+    port.emit(HOST_READY("/ws/a", "sess-a")); // core wire: no reasoningEffort field ⇒ "off"
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_reasoning_effort", "user_message"]);
+    expect(port.sent[1]).toEqual({ type: "set_reasoning_effort", effort: "high" });
+  });
+
+  it("sends it AFTER a model switch, so the host validates the level against the model actually active by then", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there", "glm-5.2", "plan", undefined, undefined, "max");
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_mode", "set_model", "set_reasoning_effort", "user_message"]);
+  });
+
+  it("sends nothing when the pick already equals the host's boot effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there", undefined, undefined, undefined, undefined, "off");
+    port.emit(HOST_READY("/ws/a", "sess-a")); // absent field ⇒ "off"
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message"]);
+  });
+
+  it("drops a level outside core's closed vocabulary instead of putting it on the wire", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there", undefined, undefined, undefined, undefined, "turbo");
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message"]);
+  });
+
+  it("already-ready shortcut: compares against the tab's live reasoning effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    port.emit({ type: "reasoning_effort_changed", effort: "high" });
+    expect(registry.getStore("tab-a")?.getState().connection).toBe("ready");
+
+    registry.queueInitialPrompt("tab-a", "same level", undefined, undefined, undefined, undefined, "high");
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message"]);
+
+    registry.queueInitialPrompt("tab-a", "new level", undefined, undefined, undefined, undefined, "max");
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message", "set_reasoning_effort", "user_message"]);
+  });
+});
+
 describe("tab-registry — queueInitialPrompt images (TASK.81)", () => {
   const IMAGE = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
 

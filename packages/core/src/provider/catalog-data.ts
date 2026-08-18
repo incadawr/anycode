@@ -54,15 +54,20 @@ const ENTRIES: CatalogProviderEntry[] = [
     // TASK.113 (2026-08-15): refreshed to the live docs.z.ai model line (guides/llm
     // sidebar + each page's spec box and code samples). Fresh-first so the first
     // chip — the empty-model prefill — is the newest model. reasoning/effortLevels
-    // stay only where a source confirmed them (glm-5.2's native 3-state UI); the
-    // rest of the 5.x/4.7 line advertises "multiple thinking modes" without a
+    // stay only where a source confirmed them (glm-5.2's native 3-state UI, and
+    // glm-5.3 — same 5.x thinking line, owner-confirmed live on the coding plan);
+    // the rest of the 5.x/4.7 line advertises "multiple thinking modes" without a
     // confirmed level set, so those fields stay absent rather than guessed.
+    // The z.ai effort mapping itself is provider-level, not per-model
+    // (`reasoningRequestOptions`, providerName "Z.AI (GLM)": effort high/max +
+    // a thinking budget), so a missing `reasoning: true` here is what silently
+    // drops a connection's stored effort — the model list is the only gate.
     // GLM-5.3's id is owner-confirmed live on the coding plan (works via manual
     // entry); docs.z.ai carries the page but no code sample yet ("API coming
     // soon"). 4.5/4.5-air numbers predate this pass and are kept as-is.
     models: [
       // GLM-5.3/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
-      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
+      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
       { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
@@ -104,6 +109,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     // above 401s them (verified live 2026-07-17). Models/262k context/thinking
     // capabilities mirror the endpoint's /v1/models declaration; the K2.7 pair
     // is thinking-only (no "off"), k3 natively declares low/high/max efforts.
+    // k3-256k is the same K3 served under its context-suffixed id (both appear
+    // in the endpoint's live model list), so it carries K3's capabilities.
     id: "kimi",
     name: "Kimi (kimi.com subscription)",
     baseUrl: "https://api.kimi.com/coding",
@@ -114,6 +121,7 @@ const ENTRIES: CatalogProviderEntry[] = [
       { id: "kimi-for-coding", name: "K2.7 Coding", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
       { id: "kimi-for-coding-highspeed", name: "K2.7 Coding Highspeed", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
       { id: "k3", name: "K3", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "k3-256k", name: "K3 256k", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
     ],
   },
   {

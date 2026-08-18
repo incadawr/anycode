@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyStarterPreset,
+  buildStartModelMenuGroups,
   CODEX_DRAFT_PRESETS,
   computeCodexProfileChipLabel,
   computeModelChipDisplay,
@@ -25,14 +26,18 @@ import {
   resolveDraftEngineEffort,
   resolveProviderDefaultModel,
   seedWorkspaceFromRecents,
+  selectStartModelRow,
   shouldShowClaudeEngineButton,
   shouldShowCodexProfileChip,
+  startModelRowConnectionId,
   type FolderPickDeps,
   type ModelPickDeps,
 } from "./StartScreen.js";
+import { providerModelsFor } from "./ModelPill.js";
 import { createTabsStore } from "../tabs-store.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { StartSubmitResult } from "../start-session.js";
+import type { CatalogSummary, ProviderConnection } from "../../../shared/settings.js";
 
 function session(over: Partial<SessionSummary> & { id: string; workspace: string; updatedAt: number }): SessionSummary {
   return { model: "m1", mode: "build", createdAt: over.updatedAt, ...over };
@@ -466,6 +471,207 @@ describe("pickModelForDraft (§3-D3 model-chip wiring)", () => {
     const { deps, tabsStore } = makeDeps();
 
     pickModelForDraft("claude-sonnet", deps);
+
+    expect(tabsStore.getState().draft).toBeNull();
+  });
+});
+
+function connection(over: Partial<ProviderConnection> & { id: string; providerId: string }): ProviderConnection {
+  return over;
+}
+
+describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B, re-exported from start-model-picker.ts by TASK.131 — grouped New Session model popover)", () => {
+  const catalog: CatalogSummary = [
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      authKind: "api_key",
+      models: [
+        { id: "claude-opus", name: "Claude Opus" },
+        { id: "claude-sonnet", name: "Claude Sonnet" },
+      ],
+    },
+    {
+      id: "kimi",
+      name: "Kimi",
+      authKind: "api_key",
+      models: [{ id: "kimi-k2", name: "Kimi K2" }],
+    },
+  ];
+
+  it("builds one group per connection, headed by the connection's label, models resolved via providerModelsFor", () => {
+    const connections = [
+      connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic main" }),
+      connection({ id: "conn-b", providerId: "kimi", label: "Kimi subscription" }),
+    ];
+
+    const groups = buildStartModelMenuGroups(connections, catalog, undefined, {
+      connectionId: "conn-a",
+      modelId: "claude-opus",
+    });
+
+    expect(groups.map((g) => g.label)).toEqual(["Anthropic main", "Kimi subscription"]);
+    expect(groups[0]?.items.map((i) => i.id)).toEqual(["claude-opus", "claude-sonnet"]);
+    expect(groups[1]?.items.map((i) => i.id)).toEqual(["kimi-k2"]);
+  });
+
+  it("a connection with an empty/absent live models[] falls back to the provider's static catalog (providerModelsFor's own behavior, not duplicated)", () => {
+    const connections = [connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic", models: [] })];
+
+    const groups = buildStartModelMenuGroups(connections, catalog, undefined, {
+      connectionId: "conn-a",
+      modelId: "claude-opus",
+    });
+
+    expect(groups[0]?.items.map((i) => i.id)).toEqual(["claude-opus", "claude-sonnet"]);
+  });
+
+  it("checkmark parity: the SAME model id present in two connections marks current only on the item belonging to the actually current connection", () => {
+    const connections = [
+      connection({ id: "conn-sub", providerId: "kimi", label: "Kimi subscription" }),
+      connection({ id: "conn-api", providerId: "kimi", label: "Kimi API" }),
+    ];
+
+    const groups = buildStartModelMenuGroups(connections, catalog, undefined, {
+      connectionId: "conn-api",
+      modelId: "kimi-k2",
+    });
+
+    // TASK.131 D1 ordering: the current pair's connection leads the rail, so
+    // the settings-order-second `conn-api` is groups[0] here.
+    expect(groups.map((g) => g.connectionId)).toEqual(["conn-api", "conn-sub"]);
+    expect(groups[0]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(true);
+    expect(groups[1]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(false);
+  });
+
+  it("TASK.131 D1: a connection offering nothing (unknown provider, no live list) leaves the rail entirely", () => {
+    const connections = [
+      connection({ id: "conn-empty", providerId: "mystery", label: "Mystery" }),
+      connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
+    ];
+
+    const groups = buildStartModelMenuGroups(connections, catalog, undefined, {
+      connectionId: "conn-a",
+      modelId: "claude-opus",
+    });
+
+    expect(groups.map((g) => g.connectionId)).toEqual(["conn-a"]);
+  });
+
+  it("no explicit pick (current pair = active connection's default): the active connection's group carries the current mark, every other group has none", () => {
+    const connections = [
+      connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
+      connection({ id: "conn-b", providerId: "kimi", label: "Kimi" }),
+    ];
+
+    const groups = buildStartModelMenuGroups(connections, catalog, undefined, {
+      connectionId: "conn-a",
+      modelId: "claude-opus",
+    });
+
+    expect(groups[0]?.items.find((i) => i.current)).toEqual({ id: "claude-opus", name: "Claude Opus", current: true });
+    expect(groups[1]?.items.some((i) => i.current)).toBe(false);
+  });
+
+  it("TASK.106 §6 rail form: every group carries its connection's providerId (the Popular strip's provider-keyed match)", () => {
+    const connections = [
+      connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
+      connection({ id: "conn-b", providerId: "kimi", label: "Kimi" }),
+    ];
+
+    const groups = buildStartModelMenuGroups(connections, catalog, undefined, {
+      connectionId: "conn-a",
+      modelId: "claude-opus",
+    });
+
+    expect(groups.map((g) => g.providerId)).toEqual(["anthropic", "kimi"]);
+  });
+});
+
+describe("TASK.106 cut-1 P2 fix: model chip label resolves against the PINNED connection's catalog, not always the active one", () => {
+  const catalog: CatalogSummary = [
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      authKind: "api_key",
+      models: [{ id: "claude-opus", name: "Claude Opus" }],
+    },
+    {
+      id: "kimi",
+      name: "Kimi",
+      authKind: "api_key",
+      models: [{ id: "kimi-k2-0905", name: "Kimi K2" }],
+    },
+  ];
+
+  it("computeModelChipDisplay: given the PINNED (not active) connection's catalog, resolves the real display name instead of falling back to the raw model id", () => {
+    // Active connection is Anthropic; the user picked Kimi K2 from the OTHER
+    // connection's group in the popover. The chip must still resolve "Kimi
+    // K2" — not the raw "kimi-k2-0905" id modelDisplayName falls back to on
+    // a catalog miss — because the caller resolves catalogModels off the
+    // PINNED connection (`draft.connectionId`), not the active one.
+    const pinnedConnectionCatalogModels = providerModelsFor("kimi", catalog, undefined, undefined);
+    const chip = computeModelChipDisplay("kimi-k2-0905", "claude-opus", pinnedConnectionCatalogModels);
+
+    expect(chip).toEqual({ modelId: "kimi-k2-0905", label: "Kimi K2", isDefault: false });
+  });
+
+  it("regression check: resolving off the ACTIVE connection's catalog instead (the pre-fix bug) would have fallen back to the raw id", () => {
+    // Same pick, but catalogModels resolved off the ACTIVE connection
+    // (Anthropic) instead of the pin — this is exactly what StartScreen.tsx
+    // did before the fix, and demonstrates why it produced the wrong label.
+    const activeConnectionCatalogModels = providerModelsFor("anthropic", catalog, undefined, undefined);
+    const chip = computeModelChipDisplay("kimi-k2-0905", "claude-opus", activeConnectionCatalogModels);
+
+    expect(chip.label).toBe("kimi-k2-0905");
+  });
+});
+
+describe("startModelRowConnectionId (TASK.106 cut-1 stage B, §3 item 3)", () => {
+  it("normalizes the active connection's own row to undefined (SessionDraft.connectionId's 'unset ⇒ active' convention)", () => {
+    expect(startModelRowConnectionId("conn-a", "conn-a")).toBeUndefined();
+  });
+
+  it("passes through a non-active connection's real id unchanged", () => {
+    expect(startModelRowConnectionId("conn-b", "conn-a")).toBe("conn-b");
+  });
+
+  it("passes through the real id when there is no active connection at all", () => {
+    expect(startModelRowConnectionId("conn-b", undefined)).toBe("conn-b");
+  });
+});
+
+describe("selectStartModelRow (TASK.106 cut-1 stage B — grouped row click sets both axes of the pair)", () => {
+  function makeDeps(): { deps: ModelPickDeps; tabsStore: ReturnType<typeof createTabsStore> } {
+    const tabsStore = createTabsStore();
+    return { deps: { tabsStore }, tabsStore };
+  }
+
+  it("a cross-connection pick writes BOTH the model id and the explicit connection id onto the draft", () => {
+    const { deps, tabsStore } = makeDeps();
+    tabsStore.getState().openDraft("/ws/a");
+
+    selectStartModelRow("conn-other", "kimi-k2", deps);
+
+    expect(tabsStore.getState().draft?.model).toBe("kimi-k2");
+    expect(tabsStore.getState().draft?.connectionId).toBe("conn-other");
+  });
+
+  it("the active group's row (already normalized to undefined by the caller) clears any prior connection pin", () => {
+    const { deps, tabsStore } = makeDeps();
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftConnectionId("conn-other");
+
+    selectStartModelRow(undefined, "claude-opus", deps);
+
+    expect(tabsStore.getState().draft?.model).toBe("claude-opus");
+    expect(tabsStore.getState().draft?.connectionId).toBeUndefined();
+  });
+
+  it("is a no-op while there is no draft (setDraftModel/setDraftConnectionId's own guard)", () => {
+    const { deps, tabsStore } = makeDeps();
+
+    selectStartModelRow("conn-other", "kimi-k2", deps);
 
     expect(tabsStore.getState().draft).toBeNull();
   });

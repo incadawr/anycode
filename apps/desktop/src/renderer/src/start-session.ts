@@ -39,22 +39,28 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
 }
 
 /**
- * Keeps the historical Core create payload byte-for-byte additive. For a
- * non-core (Codex) draft, also forwards the draft's own model/preset/profile
- * picks (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers
- * both already existed — this is the missing wire between them). All three
- * are opaque ids; omitted entirely when never explicitly picked, so the host
- * (or main's profile registry) applies its own default rather than receiving
- * a stale/invalid id.
+ * Keeps the historical Core create payload byte-for-byte additive apart from
+ * the TASK.106 cut-1 stage A `connectionId` pick below. For a non-core
+ * (Codex) draft, also forwards the draft's own model/preset/profile picks
+ * (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers both
+ * already existed — this is the missing wire between them). All are opaque
+ * ids; omitted entirely when never explicitly picked, so the host (or main's
+ * registry) applies its own default rather than receiving a stale/invalid id.
  */
 export function createStartTabRequest(
-  draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset" | "codexProfileId">,
+  draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset" | "codexProfileId" | "connectionId">,
 ): CreateTabRequest {
   if (draft.workspace === null) {
     throw new Error("A workspace is required to create a tab");
   }
   if (draft.engine === "core") {
-    return { kind: "new", workspace: draft.workspace };
+    return {
+      kind: "new",
+      workspace: draft.workspace,
+      // TASK.106 cut-1 stage A: the New Session model picker's cross-connection
+      // pick. Absent ⇒ main falls back to the active connection, unchanged.
+      ...(draft.connectionId !== undefined ? { connectionId: draft.connectionId } : {}),
+    };
   }
   return {
     kind: "new",
@@ -111,15 +117,17 @@ export async function submitStartDraft(
   // Codex/Claude own model and approval policy natively (the model already
   // rode `engineModel` on the CreateTabRequest spawn above) — do not emit
   // AnyCode's first-turn model/mode controls for an external engine. Effort
-  // (TASK.81) is the opposite split: it has NO spawn-time channel at all
-  // (host/session.ts's `set_engine_effort` only exists post-boot, via the
-  // engineSettings seam a non-core engine wires — core never reaches that
-  // case), so it rides `queueInitialPrompt` exclusively, and only for a
-  // non-core draft (`engineEffort` is never set on a Core draft). Images ride
-  // `queueInitialPrompt` for every engine alike — there is no spawn-time
-  // attachment channel for any of them.
+  // is the opposite split: it has NO spawn-time channel at all, so it rides
+  // `queueInitialPrompt` for every engine — but through the message that
+  // engine actually speaks. A non-core draft's pick goes out as
+  // `set_engine_effort` (TASK.81; host/session.ts fires that case only
+  // through the engineSettings seam core never wires), a Core draft's as
+  // `set_reasoning_effort` (TASK.131 — the New Session picker now offers the
+  // effort level of whatever model it is about to start, from that model's
+  // own declared vocabulary). Images ride `queueInitialPrompt` for every
+  // engine alike — there is no spawn-time attachment channel for any of them.
   if (engine === "core") {
-    deps.registry.queueInitialPrompt(createdTabId, prompt, model ?? undefined, mode, undefined, images);
+    deps.registry.queueInitialPrompt(createdTabId, prompt, model ?? undefined, mode, undefined, images, engineEffort);
   } else {
     deps.registry.queueInitialPrompt(createdTabId, prompt, undefined, undefined, engineEffort, images);
   }

@@ -43,7 +43,7 @@
  */
 import { createDesktopStore, type DesktopState, type QueuedPromptImage } from "./store.js";
 import { transcriptTextWithImages } from "./queue-format.js";
-import type { PermissionMode } from "@anycode/core";
+import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import { connectHost, connectTerminal, type HostConnection, type TerminalConnection } from "./port.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
 import { deriveCoarse, useTabStatusStore, type TabStatusStoreApi } from "./tab-status-store.js";
@@ -208,6 +208,12 @@ export interface TabRegistry {
    * `engineSettings`, which core never wires) — sent last, after model/mode,
    * compared against the boot model's own resolved effort
    * (`host_ready.engine.model.effort`) so an unchanged pick sends nothing.
+   * `reasoningEffort` (TASK.131) is the CORE engine's own half of the same
+   * split: core has no `set_engine_effort` case at all, its wire message is
+   * `set_reasoning_effort` — so the two travel as separate parameters rather
+   * than one "effort" a receiver would have to guess the vocabulary of. Sent
+   * on the same before-the-first-turn recipe, after the model switch so the
+   * host validates it against the model actually active by then.
    * `images` (TASK.81) ride the first `user_message` exactly like a queued
    * prompt's images (`dispatchQueuedPrompt`'s recipe) — a boot model that
    * cannot accept them (`host_ready.imageInput === false`) drops them and
@@ -221,6 +227,7 @@ export interface TabRegistry {
     mode?: PermissionMode,
     effort?: string,
     images?: readonly QueuedPromptImage[],
+    reasoningEffort?: string,
   ): void;
 }
 
@@ -254,8 +261,27 @@ export function createTabRegistry(
    */
   const pendingInitialPrompts = new Map<
     string,
-    { text: string; model?: string; mode?: PermissionMode; effort?: string; images?: readonly QueuedPromptImage[] }
+    {
+      text: string;
+      model?: string;
+      mode?: PermissionMode;
+      effort?: string;
+      images?: readonly QueuedPromptImage[];
+      reasoningEffort?: string;
+    }
   >();
+
+  /**
+   * TASK.131: core's reasoning-effort vocabulary is CLOSED (core's own
+   * `ReasoningEffort`), while a draft's effort pick is a free-form string
+   * (it also serves the non-core engines' own per-model vocabularies). This
+   * narrows one to the other and returns `undefined` for anything else, so
+   * an unrecognized level is dropped here instead of riding the wire.
+   */
+  function asReasoningEffort(value: string): ReasoningEffort | undefined {
+    const levels: readonly string[] = ["off", "low", "medium", "high", "max"];
+    return levels.includes(value) ? (value as ReasoningEffort) : undefined;
+  }
 
   /**
    * First-turn picks must reach the host before the first user message. The
@@ -267,7 +293,13 @@ export function createTabRegistry(
     model: string | undefined,
     mode: PermissionMode | undefined,
     effort: string | undefined,
-    current: { model: string | null; mode: PermissionMode | null; effort: string | undefined },
+    current: {
+      model: string | null;
+      mode: PermissionMode | null;
+      effort: string | undefined;
+      reasoningEffort: ReasoningEffort | undefined;
+    },
+    reasoningEffort?: string,
   ): void {
     if (mode !== undefined && mode !== current.mode) {
       entry.connection?.send({ type: "set_mode", mode });
@@ -282,6 +314,16 @@ export function createTabRegistry(
     // ordering correct if that ever changes.
     if (effort !== undefined && effort !== current.effort) {
       entry.connection?.send({ type: "set_engine_effort", effort });
+    }
+    // TASK.131: core's own effort message, on the same after-the-model
+    // ordering. The level is checked against core's closed vocabulary here
+    // (an unrecognized string never reaches the wire) and the host then
+    // re-validates it against the ACTIVE MODEL's declared levels
+    // (`resolveReasoningEffort`, fail-closed), so a pick resolved against a
+    // stale catalog can only be ignored, never misapplied.
+    const level = reasoningEffort === undefined ? undefined : asReasoningEffort(reasoningEffort);
+    if (level !== undefined && level !== current.reasoningEffort) {
+      entry.connection?.send({ type: "set_reasoning_effort", effort: level });
     }
   }
 
@@ -406,11 +448,21 @@ export function createTabRegistry(
           // F5#1b D3: a task-scoped model pick that differs from the boot
           // model is switched BEFORE the initial prompt, same port ⇒ in-order
           // delivery; the host is idle at host_ready so the busy-guard passes.
-          applyInitialPicks(entry, pending.model, pending.mode, pending.effort, {
-            model: message.model,
-            mode: message.mode,
-            effort: message.engine?.model?.effort,
-          });
+          applyInitialPicks(
+            entry,
+            pending.model,
+            pending.mode,
+            pending.effort,
+            {
+              model: message.model,
+              mode: message.mode,
+              effort: message.engine?.model?.effort,
+              // The host's own boot default when it reports none — the same
+              // `?? "off"` store.ts applies to this exact field.
+              reasoningEffort: message.reasoningEffort ?? "off",
+            },
+            pending.reasoningEffort,
+          );
           dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput);
         }
       }
@@ -685,7 +737,7 @@ export function createTabRegistry(
       statusStore.getState().reset();
     },
 
-    queueInitialPrompt(tabId, text, model, mode, effort, images): void {
+    queueInitialPrompt(tabId, text, model, mode, effort, images, reasoningEffort): void {
       if (!tabId || closedTabIds.has(tabId)) {
         return;
       }
@@ -696,15 +748,23 @@ export function createTabRegistry(
         // model (set at host_ready, kept current by model_changed), so compare
         // against THAT instead of a boot-time message.
         const state = entry.store.getState();
-        applyInitialPicks(entry, model, mode, effort, {
-          model: state.model,
-          mode: state.mode,
-          effort: state.engine?.model?.effort,
-        });
+        applyInitialPicks(
+          entry,
+          model,
+          mode,
+          effort,
+          {
+            model: state.model,
+            mode: state.mode,
+            effort: state.engine?.model?.effort,
+            reasoningEffort: state.reasoningEffort,
+          },
+          reasoningEffort,
+        );
         dispatchInitialPrompt(entry, text, images ?? [], state.imageInput);
         return;
       }
-      pendingInitialPrompts.set(tabId, { text, model, mode, effort, images });
+      pendingInitialPrompts.set(tabId, { text, model, mode, effort, images, reasoningEffort });
     },
   };
 }

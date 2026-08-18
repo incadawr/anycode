@@ -93,6 +93,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       "kimi-for-coding",
       "kimi-for-coding-highspeed",
       "k3",
+      "k3-256k",
     ]);
     // Thinking-only models: no "off" tier; k3 mirrors its native low/high/max set.
     expect(kimi?.models.find((model) => model.id === "kimi-for-coding")?.effortLevels).toEqual(["low", "medium", "high"]);
