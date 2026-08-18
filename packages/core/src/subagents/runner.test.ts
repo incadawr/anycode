@@ -37,7 +37,13 @@ import {
   MAX_CONCURRENT_SUBAGENTS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SUBAGENT_MAX_TURNS_CEILING,
+  SUBAGENT_LOOP_DEADLINE_MS,
+  SUBAGENT_OUTCOME_DEADLINE_MS,
+  SUBAGENT_TIME_BUDGET_MS,
+  SUBAGENT_WRAPUP_MIN_WINDOW_MS,
+  SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
 } from "../types/config.js";
+import { SUBAGENT_WRAPUP_PROMPT } from "../prompts/subagent.js";
 import type { EngineChildSpec, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type { ToolContext } from "../types/tools.js";
 import { SPAWN_TOOLS, buildChildConfig, createSubagentRunner, withSubagents } from "./runner.js";
@@ -93,6 +99,21 @@ function toolStep(id: string, name: string, input: unknown, text?: string): Mode
 function lastRole(req: ModelRequest): "user" | "assistant" | "tool" | "none" {
   const message = req.messages[req.messages.length - 1];
   return message ? message.role : "none";
+}
+
+/**
+ * The wrap-up rescue call (TASK.74 §4), recognized the way the design specifies:
+ * zero tool declarations AND a trailing synthetic user message carrying the
+ * wrap-up instruction. Both halves are asserted so a script cannot mistake an
+ * ordinary child step for the rescue.
+ */
+function isWrapUpRequest(req: ModelRequest): boolean {
+  const last = req.messages[req.messages.length - 1];
+  return (
+    req.tools.length === 0 &&
+    last?.role === "user" &&
+    last.content === SUBAGENT_WRAPUP_PROMPT
+  );
 }
 
 function isChildRequest(req: ModelRequest): boolean {
@@ -283,6 +304,33 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     ).toBe(SUBAGENT_MAX_TURNS_CEILING);
   });
 
+  // The role's own budget (md-profile `maxTurns:` frontmatter) sits between the
+  // request and the settings default: it is an author's statement about the
+  // role, so it outranks the global default — but never an explicit request,
+  // and never the runaway ceiling. Built-in personas declare none ON PURPOSE
+  // (a hardcoded 24 would silently outrank the owner-visible setting).
+  it("takes a role's declared turnBudget over the default, under an explicit request and the ceiling", () => {
+    const parent = makeParent();
+    const explore = getPersona("explore");
+    expect(explore.turnBudget).toBeUndefined();
+    const frugal: PersonaDefinition = { ...explore, turnBudget: 12 };
+    expect(buildChildConfig(parent, frugal, REQ).maxTurns).toBe(12);
+    // An explicit request still wins over the role.
+    expect(buildChildConfig(parent, frugal, { ...REQ, maxTurns: 30 }).maxTurns).toBe(30);
+    // And the role is bounded by the runaway ceiling like everything else.
+    const overreaching: PersonaDefinition = { ...explore, turnBudget: 9_999 };
+    expect(buildChildConfig(parent, overreaching, REQ).maxTurns).toBe(SUBAGENT_MAX_TURNS_CEILING);
+  });
+
+  it("threads extras.deadlineAt into the child config and omits the field without it", () => {
+    const parent = makeParent();
+    const deadlineAt = Date.now() + 1_234;
+    expect(buildChildConfig(parent, getPersona("explore"), REQ, { deadlineAt }).deadlineAt).toBe(deadlineAt);
+    // Byte-identical to a pre-TASK.74 child when no deadline is supplied.
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).deadlineAt).toBeUndefined();
+    expect("deadlineAt" in buildChildConfig(parent, getPersona("explore"), REQ)).toBe(false);
+  });
+
   it("gives the child a fresh history that never reaches the parent's persistence sink (ephemeral, R5)", () => {
     const sink: HistorySink = { append: vi.fn(), replaceAll: vi.fn(), flush: async () => {} };
     const parentHistory = new ConversationHistory({ sink });
@@ -457,9 +505,12 @@ describe("output cap + status mapping", () => {
     expect(outcome.finalText.length).toBe(100_000);
   });
 
-  it("maps a max_turns cutoff to status max_turns with the last completed turn's text", async () => {
+  it("maps a max_turns cutoff to status max_turns and rescues the text with a wrap-up report", async () => {
     let step = 0;
-    const model = new ScriptedModelPort(() => {
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return textStep("REPORT: turn-1 and turn-2 findings");
+      }
       step += 1;
       return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
     });
@@ -469,9 +520,10 @@ describe("output cap + status mapping", () => {
     expect(outcome.status).toBe("max_turns");
     expect(outcome.turns).toBe(2);
     expect(outcome.toolCalls).toBe(2);
-    expect(outcome.finalText).toBe("turn-2");
-    // Two model calls (turns 1+2); the cutoff turn never calls the model.
-    expect(model.calls).toBe(2);
+    // The wrap-up report replaces the cut-off turn's preamble ("turn-2").
+    expect(outcome.finalText).toBe("REPORT: turn-1 and turn-2 findings");
+    // Two loop turns (the cutoff turn never calls the model) + one wrap-up call.
+    expect(model.calls).toBe(3);
   });
 
   it("returns an error outcome for an unknown persona without throwing", async () => {
@@ -1758,5 +1810,506 @@ describe("engineProfile() (TASK.102 CUT-S4 §2.1)", () => {
     live = [codexPersona];
 
     expect(runner.engineProfile?.("codex-worker")).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.74 — wall-clock budget + wrap-up rescue. The measurement that motivated
+// this: one child in three died on the 8-turn cap having spent 13-66% of its
+// 600s, and the partial the parent received was the preamble of the cut-off
+// turn ("now let me check X"), not the findings. The budget is now time; the
+// turn count only stops a runaway; and an exhausted child gets ONE tool-free
+// model call to turn what it saw into a report.
+//
+// Every test below drives the REAL seam (runner -> buildChildConfig -> AgentLoop
+// -> dispatcher); only the ModelPort is scripted. Deadline tests fake Date ONLY
+// — the dispatcher, the semaphore and the wrap-up timer all need real timers.
+
+/** Fixed wall-clock origin for the fake-Date tests. */
+const CLOCK_BASE = 1_700_000_000_000;
+
+describe("subagent budget constants (TASK.74 §2.1)", () => {
+  it("a wrap-up started at the loop deadline still returns before the dispatcher wall", () => {
+    expect(SUBAGENT_LOOP_DEADLINE_MS + SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS).toBeLessThanOrEqual(
+      SUBAGENT_OUTCOME_DEADLINE_MS,
+    );
+    expect(SUBAGENT_OUTCOME_DEADLINE_MS).toBeLessThan(SUBAGENT_TIME_BUDGET_MS);
+    // A minimum window that is not strictly inside the call ceiling would either
+    // never skip or always skip.
+    expect(SUBAGENT_WRAPUP_MIN_WINDOW_MS).toBeGreaterThan(0);
+    expect(SUBAGENT_WRAPUP_MIN_WINDOW_MS).toBeLessThan(SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS);
+    // The default budget must itself be reachable under the ceiling.
+    expect(DEFAULT_SUBAGENT_MAX_TURNS).toBeLessThanOrEqual(SUBAGENT_MAX_TURNS_CEILING);
+  });
+});
+
+describe("child wall-clock deadline (TASK.74 §3, DoD-1)", () => {
+  it("ends the child with max_turns when the deadline passes, well short of the turn budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(CLOCK_BASE);
+    try {
+      let step = 0;
+      const model = new ScriptedModelPort((req) => {
+        if (isWrapUpRequest(req)) {
+          return textStep("REPORT: deadline rescue");
+        }
+        step += 1;
+        if (step === 3) {
+          // The third step is the expensive one: it runs the clock past the
+          // child's deadline while the turn is in flight.
+          vi.setSystemTime(CLOCK_BASE + SUBAGENT_LOOP_DEADLINE_MS + 1);
+        }
+        return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+      });
+      const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+      // No maxTurns => the persona budget of 24. The run must NOT reach it.
+      const outcome = await runner.run({ ...REQ }, {});
+
+      expect(outcome.status).toBe("max_turns");
+      expect(outcome.turns).toBe(3);
+      expect(outcome.turns).toBeLessThan(DEFAULT_SUBAGENT_MAX_TURNS);
+      // Three loop steps + one wrap-up; the model was not called again.
+      expect(model.calls).toBe(4);
+      expect(outcome.finalText).toBe("REPORT: deadline rescue");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a child whose deadline expired while queued exits max_turns with zero turns instead of running", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(CLOCK_BASE);
+    try {
+      const model = new ScriptedModelPort(() => textStep("should never run"));
+      const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+      // Simulates the observed "parked behind siblings until the budget was
+      // gone" run: the clock is already past the deadline when the loop starts.
+      const started = runner.run({ ...REQ }, {});
+      vi.setSystemTime(CLOCK_BASE + SUBAGENT_LOOP_DEADLINE_MS + 1);
+      const outcome = await started;
+
+      expect(outcome.status).toBe("max_turns");
+      expect(outcome.turns).toBe(0);
+      // Zero turns => nothing to summarize => no wrap-up call either.
+      expect(model.calls).toBe(0);
+      expect(outcome.finalText).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("wrap-up rescue end-to-end (TASK.74 §4, DoD-2)", () => {
+  const scoutBody = "You are the tiny scout profile body.";
+  const scout: PersonaDefinition = {
+    name: "tiny-scout",
+    description: "two-turn scout",
+    tools: ["TodoRead"],
+    systemPrompt: scoutBody,
+    turnBudget: 2,
+  };
+
+  it("carries the rescued report through parent-loop -> dispatcher -> agentTool -> runner -> child-loop", async () => {
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return textStep("REPORT: found X; unchecked: Y");
+      }
+      if (req.system?.includes(scoutBody)) {
+        // What the child was ABOUT to do — exactly the useless partial the
+        // parent used to receive.
+        return toolStep("k", "TodoRead", {}, "now let me check the other half");
+      }
+      return lastRole(req) === "user"
+        ? toolStep("agent-1", "Agent", {
+            description: "scout work",
+            prompt: "sweep the repo",
+            agent_type: "tiny-scout",
+          })
+        : textStep("parent done");
+    });
+    const loop = new AgentLoop(
+      withSubagents(makeParent({ modelPort: model, mode: "yolo" }), { profiles: [scout] }),
+    );
+
+    const events = await collect(loop.runTurn("please spawn a scout"));
+
+    // What the parent model actually reads.
+    const agentResult = events.find(
+      (e) => e.type === "tool_result" && e.outcome.toolName === "Agent",
+    );
+    expect(agentResult?.type === "tool_result" && agentResult.outcome.status).toBe("max_turns");
+    const modelText = agentResult?.type === "tool_result" ? agentResult.outcome.modelText : "";
+    expect(modelText).toContain("INCOMPLETE SUBAGENT RESULT");
+    expect(modelText).toContain("REPORT: found X");
+    // The preamble of the cut-off turn is NOT what travels back.
+    expect(modelText).not.toContain("now let me check the other half");
+    // The status is never promoted by a technically successful wrap-up.
+    const result = agentResult?.type === "tool_result" ? agentResult.outcome.result : undefined;
+    expect(result?.ok).toBe(false);
+    expect(result?.errorKind).toBe("max_turns");
+    expect((result?.output as SubagentOutcome | undefined)?.status).toBe("max_turns");
+    expect((result?.output as SubagentOutcome | undefined)?.turns).toBe(2);
+
+    const end = events.find((e) => e.type === "subagent_end");
+    expect(end?.type === "subagent_end" && end.status).toBe("max_turns");
+    expect(end?.type === "subagent_end" && end.turns).toBe(2);
+    expect(loop.history.unansweredToolCallIds()).toEqual([]);
+
+    // The rescue call itself: no tools, and the child's own transcript plus one
+    // synthetic user message.
+    const wrapReq = model.requests.find(isWrapUpRequest);
+    expect(wrapReq).toBeDefined();
+    expect(wrapReq!.tools).toHaveLength(0);
+    expect(wrapReq!.messages.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    expect(wrapReq!.messages[0]).toEqual({ role: "user", content: "sweep the repo" });
+    expect(wrapReq!.system).toBe(model.requests.find((r) => r.system?.includes(scoutBody))?.system);
+  });
+});
+
+describe("wrap-up has no tools by construction (TASK.74 §4.1, DoD-3)", () => {
+  it("ignores a tool call proposed in the rescue reply — there is no dispatcher on that path", async () => {
+    const readFile = vi.fn(async (path: string) => `body of ${path}`);
+    const ports: CorePorts = {
+      fs: { readFile } as unknown as FileSystemPort,
+      exec: {} as ExecutionPort,
+      http: {} as HttpPort,
+      todos: new InMemoryTodoStore(),
+    };
+    let step = 0;
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        // A tool call in the rescue reply, despite the empty declarations.
+        return toolStep("wrap-1", "Read", { file_path: "/work/forbidden.txt" }, "REPORT: rescued");
+      }
+      step += 1;
+      return toolStep(`c${step}`, "Read", { file_path: `/work/f${step}.txt` }, `turn-${step}`);
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, ports, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    // The real Read handler ran for the two loop turns and never for the rescue.
+    expect(readFile.mock.calls.map((call) => call[0])).toEqual([
+      "/work/f1.txt",
+      "/work/f2.txt",
+    ]);
+    expect(outcome.toolCalls).toBe(2);
+    // Only the accumulated text survives the rescue.
+    expect(outcome.finalText).toBe("REPORT: rescued");
+  });
+});
+
+describe("wrap-up leaves the child history untouched (TASK.74 §4.3, DoD-4)", () => {
+  it("adds no item to loop.history — the instruction exists only in the request", async () => {
+    const realAppend = ConversationHistory.prototype.append;
+    const histories: ConversationHistory[] = [];
+    const appendSpy = vi
+      .spyOn(ConversationHistory.prototype, "append")
+      .mockImplementation(function (this: ConversationHistory, message) {
+        if (!histories.includes(this)) {
+          histories.push(this);
+        }
+        return realAppend.call(this, message);
+      });
+    try {
+      let itemsAtWrapUp = -1;
+      let lastIdAtWrapUp = "";
+      let step = 0;
+      const model = new ScriptedModelPort((req) => {
+        if (isWrapUpRequest(req)) {
+          const child = histories[0]!;
+          itemsAtWrapUp = child.items.length;
+          lastIdAtWrapUp = child.items[child.items.length - 1]!.id;
+          return textStep("REPORT: done looking");
+        }
+        step += 1;
+        return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+      });
+      const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+      const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+      expect(outcome.finalText).toBe("REPORT: done looking");
+
+      const child = histories[0]!;
+      // user + (assistant, tool) x 2 turns — balanced and terminal at loop_end.
+      expect(itemsAtWrapUp).toBe(5);
+      expect(child.items.length).toBe(itemsAtWrapUp);
+      expect(child.items[child.items.length - 1]!.id).toBe(lastIdAtWrapUp);
+      const serialized = JSON.stringify(child.items.map((item) => item.message));
+      expect(serialized).not.toContain(SUBAGENT_WRAPUP_PROMPT);
+      expect(serialized).not.toContain("REPORT: done looking");
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+});
+
+describe("wrap-up degrades without ever worsening the outcome (TASK.74 §7 F4, DoD-5)", () => {
+  /** A child that runs `turns` tool steps, then answers the rescue via `wrapUp`. */
+  function makePort(wrapUp: (yieldEvent: (e: ModelStreamEvent) => void) => Promise<void>): {
+    port: ModelPort;
+    calls: () => number;
+  } {
+    let calls = 0;
+    let step = 0;
+    const port: ModelPort = {
+      streamText(req: ModelRequest): AsyncIterable<ModelStreamEvent> {
+        calls += 1;
+        if (isWrapUpRequest(req)) {
+          return (async function* () {
+            const buffered: ModelStreamEvent[] = [];
+            await wrapUp((event) => buffered.push(event));
+            for (const event of buffered) {
+              yield event;
+            }
+          })();
+        }
+        step += 1;
+        const events = toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+        return (async function* () {
+          for (const event of events) {
+            yield event;
+          }
+        })();
+      },
+    };
+    return { port, calls: () => calls };
+  }
+
+  it("(a) a throwing wrap-up stream leaves the raw partial and never escapes run()", async () => {
+    const { port, calls } = makePort(async () => {
+      throw new Error("wrapup boom");
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("turn-2");
+    expect(calls()).toBe(3);
+  });
+
+  it("(b) a blank wrap-up reply does not erase a non-empty partial", async () => {
+    const { port } = makePort(async (emit) => {
+      emit({ type: "start" });
+      emit({ type: "text_delta", id: "t", text: "   \n  " });
+      emit({ type: "finish", finishReason: "stop", usage: {} });
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("turn-2");
+  });
+
+  it("(c) a non-empty wrap-up replaces the cut-off turn's preamble", async () => {
+    const { port } = makePort(async (emit) => {
+      emit({ type: "start" });
+      emit({ type: "text_delta", id: "t", text: "REPORT: the real findings" });
+      emit({ type: "finish", finishReason: "stop", usage: {} });
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("REPORT: the real findings");
+  });
+
+  it("(d) a wrap-up stream_retry discards the aborted attempt's text", async () => {
+    const { port } = makePort(async (emit) => {
+      emit({ type: "start" });
+      emit({ type: "text_delta", id: "t", text: "half a sentence that never" });
+      emit({ type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 0, reason: "stall" });
+      emit({ type: "text_delta", id: "t", text: "REPORT: the retried findings" });
+      emit({ type: "finish", finishReason: "stop", usage: {} });
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.finalText).toBe("REPORT: the retried findings");
+  });
+});
+
+describe("wrap-up window gate (TASK.74 §4.3, DoD-6)", () => {
+  /** Runs a 2-turn child whose second step advances the clock by `elapsedMs`. */
+  async function runWithElapsed(elapsedMs: number): Promise<{
+    outcome: SubagentOutcome;
+    calls: number;
+  }> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(CLOCK_BASE);
+    try {
+      let step = 0;
+      const model = new ScriptedModelPort((req) => {
+        if (isWrapUpRequest(req)) {
+          return textStep("REPORT: rescued in time");
+        }
+        step += 1;
+        if (step === 2) {
+          vi.setSystemTime(CLOCK_BASE + elapsedMs);
+        }
+        return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+      });
+      const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+      const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+      return { outcome, calls: model.calls };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("(a) skips the rescue entirely when too little of the dispatcher budget remains", async () => {
+    // 580s elapsed leaves a 10s window — under SUBAGENT_WRAPUP_MIN_WINDOW_MS.
+    const { outcome, calls } = await runWithElapsed(580_000);
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("turn-2");
+    expect(calls).toBe(2);
+  });
+
+  it("(b) runs the rescue while a full window remains", async () => {
+    const { outcome, calls } = await runWithElapsed(400_000);
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("REPORT: rescued in time");
+    expect(calls).toBe(3);
+  });
+
+  it("(b') skips the rescue when the caller cancelled between loop_end and the call", async () => {
+    const controller = new AbortController();
+    let step = 0;
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return textStep("REPORT: must never run");
+      }
+      step += 1;
+      return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+    });
+    // The Stop observer fires inside emitLoopEnd, i.e. after the loop has
+    // already decided max_turns and before the runner reads the outcome —
+    // exactly the window a late external cancel lands in.
+    const { hooks, calls } = recordingHooks();
+    const cancellingHooks = {
+      ...hooks,
+      runObservers: async (event: string, input: unknown) => {
+        calls.push({ event, input });
+        if (event === "Stop") {
+          controller.abort();
+        }
+      },
+    } as unknown as HookRunner;
+    const runner = createSubagentRunner(
+      makeParent({ modelPort: model, hooks: cancellingHooks, mode: "yolo" }),
+    );
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, { signal: controller.signal });
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("turn-2");
+    expect(model.calls).toBe(2);
+  });
+});
+
+describe("wrap-up lifecycle and semaphore (TASK.74 §7 F8, DoD-7)", () => {
+  it("holds the permit across the rescue and fires exactly one SubagentStop per spawn, after it", async () => {
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const journal: string[] = [];
+    const started: string[] = [];
+
+    const model: ModelPort = {
+      streamText(req: ModelRequest): AsyncIterable<ModelStreamEvent> {
+        const first = req.messages[0];
+        const who = first?.role === "user" ? first.content : "?";
+        const wrapUp = isWrapUpRequest(req);
+        started.push(wrapUp ? `wrapup:${who}` : who);
+        if (wrapUp) {
+          journal.push(`wrapup:${who}`);
+        }
+        return (async function* () {
+          // A's rescue and B's only turn both park on the gate, so BOTH permits
+          // stay taken while A is between loop_end and its outcome.
+          if ((wrapUp && who === "A") || (!wrapUp && who === "B")) {
+            await gate;
+          }
+          yield { type: "start" };
+          yield { type: "text_delta", id: "t", text: wrapUp ? `report-${who}` : `text-${who}` };
+          if (wrapUp || who !== "A") {
+            yield { type: "finish", finishReason: "stop", usage: {} };
+            return;
+          }
+          // A's single loop turn ends on a tool call, so its budget of 1 cuts
+          // the run off at max_turns and the rescue fires.
+          yield { type: "tool_call", toolCall: { id: "a1", name: "TodoRead", input: {} } };
+          yield { type: "finish", finishReason: "tool_calls", usage: {} };
+        })();
+      },
+    };
+
+    const { hooks, calls } = recordingHooks({
+      onSubagentStop: async (input) => {
+        journal.push(`stop:${(input as SubagentStopHookInput).description}`);
+      },
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, hooks, mode: "yolo" }));
+
+    const pA = runner.run({ ...REQ, description: "A", prompt: "A", maxTurns: 1 }, {});
+    const pB = runner.run({ ...REQ, description: "B", prompt: "B" }, {});
+    const pC = runner.run({ ...REQ, description: "C", prompt: "C" }, {});
+    expect(MAX_CONCURRENT_SUBAGENTS).toBe(2);
+
+    await delay(50);
+    // A is inside its rescue and B is mid-turn: both permits are held, so the
+    // third child has not touched the model.
+    expect(started).toContain("A");
+    expect(started).toContain("wrapup:A");
+    expect(started).toContain("B");
+    expect(started).not.toContain("C");
+
+    releaseGate();
+    const [rA, rB, rC] = await Promise.all([pA, pB, pC]);
+
+    expect(rA.status).toBe("max_turns");
+    expect(rA.finalText).toBe("report-A");
+    expect(rB.status).toBe("completed");
+    expect(rC.status).toBe("completed");
+    expect(started).toContain("C");
+
+    // One SubagentStop per spawn, and A's fires only after A's rescue call.
+    expect(calls.filter((c) => c.event === "SubagentStop")).toHaveLength(3);
+    expect(journal.filter((entry) => entry === "wrapup:A")).toHaveLength(1);
+    expect(journal.indexOf("wrapup:A")).toBeGreaterThanOrEqual(0);
+    expect(journal.indexOf("wrapup:A")).toBeLessThan(journal.indexOf("stop:A"));
+  });
+});
+
+describe("hand-built maxTurns guard (TASK.74 §2.4, F10)", () => {
+  it("refuses a non-integer or non-positive budget before anything is spawned", async () => {
+    const model = new ScriptedModelPort(() => textStep("never"));
+    const { hooks, calls } = recordingHooks();
+    const runner = createSubagentRunner(makeParent({ modelPort: model, hooks }));
+
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      const outcome = await runner.run({ ...REQ, maxTurns: bad }, {});
+      expect(outcome.status, `maxTurns ${bad}`).toBe("error");
+      expect(outcome.turns).toBe(0);
+      expect(outcome.toolCalls).toBe(0);
+      expect(outcome.finalText).toContain("maxTurns");
+    }
+    // Nothing ran: no model call and no lifecycle hook for a rejected request.
+    expect(model.calls).toBe(0);
+    expect(calls.filter((c) => c.event === "SubagentStop")).toHaveLength(0);
   });
 });

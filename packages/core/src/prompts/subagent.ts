@@ -28,6 +28,24 @@ export interface SubagentPromptOptions {
 }
 
 /**
+ * The wrap-up instruction sent as a synthetic user message on the ONE tool-free
+ * model call a budget-exhausted child gets (TASK.74 §4). It exists to convert
+ * the text the parent would otherwise receive — the preamble of the cut-off
+ * turn, i.e. what the child was ABOUT to do — into the findings it already has.
+ * Lives here rather than as a literal in the runner so all subagent-facing copy
+ * stays in one place.
+ */
+export const SUBAGENT_WRAPUP_PROMPT = [
+  "You have run out of budget for this task. This is your wrap-up step: your tools have been removed,",
+  "and this reply is the report that travels back to the agent that spawned you.",
+  "Based only on what you already saw, write:",
+  "1. Findings so far — concrete facts with file paths, line numbers, and short excerpts you actually verified.",
+  "2. What you did NOT get to check or verify.",
+  "3. Open questions and the next steps a successor should take.",
+  "Do not claim the task is complete. Do not propose tool calls. Reply with the report text now.",
+].join(" ");
+
+/**
  * Assembles the child's full system prompt from the harness prelude, the persona
  * body, and the finality note. Only `toolNames` is required, so the runner's
  * legacy 3-arg `buildChildConfig` path (no env/memory) still yields a valid
