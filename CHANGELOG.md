@@ -5,6 +5,34 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.13] — 2026-08-18
+
+### Added
+
+- Choosing a model when starting a session no longer means choosing a provider
+  first. The chip on the New Session screen opens a drill-down: three quick
+  picks ranked from your own recent sessions, then one row per connected
+  provider, then that provider's models — and, when the model has thinking
+  modes, its effort levels. Previously the screen offered only the active
+  connection's models, and reaching anything else meant a trip to Settings.
+- The picker states the effort the session will actually start with, on the chip
+  itself (`GLM-5.3 · Max`), the way a running session's model pill does. The
+  levels offered belong to the model, not to the app: a model with three modes
+  shows three, and a model with none shows no effort row at all instead of a
+  made-up list.
+- The popup no longer grows past the bottom of the window and hands you a
+  scrollbar: each level is sized against the room actually available above or
+  below the chip.
+
+### Fixed
+
+- GLM-5.3 was running with no thinking at all, silently, even with effort set to
+  Max on the connection: the model was not declared as a reasoning model, and
+  the stored effort was dropped on the way to the request. It now declares the
+  same off/high/max modes as GLM-5.2, and the effort reaches the provider.
+- The `k3-256k` model that the Kimi subscription endpoint serves was missing from
+  the catalog entirely, so it too had no thinking modes. It now carries K3's.
+
 ## [0.0.12] — 2026-08-17
 
 ### Added
