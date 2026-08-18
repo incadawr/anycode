@@ -410,7 +410,17 @@ export interface CatalogSummaryEntry {
   id: string;
   name: string;
   authKind: CatalogAuthKind;
-  models: { id: string; name?: string }[];
+  /**
+   * TASK.131: `reasoning`/`effortLevels` join the projection so a picker with
+   * no live host — the New Session draft — can tell which models even HAVE a
+   * reasoning-effort vocabulary and which levels each one accepts. They are
+   * the same two catalog facts core's own `resolveEffortLevels` reads, and
+   * they are projected verbatim (not pre-resolved) so the renderer's copy of
+   * that rule stays a pure function over them. Both optional/additive: an
+   * older main, or a model the catalog says nothing about, projects neither
+   * and the renderer then offers no effort level at all.
+   */
+  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: string[] }[];
   needsBaseUrl?: boolean;
   /**
    * True ONLY for the literal `custom` sentinel entry (TASK.43 W5-FIX). Distinct

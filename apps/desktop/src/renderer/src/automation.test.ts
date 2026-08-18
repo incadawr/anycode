@@ -1391,8 +1391,9 @@ function fakeStartScreenDom(overrides: Partial<StartScreenDom> = {}): StartScree
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
     ...overrides,
   };
@@ -1679,19 +1680,23 @@ describe("automation facade — startScreenModelMenuState / startScreenToggleMod
     const { tabsStore, registry } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, fakeStartScreenDom());
 
-    expect(facade.startScreenModelMenuState()).toEqual({ ok: true, open: false, groups: [] });
+    expect(facade.startScreenModelMenuState()).toEqual({ ok: true, open: false, level: null, groups: [] });
   });
 
-  it("reads grouped rows straight off the DOM probe when the popover is open", () => {
+  it("reads the level and the grouped rows straight off the DOM probe when the popover is open", () => {
     const { tabsStore, registry } = setupReadyTab();
     const groups = [
-      { connectionId: "conn-main", label: "Main", items: [{ id: "m1", name: "Model One", current: true }] },
-      { connectionId: "conn-second", label: "Second", items: [{ id: "m2", name: "Model Two", current: false }] },
+      { connectionId: "conn-main", label: "Main", count: 1, items: [{ id: "m1", name: "Model One", current: true }] },
+      { connectionId: "conn-second", label: "Second", count: 1, items: [] },
     ];
-    const startScreenDom = fakeStartScreenDom({ modelMenuOpen: () => true, modelMenuGroups: () => groups });
+    const startScreenDom = fakeStartScreenDom({
+      modelMenuOpen: () => true,
+      modelMenuLevel: () => "group",
+      modelMenuGroups: () => groups,
+    });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
 
-    expect(facade.startScreenModelMenuState()).toEqual({ ok: true, open: true, groups });
+    expect(facade.startScreenModelMenuState()).toEqual({ ok: true, open: true, level: "group", groups });
   });
 
   it("startScreenToggleModelMenu refuses with no_draft when no draft is open, and never clicks the chip", async () => {
@@ -2008,8 +2013,9 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
 
@@ -2520,8 +2526,9 @@ describe("automation facade — ctxPopoverState / ctxPopoverOpen (design/slice-P
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom3: ModelPillDom = {
@@ -2781,8 +2788,9 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom: ModelPillDom = {
@@ -3145,8 +3153,9 @@ describe("automation facade — agentCardState (design/slice-P7.18-cut.md §4 W4
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom4: ModelPillDom = {
@@ -3296,8 +3305,9 @@ describe("automation facade — agentCardExpand (design/slice-P7.18-cut.md §4 W
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom5: ModelPillDom = {
@@ -3450,8 +3460,9 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom4: ModelPillDom = {
@@ -3862,8 +3873,9 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
   const noModelPillDom5: ModelPillDom = {
@@ -5556,8 +5568,9 @@ describe("automation facade — modelPillState catalog parity (W4-F0, findings S
     clickProjectChip: () => {},
     modelMenuOpen: () => false,
     clickModelChip: () => {},
+    modelMenuLevel: () => null,
     modelMenuGroups: () => [],
-    clickModelRailTab: () => false,
+    clickModelGroup: () => false,
     clickModelItem: () => false,
   };
 

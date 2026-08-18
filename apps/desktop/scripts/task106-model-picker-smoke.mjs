@@ -521,39 +521,35 @@ async function step5OpenDraftAndModelMenu(ctx) {
   assert(step, groupLabels.includes("Main"), `expected a group labeled "Main", got labels=${JSON.stringify(groupLabels)}`);
   assert(step, groupLabels.includes("Second"), `expected a group labeled "Second", got labels=${JSON.stringify(groupLabels)}`);
 
-  // TASK.106 §6 rail form: only the rail-selected connection's rows are in
-  // the DOM at once (here: the current pair's connection, Main). Second's
-  // group is present as a rail tab with an EMPTY items array — the select
-  // step drives its rail tab first, then the row (the facade's own
-  // clickModelItem rail fallback). The synthetic "Popular" group may or may
-  // not lead the array (z-ai picks resolve only when the live catalog
-  // carries them); never count on its absence or presence for group-count
-  // assertions above — both groups above are rail tabs, always present.
-  const popularGroup = menuState.groups.find((g) => g.label === "Popular");
-  if (popularGroup) {
-    assert(step, popularGroup.items.every((i) => typeof i.id === "string" && i.id.length > 0), `Popular strip rows must carry real model ids, got ${JSON.stringify(popularGroup.items)}`);
-  }
+  // TASK.131 drill-down form: the popover opens on its ROOT level, which
+  // renders the popular picks, one row per connection, and (for a model that
+  // declares a vocabulary) the effort row. A connection's models are a level
+  // of their own, so NO group has rendered items here — `count` is the
+  // group's real size, `items` is what happens to be on screen.
+  assert(step, menuState.level === "root", `expected the popover to open on its root level, got level=${JSON.stringify(menuState.level)}`);
 
   const mainGroup = menuState.groups.find((g) => g.label === "Main");
-  assert(step, Array.isArray(mainGroup?.items) && mainGroup.items.length > 0, `expected the rail-selected group "Main" to render its model items, got ${JSON.stringify(mainGroup)}`);
+  assert(step, mainGroup !== undefined, `expected a group row labeled "Main", got ${JSON.stringify(menuState.groups)}`);
+  assert(step, mainGroup.count > 0, `expected the "Main" group row to carry a non-zero model count, got ${JSON.stringify(mainGroup)}`);
 
   const secondGroup = menuState.groups.find((g) => g.connectionId === ctx.secondConnId);
   assert(step, secondGroup !== undefined, `expected a group with connectionId===${ctx.secondConnId} (Second), got connectionIds=${JSON.stringify(menuState.groups.map((g) => g.connectionId))}`);
   ctx.secondGroup = secondGroup;
 
-  await saveScreenshot(ctx, "1-model-menu-open-rail");
-  pass(step, `New Session model-menu popover renders the rail: groups [${groupLabels.join(", ")}], Main's items rendered (${mainGroup.items.length})${popularGroup ? `, Popular strip x${popularGroup.items.length}` : ""}`);
+  await saveScreenshot(ctx, "1-model-menu-open-root");
+  pass(step, `New Session model-menu popover opens on its root level: groups [${groupLabels.join(", ")}], Main carries ${mainGroup.count} model(s)`);
 }
 
 // ── step 6: select a model from the "Second" connection's group via a real click-driven select ──
 
 async function step6SelectFromSecondGroup(ctx) {
   const step = 6;
-  // TASK.106 §6 rail form: Second's rows are NOT in the DOM while Main is
-  // rail-selected — the /select driver (facade clickModelItem) clicks
-  // Second's rail tab first, then the row. The model id to pick comes from
-  // the connection's settings.json models[] (written at step 4), not from
-  // the menu probe's items (which are empty until the rail tab is driven).
+  // TASK.131 drill-down form: Second's model rows are NOT in the DOM while
+  // the root level is showing — the /select driver (facade clickModelItem)
+  // clicks Second's group row first, opening its level, then the model row.
+  // The model id to pick comes from the connection's settings.json models[]
+  // (written at step 4), not from the menu probe's items (which are empty
+  // until that level is opened).
   const settings = readJsonDisk(step, ctx.settingsPath, "profile settings");
   const secondConnection = (settings.provider?.connections ?? []).find((c) => c.id === ctx.secondConnId);
   assert(step, secondConnection != null, `expected connection ${ctx.secondConnId} in settings.json, got ${JSON.stringify(settings.provider?.connections)}`);
@@ -578,7 +574,7 @@ async function step6SelectFromSecondGroup(ctx) {
   assert(step, closedMenu.open === false, `expected the model-menu popover to close after a successful select, got open=${closedMenu.open}`);
 
   await saveScreenshot(ctx, "2-model-chip-picked-second");
-  pass(step, `selected model "${ctx.pickedModelId}" from connection "Second" (${ctx.secondConnId}) via rail-tab + row real clicks; draft.model confirms the pick`);
+  pass(step, `selected model "${ctx.pickedModelId}" from connection "Second" (${ctx.secondConnId}) via group-row + model-row real clicks; draft.model confirms the pick`);
 }
 
 // ── step 7: submit the prompt through the picked connection, wait for a live assistant reply ──

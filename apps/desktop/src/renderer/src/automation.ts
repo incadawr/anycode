@@ -340,9 +340,13 @@ export interface StartScreenState {
 export interface StartScreenModelMenuState {
   ok: true;
   open: boolean;
+  /** TASK.131: which level of the drill-down is on screen (`root` / `group` / `effort`); `null` while the popover is closed. */
+  level: string | null;
   groups: Array<{
     connectionId: string;
     label: string;
+    /** The group's full model count, known at every level — `items` is only what is rendered right now. */
+    count: number;
     items: Array<{ id: string; name: string; current: boolean }>;
   }>;
 }
@@ -404,15 +408,19 @@ export interface StartScreenDom {
   modelMenuOpen(): boolean;
   /** A real `.click()` on the model control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
   clickModelChip(): void;
+  /** Which level of the drill-down the popover is showing (TASK.131) — the `data-level` attribute `StartScreen.tsx` stamps on the popover. `null` when it is closed. */
+  modelMenuLevel(): string | null;
   /**
-   * The rendered popover's grouped rows (TASK.106 cut-1; §6 rail form),
+   * The rendered popover's groups (TASK.106 cut-1; TASK.131 drill-down form),
    * read straight off the DOM in the SAME order `StartScreen.tsx` renders
-   * them — one entry per `.start-model-rail-btn` (the rail tab, the old
-   * group header promoted to a selectable button), its items the
-   * `.start-model-item` buttons of the RIGHT PANE when that connection is
-   * the rail-selected one (the rail form renders one group's rows at a
-   * time), plus every `.start-model-popular-chip` under a synthetic
-   * `Popular` group so the always-visible quick picks stay addressable.
+   * them — one entry per `.start-model-group` row of the ROOT level.
+   *
+   * `count` is the group's own model count (`data-model-count`), known at
+   * every level; `items` are only the rows CURRENTLY on screen for that
+   * connection, so they are populated once that group's level is open and
+   * empty while the root is showing. A probe cannot drill on its own — it
+   * reads, it does not click; `clickModelGroup` is the driver.
+   *
    * `connectionId`/`id` are read off the `data-connection-id`/`data-model-id`
    * attributes `StartScreen.tsx` stamps on those exact nodes (the automation
    * channel's one product-code hook here, same posture as
@@ -423,14 +431,15 @@ export interface StartScreenDom {
   modelMenuGroups(): Array<{
     connectionId: string;
     label: string;
+    count: number;
     items: Array<{ id: string; name: string; current: boolean }>;
   }>;
   /**
-   * TASK.106 §6 rail form: a real `.click()` on the rail tab matching this
-   * connection — makes the right pane render that connection's models.
-   * `false` if no such rail tab is rendered.
+   * TASK.131 drill-down form: a real `.click()` on the root level's group row
+   * for this connection — opens that connection's models as a level. `false`
+   * if no such row is rendered (wrong level, or an unknown connection).
    */
-  clickModelRailTab(connectionId: string): boolean;
+  clickModelGroup(connectionId: string): boolean;
   /** A real `.click()` on the item button matching this connection+model pair; `false` if no such row is rendered. */
   clickModelItem(connectionId: string, modelId: string): boolean;
 }
@@ -2272,38 +2281,36 @@ function realStartScreenDom(): StartScreenDom {
     clickModelChip: () => {
       document.querySelector<HTMLButtonElement>(".start-model .model-pill-chip")?.click();
     },
+    modelMenuLevel: () => document.querySelector(".start-model-menu")?.getAttribute("data-level") ?? null,
     modelMenuGroups: () => {
-      // TASK.106 §6 rail form: the popover renders a Popular chip strip, a
-      // connection rail, and ONE rail-selected connection's item rows. The
-      // probe rebuilds the old "every group with its items" shape from that
-      // structure: rail tabs become the group entries (label + id); the
-      // selected tab's group carries the rendered .start-model-item rows;
-      // Popular chips ride a synthetic leading group so the always-visible
-      // quick picks stay addressable by pair alone.
+      // TASK.131 drill-down: the ROOT level renders the group rows (plus the
+      // popular picks and the effort row); a group's models are a level of
+      // their own. The probe reports every group row it can see, with the
+      // rows currently on screen for it — which is nothing while the root is
+      // showing, and that group's models once its level is open. `count` is
+      // the group's real size either way.
       const menu = document.querySelector(".start-model-menu");
       if (!menu) {
         return [];
       }
-      const groups: Array<{ connectionId: string; label: string; items: Array<{ id: string; name: string; current: boolean }> }> = [];
-      const popular: Array<{ id: string; name: string; current: boolean }> = [];
+      const groups: Array<{
+        connectionId: string;
+        label: string;
+        count: number;
+        items: Array<{ id: string; name: string; current: boolean }>;
+      }> = [];
       const itemsOf: Record<string, Array<{ id: string; name: string; current: boolean }>> = {};
-      for (const chip of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-popular-chip"))) {
-        popular.push({
-          id: chip.getAttribute("data-model-id") ?? "",
-          name: chip.querySelector(".start-model-popular-name")?.textContent?.trim() ?? "",
-          current: chip.getAttribute("aria-checked") === "true",
-        });
-      }
-      for (const tab of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-rail-btn"))) {
-        const connectionId = tab.getAttribute("data-connection-id") ?? "";
+      for (const row of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-group"))) {
+        const connectionId = row.getAttribute("data-connection-id") ?? "";
         groups.push({
           connectionId,
-          label: tab.querySelector(".start-model-rail-name")?.textContent?.trim() ?? "",
+          label: row.querySelector(".start-model-row-name")?.textContent?.trim() ?? "",
+          count: Number(row.getAttribute("data-model-count") ?? "0"),
           items: [],
         });
         itemsOf[connectionId] = groups[groups.length - 1]!.items;
       }
-      for (const item of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-list .start-model-item"))) {
+      for (const item of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-item[data-model-id]"))) {
         const connectionId = item.getAttribute("data-connection-id") ?? "";
         const bucket = itemsOf[connectionId];
         if (!bucket) {
@@ -2315,43 +2322,40 @@ function realStartScreenDom(): StartScreenDom {
           current: item.getAttribute("aria-checked") === "true",
         });
       }
-      if (popular.length > 0) {
-        groups.unshift({ connectionId: "__popular__", label: "Popular", items: popular });
-      }
       return groups;
     },
-    clickModelRailTab: (connectionId) => {
-      const tab = document.querySelector<HTMLButtonElement>(
-        `.start-model-rail-btn[data-connection-id="${CSS.escape(connectionId)}"]`,
+    clickModelGroup: (connectionId) => {
+      const row = document.querySelector<HTMLButtonElement>(
+        `.start-model-group[data-connection-id="${CSS.escape(connectionId)}"]`,
       );
-      if (!tab) {
+      if (!row) {
         return false;
       }
-      tab.click();
+      row.click();
       return true;
     },
     clickModelItem: (connectionId, modelId) => {
-      // TASK.106 §6 rail form: a row only exists in the DOM when its
-      // connection is rail-selected (or when it's a Popular chip, which is
-      // always rendered). Try the direct hit first; on a miss, drive the
-      // rail tab for that connection first and retry once — the same real
-      // clicks a user would make, no synthetic store poke.
+      // TASK.131 drill-down: a model row only exists in the DOM while its
+      // group's level is open — or on the root, when the model happens to be
+      // one of the popular picks. Try the direct hit first; on a miss, open
+      // that connection's level and retry once — the same two real clicks a
+      // user would make, no synthetic store poke.
       const hit = () =>
         document.querySelector<HTMLButtonElement>(
-          `.start-model-menu [data-connection-id="${CSS.escape(connectionId)}"][data-model-id="${CSS.escape(modelId)}"]`,
+          `.start-model-menu .start-model-item[data-connection-id="${CSS.escape(connectionId)}"][data-model-id="${CSS.escape(modelId)}"]`,
         );
       const button = hit();
       if (button) {
         button.click();
         return true;
       }
-      const tab = document.querySelector<HTMLButtonElement>(
-        `.start-model-rail-btn[data-connection-id="${CSS.escape(connectionId)}"]`,
+      const row = document.querySelector<HTMLButtonElement>(
+        `.start-model-group[data-connection-id="${CSS.escape(connectionId)}"]`,
       );
-      if (!tab) {
+      if (!row) {
         return false;
       }
-      tab.click();
+      row.click();
       const retry = hit();
       if (!retry) {
         return false;
@@ -4960,7 +4964,12 @@ export function createAutomationFacade(
     },
 
     startScreenModelMenuState(): StartScreenModelMenuState {
-      return { ok: true, open: startScreenDom.modelMenuOpen(), groups: startScreenDom.modelMenuGroups() };
+      return {
+        ok: true,
+        open: startScreenDom.modelMenuOpen(),
+        level: startScreenDom.modelMenuLevel(),
+        groups: startScreenDom.modelMenuGroups(),
+      };
     },
 
     async startScreenToggleModelMenu(open: boolean): Promise<FacadeResult> {
