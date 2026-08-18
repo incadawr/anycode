@@ -1394,6 +1394,71 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(res.status).toBe(400);
     expect(calls).toHaveLength(0);
   });
+
+  it("GET /start-screen/model-menu -> startScreenModelMenuState (TASK.106 cut-1)", async () => {
+    const facadeResult = {
+      ok: true,
+      open: true,
+      groups: [{ connectionId: "conn-main", label: "Main", items: [{ id: "m1", name: "Model One", current: true }] }],
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/model-menu"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"startScreenModelMenuState"');
+    expect(calls[0]).toContain("[]");
+  });
+
+  it("POST /start-screen/model-menu with {open:true} -> startScreenToggleModelMenu([true]) (TASK.106 cut-1)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/model-menu"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ open: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"startScreenToggleModelMenu"');
+    expect(calls[0]).toContain("[true]");
+  });
+
+  it("POST /start-screen/model-menu with a non-boolean open -> 400, facade never invoked (TASK.106 cut-1)", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/model-menu"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ open: "yes" }),
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POST /start-screen/model-menu/select -> startScreenSelectModelRow([connectionId, modelId]) (TASK.106 cut-1)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/model-menu/select"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ connectionId: "conn-second", modelId: "m2" }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"startScreenSelectModelRow"');
+    expect(calls[0]).toContain('["conn-second","m2"]');
+  });
+
+  it("POST /start-screen/model-menu/select with a missing modelId -> 400, facade never invoked (TASK.106 cut-1)", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/start-screen/model-menu/select"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ connectionId: "conn-second" }),
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("prompt-queue routes (design/slice-P7.14-cut.md §5 W3)", () => {

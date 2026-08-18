@@ -1406,6 +1406,12 @@ function fakeStartScreenDom(overrides: Partial<StartScreenDom> = {}): StartScree
     recentCount: () => 0,
     projectMenuOpen: () => false,
     clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
     ...overrides,
   };
 }
@@ -1686,6 +1692,151 @@ describe("automation facade — startScreenToggleProjectMenu (design/slice-F5-1b
   });
 });
 
+describe("automation facade — startScreenModelMenuState / startScreenToggleModelMenu / startScreenSelectModelRow (TASK.106 cut-1)", () => {
+  it("reads open:false and an empty group list when the popover isn't rendered", () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, fakeStartScreenDom());
+
+    expect(facade.startScreenModelMenuState()).toEqual({ ok: true, open: false, level: null, groups: [] });
+  });
+
+  it("reads the level and the grouped rows straight off the DOM probe when the popover is open", () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const groups = [
+      { connectionId: "conn-main", label: "Main", count: 1, items: [{ id: "m1", name: "Model One", current: true }] },
+      { connectionId: "conn-second", label: "Second", count: 1, items: [] },
+    ];
+    const startScreenDom = fakeStartScreenDom({
+      modelMenuOpen: () => true,
+      modelMenuLevel: () => "group",
+      modelMenuGroups: () => groups,
+    });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    expect(facade.startScreenModelMenuState()).toEqual({ ok: true, open: true, level: "group", groups });
+  });
+
+  it("startScreenToggleModelMenu refuses with no_draft when no draft is open, and never clicks the chip", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const clickModelChip = vi.fn();
+    const startScreenDom = fakeStartScreenDom({ clickModelChip });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenToggleModelMenu(true)).resolves.toEqual({ ok: false, reason: "no_draft" });
+    expect(clickModelChip).not.toHaveBeenCalled();
+  });
+
+  it("startScreenToggleModelMenu is a no-op (no click) when the popover is already in the requested state", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    tabsStore.getState().openDraft("/ws/z");
+    const clickModelChip = vi.fn();
+    const startScreenDom = fakeStartScreenDom({ modelMenuOpen: () => false, clickModelChip });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenToggleModelMenu(false)).resolves.toEqual({ ok: true });
+    expect(clickModelChip).not.toHaveBeenCalled();
+  });
+
+  it("startScreenToggleModelMenu clicks the chip and awaits the commit when opening", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    tabsStore.getState().openDraft("/ws/z");
+    let open = false;
+    const startScreenDom = fakeStartScreenDom({
+      modelMenuOpen: () => open,
+      clickModelChip: () => {
+        open = true;
+      },
+    });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenToggleModelMenu(true)).resolves.toEqual({ ok: true });
+  });
+
+  it("startScreenToggleModelMenu reports did_not_open when a real click no-ops", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    tabsStore.getState().openDraft("/ws/z");
+    const startScreenDom = fakeStartScreenDom({ modelMenuOpen: () => false, clickModelChip: () => {} });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenToggleModelMenu(true)).resolves.toEqual({ ok: false, reason: "did_not_open" });
+  });
+
+  it("startScreenSelectModelRow refuses with no_draft when no draft is open, and never clicks anything", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const clickModelChip = vi.fn();
+    const clickModelItem = vi.fn(() => true);
+    const startScreenDom = fakeStartScreenDom({ clickModelChip, clickModelItem });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenSelectModelRow("conn-second", "m2")).resolves.toEqual({ ok: false, reason: "no_draft" });
+    expect(clickModelChip).not.toHaveBeenCalled();
+    expect(clickModelItem).not.toHaveBeenCalled();
+  });
+
+  it("startScreenSelectModelRow opens the popover first when it is closed, then clicks the matching row", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    tabsStore.getState().openDraft("/ws/z");
+    let open = false;
+    const clickModelItem = vi.fn((connectionId: string, modelId: string) => {
+      expect(connectionId).toBe("conn-second");
+      expect(modelId).toBe("m2");
+      open = false;
+      return true;
+    });
+    const startScreenDom = fakeStartScreenDom({
+      modelMenuOpen: () => open,
+      clickModelChip: () => {
+        open = true;
+      },
+      clickModelItem,
+    });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenSelectModelRow("conn-second", "m2")).resolves.toEqual({ ok: true });
+    expect(clickModelItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("startScreenSelectModelRow does not re-open an already-open popover before clicking", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    tabsStore.getState().openDraft("/ws/z");
+    const clickModelChip = vi.fn();
+    let open = true;
+    const startScreenDom = fakeStartScreenDom({
+      modelMenuOpen: () => open,
+      clickModelChip,
+      clickModelItem: () => {
+        open = false;
+        return true;
+      },
+    });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenSelectModelRow("conn-second", "m2")).resolves.toEqual({ ok: true });
+    expect(clickModelChip).not.toHaveBeenCalled();
+  });
+
+  it("startScreenSelectModelRow reports not_present when no row matches the pair", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    tabsStore.getState().openDraft("/ws/z");
+    const startScreenDom = fakeStartScreenDom({ modelMenuOpen: () => true, clickModelItem: () => false });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenSelectModelRow("conn-second", "unknown-model")).resolves.toEqual({
+      ok: false,
+      reason: "not_present",
+    });
+  });
+
+  it("startScreenSelectModelRow reports did_not_close when the click delivers but the menu never closes", async () => {
+    const { tabsStore, registry } = setupReadyTab();
+    tabsStore.getState().openDraft("/ws/z");
+    const startScreenDom = fakeStartScreenDom({ modelMenuOpen: () => true, clickModelItem: () => true });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
+
+    await expect(facade.startScreenSelectModelRow("conn-second", "m2")).resolves.toEqual({ ok: false, reason: "did_not_close" });
+  });
+});
+
 describe("automation facade — startScreenSubmit (design/slice-P7.12-cut.md §5 W2)", () => {
   it("delegates to submitStartDraft's own guards: no draft -> refusal, nothing sent", async () => {
     const { tabsStore, registry } = setupReadyTab();
@@ -1872,7 +2023,18 @@ describe("automation facade — prompt queue (design/slice-P7.14-cut.md §5 W3)"
 describe("automation facade — modelPillState / modelPillPick (design/slice-P7.15-cut.md §2.6 W4)", () => {
   const noTranscriptDom: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
 
   function settingsSnapshotWithCatalog(providerId: string, models: { id: string; name?: string }[]): SettingsSnapshot {
     return {
@@ -2374,7 +2536,18 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
 describe("automation facade — ctxPopoverState / ctxPopoverOpen (design/slice-P7.17-cut.md F12 W4)", () => {
   const noTranscriptDom3: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom3: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom3: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom3: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
   const noModelPillDom3: ModelPillDom = {
     mounted: () => false,
     popoverOpen: () => false,
@@ -2625,7 +2798,18 @@ describe("automation facade — ctxPopoverState / ctxPopoverOpen (design/slice-P
 describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md §5 W4)", () => {
   const noTranscriptDom2: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom2: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom2: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom2: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
   const noModelPillDom: ModelPillDom = {
     mounted: () => false,
     popoverOpen: () => false,
@@ -2979,7 +3163,18 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
 describe("automation facade — agentCardState (design/slice-P7.18-cut.md §4 W4)", () => {
   const noTranscriptDom4: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom4: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom4: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom4: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
   const noModelPillDom4: ModelPillDom = {
     mounted: () => false,
     popoverOpen: () => false,
@@ -3120,7 +3315,18 @@ describe("automation facade — agentCardState (design/slice-P7.18-cut.md §4 W4
 describe("automation facade — agentCardExpand (design/slice-P7.18-cut.md §4 W4)", () => {
   const noTranscriptDom5: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom5: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom5: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom5: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
   const noModelPillDom5: ModelPillDom = {
     mounted: () => false,
     popoverOpen: () => false,
@@ -3264,7 +3470,18 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
   // fixed-arity, never exercised by these tests.
   const noTranscriptDom4: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom4: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom4: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom4: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
   const noModelPillDom4: ModelPillDom = {
     mounted: () => false,
     popoverOpen: () => false,
@@ -3666,7 +3883,18 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
   // these tests.
   const noTranscriptDom5: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom5: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom5: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom5: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
   const noModelPillDom5: ModelPillDom = {
     mounted: () => false,
     popoverOpen: () => false,
@@ -5350,7 +5578,18 @@ describe("automation facade — provider connections grid/drawer probe/driver (T
 describe("automation facade — modelPillState catalog parity (W4-F0, findings S5-1)", () => {
   const noTranscriptDom: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom: TodoPanelDom = { panel: () => null };
-  const noStartScreenDom: StartScreenDom = { rendered: () => false, recentCount: () => 0, projectMenuOpen: () => false, clickProjectChip: () => {} };
+  const noStartScreenDom: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
 
   function pillDom(): ModelPillDom {
     return {

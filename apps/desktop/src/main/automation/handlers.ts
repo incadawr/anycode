@@ -717,6 +717,23 @@ export function startScreenToggleProjectMenu(deps: HandlerDeps, open: boolean): 
   return deps.callFacade("startScreenToggleProjectMenu", [open]);
 }
 
+// --- Model-menu grouped picker (TASK.106 cut-1): thin wrappers over the
+// frozen facade contract, same discipline as startScreenToggleProjectMenu
+// above — the facade owns every guard (no_draft / did_not_open / not_present
+// / did_not_close), this layer only forwards method + args. ---
+
+export function startScreenModelMenuState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("startScreenModelMenuState", []);
+}
+
+export function startScreenToggleModelMenu(deps: HandlerDeps, open: boolean): Promise<unknown> {
+  return deps.callFacade("startScreenToggleModelMenu", [open]);
+}
+
+export function startScreenSelectModelRow(deps: HandlerDeps, connectionId: string, modelId: string): Promise<unknown> {
+  return deps.callFacade("startScreenSelectModelRow", [connectionId, modelId]);
+}
+
 export function startScreenSubmit(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("startScreenSubmit", []);
 }

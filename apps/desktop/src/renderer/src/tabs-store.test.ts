@@ -388,6 +388,46 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft?.codexProfileId).toBeUndefined();
   });
 
+  it("setDraftConnectionId sets the draft's cross-connection model pick, absent until then (TASK.106 cut-1 stage A)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    expect(store.getState().draft?.connectionId).toBeUndefined();
+
+    store.getState().setDraftConnectionId("conn-x");
+    expect(store.getState().draft).toEqual({
+      workspace: "/ws/a",
+      prompt: "",
+      engine: "core",
+      model: null,
+      mode: "build",
+      connectionId: "conn-x",
+    });
+  });
+
+  it("re-opening an existing draft preserves its connection pick (focus, not reset)", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftConnectionId("conn-x");
+    store.getState().openDraft(); // re-focus, no workspace arg
+    expect(store.getState().draft?.connectionId).toBe("conn-x");
+  });
+
+  it("setDraftConnectionId is a no-op while draft is null", () => {
+    const store = createTabsStore();
+    store.getState().setDraftConnectionId("conn-x");
+    expect(store.getState().draft).toBeNull();
+  });
+
+  it("setDraftConnectionId(undefined) clears a pick back to the active-connection default", () => {
+    const store = createTabsStore();
+    store.getState().openDraft("/ws/a");
+    store.getState().setDraftConnectionId("conn-x");
+    expect(store.getState().draft?.connectionId).toBe("conn-x");
+
+    store.getState().setDraftConnectionId(undefined);
+    expect(store.getState().draft?.connectionId).toBeUndefined();
+  });
+
   it("setDraftImages sets the draft's image attachments, absent until then (TASK.81)", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");

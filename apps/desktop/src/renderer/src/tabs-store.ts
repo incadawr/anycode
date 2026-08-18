@@ -85,6 +85,18 @@ export interface SessionDraft {
    */
   codexProfileId?: string;
   /**
+   * Core-only provider-connection pin for a new session (TASK.106 cut-1
+   * stage A): an opaque connection id from main's live registry, set when
+   * the New Session model picker's chosen model belongs to a connection
+   * other than the active one. Absent until the user picks a cross-connection
+   * model (mirrors `codexProfileId`'s "unset in this slice" convention) ⇒
+   * the session pins to `activeConnectionId()`, today's behavior. Never read
+   * for a non-core draft; picking this never changes
+   * `settings.provider.activeConnectionId` itself — it is a session-scoped
+   * pin, not a default switch.
+   */
+  connectionId?: string;
+  /**
    * Image attachments for the first turn (TASK.81, Composer.tsx parity —
    * `attachedImages`, projected through the SAME `QueuedPromptImage` shape a
    * queued prompt's images already use so `queueInitialPrompt`/
@@ -99,21 +111,24 @@ export interface SessionDraft {
    */
   images?: readonly QueuedPromptImage[];
   /**
-   * Non-core engine reasoning-effort pick for the first turn (TASK.81,
+   * The draft's reasoning-effort pick for the first turn (TASK.81,
    * Composer.tsx parity — `handleEngineEffortPick`/`EngineModelMenu`'s
    * `effort` prop). A free-form per-model string, never core's
    * `ReasoningEffort` enum (codex/claude advertise their own vocabulary —
    * shared/protocol.ts's `EngineModelChoice.efforts`), so this cannot reuse
-   * `model`'s always-present `null` = "provider default" sentinel: there is
-   * no draft-time catalog of per-model effort defaults to fall back to (main
-   * never projects `reasoning`/`effortLevels` into the renderer's provider-
-   * catalog summary — shared/settings.ts's `CatalogSummaryEntry` deliberately
-   * strips them, "renderer never imports core"), and the CORE engine has no
-   * draft-time effort data at all (its own `set_reasoning_effort` path needs
-   * a live host-resolved `availableEffortLevels`, which does not exist before
-   * a host boots). Absent until the user opens the draft's effort row and
-   * picks one — mirrors `enginePreset`/`codexProfileId`'s "unset in this
-   * slice" convention. Never read for a Core draft.
+   * `model`'s always-present `null` = "provider default" sentinel. Absent
+   * until the user opens the draft's effort level and picks one — mirrors
+   * `enginePreset`/`codexProfileId`'s "unset in this slice" convention, and
+   * absent means "whatever the connection already persists", never "off".
+   *
+   * TASK.131: a CORE draft carries it too now. Its vocabulary comes from the
+   * model itself — `CatalogSummaryEntry.models[].effortLevels`, which main
+   * projects for exactly this reason (it used to strip them, which is why
+   * the core draft had no effort control at all) — and it is delivered as
+   * core's own `set_reasoning_effort` before the first turn, not as the
+   * non-core `set_engine_effort` (start-session.ts / tab-registry.ts's
+   * `applyInitialPicks`). A pick that the newly chosen model does not
+   * declare is dropped rather than translated (`carryDraftEffort`).
    */
   engineEffort?: string;
 }
@@ -172,6 +187,12 @@ export interface TabsState {
    * convention).
    */
   setDraftCodexProfileId(profileId: string | undefined): void;
+  /**
+   * No-op while `draft === null`. Core-only pin (mirrors
+   * `setDraftCodexProfileId`, TASK.106 cut-1 stage A). `undefined` clears
+   * back to the active-connection default.
+   */
+  setDraftConnectionId(connectionId: string | undefined): void;
   /**
    * No-op while `draft === null`. Full replace (mirrors `setDraftPrompt`) —
    * the caller (StartScreen's attach/paste/remove handlers) computes the
@@ -355,6 +376,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
           mode: state.draft?.mode ?? "build",
           ...(state.draft?.enginePreset !== undefined ? { enginePreset: state.draft.enginePreset } : {}),
           ...(state.draft?.codexProfileId !== undefined ? { codexProfileId: state.draft.codexProfileId } : {}),
+          ...(state.draft?.connectionId !== undefined ? { connectionId: state.draft.connectionId } : {}),
           ...(state.draft?.images !== undefined ? { images: state.draft.images } : {}),
           ...(state.draft?.engineEffort !== undefined ? { engineEffort: state.draft.engineEffort } : {}),
         },
@@ -371,7 +393,18 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     },
 
     setDraftEngine(engine): void {
-      set((state) => (state.draft === null ? state : { draft: { ...state.draft, engine } }));
+      // TASK.131: the effort pick belongs to a MODEL's vocabulary, and every
+      // engine offers an entirely different set of models — so a switch drops
+      // the pick rather than carrying a level the new engine may not even
+      // have a name for. (Now that a Core draft forwards its own effort too,
+      // a leftover Codex pick would otherwise ride out as
+      // `set_reasoning_effort`.) The same rule `carryDraftEffort` applies
+      // within one engine when the model itself changes.
+      set((state) =>
+        state.draft === null
+          ? state
+          : { draft: { ...state.draft, engine, ...(state.draft.engineEffort !== undefined ? { engineEffort: undefined } : {}) } },
+      );
     },
 
     setDraftModel(model): void {
@@ -388,6 +421,10 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftCodexProfileId(profileId): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, codexProfileId: profileId } }));
+    },
+
+    setDraftConnectionId(connectionId): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, connectionId } }));
     },
 
     setDraftImages(images): void {

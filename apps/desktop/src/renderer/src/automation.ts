@@ -329,6 +329,28 @@ export interface StartScreenState {
   availableEngines?: EngineId[];
 }
 
+/**
+ * `startScreenModelMenuState`'s ok-shape (TASK.106 cut-1): a DOM read of the
+ * New Session model popover's grouped rows, same "no mirrored state"
+ * discipline as `StartScreenState` above — `open: false` with `groups: []`
+ * is a normal reading (the popover isn't rendered), not an error. `groups`
+ * mirrors `buildStartModelMenuGroups`/`modelMenuRows` (StartScreen.tsx) one
+ * for one, read straight off the rendered DOM via `StartScreenDom.modelMenuGroups`.
+ */
+export interface StartScreenModelMenuState {
+  ok: true;
+  open: boolean;
+  /** TASK.131: which level of the drill-down is on screen (`root` / `group` / `effort`); `null` while the popover is closed. */
+  level: string | null;
+  groups: Array<{
+    connectionId: string;
+    label: string;
+    /** The group's full model count, known at every level — `items` is only what is rendered right now. */
+    count: number;
+    items: Array<{ id: string; name: string; current: boolean }>;
+  }>;
+}
+
 /** DOM accessor DI for the transcript-scroll probe (design §3.3), injectable for tests exactly like `AnycodeBridge`. */
 export interface TranscriptDom {
   /**
@@ -382,6 +404,44 @@ export interface StartScreenDom {
   projectMenuOpen(): boolean;
   /** A real `.click()` on the project control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
   clickProjectChip(): void;
+  /** Whether the model popover (`.start-model-menu`) is currently in the DOM (TASK.106 cut-1). */
+  modelMenuOpen(): boolean;
+  /** A real `.click()` on the model control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
+  clickModelChip(): void;
+  /** Which level of the drill-down the popover is showing (TASK.131) — the `data-level` attribute `StartScreen.tsx` stamps on the popover. `null` when it is closed. */
+  modelMenuLevel(): string | null;
+  /**
+   * The rendered popover's groups (TASK.106 cut-1; TASK.131 drill-down form),
+   * read straight off the DOM in the SAME order `StartScreen.tsx` renders
+   * them — one entry per `.start-model-group` row of the ROOT level.
+   *
+   * `count` is the group's own model count (`data-model-count`), known at
+   * every level; `items` are only the rows CURRENTLY on screen for that
+   * connection, so they are populated once that group's level is open and
+   * empty while the root is showing. A probe cannot drill on its own — it
+   * reads, it does not click; `clickModelGroup` is the driver.
+   *
+   * `connectionId`/`id` are read off the `data-connection-id`/`data-model-id`
+   * attributes `StartScreen.tsx` stamps on those exact nodes (the automation
+   * channel's one product-code hook here, same posture as
+   * `ToolCallCard.tsx`'s `data-tool-call-id`) — display labels alone cannot
+   * be trusted to key a click, since two connections can carry the same
+   * auto-generated name.
+   */
+  modelMenuGroups(): Array<{
+    connectionId: string;
+    label: string;
+    count: number;
+    items: Array<{ id: string; name: string; current: boolean }>;
+  }>;
+  /**
+   * TASK.131 drill-down form: a real `.click()` on the root level's group row
+   * for this connection — opens that connection's models as a level. `false`
+   * if no such row is rendered (wrong level, or an unknown connection).
+   */
+  clickModelGroup(connectionId: string): boolean;
+  /** A real `.click()` on the item button matching this connection+model pair; `false` if no such row is rendered. */
+  clickModelItem(connectionId: string, modelId: string): boolean;
 }
 
 /**
@@ -1959,6 +2019,12 @@ export interface AutomationFacade {
   // method until B5-auto wires the real draft action + main-side HTTP route.
   startScreenSetEngine?(engineId: string): Promise<FacadeResult>;
   startScreenToggleProjectMenu(open: boolean): Promise<FacadeResult>;
+  // ── model-menu grouped picker (TASK.106 cut-1): mirrors the project-menu
+  // driver's discipline one for one — a DOM probe for the rendered groups,
+  // and a real-click driver for open/close and per-row select. ──
+  startScreenModelMenuState(): StartScreenModelMenuState;
+  startScreenToggleModelMenu(open: boolean): Promise<FacadeResult>;
+  startScreenSelectModelRow(connectionId: string, modelId: string): Promise<FacadeResult>;
   startScreenSubmit(): Promise<{ ok: true; tabId: string } | { ok: false; message: string }>;
   // ── prompt queue (design/slice-P7.14-cut.md §5 W3) — all over the SAME
   // store actions Composer/PromptQueue.tsx call; `sendPrompt` above is
@@ -2300,6 +2366,92 @@ function realStartScreenDom(): StartScreenDom {
     projectMenuOpen: () => document.querySelector(".start-project-menu") !== null,
     clickProjectChip: () => {
       document.querySelector<HTMLButtonElement>(".start-folder")?.click();
+    },
+    modelMenuOpen: () => document.querySelector(".start-model-menu") !== null,
+    clickModelChip: () => {
+      document.querySelector<HTMLButtonElement>(".start-model .model-pill-chip")?.click();
+    },
+    modelMenuLevel: () => document.querySelector(".start-model-menu")?.getAttribute("data-level") ?? null,
+    modelMenuGroups: () => {
+      // TASK.131 drill-down: the ROOT level renders the group rows (plus the
+      // popular picks and the effort row); a group's models are a level of
+      // their own. The probe reports every group row it can see, with the
+      // rows currently on screen for it — which is nothing while the root is
+      // showing, and that group's models once its level is open. `count` is
+      // the group's real size either way.
+      const menu = document.querySelector(".start-model-menu");
+      if (!menu) {
+        return [];
+      }
+      const groups: Array<{
+        connectionId: string;
+        label: string;
+        count: number;
+        items: Array<{ id: string; name: string; current: boolean }>;
+      }> = [];
+      const itemsOf: Record<string, Array<{ id: string; name: string; current: boolean }>> = {};
+      for (const row of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-group"))) {
+        const connectionId = row.getAttribute("data-connection-id") ?? "";
+        groups.push({
+          connectionId,
+          label: row.querySelector(".start-model-row-name")?.textContent?.trim() ?? "",
+          count: Number(row.getAttribute("data-model-count") ?? "0"),
+          items: [],
+        });
+        itemsOf[connectionId] = groups[groups.length - 1]!.items;
+      }
+      for (const item of Array.from(menu.querySelectorAll<HTMLButtonElement>(".start-model-item[data-model-id]"))) {
+        const connectionId = item.getAttribute("data-connection-id") ?? "";
+        const bucket = itemsOf[connectionId];
+        if (!bucket) {
+          continue;
+        }
+        bucket.push({
+          id: item.getAttribute("data-model-id") ?? "",
+          name: item.querySelector(".start-model-item-name")?.textContent?.trim() ?? "",
+          current: item.getAttribute("aria-checked") === "true",
+        });
+      }
+      return groups;
+    },
+    clickModelGroup: (connectionId) => {
+      const row = document.querySelector<HTMLButtonElement>(
+        `.start-model-group[data-connection-id="${CSS.escape(connectionId)}"]`,
+      );
+      if (!row) {
+        return false;
+      }
+      row.click();
+      return true;
+    },
+    clickModelItem: (connectionId, modelId) => {
+      // TASK.131 drill-down: a model row only exists in the DOM while its
+      // group's level is open — or on the root, when the model happens to be
+      // one of the popular picks. Try the direct hit first; on a miss, open
+      // that connection's level and retry once — the same two real clicks a
+      // user would make, no synthetic store poke.
+      const hit = () =>
+        document.querySelector<HTMLButtonElement>(
+          `.start-model-menu .start-model-item[data-connection-id="${CSS.escape(connectionId)}"][data-model-id="${CSS.escape(modelId)}"]`,
+        );
+      const button = hit();
+      if (button) {
+        button.click();
+        return true;
+      }
+      const row = document.querySelector<HTMLButtonElement>(
+        `.start-model-group[data-connection-id="${CSS.escape(connectionId)}"]`,
+      );
+      if (!row) {
+        return false;
+      }
+      row.click();
+      const retry = hit();
+      if (!retry) {
+        return false;
+      }
+      retry.click();
+      return true;
     },
   };
 }
@@ -5017,6 +5169,51 @@ export function createAutomationFacade(
       // very next synchronous line.
       const committed = await waitUntil(() => startScreenDom.projectMenuOpen() === open, START_SCREEN_COMMIT_DEADLINE_MS);
       return committed ? { ok: true } : { ok: false, reason: open ? "did_not_open" : "did_not_close" };
+    },
+
+    startScreenModelMenuState(): StartScreenModelMenuState {
+      return {
+        ok: true,
+        open: startScreenDom.modelMenuOpen(),
+        level: startScreenDom.modelMenuLevel(),
+        groups: startScreenDom.modelMenuGroups(),
+      };
+    },
+
+    async startScreenToggleModelMenu(open: boolean): Promise<FacadeResult> {
+      if (tabsStore.getState().draft === null) {
+        return { ok: false, reason: "no_draft" };
+      }
+      if (startScreenDom.modelMenuOpen() === open) {
+        return { ok: true };
+      }
+      // A real click on the model control's chip — not a synthetic store
+      // poke, same posture as startScreenToggleProjectMenu/clickProjectChip
+      // above (the popover's open state is local component useState).
+      startScreenDom.clickModelChip();
+      const committed = await waitUntil(() => startScreenDom.modelMenuOpen() === open, START_SCREEN_COMMIT_DEADLINE_MS);
+      return committed ? { ok: true } : { ok: false, reason: open ? "did_not_open" : "did_not_close" };
+    },
+
+    async startScreenSelectModelRow(connectionId: string, modelId: string): Promise<FacadeResult> {
+      if (tabsStore.getState().draft === null) {
+        return { ok: false, reason: "no_draft" };
+      }
+      if (!startScreenDom.modelMenuOpen()) {
+        startScreenDom.clickModelChip();
+        const opened = await waitUntil(() => startScreenDom.modelMenuOpen(), START_SCREEN_COMMIT_DEADLINE_MS);
+        if (!opened) {
+          return { ok: false, reason: "did_not_open" };
+        }
+      }
+      // A real click on the matching row (§ above) — sets both axes of the
+      // pair at once via StartScreen.tsx's own selectModel/selectStartModelRow,
+      // no synthetic store poke.
+      if (!startScreenDom.clickModelItem(connectionId, modelId)) {
+        return { ok: false, reason: "not_present" };
+      }
+      const closed = await waitUntil(() => !startScreenDom.modelMenuOpen(), START_SCREEN_COMMIT_DEADLINE_MS);
+      return closed ? { ok: true } : { ok: false, reason: "did_not_close" };
     },
 
     startScreenSubmit(): Promise<{ ok: true; tabId: string } | { ok: false; message: string }> {
