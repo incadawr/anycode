@@ -216,6 +216,29 @@ export const DEFAULT_SUBAGENT_MAX_TURNS = 40;
  */
 export const SUBAGENT_MAX_TURNS_CEILING = 200;
 
+/** The Agent tool's dispatcher wall (tools/agent.ts metadata imports this). */
+export const SUBAGENT_TIME_BUDGET_MS = 600_000;
+
+/**
+ * A child loop must not START another model step after this much elapsed time
+ * from SubagentPort.run entry (pre-semaphore — the dispatcher bills a queued
+ * child from the moment its handler is called, so a child parked behind
+ * siblings is only entitled to the remainder).
+ */
+export const SUBAGENT_LOOP_DEADLINE_MS = 480_000;
+
+/** Ceiling on the wrap-up model call. */
+export const SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS = 60_000;
+
+/**
+ * The outcome must be on its way back by this elapsed time (10s reserve under
+ * SUBAGENT_TIME_BUDGET_MS for SubagentStop observers + plumbing).
+ */
+export const SUBAGENT_OUTCOME_DEADLINE_MS = 590_000;
+
+/** Below this remaining window the wrap-up call is skipped entirely. */
+export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
+
 /** Semaphore width in the subagent runner: at most this many child loops run at once (atop toolConcurrency=4). */
 export const MAX_CONCURRENT_SUBAGENTS = 2;
 

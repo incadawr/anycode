@@ -506,6 +506,88 @@ describe("AgentLoop.runTurn — max turns", () => {
   });
 });
 
+describe("AgentLoop.runTurn — wall-clock deadline (TASK.74 §3)", () => {
+  /**
+   * A model port that advances the (faked) clock past `deadlineAt` once it has
+   * served `afterCalls` steps, so the deadline is crossed by work the loop
+   * itself did rather than by a timer racing the test.
+   */
+  class ClockAdvancingPort implements ModelPort {
+    calls = 0;
+    constructor(
+      private readonly afterCalls: number,
+      private readonly advanceTo: number,
+    ) {}
+
+    streamText(): AsyncIterable<ModelStreamEvent> {
+      this.calls += 1;
+      if (this.calls === this.afterCalls) {
+        vi.setSystemTime(this.advanceTo);
+      }
+      return (async function* () {
+        yield { type: "tool_call", toolCall: { id: "c", name: "Mock", input: { value: "x" } } } as ModelStreamEvent;
+        yield { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent;
+      })();
+    }
+  }
+
+  const BASE = 1_700_000_000_000;
+
+  it("ends with max_turns at the deadline, short of the turn budget", async () => {
+    // Only Date is faked: the dispatcher's own timers must stay real.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(BASE);
+    try {
+      const modelPort = new ClockAdvancingPort(3, BASE + 60_000);
+      const loop = makeLoop({ modelPort, maxTurns: 10, deadlineAt: BASE + 30_000 });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 3 });
+      // Three turns ran; the fourth iteration exited before calling the model.
+      expect(modelPort.calls).toBe(3);
+      expect(events.filter((e) => e.type === "turn_start")).toHaveLength(4);
+      expect(events.filter((e) => e.type === "tool_result")).toHaveLength(3);
+      // The history is balanced — the cut-off turn never started a tool call.
+      expect(loop.history.unansweredToolCallIds()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("without deadlineAt the same script runs the full turn budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(BASE);
+    try {
+      const modelPort = new ClockAdvancingPort(3, BASE + 60_000);
+      const loop = makeLoop({ modelPort, maxTurns: 10 });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 10 });
+      expect(modelPort.calls).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a deadline already in the past ends the turn before the first model call", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(BASE);
+    try {
+      const modelPort = new ClockAdvancingPort(99, BASE);
+      const loop = makeLoop({ modelPort, maxTurns: 10, deadlineAt: BASE - 1 });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 0 });
+      expect(modelPort.calls).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("AgentLoop.runTurn — cancellation", () => {
   it("cancels mid-stream and preserves already-emitted events", async () => {
     const modelPort = new MockModelPort([

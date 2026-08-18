@@ -14,7 +14,7 @@ import {
   type AgentProfileRoot,
 } from "./profiles.js";
 import { PERSONAS } from "./personas.js";
-import { AGENT_PROFILE_PROMPT_MAX_BYTES } from "../types/config.js";
+import { AGENT_PROFILE_PROMPT_MAX_BYTES, SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
 import type { FileStat, FileSystemPort } from "../ports/file-system.js";
 
 function md(fields: Record<string, string>, body: string): string {
@@ -80,6 +80,48 @@ describe("parseAgentProfileMd", () => {
     expect("ok" in capped && Buffer.byteLength(capped.ok.body)).toBe(AGENT_PROFILE_PROMPT_MAX_BYTES);
     const empty = parseAgentProfileMd(md({ name: "bare", description: "d" }, "   "), "f");
     expect("ok" in empty && empty.ok.body).toBe('[agent profile "bare" — empty body]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.74 §2.3: `maxTurns:` frontmatter becomes PersonaDefinition.turnBudget.
+// Fatal-on-invalid mirrors `model:` — a profile that asks for a budget and
+// silently gets a different one is worse than one that is loudly refused.
+
+describe("parseAgentProfileMd — maxTurns frontmatter (TASK.74 §2.3)", () => {
+  it("maps a valid maxTurns onto turnBudget", () => {
+    const res = parseAgentProfileMd(md({ name: "scout", description: "d", maxTurns: "12" }, "b"), "f");
+    expect("ok" in res && res.ok.turnBudget).toBe(12);
+  });
+
+  it("accepts the boundaries 1 and SUBAGENT_MAX_TURNS_CEILING", () => {
+    expect(
+      "ok" in parseAgentProfileMd(md({ name: "a", description: "d", maxTurns: "1" }, "b"), "f"),
+    ).toBe(true);
+    const top = parseAgentProfileMd(
+      md({ name: "a", description: "d", maxTurns: String(SUBAGENT_MAX_TURNS_CEILING) }, "b"),
+      "f",
+    );
+    expect("ok" in top && top.ok.turnBudget).toBe(SUBAGENT_MAX_TURNS_CEILING);
+  });
+
+  it("leaves turnBudget undefined when the line is absent or blank", () => {
+    const absent = parseAgentProfileMd(md({ name: "a", description: "d" }, "b"), "f");
+    expect("ok" in absent && absent.ok.turnBudget).toBeUndefined();
+    const blank = parseAgentProfileMd(md({ name: "a", description: "d", maxTurns: "  " }, "b"), "f");
+    expect("ok" in blank && blank.ok.turnBudget).toBeUndefined();
+  });
+
+  it("is FATAL for an over-ceiling, zero, negative, fractional or non-numeric value", () => {
+    for (const bad of [String(SUBAGENT_MAX_TURNS_CEILING + 1), "0", "-1", "1.5", "abc", "0x20", "1e1"]) {
+      const res = parseAgentProfileMd(
+        md({ name: "scout", description: "d", maxTurns: bad }, "b"),
+        "f",
+      );
+      expect(res, `maxTurns ${bad}`).toEqual({
+        error: { kind: "bad_max_turns", name: "scout", maxTurns: bad },
+      });
+    }
   });
 });
 

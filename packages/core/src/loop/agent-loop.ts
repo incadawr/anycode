@@ -127,6 +127,19 @@ export interface AgentLoopConfig {
    * is never inherited by children.
    */
   subagentMaxTurns?: number;
+
+  /**
+   * Absolute epoch-ms after which runTurnInner must not start another model
+   * step; the check sits beside the maxTurns check and exits the same way
+   * (loop_end "max_turns" — budget exhausted). A turn already in flight when it
+   * expires plays out to the end, so the history stays balanced. Unset => no
+   * deadline (parent loops are byte-identical to pre-TASK.74 behaviour). Set by
+   * the subagent runner from the wall-clock budget of one spawn; the value is
+   * absolute rather than a duration because the anchor is SubagentPort.run
+   * entry — a child that spent its budget parked in the concurrency semaphore
+   * is entitled only to the remainder.
+   */
+  deadlineAt?: number;
   /** Passed out-of-band as ModelRequest.system on every step; never enters history. */
   systemPrompt?: string;
   maxOutputTokens?: number;
@@ -439,6 +452,7 @@ export class AgentLoop {
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const signal = options?.signal;
     const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
+    const deadlineAt = this.config.deadlineAt;
 
     // Pre-aborted: end immediately, before hooks or any model call.
     if (signal?.aborted) {
@@ -572,7 +586,14 @@ export class AgentLoop {
         turn += 1;
         yield { type: "turn_start", turn };
 
-        if (turn > maxTurns) {
+        // Budget exhaustion, both kinds. The wall-clock deadline is a
+        // COOPERATIVE exit sharing the turn cap's branch on purpose: aborting the
+        // turn signal on a timer would report `cancelled` (indistinguishable from
+        // a user cancel) and would leave the history mid-turn. Checked here —
+        // after turn_start, before compaction and the model step — so a turn
+        // already in flight finishes its tool dispatch and no tool_call is left
+        // unanswered.
+        if (turn > maxTurns || (deadlineAt !== undefined && Date.now() >= deadlineAt)) {
           yield* this.emitLoopEnd("max_turns", turn - 1, signal);
           return;
         }

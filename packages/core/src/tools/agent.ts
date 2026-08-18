@@ -40,7 +40,11 @@
 import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
 import type { EngineProfileInfo, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
-import { SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS, SUBAGENT_OUTPUT_MAX_BYTES } from "../types/config.js";
+import {
+  SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS,
+  SUBAGENT_OUTPUT_MAX_BYTES,
+  SUBAGENT_TIME_BUDGET_MS,
+} from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
 import {
   sanitizeAndCap,
@@ -89,8 +93,11 @@ function buildMetadata(sessionTier: boolean): ToolMetadata {
     riskLevel: "low",
     sideEffectScope: "process",
     needsApproval: false,
-    timeoutMs: 600_000,
-    maxTimeoutMs: 600_000,
+    // The dispatcher wall for one spawn. The child's own wall-clock deadline
+    // and wrap-up window derive from this same constant, so the three can never
+    // drift into a run that returns after the dispatcher stopped listening.
+    timeoutMs: SUBAGENT_TIME_BUDGET_MS,
+    maxTimeoutMs: SUBAGENT_TIME_BUDGET_MS,
     maxOutputBytes: SUBAGENT_OUTPUT_MAX_BYTES,
   };
 }
@@ -109,7 +116,9 @@ function outcomeToResult(
   if (outcome.status === "error") {
     return { ok: false, error: outcome.finalText || "Agent: the subagent failed.", ...presentation };
   }
-  // max_turns (TASK.44): the child hit its turn budget — this is NOT a
+  // max_turns (TASK.44 + TASK.74): the child exhausted its budget — the turn
+  // cap or the wall-clock deadline, which share this status because the
+  // remediation is identical. This is NOT a
   // success. Return an explicit incomplete errorKind so the dispatcher maps
   // the tool_call to status "max_turns" (not "success"), the parent model
   // receives a clear message naming the limit and the turns spent, and any
@@ -120,8 +129,10 @@ function outcomeToResult(
   if (outcome.status === "max_turns") {
     const partial = outcome.finalText.trim();
     const error = partial
-      ? `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing. Partial result:\n\n${partial}`
-      : `Agent: the subagent reached its max turn limit (${outcome.turns} turns) without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)").`;
+      ? `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing.\n` +
+        `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ` +
+        `Missing checks may invalidate the conclusions below.\n\n${partial}`
+      : `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)").`;
     return { ok: false, errorKind: "max_turns", error, output: toAgentOutput(outcome), ...presentation };
   }
   // cancelled (TASK.44): preserve cancellation semantics — never success.

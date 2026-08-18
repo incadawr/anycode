@@ -22,16 +22,21 @@ import { ConversationHistory } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { ToolRegistry, createDefaultToolRegistry } from "../tools/registry.js";
-import { buildSubagentSystemPrompt } from "../prompts/subagent.js";
+import { SUBAGENT_WRAPUP_PROMPT, buildSubagentSystemPrompt } from "../prompts/subagent.js";
 import type { SystemPromptEnv } from "../prompts/system.js";
 import type { ModelPort } from "../ports/model.js";
 import { capUtf8Bytes } from "../util/bytes.js";
+import { linkAbortSignal } from "../util/abort.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   SUBAGENT_MAX_TURNS_CEILING,
   MAX_CONCURRENT_SUBAGENTS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
+  SUBAGENT_LOOP_DEADLINE_MS,
+  SUBAGENT_OUTCOME_DEADLINE_MS,
   SUBAGENT_OUTPUT_MAX_BYTES,
+  SUBAGENT_WRAPUP_MIN_WINDOW_MS,
+  SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
 } from "../types/config.js";
 import type {
   EngineChildSpec,
@@ -127,7 +132,18 @@ export function buildChildConfig(
   parent: AgentLoopConfig,
   persona: PersonaDefinition,
   req: SubagentRequest,
-  extras?: { env?: SystemPromptEnv; memorySection?: string; modelPort?: ModelPort },
+  extras?: {
+    env?: SystemPromptEnv;
+    memorySection?: string;
+    modelPort?: ModelPort;
+    /**
+     * Absolute epoch-ms wall-clock budget for the child loop (TASK.74 §3). The
+     * runner anchors it at SubagentPort.run entry — pre-semaphore — so a child
+     * that queued behind siblings inherits only the remaining time. Absent =>
+     * the child loop runs without a deadline (existing callers unchanged).
+     */
+    deadlineAt?: number;
+  },
 ): AgentLoopConfig {
   const tokenizer = parent.tokenizer ?? new HeuristicTokenizer();
   // NEW per-persona registry WITHOUT any spawn tool (structural non-recursion,
@@ -151,14 +167,19 @@ export function buildChildConfig(
     // is inherited (same workspace fs/exec/http).
     ports: { ...parent.ports, todos: new InMemoryTodoStore() },
     cwd: parent.cwd,
-    // Budget resolution, most specific first: explicit request > host/settings
-    // default (parent.subagentMaxTurns) > DEFAULT_SUBAGENT_MAX_TURNS. Only the
-    // runaway ceiling clamps — until 2026-08-16 the DEFAULT was the clamp, so
-    // a caller could lower the budget but nothing could raise it.
+    // Budget resolution, most specific first: explicit request (a workflow step
+    // — the Agent schema has no maxTurns and will not get one) > the role's own
+    // budget (md-profile frontmatter / persona) > host/settings default
+    // (parent.subagentMaxTurns) > DEFAULT_SUBAGENT_MAX_TURNS. Only the runaway
+    // ceiling clamps — until 2026-08-16 the DEFAULT was the clamp, so a caller
+    // could lower the budget but nothing could raise it. Turns are the runaway
+    // guard, not the working budget: deadlineAt below is what usually ends a
+    // long run (TASK.74 §2.4, carried into TASK.124).
     maxTurns: Math.min(
-      req.maxTurns ?? parent.subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS,
+      req.maxTurns ?? persona.turnBudget ?? parent.subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS,
       SUBAGENT_MAX_TURNS_CEILING,
     ),
+    ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
     // Harness prelude (tool discipline over the child's OWN registry, env, memory)
     // + persona/profile body + finality note. toolNames come from the registry
     // built above (post SPAWN_TOOLS skip), so the child's prompt structurally
@@ -348,6 +369,24 @@ export function createSubagentRunner(
         };
       }
 
+      // The port is public: a hand-built request bypasses the workflow schema
+      // that would have rejected a nonsense budget, and an unchecked NaN/0/-1
+      // would reach the loop as a maxTurns nothing compares usefully against.
+      // Refuse it as an error-outcome before anything is spawned.
+      if (
+        req.maxTurns !== undefined &&
+        (!Number.isInteger(req.maxTurns) || req.maxTurns < 1)
+      ) {
+        return {
+          status: "error",
+          finalText: `Agent: maxTurns must be a positive integer (received ${String(req.maxTurns)}).`,
+          truncated: false,
+          turns: 0,
+          toolCalls: 0,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
       // Pre-aborted: never enter the semaphore or start a child.
       if (signal?.aborted) {
         return cancelledOutcome(startedAt);
@@ -474,13 +513,19 @@ export function createSubagentRunner(
           ...(requestedModel !== undefined ? { model: requestedModel } : {}),
         });
 
-        const loop = new AgentLoop(
-          buildChildConfig(parent, persona, req, {
-            env: opts?.env,
-            memorySection: opts?.memorySection,
-            ...(childModelPort !== undefined ? { modelPort: childModelPort } : {}),
-          }),
-        );
+        // The config is held in a variable rather than inlined: the wrap-up call
+        // below must reach the model through the SAME port/system prompt/output
+        // limits the loop used, including the resolveChildModelPort branch.
+        const childConfig = buildChildConfig(parent, persona, req, {
+          env: opts?.env,
+          memorySection: opts?.memorySection,
+          // Wall-clock budget anchored at run() entry, i.e. BEFORE the semaphore
+          // wait above: the dispatcher bills the Agent call from the moment the
+          // handler was invoked, so time spent queued is time already spent.
+          deadlineAt: startedAt + SUBAGENT_LOOP_DEADLINE_MS,
+          ...(childModelPort !== undefined ? { modelPort: childModelPort } : {}),
+        });
+        const loop = new AgentLoop(childConfig);
 
         let currentTurnText = "";
         let finalText = "";
@@ -591,6 +636,34 @@ export function createSubagentRunner(
         // status maps 1:1 from loop_end.reason (same union); no loop_end => error.
         const status: SubagentOutcome["status"] = loopReason ?? "error";
         const turns = loopTurns ?? turnEndCount;
+
+        // Wrap-up rescue (TASK.74 §4). A child cut off by its budget otherwise
+        // hands the parent the preamble of the turn that was cut — what it was
+        // about to do, not what it found. One tool-free model call converts the
+        // history it already has into a report. Deliberately NOT run when:
+        // the run ended any other way (a completed child already reported, an
+        // errored/cancelled one has no standing to speak), the child never
+        // completed a turn (nothing to summarize — the empty branch in
+        // tools/agent.ts says so honestly and costs no time), or the caller
+        // cancelled (the rescue must not outlive the request).
+        //
+        // The status computed above is NEVER revised by the rescue: a technically
+        // successful wrap-up is still an unfinished task, and promoting it to
+        // "completed" would make a workflow accept the fragment as a satisfied
+        // dependency.
+        if (status === "max_turns" && turns > 0 && !signal?.aborted) {
+          // Window shrinks as the run approaches the dispatcher's wall: a call
+          // started too late would push the whole Agent call past its timeout
+          // and the parent would receive nothing at all instead of a partial.
+          const windowMs = Math.min(
+            SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
+            SUBAGENT_OUTCOME_DEADLINE_MS - (Date.now() - startedAt),
+          );
+          if (windowMs >= SUBAGENT_WRAPUP_MIN_WINDOW_MS) {
+            finalText = await runWrapUp(childConfig, loop, finalText, windowMs, signal);
+          }
+        }
+
         const capped = capUtf8Bytes(finalText, SUBAGENT_OUTPUT_MAX_BYTES);
         const outcome: SubagentOutcome = {
           status,
@@ -622,6 +695,64 @@ export function createSubagentRunner(
       }
     },
   };
+}
+
+/**
+ * One tool-free model call asking a budget-exhausted child to report what it
+ * actually established (TASK.74 §4.3). Runs OUTSIDE the AgentLoop, straight
+ * against the child's own ModelPort, which makes the no-tools rule structural:
+ * there is no dispatcher on this path, so a tool call the model proposes anyway
+ * has nothing to execute it. Stream retries and the stall watchdog still apply
+ * — they live in the ModelPort adapter, not in the loop.
+ *
+ * The loop's history is READ, never written: the instruction exists only in this
+ * request's `messages`, so the transcript stays exactly as `loop_end` left it —
+ * balanced and terminal. Compaction is not available here; an overflowing
+ * history therefore fails the call, which degrades to `fallback` like every
+ * other failure. Returns the report, or `fallback` (the raw last-turn text)
+ * whenever the call throws, aborts, times out or produces nothing but
+ * whitespace — the rescue can only improve the outcome, never worsen it.
+ */
+async function runWrapUp(
+  config: AgentLoopConfig,
+  loop: AgentLoop,
+  fallback: string,
+  windowMs: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  const controller = new AbortController();
+  const dispose = signal ? linkAbortSignal(signal, controller) : () => {};
+  const timer = setTimeout(() => controller.abort("wrapup-timeout"), windowMs);
+  try {
+    let text = "";
+    const stream = config.modelPort.streamText({
+      system: config.systemPrompt,
+      messages: [
+        ...loop.history.toMessages(),
+        { role: "user", content: SUBAGENT_WRAPUP_PROMPT },
+      ],
+      tools: [],
+      maxOutputTokens: config.maxOutputTokens,
+      reasoningEffort: config.reasoningEffort,
+      abortSignal: controller.signal,
+    });
+    for await (const event of stream) {
+      if (event.type === "text_delta") {
+        text += event.text;
+      } else if (event.type === "stream_retry") {
+        // The step is replayed from scratch; discard the aborted attempt's text
+        // (mirror of the loop's own accumulator reset).
+        text = "";
+      }
+    }
+    return text.trim().length > 0 ? text : fallback;
+  } catch {
+    // Degradation by design: any failure leaves today's raw partial in place.
+    return fallback;
+  } finally {
+    clearTimeout(timer);
+    dispose();
+  }
 }
 
 /**
