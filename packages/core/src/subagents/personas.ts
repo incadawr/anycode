@@ -46,6 +46,16 @@ export interface PersonaDefinition {
    */
   model?: string;
   /**
+   * Turn budget declared by a role (md-profile `maxTurns:` frontmatter).
+   * Clamped to SUBAGENT_MAX_TURNS_CEILING by the runner; absent => the host's
+   * `tools.subagentMaxTurns` setting, else DEFAULT_SUBAGENT_MAX_TURNS. Built-in
+   * personas leave it undefined ON PURPOSE: a hardcoded role budget would
+   * silently outrank the owner-visible setting shipped in 0.0.12. The budget
+   * that actually decides a run is wall-clock (SUBAGENT_LOOP_DEADLINE_MS) —
+   * turns are the runaway guard.
+   */
+  turnBudget?: number;
+  /**
    * Md-profile `engine:` frontmatter. When set, children of this persona run as
    * a one-shot foreign CLI run (Codex or Claude Code) instead of an in-process
    * AgentLoop — the runner's whole buildChildConfig/AgentLoop path is bypassed
@@ -89,6 +99,14 @@ const EXPLORE_SYSTEM_PROMPT = [
   "You typically run alongside sibling explorations in parallel, so stay tightly scoped and keep the work cheap.",
 ].join(" ");
 
+/**
+ * Both built-in personas declare their turn budget explicitly rather than
+ * falling through to DEFAULT_SUBAGENT_TURN_BUDGET: the budget is a property of
+ * the role, and the two happening to share a number today is not a reason to
+ * couple them to a global. There is no evidence that recon and execution cost
+ * different numbers of turns, and the budget that actually decides a run is
+ * wall-clock — the turn count only stops a runaway on cheap steps.
+ */
 export const PERSONAS: Record<PersonaName, PersonaDefinition> = {
   "general-purpose": {
     name: "general-purpose",

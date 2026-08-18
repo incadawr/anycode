@@ -101,6 +101,13 @@ export type ModelStreamEvent =
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
   | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string };
 
+/**
+ * Why a loop stopped. `max_turns` means BUDGET EXHAUSTED — either the turn cap
+ * or, for a subagent child, the wall-clock deadline (AgentLoopConfig.deadlineAt);
+ * both leave a balanced history and an unfinished task, and every consumer
+ * treats them identically, so they share one reason rather than splitting the
+ * union across the ~10 files that map it.
+ */
 export type LoopEndReason = "completed" | "max_turns" | "cancelled" | "error" | "workspace_transition";
 
 /** Full event stream produced by the agent loop; superset of the model stream vocabulary. */
