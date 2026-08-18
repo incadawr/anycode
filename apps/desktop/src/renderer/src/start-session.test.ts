@@ -190,7 +190,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(res).toEqual({ ok: true, tabId: "t1" });
     expect(order).toEqual(["createTab", "addTab", "setActive", "queueInitialPrompt"]);
     // No model was picked on the draft (defaults null) -> forwarded as undefined (slice F5#1b, D3).
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", undefined, "build", undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", undefined, "build", undefined, undefined, undefined);
     expect(tabsStore.getState().draft).toBeNull();
     expect(tabsStore.getState().draftActive).toBe(false);
 
@@ -206,7 +206,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", "gpt-5", "build", undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", "gpt-5", "build", undefined, undefined, undefined);
   });
 
   it("forwards the selected start-screen mode for first-turn setup", async () => {
@@ -217,7 +217,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "make a plan", undefined, "plan", undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "make a plan", undefined, "plan", undefined, undefined, undefined);
   });
 
   it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Core draft", async () => {
@@ -229,7 +229,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, "build", undefined, [image]);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, "build", undefined, [image], undefined);
   });
 
   it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Codex draft", async () => {
@@ -258,7 +258,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, "high", undefined);
   });
 
-  it("TASK.81: a Core draft never forwards engineEffort, even if one is leftover from a prior Codex pick (engine switch does not reset it)", async () => {
+  it("TASK.131: a Codex effort pick never leaks into a Core session — the engine switch drops it", async () => {
     const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -268,7 +268,19 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, "build", undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, "build", undefined, undefined, undefined);
+  });
+
+  it("TASK.131: a Core draft's own effort pick rides as queueInitialPrompt's reasoning-effort argument (core speaks set_reasoning_effort, not set_engine_effort)", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftModel("glm-5.2");
+    tabsStore.getState().setDraftEngineEffort("max");
+
+    await submitStartDraft(deps);
+
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", "glm-5.2", "build", undefined, undefined, "max");
   });
 
   it("addTab is idempotent against the port-delivery race — a pre-existing tabId is a harmless no-op", async () => {

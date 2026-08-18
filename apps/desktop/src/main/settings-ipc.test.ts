@@ -541,6 +541,29 @@ describe("projectCatalogSummary — value-only projection", () => {
     expect(JSON.stringify(summary)).not.toContain("https://z");
   });
 
+  it("TASK.131: projects each model's own reasoning/effortLevels, and only when declared", () => {
+    const summary = projectCatalogSummary([
+      {
+        id: "z-ai",
+        name: "Z.AI",
+        auth: { kind: "api_key" },
+        baseUrl: "https://z",
+        models: [
+          { id: "glm-5.2", name: "GLM-5.2", reasoning: true, effortLevels: ["off", "high", "max"] },
+          { id: "glm-4.6", name: "GLM-4.6" },
+          { id: "sonnet-ish", reasoning: true },
+        ],
+      },
+    ]);
+    // Verbatim, not pre-resolved: the renderer applies core's own
+    // "declared list, else the legacy four" rule over these two facts.
+    expect(summary[0]?.models).toEqual([
+      { id: "glm-5.2", name: "GLM-5.2", reasoning: true, effortLevels: ["off", "high", "max"] },
+      { id: "glm-4.6", name: "GLM-4.6" },
+      { id: "sonnet-ish", reasoning: true },
+    ]);
+  });
+
   it("projects defaultTransport/supportedTransports/authOptional only when the source entry declares them (TASK.43 W5)", () => {
     const summary = projectCatalogSummary([
       {

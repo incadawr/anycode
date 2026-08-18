@@ -2091,13 +2091,27 @@ body {
   min-width: 0;
 }
 
+/* ── the New Session model picker (TASK.131, owner decision 17.08) ──
+   A drill-down, in the app's OWN menu language: the same two row shapes
+   `.model-pill-popover` already uses (a pick with a check gutter, a drill-in
+   with a value + chevron), the same overlay/shadow/radius, the same 1px row
+   rhythm. Two forms preceded it and were rejected on the owner's live smoke —
+   a two-pane rail (half the popover empty) and a horizontal tab row (the
+   drill-down idea lost) — so the shapes here are deliberately NOT novel.
+
+   The popover carries an INLINE `max-height` measured from the room actually
+   available around the chip (`startModelMenuMaxHeightPx`); the cap below is
+   only a first-paint fallback. It is a max, never a fixed height: a level
+   shorter than the room renders at its natural size, so no scrollbar appears
+   at all — which is the point. */
 .start-model-menu {
   position: absolute;
   top: calc(100% + var(--sp-2));
   left: 0;
   z-index: 20;
-  min-width: 14rem;
-  max-height: 18rem;
+  min-width: 17rem;
+  max-width: 24rem;
+  max-height: 22rem;
   overflow-y: auto;
   padding: var(--sp-1);
   display: flex;
@@ -2110,14 +2124,28 @@ body {
   animation: scale-in var(--dur-2) var(--ease-spring);
 }
 
-.start-model-item {
+/* Flipped placement: too little room under the chip, so the popover hangs
+   above it. The popover MOVES rather than growing a scrollbar. */
+.start-model-menu-flipped {
+  top: auto;
+  bottom: calc(100% + var(--sp-2));
+  transform-origin: 0 100%;
+}
+
+/* Both row shapes share one metric: the 30px budget the geometry counts
+   (START_MODEL_ROW_HEIGHT_PX in start-model-picker.ts). A taller row here
+   would make the flip decision under-estimate every level. */
+.start-model-item,
+.start-model-row,
+.start-model-back {
   display: flex;
-  /* Direct child of the height-capped scrolling column above. */
+  /* Direct children of the max-height column above. */
   flex-shrink: 0;
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
-  padding: var(--sp-2);
+  min-height: 30px;
+  padding: calc(var(--sp-1) + 2px) var(--sp-2);
   border: none;
   border-radius: var(--r-sm);
   background: transparent;
@@ -2128,7 +2156,11 @@ body {
 }
 
 .start-model-item:hover,
-.start-model-item:focus-visible {
+.start-model-item:focus-visible,
+.start-model-row:hover,
+.start-model-row:focus-visible,
+.start-model-back:hover,
+.start-model-back:focus-visible {
   background: var(--bg-hover);
 }
 
@@ -2147,175 +2179,106 @@ body {
 }
 
 .start-model-item-name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-sm);
+  /* Pinned so the row's own 30px budget is not at the mercy of the UA's
+     default `normal` line-height. */
+  line-height: var(--lh-tight);
 }
 
-.start-model-menu-current .start-model-item-name {
+.start-model-item-current .start-model-item-name {
   color: var(--accent);
 }
 
-/* ── TASK.106 §6: rail form (owner decision 16.08) — two-pane picker ── */
-
-/* The rail-form popover: wider than the old flat list, height capped by the
-   panes below rather than the menu's own 18rem scroll cap. */
-.start-model-menu-rail {
-  min-width: 30rem;
-  max-height: none;
-  overflow: visible;
-  padding: 0;
-}
-
-/* "Popular" strip: one horizontal row of chips above the panes. */
-.start-model-popular {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-2) calc(var(--sp-2) - 1px);
-  border-bottom: 1px solid var(--border);
-}
-
-.start-model-popular-label {
+/* A popular pick can come from any connection, so it names the one it means.
+   Muted and trailing — it annotates the model, it is not a second choice. */
+.start-model-item-sub {
   flex-shrink: 0;
-  font-size: var(--fs-2xs);
-  font-weight: var(--w-medium);
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-  color: var(--text-3);
-}
-
-.start-model-popular-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
-  min-width: 0;
-}
-
-.start-model-popular-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: calc(var(--sp-1) - 1px) var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  background: var(--bg-card);
-  color: var(--text-1);
-  font: inherit;
-  font-size: var(--fs-xs);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.start-model-popular-chip:hover,
-.start-model-popular-chip:focus-visible {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-}
-
-.start-model-popular-chip-current {
-  border-color: var(--accent);
-}
-
-.start-model-popular-chip-current .start-model-popular-name {
-  color: var(--accent);
-  font-weight: var(--w-medium);
-}
-
-.start-model-popular-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.start-model-popular-conn {
-  color: var(--text-3);
-  font-size: var(--fs-2xs);
-}
-
-/* Two panes: rail (left) + list (right), a fixed min height so a 1-model
-   connection doesn't collapse the popover. */
-.start-model-panels {
-  display: flex;
-  min-height: 15rem;
-}
-
-.start-model-rail {
-  width: 11rem;
-  flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  padding: var(--sp-1);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  overflow-y: auto;
-  border-radius: var(--r-md) 0 0 var(--r-md);
-}
-
-.start-model-rail-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 1px;
-  flex-shrink: 0;
-  padding: var(--sp-1) var(--sp-2);
-  border: none;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-1);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.start-model-rail-btn:hover,
-.start-model-rail-btn:focus-visible {
-  background: var(--bg-hover);
-}
-
-.start-model-rail-btn-selected {
-  background: var(--accent-soft);
-}
-
-.start-model-rail-btn-selected .start-model-rail-name {
-  color: var(--accent);
-  font-weight: var(--w-medium);
-}
-
-.start-model-rail-name-row {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--sp-2);
-  min-width: 0;
-}
-
-.start-model-rail-name {
-  font-size: var(--fs-xs);
-  min-width: 0;
+  max-width: 9rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.start-model-rail-count {
-  font-family: var(--font-mono);
   font-size: var(--fs-2xs);
-  color: var(--text-ghost);
+  color: var(--text-3);
 }
 
-/* The right pane re-uses .start-model-item rows; it needs its own scroll
-   cap now that the menu itself no longer scrolls as one column. */
-.start-model-list {
+/* A drill-in row carries no check gutter of its own, so it borrows one as
+   padding: every row's TEXT starts on the same x, whatever mix of picks and
+   drill-ins a level holds. Expressed in the same tokens the item row's
+   gutter is built from (padding + 1rem check + gap) so it tracks the density
+   scale instead of freezing one density's pixel count. */
+.start-model-row {
+  padding-left: calc(var(--sp-2) * 2 + 1rem);
+}
+
+/* A drill-in row: name, then a muted value, then the chevron that says there
+   is a level behind it. */
+.start-model-row-name {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: var(--sp-1);
-  overflow-y: auto;
-  max-height: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+}
+
+/* TASK.131 D2: the baseUrl host beside a colliding auto-label — two
+   connections that auto-name to the same thing are otherwise indistinguishable. */
+.start-model-row-sub {
+  flex-shrink: 0;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+.start-model-row-value {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.start-model-row-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.6;
+  transform: rotate(-90deg);
+}
+
+.start-model-divider {
+  flex-shrink: 0;
+  height: 1px;
+  /* Counted as START_MODEL_DIVIDER_PX (9) by the geometry: 1px + 2×--sp-1. */
+  margin: var(--sp-1) 0;
+  background: var(--border);
+}
+
+/* The honest-empty line: no connected provider has anything to offer. */
+.start-model-empty {
+  padding: calc(var(--sp-1) + 2px) var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+/* The level header: backs out one level, and names the level it is leaving. */
+.start-model-back {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.start-model-back-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  transform: rotate(90deg);
 }
 
 /* ── transcript (design §2.1/§2.2/§2.4 — UI-6) ── */

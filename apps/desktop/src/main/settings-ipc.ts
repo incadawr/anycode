@@ -295,7 +295,8 @@ export interface CatalogEntryShape {
   name: string;
   auth: { kind: string };
   baseUrl: string;
-  models: { id: string; name?: string }[];
+  /** `reasoning`/`effortLevels` (TASK.131) ride along for the draft-time effort picker; `string[]`-typed to keep this module core-import-free. */
+  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: readonly string[] }[];
   /** True for the literal `custom` sentinel (TASK.43 W5-FIX); main supplies it from core's `isCustomProvider`. */
   isCustom?: boolean;
   /** Wire transport fields (TASK.43 W5); `string`-typed to keep this module core-import-free. */
@@ -319,7 +320,14 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     id: entry.id,
     name: entry.name,
     authKind: entry.auth.kind === "oauth" ? "oauth" : "api_key",
-    models: entry.models.map((m) => (m.name !== undefined ? { id: m.id, name: m.name } : { id: m.id })),
+    models: entry.models.map((m) => ({
+      id: m.id,
+      ...(m.name !== undefined ? { name: m.name } : {}),
+      // TASK.131: both only when declared, so a fixture's plain `{id,name}`
+      // model still projects to exactly `{id,name}`.
+      ...(m.reasoning === true ? { reasoning: true } : {}),
+      ...(m.effortLevels !== undefined ? { effortLevels: [...m.effortLevels] } : {}),
+    })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : {}),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
     ...(entry.defaultTransport !== undefined ? { defaultTransport: entry.defaultTransport as ProviderTransportId } : {}),

@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyStarterPreset,
   buildStartModelMenuGroups,
-  buildStartModelPopularRows,
   CODEX_DRAFT_PRESETS,
   computeCodexProfileChipLabel,
   computeModelChipDisplay,
@@ -481,7 +480,7 @@ function connection(over: Partial<ProviderConnection> & { id: string; providerId
   return over;
 }
 
-describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B — grouped New Session model popover)", () => {
+describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B, re-exported from start-model-picker.ts by TASK.131 — grouped New Session model popover)", () => {
   const catalog: CatalogSummary = [
     {
       id: "anthropic",
@@ -538,8 +537,25 @@ describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B — grouped New Sess
       modelId: "kimi-k2",
     });
 
-    expect(groups[0]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(false);
-    expect(groups[1]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(true);
+    // TASK.131 D1 ordering: the current pair's connection leads the rail, so
+    // the settings-order-second `conn-api` is groups[0] here.
+    expect(groups.map((g) => g.connectionId)).toEqual(["conn-api", "conn-sub"]);
+    expect(groups[0]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(true);
+    expect(groups[1]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(false);
+  });
+
+  it("TASK.131 D1: a connection offering nothing (unknown provider, no live list) leaves the rail entirely", () => {
+    const connections = [
+      connection({ id: "conn-empty", providerId: "mystery", label: "Mystery" }),
+      connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
+    ];
+
+    const groups = buildStartModelMenuGroups(connections, catalog, undefined, {
+      connectionId: "conn-a",
+      modelId: "claude-opus",
+    });
+
+    expect(groups.map((g) => g.connectionId)).toEqual(["conn-a"]);
   });
 
   it("no explicit pick (current pair = active connection's default): the active connection's group carries the current mark, every other group has none", () => {
@@ -569,83 +585,6 @@ describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B — grouped New Sess
     });
 
     expect(groups.map((g) => g.providerId)).toEqual(["anthropic", "kimi"]);
-  });
-});
-
-describe("buildStartModelPopularRows (TASK.106 §6 — Popular strip, owner decision 16.08)", () => {
-  const catalog: CatalogSummary = [
-    {
-      id: "z-ai",
-      name: "Z.AI (GLM)",
-      authKind: "api_key",
-      models: [{ id: "glm-5.3", name: "GLM-5.3" }],
-    },
-    {
-      id: "anthropic",
-      name: "Anthropic",
-      authKind: "api_key",
-      models: [{ id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" }],
-    },
-    {
-      id: "openai",
-      name: "OpenAI",
-      authKind: "api_key",
-      models: [{ id: "gpt-5.1", name: "GPT-5.1" }],
-    },
-  ];
-
-  function groupsFor(connections: ReturnType<typeof connection>[]): ReturnType<typeof buildStartModelMenuGroups> {
-    return buildStartModelMenuGroups(connections, catalog, undefined, { connectionId: connections[0]?.id, modelId: "glm-5.3" });
-  }
-
-  const picks = [
-    { connectionProviderId: "z-ai", modelId: "glm-5.3" },
-    { connectionProviderId: "anthropic", modelId: "claude-sonnet-4-20250514" },
-    { connectionProviderId: "moonshot", modelId: "kimi-k2-0711-preview" },
-  ];
-
-  it("resolves picks against live groups: connected provider + catalog id → row; the rest drop out silently", () => {
-    const connections = [
-      connection({ id: "conn-z", providerId: "z-ai", label: "Z.AI" }),
-      connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
-    ];
-
-    const rows = buildStartModelPopularRows(groupsFor(connections), picks, { connectionId: "conn-z", modelId: "glm-5.3" });
-
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ connectionId: "conn-z", id: "glm-5.3", name: "GLM-5.3", current: true });
-    expect(rows[1]).toEqual({ connectionId: "conn-a", id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", current: false });
-  });
-
-  it("matches by PROVIDER, not connection id: a second connection of the same provider serves the pick", () => {
-    const connections = [
-      connection({ id: "conn-main", providerId: "z-ai", label: "Z.AI main" }),
-      connection({ id: "conn-second", providerId: "z-ai", label: "Z.AI second" }),
-    ];
-
-    const rows = buildStartModelPopularRows(groupsFor(connections), picks, { connectionId: "conn-second", modelId: "glm-5.3" });
-
-    // The FIRST connected group of that provider serves the pick; the
-    // current mark still keys off the pair's real connection id.
-    expect(rows[0]).toEqual({ connectionId: "conn-main", id: "glm-5.3", name: "GLM-5.3", current: false });
-  });
-
-  it("current marks the current PAIR only (same model id on another connection stays unmarked)", () => {
-    const connections = [
-      connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
-      connection({ id: "conn-a2", providerId: "z-ai", label: "Z.AI" }),
-    ];
-
-    const rows = buildStartModelPopularRows(groupsFor(connections), picks, { connectionId: "conn-a2", modelId: "glm-5.3" });
-
-    expect(rows.find((r) => r.id === "claude-sonnet-4-20250514")?.current).toBe(false);
-    expect(rows.find((r) => r.id === "glm-5.3")?.current).toBe(true);
-  });
-
-  it("empty strip when nothing resolves (no connections, or picks' models all absent from the catalog)", () => {
-    expect(buildStartModelPopularRows([], picks, { connectionId: undefined, modelId: "x" })).toEqual([]);
-    const onlyOpenai = [connection({ id: "conn-o", providerId: "openai", label: "OpenAI" })];
-    expect(buildStartModelPopularRows(groupsFor(onlyOpenai), picks, { connectionId: "conn-o", modelId: "gpt-5.1" })).toEqual([]);
   });
 });
 
