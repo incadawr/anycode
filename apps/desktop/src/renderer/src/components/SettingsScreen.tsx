@@ -94,7 +94,8 @@ import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
 import { ClaudeEnginePane } from "./ClaudeEnginePane.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
-import { EngineProxyField } from "./EngineProxyField.js";
+import { ProxyProfilesPane } from "./ProxyProfilesPane.js";
+import { ProxyRefPicker } from "./ProxyRefPicker.js";
 import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
@@ -104,7 +105,7 @@ import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane } from "./SubagentsPane.js";
 import { ProfilePane } from "./ProfilePane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
-import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Terminal } from "./icons.js";
+import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Terminal } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
@@ -113,7 +114,7 @@ import "../settings.css";
 
 const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "network" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -137,6 +138,12 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
   { id: "claude", label: "Claude", description: "Discover and verify the Claude Code agent engine.", icon: Cube },
   { id: "permissions", label: "Permissions", description: "Rules that let tools run without asking.", icon: Check },
   { id: "tools", label: "Tools", description: "Concurrency, stall timeout, and turn limits.", icon: Terminal },
+  {
+    id: "network",
+    label: "Network",
+    description: "Named proxy profiles, and the proxy this app uses by default.",
+    icon: Globe,
+  },
   { id: "mcp", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
   {
     id: "skills",
@@ -169,6 +176,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   claude: ["claude", "agent", "engine", "sign in", "anthropic", "cli", "binary", "proxy"],
   permissions: ["always allow", "rules", "bash", "pattern", "tool", "trusted", "binary", "consent", "security"],
   tools: ["concurrency", "stall timeout", "max turns", "tool"],
+  network: ["proxy", "network", "system proxy", "no proxy", "authentication", "check connection"],
   mcp: ["mcp", "server", "status"],
   skills: ["skill", "skills", "import", "enable"],
   subagents: ["agent", "agents", "subagent", "subagents", "persona", "agent_type", "built-in"],
@@ -1345,12 +1353,16 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
 
             {activePane === "codex" && <CodexEnginePane onRequestCloseSettings={onClose} />}
 
-            {/* TASK.139 lane B: engine-level proxy, stacked after the pane it belongs to — not a patch to CodexEnginePane itself. */}
-            {activePane === "codex" && <EngineProxyField engine="codex" store={store} />}
+            {/* TASK.141: the engine's proxy is now a REFERENCE into the named
+                registry, not a URL field — one instance of the same picker the
+                connection drawer and the Network pane's app rung use. Stacked
+                after the pane it belongs to, not patched into CodexEnginePane
+                itself (TASK.139's reasoning, unchanged). */}
+            {activePane === "codex" && <ProxyRefPicker scope={{ kind: "engine", engine: "codex" }} store={store} />}
 
             {activePane === "claude" && <ClaudeEnginePane />}
 
-            {activePane === "claude" && <EngineProxyField engine="claude" store={store} />}
+            {activePane === "claude" && <ProxyRefPicker scope={{ kind: "engine", engine: "claude" }} store={store} />}
 
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 
@@ -1400,6 +1412,13 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                 </div>
               </section>
             )}
+
+            {/* TASK.141: the app rung — the bottom of every ladder — sits above
+                the registry it picks from, so "what does this app use by
+                default" is answered before "what profiles exist". */}
+            {activePane === "network" && <ProxyRefPicker scope={{ kind: "app" }} store={store} />}
+
+            {activePane === "network" && <ProxyProfilesPane store={store} />}
 
           {activePane === "mcp" && <McpServersPane servers={mcpServers} tabId={activeTabId ?? undefined} />}
 

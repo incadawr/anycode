@@ -82,7 +82,6 @@ import type {
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
   CustomProviderRecord,
-  EngineProxySetRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -90,6 +89,17 @@ import type {
   SettingsPatch,
   SettingsSnapshot,
 } from "../../shared/settings";
+// TASK.141: the proxy-registry contract (a frozen shared/** module, imported
+// directly — same convention as preview-panel/md-preview above).
+import type {
+  ProxyCheckRequest,
+  ProxyCheckResult,
+  ProxyProfileDeleteRequest,
+  ProxyProfileDeleteResult,
+  ProxyProfileUpsertRequest,
+  ProxyRefSetRequest,
+} from "../../shared/proxy";
+
 import type {
   McpConfigDeleteRequest,
   McpConfigGetRequest,
@@ -422,13 +432,25 @@ declare global {
         // request outcome updates a connection's advisory health — no payload,
         // same shape as `onEnginesChanged` above.
         onProviderHealthChanged(callback: () => void): () => void;
-        // TASK.139 lane A: sets/clears settings.<engine>.proxyUrl, the
-        // engine-level proxy that sits ABOVE the connection-level one
-        // (TASK.132) in the priority ladder. `proxyUrl: ""` is the clear
-        // sentinel — never omission. Never carries a secret directly (the
-        // proxy URL's userinfo is custody-equivalent to the connection-level
-        // field, not a vault secret); resolves with a fresh snapshot on success.
-        engineProxySet(req: EngineProxySetRequest): Promise<SettingsMutationResult>;
+        // TASK.141: the named proxy registry (shared/proxy.ts). `upsert`
+        // without an id CREATES and reports the minted id back as
+        // `createdProxyProfileId`; `delete` REFUSES while any scope still
+        // references the profile and names the consumers in the refusal;
+        // `refSet` points ONE app/engine scope at a profile (a connection's ref
+        // rides connection-create/update instead); `check` spawns a probe child
+        // with the profile's materialised env.
+        //
+        // The password action on `upsert` and the target/verdict shape on
+        // `check` are written out here rather than imported: they are the two
+        // contracts the design review reshaped (H-01, B-11) after lane A froze
+        // its first cut, and this is the same "duplicated on purpose"
+        // convention this file already uses for shapes it cannot import. The
+        // upsert/check REQUEST types are intersected with the shared ones, so
+        // the mirrors collapse into them the moment lane A lands the reshape.
+        proxyProfileUpsert(req: ProxyProfileUpsertRequest): Promise<SettingsMutationResult>;
+        proxyProfileDelete(req: ProxyProfileDeleteRequest): Promise<ProxyProfileDeleteResult>;
+        proxyRefSet(req: ProxyRefSetRequest): Promise<SettingsMutationResult>;
+        proxyCheck(req: ProxyCheckRequest): Promise<ProxyCheckResult>;
       };
       // TASK.54 (cut §9.2/§13.1): custom OpenAI-compatible model-provider
       // CRUD + guarded `/v1/models` preview fetch (main/provider-ipc.ts owns

@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import type { AnycodeSettings, ProviderConnection } from "../shared/settings.js";
 import { isProxyUrl } from "../shared/settings.js";
 import type { ProxyProfile, ProxyScopeId } from "../shared/proxy.js";
-import { proxyProfiles, readProxyScope } from "../shared/proxy.js";
+import { isProxyProfileUrl, proxyProfiles, readProxyScope } from "../shared/proxy.js";
 
 /**
  * Everything main needs to know about ONE scope kind. `read` answers the ladder
@@ -52,8 +52,8 @@ function connectionOf(settings: AnycodeSettings, scope: ProxyScopeId): ProviderC
 }
 
 /**
- * Drops a block that a ref/legacy removal emptied. Same only-truthy-on-disk
- * hygiene `handleEngineProxySet` already applies: a user who merely visited the
+ * Drops a block that a ref/legacy removal emptied — the only-truthy-on-disk
+ * hygiene every settings writer here applies: a user who merely visited the
  * picker must not permanently acquire a `"codex": {}` (or `"network": {}`) husk
  * in settings.json.
  */
@@ -87,9 +87,9 @@ export const PROXY_SCOPE_BINDINGS: Record<ProxyScopeId["kind"], ProxyScopeBindin
       if (scope.kind !== "engine") {
         return;
       }
-      // Two concrete branches rather than one union-keyed write, the same
-      // reasoning `handleEngineProxySet` states: the two blocks are different
-      // types and a keyed write would need a cast that discards the checking.
+      // Two concrete branches rather than one union-keyed write: the two
+      // blocks are different types and a keyed write would need a cast that
+      // discards exactly the checking this is here for.
       if (scope.engine === "codex") {
         const block = { ...settings.codex };
         delete block.proxyUrl;
@@ -183,12 +183,10 @@ export function defaultProxyProfileId(): string {
 }
 
 /**
- * Dedup key of a proxy: scheme + host + port + the login, with the PASSWORD
- * deliberately excluded (and userinfo in `url` ignored — `URL.host` never
- * carries it). Two scopes holding the same corporate
- * `http://user:pass@proxy:3128` must converge on ONE profile — that convergence
- * is the whole point of the registry — and two strings differing only in the
- * password are the same account typed twice, not two proxies.
+ * Dedup key of a proxy: scheme + host + port + the login (userinfo in `url` is
+ * ignored — `URL.host` never carries it). This is the CHEAP half of the
+ * comparison; the password half is done separately against the vault, because it
+ * is the only half that is neither in this document nor readable synchronously.
  *
  * One derivation for both sides of the comparison, so an incoming legacy string
  * and an already-imported profile can never be judged by different rules.
@@ -223,16 +221,42 @@ export function uniqueProxyProfileName(settings: AnycodeSettings, desired: strin
   }
 }
 
+/**
+ * What the vault knows about ONE profile's password (design review B-08). The
+ * third arm is the reason this is not `string | undefined`: an entry that EXISTS
+ * but cannot be decrypted (a keychain identity change, a copied secrets.json) is
+ * not the same fact as "there is no password", and treating the two alike is
+ * precisely how a dedup would merge two different credentials.
+ */
+export type ProxyPasswordProbe =
+  | { state: "unset" }
+  | { state: "value"; value: string }
+  | { state: "unreadable" };
+
+/** Everything the (now vault-aware) legacy import needs from outside the settings document. */
+export interface LegacyProxyImportDeps {
+  /**
+   * The decrypted password of an EXISTING registry profile. Required, not
+   * optional: without it the dedup below can only compare half a credential, and
+   * a half-comparison is what makes it unsafe.
+   */
+  readPassword: (profileId: string) => Promise<ProxyPasswordProbe>;
+  /** Mints a fresh profile id; injected for determinism in tests. */
+  genId?: () => string;
+}
+
 /** Outcome of a legacy import: which profile the scope should now reference, and the password that has to reach the vault. */
 export interface LegacyProxyImport {
   profileId: string;
   /**
-   * The password that was embedded in the legacy string's userinfo, decoded.
-   * The caller persists it under `proxyProfileSecretKey(profileId)` — this
-   * function is synchronous and pure, and the vault is neither.
+   * The password embedded in the legacy string's userinfo, decoded — present
+   * ONLY together with `created: true`. A deduped import never carries one: a
+   * match now REQUIRES the passwords to be equal already, so there is nothing to
+   * write, and writing anyway is exactly the defect that made this async (it
+   * silently re-authenticated every other consumer of the matched profile).
    */
   password?: string;
-  /** False when an existing profile matched (deduped) — the caller then leaves the registry alone. */
+  /** False when an existing profile matched (deduped) — the caller then leaves the registry and the vault alone. */
   created: boolean;
 }
 
@@ -245,19 +269,26 @@ export interface LegacyProxyImport {
  * "same proxy", and three connections sharing one corporate string would end up
  * as three twin profiles.
  *
- * Runs ONLY on a write. Reading a legacy string changes nothing on disk — that
- * is what keeps an untouched settings.json byte-identical and lets a user who
- * never opens the picker keep working exactly as before.
+ * Runs ONLY on the explicit `PROXY_REF_LEGACY` wire action (design review
+ * H-04) — never on a read, and never on the automatic doctor/`lastCheck`/
+ * binary-path writes those same blocks receive in the background. That is what
+ * keeps an untouched settings.json byte-identical and lets a user who never
+ * opens the picker keep working exactly as before.
  *
  * An inline `user:pass@` is split apart here: `user` becomes the profile's
  * `login` (settings.json, not a secret) and `pass` comes back for the vault, so
  * the import is also the moment the password stops living in a 0644 file.
+ *
+ * ASYNC and vault-aware since design review B-08: the dedup compares the FULL
+ * credential (normalised url + login + decrypted password), and the password
+ * half lives only in the vault. See `sameCredential` for what an unreadable
+ * password means.
  */
-export function importLegacyProxy(
+export async function importLegacyProxy(
   settings: AnycodeSettings,
   legacyUrl: string,
-  genId: () => string = defaultProxyProfileId,
-): LegacyProxyImport | undefined {
+  deps: LegacyProxyImportDeps,
+): Promise<LegacyProxyImport | undefined> {
   if (!isProxyUrl(legacyUrl)) {
     return undefined;
   }
@@ -269,25 +300,37 @@ export function importLegacyProxy(
   }
   const login = decodeURIComponent(url.username);
   const password = url.password === "" ? undefined : decodeURIComponent(url.password);
-  const key = proxyDedupKey(legacyUrl, login);
-  // `undefined` here is unreachable after the parse above; comparing it against
-  // an unparseable profile's equally-undefined key would dedupe two broken rows
-  // into one, so the branch is closed explicitly rather than relied upon.
-  const existing =
-    key === undefined ? undefined : proxyProfiles(settings).find((profile) => profileDedupKey(profile) === key);
-  if (existing !== undefined) {
-    return { profileId: existing.id, ...(password !== undefined ? { password } : {}), created: false };
-  }
   // Stored without userinfo — the credential halves live in `login` + the vault
   // from here on, which is the at-rest half of the custody fix.
   const bare = new URL(legacyUrl);
   bare.username = "";
   bare.password = "";
+  const bareUrl = bare.toString();
+  // The registry's custody rule is stricter than TASK.132's legacy predicate
+  // (design review B-06): a profile url must be a bare proxy endpoint, with no
+  // path/query/fragment. A legacy string that carries one — a PAC url pasted
+  // into the proxy field, most likely — is REFUSED conversion rather than
+  // silently rewritten into a different endpoint. It keeps working as the legacy
+  // string it already is; only the "make it a profile" action fails, loudly.
+  if (!isProxyProfileUrl(bareUrl)) {
+    return undefined;
+  }
+  const key = proxyDedupKey(legacyUrl, login);
+  // `undefined` here is unreachable after the parse above; comparing it against
+  // an unparseable profile's equally-undefined key would dedupe two broken rows
+  // into one, so the branch is closed explicitly rather than relied upon.
+  const candidates =
+    key === undefined ? [] : proxyProfiles(settings).filter((profile) => profileDedupKey(profile) === key);
+  for (const candidate of candidates) {
+    if (await sameCredential(candidate, password, deps)) {
+      return { profileId: candidate.id, created: false };
+    }
+  }
   const profile: ProxyProfile = {
-    id: genId(),
+    id: (deps.genId ?? defaultProxyProfileId)(),
     name: uniqueProxyProfileName(settings, url.host),
     mode: "manual",
-    url: bare.toString(),
+    url: bareUrl,
     ...(login !== "" ? { login } : {}),
   };
   settings.network = {
@@ -295,4 +338,32 @@ export function importLegacyProxy(
     proxyProfiles: [...proxyProfiles(settings), profile],
   };
   return { profileId: profile.id, ...(password !== undefined ? { password } : {}), created: true };
+}
+
+/**
+ * True when an existing profile carries exactly the credential the incoming
+ * legacy string does — the half of the dedup that needs the vault (design review
+ * B-08).
+ *
+ * Two strings that agree on scheme/host/port/login but disagree on the password
+ * are two different accounts on one proxy, not one account typed twice. Merging
+ * them would silently REPLACE the password every other consumer of that profile
+ * authenticates with, and the first symptom would be a 407 storm on connections
+ * the user never touched.
+ *
+ * An UNREADABLE password answers "not the same": we cannot prove equality, and
+ * the safe direction under uncertainty is to mint a separate profile (a
+ * duplicate row the user can merge by hand) rather than to alias two credentials
+ * we never compared.
+ */
+async function sameCredential(
+  candidate: ProxyProfile,
+  password: string | undefined,
+  deps: LegacyProxyImportDeps,
+): Promise<boolean> {
+  const probe = await deps.readPassword(candidate.id);
+  if (probe.state === "unreadable") {
+    return false;
+  }
+  return password === undefined ? probe.state === "unset" : probe.state === "value" && probe.value === password;
 }

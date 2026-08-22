@@ -82,16 +82,6 @@ export const CONNECTION_DELETE_CHANNEL = "anycode:connection-delete";
 /** invoke channel: re-check a connection's health ({id}) — scaffold (W11 wires the probe). */
 export const CONNECTION_CHECK_CHANNEL = "anycode:connection-check";
 
-/**
- * invoke channel: set/clear ONE engine's proxy (TASK.139) — `{engine, proxyUrl}`.
- * Deliberately its own channel rather than a `settings-set` patch: the persisted
- * schema for `codex`/`claude` is lenient (`z.string()`, settings/schema.ts), so a
- * generic patch would let an unvalidated value onto disk, while this channel
- * refines against `isProxyUrl` at the trust boundary — the same split the
- * connection CRUD channels make against the equally lenient `connections[]`.
- */
-export const ENGINE_PROXY_SET_CHANNEL = "anycode:engine-proxy-set";
-
 // ── settings schema (design §2; mirrored 1:1 by the zod schema in settings/schema.ts) ──
 
 /**
@@ -187,8 +177,11 @@ export interface ProviderConnection {
    *
    * CUSTODY: stored VERBATIM and may carry `user:pass@` userinfo (authenticated
    * proxies are the dominant real-world case), so the credential lives in plain
-   * text in the 0644 settings.json, rides the renderer snapshot, and is visible
-   * in the env of every child process the host spawns. That exposure is the
+   * text in the 0644 settings.json and is visible in the env of every child
+   * process the host spawns. It NO LONGER rides the renderer snapshot: TASK.141
+   * (design review H-02) projects every snapshot through `maskLegacyProxyUrls`,
+   * so what crosses to the renderer is `user:***@host:port` while main keeps the
+   * real string for the spawn. The remaining exposure is the
    * owner's decision, not an oversight: this is network infrastructure config
    * with parity to a shell-exported `https_proxy`, it has no vault key, and
    * children inheriting it is precisely the feature — it is deliberately NOT
@@ -640,6 +633,13 @@ export type CatalogSummary = CatalogSummaryEntry[];
 
 /** Everything the renderer needs to render Settings/Welcome without a second round-trip. */
 export interface SettingsSnapshot {
+  /**
+   * The settings document, PROJECTED for the renderer (TASK.141, design review
+   * H-02): every legacy proxy string's userinfo is masked
+   * (`maskLegacyProxyUrls`), because a password must never cross this boundary
+   * and a plain snapshot used to carry `user:pass@` in full. Byte-identical to
+   * the on-disk document whenever no legacy string carries a credential.
+   */
   settings: AnycodeSettings;
   secrets: SecretStatus[];
   /** apiKey(env|vault) && model(env|settings) — the auto-tab gate (§6). */
@@ -832,13 +832,6 @@ export interface ConnectionDeleteRequest {
 
 export interface ConnectionCheckRequest {
   id: string;
-}
-
-/** Payload of `ENGINE_PROXY_SET_CHANNEL` (TASK.139) — one engine's proxy, set or cleared. */
-export interface EngineProxySetRequest {
-  engine: "codex" | "claude";
-  /** Non-empty is validated by `isProxyUrl` at the IPC boundary; `""` is the clear sentinel. */
-  proxyUrl: string;
 }
 
 export interface SecretSetRequest {

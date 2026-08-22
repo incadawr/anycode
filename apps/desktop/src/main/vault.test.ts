@@ -292,6 +292,61 @@ describe("Vault.statuses — multi-key (slice 2.5)", () => {
       "proxy.profile.proxy-corp.password",
     ]);
   });
+
+  // B-09. `passwordSet` in the profile editor is DERIVED from this projection
+  // and from nothing else: present-with-`set` means "there is a password",
+  // ABSENT means "there is none". No negative record is written anywhere, and
+  // no value ever crosses — which is what lets the editor render a "password is
+  // set" placeholder for a value it can never read.
+  it("B-09: a profile with no password produces NO entry at all — absence is the answer", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    const keys = (await v.statuses({})).map((s) => s.key);
+    expect(keys).toEqual(["provider.apiKey"]);
+    expect(keys.some((key) => key.startsWith("proxy.profile."))).toBe(false);
+  });
+
+  // B-09: the status projection must not ask `secretEnvFor` about a proxy key —
+  // that function refuses one fail-closed, so a projection that asked would
+  // throw and take the whole `settings-get` down with it.
+  it("B-09: statuses never throws for a proxy key, and the value never appears in the projection", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await v.setSecret("proxy.profile.proxy-corp.password", "pr0xy-p@ss", { allowWeak: false });
+    const statuses = await v.statuses({ ANYCODE_API_KEY: "sk-env" }, catalogIds);
+    expect(JSON.stringify(statuses)).not.toContain("pr0xy-p@ss");
+  });
+
+  // An entry that exists but will not decrypt still reads `set` (there IS a
+  // password) with source `none` (nothing usable wins at spawn) — the same
+  // shape a provider credential takes, and the honest one for the editor.
+  it("B-09: an undecryptable proxy password reads set:true, source:none", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await v.setSecret("proxy.profile.proxy-corp.password", "pw", { allowWeak: false });
+    const broken = makeVault(new FakeSafeStorage({ available: true, corruptDecrypt: true }), "darwin");
+    const status = (await broken.statuses({})).find((s) => s.key === "proxy.profile.proxy-corp.password");
+    expect(status).toEqual({
+      key: "proxy.profile.proxy-corp.password",
+      set: true,
+      source: "none",
+      tier: "os_encrypted",
+    });
+  });
+});
+
+describe("Vault.probeSecret — unset vs. undecryptable (B-08)", () => {
+  // `getSecretValue` collapses both to undefined, and every CREDENTIAL consumer
+  // is right to. The legacy-import dedup is not: it decides whether two
+  // configurations are the SAME credential, and "unknown" is not "equal".
+  it("distinguishes the three states", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    expect(await v.probeSecret("proxy.profile.proxy-corp.password")).toEqual({ state: "unset" });
+    await v.setSecret("proxy.profile.proxy-corp.password", "pw", { allowWeak: false });
+    expect(await v.probeSecret("proxy.profile.proxy-corp.password")).toEqual({ state: "value", value: "pw" });
+
+    const broken = makeVault(new FakeSafeStorage({ available: true, corruptDecrypt: true }), "darwin");
+    expect(await broken.probeSecret("proxy.profile.proxy-corp.password")).toEqual({ state: "unreadable" });
+    // The credential-shaped read still collapses both to undefined.
+    expect(await broken.getSecretValue("proxy.profile.proxy-corp.password")).toBeUndefined();
+  });
 });
 
 describe("Vault OAuth token blob (slice 2.5 §3.3 + TASK.45: keyed by CONNECTION id)", () => {

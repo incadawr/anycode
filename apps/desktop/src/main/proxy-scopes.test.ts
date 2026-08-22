@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { PROXY_REF_DIRECT, proxyProfiles, readProxyScope, type ProxyProfile, type ProxyScopeId } from "../shared/proxy.js";
 import type { AnycodeSettings, ProviderConnection } from "../shared/settings.js";
+import type { LegacyProxyImportDeps, ProxyPasswordProbe } from "./proxy-scopes.js";
 import {
   allProxyScopes,
   importLegacyProxy,
@@ -38,6 +39,19 @@ function withConnections(connections: ProviderConnection[], over: Partial<Anycod
 function ids(...values: string[]): () => string {
   let i = 0;
   return () => values[i++] ?? `proxy-overflow-${i}`;
+}
+
+/**
+ * Import deps with a deterministic id minter and an explicit view of what the
+ * vault holds per profile (B-08: the dedup compares the DECRYPTED password, so
+ * the vault is part of the input, not an afterthought). Unlisted profiles read
+ * as "no password stored".
+ */
+function importDeps(
+  genId: () => string,
+  passwords: Record<string, ProxyPasswordProbe> = {},
+): LegacyProxyImportDeps {
+  return { genId, readPassword: async (profileId) => passwords[profileId] ?? { state: "unset" } };
 }
 
 const APP: ProxyScopeId = { kind: "app" };
@@ -159,9 +173,9 @@ describe("proxyProfileConsumers — what blocks a delete", () => {
 });
 
 describe("importLegacyProxy — one profile per proxy, not per scope", () => {
-  it("mints a manual profile named host:port and strips the userinfo out of the stored URL", () => {
+  it("mints a manual profile named host:port and strips the userinfo out of the stored URL", async () => {
     const draft = settings();
-    const imported = importLegacyProxy(draft, "http://user:pass@proxy.corp:3128", ids("proxy-1"));
+    const imported = await importLegacyProxy(draft, "http://user:pass@proxy.corp:3128", importDeps(ids("proxy-1")));
     expect(imported).toEqual({ profileId: "proxy-1", password: "pass", created: true });
     expect(proxyProfiles(draft)).toEqual([
       { id: "proxy-1", name: "proxy.corp:3128", mode: "manual", url: "http://proxy.corp:3128/", login: "user" },
@@ -169,35 +183,92 @@ describe("importLegacyProxy — one profile per proxy, not per scope", () => {
   });
 
   // The registry's whole point: three connections carrying the same corporate
-  // string converge on ONE profile, editable in one place.
-  it("dedupes by URL + login instead of minting a twin", () => {
+  // string converge on ONE profile, editable in one place. B-08 sharpened the
+  // rule — convergence now requires the PASSWORD to match too, so the vault view
+  // has to reflect what the first import stored.
+  it("dedupes by URL + login + password instead of minting a twin", async () => {
     const draft = settings();
-    const first = importLegacyProxy(draft, "http://user:pass@proxy.corp:3128", ids("proxy-1"));
-    const second = importLegacyProxy(draft, "http://user:pass@proxy.corp:3128", ids("proxy-2"));
+    const first = await importLegacyProxy(draft, "http://user:pass@proxy.corp:3128", importDeps(ids("proxy-1")));
+    const second = await importLegacyProxy(
+      draft,
+      "http://user:pass@proxy.corp:3128",
+      importDeps(ids("proxy-2"), { "proxy-1": { state: "value", value: "pass" } }),
+    );
     expect(second?.profileId).toBe(first?.profileId);
     expect(second?.created).toBe(false);
+    // A deduped import carries NO password: the match proved the stored one is
+    // already identical, so there is nothing for the caller to write.
+    expect(second?.password).toBeUndefined();
     expect(proxyProfiles(draft)).toHaveLength(1);
   });
 
-  it("treats a different login on the same host as a DIFFERENT proxy account", () => {
+  it("treats a different login on the same host as a DIFFERENT proxy account", async () => {
     const draft = settings();
-    importLegacyProxy(draft, "http://alice:pw@proxy.corp:3128", ids("proxy-1"));
-    importLegacyProxy(draft, "http://bob:pw@proxy.corp:3128", ids("proxy-2"));
+    await importLegacyProxy(draft, "http://alice:pw@proxy.corp:3128", importDeps(ids("proxy-1")));
+    await importLegacyProxy(
+      draft,
+      "http://bob:pw@proxy.corp:3128",
+      importDeps(ids("proxy-2"), { "proxy-1": { state: "value", value: "pw" } }),
+    );
     expect(proxyProfiles(draft)).toHaveLength(2);
   });
 
-  it("suffixes a colliding name rather than shadowing the existing profile", () => {
+  // B-08: the dedup used to compare url+login ONLY, so two accounts that share a
+  // host and a username but differ in password merged — and the merge silently
+  // re-pointed the password every EXISTING consumer of that profile
+  // authenticates with.
+  it("B-08: a different password on the same host+login mints a separate profile, never overwrites", async () => {
+    const draft = settings();
+    await importLegacyProxy(draft, "http://user:secret-A@proxy.corp:3128", importDeps(ids("proxy-1")));
+    const second = await importLegacyProxy(
+      draft,
+      "http://user:secret-B@proxy.corp:3128",
+      importDeps(ids("proxy-2"), { "proxy-1": { state: "value", value: "secret-A" } }),
+    );
+    expect(second).toEqual({ profileId: "proxy-2", password: "secret-B", created: true });
+    expect(proxyProfiles(draft)).toHaveLength(2);
+  });
+
+  // B-08: "cannot read the stored password" is not "the passwords are equal".
+  // Under uncertainty the safe move is a separate profile the user can merge by
+  // hand, never an alias between two credentials nobody compared.
+  it("B-08: an UNREADABLE stored password blocks the dedup", async () => {
+    const draft = settings();
+    await importLegacyProxy(draft, "http://user:pass@proxy.corp:3128", importDeps(ids("proxy-1")));
+    const second = await importLegacyProxy(
+      draft,
+      "http://user:pass@proxy.corp:3128",
+      importDeps(ids("proxy-2"), { "proxy-1": { state: "unreadable" } }),
+    );
+    expect(second?.created).toBe(true);
+    expect(second?.profileId).toBe("proxy-2");
+  });
+
+  // The credential-free case is symmetric: a password-less legacy string matches
+  // only a profile the vault holds NOTHING for.
+  it("B-08: a password-less string does not dedupe onto a profile that has a password", async () => {
+    const draft = settings();
+    await importLegacyProxy(draft, "http://user:pass@proxy.corp:3128", importDeps(ids("proxy-1")));
+    const second = await importLegacyProxy(
+      draft,
+      "http://user@proxy.corp:3128",
+      importDeps(ids("proxy-2"), { "proxy-1": { state: "value", value: "pass" } }),
+    );
+    expect(second?.created).toBe(true);
+  });
+
+  it("suffixes a colliding name rather than shadowing the existing profile", async () => {
     const draft = settings({
       network: { proxyProfiles: [{ id: "proxy-0", name: "proxy.corp:3128", mode: "system" }] },
     });
-    const imported = importLegacyProxy(draft, "http://proxy.corp:3128", ids("proxy-1"));
+    const imported = await importLegacyProxy(draft, "http://proxy.corp:3128", importDeps(ids("proxy-1")));
     expect(imported?.created).toBe(true);
     expect(proxyProfiles(draft)[1]?.name).toBe("proxy.corp:3128 (2)");
   });
 
-  it("carries no login/password keys for a credential-free legacy string", () => {
+  it("carries no login/password keys for a credential-free legacy string", async () => {
     const draft = settings();
-    const imported = importLegacyProxy(draft, "http://proxy.corp:3128", ids("proxy-1"));
+    const imported = await importLegacyProxy(draft, "http://proxy.corp:3128", importDeps(ids("proxy-1")));
     expect(imported).toEqual({ profileId: "proxy-1", created: true });
     expect(proxyProfiles(draft)[0]).toEqual({
       id: "proxy-1",
@@ -207,23 +278,38 @@ describe("importLegacyProxy — one profile per proxy, not per scope", () => {
     });
   });
 
-  it("decodes percent-encoded userinfo back to the real credential", () => {
+  it("decodes percent-encoded userinfo back to the real credential", async () => {
     const draft = settings();
-    const imported = importLegacyProxy(draft, "http://user%40corp:p%40ss@proxy.corp:3128", ids("proxy-1"));
+    const imported = await importLegacyProxy(
+      draft,
+      "http://user%40corp:p%40ss@proxy.corp:3128",
+      importDeps(ids("proxy-1")),
+    );
     expect(imported?.password).toBe("p@ss");
     expect(proxyProfiles(draft)[0]?.login).toBe("user@corp");
   });
 
-  it("refuses a string that is not an http(s) proxy URL and leaves the registry untouched", () => {
+  it("refuses a string that is not an http(s) proxy URL and leaves the registry untouched", async () => {
     const draft = settings();
-    expect(importLegacyProxy(draft, "proxy.corp:3128", ids("proxy-1"))).toBeUndefined();
-    expect(importLegacyProxy(draft, "socks5://proxy.corp:1080", ids("proxy-1"))).toBeUndefined();
+    expect(await importLegacyProxy(draft, "proxy.corp:3128", importDeps(ids("proxy-1")))).toBeUndefined();
+    expect(await importLegacyProxy(draft, "socks5://proxy.corp:1080", importDeps(ids("proxy-1")))).toBeUndefined();
     expect("network" in draft).toBe(false);
   });
 
-  it("never dedupes against a system-mode profile (it has no URL to match)", () => {
+  // B-06: the registry's custody rule is stricter than TASK.132's legacy
+  // predicate. A legacy string carrying a path (a PAC url in the proxy field,
+  // most likely) keeps working AS a legacy string, but converting it would have
+  // to silently rewrite the endpoint — so the conversion is refused instead.
+  it("B-06: refuses to convert a legacy string with a path/query/fragment", async () => {
+    const draft = settings();
+    expect(await importLegacyProxy(draft, "http://proxy.corp:3128/pac", importDeps(ids("proxy-1")))).toBeUndefined();
+    expect(await importLegacyProxy(draft, "http://proxy.corp:3128/?a=1", importDeps(ids("proxy-1")))).toBeUndefined();
+    expect("network" in draft).toBe(false);
+  });
+
+  it("never dedupes against a system-mode profile (it has no URL to match)", async () => {
     const draft = settings({ network: { proxyProfiles: [{ id: "proxy-sys", name: "System", mode: "system" }] } });
-    const imported = importLegacyProxy(draft, "http://proxy.corp:3128", ids("proxy-1"));
+    const imported = await importLegacyProxy(draft, "http://proxy.corp:3128", importDeps(ids("proxy-1")));
     expect(imported?.created).toBe(true);
   });
 });

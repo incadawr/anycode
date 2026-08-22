@@ -17,6 +17,7 @@ import {
   isProxyProfileSecretKey,
   isProxyProfileUrl,
   isReservedProxyRef,
+  maskLegacyProxyUrls,
   maskProxyUrl,
   proxyPathFingerprint,
   proxyProfileSecretKey,
@@ -25,6 +26,9 @@ import {
   PROXY_REF_LEGACY,
   readProxyScope,
   resolveProxyLadder,
+  type ProxyCheckRequest,
+  type ProxyCheckResult,
+  type ProxyCheckVerdict,
   type ProxyProfile,
   type ProxyScopeId,
 } from "./proxy.js";
@@ -308,5 +312,99 @@ describe("proxyPathFingerprint — what a health reading was measured through", 
     const silent = withConnection({ id: "conn-1", providerId: "" });
     const direct = withConnection({ id: "conn-1", providerId: "", proxyRef: PROXY_REF_DIRECT });
     expect(proxyPathFingerprint(silent, CHAIN)).not.toBe(proxyPathFingerprint(direct, CHAIN));
+  });
+});
+
+// ── design-review regressions (TASK.141 lane A, gpt-5.6-sol xhigh) ──
+
+describe("B-06 — isProxyProfileUrl is a PROXY ENDPOINT rule, not a url rule", () => {
+  // A proxy is dialled as host:port. Anything after the authority is either a
+  // PAC url pasted into the wrong field or a typo, and both produce a client
+  // that connects to the right port and then speaks the wrong thing.
+  it("refuses a path, a query and a fragment", () => {
+    expect(isProxyProfileUrl("http://proxy.corp:3128/pac")).toBe(false);
+    expect(isProxyProfileUrl("http://proxy.corp:3128/?a=1")).toBe(false);
+    expect(isProxyProfileUrl("http://proxy.corp:3128/#frag")).toBe(false);
+  });
+
+  it("accepts the normalised bare authority (URL renders its path as `/`)", () => {
+    expect(isProxyProfileUrl("http://proxy.corp:3128/")).toBe(true);
+    expect(isProxyProfileUrl("http://proxy.corp")).toBe(true);
+  });
+
+  it("still refuses userinfo, a missing host, and a non-http scheme", () => {
+    expect(isProxyProfileUrl("http://user:pass@proxy.corp:3128")).toBe(false);
+    expect(isProxyProfileUrl("http://user@proxy.corp:3128")).toBe(false);
+    expect(isProxyProfileUrl("socks5://proxy.corp:1080")).toBe(false);
+    expect(isProxyProfileUrl("http://")).toBe(false);
+  });
+});
+
+describe("H-02 — maskLegacyProxyUrls, the renderer-safe projection", () => {
+  const legacy = "http://user:pass@proxy.corp:3128";
+
+  it("masks legacy userinfo on connections and both engine blocks", () => {
+    const current = settings({
+      provider: { connections: [{ id: "conn-1", providerId: "z-ai", proxyUrl: legacy }] },
+      codex: { proxyUrl: legacy },
+      claude: { proxyUrl: legacy },
+    });
+    const projected = maskLegacyProxyUrls(current);
+    const masked = "http://user:***@proxy.corp:3128/";
+    expect(projected.provider.connections[0]?.proxyUrl).toBe(masked);
+    expect(projected.codex?.proxyUrl).toBe(masked);
+    expect(projected.claude?.proxyUrl).toBe(masked);
+    expect(JSON.stringify(projected)).not.toContain("pass@");
+    // The input is never mutated — main keeps the real credential.
+    expect(current.codex?.proxyUrl).toBe(legacy);
+  });
+
+  // Byte-identity: without userinfo there is nothing to hide, and the SAME
+  // object comes back so a deep-equal snapshot assertion still describes the
+  // document rather than a projection of it.
+  it("returns the input unchanged when no legacy string carries a credential", () => {
+    const current = settings({
+      provider: { connections: [{ id: "conn-1", providerId: "z-ai", proxyUrl: "http://proxy.corp:3128" }] },
+      codex: { proxyUrl: "http://proxy.corp:3128" },
+    });
+    expect(maskLegacyProxyUrls(current)).toBe(current);
+  });
+
+  it("keeps the login half visible — it is not a secret and the picker has to name the item", () => {
+    const current = settings({ codex: { proxyUrl: "http://alice:pw@proxy.corp:3128" } });
+    expect(maskLegacyProxyUrls(current).codex?.proxyUrl).toContain("alice:***@");
+  });
+});
+
+describe("B-11 — the Check contract carries a target and an honesty flag", () => {
+  // Types are erased at runtime, so this pins the SHAPE the two sides agree on:
+  // lane B fills these fields, lane C renders them. A verdict alone was the
+  // defect — `ok` could be returned by a request that never touched the proxy.
+  it("a green verdict still says which target answered and whether the proxy was used", () => {
+    const result: ProxyCheckResult = {
+      ok: true,
+      verdict: "bypassed_by_no_proxy",
+      targetUrl: "https://api.anthropic.com",
+      proxyUsed: false,
+      shellOverride: false,
+    };
+    expect(result.ok && result.proxyUsed).toBe(false);
+    expect(result.ok && result.targetUrl).toBe("https://api.anthropic.com");
+  });
+
+  it("the request can name a connection or a bare url, and neither is required", () => {
+    const requests: ProxyCheckRequest[] = [
+      { profileId: "proxy-1" },
+      { profileId: "proxy-1", target: { kind: "connection", connectionId: "conn-1" } },
+      { profileId: "proxy-1", target: { kind: "url", url: "https://example.test" } },
+    ];
+    expect(requests.map((request) => request.target?.kind)).toEqual([undefined, "connection", "url"]);
+  });
+
+  // The three verdicts that used to be swallowed by a boolean: each of them is
+  // a green request that proves nothing about the proxy.
+  it("names the verdicts a boolean used to hide", () => {
+    const verdicts: ProxyCheckVerdict[] = ["direct", "bypassed_by_no_proxy", "socks_unsupported"];
+    expect(verdicts).toHaveLength(3);
   });
 });
