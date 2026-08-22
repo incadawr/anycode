@@ -355,3 +355,86 @@ describe("plan-approval ask deadline (TASK.27)", () => {
     ]);
   });
 });
+
+/**
+ * TASK.144: the always-allow seam the two ENGINE boots pass and the core boot
+ * deliberately does not (see PermissionRuleMatcher's header). These assert both
+ * halves: a matching rule is answered without ever reaching the UI, and a
+ * broker constructed without the seam is byte-identical to every pre-TASK.144
+ * one — which is what makes the core path's hook-can-still-ask invariant safe.
+ */
+describe("IpcPermissionBroker always-allow rules (TASK.144)", () => {
+  function makeRuledBroker(matches: (toolName: string, input: unknown) => boolean): {
+    broker: IpcPermissionBroker;
+    emitted: HostToUiMessage[];
+    seen: { toolName: string; input: unknown }[];
+  } {
+    const emitted: HostToUiMessage[] = [];
+    const seen: { toolName: string; input: unknown }[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, {
+      matches(toolName, input) {
+        seen.push({ toolName, input });
+        return matches(toolName, input);
+      },
+    });
+    return { broker, emitted, seen };
+  }
+
+  it("answers a matching ask with allow, without a permission_request and without parking it", async () => {
+    const { broker, emitted, seen } = makeRuledBroker(() => true);
+
+    await expect(broker.requestPermission(request)).resolves.toEqual({ behavior: "allow" });
+    // Nothing reached the UI at all — neither the ask nor a settle it would
+    // have to reconcile against an ask it never saw.
+    expect(emitted).toEqual([]);
+    expect(broker.pendingCount).toBe(0);
+    // The store is consulted with the ask's own toolName and raw input, never a
+    // translated one: a stored `Bash` rule must not vouch for `CodexExec`.
+    expect(seen).toEqual([{ toolName: "Write", input: request.input }]);
+  });
+
+  it("arms no deadline for a rule-allowed ask", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeRuledBroker(() => true);
+
+    await expect(broker.requestPermission(request)).resolves.toEqual({ behavior: "allow" });
+    await vi.advanceTimersByTimeAsync(PERMISSION_ASK_TIMEOUT_MS * 2);
+    expect(settled(emitted)).toEqual([]);
+  });
+
+  it("presents a non-matching ask exactly as before", async () => {
+    const { broker, emitted } = makeRuledBroker(() => false);
+    const decision = broker.requestPermission(request);
+
+    expect(broker.pendingCount).toBe(1);
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("does not queue behind a shown ask: a rule-allowed call resolves while another is in front of the UI", async () => {
+    const { broker, emitted } = makeRuledBroker((toolName) => toolName === "Read");
+    const shown = broker.requestPermission(request);
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
+
+    // The FIFO queue exists because the renderer has one modal slot. A rule
+    // match never needs that slot, so it must not inherit the queue's latency —
+    // otherwise an always-allowed read would still wait out the human.
+    const readRequest: PermissionRequest = { ...request, toolName: "Read", input: { file_path: "/workspace/a.txt" } };
+    await expect(broker.requestPermission(readRequest)).resolves.toEqual({ behavior: "allow" });
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
+    expect(broker.pendingCount).toBe(1);
+
+    broker.handleResponse(requestId(emitted), "allow");
+    await expect(shown).resolves.toMatchObject({ behavior: "allow" });
+  });
+
+  it("without the seam (the core boot's broker) every ask is still parked and presented", async () => {
+    const { broker, emitted } = makeBroker();
+    const decision = broker.requestPermission(request);
+
+    expect(broker.pendingCount).toBe(1);
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
+    broker.handleResponse(requestId(emitted), "allow");
+    await expect(decision).resolves.toMatchObject({ behavior: "allow" });
+  });
+});

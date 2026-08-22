@@ -118,7 +118,17 @@
  * rules instance is handed to Session, which appends to it when a
  * `permission_response` carries `remember` on an "allow" (data-plane half of
  * "Always allow"; main's `permission-rule-add` IPC is the control-plane half
- * that persists the rule for future boots, 2.2.2/2.2.4). boot()'s `finally`
+ * that persists the rule for future boots, 2.2.2/2.2.4).
+ *
+ * TASK.144 extends the SEED to the two engine boots (bootCodexSession /
+ * bootClaudeSession), which until now handed Session an empty store and so
+ * ignored settings.json entirely. Those two sessions have no core permission
+ * engine to wrap (`supportsCorePermissions` is false for both), so the rules
+ * instance goes to their IpcPermissionBroker instead — the only point their
+ * approval bridges pass through. The core boot's broker deliberately gets NO
+ * rules; permission-broker.ts's PermissionRuleMatcher header carries the
+ * reason (a PreToolUse hook may raise a rule-allowed call back up to "ask",
+ * and that upgrade must survive). boot()'s `finally`
  * scrubs SECRET_ENV_KEYS from this process's own `process.env` — after the
  * AiSdkModelPort above has already captured the key by value, and before any
  * turn (hence any Bash child) can possibly run — on both the success AND the
@@ -171,7 +181,6 @@ import {
   NodeMcpTransportFactory,
   RuleAwarePermissionEngine,
   SafeCommandPermissionEngine,
-  SessionPermissionRules,
   SqlitePersistenceAdapter,
   SwitchableModelPort,
   WriteBehindHistorySink,
@@ -667,10 +676,21 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   const args = parseHostArgs(process.argv.slice(2));
   const dbPath = resolveCodexDbPath(process.env);
   persistence = new SqlitePersistenceAdapter(dbPath);
+  // TASK.144: the persisted always-allow rules, seeded from the SAME
+  // settings.json the core boot reads. A Codex session has no core permission
+  // engine (`supportsCorePermissions` is false), so this one instance is both
+  // the broker's rule source and Session's append target — see the
+  // PermissionRuleMatcher header for why the core boot deliberately keeps its
+  // broker rule-free.
+  const rules = await seedAlwaysAllowRules(hostSettingsPathOverride());
   // TASK.102 CUT-S4 §4.1: a child-mode boot's broker wraps `emit` with the
   // permission-tap, exactly like the core path already did (§4.1's shared
   // helper) — Codex previously had none of this wiring (S2 built it core-only).
-  const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit);
+  const broker = new IpcPermissionBroker(
+    args.child !== undefined ? buildChildBrokerEmit(emit) : emit,
+    undefined, // default ask deadline
+    rules,
+  );
   const processOwnership = readHostProcessOwnership(
     process.env,
     process.pid,
@@ -900,7 +920,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     // pass-through), so this is exactly what `historyItems()` returns.
     bootHistory: booted.engine.historyItems(),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
-    rules: new SessionPermissionRules(),
+    // TASK.144: the SAME store the broker above matches against, so an
+    // in-session "Always allow" starts working from the very next ask instead
+    // of only after a restart re-seeds it from settings.json.
+    rules,
     // `model/list` is the native Codex capability authority. The closure reads
     // the engine's chosen model live, so switching to a text-only model closes
     // the Composer gate before a turn can be sent.
@@ -955,9 +978,17 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // and two copies of this two-line rule could drift into two databases.
   const dbPath = resolveCodexDbPath(process.env);
   persistence = new SqlitePersistenceAdapter(dbPath);
+  // TASK.144: same seed the codex boot above performs, for the same reason —
+  // a Claude session's approvals never pass through core's permission engine,
+  // so the broker is the only place a persisted rule can be honoured.
+  const rules = await seedAlwaysAllowRules(hostSettingsPathOverride());
   // TASK.102 CUT-S4 §4.1: same shared wrapping the codex boot above now gets —
   // Claude previously had none of this wiring at all (S2 built it core-only).
-  const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit);
+  const broker = new IpcPermissionBroker(
+    args.child !== undefined ? buildChildBrokerEmit(emit) : emit,
+    undefined, // default ask deadline
+    rules,
+  );
   const processOwnership = readClaudeHostProcessOwnership(
     process.env,
     process.pid,
@@ -1173,7 +1204,10 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
     hasTitle: connected.sessionMeta?.title !== undefined && connected.sessionMeta.title.length > 0,
-    rules: new SessionPermissionRules(),
+    // TASK.144: the SAME store the broker above matches against, so an
+    // in-session "Always allow" starts working from the very next ask instead
+    // of only after a restart re-seeds it from settings.json.
+    rules,
     // Without this seam the Composer never receives an `imageInput` verdict and
     // Session drops every attachment before the engine sees it (session.ts's
     // `imageInputEnabled?.() !== true` gate) — the second, independent reason

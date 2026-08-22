@@ -324,6 +324,24 @@ const GLOB_META_RE = /[*?[\]{!()]/;
  * `make -j4`: their first token (`git`/`node`/`make`) is a literal word,
  * the glob lives in a later token.
  */
+/**
+ * Tools whose approval subject is a shell COMMAND LINE, and whose always-allow
+ * patterns therefore go through `commandBinary`/`sanitizeBashPattern` and match
+ * per-segment. Mirrors `isCommandLineTool` in packages/core's
+ * permissions/rules.ts — the two must agree, or the modal would offer a pattern
+ * the matcher cannot use (or, worse, omit one and hand the user a bare
+ * allow-every-command rule instead).
+ *
+ * `CodexExec` (TASK.144) is the desktop Codex approval bridge's name for a
+ * `commandExecution` approval; its input carries the same `command: string`.
+ * `CodexApplyPatch` is deliberately NOT here: its input carries a `paths[]`
+ * array and no single subject, so it keeps the bare tool-level rule that
+ * `Edit`/`Write` already get.
+ */
+export function isCommandLineTool(toolName: string): boolean {
+  return toolName === "Bash" || toolName === "CodexExec";
+}
+
 export function sanitizeBashPattern(pattern: string): string {
   const tokens = tokenizeCommand(pattern);
   if (tokens.length === 0) {
