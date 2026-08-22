@@ -61,7 +61,19 @@ import {
   type ContextBudgetConfig,
 } from "../context/budget.js";
 import { HeuristicTokenizer, type Tokenizer } from "../context/tokenizer.js";
-import { DEFAULT_MAX_TURNS, DEFAULT_TOOL_CONCURRENCY, type ReasoningEffort } from "../types/config.js";
+import {
+  DEFAULT_MAX_TURNS,
+  DEFAULT_TOOL_CONCURRENCY,
+  MAX_CEILING_ROUNDS,
+  type ReasoningEffort,
+} from "../types/config.js";
+import {
+  acceptCeilingVerdict,
+  ceilingGrant,
+  ceilingWindowMs,
+  requestCeilingVerdict,
+  type CeilingConfig,
+} from "./ceiling.js";
 import type { DispatchContext } from "../dispatch/dispatcher.js";
 import { runToolBatches, type ToolSchedulerConfig } from "../dispatch/scheduler.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
@@ -140,6 +152,15 @@ export interface AgentLoopConfig {
    * is entitled only to the remainder.
    */
   deadlineAt?: number;
+  /**
+   * Turn-ceiling decision ladder (TASK.124 cut-1). Omitted => the defaults
+   * apply: the ladder is ON, its window is CEILING_DECISION_TIMEOUT_MS and it
+   * may hand out at most `maxTurns` extra turns in total, over at most
+   * MAX_CEILING_ROUNDS rounds. `{ enabled: false }` restores the pre-TASK.124
+   * wall. The subagent runner additionally passes the two child clamps
+   * (maxTurnsCeiling, outcomeDeadlineAt).
+   */
+  ceiling?: CeilingConfig;
   /** Passed out-of-band as ModelRequest.system on every step; never enters history. */
   systemPrompt?: string;
   maxOutputTokens?: number;
@@ -375,6 +396,24 @@ export class AgentLoop {
    */
   private activeDispatchCtx: DispatchContext | null = null;
 
+  /**
+   * Ceiling-ladder state (TASK.124 cut-1). It lives on the LOOP, not inside one
+   * runTurnInner, because MAX_CEILING_ROUNDS bounds the extensions of a SESSION:
+   * kept locally, a follow-up user message would start with a fresh round
+   * counter and the ladder could be walked again by simply sending "continue".
+   *
+   * `ceilingRounds` counts GRANTED rounds (a refused round ends the run, so it
+   * never needs a number); `ceilingGrantedTurns` is their sum and is what raises
+   * the effective turn cap; `ceilingPreviousRemaining` is the length of the last
+   * granted verdict's remaining list, which the next round must beat;
+   * `ceilingSuccessfulToolCalls` counts successful tool results SINCE the last
+   * grant — the per-round "did anything actually happen" measure.
+   */
+  private ceilingRounds = 0;
+  private ceilingGrantedTurns = 0;
+  private ceilingPreviousRemaining: number | undefined;
+  private ceilingSuccessfulToolCalls = 0;
+
   constructor(private readonly config: AgentLoopConfig) {
     const tokenizer = config.tokenizer ?? new HeuristicTokenizer();
     this.tokenizer = tokenizer;
@@ -586,16 +625,35 @@ export class AgentLoop {
         turn += 1;
         yield { type: "turn_start", turn };
 
-        // Budget exhaustion, both kinds. The wall-clock deadline is a
-        // COOPERATIVE exit sharing the turn cap's branch on purpose: aborting the
-        // turn signal on a timer would report `cancelled` (indistinguishable from
-        // a user cancel) and would leave the history mid-turn. Checked here —
-        // after turn_start, before compaction and the model step — so a turn
-        // already in flight finishes its tool dispatch and no tool_call is left
-        // unanswered.
-        if (turn > maxTurns || (deadlineAt !== undefined && Date.now() >= deadlineAt)) {
+        // Budget exhaustion, two kinds — and since TASK.124 they exit
+        // differently. Both are checked here — after turn_start, before
+        // compaction and the model step — so a turn already in flight finishes
+        // its tool dispatch and no tool_call is left unanswered.
+        //
+        // The wall-clock deadline stays a WALL the ladder never extends (spec
+        // p.8): the budget it guards is time already spent, and for a child it
+        // is what the parent is waiting on. It remains a COOPERATIVE exit
+        // sharing the turn cap's loop_end on purpose: aborting the turn signal
+        // on a timer would report `cancelled` (indistinguishable from a user
+        // cancel) and would leave the history mid-turn.
+        if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
           yield* this.emitLoopEnd("max_turns", turn - 1, signal);
           return;
+        }
+
+        // The turn cap, by contrast, is a DECISION POINT: one structured verdict
+        // (loop/ceiling.ts) decides whether this run earns a smaller-than-last
+        // extension. Every refusal path — ladder disabled, rounds spent, no
+        // successful tool call in the round, no grant budget left, no window,
+        // an unreadable verdict — falls through to the same loop_end the cap
+        // produced before the slice.
+        const effectiveMaxTurns = maxTurns + this.ceilingGrantedTurns;
+        if (turn > effectiveMaxTurns) {
+          const granted = yield* this.tryCeilingGrant(maxTurns, signal);
+          if (!granted) {
+            yield* this.emitLoopEnd("max_turns", turn - 1, signal);
+            return;
+          }
         }
 
         // Compaction at iteration start (design §2.6): microcompact first, then
@@ -787,11 +845,19 @@ export class AgentLoop {
           }
         }
 
-        // Append every result in PROPOSAL order (invariant: full pairing).
+        // Append every result in PROPOSAL order (invariant: full pairing). The
+        // ceiling ladder's per-round activity measure is counted on the same
+        // pass: only `success` counts (TASK.124 §1.6) — denied, error,
+        // timed_out, cancelled, invalid_input and max_turns are all outcomes in
+        // which nothing was established, and a round of those earns no
+        // extension.
         for (const call of toolCalls) {
           const outcome = outcomeById.get(call.id);
           if (outcome) {
             this.history.append(buildToolResultMessage(call, outcome));
+            if (outcome.status === "success") {
+              this.ceilingSuccessfulToolCalls += 1;
+            }
           }
         }
 
@@ -825,6 +891,85 @@ export class AgentLoop {
         this.activeDispatchCtx = null;
       }
     }
+  }
+
+  /**
+   * One round of the turn-ceiling ladder (TASK.124 cut-1). Returns true when a
+   * grant was issued (the effective cap is raised and `ceiling_grant` has been
+   * emitted); false is a refusal, and every refusal is silent — the caller's
+   * `loop_end`/`max_turns` already says the run stopped, so a second event
+   * variant for "asked and was told no" would only multiply consumers (§1.8).
+   *
+   * The cheap gates run BEFORE the model call: a ladder that spends a call to
+   * discover it had no round, no successful tool call or no grant budget left
+   * would bill the user for a decision it could not act on either way.
+   */
+  private async *tryCeilingGrant(
+    maxTurns: number,
+    signal: AbortSignal | undefined,
+  ): AsyncGenerator<AgentEvent, boolean, unknown> {
+    const config = this.config.ceiling;
+    if (config?.enabled === false || this.ceilingRounds >= MAX_CEILING_ROUNDS) {
+      return false;
+    }
+    const round = this.ceilingRounds + 1;
+    // Round 1 gates on the verdict alone: "at least one successful tool call
+    // since the previous ceiling" has no previous ceiling to measure from, and
+    // requiring it would make the ladder unreachable for a run that spent its
+    // whole budget on a single long-running dispatch (§1.5).
+    if (round >= 2 && this.ceilingSuccessfulToolCalls <= 0) {
+      return false;
+    }
+    const grant = ceilingGrant(round, maxTurns, this.ceilingGrantedTurns, config);
+    if (grant <= 0) {
+      return false;
+    }
+    const windowMs = ceilingWindowMs(config, Date.now());
+    if (windowMs === null) {
+      return false;
+    }
+
+    const verdict = await requestCeilingVerdict({
+      modelPort: this.config.modelPort,
+      system: this.config.systemPrompt,
+      // Read-only: the instruction lives in the decision request alone, so the
+      // transcript this run continues with is the one the loop already built.
+      messages: this.history.toMessages(),
+      maxOutputTokens: this.config.maxOutputTokens,
+      reasoningEffort: this.config.reasoningEffort,
+      round,
+      maxRounds: MAX_CEILING_ROUNDS,
+      previousRemaining: this.ceilingPreviousRemaining,
+      windowMs,
+      signal,
+    });
+    if (
+      verdict === null ||
+      !acceptCeilingVerdict({
+        verdict,
+        round,
+        previousRemaining: this.ceilingPreviousRemaining,
+        successfulToolCalls: this.ceilingSuccessfulToolCalls,
+      })
+    ) {
+      return false;
+    }
+
+    this.ceilingRounds = round;
+    this.ceilingGrantedTurns += grant;
+    this.ceilingPreviousRemaining = verdict.remaining.length;
+    // "Successful tool call" is measured PER ROUND: the counter restarts with
+    // the turns this grant just bought.
+    this.ceilingSuccessfulToolCalls = 0;
+    yield {
+      type: "ceiling_grant",
+      round,
+      granted: grant,
+      totalGranted: this.ceilingGrantedTurns,
+      remaining: [...verdict.remaining],
+      ...(verdict.nextAction !== undefined ? { nextAction: verdict.nextAction } : {}),
+    };
+    return true;
   }
 
   /**

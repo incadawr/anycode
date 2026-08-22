@@ -476,9 +476,21 @@ export function renderEvent(
       }
       break;
     }
+    // One granted extension of the turn ceiling (TASK.124). Every grant is
+    // visible: the line names the round, what it bought, the running total and
+    // what the model said still remains.
+    case "ceiling_grant":
+      write(
+        `\n[ceiling: round ${event.round}, +${event.granted} turn(s) (total ${event.totalGranted}) — remaining: ${event.remaining.join("; ")}]\n`,
+      );
+      break;
     case "loop_end":
+      // Since TASK.124 the turn cap is a decision point, not a setting to raise:
+      // the ladder already asked and either granted (a ceiling_grant line above)
+      // or refused. Pointing at Settings/ANYCODE_MAX_TURNS would name an action
+      // that is no longer the one that happened, so the line just states the fact.
       write(event.reason === "max_turns"
-        ? `\n[stopped: reached the turn limit (${event.turns} turns) — raise it in Settings or ANYCODE_MAX_TURNS]\n`
+        ? `\n[stopped: turn limit reached (${event.turns} turns)]\n`
         : `\n[loop_end: ${event.reason}, turns=${event.turns}]\n`);
       break;
     case "stream_retry":

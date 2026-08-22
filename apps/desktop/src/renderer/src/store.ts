@@ -312,6 +312,24 @@ export type TranscriptBlock =
       level: "log" | "warn" | "error" | "pageerror";
       message: string;
       suppressed?: number;
+    }
+  /**
+   * One row per `ceiling_grant` AgentEvent (TASK.124 cut-1): the turn-ceiling
+   * ladder granted an extension — round number, how many turns it bought and
+   * the model's own remaining list. Kept minimal on purpose: the interactive
+   * continuation affordance (a button that lets a human overrule a refusal)
+   * is cut-2; cut-1 only needs the grant to be VISIBLE in the feed, never
+   * silent (TASK.124 "Видимость"). The optional `nextAction` rides along only
+   * so the cut-2 UI does not need a wire change to show it.
+   */
+  | {
+      kind: "ceiling_grant";
+      id: string;
+      round: number;
+      granted: number;
+      totalGranted: number;
+      remaining: string[];
+      nextAction?: string;
     };
 
 /** Convenience alias for the tool_call variant of TranscriptBlock (used by ToolCallCard). */
@@ -2173,6 +2191,21 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             level: event.level,
             message: event.message,
             ...(event.suppressed !== undefined ? { suppressed: event.suppressed } : {}),
+          });
+          return;
+
+        // Turn-ceiling grant (TASK.124 cut-1): the ladder extended the turn
+        // cap — must be visible in the feed, never silent. Minimal row: the
+        // interactive continuation button is cut-2.
+        case "ceiling_grant":
+          appendBlock({
+            kind: "ceiling_grant",
+            id: `ceiling-grant:${turnId}:${event.round}`,
+            round: event.round,
+            granted: event.granted,
+            totalGranted: event.totalGranted,
+            remaining: event.remaining,
+            ...(event.nextAction !== undefined ? { nextAction: event.nextAction } : {}),
           });
           return;
 

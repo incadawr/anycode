@@ -717,7 +717,11 @@ export function MessageList({
                   className={`message message-loop-end${enterClass(block.id)}`}
                 >
                   {block.reason === "max_turns"
-                    ? `Stopped: reached the turn limit (${block.turns} turns). Raise it in Settings or ANYCODE_MAX_TURNS.`
+                    // TASK.124: the turn cap is a decision point, not a setting
+                    // — the ladder already granted (ceiling_grant rows above)
+                    // or refused. Pointing at Settings would name an action
+                    // that is no longer the one that happened.
+                    ? `Stopped: turn limit reached (${block.turns} turns).`
                     : `Turn ended: ${block.reason} (${block.turns} turn${block.turns === 1 ? "" : "s"})`}
                   {showTryAgainButton(retry, block.id, connection) && (
                     <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
@@ -730,6 +734,17 @@ export function MessageList({
               return <div key={block.id} className="message message-error" role="alert">Output truncated at the model token limit. Raise ANYCODE_MAX_OUTPUT_TOKENS or split the write.</div>;
             case "preview_console":
               return <PreviewConsoleRow key={block.id} block={block} enter={enterIds.has(block.id)} />;
+            // Turn-ceiling grant (TASK.124 cut-1): minimal visibility row —
+            // every extension of the turn cap must be visible, never silent.
+            // The interactive "continue" affordance is cut-2.
+            case "ceiling_grant":
+              return (
+                <div key={block.id} className={`message message-loop-end${enterClass(block.id)}`}>
+                  Turn limit reached — extended by {block.granted} turn{block.granted === 1 ? "" : "s"}
+                  {" "}(round {block.round}, total +{block.totalGranted}). Remaining:{" "}
+                  {block.remaining.join("; ")}
+                </div>
+              );
             default: {
               const _exhaustive: never = block;
               return _exhaustive;
