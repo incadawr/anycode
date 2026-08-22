@@ -84,6 +84,7 @@ import type {
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
   CustomProviderRecord,
+  EngineProxySetRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -427,6 +428,13 @@ declare global {
         // request outcome updates a connection's advisory health — no payload,
         // same shape as `onEnginesChanged` above.
         onProviderHealthChanged(callback: () => void): () => void;
+        // TASK.139 lane A: sets/clears settings.<engine>.proxyUrl, the
+        // engine-level proxy that sits ABOVE the connection-level one
+        // (TASK.132) in the priority ladder. `proxyUrl: ""` is the clear
+        // sentinel — never omission. Never carries a secret directly (the
+        // proxy URL's userinfo is custody-equivalent to the connection-level
+        // field, not a vault secret); resolves with a fresh snapshot on success.
+        engineProxySet(req: EngineProxySetRequest): Promise<SettingsMutationResult>;
       };
       // TASK.54 (cut §9.2/§13.1): custom OpenAI-compatible model-provider
       // CRUD + guarded `/v1/models` preview fetch (main/provider-ipc.ts owns

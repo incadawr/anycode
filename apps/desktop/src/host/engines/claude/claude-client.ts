@@ -19,7 +19,7 @@ import { dirname, isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
-import { ENGINE_PROCESS_REGISTRATION_TYPE } from "../../../shared/engines.js";
+import { ENGINE_PROCESS_REGISTRATION_TYPE, ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../../../shared/engines.js";
 import { checkConsentedBinaryTrust, type BinaryTrustConsent, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
 import { resolveClaudeConfigDir } from "../../../shared/claude-config-dir.js";
 import {
@@ -168,6 +168,15 @@ export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: strin
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
+  // TASK.139: `settings.claude.proxyUrl`, carried in from main under a private
+  // name and turned into the real proxy family here. It OVERWRITES whatever the
+  // passthrough list just copied in — that value can only be the connection's
+  // proxy, since main withholds the carrier entirely when the shell owns the
+  // family, which is precisely the `shell > engine > connection` ladder. Same
+  // call runs for a subagent child (host/engine-children.ts funnels through this
+  // builder), so a claude subagent of a CORE tab proxies by claude's setting.
+  // The carrier itself is never forwarded: the allowlist above does not name it.
+  applyEngineProxyOverride(env, source, ENV_CLAUDE_PROXY_URL);
   const resolvedConfigDir = resolveClaudeConfigDir(profileDir);
   if (resolvedConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = resolvedConfigDir;
   env.DISABLE_AUTOUPDATER = "1";

@@ -395,15 +395,34 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
             z.array(z.string()),
           )
           .optional(),
+        // Engine-level HTTP(S) proxy (TASK.139) — lenient `z.string()` for the
+        // same reason as `connections[].proxyUrl` above: schema.ts is not where
+        // strictness lives. `ENGINE_PROXY_SET_CHANNEL` refines against
+        // `isProxyUrl` at the trust boundary, and `engineProxyCarriers` gates
+        // emission on it fail-soft, so a garbage value can only ever mean
+        // "no engine proxy".
+        //
+        // NEW FACT this field introduces: the `codex` block is no longer purely
+        // advisory cache. It now holds a FUNCTIONAL setting, and it still sits
+        // under the outer `.catch(undefined)` below — so a wrong-shaped `codex`
+        // value drops the proxy along with `binaryPath`/`lastCheck`. That is the
+        // accepted trade, not an oversight: the failure direction is "no proxy
+        // emitted", which is fail-soft, and per-field tolerance here would cost
+        // more than it buys for a block the app rewrites on every doctor run.
+        proxyUrl: z.string().optional(),
       })
       .optional()
       .catch(undefined),
     // Claude engine onboarding metadata (SLICE-CC A1, cut §1.2, additive-optional;
     // version NOT bumped, same forward-compat reasoning as `codex` above).
-    // `.catch(undefined)`: `claude` is an ADVISORY cache field, not a functional
-    // setting — a foreign/wrong-shaped value here must never fail the whole
-    // document (same reasoning as `codex`'s own outer catch). No per-element
-    // array validation needed yet (CC-A has no `profiles` array).
+    // `.catch(undefined)`: a foreign/wrong-shaped value here must never fail the
+    // whole document (same reasoning as `codex`'s own outer catch). No
+    // per-element array validation needed yet (CC-A has no `profiles` array).
+    //
+    // TASK.139 retired the "this block is ADVISORY cache, not a functional
+    // setting" half of that reasoning: `proxyUrl` below IS functional, and the
+    // outer catch drops it together with the cache. Accepted for the same reason
+    // as on `codex` — the failure direction is "no proxy emitted".
     claude: z
       .object({
         binaryPath: z.string().optional(),
@@ -414,6 +433,10 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
             at: z.string(),
           })
           .optional(),
+        // Engine-level HTTP(S) proxy (TASK.139), lenient by the same rule as its
+        // codex twin: strictness lives at `ENGINE_PROXY_SET_CHANNEL`, emission
+        // is gated fail-soft in `engineProxyCarriers`.
+        proxyUrl: z.string().optional(),
       })
       .optional()
       .catch(undefined),
