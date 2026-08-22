@@ -12,7 +12,6 @@ import {
   CONNECTION_DELETE_CHANNEL,
   CONNECTION_SET_ACTIVE_CHANNEL,
   CONNECTION_UPDATE_CHANNEL,
-  ENGINE_PROXY_SET_CHANNEL,
   PERMISSION_RULE_ADD_CHANNEL,
   SECRET_CLEAR_CHANNEL,
   SECRET_ENV_KEYS,
@@ -51,10 +50,6 @@ describe("frozen contract surface (shared/settings.ts)", () => {
     expect(CONNECTION_UPDATE_CHANNEL).toBe("anycode:connection-update");
     expect(CONNECTION_SET_ACTIVE_CHANNEL).toBe("anycode:connection-set-active");
     expect(CONNECTION_DELETE_CHANNEL).toBe("anycode:connection-delete");
-  });
-
-  it("pins the engine-proxy channel (TASK.139)", () => {
-    expect(ENGINE_PROXY_SET_CHANNEL).toBe("anycode:engine-proxy-set");
   });
 
   it("pins SECRET_ENV_KEYS (ruling R3)", () => {
@@ -1055,9 +1050,11 @@ describe("codex/claude proxyUrl (TASK.139) — persisted schema stays LENIENT on
     }
   });
 
-  // Strictness deliberately does NOT live here — `ENGINE_PROXY_SET_CHANNEL`
-  // refines against `isProxyUrl`, and `engineProxyCarriers` gates emission
-  // fail-soft, so a hand-edited garbage value can only ever mean "no proxy".
+  // Strictness deliberately does NOT live here. `proxyUrl` on an engine block is
+  // now only ever a LEGACY value (TASK.141 replaced the field with `proxyRef`),
+  // read to be imported into the registry and refused there if unconvertible;
+  // `engineProxyCarriers` gates emission fail-soft besides, so a hand-edited
+  // garbage value can only ever mean "no proxy".
   it("accepts a NON-URL proxyUrl rather than failing the document", () => {
     const parsed = parseSettings({ ...cloneDefaults(), codex: { proxyUrl: "definitely not a url" } });
     expect(parsed.status).toBe("ok");
@@ -1090,5 +1087,204 @@ describe("codex/claude proxyUrl (TASK.139) — persisted schema stays LENIENT on
     expect(parsed.status).toBe("ok");
     expect(parsed.settings.codex).toBeUndefined();
     expect(parsed.settings.claude?.proxyUrl).toBe(PROXY);
+  });
+});
+
+describe("network.proxyProfiles + proxyRef (TASK.141) — round-trip + zod-granularity", () => {
+  const CORP = { id: "proxy-corp", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" };
+  const SYS = { id: "proxy-sys", name: "System", mode: "system", noProxy: "a.corp", login: "user" };
+
+  it("round-trips the whole registry and the app ref verbatim", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: { proxyProfiles: [CORP, SYS], proxyRef: "proxy-corp" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network).toEqual({ proxyProfiles: [CORP, SYS], proxyRef: "proxy-corp" });
+    }
+  });
+
+  it("round-trips a proxyRef on all four scopes", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      provider: { connections: [{ id: "conn-1", providerId: "z-ai", proxyRef: "direct" }] },
+      codex: { proxyRef: "proxy-corp" },
+      claude: { proxyRef: "direct" },
+      network: { proxyProfiles: [CORP], proxyRef: "proxy-corp" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.proxyRef).toBe("direct");
+      expect(parsed.data.codex?.proxyRef).toBe("proxy-corp");
+      expect(parsed.data.claude?.proxyRef).toBe("direct");
+      expect(parsed.data.network?.proxyRef).toBe("proxy-corp");
+    }
+  });
+
+  // Per-element tolerance (the `codex.profiles` precedent): one hand-edited
+  // profile must not blank the user's other profiles — every survivor keeps
+  // working, and a scope pointing at the dropped one reads fail-soft as
+  // "direct", never as a silent fall-through to another rung's proxy.
+  it("drops ONE malformed profile without disturbing its siblings or the app ref", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: {
+        proxyProfiles: [CORP, { id: "proxy-bad", name: "Bad", mode: "socks" }, SYS],
+        proxyRef: "proxy-corp",
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles).toEqual([CORP, SYS]);
+      expect(parsed.data.network?.proxyRef).toBe("proxy-corp");
+    }
+  });
+
+  // Strictness lives at the IPC boundary, never here: this file validates a
+  // WHOLE document, and one hand-edited character must not reset every other
+  // section to defaults.
+  it("stays LENIENT about a profile URL — a garbage value round-trips and is gated at emission instead", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: { proxyProfiles: [{ ...CORP, url: "proxy.corp:3128" }] },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles?.[0]?.url).toBe("proxy.corp:3128");
+      expect(isProxyUrl("proxy.corp:3128")).toBe(false);
+    }
+  });
+
+  it("a wrong-SHAPED network value drops to undefined without failing the document", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), network: "corporate", ui: { theme: "dark" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network).toBeUndefined();
+      expect(parsed.data.ui.theme).toBe("dark");
+      expect(parsed.data.permissions).toEqual({ alwaysAllow: [] });
+    }
+  });
+
+  it("a non-array proxyProfiles falls back to an empty registry, keeping the ref", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: { proxyProfiles: "nope", proxyRef: "proxy-corp" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles).toEqual([]);
+      expect(parsed.data.network?.proxyRef).toBe("proxy-corp");
+    }
+  });
+
+  // Additive-optional, version NOT bumped: a settings.json that never heard of
+  // this feature round-trips byte-identically.
+  it("a document with no network key round-trips byte-identically", () => {
+    const before = JSON.parse(JSON.stringify(cloneDefaults())) as unknown;
+    const parsed = settingsSchema.safeParse(before);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).toEqual(before);
+      expect("network" in (parsed.data as object)).toBe(false);
+    }
+  });
+});
+
+// ── design-review regressions (TASK.141 lane A, gpt-5.6-sol xhigh) ──
+
+describe("B-07 — a corrupt advisory field must not erase an explicit proxy decision", () => {
+  // THE SCENARIO: `codex.proxyRef` is `"direct"` on disk. A neighbouring
+  // `lastCheck` has an incompatible shape (a hand edit, or another version's
+  // format). The whole `codex` block used to fall to `undefined`, and losing
+  // the block does NOT mean "no proxy" — it means "this engine has no rung of
+  // its own", i.e. it INHERITS the connection/app rung. The user's explicit
+  // "no proxy" silently became "use someone else's proxy".
+  it("keeps proxyRef/proxyUrl when a sibling advisory field is wrong-shaped", () => {
+    for (const engine of ["codex", "claude"] as const) {
+      const parsed = settingsSchema.safeParse({
+        ...cloneDefaults(),
+        [engine]: {
+          proxyRef: "direct",
+          proxyUrl: "http://legacy:3128",
+          binaryPath: "/usr/local/bin/x",
+          lastCheck: { status: 42, at: [] },
+        },
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        const block = engine === "codex" ? parsed.data.codex : parsed.data.claude;
+        expect(block?.proxyRef).toBe("direct");
+        expect(block?.proxyUrl).toBe("http://legacy:3128");
+        // The corrupt cache half is still dropped — that half IS advisory.
+        expect(block?.lastCheck).toBeUndefined();
+        expect(block?.binaryPath).toBeUndefined();
+      }
+    }
+  });
+
+  // Nothing to salvage: a block with no functional proxy field still collapses
+  // to `undefined`, exactly as before, so no empty husk appears on disk.
+  it("still drops a corrupt block that carries no proxy decision at all", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      codex: { binaryPath: 42, lastCheck: { status: "nope" } },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex).toBeUndefined();
+    }
+  });
+
+  // The `network` block gets per-FIELD tolerance for the same reason: a
+  // wrong-typed app ref must cost the app ref, never the whole registry.
+  it("a wrong-typed app proxyRef costs only the ref, not the registry", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: {
+        proxyProfiles: [{ id: "proxy-corp", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" }],
+        proxyRef: 7,
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles).toHaveLength(1);
+      expect(parsed.data.network?.proxyRef).toBeUndefined();
+    }
+  });
+});
+
+describe("H-03 — one bad profile never blanks the registry", () => {
+  // THE SCENARIO: P1, a malformed P2, and a valid P3. Under a whole-array
+  // `.catch([])` the registry parses to `[]`, every ref in the document becomes
+  // dangling, and the next automatic settings write PERSISTS the emptiness.
+  it("drops only the bad element, and the survivors keep their refs alive", () => {
+    const good1 = { id: "proxy-1", name: "One", mode: "manual", url: "http://one:3128" };
+    const good2 = { id: "proxy-3", name: "Three", mode: "system" };
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      provider: { connections: [{ id: "conn-1", providerId: "z-ai", proxyRef: "proxy-3" }] },
+      network: { proxyProfiles: [good1, { id: "proxy-2", mode: 5, name: null }, good2], proxyRef: "proxy-1" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles).toEqual([good1, good2]);
+      expect(parsed.data.network?.proxyRef).toBe("proxy-1");
+      expect(parsed.data.provider.connections[0]?.proxyRef).toBe("proxy-3");
+    }
+  });
+
+  // The outer array-level fallback survives for the ONE case it is for: a value
+  // that is not an array at all.
+  it("falls back to an empty registry only for a non-array value", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: { proxyProfiles: { nope: true }, proxyRef: "proxy-1" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles).toEqual([]);
+      expect(parsed.data.network?.proxyRef).toBe("proxy-1");
+    }
   });
 });

@@ -118,6 +118,13 @@ const connectionSchema = z.object({
   // because the drawer pre-flights the field with the SAME rule and the
   // renderer must not pull this zod module in to get it.
   proxyUrl: z.string().optional(),
+  // Proxy-registry reference (TASK.141), lenient for the same reason as
+  // `proxyUrl` above and with a sharper one of its own: the ref points at a row
+  // in a SEPARATE section, and a refine that checked membership here would make
+  // the validity of one section depend on the parse order of another. Membership
+  // is checked at the IPC boundary; a ref that no longer resolves is read
+  // fail-soft as "direct for this connection" by `resolveProxyLadder`.
+  proxyRef: z.string().optional(),
   reasoningEffort: reasoningEffortSchema.optional(),
   authOptional: z.boolean().optional(),
   // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —
@@ -300,6 +307,78 @@ const customProvidersArraySchema = z.preprocess(
   z.array(customProviderSchema),
 );
 
+// ── named proxy profiles (TASK.141 §1) ──
+
+/**
+ * One `ProxyProfile`. `mode` is the only strict field — it drives a branch in
+ * main (resolve the system proxy vs. use `url`), so an unrecognised value has no
+ * safe reading. Everything else is a lenient `z.string()`, the same rule the two
+ * proxy fields above follow: strictness for a URL lives at the IPC boundary
+ * (`isProxyProfileUrl` in main/settings-ipc.ts), never here, because this file
+ * validates a WHOLE document and one hand-edited character must not reset every
+ * other section to defaults.
+ */
+const proxyProfileSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  mode: z.enum(["system", "manual"]),
+  url: z.string().optional(),
+  noProxy: z.string().optional(),
+  login: z.string().optional(),
+});
+
+/**
+ * The registry array. PER-ELEMENT tolerance (design review H-03, following the
+ * `codexProfilesArraySchema` precedent) so one malformed profile is dropped
+ * ALONE rather than blanking the user's other profiles: with a whole-array
+ * `.catch([])` a single bad record would empty the registry, turn every ref in
+ * the document into a dangling one, and — since the next automatic settings
+ * write persists what was parsed — save that emptiness to disk. Every surviving
+ * profile keeps working, and every scope pointing at the dropped one reads
+ * fail-soft as "direct", never as a silent fall-through to a different rung's
+ * proxy.
+ *
+ * The outer `.catch([])` is the belt for a `proxyProfiles` value that is not an
+ * array at all — the ONLY case it may fire in, since the preprocessing above
+ * already guarantees every element of an array-shaped value parses.
+ */
+const proxyProfilesArraySchema = z
+  .preprocess((raw) => parseElementsTolerantly(proxyProfileSchema, raw), z.array(proxyProfileSchema))
+  .catch([]);
+
+/**
+ * The FUNCTIONAL proxy half of an engine block, salvaged when the block as a
+ * whole fails to parse (design review B-07).
+ *
+ * `codex`/`claude` sit under an outer `.catch(undefined)` because they are
+ * mostly ADVISORY cache (binaryPath, lastCheck, profiles) that must never fail a
+ * whole document. But `proxyRef`/`proxyUrl` are not advisory: losing them does
+ * not mean "no proxy", it means "this engine has no rung of its own" — i.e. it
+ * INHERITS the connection/app rung. So a hand-edited (or newer-version, or
+ * simply wrong-shaped) `lastCheck` sibling could silently convert an explicit
+ * `proxyRef:"direct"` into "use whatever proxy the connection uses", which is
+ * the precise opposite of what the user selected, and a leak direction rather
+ * than a fail-soft one.
+ *
+ * This keeps only the two string-shaped functional fields and drops the rest of
+ * the corrupt block, so the outer catch keeps doing its job for the cache half
+ * while an explicit proxy decision survives on its own.
+ */
+function salvageEngineProxyFields(raw: unknown): { proxyUrl?: string; proxyRef?: string } | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const source = raw as { proxyUrl?: unknown; proxyRef?: unknown };
+  const salvaged: { proxyUrl?: string; proxyRef?: string } = {};
+  if (typeof source.proxyUrl === "string") {
+    salvaged.proxyUrl = source.proxyUrl;
+  }
+  if (typeof source.proxyRef === "string") {
+    salvaged.proxyRef = source.proxyRef;
+  }
+  return salvaged.proxyUrl === undefined && salvaged.proxyRef === undefined ? undefined : salvaged;
+}
+
 export const settingsSchema: z.ZodType<AnycodeSettings> = z
   .object({
     version: z.literal(2),
@@ -395,12 +474,13 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
             z.array(z.string()),
           )
           .optional(),
-        // Engine-level HTTP(S) proxy (TASK.139) — lenient `z.string()` for the
-        // same reason as `connections[].proxyUrl` above: schema.ts is not where
-        // strictness lives. `ENGINE_PROXY_SET_CHANNEL` refines against
-        // `isProxyUrl` at the trust boundary, and `engineProxyCarriers` gates
-        // emission on it fail-soft, so a garbage value can only ever mean
-        // "no engine proxy".
+        // Engine-level HTTP(S) proxy — LEGACY as of TASK.141, which replaced the
+        // field with `proxyRef` into the profile registry. Kept readable (and
+        // lenient `z.string()`, for the same reason as `connections[].proxyUrl`
+        // above: schema.ts is not where strictness lives) so an existing value
+        // survives to be imported into a profile on the user's next edit. The
+        // import refines it; `engineProxyCarriers` gates emission fail-soft
+        // besides, so a garbage value can only ever mean "no engine proxy".
         //
         // NEW FACT this field introduces: the `codex` block is no longer purely
         // advisory cache. It now holds a FUNCTIONAL setting, and it still sits
@@ -409,10 +489,18 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
         // accepted trade, not an oversight: the failure direction is "no proxy
         // emitted", which is fail-soft, and per-field tolerance here would cost
         // more than it buys for a block the app rewrites on every doctor run.
+        //
+        // TASK.141 (design review B-07) RETIRES that trade for the two proxy
+        // fields, and only for them: losing the block does NOT mean "no proxy",
+        // it means "inherit the connection/app rung", so a corrupt `lastCheck`
+        // sibling could turn an explicit `"direct"` into someone else's proxy.
+        // The outer catch below therefore salvages `proxyUrl`/`proxyRef` instead
+        // of dropping them with the cache — see `salvageEngineProxyFields`.
         proxyUrl: z.string().optional(),
+        proxyRef: z.string().optional(),
       })
       .optional()
-      .catch(undefined),
+      .catch((ctx) => salvageEngineProxyFields(ctx.value)),
     // Claude engine onboarding metadata (SLICE-CC A1, cut §1.2, additive-optional;
     // version NOT bumped, same forward-compat reasoning as `codex` above).
     // `.catch(undefined)`: a foreign/wrong-shaped value here must never fail the
@@ -433,10 +521,38 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
             at: z.string(),
           })
           .optional(),
-        // Engine-level HTTP(S) proxy (TASK.139), lenient by the same rule as its
-        // codex twin: strictness lives at `ENGINE_PROXY_SET_CHANNEL`, emission
-        // is gated fail-soft in `engineProxyCarriers`.
+        // Engine-level HTTP(S) proxy — legacy by the same rule as its codex
+        // twin: readable so it can be imported into a profile, refined by that
+        // import, emission gated fail-soft in `engineProxyCarriers`.
         proxyUrl: z.string().optional(),
+        // Proxy-registry reference (TASK.141) — mirror of `codex.proxyRef`.
+        proxyRef: z.string().optional(),
+      })
+      .optional()
+      // Same functional-field salvage as `codex` above (design review B-07).
+      .catch((ctx) => salvageEngineProxyFields(ctx.value)),
+    // Named proxy profiles + the app-level reference (TASK.141, additive-optional;
+    // version NOT bumped, same forward-compat reasoning as `codex`/`claude`
+    // above — a settings.json with no `network` key round-trips byte-identically).
+    // Declared explicitly (not left to `.passthrough()`) so it validates and
+    // survives a read-modify-write cycle.
+    //
+    // `.catch(undefined)` for the same reason the two engine blocks carry one: a
+    // foreign/wrong-shaped value at this key must never fail the WHOLE document
+    // and drop the user through `parseSettings`'s corrupt→defaults path, wiping
+    // every other section. The failure direction is fail-soft in the required
+    // sense — no registry and no app ref means every ladder falls through to
+    // "no proxy", exactly where a pre-TASK.141 settings.json already sits. The
+    // registry's own per-element tolerance (above) means it takes a
+    // wrong-SHAPED `network` value, not one bad profile, to reach this catch.
+    network: z
+      .object({
+        proxyProfiles: proxyProfilesArraySchema.optional(),
+        // Per-FIELD catch, for the same reason the registry above is per-element
+        // (design review H-03/B-07): a wrong-typed app ref must cost the app ref
+        // and nothing else. Without it, one bad `proxyRef` would fail the whole
+        // `network` object and take the entire profile registry down with it.
+        proxyRef: z.string().optional().catch(undefined),
       })
       .optional()
       .catch(undefined),

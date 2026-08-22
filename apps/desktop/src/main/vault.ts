@@ -33,6 +33,7 @@ import {
   saveSecrets,
 } from "../settings/files.js";
 import type { SecretKey, SecretSource, SecretStatus, SecretTier } from "../shared/settings.js";
+import { isProxyProfileSecretKey } from "../shared/proxy.js";
 import { isKnownSecretKey, secretEnvFor } from "./host-env.js";
 
 /**
@@ -171,6 +172,27 @@ export class Vault {
   }
 
   /**
+   * The same read, but distinguishing "there is no entry" from "there is one and
+   * it cannot be decrypted" (design review B-08). `getSecretValue` deliberately
+   * collapses both to undefined — every consumer of a CREDENTIAL treats an
+   * undecryptable key as unset and asks the user to retype it.
+   *
+   * The legacy-proxy dedup cannot: it decides whether two configurations are the
+   * SAME credential, and "unknown" is not "equal". Answering `unreadable` there
+   * makes it mint a separate profile instead of aliasing two passwords it never
+   * compared. Still never returns a value to anything outside main.
+   */
+  async probeSecret(key: SecretKey): Promise<{ state: "unset" } | { state: "value"; value: string } | { state: "unreadable" }> {
+    const file = await this.load();
+    const entry = file.entries[key];
+    if (entry === undefined) {
+      return { state: "unset" };
+    }
+    const value = this.decrypt(entry);
+    return value === undefined ? { state: "unreadable" } : { state: "value", value };
+  }
+
+  /**
    * Reads + parses a provider's OAuth token blob (design §3.3). Fail-soft: unset,
    * undecryptable (keychain-identity change), or a corrupt/legacy value all yield
    * undefined. The ONLY place a decrypted token is produced, and it never leaves
@@ -257,6 +279,20 @@ export class Vault {
    * wins at spawn (env override visible), computed from the effective decryptable
    * value so a present-but-undecryptable entry reads source "none" while still
    * `set`. NEVER carries a value (custody invariant).
+   *
+   * PROXY-PROFILE PASSWORDS (TASK.141 §5, design review B-09) ride this exact
+   * projection, and it is the ONLY way the renderer learns anything about them:
+   *  - a profile WITH a password has `proxy.profile.<id>.password` in this list
+   *    with `set: true`. The editor's `passwordSet` placeholder is that boolean
+   *    and nothing more;
+   *  - a profile WITHOUT one has no entry at all, so the key is simply absent
+   *    from the list — absence IS the answer, and no negative record is written
+   *    anywhere;
+   *  - `source` for such a key can only ever be `vault` / `plaintext` / `none`.
+   *    It is never `env`: a proxy password has no env materialisation (see
+   *    `sourceFor`).
+   * The value itself never crosses, which is what lets the editor show a
+   * "password is set" state without ever holding the password.
    */
   async statuses(bootEnv: NodeJS.ProcessEnv, catalogIds: readonly string[] = []): Promise<SecretStatus[]> {
     const file = await this.load();
@@ -334,8 +370,14 @@ export class Vault {
     effective: string | undefined,
     bootEnv: NodeJS.ProcessEnv,
   ): SecretSource {
-    const envName = secretEnvFor(key);
-    const fromEnv = bootEnv[envName];
+    // TASK.141: a proxy-profile password has no env materialisation at all — it
+    // is composed into a proxy URL in main and rides the HTTP(S)_PROXY family,
+    // never a `SECRET_ENV_KEY`. Asking `secretEnvFor` for its var would be a
+    // category error (it refuses such a key fail-closed), and answering "env"
+    // here whenever `ANYCODE_API_KEY` happened to be exported would tell the
+    // editor a proxy password is overridden by a provider credential.
+    const envName = isProxyProfileSecretKey(key) ? undefined : secretEnvFor(key);
+    const fromEnv = envName === undefined ? undefined : bootEnv[envName];
     if (fromEnv !== undefined && fromEnv.trim() !== "") {
       return "env";
     }

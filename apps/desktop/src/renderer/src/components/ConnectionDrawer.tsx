@@ -40,9 +40,9 @@ import type {
   SecretStatus,
   SettingsMutationResult,
 } from "../../../shared/settings.js";
-import { isProxyUrl } from "../../../shared/settings.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId } from "./ConnectionTile.js";
+import { PROXY_REF_INHERIT, ProxyRefPicker, connectionCreateProxyRefField, proxyRefInitialValue } from "./ProxyRefPicker.js";
 import {
   OAuthCredentialBlock,
   TRANSPORT_LABEL,
@@ -112,38 +112,16 @@ export function resolveDrawerOAuthStartArgs(
   return { providerId: selectedEntryId, connectionId: createdConnectionId };
 }
 
-/**
- * Pre-flight for the proxy field (TASK.132): true when the typed value is
- * non-empty and not something main will accept. Main is still the authority —
- * its `.strict()` payload schema refuses the same value — but that refusal
- * arrives as the drawer's generic "The changes couldn't be saved.", which for
- * this field is a dead end: the most likely mistake is a scheme-less
- * `proxy.host:3128`, and nothing on screen would say so. Blank is never blocked
- * (it is the clear sentinel). Shares `isProxyUrl` with main rather than
- * re-deriving the rule. Exported for direct testing (no jsdom).
+/*
+ * TASK.141: `proxyUrlSaveBlocked` / `PROXY_URL_ERROR` /
+ * `connectionCreateProxyField` are GONE, and with them the whole class of
+ * mistake they existed to diagnose. A proxy URL is no longer typed at a scope
+ * — the drawer picks a named profile out of the registry (`ProxyRefPicker`),
+ * and inside the profile editor the scheme comes from a checkbox rather than
+ * from the user, so a scheme-less `proxy.host:3128` is not expressible. The
+ * create-path fragment moved to `connectionCreateProxyRefField` in the picker,
+ * next to the other rules about what a ref means on the wire.
  */
-export function proxyUrlSaveBlocked(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed !== "" && !isProxyUrl(trimmed);
-}
-
-/** The one message both create and save show for a proxy value main would refuse (TASK.132). */
-export const PROXY_URL_ERROR = "Proxy URL must be an http:// or https:// address, e.g. http://proxy.example.com:3128.";
-
-/**
- * The proxy fragment BOTH create paths spread into their `connection-create`
- * payload (TASK.132) — the catalog-provider create and the new-custom-endpoint
- * create, which mints its record first and the connection second. It exists as
- * one named thing because the second path originally omitted the field and
- * silently dropped a typed proxy; a shared fragment makes the rule reviewable
- * and testable, unlike two hand-written spreads. Create has no clear sentinel:
- * a blank field means "no proxy", so the key is omitted rather than sent as
- * `""` (which the create schema refuses).
- */
-export function connectionCreateProxyField(proxyUrl: string): { proxyUrl?: string } {
-  const trimmed = proxyUrl.trim();
-  return trimmed === "" ? {} : { proxyUrl: trimmed };
-}
 
 /**
  * The connection-update payload the unified `save` sends (TASK.45 W12-FIX §3;
@@ -163,7 +141,7 @@ export function buildConnectionUpdatePayload(params: {
   transport: ProviderTransportId | "";
   baseUrl: string;
   showBaseUrl: boolean;
-  proxyUrl: string;
+  proxyRef: string;
   authOptional: boolean;
 }): ConnectionUpdateRequest {
   return {
@@ -172,10 +150,14 @@ export function buildConnectionUpdatePayload(params: {
     model: params.model.trim(),
     transport: params.transport,
     baseUrl: params.showBaseUrl ? params.baseUrl.trim() : "",
-    // Sent unconditionally, same rationale as `transport` (TASK.132): emptying
-    // the field must CLEAR the persisted proxy, and `""` is the channel's
-    // clear sentinel — omitting it would leave the old proxy in force.
-    proxyUrl: params.proxyUrl.trim(),
+    // Sent unconditionally, same rationale as `transport` (TASK.141, inherited
+    // from TASK.132's `proxyUrl`): choosing "Use application proxy" must CLEAR
+    // the persisted ref, and `""` is the channel's clear sentinel — omitting it
+    // would leave the old choice in force. The legacy `proxyUrl` key is
+    // deliberately NOT sent here: absent means "keep", which is what lets an
+    // untouched legacy string survive a save of an unrelated field, and `""`
+    // on the ref is what erases both keys when the user really does clear it.
+    proxyRef: params.proxyRef,
     // Sent unconditionally, same rationale as `transport`: `false` must CLEAR
     // a previously-persisted flag, not leave it untouched.
     authOptional: params.authOptional,
@@ -324,6 +306,11 @@ export function ConnectionDrawerFields({
   const labelInputRef = useRef<HTMLInputElement>(null);
   const secretInputRef = useRef<HTMLInputElement>(null);
   const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
+  // TASK.141: the settings document behind the proxy picker's seed. Read here
+  // (not inside the picker) because the drawer runs the picker CONTROLLED — the
+  // ref rides the drawer's own create/update payloads instead of being written
+  // by a channel of its own.
+  const proxySnapshot = useStore(store, (s) => s.snapshot);
 
   // Add mode: `""` until the user picks a template AND clicks "Create
   // connection"; edit mode: fixed to the connection's own id for this drawer's
@@ -344,7 +331,14 @@ export function ConnectionDrawerFields({
   });
   const [baseUrl, setBaseUrl] = useState(editConnection?.baseUrl ?? "");
   const [transport, setTransport] = useState<ProviderTransportId | "">(editConnection?.transport ?? "");
-  const [proxyUrl, setProxyUrl] = useState(editConnection?.proxyUrl ?? "");
+  // TASK.141: the connection's rung is a REFERENCE now, seeded through the same
+  // pure helper every other scope's picker uses (a dangling id reads as "No
+  // proxy", a legacy `proxyUrl` string reads as the synthetic Legacy entry).
+  const [proxyRef, setProxyRef] = useState(() =>
+    editConnection === undefined || proxySnapshot === null
+      ? PROXY_REF_INHERIT
+      : proxyRefInitialValue({ kind: "connection", connectionId: editConnection.id }, proxySnapshot.settings),
+  );
   const [noAuth, setNoAuth] = useState(editConnection?.authOptional === true);
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
@@ -429,10 +423,6 @@ export function ConnectionDrawerFields({
       setError('Enter a name and base URL, plus an API key or check "This endpoint doesn\'t need an API key".');
       return;
     }
-    if (proxyUrlSaveBlocked(proxyUrl)) {
-      setError(PROXY_URL_ERROR);
-      return;
-    }
     setCreating(true);
     setError(null);
     try {
@@ -454,10 +444,11 @@ export function ConnectionDrawerFields({
         providerId: newId,
         ...(label.trim() ? { label: label.trim() } : {}),
         ...(transport ? { transport } : {}),
-        // TASK.132: the proxy field is rendered in this pre-create state too, so
-        // it has to travel on THIS create as well — omitting it here silently
-        // dropped a typed proxy for every new custom endpoint.
-        ...connectionCreateProxyField(proxyUrl),
+        // TASK.132/TASK.141: the proxy control is rendered in this pre-create
+        // state too, so its value has to travel on THIS create as well —
+        // omitting it here silently dropped the choice for every new custom
+        // endpoint.
+        ...connectionCreateProxyRefField(proxyRef),
       });
       const createdId = resolveCreatedConnectionId(connResult);
       if (createdId === undefined) {
@@ -486,10 +477,6 @@ export function ConnectionDrawerFields({
     if (providerId === "") {
       return;
     }
-    if (proxyUrlSaveBlocked(proxyUrl)) {
-      setError(PROXY_URL_ERROR);
-      return;
-    }
     setCreating(true);
     setError(null);
     try {
@@ -498,7 +485,7 @@ export function ConnectionDrawerFields({
         ...(label.trim() ? { label: label.trim() } : {}),
         ...(transport ? { transport } : {}),
         ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
-        ...connectionCreateProxyField(proxyUrl),
+        ...connectionCreateProxyRefField(proxyRef),
         ...(noAuth ? { authOptional: true } : {}),
       });
       const createdId = resolveCreatedConnectionId(result);
@@ -545,10 +532,6 @@ export function ConnectionDrawerFields({
       setError("Pick a model before saving — without one this connection can't open a tab.");
       return;
     }
-    if (proxyUrlSaveBlocked(proxyUrl)) {
-      setError(PROXY_URL_ERROR);
-      return;
-    }
     setSaving(true);
     setError(null);
     try {
@@ -560,7 +543,7 @@ export function ConnectionDrawerFields({
           transport,
           baseUrl,
           showBaseUrl,
-          proxyUrl,
+          proxyRef,
           authOptional: noAuth,
         }),
       );
@@ -754,24 +737,17 @@ export function ConnectionDrawerFields({
         </select>
       </label>
 
-      {/* TASK.132: plain text, not a password field — the value is infra config
-          the user must be able to proofread (a typo'd host:port is otherwise
-          undiagnosable), and the hint states the plaintext storage outright. */}
-      <label className="settings-field">
-        <span className="settings-field-label">Proxy URL (optional)</span>
-        <input
-          className="settings-field-input"
-          type="text"
-          value={proxyUrl}
-          disabled={readOnly}
-          placeholder="http://user:pass@proxy.example.com:3128"
-          onChange={(e) => setProxyUrl(e.target.value)}
-        />
-        <span className="settings-field-hint">
-          Requests from this connection go through this HTTP(S) proxy. Stored as plain text, and passed to every
-          process this connection starts — including shell commands the model runs.
-        </span>
-      </label>
+      {/* TASK.141: one instance of the same picker the engine panes and the
+          Network pane render — CONTROLLED here, because a connection's ref
+          rides this drawer's own create/update payload rather than a channel of
+          its own. That is what removes the two-phase "create the connection,
+          then bind its proxy" dance. */}
+      <ProxyRefPicker
+        scope={{ kind: "connection", connectionId: createdConnectionId ?? "" }}
+        store={store}
+        value={proxyRef}
+        onChange={setProxyRef}
+      />
 
       {isNewCustomEndpoint && (
         <label className="settings-field-checkbox">
