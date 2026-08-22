@@ -355,3 +355,104 @@ describe("plan-approval ask deadline (TASK.27)", () => {
     ]);
   });
 });
+
+/**
+ * TASK.138: an unanswered ask means nobody is at the screen, and every later ask
+ * in that session is denied outright instead of burning its own full deadline.
+ * The live failure this prevents: four serial asks × 120 s of dead wall clock,
+ * plus a subagent losing its entire time budget to asks no one could answer.
+ */
+describe("unattended latch (TASK.138)", () => {
+  it("denies later asks immediately, without presenting them, once one expired", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeBroker(120_000);
+    const first = broker.requestPermission(request);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(first).resolves.toMatchObject({ behavior: "deny" });
+    expect(broker.isUnattended).toBe(true);
+
+    const presentedBefore = emitted.filter((m) => m.type === "permission_request").length;
+    // No timer advanced between here and the assertions: the wall clock spent by
+    // these five asks is zero, so total wait stays bounded by ONE deadline
+    // regardless of how many tools the model tries.
+    const later = await Promise.all([
+      broker.requestPermission(request),
+      broker.requestPermission(request),
+      broker.requestPermission(request),
+      broker.requestPermission(request),
+      broker.requestPermission(request),
+    ]);
+
+    expect(later.every((d) => d.behavior === "deny")).toBe(true);
+    expect(emitted.filter((m) => m.type === "permission_request").length).toBe(presentedBefore);
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it("tells the model the refusal is not on the merits and that retrying will not help", async () => {
+    vi.useFakeTimers();
+    const { broker } = makeBroker(120_000);
+    const first = broker.requestPermission(request);
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    const expired = await first;
+    expect(expired.behavior).toBe("deny");
+    const expiredReason = expired.behavior === "deny" ? expired.reason : "";
+    expect(expiredReason).toContain("no one answered");
+    expect(expiredReason).toContain("NOT a refusal on the merits");
+    expect(expiredReason).toContain("rephrased equivalent");
+
+    const latched = await broker.requestPermission(request);
+    expect(latched.behavior).toBe("deny");
+    const latchedReason = latched.behavior === "deny" ? latched.reason : "";
+    expect(latchedReason).toContain("unattended");
+    expect(latchedReason).toContain("NOT a refusal on the merits");
+  });
+
+  it("a permission answer disarms the latch — asking resumes", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeBroker(120_000);
+    const first = broker.requestPermission(request);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await first;
+    expect(broker.isUnattended).toBe(true);
+
+    // The click lands on an ask that already expired: unknown requestId, ignored
+    // as a decision — but it is still proof that a human came back.
+    broker.handleResponse(requestId(emitted), "allow");
+    expect(broker.isUnattended).toBe(false);
+
+    const presentedBefore = emitted.filter((m) => m.type === "permission_request").length;
+    void broker.requestPermission(request);
+    expect(emitted.filter((m) => m.type === "permission_request").length).toBe(presentedBefore + 1);
+  });
+
+  it("noteHumanPresent disarms the latch and is idempotent when it was never armed", async () => {
+    vi.useFakeTimers();
+    const { broker } = makeBroker(120_000);
+    broker.noteHumanPresent();
+    expect(broker.isUnattended).toBe(false);
+
+    const first = broker.requestPermission(request);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await first;
+    expect(broker.isUnattended).toBe(true);
+
+    broker.noteHumanPresent();
+    broker.noteHumanPresent();
+    expect(broker.isUnattended).toBe(false);
+  });
+
+  it("the latch never turns an ask into an allow", async () => {
+    vi.useFakeTimers();
+    const { broker } = makeBroker(120_000);
+    const first = broker.requestPermission(request);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await first;
+
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const decision = await broker.requestPermission(request);
+      expect(decision.behavior).toBe("deny");
+    }
+  });
+});
