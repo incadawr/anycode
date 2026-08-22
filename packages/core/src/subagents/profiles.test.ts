@@ -12,7 +12,11 @@ import { join } from "node:path";
 
 import { discoverAgentProfiles, parseAgentProfileMd, type AgentProfileRoot } from "./profiles.js";
 import { PERSONAS } from "./personas.js";
-import { AGENT_PROFILE_PROMPT_MAX_BYTES, MAX_AGENT_PROFILES } from "../types/config.js";
+import {
+  AGENT_PROFILE_PROMPT_MAX_BYTES,
+  MAX_AGENT_PROFILES,
+  SUBAGENT_MAX_TURNS_CEILING,
+} from "../types/config.js";
 import type { FileStat, FileSystemPort } from "../ports/file-system.js";
 
 // ---------------------------------------------------------------------------
@@ -534,5 +538,50 @@ describe("discoverAgentProfiles — engine + tools conflict (TASK.97 R4)", () =>
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain(join(WS, "scout.md"));
     expect(problems[0]).toContain('"tools" cannot be combined with "engine: claude"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `maxTurns:` frontmatter (TASK.74 §2.3): the per-run turn budget as a property
+// of the role. Same fatal-on-invalid and claim-set semantics as bad_model /
+// bad_engine — a profile whose declared budget is silently replaced is worse
+// than one that is loudly refused.
+
+describe("discoverAgentProfiles — maxTurns frontmatter (TASK.74 §2.3)", () => {
+  it("attaches the budget to the persona and refuses an out-of-range one (profile not registered)", async () => {
+    const good = md({ name: "good", description: "d", maxTurns: "12" }, "BODY");
+    const overCeiling = String(SUBAGENT_MAX_TURNS_CEILING + 1);
+    const bad = md({ name: "bad", description: "d", maxTurns: overCeiling }, "BODY");
+    const fs = new FakeFs({ [WS]: { "good.md": good, "bad.md": bad } });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+
+    expect(profiles.map((p) => [p.name, p.turnBudget])).toEqual([["good", 12]]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("bad.md");
+    expect(problems[0]).toContain(`maxTurns "${overCeiling}"`);
+    expect(problems[0]).toContain(String(SUBAGENT_MAX_TURNS_CEILING));
+  });
+
+  it("leaves turnBudget unset when the line is absent — the persona default applies", async () => {
+    const fs = new FakeFs({ [WS]: { "plain.md": md({ name: "plain", description: "d" }, "BODY") } });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+    expect(problems).toEqual([]);
+    expect(profiles[0]?.turnBudget).toBeUndefined();
+  });
+
+  it("a higher-precedence bad-maxTurns file still shadows a valid lower-precedence same-named file", async () => {
+    const fs = new FakeFs({
+      [WS]: { "scout.md": md({ name: "scout", description: "project — bad", maxTurns: "abc" }, "P") },
+      [HOME]: { "scout.md": md({ name: "scout", description: "user — valid" }, "U") },
+    });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+
+    expect(profiles.some((p) => p.name === "scout")).toBe(false);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(join(WS, "scout.md"));
+    expect(problems[0]).toContain('maxTurns "abc"');
   });
 });

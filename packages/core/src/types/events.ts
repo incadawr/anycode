@@ -101,6 +101,13 @@ export type ModelStreamEvent =
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
   | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string };
 
+/**
+ * Why a loop stopped. `max_turns` means BUDGET EXHAUSTED — either the turn cap
+ * or, for a subagent child, the wall-clock deadline (AgentLoopConfig.deadlineAt);
+ * both leave a balanced history and an unfinished task, and every consumer
+ * treats them identically, so they share one reason rather than splitting the
+ * union across the ~10 files that map it.
+ */
 export type LoopEndReason = "completed" | "max_turns" | "cancelled" | "error" | "workspace_transition";
 
 /** Full event stream produced by the agent loop; superset of the model stream vocabulary. */
@@ -123,6 +130,26 @@ export type AgentEvent =
       error?: string;
     }
   | { type: "microcompact"; clearedToolResults: number; savedTokens: number }
+  /**
+   * One granted extension of the turn ceiling (TASK.124 cut-1). Additive: it
+   * rides the existing agent_event envelope on the desktop wire with no
+   * protocol change (protocol.ts projects new AgentEvent variants
+   * automatically), same precedent as `engine_notice` above. Emitted ONLY when
+   * a grant was actually issued — a refused round needs no event, the existing
+   * `loop_end`/`max_turns` already says the run stopped. `round` counts from 1
+   * and never exceeds MAX_CEILING_ROUNDS; `totalGranted` is the running sum of
+   * turns this session's ladder has handed out (bounded by the loop's
+   * maxGrantedTurns); `remaining`/`nextAction` come verbatim from the model's
+   * structured verdict.
+   */
+  | {
+      type: "ceiling_grant";
+      round: number;
+      granted: number;
+      totalGranted: number;
+      remaining: string[];
+      nextAction?: string;
+    }
   /** Emitted after each finish (design §2.5): provider usage wins over the local estimate. */
   | {
       type: "context_usage";
