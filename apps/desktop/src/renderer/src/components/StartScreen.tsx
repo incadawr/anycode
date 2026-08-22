@@ -60,8 +60,8 @@
  * (with a notice, text still sent) if the boot model turns out not to
  * accept them.
  */
-import { Fragment, useEffect, useRef, useState } from "react";
-import type { ClipboardEvent, CSSProperties, KeyboardEvent, ReactElement } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ClipboardEvent, KeyboardEvent } from "react";
 import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-store.js";
 import type { QueuedPromptImage } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
@@ -79,6 +79,12 @@ import {
   startModelMenuFlipsUp,
   startModelMenuMaxHeightPx,
 } from "./start-model-picker.js";
+// TASK.106 cut-2 §D4 (DoD 6): the drill-down popover's MARKUP is one shared
+// component both pickers render (this screen and a running session's chip) —
+// the rows, the level and the placement are still decided here, since which
+// pair a DRAFT means is this screen's business alone.
+import { ModelDrillMenu } from "./model-drill-menu.js";
+import type { ModelDrillPage, ModelDrillRow } from "./model-drill-rows.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import {
@@ -315,22 +321,6 @@ export type { StartModelMenuGroup, StartModelMenuItem } from "./start-model-pick
  * is a whole row).
  */
 const MODEL_MENU_GAP_PX = 8;
-
-/**
- * One focusable row of whatever level the model popover is currently showing
- * (TASK.131 drill-down form). Every level is a flat list of these, so the
- * roving-focus keyboard is ONE code path rather than one per level; `kind`
- * decides both what the row renders and what activating it does.
- */
-export type StartModelMenuRow =
-  | { kind: "popular"; connectionId: string; modelId: string; name: string; groupLabel: string; current: boolean }
-  | { kind: "group"; connectionId: string; label: string; subtitle: string | undefined; count: number }
-  | { kind: "effort-open"; value: string }
-  | { kind: "model"; connectionId: string; modelId: string; name: string; current: boolean }
-  | { kind: "effort"; value: string; current: boolean };
-
-/** Which level of the drill-down is on screen. `group` carries the connection whose models it lists. */
-export type StartModelMenuPage = { kind: "root" } | { kind: "group"; connectionId: string } | { kind: "effort" };
 
 /**
  * An effort level's human-readable label — ModelPill's own `EFFORT_LABELS`
@@ -678,7 +668,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // Local UI state (like modelMenuOpen itself), deliberately NOT draft state:
   // browsing a connection's models must not touch the draft until a row is
   // actually picked. Reset to the root on every open.
-  const [modelMenuPage, setModelMenuPage] = useState<StartModelMenuPage>({ kind: "root" });
+  const [modelMenuPage, setModelMenuPage] = useState<ModelDrillPage>({ kind: "root" });
   // TASK.131: the popover's measured placement — whether it hangs above the
   // chip instead of below it, and how tall it may grow before it would run
   // off screen. Measured once per open (the seeding effect below) from the
@@ -772,11 +762,11 @@ export function StartScreen({ onToast }: StartScreenProps) {
     modelMenuPage.kind === "group"
       ? modelGroups.find((group) => group.connectionId === modelMenuPage.connectionId)
       : undefined;
-  // Every level is a flat row list — see `StartModelMenuRow`. The root's
-  // sections (popular / groups / effort) are separated by dividers in the
-  // JSX, but they share ONE roving-focus index, exactly like ModelPill's own
-  // drill-down popover.
-  const modelMenuRows: StartModelMenuRow[] =
+  // Every level is a flat row list — see `ModelDrillRow`. The root's sections
+  // (popular / groups / effort) are separated by dividers inside
+  // `ModelDrillMenu`, but they share ONE roving-focus index, exactly like the
+  // running session's own drill-down popover.
+  const modelMenuRows: ModelDrillRow[] =
     modelMenuPage.kind === "group"
       ? (modelOpenGroup?.items ?? []).map((item) => ({
           kind: "model" as const,
@@ -1300,7 +1290,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   }
 
   /** What activating a row does — the one place the drill-down's verbs live (open a level, pick a model, pick an effort). */
-  function activateModelRow(row: StartModelMenuRow): void {
+  function activateModelRow(row: ModelDrillRow): void {
     switch (row.kind) {
       case "popular":
       case "model":
@@ -1407,86 +1397,6 @@ export function StartScreen({ onToast }: StartScreenProps) {
     setCodexProfileMenuOpen(false);
     window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
     window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "codex" }));
-  }
-
-  /**
-   * One row of whatever level is on screen (TASK.131 drill-down form). Two
-   * shapes only: a PICK (`.start-model-item` — check gutter, name, muted
-   * trailing detail) and a DRILL-IN (`.start-model-row` — name, value,
-   * chevron), the same two shapes ModelPill's own popover uses, so the start
-   * screen's picker speaks the app's existing menu language rather than a
-   * third one of its own.
-   */
-  function renderModelRow(row: StartModelMenuRow, index: number): ReactElement {
-    const attach = (el: HTMLButtonElement | null): void => {
-      modelItemRefs.current[index] = el;
-    };
-    const tabIndex = index === modelFocusIndex ? 0 : -1;
-    if (row.kind === "group") {
-      return (
-        <button
-          ref={attach}
-          type="button"
-          role="menuitem"
-          aria-haspopup="menu"
-          tabIndex={tabIndex}
-          className="start-model-row start-model-group"
-          data-connection-id={row.connectionId}
-          data-model-count={row.count}
-          onClick={() => activateModelRow(row)}
-        >
-          <span className="start-model-row-name">{row.label}</span>
-          {/* TASK.131 D2: the baseUrl host, shown only when two connections' auto-labels collide. */}
-          {row.subtitle !== undefined && <span className="start-model-row-sub">{row.subtitle}</span>}
-          <span className="start-model-row-value">{row.count}</span>
-          <Chevron className="start-model-row-chevron" />
-        </button>
-      );
-    }
-    if (row.kind === "effort-open") {
-      return (
-        <button
-          ref={attach}
-          type="button"
-          role="menuitem"
-          aria-haspopup="menu"
-          tabIndex={tabIndex}
-          className="start-model-row start-model-effort-row"
-          data-effort={row.value}
-          onClick={() => activateModelRow(row)}
-        >
-          <span className="start-model-row-name">Effort</span>
-          <span className="start-model-row-value">{effortLabel(row.value)}</span>
-          <Chevron className="start-model-row-chevron" />
-        </button>
-      );
-    }
-    const current = row.current;
-    return (
-      <button
-        ref={attach}
-        type="button"
-        role="menuitemradio"
-        aria-checked={current}
-        tabIndex={tabIndex}
-        className={`start-model-item${current ? " start-model-item-current" : ""}`}
-        {...(row.kind === "effort"
-          ? { "data-effort": row.value }
-          : { "data-connection-id": row.connectionId, "data-model-id": row.modelId })}
-        onClick={() => activateModelRow(row)}
-      >
-        <span className="start-model-item-check" aria-hidden="true">
-          {current ? <Check /> : null}
-        </span>
-        <span className="start-model-item-name">{row.kind === "effort" ? effortLabel(row.value) : row.name}</span>
-        {/* A popular pick that would SWITCH connection says which one it
-            means; one from the connection already in use needs no annotation
-            (and repeating today's connection on every row is pure noise). */}
-        {row.kind === "popular" && row.connectionId !== chipConnectionId && (
-          <span className="start-model-item-sub">{row.groupLabel}</span>
-        )}
-      </button>
-    );
   }
 
   return (
@@ -1817,57 +1727,24 @@ export function StartScreen({ onToast }: StartScreenProps) {
                 <Chevron className="model-pill-chevron" />
               </button>
 
+              {/* TASK.131 (owner decision 17.08): a drill-down, not two panes
+                  and not a tab row — rendered by the SHARED popover component
+                  (TASK.106 cut-2 DoD 6), which a running session's chip
+                  renders too, so neither picker can drift from the other. */}
               {modelMenuOpen && (
-                <div
-                  className={`start-model-menu${modelMenuPlacement?.flipUp ? " start-model-menu-flipped" : ""}`}
-                  role="menu"
-                  aria-label="Model"
-                  data-level={modelMenuPage.kind}
+                <ModelDrillMenu
+                  rows={modelMenuRows}
+                  page={modelMenuPage}
+                  placement={modelMenuPlacement}
+                  backLabel={modelMenuPage.kind === "effort" ? "Effort" : (modelOpenGroup?.label ?? "Models")}
+                  focusIndex={modelFocusIndex}
+                  emptyText="No connected providers yet."
+                  itemRefs={modelItemRefs}
                   onKeyDown={onModelMenuKeyDown}
-                  style={
-                    modelMenuPlacement ? ({ maxHeight: `${modelMenuPlacement.maxHeightPx}px` } as CSSProperties) : undefined
-                  }
-                >
-                  {/* TASK.131 (owner decision 17.08): a drill-down, not two
-                      panes and not a tab row. The root offers three popular
-                      picks and one row per connection; a connection's models
-                      are a level of their own; a model that declares an
-                      effort vocabulary gets an effort level of its own. The
-                      popover carries no fixed height — only the max the room
-                      around the chip allows — so a level shorter than that
-                      renders with no scrollbar at all. */}
-                  {modelMenuPage.kind !== "root" && (
-                    <button type="button" className="start-model-back" onClick={modelMenuBack}>
-                      <Chevron className="start-model-back-chevron" />
-                      {modelMenuPage.kind === "effort" ? "Effort" : (modelOpenGroup?.label ?? "Models")}
-                    </button>
-                  )}
-                  {/* Reachable only with no connected provider at all (the
-                      current connection always keeps a group, even an empty
-                      one). An empty box would read as a broken popover. */}
-                  {modelMenuRows.length === 0 && (
-                    <div className="start-model-empty">No connected providers yet.</div>
-                  )}
-                  {modelMenuRows.map((row, index) => {
-                    // The root's three sections are separated by hairlines;
-                    // the levels below it are a single uninterrupted list.
-                    const previous = modelMenuRows[index - 1];
-                    const dividerBefore =
-                      (row.kind === "group" && previous?.kind === "popular") || row.kind === "effort-open";
-                    const key =
-                      row.kind === "group"
-                        ? `group:${row.connectionId}`
-                        : row.kind === "effort" || row.kind === "effort-open"
-                          ? `effort:${row.value}`
-                          : `${row.kind}:${row.connectionId}:${row.modelId}`;
-                    return (
-                      <Fragment key={key}>
-                        {dividerBefore && <div className="start-model-divider" />}
-                        {renderModelRow(row, index)}
-                      </Fragment>
-                    );
-                  })}
-                </div>
+                  onActivateRow={activateModelRow}
+                  onBack={modelMenuBack}
+                  isCurrentConnection={(connectionId) => connectionId === chipConnectionId}
+                />
               )}
                 </div>
               </>

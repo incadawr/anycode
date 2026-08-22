@@ -29,6 +29,46 @@ export const TAB_CREATE_CHANNEL = "anycode:tab-create";
 /** invoke channel: close a tab by id. */
 export const TAB_CLOSE_CHANNEL = "anycode:tab-close";
 
+/**
+ * invoke channel: re-bind a RUNNING tab to another provider connection
+ * (TASK.106 cut-2 §D1/§D6). Not a close and not a create — the tab row, its
+ * session id, and its terminal panel all survive; only the host process is
+ * replaced by a resume host booted on the target connection's fork env.
+ */
+export const TAB_REBIND_CHANNEL = "anycode:tab-rebind";
+
+/**
+ * Re-bind request (TASK.106 cut-2 §D6): the renderer knows `tabId` from the
+ * tabs-store, `connectionId` is an opaque id from main's live connection
+ * registry — never a credential. Main validates BOTH against its own state
+ * (the tab must be a running root core tab; the connection must exist) before
+ * anything is mutated.
+ */
+export interface TabRebindRequest {
+  tabId: string;
+  connectionId: string;
+}
+
+/**
+ * Result of a re-bind request (TASK.106 cut-2 §D6), fail-closed in every
+ * refusal — a refused re-bind leaves the tab running on its ORIGINAL
+ * connection, never on an unprimed or wrong one:
+ *  - `unknown_tab`: no such tab, or a child session's id (a child is not
+ *    externally addressable, same rule `closeTab` already applies);
+ *  - `busy`: the tab is not in the `running` state (closing / crash-looped);
+ *  - `non_core`: a codex/claude tab owns its own account (the same law
+ *    `handleCreate` applies to a `new` request's connection pick);
+ *  - `same_connection`: the target IS the tab's current pin (no-op refusal);
+ *  - `connection_missing`: the id is absent from main's live registry;
+ *  - `not_ready`: the target connection's fork env could not be primed.
+ */
+export type TabRebindResult =
+  | { ok: true; connectionId: string }
+  | {
+      ok: false;
+      reason: "unknown_tab" | "busy" | "connection_missing" | "not_ready" | "same_connection" | "non_core";
+    };
+
 /** invoke channel: list persisted sessions for the picker. */
 export const SESSIONS_LIST_CHANNEL = "anycode:sessions-list";
 

@@ -17,7 +17,9 @@ import {
   handleCreate,
   handleSessionDelete,
   handleSessionsDeleteOlder,
+  handleTabRebind,
   handleWorkspacePick,
+  tabRebindRequestSchema,
   toSummary,
   type ChildHistoryResult,
   type DialogLike,
@@ -1790,5 +1792,214 @@ describe("handleChildHistory — CHILD_HISTORY_CHANNEL (TASK.102 CUT-S2 §2.5/§
     const res = await handleChildHistory(deps, { parentSessionId: "session-master", spawnToolCallId: "call-1" });
 
     expect(res).toEqual({ ok: true, items: [] });
+  });
+});
+
+// ── TASK.106 cut-2: handleTabRebind ────────────────────────────────────────
+
+/**
+ * Fake TabHostManager surface for the rebind path: `getTab` answers a
+ * configurable TabHost-like record, `rebindTab` records the call (the real
+ * manager's own mechanics are exercised in tabs.test.ts). All fields the
+ * handler reads are plain data — no Electron involved.
+ */
+function makeRebindManager(tab: Record<string, unknown> | undefined) {
+  const getTab = vi.fn(() => tab);
+  const rebindTab = vi.fn(async () => ({ ok: true as const }));
+  const manager = { getTab, rebindTab } as unknown as TabHostManager;
+  return { manager, getTab, rebindTab };
+}
+
+/** A running, root, core tab pinned to conn-old — the happy-path subject. */
+function runningCoreTab(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    tabId: "tab-1",
+    sessionId: "session-1",
+    engine: "core",
+    state: "running",
+    connectionId: "conn-old",
+    childOf: undefined,
+    ...over,
+  };
+}
+
+/** Deps stub for the rebind path: persistence.touchSession spied, optional seams injectable. */
+function makeRebindDeps(
+  tab: Record<string, unknown> | undefined,
+  over: {
+    connectionExists?: (id: string) => boolean;
+    ensureConnectionEnv?: (id: string) => Promise<void>;
+    readConnectionModel?: (id: string) => string | undefined;
+  } = {},
+) {
+  const touchSession = vi.fn(async () => {});
+  const { manager, getTab, rebindTab } = makeRebindManager(tab);
+  const deps: TabIpcDeps = {
+    manager,
+    persistence: { ...persistenceStub, touchSession },
+    dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) } as DialogLike,
+    ...(over.connectionExists !== undefined ? { connectionExists: over.connectionExists } : {}),
+    ...(over.ensureConnectionEnv !== undefined ? { ensureConnectionEnv: over.ensureConnectionEnv } : {}),
+    ...(over.readConnectionModel !== undefined ? { readConnectionModel: over.readConnectionModel } : {}),
+  };
+  return { deps, touchSession, getTab, rebindTab };
+}
+
+describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
+  it("happy path: primes the env, re-pins the session row with the target's model, then rebinds the tab", async () => {
+    const order: string[] = [];
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: (id) => id === "conn-new",
+      ensureConnectionEnv: async (id) => {
+        order.push(`ensure:${id}`);
+      },
+      readConnectionModel: (id) => (id === "conn-new" ? "glm-5.3" : undefined),
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    expect(order).toEqual(["ensure:conn-new"]);
+    expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new", model: "glm-5.3" });
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new");
+  });
+
+  it("a tab that does not exist refuses unknown_tab and touches nothing", async () => {
+    const { deps, touchSession, rebindTab } = makeRebindDeps(undefined, {
+      connectionExists: () => true,
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "nope", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("a child session's tabId reads as unknown_tab (not externally addressable)", async () => {
+    const { deps, rebindTab } = makeRebindDeps(
+      runningCoreTab({ childOf: { parentTabId: "p", parentSessionId: "ps", spawnToolCallId: "c", requestId: "r" } }),
+      { connectionExists: () => true },
+    );
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("a non-running tab refuses busy", async () => {
+    const { deps, rebindTab } = makeRebindDeps(runningCoreTab({ state: "closing" }), {
+      connectionExists: () => true,
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "busy" });
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("a non-core tab refuses non_core and never consults the connection seams", async () => {
+    const { deps, rebindTab } = makeRebindDeps(runningCoreTab({ engine: "codex" }), {
+      connectionExists: () => true,
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "non_core" });
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("re-binding to the SAME connection refuses same_connection (no-op refusal)", async () => {
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-old" });
+
+    expect(res).toEqual({ ok: false, reason: "same_connection" });
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("an id absent from the live registry refuses connection_missing before any env work", async () => {
+    const ensured: string[] = [];
+    const { deps, touchSession } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: (id) => id !== "conn-dead",
+      ensureConnectionEnv: async (id) => {
+        ensured.push(id);
+      },
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-dead" });
+
+    expect(res).toEqual({ ok: false, reason: "connection_missing" });
+    expect(ensured).toEqual([]);
+    expect(touchSession).not.toHaveBeenCalled();
+  });
+
+  it("no connectionExists seam wired at all (legacy wiring) fails closed to connection_missing", async () => {
+    const { deps } = makeRebindDeps(runningCoreTab());
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "connection_missing" });
+  });
+
+  it("ensureConnectionEnv throwing refuses not_ready and never touches the session row", async () => {
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      ensureConnectionEnv: async () => {
+        throw new Error("vault read failed");
+      },
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("rebindTab refusing not_ready propagates the refusal", async () => {
+    const tab = runningCoreTab();
+    const touchSession = vi.fn(async () => {});
+    const getTab = vi.fn(() => tab);
+    const rebindTab = vi.fn(async () => ({ ok: false as const, reason: "not_ready" as const }));
+    const deps: TabIpcDeps = {
+      manager: { getTab, rebindTab } as unknown as TabHostManager,
+      persistence: { ...persistenceStub, touchSession },
+      dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) } as DialogLike,
+      connectionExists: () => true,
+    };
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+  });
+
+  it("without a readConnectionModel seam the pin is still written, the model column is left as-is", async () => {
+    const { deps, touchSession } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      ensureConnectionEnv: async () => {},
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new" });
+  });
+});
+
+describe("tabRebindRequestSchema — bounds only (§D6)", () => {
+  it("accepts a well-formed request and bounds both ids' length", () => {
+    expect(tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new" }).success).toBe(true);
+    expect(tabRebindRequestSchema.safeParse({ tabId: "", connectionId: "conn-new" }).success).toBe(false);
+    expect(
+      tabRebindRequestSchema.safeParse({ tabId: "t".repeat(129), connectionId: "conn-new" }).success,
+    ).toBe(false);
+    expect(
+      tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "x".repeat(129) }).success,
+    ).toBe(false);
   });
 });
