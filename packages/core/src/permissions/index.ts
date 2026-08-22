@@ -10,3 +10,6 @@ export type { BashCommandLineClassification } from "./safe-command.js";
 // TASK.36 handoff (invariant 2): the ONE Bash segment splitter, exported.
 export { splitBashSegments } from "./rules.js";
 export type { BashSegments, BashSeparatorKind } from "./rules.js";
+// TASK.138 slice 2: per-run Bash allow-list decorator (ANYCODE_RUN_ALLOW_BASH).
+export { parseRunAllowBash, RunAllowBashPermissionEngine } from "./run-allow-bash.js";
+export type { RunAllowBashEntry } from "./run-allow-bash.js";
