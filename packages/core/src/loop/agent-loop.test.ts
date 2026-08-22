@@ -46,6 +46,8 @@ import { InMemoryHookRunner } from "../dispatch/hook-runner.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
+import { CEILING_VERDICT_DECLARATION } from "./ceiling.js";
+import { MAX_CEILING_ROUNDS } from "../types/config.js";
 
 // ---------------------------------------------------------------------------
 // Mock model port: replays scripted stream events, one step per streamText call.
@@ -560,7 +562,11 @@ describe("AgentLoop.runTurn — wall-clock deadline (TASK.74 §3)", () => {
     vi.setSystemTime(BASE);
     try {
       const modelPort = new ClockAdvancingPort(3, BASE + 60_000);
-      const loop = makeLoop({ modelPort, maxTurns: 10 });
+      // This test's concern is the deadline/turn-budget interaction (TASK.74
+      // §3), not the ceiling ladder (TASK.124, covered separately in its own
+      // describe block below) — disabled explicitly so `modelPort.calls` keeps
+      // meaning exactly "one call per loop turn".
+      const loop = makeLoop({ modelPort, maxTurns: 10, ceiling: { enabled: false } });
 
       const events = await collect(loop.runTurn("go"));
 
@@ -585,6 +591,348 @@ describe("AgentLoop.runTurn — wall-clock deadline (TASK.74 §3)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () => {
+  /** One successful `Mock` tool-call turn — the loop's normal per-turn step. */
+  function toolTurnStep(id: string): ModelStreamEvent[] {
+    return [
+      { type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /** One failing tool-call turn (status "error", never counted as progress). */
+  function failingTurnStep(id: string): ModelStreamEvent[] {
+    return [
+      { type: "tool_call", toolCall: { id, name: "Fail", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /** A tool-free completion turn — ends the loop with reason "completed". */
+  function completionStep(): ModelStreamEvent[] {
+    return [
+      { type: "text_delta", id: "t", text: "done" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+  }
+
+  /** One clean `ceiling_verdict` call — the ONLY way a grant can be produced. */
+  function verdictStep(
+    remaining: string[],
+    opts?: { done?: boolean; nextAction?: string },
+  ): ModelStreamEvent[] {
+    const input: Record<string, unknown> = { done: opts?.done ?? false, remaining };
+    if (opts?.nextAction !== undefined) input.next_action = opts.nextAction;
+    return [
+      { type: "tool_call", toolCall: { id: `v${Math.random()}`, name: "ceiling_verdict", input } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  const failTool = makeTool({ handler: async () => ({ ok: false, error: "boom" }) });
+  const registry = makeRegistry({ Mock: makeTool(), Fail: failTool });
+
+  const grantEvents = (events: AgentEvent[]) =>
+    events.filter((e): e is Extract<AgentEvent, { type: "ceiling_grant" }> => e.type === "ceiling_grant");
+
+  it("round 1: grants, is visible as one event, and the loop resumes with the SAME history — no trace of the decision call", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      verdictStep(["finish the thing"]), // round 1: no progress/shortening gate
+      completionStep(),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toEqual([
+      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["finish the thing"] },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
+    // turn_start fires once per turn (1,2,3) — the grant happens INSIDE turn 3's
+    // iteration, it does not restart turn numbering or announce a new turn.
+    expect(events.filter((e) => e.type === "turn_start")).toHaveLength(3);
+
+    // Exactly 4 model calls: 2 normal turns, 1 ceiling decision, 1 resumed turn.
+    expect(modelPort.requests).toHaveLength(4);
+    // The decision call declares EXACTLY the one verdict tool; every other call
+    // gets the loop's own (mocked) declarations.
+    expect(modelPort.requests[2]!.tools).toEqual([CEILING_VERDICT_DECLARATION]);
+    expect(modelPort.requests[0]!.tools).toEqual([]);
+    expect(modelPort.requests[3]!.tools).toEqual([]);
+
+    // Read-only: the loop's persisted history carries only the two real tool
+    // round-trips plus the resumed turn's text — never the decision prompt or
+    // the ceiling_verdict call itself.
+    const serialized = JSON.stringify(loop.history.toMessages());
+    expect(serialized).not.toContain("ceiling_verdict");
+    expect(serialized).not.toContain("reached the configured turn limit");
+    expect(loop.history.unansweredToolCallIds()).toEqual([]);
+  });
+
+  it("a round with zero successful tool calls since the last grant is refused WITHOUT a model call, whatever the verdict would have said", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      verdictStep(["a", "b"]), // round 1 grants (no progress gate yet)
+      failingTurnStep("c3"), // consumes the grant but earns no "success"
+      // No 5th step: round 2 must refuse BEFORE ever calling the model.
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toHaveLength(1); // only round 1
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 3 });
+    expect(events.filter((e) => e.type === "turn_start")).toHaveLength(4);
+    expect(events.filter((e) => e.type === "tool_result")).toHaveLength(3);
+    // The cheap gate refused round 2 before spending a call on it.
+    expect(modelPort.requests).toHaveLength(4);
+  });
+
+  describe("fail-closed: every kind of unreadable decision refuses like a plain max_turns", () => {
+    it("no tool_call at all", async () => {
+      const modelPort = new MockModelPort([
+        toolTurnStep("c1"),
+        [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      ]);
+      const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(grantEvents(events)).toHaveLength(0);
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+    });
+
+    it("arguments that fail the structural schema", async () => {
+      const modelPort = new MockModelPort([
+        toolTurnStep("c1"),
+        [{ type: "tool_call", toolCall: { id: "v1", name: "ceiling_verdict", input: { done: "nope" } } }],
+      ]);
+      const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(grantEvents(events)).toHaveLength(0);
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+    });
+
+    it("a wrong-tool call (nothing else is offered, but the model called something else)", async () => {
+      const modelPort = new MockModelPort([toolTurnStep("c1"), toolTurnStep("c2")]);
+      const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(grantEvents(events)).toHaveLength(0);
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+    });
+
+    it("the decision call throws mid-stream", async () => {
+      class ThrowOnSecondCallPort implements ModelPort {
+        calls = 0;
+        streamText(): AsyncIterable<ModelStreamEvent> {
+          this.calls += 1;
+          if (this.calls === 1) {
+            const events = toolTurnStep("c1");
+            return (async function* () {
+              for (const e of events) yield e;
+            })();
+          }
+          return (async function* (): AsyncGenerator<ModelStreamEvent> {
+            yield { type: "start" };
+            throw new Error("ceiling decision boom");
+          })();
+        }
+      }
+      const modelPort = new ThrowOnSecondCallPort();
+      const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(grantEvents(events)).toHaveLength(0);
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+      expect(modelPort.calls).toBe(2); // the throw was swallowed, not retried
+    });
+
+    it("the decision call times out (never responds within its window)", async () => {
+      vi.useFakeTimers();
+      try {
+        class HangOnSecondCallPort implements ModelPort {
+          calls = 0;
+          streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+            this.calls += 1;
+            const isFirst = this.calls === 1;
+            const signal = request.abortSignal;
+            if (isFirst) {
+              const events = toolTurnStep("c1");
+              return (async function* () {
+                for (const e of events) yield e;
+              })();
+            }
+            return (async function* (): AsyncGenerator<ModelStreamEvent> {
+              await new Promise<never>((_resolve, reject) => {
+                signal?.addEventListener(
+                  "abort",
+                  () => reject(new DOMException("Aborted", "AbortError")),
+                  { once: true },
+                );
+              });
+            })();
+          }
+        }
+        const modelPort = new HangOnSecondCallPort();
+        const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+        const eventsPromise = collect(loop.runTurn("go"));
+        await vi.advanceTimersByTimeAsync(30_000); // CEILING_DECISION_TIMEOUT_MS
+        const events = await eventsPromise;
+
+        expect(grantEvents(events)).toHaveLength(0);
+        expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("{ enabled: false } restores the pre-TASK.124 wall — no decision call is ever attempted", async () => {
+    const modelPort = new MockModelPort([toolTurnStep("c1"), toolTurnStep("c2")]);
+    const loop = makeLoop({ modelPort, maxTurns: 1, registry, ceiling: { enabled: false } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toHaveLength(0);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+    expect(modelPort.requests).toHaveLength(1); // only the one real turn — no second call at all
+  });
+
+  it("the wall-clock deadline pre-empts the ladder: no decision call when both fire on the same turn", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const BASE = 1_700_000_000_000;
+    vi.setSystemTime(BASE);
+    try {
+      class ClockAdvancingOnFirstCallPort implements ModelPort {
+        calls = 0;
+        streamText(): AsyncIterable<ModelStreamEvent> {
+          this.calls += 1;
+          vi.setSystemTime(BASE + 10_000); // crosses deadlineAt during turn 1
+          const events = toolTurnStep("c1");
+          return (async function* () {
+            for (const e of events) yield e;
+          })();
+        }
+      }
+      const modelPort = new ClockAdvancingOnFirstCallPort();
+      // Both walls line up on turn 2: turn(2) > maxTurns(1) AND deadlineAt has
+      // just passed. Per TASK.124 §1.8 the deadline branch is checked FIRST.
+      const loop = makeLoop({ modelPort, maxTurns: 1, deadlineAt: BASE + 5_000, registry });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(grantEvents(events)).toHaveLength(0);
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+      // Only the one real turn ran; turn 2 never reached the ceiling branch.
+      expect(modelPort.calls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("seam: ceiling -> grant -> same history continues -> smaller grant -> continues -> third round refused (stricter gate) -> stop", async () => {
+    const N = 8;
+    const modelPort = new MockModelPort([
+      // Turns 1-8: the original budget.
+      toolTurnStep("t1"),
+      toolTurnStep("t2"),
+      toolTurnStep("t3"),
+      toolTurnStep("t4"),
+      toolTurnStep("t5"),
+      toolTurnStep("t6"),
+      toolTurnStep("t7"),
+      toolTurnStep("t8"),
+      // Round 1 (turn 9 > 8): no progress/shortening gate yet.
+      verdictStep(["a", "b", "c"]),
+      // Turns 9-12: the round-1 grant (floor(8/2) = 4).
+      toolTurnStep("t9"),
+      toolTurnStep("t10"),
+      toolTurnStep("t11"),
+      toolTurnStep("t12"),
+      // Round 2 (turn 13 > 12): progress (4 successes) + strictly shorter remaining.
+      verdictStep(["a", "b"]),
+      // Turns 13-14: the round-2 grant (floor(8/4) = 2).
+      toolTurnStep("t13"),
+      toolTurnStep("t14"),
+      // Round 3 (turn 15 > 14): progress + shorter remaining are both true, but
+      // next_action is missing — round 3's extra gate refuses it.
+      verdictStep(["a"]),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: N, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toEqual([
+      { type: "ceiling_grant", round: 1, granted: 4, totalGranted: 4, remaining: ["a", "b", "c"] },
+      { type: "ceiling_grant", round: 2, granted: 2, totalGranted: 6, remaining: ["a", "b"] },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 14 });
+    // 8 + 4 + 2 real turns = 14 tool round-trips, plus the two decision calls
+    // and the refused round-3 attempt = 17 model calls total.
+    expect(modelPort.requests).toHaveLength(17);
+    expect(modelPort.requests.filter((r) => r.tools.length === 1 && r.tools[0]!.name === "ceiling_verdict")).toHaveLength(3);
+
+    // The whole run is one continuous history: 1 user message + 14 (assistant,
+    // tool) pairs, balanced, and never touched by the decision machinery.
+    expect(loop.history.toMessages()).toHaveLength(1 + 14 * 2);
+    expect(loop.history.unansweredToolCallIds()).toEqual([]);
+    const serialized = JSON.stringify(loop.history.toMessages());
+    expect(serialized).not.toContain("ceiling_verdict");
+  });
+
+  it("MAX_CEILING_ROUNDS is a hard cap: a 4th round is refused with no model call, and the grant sum never exceeds maxTurns", async () => {
+    const N = 8;
+    const modelPort = new MockModelPort([
+      toolTurnStep("t1"),
+      toolTurnStep("t2"),
+      toolTurnStep("t3"),
+      toolTurnStep("t4"),
+      toolTurnStep("t5"),
+      toolTurnStep("t6"),
+      toolTurnStep("t7"),
+      toolTurnStep("t8"),
+      verdictStep(["a", "b", "c"]), // round 1 -> grants 4
+      toolTurnStep("t9"),
+      toolTurnStep("t10"),
+      toolTurnStep("t11"),
+      toolTurnStep("t12"),
+      verdictStep(["a", "b"]), // round 2 -> grants 2
+      toolTurnStep("t13"),
+      toolTurnStep("t14"),
+      // Round 3 this time SUCCEEDS: shorter remaining + a real next_action.
+      verdictStep(["a"], { nextAction: "finish it" }),
+      toolTurnStep("t15"),
+      toolTurnStep("t16"),
+      // No further step: round 4 must be refused before ever calling the model.
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: N, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    const grants = grantEvents(events);
+    expect(grants).toHaveLength(MAX_CEILING_ROUNDS);
+    expect(grants.map((g) => g.round)).toEqual([1, 2, 3]);
+    expect(grants.map((g) => g.granted)).toEqual([4, 2, 2]); // round 3's raw 5 is clamped to the 2 left of N=8
+    const totalGranted = grants.at(-1)!.totalGranted;
+    expect(totalGranted).toBeLessThanOrEqual(N); // spec: sum of grants never exceeds N
+    expect(totalGranted).toBe(8);
+
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 16 });
+    // 8 + 4 + 2 + 2 = 16 real turns + 3 decision calls = 19; the 4th attempt
+    // never reaches the model (MAX_CEILING_ROUNDS gate is cheap).
+    expect(modelPort.requests).toHaveLength(19);
   });
 });
 

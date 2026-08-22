@@ -239,6 +239,32 @@ export const SUBAGENT_OUTCOME_DEADLINE_MS = 590_000;
 /** Below this remaining window the wrap-up call is skipped entirely. */
 export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
 
+// ---------------------------------------------------------------------------
+// TASK.124 constants (turn-ceiling decision ladder)
+
+/**
+ * How many times ONE session's turn ceiling may be extended by the decision
+ * ladder. The bound is per session, not per `runTurn` call: the ladder state
+ * lives on the AgentLoop, so a follow-up user message cannot reset the counter
+ * and walk the ladder a second time.
+ */
+export const MAX_CEILING_ROUNDS = 3;
+
+/**
+ * Window for ONE ceiling-verdict model call. Half of
+ * SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS on purpose: the question is narrower (one
+ * structured tool call, no prose report), and the answer gates a decision the
+ * user is waiting on.
+ */
+export const CEILING_DECISION_TIMEOUT_MS = 30_000;
+
+/**
+ * Below this much remaining wall-clock budget the ceiling decision call is not
+ * made at all. A verdict that cannot come back in time is worth less than the
+ * stop it would delay — fail closed instead of spending the remainder.
+ */
+export const CEILING_MIN_WINDOW_MS = 10_000;
+
 /** Semaphore width in the subagent runner: at most this many child loops run at once (atop toolConcurrency=4). */
 export const MAX_CONCURRENT_SUBAGENTS = 2;
 

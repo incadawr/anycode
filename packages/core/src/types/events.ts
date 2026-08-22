@@ -130,6 +130,26 @@ export type AgentEvent =
       error?: string;
     }
   | { type: "microcompact"; clearedToolResults: number; savedTokens: number }
+  /**
+   * One granted extension of the turn ceiling (TASK.124 cut-1). Additive: it
+   * rides the existing agent_event envelope on the desktop wire with no
+   * protocol change (protocol.ts projects new AgentEvent variants
+   * automatically), same precedent as `engine_notice` above. Emitted ONLY when
+   * a grant was actually issued — a refused round needs no event, the existing
+   * `loop_end`/`max_turns` already says the run stopped. `round` counts from 1
+   * and never exceeds MAX_CEILING_ROUNDS; `totalGranted` is the running sum of
+   * turns this session's ladder has handed out (bounded by the loop's
+   * maxGrantedTurns); `remaining`/`nextAction` come verbatim from the model's
+   * structured verdict.
+   */
+  | {
+      type: "ceiling_grant";
+      round: number;
+      granted: number;
+      totalGranted: number;
+      remaining: string[];
+      nextAction?: string;
+    }
   /** Emitted after each finish (design §2.5): provider usage wins over the local estimate. */
   | {
       type: "context_usage";

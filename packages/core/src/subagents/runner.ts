@@ -143,6 +143,13 @@ export function buildChildConfig(
      * the child loop runs without a deadline (existing callers unchanged).
      */
     deadlineAt?: number;
+    /**
+     * Absolute epoch-ms by which the outcome must be on its way back to the
+     * parent (TASK.124 §1.11). Clamps the ceiling ladder's decision window: a
+     * child that would answer after the Agent call has already timed out must
+     * stop instead, so the parent gets a partial rather than nothing.
+     */
+    outcomeDeadlineAt?: number;
   },
 ): AgentLoopConfig {
   const tokenizer = parent.tokenizer ?? new HeuristicTokenizer();
@@ -180,6 +187,17 @@ export function buildChildConfig(
       SUBAGENT_MAX_TURNS_CEILING,
     ),
     ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
+    // Ceiling ladder with the two clamps only a child needs (TASK.124 §1.12):
+    // maxTurnsCeiling keeps the budget PLUS every grant under the same runaway
+    // guard that bounds an explicit request, and outcomeDeadlineAt shrinks (and
+    // eventually cancels) the decision call as the dispatcher's wall approaches.
+    // The window/round/grant-sum defaults are the loop's own.
+    ceiling: {
+      maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING,
+      ...(extras?.outcomeDeadlineAt !== undefined
+        ? { outcomeDeadlineAt: extras.outcomeDeadlineAt }
+        : {}),
+    },
     // Harness prelude (tool discipline over the child's OWN registry, env, memory)
     // + persona/profile body + finality note. toolNames come from the registry
     // built above (post SPAWN_TOOLS skip), so the child's prompt structurally
@@ -523,6 +541,9 @@ export function createSubagentRunner(
           // wait above: the dispatcher bills the Agent call from the moment the
           // handler was invoked, so time spent queued is time already spent.
           deadlineAt: startedAt + SUBAGENT_LOOP_DEADLINE_MS,
+          // Same anchor as the wrap-up window below (run() entry): what the
+          // ladder may spend on a decision is what is left of the parent's wait.
+          outcomeDeadlineAt: startedAt + SUBAGENT_OUTCOME_DEADLINE_MS,
           ...(childModelPort !== undefined ? { modelPort: childModelPort } : {}),
         });
         const loop = new AgentLoop(childConfig);

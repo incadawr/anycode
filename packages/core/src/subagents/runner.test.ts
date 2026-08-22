@@ -331,6 +331,22 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect("deadlineAt" in buildChildConfig(parent, getPersona("explore"), REQ)).toBe(false);
   });
 
+  // The ceiling ladder applies to children too (TASK.124 §1.5/§1.7), but with
+  // the two clamps only a child needs: the total (budget + every grant) stays
+  // under SUBAGENT_MAX_TURNS_CEILING like an explicit request would, and the
+  // decision window is additionally bounded by what is left of the parent's
+  // wait so a late verdict cannot outlive the dispatcher's own timeout.
+  it("always sets ceiling.maxTurnsCeiling to SUBAGENT_MAX_TURNS_CEILING, and threads outcomeDeadlineAt only when given", () => {
+    const parent = makeParent();
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).ceiling).toEqual({
+      maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING,
+    });
+    const outcomeDeadlineAt = Date.now() + 5_678;
+    expect(
+      buildChildConfig(parent, getPersona("explore"), REQ, { outcomeDeadlineAt }).ceiling,
+    ).toEqual({ maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING, outcomeDeadlineAt });
+  });
+
   it("gives the child a fresh history that never reaches the parent's persistence sink (ephemeral, R5)", () => {
     const sink: HistorySink = { append: vi.fn(), replaceAll: vi.fn(), flush: async () => {} };
     const parentHistory = new ConversationHistory({ sink });
@@ -522,8 +538,10 @@ describe("output cap + status mapping", () => {
     expect(outcome.toolCalls).toBe(2);
     // The wrap-up report replaces the cut-off turn's preamble ("turn-2").
     expect(outcome.finalText).toBe("REPORT: turn-1 and turn-2 findings");
-    // Two loop turns (the cutoff turn never calls the model) + one wrap-up call.
-    expect(model.calls).toBe(3);
+    // Two loop turns, + one ceiling round-1 decision call (refused: the script
+    // answers every non-wrap-up request with a "TodoRead" tool call, which is
+    // not `ceiling_verdict`) + one wrap-up call (TASK.124).
+    expect(model.calls).toBe(4);
   });
 
   it("returns an error outcome for an unknown persona without throwing", async () => {
@@ -2095,7 +2113,9 @@ describe("wrap-up degrades without ever worsening the outcome (TASK.74 §7 F4, D
 
     expect(outcome.status).toBe("max_turns");
     expect(outcome.finalText).toBe("turn-2");
-    expect(calls()).toBe(3);
+    // 2 loop turns + 1 refused ceiling round-1 call (TASK.124; the script's
+    // else-branch answers it with a plain "TodoRead" tool call) + 1 wrap-up.
+    expect(calls()).toBe(4);
   });
 
   it("(b) a blank wrap-up reply does not erase a non-empty partial", async () => {
@@ -2182,7 +2202,9 @@ describe("wrap-up window gate (TASK.74 §4.3, DoD-6)", () => {
     const { outcome, calls } = await runWithElapsed(400_000);
     expect(outcome.status).toBe("max_turns");
     expect(outcome.finalText).toBe("REPORT: rescued in time");
-    expect(calls).toBe(3);
+    // 2 loop turns + 1 refused ceiling round-1 call (TASK.124, still inside
+    // SUBAGENT_LOOP_DEADLINE_MS at 400s elapsed) + 1 wrap-up.
+    expect(calls).toBe(4);
   });
 
   it("(b') skips the rescue when the caller cancelled between loop_end and the call", async () => {
@@ -2216,7 +2238,9 @@ describe("wrap-up window gate (TASK.74 §4.3, DoD-6)", () => {
 
     expect(outcome.status).toBe("max_turns");
     expect(outcome.finalText).toBe("turn-2");
-    expect(model.calls).toBe(2);
+    // 2 loop turns + 1 refused ceiling round-1 call (TASK.124); the Stop
+    // observer's abort() then makes the wrap-up window gate skip its call.
+    expect(model.calls).toBe(3);
   });
 });
 
