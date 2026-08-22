@@ -45,6 +45,12 @@ type ArtifactActionResult =
 // preload's own mirror of it) — same "duplicated on purpose" convention.
 type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
 
+// TASK.112 slice 2: duplicated from main/artifacts-ipc.ts's previewable-probe
+// result (and preload's own mirror of it) — same "duplicated on purpose"
+// convention. `paths` is the subset of the CALLER'S OWN strings that
+// verified — never a resolved realpath.
+type ArtifactPreviewableResult = { paths: string[] };
+
 import type { PreviewOpenSuccess, PreviewResult } from "../../shared/preview";
 // CUT.md §2.1/§3 96-P2: mirrors the SAME preview-panel wire types declared in
 // shared/preview-panel.ts (a frozen shared/** contract, imported directly —
@@ -563,6 +569,11 @@ declare global {
         // Night-track wave-1: user click on a local .html/.htm/.md artifact
         // link opens/reopens it in the PreviewHost window.
         preview(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>>;
+        // TASK.112 slice 2: batched yes/no existence-and-containment probe
+        // for path candidates a plain-text scan found (markdown/path-
+        // spans.ts) — never opens/reads/reveals anything, unlike `preview`
+        // above, so it is safe to call on every render.
+        previewable(tabId: string, paths: string[]): Promise<ArtifactPreviewableResult>;
       };
       // CUT.md §2.1/§3 96-P2: the preview-panel control plane — NOT under
       // `artifacts.preview` above (different plane: panel-gating/bounds/

@@ -32,6 +32,7 @@ import type { Token, Tokens } from "marked";
 import { decodeMarkedText, fenceLabel, lexMarkdown } from "../markdown/lex.js";
 import { isLocalMdHref, resolveDocRelative } from "../markdown/doc-links.js";
 import { classifyHtmlToken } from "../markdown/html-token.js";
+import { findPathSpans } from "../markdown/path-spans.js";
 import {
   fontStyleToCss,
   highlightCode,
@@ -48,6 +49,7 @@ import {
 } from "./artifact-messages.js";
 import { Check, Copy } from "./icons.js";
 import { TabContext } from "../tab-context.js";
+import { PREVIEWABLE_DOC_EXTENSIONS } from "../../../shared/previewable.js";
 
 /** Single copy slot per Markdown instance (design §4): which link href, if any, is currently showing its transient "Copied" hint. */
 interface CopyState {
@@ -63,7 +65,13 @@ const CopyContext = createContext<CopyState>({ linkTarget: null, copyLink: () =>
  * MessageList uses; `null` outside a tab (tests, Storybook-ish mounts) —
  * every artifact surface degrades to the plain copy-link in that case.
  */
-const MarkdownTabContext = createContext<string | null>(null);
+/**
+ * Exported (TASK.112 slice 2) for the same "SSR can't reach an effect-derived
+ * value" reason as `BlockTokens`/`InlineTokens`: `MdLink`'s adornment row is
+ * gated on a tab being present, so a static render can only exercise the
+ * adorned-vs-bare distinction by supplying this context explicitly.
+ */
+export const MarkdownTabContext = createContext<string | null>(null);
 
 /**
  * TASK.99 M2 (CUT.md CONTRACTS): parameterizes `Markdown` for the native
@@ -82,10 +90,168 @@ export interface MdDocContextValue {
 
 export const MdDocContext = createContext<MdDocContextValue | null>(null);
 
+/** Shared empty set — a single stable reference so a context consumer's own
+ *  memoization never sees a "changed" value just because a fresh, equally-
+ *  empty Set was allocated on some unrelated render. */
+const EMPTY_PATH_SET: ReadonlySet<string> = new Set();
+
+/**
+ * TASK.112 slice 2: the set of prose/codespan path candidates THIS render's
+ * `Markdown` instance has confirmed real (existing, in-bounds, previewable-
+ * extension) via `artifacts.previewable`. Default `EMPTY_PATH_SET` is a HARD
+ * invariant, same posture as `MdDocContext` above: every read below is
+ * additive-only and gated behind `.has(...)`/`.size`, so a consumer mounted
+ * with no provider (this file's own SSR tests, any future non-chat mount)
+ * renders byte-identical to before this slice.
+ */
+export const PathLinkContext = createContext<ReadonlySet<string>>(EMPTY_PATH_SET);
+
+/**
+ * Positive-only probe cache, keyed `${tabId}\u0000${path}` — module-level
+ * (not component state) because the SAME file path is routinely repeated
+ * across many messages in one transcript (an agent narrating the same file
+ * across several turns), and there is no reason to re-probe an already-
+ * confirmed path just because a different `Markdown` instance mounted.
+ * NEGATIVE results are never cached: a path the model is ABOUT to write does
+ * not exist yet at the moment its containing message first renders, but it
+ * may exist by the next render (streaming, or a later poll) — caching "no"
+ * would freeze that file out of ever becoming a link for the lifetime of the
+ * renderer process.
+ */
+const previewableCache = new Map<string, true>();
+
+function previewableCacheKey(tabId: string, path: string): string {
+  return `${tabId}\u0000${path}`;
+}
+
+/**
+ * Recursively collects path candidates from a lexed token tree: `text`
+ * leaves (their DECODED content, via `findPathSpans`) and `codespan` tokens
+ * whose entire trimmed content is a single candidate. Mirrors exactly the
+ * shapes `BlockTokens`/`InlineTokens` themselves recurse into (heading/
+ * paragraph/strong/em/del/blockquote/list-item/table-cell) so a path is
+ * findable anywhere prose can legally appear.
+ *
+ * Two shapes are deliberately never visited, matching `InlineTokens`' own
+ * `linkify` rule: a `link` token's children (already have their own
+ * click-to-open affordance — nesting a second one would be an `<a>` inside
+ * an `<a>`) and a block `code` token (a fenced/indented block is source
+ * text, e.g. a shell transcript or a diff, not a place names are "stated" in
+ * the sense this feature targets).
+ *
+ * Exported (this package's renderer tests are pure-logic + SSR only, see
+ * ToolCallCard.test.ts's file header) so the collector can be unit-tested
+ * directly against hand-built token arrays, not only through a full render.
+ */
+export function collectPathCandidates(tokens: Token[]): string[] {
+  const found = new Set<string>();
+  collectPathCandidatesInto(tokens, found);
+  return [...found];
+}
+
+function collectPathCandidatesInto(tokens: Token[], found: Set<string>): void {
+  for (const token of tokens) {
+    switch (token.type) {
+      case "link":
+      case "code":
+        continue;
+      case "codespan": {
+        const trimmed = (token as Tokens.Codespan).text.trim();
+        const spans = findPathSpans(trimmed);
+        // Whole-content match only: a codespan that merely CONTAINS a path
+        // among other code stays inert — `` `cd docs/plan.md` `` is a shell
+        // command, not a stated path, and must not partially linkify.
+        if (spans.length === 1 && spans[0]!.start === 0 && spans[0]!.end === trimmed.length) {
+          found.add(spans[0]!.path);
+        }
+        continue;
+      }
+      case "text": {
+        const t = token as Tokens.Text;
+        if (t.tokens) {
+          collectPathCandidatesInto(t.tokens, found);
+        } else {
+          for (const span of findPathSpans(decodeMarkedText(t.text))) {
+            found.add(span.path);
+          }
+        }
+        continue;
+      }
+      case "heading":
+      case "paragraph":
+      case "strong":
+      case "em":
+      case "del":
+      case "blockquote": {
+        const nested = (token as { tokens?: Token[] }).tokens;
+        if (nested) {
+          collectPathCandidatesInto(nested, found);
+        }
+        continue;
+      }
+      case "list":
+        for (const item of (token as Tokens.List).items) {
+          collectPathCandidatesInto(item.tokens, found);
+        }
+        continue;
+      case "table": {
+        const t = token as Tokens.Table;
+        for (const cell of t.header) {
+          collectPathCandidatesInto(cell.tokens, found);
+        }
+        for (const row of t.rows) {
+          for (const cell of row) {
+            collectPathCandidatesInto(cell.tokens, found);
+          }
+        }
+        continue;
+      }
+      default:
+        continue;
+    }
+  }
+}
+
+/** One rendered fragment of a `text` leaf, split around its verified path spans. */
+export type TextSegment = { kind: "text"; value: string } | { kind: "link"; path: string };
+
+/**
+ * Pure split of DECODED text into plain/link fragments, in source order.
+ * `verified.size === 0` short-circuits to a single plain-text segment
+ * BEFORE `findPathSpans` even runs — the empty-set case is the common one
+ * (most messages carry no confirmed path candidate) and this is also the
+ * exact condition `InlineTokens`' "byte-identical when empty" invariant
+ * needs, satisfied structurally rather than by a separate check at the call
+ * site. Exported for direct testing (same "prefer pure helpers" rationale as
+ * `collectPathCandidates` above) — a static SSR render can observe the
+ * OUTPUT of this logic but not exercise every span-boundary case as directly.
+ */
+export function splitTextByVerifiedPaths(text: string, verified: ReadonlySet<string>): TextSegment[] {
+  if (verified.size === 0) {
+    return [{ kind: "text", value: text }];
+  }
+  const spans = findPathSpans(text).filter((span) => verified.has(span.path));
+  if (spans.length === 0) {
+    return [{ kind: "text", value: text }];
+  }
+  const segments: TextSegment[] = [];
+  let cursor = 0;
+  for (const span of spans) {
+    if (span.start > cursor) {
+      segments.push({ kind: "text", value: text.slice(cursor, span.start) });
+    }
+    segments.push({ kind: "link", path: span.path });
+    cursor = span.end;
+  }
+  if (cursor < text.length) {
+    segments.push({ kind: "text", value: text.slice(cursor) });
+  }
+  return segments;
+}
+
 const INLINE_PREVIEW_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const OPENABLE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".tiff", ".tif", ".heic"]);
-/** Night-track wave-1: local doc links the PreviewHost window can render (mirrors main/artifacts-ipc.ts's PREVIEWABLE_DOC_EXTENSIONS). */
-const PREVIEWABLE_ARTIFACT_EXTENSIONS = new Set([".html", ".htm", ".md"]);
+
 
 function extensionOfHref(href: string): string {
   const base = href.slice(href.lastIndexOf("/") + 1);
@@ -121,7 +287,7 @@ function isInlinePreviewHref(href: string): boolean {
  * tool or turn-end auto-open.
  */
 function isPreviewableArtifactHref(href: string): boolean {
-  return isLocalFileHref(href) && PREVIEWABLE_ARTIFACT_EXTENSIONS.has(extensionOfHref(href));
+  return isLocalFileHref(href) && PREVIEWABLE_DOC_EXTENSIONS.has(extensionOfHref(href));
 }
 
 /** Writes to the clipboard if available, swallowing rejection (no error theater for a clipboard edge). Returns whether a write was attempted. */
@@ -148,6 +314,64 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     [],
   );
 
+  // TASK.112 slice 2: candidates come off the SAME `tokens` streaming already
+  // memoizes on `text` — no separate re-lex. `candidateKey` (not `candidates`
+  // itself) is what the effect below keys on: during an actively-streaming
+  // tail message `tokens` gets a fresh array identity on every rAF tick even
+  // when the CONTENT of the candidate list hasn't changed yet, and re-probing
+  // main on every tick for the same names would be pure waste — a joined
+  // string collapses that back to real content-equality.
+  const candidates = useMemo(() => collectPathCandidates(tokens), [tokens]);
+  const candidateKey = candidates.join("\u0000");
+  const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
+  // Bumped after a probe adds a positive to the module cache — its VALUE is
+  // never read, only its CHANGE re-runs the memo below so a result that
+  // arrived after this component's last render becomes visible (same
+  // "deliberate re-fetch trigger" idiom as `ArtifactPreview`'s `attempt`
+  // state further down this file).
+  const [probeVersion, setProbeVersion] = useState(0);
+  const verifiedPaths = useMemo<ReadonlySet<string>>(() => {
+    if (tabId === null || candidates.length === 0) {
+      return EMPTY_PATH_SET;
+    }
+    const set = new Set<string>();
+    for (const path of candidates) {
+      if (previewableCache.has(previewableCacheKey(tabId, path))) {
+        set.add(path);
+      }
+    }
+    return set.size === 0 ? EMPTY_PATH_SET : set;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on
+    // candidateKey (content), not the `candidates` array identity; probeVersion
+    // is a pure invalidation signal, see its own comment above.
+  }, [candidateKey, tabId, probeVersion]);
+
+  useEffect(() => {
+    if (tabId === null || api === undefined || candidates.length === 0) {
+      return;
+    }
+    const unresolved = candidates.filter((path) => !previewableCache.has(previewableCacheKey(tabId, path)));
+    if (unresolved.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void api.previewable(tabId, unresolved).then((result) => {
+      if (cancelled || result.paths.length === 0) {
+        return;
+      }
+      for (const path of result.paths) {
+        previewableCache.set(previewableCacheKey(tabId, path), true);
+      }
+      setProbeVersion((version) => version + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on
+    // candidateKey (content, see the memo above), not the `candidates` array
+    // identity.
+  }, [candidateKey, tabId, api]);
+
   const copyLink = useCallback((href: string) => {
     tryClipboardWrite(href, () => {
       setLinkTarget(href);
@@ -163,14 +387,27 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <CopyContext.Provider value={copyState}>
       <MarkdownTabContext.Provider value={tabId}>
-        <BlockTokens tokens={tokens} />
+        <PathLinkContext.Provider value={verifiedPaths}>
+          <BlockTokens tokens={tokens} />
+        </PathLinkContext.Provider>
       </MarkdownTabContext.Provider>
     </CopyContext.Provider>
   );
 });
 
-/** Block-token array → elements. `default:` renders raw text in a `.md-p` — unknown/future kinds never throw. */
-function BlockTokens({ tokens }: { tokens: Token[] }) {
+/**
+ * Block-token array → elements. `default:` renders raw text in a `.md-p` —
+ * unknown/future kinds never throw.
+ *
+ * Exported (TASK.112 slice 2, same rationale as ToolCallCard's `AgentCardBody`/
+ * `ToolCallHeaderRow`): `Markdown`'s own `PathLinkContext` value is derived
+ * from an effect (the `artifacts.previewable` probe), and effects never run
+ * during `renderToStaticMarkup` — a static render has no path from
+ * `Markdown`'s own props to a populated verified set. Tests reach it instead
+ * by rendering `BlockTokens`/`InlineTokens` directly under an explicit
+ * `<PathLinkContext.Provider>`.
+ */
+export function BlockTokens({ tokens }: { tokens: Token[] }) {
   const mdDoc = useContext(MdDocContext);
   return (
     <>
@@ -269,19 +506,54 @@ function BlockTokens({ tokens }: { tokens: Token[] }) {
   );
 }
 
-/** Inline-token array → elements. `default:` renders decoded raw text — unknown/future kinds never throw. */
-function InlineTokens({ tokens }: { tokens: Token[] }) {
+/**
+ * Inline-token array → elements. `default:` renders decoded raw text —
+ * unknown/future kinds never throw.
+ *
+ * `linkify` (TASK.112 slice 2, default `true`): whether a `text`/`codespan`
+ * leaf here may become a `PathLinkContext`-verified click-to-open link.
+ * `false` ONLY inside a `link` token's own children (the "link" case below
+ * sets it, and every other recursive call in this function propagates
+ * whatever it was handed) — a real markdown link already has its own anchor,
+ * and nesting a second `<a>` inside it is invalid HTML.
+ *
+ * Exported — same "SSR can't reach an effect-derived context value"
+ * rationale as `BlockTokens` above.
+ */
+export function InlineTokens({ tokens, linkify = true }: { tokens: Token[]; linkify?: boolean }) {
   const mdDoc = useContext(MdDocContext);
+  const verifiedPaths = useContext(PathLinkContext);
   return (
     <>
       {tokens.map((token, index) => {
         switch (token.type) {
           case "text": {
             const t = token as Tokens.Text;
-            return t.tokens ? (
-              <InlineTokens key={index} tokens={t.tokens} />
-            ) : (
-              <Fragment key={index}>{decodeMarkedText(t.text)}</Fragment>
+            if (t.tokens) {
+              return <InlineTokens key={index} tokens={t.tokens} linkify={linkify} />;
+            }
+            const decoded = decodeMarkedText(t.text);
+            if (!linkify) {
+              return <Fragment key={index}>{decoded}</Fragment>;
+            }
+            // `verifiedPaths` empty is the overwhelmingly common case (most
+            // text carries no confirmed path) and `splitTextByVerifiedPaths`
+            // already short-circuits to one plain segment for it — this is
+            // also exactly the condition the "byte-identical when the
+            // verified set is empty" invariant needs, so it holds
+            // structurally rather than via a separate check here.
+            return (
+              <Fragment key={index}>
+                {splitTextByVerifiedPaths(decoded, verifiedPaths).map((segment, segIndex) =>
+                  segment.kind === "link" ? (
+                    <MdLink key={segIndex} href={segment.path} adorned={false}>
+                      {segment.path}
+                    </MdLink>
+                  ) : (
+                    <Fragment key={segIndex}>{segment.value}</Fragment>
+                  ),
+                )}
+              </Fragment>
             );
           }
           case "escape":
@@ -289,31 +561,47 @@ function InlineTokens({ tokens }: { tokens: Token[] }) {
           case "strong":
             return (
               <strong key={index}>
-                <InlineTokens tokens={(token as Tokens.Strong).tokens} />
+                <InlineTokens tokens={(token as Tokens.Strong).tokens} linkify={linkify} />
               </strong>
             );
           case "em":
             return (
               <em key={index}>
-                <InlineTokens tokens={(token as Tokens.Em).tokens} />
+                <InlineTokens tokens={(token as Tokens.Em).tokens} linkify={linkify} />
               </em>
             );
           case "del":
             return (
               <del key={index}>
-                <InlineTokens tokens={(token as Tokens.Del).tokens} />
+                <InlineTokens tokens={(token as Tokens.Del).tokens} linkify={linkify} />
               </del>
             );
-          case "codespan":
+          case "codespan": {
             // Code-span content is verbatim (CommonMark): entity references are
             // NOT processed inside inline code. marked 18 leaves `codespan.text`
             // as literal source, so it is rendered raw — decoding here would
             // wrongly collapse an author's literal `&lt;`/`&amp;` in inline code.
+            const codespanText = (token as Tokens.Codespan).text;
+            // TASK.112 slice 2: verified against the TRIMMED text (matching
+            // `collectPathCandidates`' own whole-content rule) — a codespan's
+            // padding whitespace is presentational, never part of the path
+            // main resolved and confirmed.
+            const trimmed = linkify ? codespanText.trim() : "";
+            if (linkify && verifiedPaths.has(trimmed)) {
+              return (
+                <code key={index} className="md-code-inline">
+                  <MdLink href={trimmed} adorned={false}>
+                    {trimmed}
+                  </MdLink>
+                </code>
+              );
+            }
             return (
               <code key={index} className="md-code-inline">
-                {(token as Tokens.Codespan).text}
+                {codespanText}
               </code>
             );
+          }
           case "br":
             return <br key={index} />;
           case "checkbox":
@@ -326,7 +614,7 @@ function InlineTokens({ tokens }: { tokens: Token[] }) {
             const t = token as Tokens.Link;
             return (
               <MdLink key={index} href={t.href}>
-                <InlineTokens tokens={t.tokens} />
+                <InlineTokens tokens={t.tokens} linkify={false} />
               </MdLink>
             );
           }
@@ -459,7 +747,19 @@ function Table({ table }: { table: Tokens.Table }) {
  * chat behavior"). `mdDoc === null` (chat) makes this branch dead code, byte-
  * identical to pre-M2.
  */
-function MdLink({ href, children }: { href: string; children: ReactNode }) {
+/**
+ * `adorned` (TASK.112 slice 2, default `true`): whether this link carries its
+ * sibling affordances — the copy-link button, the "Copied" hint, and the
+ * inline preview / "Reveal in folder" row. `false` for a link MINTED from
+ * prose or inline code by the path scan, where the anchor sits mid-sentence:
+ * a real markdown link is authored deliberately and usually stands alone, so
+ * a button row beside it reads as belonging to it, but the same row injected
+ * between the words of a sentence (four of them, for a sentence listing four
+ * files) destroys the prose — and inside a codespan it would additionally
+ * put a `<button>` in the middle of `<code>`. The click behaviour and the
+ * failure message are IDENTICAL either way; only the adornments differ.
+ */
+function MdLink({ href, children, adorned = true }: { href: string; children: ReactNode; adorned?: boolean }) {
   const copy = useContext(CopyContext);
   const tabId = useContext(MarkdownTabContext);
   const mdDoc = useContext(MdDocContext);
@@ -488,7 +788,7 @@ function MdLink({ href, children }: { href: string; children: ReactNode }) {
       <a className="md-link" href={href} title={href} onClick={onClick}>
         {children}
       </a>
-      {previewable && (
+      {adorned && previewable && (
         <button
           type="button"
           className="md-link-copy"
@@ -499,9 +799,9 @@ function MdLink({ href, children }: { href: string; children: ReactNode }) {
           {copied ? <Check /> : <Copy />}
         </button>
       )}
-      {copied && <span className="md-copied-hint">Copied</span>}
+      {adorned && copied && <span className="md-copied-hint">Copied</span>}
       {previewError !== null && <span className="md-artifact-error">{previewError}</span>}
-      {isInlinePreviewHref(href) ? <ArtifactPreview path={href} /> : isLocalFileHref(href) ? <ArtifactReveal path={href} /> : null}
+      {adorned ? (isInlinePreviewHref(href) ? <ArtifactPreview path={href} /> : isLocalFileHref(href) ? <ArtifactReveal path={href} /> : null) : null}
     </>
   );
 }

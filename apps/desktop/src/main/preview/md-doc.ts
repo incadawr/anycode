@@ -27,6 +27,7 @@
 
 import { basename, dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import type { MdDocReadResult } from "../../shared/md-preview.js";
+import { isMarkdownPath } from "../../shared/previewable.js";
 
 /** Read cap for the raw markdown source — anything bigger is an honest `too_large` refusal, never a truncated read. */
 export const MD_PREVIEW_MAX_SOURCE_BYTES = 2 * 1024 * 1024;
@@ -88,7 +89,7 @@ export async function readMdDoc(deps: MdDocDeps, tabId: string, previewId: strin
     return { ok: false, reason: resolved.failure };
   }
   const realPath = resolved.realPath;
-  if (!/\.md$/i.test(realPath)) {
+  if (!isMarkdownPath(realPath)) {
     return { ok: false, reason: "not_md" };
   }
 
@@ -170,7 +171,7 @@ export async function navigateMdDoc(
     return { ok: false, reason: resolved.failure };
   }
   const realPath = resolved.realPath;
-  if (!/\.md$/i.test(realPath)) {
+  if (!isMarkdownPath(realPath)) {
     return { ok: false, reason: "not_md" };
   }
 

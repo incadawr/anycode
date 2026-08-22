@@ -22,6 +22,8 @@
  *    `isLocalFileHref` regex).
  */
 
+import { isMarkdownPath } from "../../../shared/previewable.js";
+
 const WIN_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 
 /** A URI scheme prefix (`scheme:`), excluding a win32 drive letter (`C:\` / `C:/`), which is an absolute LOCAL path, not a scheme. */
@@ -137,5 +139,5 @@ export function isLocalMdHref(href: string): boolean {
     return false;
   }
   const pathPart = stripFragmentAndQuery(href);
-  return pathPart.length > 0 && /\.md$/i.test(pathPart);
+  return pathPart.length > 0 && isMarkdownPath(pathPart);
 }

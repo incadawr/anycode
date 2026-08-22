@@ -47,6 +47,7 @@ import {
   todoSummary,
   ToolCallCard,
   ToolCallHeaderRow,
+  previewablePathOf,
   workflowRunLabel,
   workflowStepAria,
   workflowStepMeta,
@@ -1259,5 +1260,105 @@ describe("ToolCallCard (SSR) — header-row badge (TASK.120)", () => {
     );
     expect(html).toContain('<span class="tool-call-child-badge tool-call-child-badge-waiting_permission"');
     expect(html).not.toContain("tool-call-child-badge-action");
+  });
+});
+
+describe("previewablePathOf (TASK.112)", () => {
+  it("returns the file_path of a document Read/Write/Edit touched", () => {
+    for (const tool of ["Read", "Write", "Edit"]) {
+      expect(previewablePathOf(tool, { file_path: "/repo/plan.md" })).toBe("/repo/plan.md");
+    }
+  });
+
+  it("accepts every previewable document extension, `.markdown` included", () => {
+    for (const path of ["/a/x.md", "/a/x.markdown", "/a/x.html", "/a/x.htm"]) {
+      expect(previewablePathOf("Write", { file_path: path })).toBe(path);
+    }
+  });
+
+  it("returns null for a non-document extension — the card falls back to plain text", () => {
+    for (const path of ["/a/x.png", "/a/x.ts", "/a/Makefile", "/a/x.mdx"]) {
+      expect(previewablePathOf("Write", { file_path: path })).toBeNull();
+    }
+  });
+
+  it("returns null for every other tool, even one whose input happens to carry a file_path", () => {
+    for (const tool of ["Bash", "Grep", "Agent", "TodoWrite", "Workflow"]) {
+      expect(previewablePathOf(tool, { file_path: "/repo/plan.md" })).toBeNull();
+    }
+  });
+
+  it("survives junk input rather than throwing — hydrated blocks may carry anything", () => {
+    expect(previewablePathOf("Write", null)).toBeNull();
+    expect(previewablePathOf("Write", undefined)).toBeNull();
+    expect(previewablePathOf("Write", "not-an-object")).toBeNull();
+    expect(previewablePathOf("Write", {})).toBeNull();
+    expect(previewablePathOf("Write", { file_path: 42 })).toBeNull();
+  });
+});
+
+describe("ToolCallCard (SSR) — open-in-preview control (TASK.112)", () => {
+  // Same plain-prop rationale as the TASK.120 badge above: the action is
+  // resolved by ToolCallCard from TabContext + the preload bridge, neither of
+  // which a static render can see, so the row takes it as a prop.
+  const docBlock: ToolCallBlock = {
+    kind: "tool_call",
+    id: "b1",
+    toolCallId: "tc1",
+    toolName: "Write",
+    input: { file_path: "/repo/plan.md" },
+    status: "success",
+    modelText: "ok",
+    snapshots: { before: null, after: null },
+    subagent: null,
+    workflow: null,
+  };
+
+  function renderRow(previewAction?: { path: string; open: () => void; error: string | null }): string {
+    return renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block: docBlock,
+        expanded: false,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+        previewAction,
+      }),
+    );
+  }
+
+  it("renders the Open control OUTSIDE the toggle button — nested buttons are invalid HTML", () => {
+    const html = renderRow({ path: "/repo/plan.md", open: () => {}, error: null });
+    expect(html).toContain('class="tool-call-open"');
+    expect(html).toContain(">Open</button>");
+    const toggleEnd = html.indexOf("</button>"); // the toggle's own close tag
+    expect(html.indexOf('class="tool-call-open"')).toBeGreaterThan(toggleEnd);
+  });
+
+  it("titles the control with the real path, so the destination is honest before the click", () => {
+    expect(renderRow({ path: "/repo/plan.md", open: () => {}, error: null })).toContain(
+      'title="Open /repo/plan.md in the preview window"',
+    );
+  });
+
+  it("renders nothing extra when there is no action — a card with no document is byte-identical to before", () => {
+    const html = renderRow(undefined);
+    expect(html).not.toContain("tool-call-open");
+    expect(html.match(/<button/g)).toHaveLength(1);
+  });
+
+  it("reports main's refusal beside the control instead of through the card's status badge", () => {
+    const html = renderRow({ path: "/repo/plan.md", open: () => {}, error: "outside the workspace" });
+    expect(html).toContain('class="tool-call-open-error"');
+    expect(html).toContain(">outside the workspace</span>");
+  });
+
+  it("shows no error span while nothing has failed", () => {
+    expect(renderRow({ path: "/repo/plan.md", open: () => {}, error: null })).not.toContain("tool-call-open-error");
+  });
+
+  it("the control is absent from a bare ToolCallCard render — no TabContext, so no action to offer", () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block: docBlock }));
+    expect(html).toContain('class="tool-call-toggle-row"');
+    expect(html).not.toContain("tool-call-open");
   });
 });

@@ -295,6 +295,8 @@ const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
 const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
 /** Night-track wave-1: user click on a local .html/.htm/.md artifact link opens/reopens it in PreviewHost. */
 const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
+/** TASK.112 slice 2: batched existence/containment probe for path candidates the renderer's plain-text scan finds outside real markdown links. */
+const ARTIFACT_PREVIEWABLE_CHANNEL = "anycode:artifact-previewable";
 // TASK.102 CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
 // history channel — main/tab-ipc.ts holds the byte-identical source of truth
 // for both the channel literal and `ChildHistoryResult`'s shape, same
@@ -496,6 +498,14 @@ export type ArtifactActionResult =
  * can fail.
  */
 export type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
+
+/**
+ * TASK.112 slice 2: result of the previewable-probe batch. `paths` is the
+ * SUBSET of the request's own strings that verified (real, in-bounds,
+ * previewable-extension, regular file) — never a resolved realpath, since
+ * the renderer matches spans against the exact string it sent.
+ */
+export type ArtifactPreviewableResult = { paths: string[] };
 
 // SLICE-CC A4 (cut §1.2): duplicated from main/claude-ipc.ts's own
 // `ClaudeOnboardingSnapshot`/`ClaudePickBinaryResult` (same "shared/** froze
@@ -981,6 +991,11 @@ contextBridge.exposeInMainWorld("anycode", {
     // way back in once the user has closed it, short of an agent turn.
     preview: (tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>> =>
       ipcRenderer.invoke(ARTIFACT_PREVIEW_CHANNEL, { tabId, path }) as Promise<PreviewResult<PreviewOpenSuccess>>,
+    // TASK.112 slice 2: batched yes/no probe for path candidates a plain-text
+    // scan found (markdown/path-spans.ts) — never opens/reads/reveals
+    // anything, so it's safe to call on every render, unlike `preview` above.
+    previewable: (tabId: string, paths: string[]): Promise<ArtifactPreviewableResult> =>
+      ipcRenderer.invoke(ARTIFACT_PREVIEWABLE_CHANNEL, { tabId, paths }) as Promise<ArtifactPreviewableResult>,
   },
   // CUT.md §2.1/§3 96-P2: `window.anycode.previewPanel` — NOT under the
   // existing `artifacts.preview` click-to-open method above (different

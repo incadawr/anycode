@@ -74,6 +74,7 @@ import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, resolve as pathResolve, sep } from "node:path";
 import { z } from "zod";
 import type { PreviewOpenSuccess, PreviewResult } from "../shared/preview.js";
+import { extensionOfPath, PREVIEWABLE_DOC_EXTENSIONS } from "../shared/previewable.js";
 
 // ── channels (preload duplicates these literals — shared/** convention is frozen per-track) ──
 
@@ -89,6 +90,16 @@ export const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
  * turn-end auto-open, with no way back once closed.
  */
 export const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
+/**
+ * TASK.112 slice 2: batched existence/containment probe for candidate paths
+ * the renderer's plain-text scan (`markdown/path-spans.ts`) found in prose or
+ * inline code — a yes/no oracle so `Markdown.tsx` can decide which of those
+ * candidates are real, in-bounds files worth linkifying. Deliberately NOT the
+ * same channel as `ARTIFACT_PREVIEW_CHANNEL`: that one opens a window as a
+ * side effect, and a probe run on every render of every message must never
+ * do that.
+ */
+export const ARTIFACT_PREVIEWABLE_CHANNEL = "anycode:artifact-previewable";
 
 // ── shared result shapes (duplicated on purpose in preload/index.ts + renderer) ──
 
@@ -150,16 +161,19 @@ const PREVIEWABLE_MIME: Record<string, string> = {
 const OPENABLE_EXTENSIONS = new Set([...Object.keys(PREVIEWABLE_MIME), ".bmp", ".ico", ".avif", ".tiff", ".tif", ".heic"]);
 
 /**
- * Extensions the artifact-preview channel may load into a PreviewHost window.
- * Deliberately disjoint from `OPENABLE_EXTENSIONS`/`PREVIEWABLE_MIME` above —
- * this is a document format PreviewHost RENDERS (a `.md` becomes a native
- * `dom-md` record — TASK.99 CUT.md CONTRACTS), never a raster image and
- * never `shell.openPath`.
+ * Extensions the artifact-preview channel may load into a PreviewHost window
+ * — deliberately disjoint from `OPENABLE_EXTENSIONS`/`PREVIEWABLE_MIME`
+ * above: a document format PreviewHost RENDERS, never a raster image and
+ * never `shell.openPath`. TASK.112 moved the list itself to
+ * `shared/previewable.ts` so this gate cannot drift from the five others.
  */
-const PREVIEWABLE_DOC_EXTENSIONS = new Set([".html", ".htm", ".md"]);
 
 /** Inline-read byte cap — anything bigger stays a link + open/reveal actions. */
 export const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** TASK.112 slice 2: caps on the previewable-probe batch — excess is DROPPED, never a refusal (see `previewableSchema`'s own comment). */
+export const MAX_PREVIEWABLE_PATHS = 64;
+export const MAX_PREVIEWABLE_PATH_CHARS = 1024;
 
 // ── fs / shell ports (structural, main-local — same rule as SubagentsFs) ──
 
@@ -264,6 +278,19 @@ export interface ArtifactsIpcDeps {
 const pathSchema = z.object({
   tabId: z.string().min(1),
   path: z.string().min(1).max(4096),
+});
+
+/**
+ * TASK.112 slice 2: deliberately UNBOUNDED at the zod layer — `paths` may be
+ * any array of strings. `handleArtifactPreviewable` enforces the 64-item /
+ * 1024-char caps itself by DROPPING the excess, per its own doc comment; a
+ * `.max()` here would instead REFUSE the whole batch (`{ paths: [] }`) for
+ * one oversized entry among otherwise-fine ones, which is not what "cap,
+ * don't fail" means.
+ */
+const previewableSchema = z.object({
+  tabId: z.string().min(1),
+  paths: z.array(z.string()),
 });
 
 // ── containment ──
@@ -574,11 +601,73 @@ export async function handleArtifactPreview(deps: ArtifactsIpcDeps, raw: unknown
   return deps.openPreview(parsed.data.tabId, resolved.realPath);
 }
 
-/** Wires the five channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
+/**
+ * artifact-previewable (TASK.112 slice 2): a yes/no oracle for the renderer's
+ * plain-text path scan (`markdown/path-spans.ts`) — for each candidate,
+ * reports whether it is a real, in-bounds, previewable-extension REGULAR
+ * FILE, so `Markdown.tsx` can decide which candidates earn a click-to-open
+ * link. Returns the SUBSET of the caller's own input strings that passed
+ * (never the resolved real paths) — the renderer matches spans against the
+ * exact string it sent, and a resolved path (symlink-followed, case-
+ * normalized) would not necessarily equal that string back.
+ *
+ * Bounded by the SAME containment resolution `handleArtifactPreview` uses
+ * (`resolveContainedPath`) — this channel never widens WHERE a path may
+ * resolve to, only adds a read-only existence check on top. It never opens,
+ * reads bytes from, or reveals anything: a `stat` is the entire filesystem
+ * interaction, which is why this is safe to call on every render of every
+ * message rather than only on a user click.
+ *
+ * A malformed payload degrades to `{ paths: [] }` rather than throwing — the
+ * probe is advisory (worst case, prose stays unlinked) so a bad payload must
+ * never surface as an error toast. Oversized/duplicate input is silently
+ * trimmed (dedupe, then drop paths over `MAX_PREVIEWABLE_PATH_CHARS`, then
+ * cap the count at `MAX_PREVIEWABLE_PATHS`) rather than refused, per
+ * `previewableSchema`'s own "cap, don't fail" comment.
+ */
+export async function handleArtifactPreviewable(deps: ArtifactsIpcDeps, raw: unknown): Promise<{ paths: string[] }> {
+  const parsed = previewableSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { paths: [] };
+  }
+  const { tabId, paths } = parsed.data;
+  const candidates = [...new Set(paths)]
+    .filter((path) => path.length > 0 && path.length <= MAX_PREVIEWABLE_PATH_CHARS)
+    .slice(0, MAX_PREVIEWABLE_PATHS);
+
+  const verified: string[] = [];
+  for (const path of candidates) {
+    // Extension gate on the ORIGINAL (unresolved) string — cheap, and the
+    // one that matters: this channel answers for the exact string the
+    // renderer is holding, so gating on anything else (e.g. a resolved
+    // real path whose final segment a symlink could rename) would be
+    // answering a slightly different question than the one being asked.
+    if (!PREVIEWABLE_DOC_EXTENSIONS.has(extensionOfPath(path))) {
+      continue;
+    }
+    const resolved = await resolveContainedPath(deps, tabId, path);
+    if ("failure" in resolved) {
+      continue;
+    }
+    try {
+      const stat = await deps.fs.stat(resolved.realPath);
+      if (!stat.isFile) {
+        continue; // a directory (or other non-regular entry) that happens to share a previewable-looking name
+      }
+    } catch {
+      continue; // deleted between resolveContainedPath's realpath and this stat — treat like never-existed
+    }
+    verified.push(path);
+  }
+  return { paths: verified };
+}
+
+/** Wires the six channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
 export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
   ipcMain.handle(ARTIFACT_READ_IMAGE_CHANNEL, (_event, raw: unknown) => handleArtifactReadImage(deps, raw));
   ipcMain.handle(ARTIFACT_OPEN_CHANNEL, (_event, raw: unknown) => handleArtifactOpen(deps, raw));
   ipcMain.handle(ARTIFACT_REVEAL_CHANNEL, (_event, raw: unknown) => handleArtifactReveal(deps, raw));
   ipcMain.handle(ARTIFACT_ALLOW_CHANNEL, (_event, raw: unknown) => handleArtifactAllow(deps, raw));
   ipcMain.handle(ARTIFACT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleArtifactPreview(deps, raw));
+  ipcMain.handle(ARTIFACT_PREVIEWABLE_CHANNEL, (_event, raw: unknown) => handleArtifactPreviewable(deps, raw));
 }

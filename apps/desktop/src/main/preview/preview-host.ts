@@ -80,6 +80,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // only), so this import does not compromise this module's own Electron-free
 // discipline.
 import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
+import { isMarkdownPath } from "../../shared/previewable.js";
 import {
   PREVIEW_EVENT_TYPE,
   PREVIEW_RESPONSE_TYPE,
@@ -528,9 +529,7 @@ function isLocalHost(hostname: string): boolean {
   return h === "localhost" || h === "127.0.0.1" || h === "::1";
 }
 
-function isMarkdownPath(path: string): boolean {
-  return /\.md$/i.test(path);
-}
+
 
 function selectorReadScript(selector: string, format: "text" | "html"): string {
   const sel = JSON.stringify(selector);
