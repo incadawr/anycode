@@ -79,6 +79,18 @@ describe("resolveDocRelative", () => {
 });
 
 describe("isLocalMdHref", () => {
+  it("accepts `.markdown` alongside `.md`, fragment and query stripped first (TASK.112)", () => {
+    expect(isLocalMdHref("other.markdown")).toBe(true);
+    expect(isLocalMdHref("./sub/other.markdown")).toBe(true);
+    expect(isLocalMdHref("/abs/other.markdown#heading")).toBe(true);
+    expect(isLocalMdHref("other.markdown?v=2")).toBe(true);
+  });
+
+  it("still rejects a near-miss extension that merely starts with md", () => {
+    expect(isLocalMdHref("other.mdx")).toBe(false);
+    expect(isLocalMdHref("other.mdown")).toBe(false);
+  });
+
   it("accepts a bare relative .md href", () => {
     expect(isLocalMdHref("other.md")).toBe(true);
   });

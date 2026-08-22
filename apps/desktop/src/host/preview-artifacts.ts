@@ -20,9 +20,9 @@
 
 import type { AgentEvent, ToolCallOutcome } from "@anycode/core";
 import { extractSnapshotPath, isSnapshotTool } from "./snapshot-hook.js";
+import { isPreviewableDocPath } from "../shared/previewable.js";
 
-/** Auto-open candidates (cut §1(a)): rendered file kinds PreviewHost/BrowserOpen understand. */
-const PREVIEWABLE_EXTENSION = /\.(html?|md)$/i;
+
 
 export class PreviewArtifactCollector {
   /** toolCallId -> candidate path, captured at tool_execution_start, consumed at the matching tool_result. */
@@ -45,7 +45,7 @@ export class PreviewArtifactCollector {
   observeResult(outcome: ToolCallOutcome): void {
     const path = this.pending.get(outcome.toolCallId);
     this.pending.delete(outcome.toolCallId);
-    if (path === undefined || outcome.status !== "success" || !PREVIEWABLE_EXTENSION.test(path)) {
+    if (path === undefined || outcome.status !== "success" || !isPreviewableDocPath(path)) {
       return;
     }
     // Dedup by path (cut §1(a)): a file written twice this turn moves to the

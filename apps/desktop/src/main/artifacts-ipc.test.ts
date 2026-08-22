@@ -20,10 +20,12 @@ import {
   handleArtifactAllow,
   handleArtifactOpen,
   handleArtifactPreview,
+  handleArtifactPreviewable,
   handleArtifactReadImage,
   handleArtifactReveal,
   isUnderRoot,
   MAX_INLINE_IMAGE_BYTES,
+  MAX_PREVIEWABLE_PATHS,
   NodeArtifactsFs,
   resolveContainedPath,
   type ArtifactsIpcDeps,
@@ -472,12 +474,31 @@ describe("handleArtifactPreview", () => {
     expect(openPreview).toHaveBeenCalledTimes(2);
   });
 
+  it("opens an in-root .markdown file — the extension TASK.112 added to the gate", async () => {
+    const { deps, workspace, openPreview } = await makeRig();
+    await seed(join(workspace, "notes.markdown"), "# hi");
+    const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, "notes.markdown") });
+    expect(result).toMatchObject({ ok: true });
+    expect(openPreview).toHaveBeenCalledWith(TAB_ID, await realpath(join(workspace, "notes.markdown")));
+  });
+
   it("refuses a path outside every allowed root — never calls openPreview", async () => {
     const { deps, home, openPreview } = await makeRig();
     await seed(join(home, "outside.md"), "# hi");
     const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(home, "outside.md") });
     expect(result.ok).toBe(false);
     expect(result).toMatchObject({ errorKind: "invalid_input" });
+    if (!result.ok) {
+      expect(result.error).toContain("outside_allowed_roots");
+    }
+    expect(openPreview).not.toHaveBeenCalled();
+  });
+
+  it("refuses an out-of-root .markdown — TASK.112 widened WHAT is previewable, never WHERE", async () => {
+    const { deps, home, openPreview } = await makeRig();
+    await seed(join(home, "outside.markdown"), "# hi");
+    const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(home, "outside.markdown") });
+    expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("outside_allowed_roots");
     }
@@ -501,5 +522,80 @@ describe("handleArtifactPreview", () => {
     expect((await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, "gone.md") })).ok).toBe(false);
     expect((await handleArtifactPreview(deps, { tabId: TAB_ID })).ok).toBe(false);
     expect(openPreview).not.toHaveBeenCalled();
+  });
+});
+
+// TASK.112 slice 2: the yes/no existence-and-containment oracle behind the
+// renderer's plain-text path scan (markdown/path-spans.ts). It never opens a
+// window (unlike handleArtifactPreview above) — a stat is the whole
+// filesystem interaction — and it echoes back the CALLER'S OWN input strings
+// for whichever candidates verify, never a resolved realpath.
+describe("handleArtifactPreviewable", () => {
+  it("passes in-root existing .md/.markdown/.html files, echoing the original strings", async () => {
+    const { deps, workspace } = await makeRig();
+    await seed(join(workspace, "notes.md"), "# hi");
+    await seed(join(workspace, "notes.markdown"), "# hi");
+    await seed(join(workspace, "report.html"), "<html></html>");
+    const paths = ["notes.md", "notes.markdown", "report.html"];
+    const result = await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths });
+    expect(result).toEqual({ paths });
+  });
+
+  it("drops an out-of-root existing file", async () => {
+    const { deps, home } = await makeRig();
+    await seed(join(home, "outside.md"), "# hi");
+    const result = await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: [join(home, "outside.md")] });
+    expect(result).toEqual({ paths: [] });
+  });
+
+  it("drops an in-root path that does not exist", async () => {
+    const { deps } = await makeRig();
+    const result = await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: ["gone.md"] });
+    expect(result).toEqual({ paths: [] });
+  });
+
+  it("drops an in-root DIRECTORY sharing a previewable-looking name", async () => {
+    const { deps, workspace } = await makeRig();
+    await mkdir(join(workspace, "dir.md"), { recursive: true });
+    const result = await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: ["dir.md"] });
+    expect(result).toEqual({ paths: [] });
+  });
+
+  it("drops a non-previewable extension even when in-root and existing", async () => {
+    const { deps, workspace } = await makeRig();
+    await seed(join(workspace, "notes.txt"), "x");
+    const result = await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: ["notes.txt"] });
+    expect(result).toEqual({ paths: [] });
+  });
+
+  it("returns { paths: [] } for a malformed payload, never throwing", async () => {
+    const { deps } = await makeRig();
+    await expect(handleArtifactPreviewable(deps, { tabId: TAB_ID })).resolves.toEqual({ paths: [] });
+    await expect(handleArtifactPreviewable(deps, { paths: ["a.md"] })).resolves.toEqual({ paths: [] });
+    await expect(handleArtifactPreviewable(deps, null)).resolves.toEqual({ paths: [] });
+    await expect(handleArtifactPreviewable(deps, "nope")).resolves.toEqual({ paths: [] });
+    // A non-string element fails the array-of-strings shape -> the whole batch is malformed.
+    await expect(handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: [1, "a.md"] })).resolves.toEqual({ paths: [] });
+  });
+
+  it("caps at 64 paths — excess is dropped, not refused", async () => {
+    const { deps, workspace } = await makeRig();
+    const names = Array.from({ length: 80 }, (_, i) => `f${i}.md`);
+    for (const name of names) {
+      await seed(join(workspace, name), "x");
+    }
+    const result = await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: names });
+    expect(result.paths).toHaveLength(MAX_PREVIEWABLE_PATHS);
+    expect(result.paths).toEqual(names.slice(0, MAX_PREVIEWABLE_PATHS));
+  });
+
+  it("dedupes the input — a repeated path is verified once and reported once", async () => {
+    const { deps, workspace } = await makeRig();
+    await seed(join(workspace, "notes.md"), "# hi");
+    const result = await handleArtifactPreviewable(deps, {
+      tabId: TAB_ID,
+      paths: ["notes.md", "notes.md", "notes.md"],
+    });
+    expect(result).toEqual({ paths: ["notes.md"] });
   });
 });

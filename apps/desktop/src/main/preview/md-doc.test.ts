@@ -108,6 +108,18 @@ describe("readMdDoc — containment re-check", () => {
   });
 });
 
+describe("readMdDoc — .markdown (TASK.112)", () => {
+  it("reads a `.markdown` document — the realPath gate accepts it exactly like `.md`", async () => {
+    const dir = await tmpDir();
+    const file = join(dir, "doc.markdown");
+    await writeFile(file, "# hi", "utf8");
+    const ref: MdDocRecordRef = { sourcePath: file, realSourcePath: file, docDir: dir, docVersion: 0 };
+    const deps = makeDeps({ ref, resolveArtifact: vi.fn(async () => ({ realPath: file })) });
+    const result = await readMdDoc(deps, TAB, PREVIEW);
+    expect(result).toMatchObject({ ok: true });
+  });
+});
+
 describe("readMdDoc — not_md", () => {
   it("refuses when the resolved realPath does not end in .md", async () => {
     const ref: MdDocRecordRef = { sourcePath: "/workspace/doc.txt", realSourcePath: "/workspace/doc.txt", docDir: "/workspace", docVersion: 0 };

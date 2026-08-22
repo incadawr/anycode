@@ -34,6 +34,7 @@
 import { useContext, useEffect, useId, useRef, useState } from "react";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowStepStatus, WorkflowSubStatus } from "../store.js";
 import { TabContext } from "../tab-context.js";
+import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild } from "../child-sessions.js";
@@ -795,6 +796,65 @@ export function summarizeInput(toolName: string, input: unknown): string {
   }
 }
 
+/**
+ * TASK.112: `Read`/`Write`/`Edit`'s `file_path` when it names a document the
+ * PreviewHost window can render, else `null`. This card is the ONE place in
+ * the transcript where the path of a file the agent just touched is known
+ * machine-side; the other click-to-open affordance (a markdown link in the
+ * answer) is born only if the model happened to write `[text](path)` in its
+ * prose, so a path stated plainly — the common case — used to offer nothing.
+ * Every other tool and every non-document extension returns `null` and the
+ * card renders exactly as it did before.
+ */
+export function previewablePathOf(toolName: string, input: unknown): string | null {
+  if (toolName !== "Read" && toolName !== "Write" && toolName !== "Edit") {
+    return null;
+  }
+  const record = input !== null && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const path = typeof record.file_path === "string" ? record.file_path : null;
+  return path !== null && isPreviewableDocPath(path) ? path : null;
+}
+
+/** A resolved open-in-preview action for this card's file path — `null` when the card has nothing to offer. */
+export interface ArtifactPreviewAction {
+  path: string;
+  open: () => void;
+  /** Main's refusal reason from the last attempt (containment, missing file), rendered beside the control; `null` while nothing has failed. */
+  error: string | null;
+}
+
+/**
+ * Resolves the card's open-in-preview action, or `null` when there is nothing
+ * to offer: a non-document tool/extension, a card mounted with no
+ * `TabContext` above it (this file's own SSR tests), or no preload bridge.
+ * The tabId is required — main resolves a workspace-relative `file_path`
+ * against the tab's own workspace.
+ *
+ * The click goes through the SAME `artifacts.preview` channel a markdown-link
+ * click already uses, so main re-runs `handleArtifactPreview`'s containment
+ * check on every call: this entry point widens WHERE nothing, only WHO can
+ * ask. Hooks are called unconditionally (React's rules of hooks); only the
+ * RETURN is gated.
+ */
+function useArtifactPreviewAction(path: string | null): ArtifactPreviewAction | null {
+  const ctx = useContext(TabContext);
+  const [error, setError] = useState<string | null>(null);
+  const api = typeof window !== "undefined" ? window.anycode?.artifacts : undefined;
+  if (path === null || ctx === null || api === undefined) {
+    return null;
+  }
+  const tabId = ctx.tabId;
+  return {
+    path,
+    error,
+    open: () => {
+      void api.preview(tabId, path).then((result) => {
+        setError(result.ok ? null : result.error);
+      });
+    },
+  };
+}
+
 /** Local pending-todo glyph (design §9.5 — icons.tsx locked this slice,
  * BrainIcon/P7.2 precedent for a local inline SVG). Stroke-only circle,
  * matching the shared icons' 16px viewBox / currentColor-stroke posture. */
@@ -913,12 +973,15 @@ export function ToolCallHeaderRow({
   bodyId,
   onToggleExpanded,
   childAction,
+  previewAction,
 }: {
   block: ToolCallBlock;
   expanded: boolean;
   bodyId: string;
   onToggleExpanded: () => void;
   childAction?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
+  /** TASK.112: resolved by ToolCallCard, passed as a plain prop for the same reason `childAction` is — a static render can see a prop, never a hook. */
+  previewAction?: ArtifactPreviewAction;
 }) {
   const isAgent = block.toolName === "Agent";
   // TASK.120: an actionable badge (waiting for permission + onOpen) cannot
@@ -984,6 +1047,29 @@ export function ToolCallHeaderRow({
       {childAction !== undefined && headerBadgeActionable && (
         <ChildBadge badge={childAction.badge} onOpen={childAction.onOpen} />
       )}
+      {/* TASK.112: the open-in-preview control for a document this card
+          wrote/read. It rides HERE, in the always-visible row, and not on the
+          path text itself, for two reasons: the path lives inside the toggle
+          <button> (nested buttons are invalid HTML — the same constraint that
+          hoisted the actionable badge above), and a settled card auto-
+          collapses, so a control that only appeared once expanded would be
+          invisible in the common case. One control only: a second one in the
+          expanded body would repeat this exact `artifacts.preview` call,
+          which is the redundancy the night-track smoke already removed once
+          from the artifact chip. */}
+      {previewAction !== undefined && (
+        <>
+          <button
+            type="button"
+            className="tool-call-open"
+            title={`Open ${previewAction.path} in the preview window`}
+            onClick={previewAction.open}
+          >
+            Open
+          </button>
+          {previewAction.error !== null && <span className="tool-call-open-error">{previewAction.error}</span>}
+        </>
+      )}
     </div>
   );
 }
@@ -1009,6 +1095,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   // TASK.102 CUT-S2 §2.5 (C3): undefined for every card but a session-tier
   // child's — see the hook's own doc comment.
   const childAction = useChildSessionAction(block);
+  const previewAction = useArtifactPreviewAction(previewablePathOf(block.toolName, block.input));
 
   const isDiffable = block.toolName === "Write" || block.toolName === "Edit";
   const hasSnapshot = block.snapshots.before !== null || block.snapshots.after !== null;
@@ -1041,6 +1128,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
         bodyId={bodyId}
         onToggleExpanded={() => setUserExpanded(!expanded)}
         childAction={childAction}
+        previewAction={previewAction ?? undefined}
       />
       {expanded && (
         // aria-live="off" (design §1.9): a user-driven expand must not dump

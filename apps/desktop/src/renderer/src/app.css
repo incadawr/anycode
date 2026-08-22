@@ -3348,6 +3348,41 @@ body {
   margin-right: var(--sp-3);
 }
 
+/* TASK.112: open-in-preview control for a document card (Read/Write/Edit of
+   an .html/.htm/.md/.markdown path). Same pill posture as the subagent Open
+   button, mounted in the always-visible header row — `flex-shrink: 0` keeps
+   it whole when a long path pushes the summary, and the toggle's own
+   horizontal padding is mirrored so it lines up with the ledger row's
+   right edge. */
+.tool-call-toggle-row .tool-call-open {
+  flex-shrink: 0;
+  margin-right: var(--sp-3);
+  padding: 0.15rem 0.65rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.tool-call-toggle-row .tool-call-open:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+/* Main's refusal reason (containment, missing file) — the preview may be
+   refused while the card itself is perfectly fine, so this reports beside
+   the control rather than through the card's own status badge. */
+.tool-call-toggle-row .tool-call-open-error {
+  flex-shrink: 0;
+  margin-right: var(--sp-3);
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+}
+
 /* Expanded-body row (SubagentStatus, ToolCallCard.tsx): badge + Open action,
    mounted only alongside the header badge above (same `child` gate). */
 .tool-call-subagent-child-row {
