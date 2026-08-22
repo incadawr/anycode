@@ -25,6 +25,7 @@ import {
   SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
+  TAB_REBIND_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
 import type {
@@ -36,6 +37,8 @@ import type {
   DeleteSessionsOlderResult,
   SessionDeleteSummaryWire,
   SessionSummary,
+  TabRebindRequest,
+  TabRebindResult,
   WorkspacePickResult,
 } from "../shared/tabs.js";
 import type { TabHostManager } from "./tabs.js";
@@ -150,6 +153,19 @@ export interface TabIpcDeps {
    */
   ensureConnectionEnv?(connectionId: string): Promise<void>;
   /**
+   * TASK.106 cut-2 (§D3/D5 of the design doc): the MODEL the target
+   * connection is currently configured with, read off main's live settings
+   * (`connectionById(settings, id)?.model`). `handleTabRebind` stamps it over
+   * the session row (`touchSession({ model })`) so the row never describes a
+   * posture the re-bound host does not actually run: a core host reads its
+   * boot model off the fork ENV (`currentModel = envConfig.model`,
+   * host/index.ts), which after the rebind IS the target connection's model —
+   * the resume path itself never writes the model column. Absent = legacy
+   * wiring / unit fixtures; the pin is still re-written, only the model column
+   * is left as-is.
+   */
+  readConnectionModel?(connectionId: string): string | undefined;
+  /**
    * Resolves the connection a RESUMED session is pinned to (TASK.45 W10). Absent
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
    */
@@ -236,6 +252,21 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
 ]);
 
 const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
+
+/**
+ * TASK.106 cut-2: the fail-closed re-bind request schema. Bounds only (a
+ * hostile-length string) — main resolves the tab against its own live
+ * registry (`manager.getTab`) and the connection against
+ * `deps.connectionExists`, never trusting either id, the same discipline as
+ * `createTabRequestSchema`'s `connectionId`.
+ */
+const tabRebindRequestSchema: z.ZodType<TabRebindRequest> = z.object({
+  tabId: z.string().min(1).max(128),
+  connectionId: z.string().min(1).max(128),
+});
+
+/** TASK.106 cut-2: exported for tests (tab-ipc.test.ts) — the fail-closed re-bind request schema. */
+export { tabRebindRequestSchema };
 
 /** TASK.114: single hard-delete — the id only; the active/not-found verdicts are main's, below. */
 const sessionDeleteRequestSchema = z.object({ sessionId: z.string().min(1) });
@@ -692,6 +723,85 @@ export async function handleWorkspacePick(deps: TabIpcDeps): Promise<WorkspacePi
 }
 
 /**
+ * TASK.106 cut-2 — re-binds a RUNNING tab's session to another provider
+ * connection, exported for tests (tab-ipc.test.ts). The tab, its session id
+ * and its terminal panel all survive; `manager.rebindTab` replaces the host
+ * process with a resume host booted on the target connection's fork env (the
+ * `relocateTab` precedent, design doc §D1). Fail-closed in EXACTLY this
+ * order, cheapest-and-most-certain first, and every refusal leaves the tab
+ * running on its ORIGINAL connection:
+ *  - `unknown_tab`: no such tab, or a child session's tab (a child is not
+ *    externally addressable — `closeTab`'s own rule);
+ *  - `busy`: the tab is not in the `running` state (closing / crash-looped);
+ *    the between-turns guard the renderer's `modelPickDisabled` already
+ *    mirrors client-side (design doc §D2) — this is the backstop;
+ *  - `non_core`: a codex/claude tab owns its own account and is never pinned
+ *    to a core connection (the same law `handleCreate` applies);
+ *  - `same_connection`: the target IS the current pin — a no-op refuses
+ *    rather than silently re-forking the host;
+ *  - `connection_missing`: the id is absent from main's live registry (or no
+ *    registry is wired at all — never a silent fallback);
+ *  - `not_ready`: `ensureConnectionEnv` threw, or `rebindTab` found the
+ *    target's env unprimed after all.
+ *
+ * On the commit path the session row is re-pinned only AFTER `rebindTab`
+ * reports the new host spawned. The reverse order would make a refused
+ * re-bind leave a durable pin on the TARGET while the tab keeps running on
+ * the original connection — the row and the live host disagreeing about the
+ * account, and the next resume of that session silently jumping to a
+ * connection the user never got. Writing after costs a crash window in which
+ * the pin still names the old connection, which is the honest failure: the
+ * switch simply did not stick, and the model chip says so.
+ */
+export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): Promise<TabRebindResult> {
+  const tab = deps.manager.getTab(req.tabId);
+  // TASK.102 CUT-S2: a child session's tabId is not externally addressable —
+  // the same "reads as no such tab" closeTab applies.
+  if (tab === undefined || tab.childOf !== undefined) {
+    return { ok: false, reason: "unknown_tab" };
+  }
+  if (tab.state !== "running") {
+    return { ok: false, reason: "busy" };
+  }
+  if (tab.engine !== "core") {
+    return { ok: false, reason: "non_core" };
+  }
+  if (req.connectionId === tab.connectionId) {
+    return { ok: false, reason: "same_connection" };
+  }
+  if (deps.connectionExists === undefined || !deps.connectionExists(req.connectionId)) {
+    return { ok: false, reason: "connection_missing" };
+  }
+  // Prime the fork env BEFORE anything is mutated — the same
+  // validated-then-primed order the cut-1 `new`-tab pick established. A throw
+  // (vault read failure) is a fail-closed `not_ready`, never a spawn on an
+  // unprimed env.
+  if (deps.ensureConnectionEnv !== undefined) {
+    try {
+      await deps.ensureConnectionEnv(req.connectionId);
+    } catch {
+      return { ok: false, reason: "not_ready" };
+    }
+  }
+  const rebound = await deps.manager.rebindTab(tab, req.connectionId);
+  if (!rebound.ok) {
+    // Nothing durable was written, so the refusal leaves the session row
+    // pinned where the tab still runs.
+    return { ok: false, reason: rebound.reason };
+  }
+  // Design doc §D3/D5: the target connection's own model is the authority for
+  // the re-bound host (the core resume boot reads the model off the fork env),
+  // so the row is stamped with it in the SAME touch as the pin — one durable
+  // write, no window where the row and the env disagree about the account.
+  const model = deps.readConnectionModel?.(req.connectionId);
+  await deps.persistence.touchSession(tab.sessionId, {
+    connectionId: req.connectionId,
+    ...(model !== undefined ? { model } : {}),
+  });
+  return { ok: true, connectionId: req.connectionId };
+}
+
+/**
  * Registers the four invoke handlers on ipcMain (design §4.1/§4.4). Each
  * validates its request; a malformed payload is rejected with the safe
  * negative result of that channel rather than throwing across the bridge.
@@ -712,6 +822,16 @@ export function registerTabIpc(deps: TabIpcDeps): void {
       return { ok: false, reason: "unknown_tab" };
     }
     return deps.manager.closeTab(parsed.data.tabId);
+  });
+
+  // TASK.106 cut-2: a malformed re-bind request is the same safe negative as
+  // an unknown tab — nothing is mutated and the tab keeps running.
+  ipcMain.handle(TAB_REBIND_CHANNEL, async (_event, raw: unknown): Promise<TabRebindResult> => {
+    const parsed = tabRebindRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, reason: "unknown_tab" };
+    }
+    return handleTabRebind(deps, parsed.data);
   });
 
   ipcMain.handle(SESSIONS_LIST_CHANNEL, async (): Promise<SessionSummary[]> => {

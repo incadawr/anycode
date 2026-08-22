@@ -68,6 +68,8 @@ import type {
   DeleteSessionResult,
   DeleteSessionsOlderResult,
   SessionSummary,
+  TabRebindRequest,
+  TabRebindResult,
   WorkspacePickResult,
 } from "../../shared/tabs";
 // TASK.102 CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
@@ -316,6 +318,10 @@ declare global {
     anycode: {
       createTab(request: CreateTabRequest): Promise<CreateTabResult>;
       closeTab(tabId: string): Promise<CloseTabResult>;
+      // TASK.106 cut-2: re-bind a running tab's session to another provider
+      // connection (drill-down pick on the model chip). Fail-closed — every
+      // refusal leaves the tab on its original connection.
+      tabRebind(request: TabRebindRequest): Promise<TabRebindResult>;
       listSessions(): Promise<SessionSummary[]>;
       // TASK.114: hard-delete one persisted session + its cascade; main's
       // active-session gate (`reason:"active"`) is the authority.

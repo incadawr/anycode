@@ -330,6 +330,25 @@ export type TranscriptBlock =
       totalGranted: number;
       remaining: string[];
       nextAction?: string;
+    }
+  /**
+   * TASK.106 cut-2 §D5: the ledger line marking the moment this session moved
+   * to another provider connection (a rebind — the host was shut down and
+   * respawned on the resume path, §D1). Renderer-only, never reconstructed
+   * into prompt history: the model learns which provider it is from its own
+   * fork env, not from the transcript — same posture as `usage_limit` above.
+   *
+   * `effortResetTo` is present exactly when the running effort did not fit the
+   * new model's vocabulary and was therefore reset (§D3): the switch says so
+   * out loud rather than substituting a level silently.
+   */
+  | {
+      kind: "connection_changed";
+      id: string;
+      fromLabel: string;
+      toLabel: string;
+      model: string;
+      effortResetTo?: string;
     };
 
 /** Convenience alias for the tool_call variant of TranscriptBlock (used by ToolCallCard). */
@@ -372,7 +391,14 @@ export type NoticeKind =
   | "rewind_rejected"
   | "engine_notice"
   | "worktree_notice"
-  | "retry_blocked";
+  | "retry_blocked"
+  /**
+   * TASK.106 cut-2 §D6: `tab-rebind` refused the provider switch the user just
+   * picked (`busy`, `connection_missing`, `not_ready`, …). The pick is NOT
+   * applied and the session keeps running on its current connection, so the
+   * refusal has to be visible — silence would read as a switch that happened.
+   */
+  | "rebind_failed";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
@@ -837,6 +863,16 @@ export interface DesktopState {
   appendUserText(id: string, text: string): void;
   /** Appends a renderer-only persisted provider diagnostic; never sent to the host/model. */
   appendUsageLimitNotice(notice: UsageLimitNotice): void;
+  /**
+   * Appends the renderer-only provider-switch ledger line (TASK.106 cut-2
+   * §D5). The caller supplies the labels/model it wants recorded; `id` is
+   * minted here unless one is passed (tests pin it). Must be called AFTER the
+   * respawned host's `host_ready` — `performReset` wipes the transcript, so a
+   * line written before it would never be seen.
+   */
+  appendConnectionChanged(
+    block: Omit<Extract<TranscriptBlock, { kind: "connection_changed" }>, "kind" | "id"> & { id?: string },
+  ): void;
   /**
    * TASK.33 W8: snapshots the text+images just put on the wire as
    * `lastSentMessage`, so a later terminal retryable failure can offer to
@@ -2674,6 +2710,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       appendUsageLimitNotice(notice: UsageLimitNotice): void {
         appendBlock({ kind: "usage_limit", id: `usage-limit:restored:${errorSeq}`, notice });
+        errorSeq += 1;
+      },
+
+      appendConnectionChanged(block): void {
+        const { id, ...rest } = block;
+        appendBlock({ kind: "connection_changed", id: id ?? `connection-changed:${errorSeq}`, ...rest });
         errorSeq += 1;
       },
 

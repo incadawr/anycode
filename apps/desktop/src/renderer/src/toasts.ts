@@ -81,6 +81,10 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   engine_notice: "warning",
   worktree_notice: "warning",
   retry_blocked: "danger",
+  // TASK.106 cut-2 §D6: the provider switch the user picked was refused, so
+  // the session still runs where it did — a refusal, same tint family as
+  // retry_blocked/mode_change_rejected.
+  rebind_failed: "danger",
   shell_error: "danger",
   preview_transferred: "neutral",
 };
