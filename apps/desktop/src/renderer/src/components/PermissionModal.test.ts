@@ -8,6 +8,7 @@
  * rendering.
  */
 import { describe, expect, it } from "vitest";
+import type { EnginePresentation } from "../../../shared/protocol.js";
 import {
   PLAN_PREVIEW_MAX_CHARS,
   UNKNOWN_SHELL_HINT,
@@ -19,27 +20,45 @@ import {
   suggestAlwaysAllowPattern,
 } from "./PermissionModal.js";
 
+function caps(overrides: Partial<EnginePresentation["capabilities"]>): EnginePresentation {
+  return {
+    id: "codex",
+    capabilities: {
+      supportsCorePermissions: false,
+      supportsRewind: false,
+      supportsWorkflow: false,
+      supportsGitMutations: false,
+      supportsContextUsage: false,
+      supportsContextBreakdown: false,
+      supportsInteractiveApprovals: false,
+      costAccounting: false,
+      supportsModelSelection: false,
+      supportsReasoningEffort: false,
+      supportsImages: false,
+      supportsTasks: false,
+      supportsFileSnapshots: false,
+      ...overrides,
+    },
+  };
+}
+
 describe("canRememberPermission", () => {
-  it("keeps core rules available but removes all remember paths for external Codex approvals", () => {
+  it("keeps remember available for a core session (no engine presentation)", () => {
     expect(canRememberPermission(null)).toBe(true);
-    expect(canRememberPermission({
-      id: "codex",
-      capabilities: {
-        supportsCorePermissions: false,
-        supportsRewind: false,
-        supportsWorkflow: false,
-        supportsGitMutations: false,
-        supportsContextUsage: false,
-        supportsContextBreakdown: false,
-        supportsInteractiveApprovals: true,
-        costAccounting: false,
-        supportsModelSelection: false,
-        supportsReasoningEffort: false,
-        supportsImages: false,
-        supportsTasks: false,
-        supportsFileSnapshots: false,
-      },
-    })).toBe(false);
+  });
+
+  it("TASK.144: an engine with a live approval bridge may remember despite supportsCorePermissions:false", () => {
+    // The whole point of TASK.144: codex/claude both report
+    // supportsCorePermissions:false, and hiding the checkbox on that flag left
+    // those sessions with no in-app way to stop being asked. Their rule store is
+    // now read by IpcPermissionBroker itself, so a remembered rule is honoured.
+    expect(canRememberPermission(caps({ supportsInteractiveApprovals: true }))).toBe(true);
+  });
+
+  it("still refuses remember when the engine has no approval bridge at all", () => {
+    // Session drops a permission_response outright without this capability, so
+    // a remembered rule would be born from an answer that never lands.
+    expect(canRememberPermission(caps({ supportsInteractiveApprovals: false }))).toBe(false);
   });
 });
 
@@ -356,5 +375,36 @@ describe("describePermissionAsk — Bash unknown shell expression (TASK.35)", ()
 
   it("UM7: plan asks are unaffected — the plan hint keeps saying 'still ask' (already pinned at :261; not duplicated here)", () => {
     expect(describePermissionAsk("ExitPlanMode", { plan: "x" }).hint).toContain("still ask");
+  });
+});
+
+/**
+ * TASK.144: the three rule-birth points treat `CodexExec` as the command-line
+ * tool it is. Without this a Codex session's "Always allow" checkbox had no
+ * pattern field at all, so the only rule it could mint was a patternless
+ * allow-EVERY-command one.
+ */
+describe("CodexExec always-allow birth points (TASK.144)", () => {
+  it("suggests a binary pattern for a CodexExec command", () => {
+    expect(suggestAlwaysAllowPattern("CodexExec", { command: "git status" })).toBe("git *");
+  });
+
+  it("strips a leading env-assignment from a CodexExec pattern, exactly like Bash", () => {
+    expect(suggestAlwaysAllowPattern("CodexExec", { command: 'OUT="/tmp/o" node x.mjs' })).toBe("node *");
+    expect(buildAlwaysAllowRule("CodexExec", 'OUT="/tmp/o" node *')).toEqual({
+      toolName: "CodexExec",
+      pattern: "node *",
+    });
+    expect(buildPermissionAllowMessage("r1", "CodexExec", { pattern: 'OUT="/tmp/o" node *' })).toEqual({
+      type: "permission_response",
+      requestId: "r1",
+      behavior: "allow",
+      remember: { pattern: "node *" },
+    });
+  });
+
+  it("offers no pattern for CodexApplyPatch — a multi-file patch has no single subject", () => {
+    expect(suggestAlwaysAllowPattern("CodexApplyPatch", { paths: ["/workspace/a.ts"] })).toBeUndefined();
+    expect(buildAlwaysAllowRule("CodexApplyPatch", undefined)).toEqual({ toolName: "CodexApplyPatch" });
   });
 });
