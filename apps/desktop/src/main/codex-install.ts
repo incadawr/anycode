@@ -633,6 +633,18 @@ export interface CodexInstallControllerDeps {
   writeCodexSettings: (patch: { binaryPath?: string; riskAcceptedVersions?: string[] }) => Promise<unknown>;
   /** Fired after a successful install / risk acceptance so main pushes ENGINES_CHANGED and rechecks. */
   onChanged?: () => void;
+  /**
+   * The SOURCE env the post-install gate doctor spawns with (TASK.139 §2 case
+   * (e)): main wires this to the same `codexDoctorSourceEnv` the onboarding
+   * doctor and `codex login` read through, so all three probes see the identical
+   * `settings.codex.proxyUrl`. Called fresh per install — the proxy may have
+   * been edited since boot.
+   *
+   * Optional: absent, `runCodexDoctor` keeps its own `process.env` default and
+   * behaviour is byte-identical to before this dep existed (the shape every
+   * existing test deps object relies on).
+   */
+  doctorSourceEnv?: () => NodeJS.ProcessEnv;
   /** DI seams; production = the real trust gate + doctor. */
   trust?: (binaryPath: string) => string | null;
   runDoctor?: (binaryPath: string, options?: RunCodexDoctorOptions) => Promise<CodexDoctorReport>;
@@ -684,7 +696,12 @@ export function createCodexInstallController(deps: CodexInstallControllerDeps): 
     };
     const untrusted = trust(installed.binaryPath);
     if (untrusted !== null) return refuse(untrusted);
-    const report = await runDoctor(installed.binaryPath);
+    // TASK.139 F4: the gate doctor is a main-spawned codex probe, so it runs
+    // with the engine proxy like the onboarding recheck and `codex login` do.
+    // No dep ⇒ no options object at all, so the call is byte-identical to its
+    // pre-TASK.139 form.
+    const doctorEnv = deps.doctorSourceEnv?.();
+    const report = await runDoctor(installed.binaryPath, doctorEnv !== undefined ? { env: doctorEnv } : undefined);
     if (report.status === "error" || report.status === "update_required" || report.status === "not_installed") {
       return refuse(report.error ?? `installed binary failed its doctor pass (${report.status})`);
     }

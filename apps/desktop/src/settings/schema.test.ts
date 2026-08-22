@@ -12,6 +12,7 @@ import {
   CONNECTION_DELETE_CHANNEL,
   CONNECTION_SET_ACTIVE_CHANNEL,
   CONNECTION_UPDATE_CHANNEL,
+  ENGINE_PROXY_SET_CHANNEL,
   PERMISSION_RULE_ADD_CHANNEL,
   SECRET_CLEAR_CHANNEL,
   SECRET_ENV_KEYS,
@@ -50,6 +51,10 @@ describe("frozen contract surface (shared/settings.ts)", () => {
     expect(CONNECTION_UPDATE_CHANNEL).toBe("anycode:connection-update");
     expect(CONNECTION_SET_ACTIVE_CHANNEL).toBe("anycode:connection-set-active");
     expect(CONNECTION_DELETE_CHANNEL).toBe("anycode:connection-delete");
+  });
+
+  it("pins the engine-proxy channel (TASK.139)", () => {
+    expect(ENGINE_PROXY_SET_CHANNEL).toBe("anycode:engine-proxy-set");
   });
 
   it("pins SECRET_ENV_KEYS (ruling R3)", () => {
@@ -1020,5 +1025,70 @@ describe("security.trustedBinaries (TASK.103, DV-6) — round-trip + per-element
       expect(parsed.data.security.trustedBinaries).toEqual([validConsent]);
       expect(parsed.data.security.allowWeakSecretStorage).toBe(true);
     }
+  });
+});
+
+describe("codex/claude proxyUrl (TASK.139) — persisted schema stays LENIENT on purpose", () => {
+  const PROXY = "http://user:pass@proxy.example.com:3128";
+
+  it("round-trips codex.proxyUrl verbatim, userinfo included", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), codex: { proxyUrl: PROXY } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex?.proxyUrl).toBe(PROXY);
+    }
+  });
+
+  it("round-trips claude.proxyUrl alongside the advisory cache fields", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      claude: {
+        binaryPath: "/opt/homebrew/bin/claude",
+        lastCheck: { status: "ready", at: "2026-08-20T00:00:00.000Z" },
+        proxyUrl: PROXY,
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.claude?.proxyUrl).toBe(PROXY);
+      expect(parsed.data.claude?.binaryPath).toBe("/opt/homebrew/bin/claude");
+    }
+  });
+
+  // Strictness deliberately does NOT live here — `ENGINE_PROXY_SET_CHANNEL`
+  // refines against `isProxyUrl`, and `engineProxyCarriers` gates emission
+  // fail-soft, so a hand-edited garbage value can only ever mean "no proxy".
+  it("accepts a NON-URL proxyUrl rather than failing the document", () => {
+    const parsed = parseSettings({ ...cloneDefaults(), codex: { proxyUrl: "definitely not a url" } });
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.codex?.proxyUrl).toBe("definitely not a url");
+  });
+
+  it("rejects a wrong-TYPED proxyUrl (the shape is still enforced)", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), codex: { proxyUrl: 3128 } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      // The block-level `.catch(undefined)` swallows it whole — accepted in
+      // TASK.139: the block is no longer purely advisory, but the failure
+      // direction ("no proxy emitted") is the safe one.
+      expect(parsed.data.codex).toBeUndefined();
+    }
+  });
+
+  it("a block with no proxyUrl round-trips with the key absent", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), codex: { binaryPath: "/usr/local/bin/codex" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect("proxyUrl" in (parsed.data.codex ?? {})).toBe(false);
+    }
+  });
+
+  // The pre-TASK.139 tolerance is unchanged: a wrong-shaped block still drops to
+  // `undefined` without taking the document down with it.
+  it("a wrong-shaped codex block still falls to undefined, document intact", () => {
+    const parsed = parseSettings({ ...cloneDefaults(), codex: "legacy-value", claude: { proxyUrl: PROXY } });
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.codex).toBeUndefined();
+    expect(parsed.settings.claude?.proxyUrl).toBe(PROXY);
   });
 });

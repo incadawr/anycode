@@ -10,7 +10,7 @@ import { dirname, isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
-import { ENGINE_PROCESS_REGISTRATION_TYPE } from "../../../shared/engines.js";
+import { ENGINE_PROCESS_REGISTRATION_TYPE, ENV_CODEX_PROXY_URL, applyEngineProxyOverride } from "../../../shared/engines.js";
 import { checkConsentedBinaryTrust, type BinaryTrustConsent, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
 import {
   CODEX_TEARDOWN_SIGKILL_WAIT_MS,
@@ -244,6 +244,15 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
+  // TASK.139: `settings.codex.proxyUrl`, carried in from main under a private
+  // name and turned into the real proxy family here. It OVERWRITES whatever the
+  // passthrough list just copied in — that value can only be the connection's
+  // proxy, since main withholds the carrier entirely when the shell owns the
+  // family, which is precisely the `shell > engine > connection` ladder. Same
+  // call runs for a subagent child (host/engine-children.ts funnels through this
+  // builder), so a codex subagent of a CORE tab proxies by codex's setting.
+  // The carrier itself is never forwarded: the allowlist above does not name it.
+  applyEngineProxyOverride(env, source, ENV_CODEX_PROXY_URL);
   env.PATH = augmentCodexPathForGui(env.PATH, platform);
   if (codexHome !== undefined) env.CODEX_HOME = codexHome;
   return env;

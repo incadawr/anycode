@@ -33,6 +33,7 @@ import {
   CONNECTION_DELETE_CHANNEL,
   CONNECTION_SET_ACTIVE_CHANNEL,
   CONNECTION_UPDATE_CHANNEL,
+  ENGINE_PROXY_SET_CHANNEL,
   OAUTH_CANCEL_CHANNEL,
   OAUTH_START_CHANNEL,
   PERMISSION_RULE_ADD_CHANNEL,
@@ -324,6 +325,19 @@ const connectionUpdateSchema = z
   })
   .strict();
 const connectionIdSchema = z.object({ id: z.string().min(1) }).strict();
+/**
+ * Engine-level proxy payload (TASK.139). `.strict()` keeps `engine` to exactly
+ * the two engines that spawn a CLI — `"core"` is refused, since AnyCode's own
+ * engine proxies through the connection, not through an engine setting. The
+ * `""` clear sentinel and the strict `isProxyUrl` gate are lifted verbatim from
+ * `connectionUpdateSchema.proxyUrl` above: same field semantics, same boundary.
+ */
+const engineProxySetSchema = z
+  .object({
+    engine: z.enum(["codex", "claude"]),
+    proxyUrl: z.union([z.string().refine(isProxyUrl), z.literal("")]),
+  })
+  .strict();
 
 /** Structural view of ONE catalog entry the projection needs (avoids a core value-import). */
 export interface CatalogEntryShape {
@@ -1450,6 +1464,71 @@ export async function handleConnectionCheck(deps: SettingsIpcDeps, raw: unknown)
 }
 
 /**
+ * engine-proxy-set: sets or clears ONE engine's `proxyUrl` (TASK.139).
+ *
+ * Its own channel rather than a `settings-set` patch, and the generic handler is
+ * deliberately left alone: `settings.codex`/`settings.claude` validate leniently
+ * on disk, so a generic patch would carry an unrefined value straight through.
+ * The engine panes must write here and only here.
+ *
+ * `""` is the clear sentinel — only-truthy-on-disk, exactly as on the connection
+ * channel. Clearing also drops the whole block when nothing else is left in it,
+ * so a user who never configured an engine does not permanently acquire a
+ * `"codex": {}` husk in settings.json from one visit to the field.
+ *
+ * `lastCheck` is deliberately NOT invalidated, unlike the connection channel's
+ * `lastHealth`. That reset protects a NETWORK observation measured through the
+ * old path; an engine's `lastCheck` records disk facts (binary found, version,
+ * signed-in per a local auth file) that no proxy change can stale.
+ */
+export async function handleEngineProxySet(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
+  const parsed = engineProxySetSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid" };
+  }
+  const { engine, proxyUrl } = parsed.data;
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const updated: AnycodeSettings = { ...loaded.settings };
+    // Written as two concrete branches rather than one `updated[engine]` write:
+    // the two blocks are different types, and a union-keyed write site would
+    // demand a cast that throws away exactly the checking this is here for.
+    if (engine === "codex") {
+      const block = { ...updated.codex };
+      if (proxyUrl === "") {
+        delete block.proxyUrl;
+      } else {
+        block.proxyUrl = proxyUrl;
+      }
+      if (Object.keys(block).length === 0) {
+        delete updated.codex;
+      } else {
+        updated.codex = block;
+      }
+    } else {
+      const block = { ...updated.claude };
+      if (proxyUrl === "") {
+        delete block.proxyUrl;
+      } else {
+        block.proxyUrl = proxyUrl;
+      }
+      if (Object.keys(block).length === 0) {
+        delete updated.claude;
+      } else {
+        updated.claude = block;
+      }
+    }
+    await saveSettings(deps.settingsPath, updated);
+    const snapshot = await snapshotFrom(deps, updated, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
+  });
+}
+
+/**
  * Wires the frozen channels onto ipcMain. A payload the handler cannot validate
  * is answered with that channel's safe negative (never thrown across the bridge).
  * The Vault concrete type satisfies VaultLike structurally. The two OAuth
@@ -1471,4 +1550,7 @@ export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vau
   ipcMain.handle(CONNECTION_SET_ACTIVE_CHANNEL, (_event, raw: unknown) => handleConnectionSetActive(deps, raw));
   ipcMain.handle(CONNECTION_DELETE_CHANNEL, (_event, raw: unknown) => handleConnectionDelete(deps, raw));
   ipcMain.handle(CONNECTION_CHECK_CHANNEL, (_event, raw: unknown) => handleConnectionCheck(deps, raw));
+  // Engine-level proxy (TASK.139): main-authoritative, additive — the only write
+  // path the engine panes' proxy field may use.
+  ipcMain.handle(ENGINE_PROXY_SET_CHANNEL, (_event, raw: unknown) => handleEngineProxySet(deps, raw));
 }

@@ -536,3 +536,70 @@ describe("createClaudeOnboardingController — consent threading (TASK.103) — 
     });
   });
 });
+
+describe("doctor source env — engine-proxy carrier custody (TASK.139)", () => {
+  const ENGINE_PROXY = "https://claude-proxy.example.com:8443";
+  /** What a shell that happens to export the carrier name would inject. */
+  const AMBIENT_PROXY = "http://ambient-carrier.invalid:9999";
+  const SHELL_PROXY = "http://shell-proxy.internal:8080";
+
+  /** Runs one recheck against a discovered binary and returns the SOURCE env the doctor was spawned with. */
+  async function doctorEnv(overrides: Partial<ClaudeIpcDeps> = {}): Promise<NodeJS.ProcessEnv> {
+    let captured: NodeJS.ProcessEnv | undefined;
+    const runDoctor = vi.fn(async (_binaryPath: string, options: RunClaudeDoctorOptions) => {
+      captured = options.env;
+      return { status: "ready" as const, version: "2.1.212" };
+    });
+    const controller = createClaudeOnboardingController(
+      baseDeps({
+        bootEnv: { ANYCODE_CLAUDE_BIN: "/env/claude" },
+        fs: fakeExecutableFs("/env/claude"),
+        runDoctor,
+        ...overrides,
+      }),
+    );
+    await controller.recheck();
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(captured).toBeDefined();
+    return captured!;
+  }
+
+  it("stamps the configured carrier into the source env the doctor reads", async () => {
+    const env = await doctorEnv({ engineProxyUrl: () => ENGINE_PROXY });
+    expect(env.ANYCODE_CLAUDE_PROXY_URL).toBe(ENGINE_PROXY);
+  });
+
+  // F1 mirror of the codex case: an ambient carrier from the user's shell must
+  // never reach a main-spawned child, because the shell-wins gate that licenses
+  // the unconditional family overwrite lives in main, not in the child builder.
+  it("drops an AMBIENT carrier from the boot env instead of honouring it", async () => {
+    const env = await doctorEnv({
+      bootEnv: { ANYCODE_CLAUDE_BIN: "/env/claude", ANYCODE_CLAUDE_PROXY_URL: AMBIENT_PROXY },
+    });
+    expect(env.ANYCODE_CLAUDE_PROXY_URL).toBeUndefined();
+  });
+
+  it("main's configured carrier wins over an ambient one of the same name", async () => {
+    const env = await doctorEnv({
+      bootEnv: { ANYCODE_CLAUDE_BIN: "/env/claude", ANYCODE_CLAUDE_PROXY_URL: AMBIENT_PROXY },
+      engineProxyUrl: () => ENGINE_PROXY,
+    });
+    expect(env.ANYCODE_CLAUDE_PROXY_URL).toBe(ENGINE_PROXY);
+  });
+
+  // Byte-identity: the shell owns the family, so `engineProxyUrl` yields nothing
+  // and the source env deep-equals the boot env minus the carrier namespace.
+  it("with a shell proxy and ambient carriers, the source env is byte-identical to the shell's boot env", async () => {
+    const env = await doctorEnv({
+      bootEnv: {
+        ANYCODE_CLAUDE_BIN: "/env/claude",
+        HTTPS_PROXY: SHELL_PROXY,
+        https_proxy: SHELL_PROXY,
+        ANYCODE_CLAUDE_PROXY_URL: AMBIENT_PROXY,
+        ANYCODE_CODEX_PROXY_URL: AMBIENT_PROXY,
+      },
+      engineProxyUrl: () => undefined,
+    });
+    expect(env).toEqual({ ANYCODE_CLAUDE_BIN: "/env/claude", HTTPS_PROXY: SHELL_PROXY, https_proxy: SHELL_PROXY });
+  });
+});
