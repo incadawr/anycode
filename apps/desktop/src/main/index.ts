@@ -26,7 +26,17 @@ import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, MessageChannelMain, app, dialog, nativeImage, safeStorage, shell, utilityProcess } from "electron";
+import {
+  BrowserWindow,
+  MessageChannelMain,
+  app,
+  dialog,
+  nativeImage,
+  safeStorage,
+  session,
+  shell,
+  utilityProcess,
+} from "electron";
 import type { MessageBoxOptions } from "electron";
 // electron-updater is CJS and exposes `autoUpdater` via a dynamic getter that
 // Node's cjs-module-lexer cannot see as a named export; a named ESM import
@@ -58,6 +68,7 @@ import {
   customProviderIds,
   customProviderSecretKey,
   customSupportedTransports,
+  applyConnectionProxy,
   engineProxyCarrierValue,
   engineProxyCarriers,
   findCustomProviderRecord,
@@ -69,6 +80,9 @@ import {
   type ProxyMaterializationDeps,
   type ResolvedProviderSelection,
 } from "./host-env.js";
+import { registerNetworkIpc } from "./network-ipc.js";
+import { spawnProxyProbe } from "./proxy-probe.js";
+import { createSystemProxyResolver, type SystemProxyCache } from "./system-proxy.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
@@ -123,6 +137,7 @@ import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 // NAMES are no longer needed here — the doctor/login deps below read their value
 // through `engineProxyCarrierValue`, which is also where shell-wins is decided.
 import { stripEngineProxyCarriers } from "../shared/engines.js";
+import { proxyProfileSecretKey, type SystemProxyResolver } from "../shared/proxy.js";
 import {
   ENGINES_CHANGED_CHANNEL,
   codexDoctorSourceEnv,
@@ -846,10 +861,93 @@ function catalogIdsFor(current: AnycodeSettings): string[] {
  * adds the refreshes — on boot, in `refreshProviderState`, and fire-and-forget
  * after every fork — so the NEXT spawn sees a network change.
  */
-const proxyMaterialization: ProxyMaterializationDeps = {
-  systemProxyUrl: () => undefined,
-  proxyPassword: () => undefined,
+let systemProxyCache: SystemProxyCache | null = null;
+
+/**
+ * Plaintext passwords of the registry's profiles, keyed by profile id.
+ *
+ * A cache exists at all because the vault is async while `engineEnv` and the
+ * doctor stubs are not; it is refreshed by `refreshProxyPasswordCache` on every
+ * proxy mutation BEFORE the mutation event reaches the renderer, so the first
+ * spawn after a save already carries the new credential.
+ */
+const proxyPasswords = new Map<string, string>();
+
+/**
+ * Delegates to `systemProxyCache` rather than being it: `session.defaultSession`
+ * does not exist until `app.whenReady`, while this object is read by call sites
+ * that run before it (the boot-time env composition). An unresolved answer
+ * materialises DIRECT — the same meaningful default, not a failure.
+ */
+const systemProxyDelegate: SystemProxyResolver = {
+  cached: (targetUrl) => systemProxyCache?.cached(targetUrl) ?? { kind: "unresolved" },
+  resolve: async (targetUrl) =>
+    systemProxyCache === null ? { kind: "unresolved" } : systemProxyCache.resolve(targetUrl),
 };
+
+const proxyMaterialization: ProxyMaterializationDeps = {
+  systemProxy: systemProxyDelegate,
+  proxyPassword: (profileId) => proxyPasswords.get(profileId),
+};
+
+/**
+ * Reloads the plaintext proxy-password cache `proxyMaterialization.proxyPassword`
+ * answers from (TASK.141 §5, design review H-01).
+ *
+ * Wired into `settingsIpcDeps.refreshProxySecrets`, which every proxy mutation
+ * calls after its vault write and BEFORE the mutation event — so the first spawn
+ * after a save already carries the new credential instead of racing the refresh.
+ * Lane A's cache is empty by construction, so the body is a no-op TODAY; the
+ * CALL ORDER is the part that has to exist now, because it is the part a later
+ * change can silently lose.
+ */
+async function refreshProxyPasswordCache(): Promise<void> {
+  const profiles = settings?.network?.proxyProfiles ?? [];
+  const loaded = await Promise.all(
+    profiles.map(async (profile) => [profile.id, await getSecret(proxyProfileSecretKey(profile.id))] as const),
+  );
+  // Rebuilt rather than merged: a profile deleted from the registry, or one
+  // whose password was cleared, must lose its cached credential here too —
+  // merging would keep handing a deleted profile's password to any scope still
+  // pointing at its id.
+  proxyPasswords.clear();
+  for (const [id, password] of loaded) {
+    if (password !== undefined) {
+      proxyPasswords.set(id, password);
+    }
+  }
+}
+
+/**
+ * The same caches, told which TARGET this materialisation is for (design review
+ * B-10). A system-proxy answer is only meaningful relative to a host — a PAC may
+ * route two connections through two different proxies — so every call site that
+ * KNOWS its target passes it, and the resolver is asked for that target alone.
+ *
+ * `buildHostEnv` derives its own target from the endpoint it just composed
+ * (`ANYCODE_BASE_URL`), so the fork path needs nothing here.
+ */
+function proxyMaterializationFor(targetUrl: string | undefined): ProxyMaterializationDeps {
+  return targetUrl === undefined ? proxyMaterialization : { ...proxyMaterialization, targetUrl };
+}
+
+/**
+ * The endpoint the ENGINE carriers of a given settings view are resolved
+ * against: the active connection's effective base url, when there is one.
+ *
+ * NAMED LIMITATION (design review B-10): this is the endpoint of ANYCODE's own
+ * traffic, not of the engine CLI's — Codex talks to OpenAI and Claude Code to
+ * Anthropic regardless of which connection a tab is pinned to, and neither
+ * endpoint is modelled anywhere in this app. Using the fork's target is the
+ * closest honest approximation for a tab child (it rides that fork's env), and
+ * for the connection-less doctor stubs there is no target at all, so a `system`
+ * profile there materialises DIRECT. Both facts are limitations of the env-proxy
+ * model, not defects of the cache.
+ */
+function engineProxyTargetUrl(current: AnycodeSettings): string | undefined {
+  const baseUrl = activeProviderView(current).baseUrl;
+  return baseUrl !== undefined && baseUrl.trim() !== "" ? baseUrl : undefined;
+}
 
 /**
  * The effective engine proxy for the codex children MAIN itself spawns — the
@@ -933,11 +1031,17 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
  */
 async function refreshProviderState(): Promise<void> {
   const current = currentSettings();
-  // TASK.141 lane-B seam (§4/§5): the system-resolve and password caches
+  // TASK.141 §4/§5: the system-resolve and password caches
   // `proxyMaterialization` exposes are refreshed HERE, before the env below is
   // composed and — since every mutating handler calls this through `onMutation`
   // — before the renderer is told the mutation landed. Refreshing after would
   // let the first spawn following a save go out on the previous value.
+  //
+  // Neither refresh may abort the state rebuild: a proxy the OS cannot be asked
+  // about, or a vault read that fails, must leave the app running on its last
+  // good answer rather than leaving `currentHostEnv` stale forever.
+  await refreshProxyPasswordCache().catch(() => undefined);
+  await (systemProxyCache?.refreshAll() ?? Promise.resolve());
   currentHostEnv = await buildHostEnvFor(current);
   const transportInfo = selectedTransportInfo(current);
   const credential = activeCredential(current);
@@ -1192,6 +1296,21 @@ async function startInitialTab(opts: {
 }
 
 void app.whenReady().then(async () => {
+  // TASK.141 §4: the system-proxy cache can only be built now — `resolveProxy`
+  // lives on a session, and no session exists before `whenReady`. Everything
+  // that read `proxyMaterialization.systemProxy` before this point got
+  // `unresolved` (⇒ direct), which is the named first-spawn window.
+  //
+  // The resolve is delegated as a closure rather than by handing the session in:
+  // main/system-proxy.ts must stay Electron-free so its tests can run in the
+  // node environment this package's vitest uses.
+  systemProxyCache = createSystemProxyResolver({
+    resolveProxy: (targetUrl) => session.defaultSession.resolveProxy(targetUrl),
+    onError: (targetUrl, error) => {
+      console.warn(`[main] system proxy resolve failed for ${targetUrl}: ${String(error)}`);
+    },
+  });
+
   // Dev dock icon (macOS): a packaged .app draws its Dock/Cmd-Tab icon from the
   // bundled icon.icns, but `electron-vite dev` runs the generic Electron binary,
   // so the Dock shows the default Electron icon. Point it at the app icon in dev
@@ -1547,7 +1666,9 @@ void app.whenReady().then(async () => {
       ...(claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
       // `settings` is null until boot finishes loading it; an early fork must
       // spread `{}` rather than dereference it.
-      ...(settings === null ? {} : engineProxyCarriers(settings, bootEnv, proxyMaterialization)),
+      ...(settings === null
+        ? {}
+        : engineProxyCarriers(settings, bootEnv, proxyMaterializationFor(engineProxyTargetUrl(settings)))),
     }),
     reapEngineProcess: createEngineProcessReaper(),
     // Credential channel (slice 2.5 §3.3 + TASK.45 W10): an oauth-mode host asks
@@ -1765,6 +1886,9 @@ void app.whenReady().then(async () => {
     },
     platform: process.platform,
     uid: process.getuid?.() ?? -1,
+    // TASK.141 §5 / design review H-01: refreshed after the vault write and
+    // before the renderer hears about the mutation.
+    refreshProxySecrets: refreshProxyPasswordCache,
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
       // TASK.54: `provider.custom` is schema-reachable through this generic
@@ -1784,6 +1908,28 @@ void app.whenReady().then(async () => {
     },
   };
   registerSettingsIpc(settingsIpcDeps);
+
+  // TASK.141 §6: "Check connection" for a proxy profile. The probe is a SPAWNED
+  // child (`process.execPath` + ELECTRON_RUN_AS_NODE=1), never a fetch from
+  // main: main's own network stack is Chromium's and obeys neither the env
+  // proxy family nor NO_PROXY, so a fetch here would answer a question nobody
+  // asked. `composeProbeEnv` routes through the same `applyConnectionProxy` a
+  // real fork takes, so the probe cannot drift into testing an env nothing else
+  // builds — the shell-wins gate included.
+  registerNetworkIpc({
+    readSettings: () => settings,
+    bootEnv,
+    execPath: process.execPath,
+    systemProxy: systemProxyDelegate,
+    readPassword: (profileId) => getSecret(proxyProfileSecretKey(profileId)),
+    composeProbeEnv: (proxy) => {
+      const env = { ...bootEnv };
+      stripEngineProxyCarriers(env);
+      applyConnectionProxy(env, bootEnv, proxy);
+      return env;
+    },
+    spawn: spawnProxyProbe,
+  });
 
   // Custom OpenAI-compatible model-provider control plane (TASK.54, cut
   // §9.2/§13.1): CRUD for `settings.provider.custom[]` + the guarded

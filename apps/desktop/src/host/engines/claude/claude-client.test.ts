@@ -15,7 +15,7 @@ import {
   redactHomePaths,
 } from "./claude-client.js";
 import { EngineVersionError } from "./protocol.js";
-import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY } from "../../../shared/engines.js";
+import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../../../shared/engines.js";
 
 // Executables the real trust gate DOES stat — see test-scratch.ts's module doc
 // on why os.tmpdir() cannot serve this (its ancestor chain is world-writable
@@ -452,6 +452,17 @@ describe("buildClaudeChildEnv", () => {
 describe("buildClaudeChildEnv — engine proxy carrier (TASK.139)", () => {
   /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
   const ENGINE_PROXY = "http://user:pass@claude-proxy.example.com:3128";
+  /**
+   * The carrier as MAIN emits it (design review B-02): the url plus the exact
+   * value the exemption pair must be replaced with. Main decides that licence —
+   * it is the only side that can still see the boot snapshot and tell a
+   * shell-exported NO_PROXY from a passthrough one.
+   */
+  const ENGINE_CARRIER = encodeEngineProxyCarrier({
+    kind: "proxy",
+    url: ENGINE_PROXY,
+    noProxy: LOOPBACK_NO_PROXY,
+  }) as string;
   /** What a connection-level proxy looks like once `applyConnectionProxy` put it in the host fork's env. */
   const CONNECTION_PROXY = "http://connection-proxy.internal:8080";
   const CONNECTION_SOURCE: NodeJS.ProcessEnv = {
@@ -490,7 +501,7 @@ describe("buildClaudeChildEnv — engine proxy carrier (TASK.139)", () => {
   // main withholds the carrier entirely when the SHELL owns the proxy family.
   it("a carrier overwrites the connection proxy the passthrough list copied in", () => {
     const env = buildClaudeChildEnv(
-      { ...CONNECTION_SOURCE, [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      { ...CONNECTION_SOURCE, [ENV_CLAUDE_PROXY_URL]: ENGINE_CARRIER },
       undefined,
       "linux",
     );
@@ -506,7 +517,7 @@ describe("buildClaudeChildEnv — engine proxy carrier (TASK.139)", () => {
 
   it("a carrier with no inherited proxy writes the family plus both loopback exemptions", () => {
     const env = buildClaudeChildEnv(
-      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_CARRIER },
       undefined,
       "linux",
     );
@@ -529,7 +540,7 @@ describe("buildClaudeChildEnv — engine proxy carrier (TASK.139)", () => {
 
   it("never forwards the carrier itself — the allowlist does not name it", () => {
     const env = buildClaudeChildEnv(
-      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_CARRIER },
       undefined,
       "linux",
     );

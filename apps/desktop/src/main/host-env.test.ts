@@ -41,8 +41,16 @@ import {
   resolveProxyLadder,
   PROXY_REF_DIRECT,
   type ProxyProfile,
+  type SystemProxyOutcome,
+  type SystemProxyResolver,
 } from "../shared/proxy.js";
-import { PROXY_CARRIER_DIRECT } from "../shared/engines.js";
+import {
+  applyEngineProxyOverride,
+  decodeEngineProxyCarrier,
+  encodeEngineProxyCarrier,
+  LOOPBACK_NO_PROXY,
+  PROXY_CARRIER_DIRECT,
+} from "../shared/engines.js";
 import { resolveProviderSelection, type ProviderSelectionDeps } from "./token-broker.js";
 import { connectionFixture, providerV2, providerV2Multi, type SingletonFixture } from "../shared/provider-v2-fixture.js";
 
@@ -583,7 +591,17 @@ describe("buildHostEnv — connection proxy (TASK.132)", () => {
   // vars the shell left blank, and the settings value would then beat the
   // shell's `HTTPS_PROXY` under lowercase-first precedence — reverting to a
   // per-var fill turns this red on `http_proxy`/`https_proxy`.
-  it("a shell-set HTTPS_PROXY makes the shell own the WHOLE family; only the mechanism flag is added", async () => {
+  //
+  // CHANGED BY DESIGN REVIEW B-01. This test used to pin the opposite of the
+  // owner's rule: it asserted that a shell-owned family STILL got `NO_PROXY`
+  // plus `NODE_USE_ENV_PROXY=1` from settings. Both of those are emissions, and
+  // "the shell owns the family ⇒ settings emit NOTHING" admits none: writing
+  // `NO_PROXY` rewrites the shell's exemption list, and `NODE_USE_ENV_PROXY=1`
+  // switches the host's own fetch onto the shell's proxy — neither was asked
+  // for. The named cost is that the host's fetch goes direct here, exactly as it
+  // did before TASK.132; a shell wanting otherwise exports NODE_USE_ENV_PROXY
+  // itself.
+  it("B-01: a shell-set HTTPS_PROXY makes settings emit NOTHING — not even the exemption or the flag", async () => {
     const env = await buildHostEnv({
       bootEnv: { HTTPS_PROXY: SHELL_PROXY },
       settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
@@ -593,13 +611,24 @@ describe("buildHostEnv — connection proxy (TASK.132)", () => {
     expect(env.HTTP_PROXY).toBeUndefined();
     expect(env.https_proxy).toBeUndefined();
     expect(env.http_proxy).toBeUndefined();
-    // The exemption is NOT part of that hand-over: the shell named no
-    // exemptions, and this field is what switches proxying on, so loopback
-    // endpoints still get covered (asserted on its own below).
-    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
-    // The field still expresses proxy INTENT, so the mechanism goes on even
-    // though the shell supplied the value.
-    expect(env.NODE_USE_ENV_PROXY).toBe("1");
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.no_proxy).toBeUndefined();
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
+  });
+
+  // The same early return, reached through each of the other three spellings —
+  // the gate is the FAMILY, not one variable.
+  it("B-01: any one of the four family names is enough to silence the settings", async () => {
+    for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+      const env = await buildHostEnv({
+        bootEnv: { [name]: SHELL_PROXY },
+        settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
+        getSecret: noSecret,
+      });
+      expect(env[name]).toBe(SHELL_PROXY);
+      expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
+      expect(env.NO_PROXY).toBeUndefined();
+    }
   });
 
   // The exemption list is atomic too, and for a sharper reason than the family:
@@ -633,30 +662,25 @@ describe("buildHostEnv — connection proxy (TASK.132)", () => {
     expect(env.HTTPS_PROXY).toBe(PROXY);
   });
 
-  // The exemption belongs to the MECHANISM, not to the proxy value's source:
-  // this field is what turns proxying on, so loopback endpoints need covering
-  // even when the shell supplied the proxy itself.
-  it("a shell-owned family still gets the loopback exemption when the shell named none", async () => {
-    const env = await buildHostEnv({
-      bootEnv: { HTTPS_PROXY: SHELL_PROXY },
-      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
-      getSecret: noSecret,
-    });
-    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
-    expect(env.no_proxy).toBe("localhost,127.0.0.1,[::1],::1");
-  });
-
-  // `envPresent` treats a blank value as unset everywhere in this module, and
-  // that is the intended reading here too: `HTTPS_PROXY=""` is how a shell
-  // says "no proxy", not "a proxy I refuse to name".
-  it("a blank shell family var counts as unset — settings fill the family", async () => {
+  // CHANGED BY DESIGN REVIEW B-01, and the change is the whole point of the
+  // finding. This used to assert that `HTTPS_PROXY=""` counts as UNSET and lets
+  // settings fill the family. Under the owner's rule «the shell wins by family»
+  // read literally, `export HTTPS_PROXY=` is a STATEMENT — "this shell wants no
+  // proxy for https" — and filling the family behind it overrides an explicit
+  // shell decision with a stored one. Declaration, not value, is what the gate
+  // reads; every other var in this module keeps the present-AND-non-blank
+  // reading (`envPresent`), and that difference has its own predicate
+  // (`shellOwnsProxyFamily`) so it cannot be "tidied" back by accident.
+  it("B-01: an EMPTY shell family var still counts as declared — settings emit nothing", async () => {
     const env = await buildHostEnv({
       bootEnv: { HTTPS_PROXY: "" },
       settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: PROXY } }),
       getSecret: noSecret,
     });
-    expect(env.HTTPS_PROXY).toBe(PROXY);
-    expect(env.http_proxy).toBe(PROXY);
+    expect(env.HTTPS_PROXY).toBe("");
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
   });
 
   // Fail-soft: a hand-edited settings.json (the persisted schema is lenient on
@@ -1162,18 +1186,27 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   /** The COMPLETE key set this function may ever emit — byte-identity is asserted over exactly this. */
   const CARRIER_KEYS = ["ANYCODE_CODEX_PROXY_URL", "ANYCODE_CLAUDE_PROXY_URL"] as const;
 
+  /**
+   * The wire value main emits for a working engine proxy (design review B-02):
+   * the url PLUS the exemption pair the child must write, since a boot env that
+   * names no `NO_PROXY` leaves that pair ours to set. Composed through the real
+   * encoder so the encoding cannot drift between main and the child builders.
+   */
+  const carrier = (url: string, noProxy: string = LOOPBACK_NO_PROXY): string =>
+    encodeEngineProxyCarrier({ kind: "proxy", url, noProxy }) as string;
+
   it("emits nothing when neither engine has a proxy", () => {
     expect(engineProxyCarriers(settings(), {})).toEqual({});
   });
 
   it("emits only the codex carrier when only codex is configured", () => {
     const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), {});
-    expect(result).toEqual({ ANYCODE_CODEX_PROXY_URL: CODEX_PROXY });
+    expect(result).toEqual({ ANYCODE_CODEX_PROXY_URL: carrier(CODEX_PROXY) });
   });
 
   it("emits only the claude carrier when only claude is configured", () => {
     const result = engineProxyCarriers(settings({ claude: { proxyUrl: CLAUDE_PROXY } }), {});
-    expect(result).toEqual({ ANYCODE_CLAUDE_PROXY_URL: CLAUDE_PROXY });
+    expect(result).toEqual({ ANYCODE_CLAUDE_PROXY_URL: carrier(CLAUDE_PROXY) });
   });
 
   it("emits both carriers, each with its own engine's value", () => {
@@ -1182,8 +1215,38 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
       {},
     );
     expect(result).toEqual({
-      ANYCODE_CODEX_PROXY_URL: CODEX_PROXY,
-      ANYCODE_CLAUDE_PROXY_URL: CLAUDE_PROXY,
+      ANYCODE_CODEX_PROXY_URL: carrier(CODEX_PROXY),
+      ANYCODE_CLAUDE_PROXY_URL: carrier(CLAUDE_PROXY),
+    });
+  });
+
+  // B-02: main withholds the exemption licence when the SHELL named the pair —
+  // the child builder cannot make that call, since by the time it runs a
+  // shell-exported NO_PROXY and a connection-derived one look identical.
+  it("B-02: withholds the exemption licence when the shell owns NO_PROXY", () => {
+    const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), { NO_PROXY: "corp.internal" });
+    expect(result).toEqual({
+      ANYCODE_CODEX_PROXY_URL: encodeEngineProxyCarrier({ kind: "proxy", url: CODEX_PROXY }),
+    });
+  });
+
+  // B-02: an engine PROFILE's own exemptions ride the carrier, appended to the
+  // loopback default — never replacing it, or a local Ollama/vLLM endpoint would
+  // be dialled through the proxy.
+  it("B-02: carries an engine profile's own noProxy, appended to the loopback default", () => {
+    const result = engineProxyCarriers(
+      settings({
+        network: {
+          proxyProfiles: [
+            { id: "proxy-1", name: "Corp", mode: "manual", url: CLAUDE_PROXY, noProxy: "engine.corp" },
+          ],
+        },
+        codex: { proxyRef: "proxy-1" },
+      }),
+      {},
+    );
+    expect(result).toEqual({
+      ANYCODE_CODEX_PROXY_URL: carrier(`${CLAUDE_PROXY}/`, `${LOOPBACK_NO_PROXY},engine.corp`),
     });
   });
 
@@ -1202,11 +1265,13 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
     });
   }
 
-  // A blank shell var is not a configured proxy (same present-AND-non-blank
-  // test the rest of this module applies).
-  it("ignores a blank shell proxy var and still emits the carriers", () => {
+  // CHANGED BY DESIGN REVIEW B-01, in step with `applyConnectionProxy`: a
+  // DECLARED family var — empty string included — is the shell claiming the
+  // family, and the two gates must read the same predicate or a scope could be
+  // silenced on the fork path and heard on the engine path.
+  it("B-01: an empty shell family var silences both carriers too", () => {
     const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), { HTTPS_PROXY: "  " });
-    expect(result).toEqual({ ANYCODE_CODEX_PROXY_URL: CODEX_PROXY });
+    expect(result).toEqual({});
   });
 
   // Fail-soft: `settings.codex`/`settings.claude` validate LENIENTLY on disk
@@ -1220,7 +1285,7 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
         settings({ codex: { proxyUrl: garbage }, claude: { proxyUrl: CLAUDE_PROXY } }),
         {},
       );
-      expect(result).toEqual({ ANYCODE_CLAUDE_PROXY_URL: CLAUDE_PROXY });
+      expect(result).toEqual({ ANYCODE_CLAUDE_PROXY_URL: carrier(CLAUDE_PROXY) });
     }
   });
 
@@ -1312,7 +1377,13 @@ describe("ambient engine-proxy carriers never reach a fork (TASK.139 F1)", () =>
     const env = await buildHostEnv({ bootEnv, settings: current, getSecret: noSecret });
     expect(env.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
     const overlay = { ...env, ...engineProxyCarriers(current, bootEnv) };
-    expect(pick(overlay)).toEqual({ ANYCODE_CODEX_PROXY_URL: CODEX_PROXY });
+    expect(pick(overlay)).toEqual({
+      ANYCODE_CODEX_PROXY_URL: encodeEngineProxyCarrier({
+        kind: "proxy",
+        url: CODEX_PROXY,
+        noProxy: LOOPBACK_NO_PROXY,
+      }),
+    });
   });
 });
 
@@ -1327,6 +1398,13 @@ describe("materializeProxyRung — a rung turned into what an env needs", () => 
 
   const materialize = (current: AnycodeSettings, deps: ProxyMaterializationDeps = {}) =>
     materializeProxyRung(resolveProxyLadder(current, [{ kind: "app" }]), deps);
+
+  /** A target-keyed resolver that answers the SAME outcome for every target. */
+  const systemResolver = (outcome: SystemProxyOutcome): SystemProxyResolver => ({
+    cached: () => outcome,
+    resolve: async () => outcome,
+  });
+  const TARGET = "https://api.anthropic.com";
 
   it("materialises a manual profile's URL", () => {
     expect(materialize(rungFor(MANUAL))).toEqual({ url: "http://proxy.corp:3128/" });
@@ -1344,13 +1422,55 @@ describe("materializeProxyRung — a rung turned into what an env needs", () => 
   // to ask, and inventing a proxy would be worse than not using one.
   it("materialises a system profile to DIRECT while the resolve cache is empty", () => {
     expect(materialize(rungFor(SYSTEM))).toBeUndefined();
-    expect(materialize(rungFor(SYSTEM), { systemProxyUrl: () => undefined })).toBeUndefined();
+    expect(
+      materialize(rungFor(SYSTEM), { systemProxy: systemResolver({ kind: "unresolved" }), targetUrl: TARGET }),
+    ).toBeUndefined();
   });
 
   it("materialises a system profile from the injected resolve cache once it has a value", () => {
-    expect(materialize(rungFor(SYSTEM), { systemProxyUrl: () => "http://pac-resolved:8080" })).toEqual({
-      url: "http://pac-resolved:8080/",
+    expect(
+      materialize(rungFor(SYSTEM), {
+        systemProxy: systemResolver({ kind: "proxy", url: "http://pac-resolved:8080" }),
+        targetUrl: TARGET,
+      }),
+    ).toEqual({ url: "http://pac-resolved:8080/" });
+  });
+
+  // B-10: the cache is keyed by TARGET, so an answer taken for one host is not
+  // an answer for another. A materialisation that does not know its own target
+  // must go DIRECT rather than borrow whatever the last resolve produced.
+  it("B-10: a system profile with no target materialises DIRECT even when the cache holds a proxy", () => {
+    expect(
+      materialize(rungFor(SYSTEM), { systemProxy: systemResolver({ kind: "proxy", url: "http://pac:8080" }) }),
+    ).toBeUndefined();
+  });
+
+  it("B-10: a system profile resolves the answer for ITS OWN target, not for another's", () => {
+    const byTarget = new Map<string, SystemProxyOutcome>([
+      ["https://a.example", { kind: "proxy", url: "http://proxy-a:3128" }],
+      ["https://b.example", { kind: "proxy", url: "http://proxy-b:3128" }],
+    ]);
+    const systemProxy: SystemProxyResolver = {
+      cached: (target) => byTarget.get(target) ?? { kind: "unresolved" },
+      resolve: async (target) => byTarget.get(target) ?? { kind: "unresolved" },
+    };
+    expect(materialize(rungFor(SYSTEM), { systemProxy, targetUrl: "https://a.example" })).toEqual({
+      url: "http://proxy-a:3128/",
     });
+    expect(materialize(rungFor(SYSTEM), { systemProxy, targetUrl: "https://b.example" })).toEqual({
+      url: "http://proxy-b:3128/",
+    });
+  });
+
+  // The three non-`proxy` outcomes are three different facts about the OS, and
+  // all three materialise DIRECT — an explicit rung whose value cannot be
+  // honoured must not fall through into another rung's proxy.
+  it("B-10: `direct` and `socks_unsupported` both materialise DIRECT", () => {
+    expect(materialize(rungFor(SYSTEM), { systemProxy: systemResolver({ kind: "direct" }), targetUrl: TARGET }))
+      .toBeUndefined();
+    expect(
+      materialize(rungFor(SYSTEM), { systemProxy: systemResolver({ kind: "socks_unsupported" }), targetUrl: TARGET }),
+    ).toBeUndefined();
   });
 
   // The password never lives in settings.json — it comes from the vault via
@@ -1444,7 +1564,11 @@ describe("engineProxyCarrierValue — the engine rung, with and without the app 
   // the application default reaches it through this value or not at all.
   it("picks up the app rung for a doctor child", () => {
     const current = settings({ network: { proxyProfiles: [PROFILE], proxyRef: PROFILE.id } });
-    expect(engineProxyCarrierValue(current, {}, "codex", true)).toBe("http://proxy.corp:3128/");
+    expect(decodeEngineProxyCarrier(engineProxyCarrierValue(current, {}, "codex", true))).toEqual({
+      kind: "proxy",
+      url: "http://proxy.corp:3128/",
+      noProxy: LOOPBACK_NO_PROXY,
+    });
   });
 
   // An explicit `direct` must be SAID: the connection's proxy is already in the
@@ -1481,7 +1605,11 @@ describe("engineProxyCarrierValue — the engine rung, with and without the app 
       network: { proxyProfiles: [PROFILE] },
     });
     expect(engineProxyCarriers(current, {})).toEqual({
-      ANYCODE_CODEX_PROXY_URL: "http://proxy.corp:3128/",
+      ANYCODE_CODEX_PROXY_URL: encodeEngineProxyCarrier({
+        kind: "proxy",
+        url: "http://proxy.corp:3128/",
+        noProxy: LOOPBACK_NO_PROXY,
+      }),
       ANYCODE_CLAUDE_PROXY_URL: PROXY_CARRIER_DIRECT,
     });
   });
@@ -1491,7 +1619,13 @@ describe("engineProxyCarrierValue — the engine rung, with and without the app 
       codex: { proxyUrl: "http://legacy:8080", proxyRef: PROFILE.id },
       network: { proxyProfiles: [PROFILE] },
     });
-    expect(engineProxyCarriers(current, {})).toEqual({ ANYCODE_CODEX_PROXY_URL: "http://proxy.corp:3128/" });
+    expect(engineProxyCarriers(current, {})).toEqual({
+      ANYCODE_CODEX_PROXY_URL: encodeEngineProxyCarrier({
+        kind: "proxy",
+        url: "http://proxy.corp:3128/",
+        noProxy: LOOPBACK_NO_PROXY,
+      }),
+    });
   });
 });
 
@@ -1549,15 +1683,34 @@ describe("TASK.141 byte-identity — a registry-free document changes not one by
     });
   });
 
-  it("a legacy-only engine block produces the exact pre-slice carrier overlay", () => {
+  // The DoD is byte-identity of the CHILD env, not of the carrier: the carrier
+  // is main's private transport, consumed by the builder and never forwarded.
+  // B-02 changed the carrier's SHAPE, so this asserts what actually has to hold
+  // — apply the carrier to a child env and compare against the exact pre-slice
+  // result (four family vars + the loopback pair).
+  it("a legacy-only engine block produces the exact pre-slice CHILD env", () => {
     const current = settings({
       codex: { proxyUrl: "http://codex-legacy:3128" },
       claude: { proxyUrl: "http://claude-legacy:3128" },
     });
-    expect(engineProxyCarriers(current, {})).toEqual({
-      ANYCODE_CODEX_PROXY_URL: "http://codex-legacy:3128",
-      ANYCODE_CLAUDE_PROXY_URL: "http://claude-legacy:3128",
-    });
+    const carriers = engineProxyCarriers(current, {});
+    for (const [engine, url] of [
+      ["ANYCODE_CODEX_PROXY_URL", "http://codex-legacy:3128"],
+      ["ANYCODE_CLAUDE_PROXY_URL", "http://claude-legacy:3128"],
+    ] as const) {
+      const childEnv: NodeJS.ProcessEnv = { HOME: "/home/me", PATH: "/usr/bin" };
+      applyEngineProxyOverride(childEnv, carriers, engine);
+      expect(childEnv).toEqual({
+        HOME: "/home/me",
+        PATH: "/usr/bin",
+        HTTPS_PROXY: url,
+        HTTP_PROXY: url,
+        https_proxy: url,
+        http_proxy: url,
+        NO_PROXY: LOOPBACK_NO_PROXY,
+        no_proxy: LOOPBACK_NO_PROXY,
+      });
+    }
   });
 
   // Fail-soft on a hand-edited legacy string is preserved verbatim: it is NOT a
@@ -1607,5 +1760,132 @@ describe("proxy-profile vault key (TASK.141 §5)", () => {
     expect(secretEnvFor("provider.apiKey")).toBe("ANYCODE_API_KEY");
     expect(secretEnvFor("provider.connection.conn-1.apiKey")).toBe("ANYCODE_API_KEY");
     expect(secretEnvFor("provider.anthropic.oauth")).toBe("ANYCODE_API_KEY");
+  });
+});
+
+// ── design-review regressions (TASK.141 lane A, gpt-5.6-sol xhigh) ──
+
+describe("B-10 — the async fork path awaits a FRESH resolve for its own target", () => {
+  const SYSTEM: ProxyProfile = { id: "proxy-sys", name: "System", mode: "system" };
+
+  function recordingResolver(answers: Record<string, string>): {
+    resolver: SystemProxyResolver;
+    resolved: string[];
+  } {
+    const resolved: string[] = [];
+    return {
+      resolved,
+      resolver: {
+        // Deliberately EMPTY: the sync cache knows nothing, so a fork that did
+        // not await a fresh resolve would materialise DIRECT and this test would
+        // catch it.
+        cached: () => ({ kind: "unresolved" }),
+        resolve: async (target) => {
+          resolved.push(target);
+          const url = answers[target];
+          return url === undefined ? { kind: "unresolved" } : { kind: "proxy", url };
+        },
+      },
+    };
+  }
+
+  it("resolves the pinned connection's endpoint, not a global one", async () => {
+    const { resolver, resolved } = recordingResolver({ "https://a.example": "http://proxy-a:3128" });
+    const current = settings({
+      provider: { baseUrl: "https://a.example", model: "m" },
+      network: { proxyProfiles: [SYSTEM], proxyRef: SYSTEM.id },
+    });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: current,
+      getSecret: noSecret,
+      proxy: { systemProxy: resolver },
+    });
+    expect(resolved).toEqual(["https://a.example"]);
+    expect(env.HTTPS_PROXY).toBe("http://proxy-a:3128/");
+  });
+
+  // THE SCENARIO: a PAC routes a.example through proxy A and b.example through
+  // proxy B; two live tabs pinned to two connections share ONE system profile.
+  // A single targetless answer would hand both spawns whichever resolve ran
+  // last.
+  it("two pinned connections get two different proxies from the same profile", async () => {
+    const { resolver } = recordingResolver({
+      "https://a.example": "http://proxy-a:3128",
+      "https://b.example": "http://proxy-b:3128",
+    });
+    const connections = [
+      connectionFixture({ connectionId: "conn-a", baseUrl: "https://a.example", model: "m" }),
+      connectionFixture({ connectionId: "conn-b", baseUrl: "https://b.example", model: "m" }),
+    ];
+    const envFor = async (activeConnectionId: string): Promise<NodeJS.ProcessEnv> =>
+      buildHostEnv({
+        bootEnv: {},
+        settings: {
+          ...settings({ network: { proxyProfiles: [SYSTEM], proxyRef: SYSTEM.id } }),
+          provider: providerV2Multi(activeConnectionId, connections),
+        },
+        getSecret: noSecret,
+        proxy: { systemProxy: resolver },
+      });
+    expect((await envFor("conn-a")).HTTPS_PROXY).toBe("http://proxy-a:3128/");
+    expect((await envFor("conn-b")).HTTPS_PROXY).toBe("http://proxy-b:3128/");
+  });
+
+  // A manual profile needs no resolve at all — the async path must not ask.
+  it("never resolves for a non-system rung", async () => {
+    const { resolver, resolved } = recordingResolver({ "https://a.example": "http://proxy-a:3128" });
+    const manual: ProxyProfile = { id: "proxy-m", name: "M", mode: "manual", url: "http://manual:3128" };
+    await buildHostEnv({
+      bootEnv: {},
+      settings: settings({
+        provider: { id: "z-ai", model: "m", baseUrl: "https://a.example" },
+        network: { proxyProfiles: [manual], proxyRef: manual.id },
+      }),
+      getSecret: noSecret,
+      proxy: { systemProxy: resolver },
+    });
+    expect(resolved).toEqual([]);
+  });
+});
+
+describe("B-03 — every explicit-direct outcome emits the sentinel", () => {
+  // THE SCENARIO: a connection uses proxy A; the engine names a `system`
+  // profile the OS answered DIRECT for (or a dangling id, or a hand-broken
+  // url). Keying the sentinel on `ref === "direct"` emitted NOTHING for all
+  // three, the builder left the connection's proxy in place, and the engine's
+  // traffic went through a rung the user had explicitly overridden.
+  it("emits it for a system profile that resolved DIRECT, for a dangling id, and for a broken url", () => {
+    const cases: AnycodeSettings[] = [
+      settings({
+        codex: { proxyRef: "proxy-sys" },
+        network: { proxyProfiles: [{ id: "proxy-sys", name: "S", mode: "system" }] },
+      }),
+      settings({ codex: { proxyRef: "proxy-vanished" } }),
+      settings({
+        codex: { proxyRef: "proxy-broken" },
+        network: { proxyProfiles: [{ id: "proxy-broken", name: "B", mode: "manual", url: "not a url" }] },
+      }),
+      // Userinfo in the host field is refused by the same rule the editor
+      // applies, so a hand-edited profile degrades to direct rather than
+      // shipping a credential out of settings.json.
+      settings({
+        codex: { proxyRef: "proxy-creds" },
+        network: {
+          proxyProfiles: [{ id: "proxy-creds", name: "C", mode: "manual", url: "http://u:p@proxy:3128" }],
+        },
+      }),
+      settings({ codex: { proxyRef: PROXY_REF_DIRECT } }),
+    ];
+    for (const current of cases) {
+      expect(engineProxyCarrierValue(current, {}, "codex", false)).toBe(PROXY_CARRIER_DIRECT);
+    }
+  });
+
+  // The opposite pole, unchanged: NO rung at all emits nothing, so the child
+  // keeps what it inherited and a registry-free document stays byte-identical.
+  it("emits nothing when no rung spoke at all", () => {
+    expect(engineProxyCarrierValue(settings(), {}, "codex", false)).toBeUndefined();
+    expect(engineProxyCarrierValue(settings(), {}, "claude", true)).toBeUndefined();
   });
 });

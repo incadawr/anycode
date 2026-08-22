@@ -13,14 +13,20 @@
  */
 
 import { ENV_AUTH_MODE } from "../shared/credentials.js";
+import type { EngineProxyCarrier } from "../shared/engines.js";
 import {
+  encodeEngineProxyCarrier,
   ENV_CLAUDE_PROXY_URL,
   ENV_CODEX_PROXY_URL,
   LOOPBACK_NO_PROXY,
-  PROXY_CARRIER_DIRECT,
   stripEngineProxyCarriers,
 } from "../shared/engines.js";
-import type { MaterializedProxy, ProxyRung, ProxyScopeId } from "../shared/proxy.js";
+import type {
+  MaterializedProxy,
+  ProxyMaterializationDeps,
+  ProxyRung,
+  ProxyScopeId,
+} from "../shared/proxy.js";
 import {
   composeProxyUrl,
   engineProxyChain,
@@ -449,49 +455,78 @@ export function applyCodexProfilesHomeOverride(env: NodeJS.ProcessEnv, override:
 }
 
 /**
- * Materialises the active connection's `proxyUrl` (TASK.132) into a host fork's
- * env as the HTTP(S)_PROXY family + the loopback `NO_PROXY` exemption +
+ * True when the BOOT env declares any member of the proxy family — the one
+ * shell-wins gate of this whole slice (design review B-01).
+ *
+ * "Declares" means the name EXISTS, empty string included, and that is the
+ * owner's rule read literally: the shell wins BY FAMILY. `export HTTPS_PROXY=`
+ * is a statement — "this shell wants no proxy for https" — and a settings value
+ * that filled the family behind it would override an explicit shell decision
+ * with a stored one. Everywhere else in this module presence means "present AND
+ * non-blank" (`envPresent`, mirroring loadEnvConfig); the proxy family is the
+ * deliberate exception, and the difference is why it has its own predicate.
+ *
+ * ONE gate for both consumers below (the fork family and the engine carriers),
+ * so a scope cannot be silenced down one path and heard down the other.
+ * `ALL_PROXY` is deliberately NOT a member — see `ALL_PROXY_KEYS` in
+ * shared/engines.ts for the measurement that decision is waiting on.
+ */
+function shellOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
+  return PROXY_FAMILY_KEYS.some((name) => bootEnv[name] !== undefined);
+}
+
+/**
+ * Materialises the fork's resolved proxy (TASK.132's connection field,
+ * generalised to the TASK.141 ladder) into a host fork's env as the
+ * HTTP(S)_PROXY family + the loopback `NO_PROXY` exemption +
  * `NODE_USE_ENV_PROXY=1`. The host's own global fetch honours it through
  * undici's env-proxy agent; the claude/codex children inherit the family
  * through their existing env allow-lists and proxy themselves natively.
  *
- * The shell-wins check is FAMILY-ATOMIC, not the per-var `fillFromSettings`
- * used everywhere else in this module, and that difference is load-bearing:
- * filling only the vars the shell left blank (shell `HTTPS_PROXY=X` + our
- * `https_proxy=Y`) would let the settings value beat the shell's under the
- * lowercase-first precedence curl and undici follow. If the shell configured
- * ANY of the four, it owns all four.
+ * SHELL-WINS IS AN EARLY RETURN, before ANY write (design review B-01). The gate
+ * is family-atomic rather than the per-var `fillFromSettings` used everywhere
+ * else in this module, and it now covers the whole emission rather than just the
+ * four proxy names:
+ *  - filling only the vars the shell left blank (shell `HTTPS_PROXY=X` + our
+ *    `https_proxy=Y`) would let the settings value beat the shell's under the
+ *    lowercase-first precedence curl and undici follow;
+ *  - and emitting `NO_PROXY` / `NODE_USE_ENV_PROXY` "anyway" — which is what
+ *    this function used to do — is not a smaller version of the same intent. It
+ *    rewrites the shell's exemption list and switches the host's own fetch onto
+ *    the shell's proxy, both of which the shell did not ask for. "The shell owns
+ *    the family, settings emit NOTHING" is the whole rule, so nothing is what
+ *    gets emitted.
  *
- * With no (or an unparseable) `proxyUrl` this emits NOTHING — not even
- * `NODE_USE_ENV_PROXY` — so a fork's env stays byte-identical to pre-TASK.132
- * in every case, including a shell that already exports a proxy: that proxy
- * rides the `{...bootEnv}` spread and remains as inert as it was before. A
- * value that fails `isProxyUrl` is fail-soft for the same reason a hand-edited
- * settings.json must not break every request: it degrades to "no proxy", never
- * to a broken env.
+ * The cost of the stricter reading is named rather than hidden: with a
+ * shell-exported proxy AND a configured profile, the host's own `fetch` no
+ * longer has `NODE_USE_ENV_PROXY` switched on for it, so it goes direct exactly
+ * as it did before TASK.132 existed. A shell that wants the host's fetch
+ * proxied can export `NODE_USE_ENV_PROXY=1` itself, which is a variable it
+ * already owns.
  *
- * `NODE_USE_ENV_PROXY` is set whenever the field expresses proxy intent, even
- * when the shell supplied the proxy VALUE — the field's job there is to switch
- * the MECHANISM on. A shell-set value (e.g. `0`) still wins.
+ * With no (or an unparseable) proxy this emits NOTHING either, so a fork's env
+ * stays byte-identical to pre-TASK.132 in every case. A value that fails
+ * `isProxyUrl` is fail-soft for the same reason a hand-edited settings.json must
+ * not break every request: it degrades to "no proxy", never to a broken env.
  */
 export function applyConnectionProxy(
   env: NodeJS.ProcessEnv,
   bootEnv: NodeJS.ProcessEnv,
   proxy: MaterializedProxy | undefined,
 ): void {
+  if (shellOwnsProxyFamily(bootEnv)) {
+    return;
+  }
   if (proxy === undefined || proxy.url.trim() === "" || !isProxyUrl(proxy.url)) {
     return;
   }
-  if (!PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name))) {
-    for (const name of PROXY_FAMILY_KEYS) {
-      env[name] = proxy.url;
-    }
+  for (const name of PROXY_FAMILY_KEYS) {
+    env[name] = proxy.url;
   }
-  // The exemption is a property of switching proxying ON, not of where the
-  // proxy VALUE came from: even when the shell owns the family, this field is
-  // what activates it, so local endpoints need the same protection. Atomic for
-  // the shadowing reason in NO_PROXY_KEYS — a shell that named its own
-  // exemptions keeps both keys untouched.
+  // Atomic for the shadowing reason in NO_PROXY_KEYS — a shell that named its
+  // own exemptions keeps both keys untouched (that check stays `envPresent`:
+  // an empty `NO_PROXY=""` names no exemptions, so there is nothing of the
+  // shell's to preserve).
   //
   // TASK.141: a profile's own exemptions are APPENDED to the loopback default,
   // never substituted for it — a list that replaced it would send a local
@@ -499,44 +534,43 @@ export function applyConnectionProxy(
   // cases get the identical composed string, atomically, for the shadowing
   // reason above.
   if (!NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))) {
-    const extra = proxy.noProxy?.trim() ?? "";
-    const value = extra === "" ? LOOPBACK_NO_PROXY : `${LOOPBACK_NO_PROXY},${extra}`;
     for (const name of NO_PROXY_KEYS) {
-      env[name] = value;
+      env[name] = composeNoProxy(proxy.noProxy);
     }
   }
   fillFromSettings(env, ENV_NODE_USE_ENV_PROXY, "1");
 }
 
+/** The loopback default with a profile's own exemptions appended (never replacing it). */
+function composeNoProxy(extra: string | undefined): string {
+  const trimmed = extra?.trim() ?? "";
+  return trimmed === "" ? LOOPBACK_NO_PROXY : `${LOOPBACK_NO_PROXY},${trimmed}`;
+}
+
 // ── proxy-registry materialisation (TASK.141) ──
 
 /**
- * The two main-side caches every SYNCHRONOUS proxy call site reads through
- * (TASK.141 §4/§5). Both are injected rather than imported so this module stays
- * electron-free and unit-testable, and so lane A can ship — and pin with tests —
- * the "no cache ⇒ direct / no password" behaviour before lane B's modules exist.
- *
- * Absent (or returning undefined) is a MEANINGFUL answer in both cases, not an
- * error: a `system` profile with nothing resolved yet materialises as DIRECT
- * (before `app.whenReady` there is no Chromium session to ask, and guessing a
- * proxy would be worse than not using one), and a profile with no cached
- * password materialises without userinfo.
+ * Re-exported so the existing main-side import sites keep one import path; the
+ * contract itself lives in shared/proxy.ts, next to `SystemProxyResolver`, since
+ * lane B's resolver and lane C's editor both need it and neither may import from
+ * main.
  */
-export interface ProxyMaterializationDeps {
-  /**
-   * Last value `session.resolveProxy` gave for a `system` profile, as
-   * `http(s)://host:port`; undefined = resolved DIRECT / not resolved yet / the
-   * OS proxy is SOCKS (unsupported by construction — env proxying is HTTP-only).
-   * Owned by main/system-proxy.ts (lane B).
-   */
-  systemProxyUrl?: () => string | undefined;
-  /**
-   * Plaintext password of ONE profile, from main's in-memory cache (the vault is
-   * async and these call sites are not). Owned by lane B alongside the resolve
-   * cache; refreshed BEFORE `emitMutation` so the first spawn after a save
-   * already carries the new value. Never crosses to the renderer.
-   */
-  proxyPassword?: (profileId: string) => string | undefined;
+export type { ProxyMaterializationDeps };
+
+/**
+ * The system-proxy answer for THIS materialisation's target, flattened to the
+ * proxy url an env can carry (design review B-10).
+ *
+ * Both "no resolver" and "no target" yield DIRECT rather than borrowing another
+ * target's answer: one global system-proxy value cannot serve a PAC that routes
+ * two hosts differently, and a wrong proxy is a worse failure than no proxy.
+ */
+function systemProxyBase(deps: ProxyMaterializationDeps): string | undefined {
+  if (deps.systemProxy === undefined || deps.targetUrl === undefined) {
+    return undefined;
+  }
+  const outcome = deps.systemProxy.cached(deps.targetUrl);
+  return outcome.kind === "proxy" ? outcome.url : undefined;
 }
 
 /**
@@ -565,7 +599,7 @@ export function materializeProxyRung(
   if (profile === undefined) {
     return undefined; // `direct`, or a dangling ref — same outcome by law.
   }
-  const base = profile.mode === "system" ? deps.systemProxyUrl?.() : profile.url;
+  const base = profile.mode === "system" ? systemProxyBase(deps) : profile.url;
   if (base === undefined || base.trim() === "") {
     return undefined;
   }
@@ -597,6 +631,41 @@ export function resolveProxyFor(
   deps: ProxyMaterializationDeps = {},
 ): MaterializedProxy | undefined {
   return materializeProxyRung(resolveProxyLadder(settings, chain), deps);
+}
+
+/**
+ * The ASYNC half of the same resolution (design review B-10): the fork path, and
+ * the only place a FRESH `session.resolveProxy` is awaited.
+ *
+ * The split is not a convenience wrapper. Sync consumers (the engine carriers,
+ * the doctor stubs) cannot await anything and must read the cache for their own
+ * target; the fork path can, and it is composing the env a real spawn will use,
+ * so it takes a fresh answer for the target THAT fork is pinned to. Two pinned
+ * connections therefore each resolve their own endpoint instead of racing over
+ * one shared slot.
+ *
+ * The freshly-taken outcome is used directly rather than re-read through
+ * `cached` after the await: between the two, a resolve for a DIFFERENT target
+ * may have landed, and re-reading would reintroduce exactly the cross-target
+ * mix-up this keying exists to remove.
+ */
+export async function resolveProxyForAsync(
+  settings: AnycodeSettings,
+  chain: readonly ProxyScopeId[],
+  deps: ProxyMaterializationDeps = {},
+): Promise<MaterializedProxy | undefined> {
+  const rung = resolveProxyLadder(settings, chain);
+  const resolver = deps.systemProxy;
+  const targetUrl = deps.targetUrl;
+  if (rung?.profile?.mode !== "system" || resolver === undefined || targetUrl === undefined) {
+    return materializeProxyRung(rung, deps);
+  }
+  const fresh = await resolver.resolve(targetUrl);
+  return materializeProxyRung(rung, {
+    ...deps,
+    // A resolver pinned to the answer just taken for this exact target.
+    systemProxy: { cached: () => fresh, resolve: (url) => resolver.resolve(url) },
+  });
 }
 
 /**
@@ -654,14 +723,14 @@ export function engineProxyCarriers(
  *    construction (it is connection-less) and no host fork to inherit from, so
  *    the app rung has to arrive through the carrier or not at all.
  *
- * A profile's own `noProxy` does NOT ride the carrier: there is one carrier per
- * engine and the exemption pair is deliberately never clobbered in the child
- * builder (a shell-exported `NO_PROXY` must survive, and the builder cannot tell
- * a shell value from a passthrough one). Exemptions therefore apply on the
- * connection/app rungs — which DO reach engine children, since both `NO_PROXY`
- * spellings are in every builder's passthrough list — but an ENGINE-scoped
- * profile's extra exemptions are not carried in this slice; its children still
- * get `LOOPBACK_NO_PROXY`.
+ * The engine's effective `noProxy` DOES ride the carrier (design review B-02),
+ * together with the licence to rewrite the exemption pair. The licence is
+ * decided here because only here is the boot snapshot still visible: main knows
+ * whether the shell owns `NO_PROXY`, the child builder cannot tell a
+ * shell-exported value from one `applyConnectionProxy` wrote. Without it, the
+ * connection rung's exemptions silently applied to an engine that had selected a
+ * different proxy — traffic to an exempt host left the engine's proxy entirely —
+ * and an engine-scoped profile's own exemptions reached nothing.
  */
 export function engineProxyCarrierValue(
   settings: AnycodeSettings,
@@ -670,19 +739,44 @@ export function engineProxyCarrierValue(
   includeApp: boolean,
   deps: ProxyMaterializationDeps = {},
 ): string | undefined {
-  if (PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name))) {
-    return undefined;
+  return encodeEngineProxyCarrier(engineProxyOutcome(settings, bootEnv, engine, includeApp, deps));
+}
+
+/**
+ * What ONE engine's rung resolves to, as a DISCRIMINATED outcome (design review
+ * B-03). The distinction the previous `ref === "direct"` test could not make is
+ * the whole point: `absent` (no rung spoke) and `direct` (an explicit rung
+ * resolved to no proxy) are opposite instructions to the child builder, and the
+ * ways of REACHING direct are many — `proxyRef:"direct"`, a dangling id, a
+ * hand-broken url, a `system` profile the OS answered DIRECT for. Every one of
+ * them has to emit the sentinel, because the connection's proxy is already in
+ * the child env via the passthrough list and staying silent would leave the
+ * engine on it — routing traffic through someone else's proxy after the user
+ * explicitly said "none".
+ */
+export function engineProxyOutcome(
+  settings: AnycodeSettings,
+  bootEnv: NodeJS.ProcessEnv,
+  engine: "codex" | "claude",
+  includeApp: boolean,
+  deps: ProxyMaterializationDeps = {},
+): EngineProxyCarrier {
+  if (shellOwnsProxyFamily(bootEnv)) {
+    return { kind: "absent" };
   }
-  const chain = engineProxyChain(engine, includeApp);
-  const rung = resolveProxyLadder(settings, chain);
+  const rung = resolveProxyLadder(settings, engineProxyChain(engine, includeApp));
   if (rung === undefined) {
-    return undefined; // no rung spoke — the child keeps whatever it inherited.
+    return { kind: "absent" }; // no rung spoke — the child keeps whatever it inherited.
   }
   const materialized = materializeProxyRung(rung, deps);
-  // An EXPLICIT rung that materialises to nothing is "direct", and that has to
-  // be said out loud: the connection's proxy is already in the child env via the
-  // passthrough list, so staying silent would leave the engine on it.
-  return materialized === undefined ? PROXY_CARRIER_DIRECT : materialized.url;
+  if (materialized === undefined) {
+    return { kind: "direct" };
+  }
+  // The exemption pair is the shell's whenever the shell named it; only then is
+  // the licence withheld, and the child builder leaves both spellings alone.
+  return NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))
+    ? { kind: "proxy", url: materialized.url }
+    : { kind: "proxy", url: materialized.url, noProxy: composeNoProxy(materialized.noProxy) };
 }
 
 
@@ -866,10 +960,20 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // `activeConnectionId` — the same handle `activeProviderView` reads — so a
   // per-tab pin (`buildHostEnvFor(settingsPinnedTo(...))`, main/index.ts) picks
   // up ITS connection's rung with no extra plumbing, exactly as before.
+  // TASK.141 §4 / design review B-10: the target this fork's traffic is for is
+  // the endpoint it was just configured with (`ANYCODE_BASE_URL`, after the
+  // whole env > connection > catalog ladder above has run) — the honest answer
+  // to "which host does a `system` profile resolve against for THIS fork". A
+  // caller may override it; nobody does today. This is the async path, so it is
+  // also the one place a FRESH system resolve is awaited.
+  const proxyDeps: ProxyMaterializationDeps = { ...(params.proxy ?? {}) };
+  if (proxyDeps.targetUrl === undefined && envPresent(env, ENV_BASE_URL)) {
+    proxyDeps.targetUrl = env[ENV_BASE_URL];
+  }
   applyConnectionProxy(
     env,
     bootEnv,
-    resolveProxyFor(settings, hostForkProxyChain(settings.provider.activeConnectionId), params.proxy ?? {}),
+    await resolveProxyForAsync(settings, hostForkProxyChain(settings.provider.activeConnectionId), proxyDeps),
   );
 
   return env;

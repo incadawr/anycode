@@ -17,8 +17,20 @@ import {
   LOOPBACK_NO_PROXY,
   PROXY_CARRIER_DIRECT,
   applyEngineProxyOverride,
+  decodeEngineProxyCarrier,
+  encodeEngineProxyCarrier,
   stripEngineProxyCarriers,
 } from "./engines.js";
+
+/**
+ * A carrier value as MAIN emits it (design review B-02): the url plus, when main
+ * has decided the shell does not own the exemption pair, the exact value that
+ * pair must be replaced with. Tests compose it through the real encoder rather
+ * than hand-writing the wire form, so a change to the encoding cannot silently
+ * pass here and fail in a child.
+ */
+const carrier = (url: string, noProxy?: string): string =>
+  encodeEngineProxyCarrier(noProxy === undefined ? { kind: "proxy", url } : { kind: "proxy", url, noProxy }) ?? "";
 
 /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
 const ENGINE_PROXY = "http://user:pass@engine-proxy.example.com:3128";
@@ -33,6 +45,10 @@ const AFFECTED_KEYS = [
   "http_proxy",
   "NO_PROXY",
   "no_proxy",
+  // Design review M-02: an explicit direct clears these two as well, so they
+  // are part of the surface even though nothing ever WRITES them here.
+  "ALL_PROXY",
+  "all_proxy",
   "NODE_USE_ENV_PROXY",
   ENV_CODEX_PROXY_URL,
   ENV_CLAUDE_PROXY_URL,
@@ -60,7 +76,17 @@ describe("applyEngineProxyOverride — no carrier means byte-identical", () => {
   it("leaves the env untouched when the carrier fails isProxyUrl", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me", HTTPS_PROXY: CONNECTION_PROXY, no_proxy: "corp.internal" };
     const before = { ...env };
-    for (const garbage of ["proxy.example.com:3128", "socks5://proxy.example.com:1080", "http://", "not a url"]) {
+    for (const garbage of [
+      carrier("proxy.example.com:3128"),
+      carrier("socks5://proxy.example.com:1080"),
+      // Not carrier-shaped at all: a bare url (the pre-B-02 wire form), broken
+      // JSON, and JSON with no url. All decode to "absent" — the only fail-soft
+      // direction a child env may take.
+      "http://proxy.example.com:3128",
+      "{not json",
+      '{"noProxy":"corp"}',
+      "not a url",
+    ]) {
       applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: garbage }, ENV_CODEX_PROXY_URL);
       expect(env).toEqual(before);
     }
@@ -70,7 +96,7 @@ describe("applyEngineProxyOverride — no carrier means byte-identical", () => {
   it("reads only its OWN carrier name", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me" };
     const before = { ...env };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CLAUDE_PROXY_URL);
+    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY) }, ENV_CLAUDE_PROXY_URL);
     expect(env).toEqual(before);
   });
 });
@@ -78,7 +104,11 @@ describe("applyEngineProxyOverride — no carrier means byte-identical", () => {
 describe("applyEngineProxyOverride — a valid carrier", () => {
   it("writes all four family vars verbatim and both loopback exemptions", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me", PATH: "/usr/bin" };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
+    applyEngineProxyOverride(
+      env,
+      { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY, LOOPBACK_NO_PROXY) },
+      ENV_CODEX_PROXY_URL,
+    );
     expect(env).toEqual({
       HOME: "/home/me",
       PATH: "/usr/bin",
@@ -109,7 +139,11 @@ describe("applyEngineProxyOverride — a valid carrier", () => {
       NO_PROXY: LOOPBACK_NO_PROXY,
       no_proxy: LOOPBACK_NO_PROXY,
     };
-    applyEngineProxyOverride(env, { [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY }, ENV_CLAUDE_PROXY_URL);
+    applyEngineProxyOverride(
+      env,
+      { [ENV_CLAUDE_PROXY_URL]: carrier(ENGINE_PROXY, LOOPBACK_NO_PROXY) },
+      ENV_CLAUDE_PROXY_URL,
+    );
     for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
       expect(env[key]).toBe(ENGINE_PROXY);
     }
@@ -119,7 +153,7 @@ describe("applyEngineProxyOverride — a valid carrier", () => {
   // the builders' allow-lists never name it.
   it("never copies the carrier into the child env", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me" };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
+    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY) }, ENV_CODEX_PROXY_URL);
     expect(ENV_CODEX_PROXY_URL in env).toBe(false);
     expect(ENV_CLAUDE_PROXY_URL in env).toBe(false);
   });
@@ -129,43 +163,114 @@ describe("applyEngineProxyOverride — a valid carrier", () => {
   // global fetch and has no business in a child env.
   it("never sets NODE_USE_ENV_PROXY", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me" };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
+    applyEngineProxyOverride(
+      env,
+      { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY, LOOPBACK_NO_PROXY) },
+      ENV_CODEX_PROXY_URL,
+    );
     expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
   });
 });
 
-describe("applyEngineProxyOverride — NO_PROXY is family-atomic", () => {
-  // Writing only the uppercase key would SHADOW the user's lowercase exemption
-  // (undici resolves `no_proxy` first), routing the very hosts they excluded
-  // through the proxy.
-  it("touches NEITHER exemption key when NO_PROXY alone is already present", () => {
+describe("applyEngineProxyOverride — the exemption pair follows the carrier's licence (B-02)", () => {
+  // Design review B-02. The builder cannot tell a shell-exported NO_PROXY from
+  // one the CONNECTION rung wrote — by the time it runs, both are just entries
+  // in the env it was handed. So main decides, where the boot snapshot is still
+  // visible, and says so in the carrier: `noProxy` present = "the shell does not
+  // own the pair, replace it with exactly this".
+  it("replaces BOTH spellings atomically when the carrier carries the licence", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me", NO_PROXY: "corp.internal" };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
+    applyEngineProxyOverride(
+      env,
+      { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY, `${LOOPBACK_NO_PROXY},engine.only`) },
+      ENV_CODEX_PROXY_URL,
+    );
+    expect(env.NO_PROXY).toBe(`${LOOPBACK_NO_PROXY},engine.only`);
+    expect(env.no_proxy).toBe(`${LOOPBACK_NO_PROXY},engine.only`);
+  });
+
+  // THE REGRESSION: connection rung exempts corp.internal, engine rung selects a
+  // different proxy and exempts nothing. Before B-02 the connection's exemption
+  // survived, so codex reached corp.internal DIRECTLY — past the proxy the
+  // engine rung had explicitly selected.
+  it("B-02: a connection rung's exemptions do NOT leak into an engine that never granted them", () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: "/home/me",
+      HTTPS_PROXY: CONNECTION_PROXY,
+      HTTP_PROXY: CONNECTION_PROXY,
+      https_proxy: CONNECTION_PROXY,
+      http_proxy: CONNECTION_PROXY,
+      NO_PROXY: `${LOOPBACK_NO_PROXY},corp.internal`,
+      no_proxy: `${LOOPBACK_NO_PROXY},corp.internal`,
+    };
+    applyEngineProxyOverride(
+      env,
+      { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY, LOOPBACK_NO_PROXY) },
+      ENV_CODEX_PROXY_URL,
+    );
+    expect(env.NO_PROXY).toBe(LOOPBACK_NO_PROXY);
+    expect(env.no_proxy).toBe(LOOPBACK_NO_PROXY);
+    expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
+  });
+
+  // The other half of the same defect: an ENGINE-scoped profile's own
+  // exemptions used to reach no child at all.
+  it("B-02: an engine profile's OWN exemptions reach the child", () => {
+    const env: NodeJS.ProcessEnv = { HOME: "/home/me" };
+    applyEngineProxyOverride(
+      env,
+      { [ENV_CLAUDE_PROXY_URL]: carrier(ENGINE_PROXY, `${LOOPBACK_NO_PROXY},engine.corp`) },
+      ENV_CLAUDE_PROXY_URL,
+    );
+    expect(env.no_proxy).toBe(`${LOOPBACK_NO_PROXY},engine.corp`);
+  });
+
+  // No licence = the shell named the exemptions, and a shell-owned NO_PROXY
+  // survives the engine override untouched — including the case where only one
+  // spelling exists (writing the other would SHADOW it: undici resolves
+  // `no_proxy` before `NO_PROXY`).
+  it("B-02: touches NEITHER spelling when main withheld the licence", () => {
+    const env: NodeJS.ProcessEnv = { HOME: "/home/me", NO_PROXY: "corp.internal" };
+    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY) }, ENV_CODEX_PROXY_URL);
     expect(env.NO_PROXY).toBe("corp.internal");
     expect("no_proxy" in env).toBe(false);
+    expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
 
-  it("touches NEITHER exemption key when no_proxy alone is already present", () => {
-    const env: NodeJS.ProcessEnv = { HOME: "/home/me", no_proxy: "corp.internal" };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
-    expect(env.no_proxy).toBe("corp.internal");
-    expect("NO_PROXY" in env).toBe(false);
-  });
-
-  it("writes both exemption keys only when neither is present", () => {
+  it("B-02: writes no exemption at all when main withheld the licence and the env had none", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me" };
-    applyEngineProxyOverride(env, { [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY }, ENV_CLAUDE_PROXY_URL);
-    expect(env.NO_PROXY).toBe(LOOPBACK_NO_PROXY);
-    expect(env.no_proxy).toBe(LOOPBACK_NO_PROXY);
+    applyEngineProxyOverride(env, { [ENV_CLAUDE_PROXY_URL]: carrier(ENGINE_PROXY) }, ENV_CLAUDE_PROXY_URL);
+    expect("NO_PROXY" in env).toBe(false);
+    expect("no_proxy" in env).toBe(false);
+  });
+});
+
+describe("engine carrier encoding — absent | direct | proxy (B-03)", () => {
+  it("round-trips every outcome", () => {
+    expect(encodeEngineProxyCarrier({ kind: "absent" })).toBeUndefined();
+    expect(encodeEngineProxyCarrier({ kind: "direct" })).toBe(PROXY_CARRIER_DIRECT);
+    for (const outcome of [
+      { kind: "proxy", url: ENGINE_PROXY } as const,
+      { kind: "proxy", url: ENGINE_PROXY, noProxy: LOOPBACK_NO_PROXY } as const,
+    ]) {
+      expect(decodeEngineProxyCarrier(encodeEngineProxyCarrier(outcome))).toEqual(outcome);
+    }
   });
 
-  // A blank exemption is not an exemption — treat it as absent, the same
-  // present-AND-non-blank test host-env.ts's `envPresent` applies.
-  it("treats a blank exemption as absent and writes both keys", () => {
-    const env: NodeJS.ProcessEnv = { HOME: "/home/me", NO_PROXY: "" };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
-    expect(env.NO_PROXY).toBe(LOOPBACK_NO_PROXY);
-    expect(env.no_proxy).toBe(LOOPBACK_NO_PROXY);
+  // `absent` and `direct` are opposite instructions to the child builder, and
+  // the discriminant is the only thing that tells them apart — the whole reason
+  // the outcome is discriminated rather than "a url or nothing".
+  it("decodes anything unrecognised to `absent`, never to a half-applied proxy", () => {
+    for (const raw of [undefined, "", "   ", "{}", '{"url":42}', '{"url":"socks5://p:1"}', "http://bare:3128"]) {
+      expect(decodeEngineProxyCarrier(raw)).toEqual({ kind: "absent" });
+    }
+  });
+
+  it("drops a blank noProxy rather than writing an empty exemption pair", () => {
+    expect(decodeEngineProxyCarrier('{"url":"http://p:3128","noProxy":"  "}')).toEqual({
+      kind: "proxy",
+      url: "http://p:3128",
+    });
   });
 });
 
@@ -179,7 +284,11 @@ describe("carrier names are frozen wire contract", () => {
 
   it("names exactly the env surface the override may touch", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me" };
-    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
+    applyEngineProxyOverride(
+      env,
+      { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY, LOOPBACK_NO_PROXY) },
+      ENV_CODEX_PROXY_URL,
+    );
     const touched = Object.keys(env).filter((key) => key !== "HOME");
     expect(touched.every((key) => (AFFECTED_KEYS as readonly string[]).includes(key))).toBe(true);
   });
@@ -201,10 +310,36 @@ describe("applyEngineProxyOverride — the DIRECT sentinel (TASK.141)", () => {
       no_proxy: LOOPBACK_NO_PROXY,
     };
     applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: PROXY_CARRIER_DIRECT }, ENV_CODEX_PROXY_URL);
-    // The exemption pair is deliberately NOT touched: the builder cannot tell a
-    // shell-exported NO_PROXY from a passthrough one, and an exemption with no
-    // proxy left to bypass is inert anyway.
+    // The exemption pair is deliberately NOT touched: with no proxy variable
+    // left, an exemption has nothing to bypass and is inert, and the shell may
+    // have named exemptions that have nothing to do with our decision.
     expect(env).toEqual({ HOME: "/home/me", NO_PROXY: LOOPBACK_NO_PROXY, no_proxy: LOOPBACK_NO_PROXY });
+  });
+
+  // Design review M-02. Both child-env builders pass ALL_PROXY/all_proxy
+  // through, and neither is part of the four-variable shell gate — so an
+  // explicit direct used to delete four names and leave a fifth pointing at a
+  // proxy. Whether the CLIs honour ALL_PROXY is still unmeasured; clearing it is
+  // the half that needs no measurement, because the worst case is a child that
+  // goes direct, which is exactly what was asked for.
+  it("M-02: an explicit direct also clears ALL_PROXY in both spellings", () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: "/home/me",
+      HTTPS_PROXY: CONNECTION_PROXY,
+      ALL_PROXY: CONNECTION_PROXY,
+      all_proxy: CONNECTION_PROXY,
+    };
+    applyEngineProxyOverride(env, { [ENV_CLAUDE_PROXY_URL]: PROXY_CARRIER_DIRECT }, ENV_CLAUDE_PROXY_URL);
+    expect(env).toEqual({ HOME: "/home/me" });
+  });
+
+  // The shell gate itself is deliberately UNCHANGED at four variables (M-02):
+  // widening it would make settings stop working on machines that export
+  // ALL_PROXY for unrelated tools, and that failure direction is not fail-soft.
+  it("M-02: a carrier with a url leaves ALL_PROXY alone (the gate stays at four names)", () => {
+    const env: NodeJS.ProcessEnv = { HOME: "/home/me", ALL_PROXY: CONNECTION_PROXY };
+    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: carrier(ENGINE_PROXY) }, ENV_CODEX_PROXY_URL);
+    expect(env.ALL_PROXY).toBe(CONNECTION_PROXY);
   });
 
   it("leaves a child env that had no proxy family byte-identical", () => {

@@ -123,7 +123,6 @@ import {
   CONNECTION_DELETE_CHANNEL,
   CONNECTION_SET_ACTIVE_CHANNEL,
   CONNECTION_UPDATE_CHANNEL,
-  ENGINE_PROXY_SET_CHANNEL,
   OAUTH_CANCEL_CHANNEL,
   OAUTH_START_CHANNEL,
   PERMISSION_RULE_ADD_CHANNEL,
@@ -140,7 +139,6 @@ import type {
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
   CustomProviderRecord,
-  EngineProxySetRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -770,16 +768,12 @@ contextBridge.exposeInMainWorld("anycode", {
     // id (off the v1-patch shim). Returns a fresh snapshot; never carries a secret.
     connectionUpdate: (req: ConnectionUpdateRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_UPDATE_CHANNEL, req) as Promise<SettingsMutationResult>,
-    // TASK.139: the engine panes' proxy field. Its own channel because the
-    // generic `set` above would carry the value past a lenient persisted schema
-    // unrefined; `proxyUrl: ""` is the clear sentinel, never a stored value.
-    engineProxySet: (req: EngineProxySetRequest): Promise<SettingsMutationResult> =>
-      ipcRenderer.invoke(ENGINE_PROXY_SET_CHANNEL, req) as Promise<SettingsMutationResult>,
-    // TASK.141: the named proxy registry. Four thin invoke wrappers, no logic —
-    // the password is NOT among them: it travels the existing `setSecret` bridge
-    // under `proxy.profile.<id>.password`, the one channel a plaintext value is
-    // allowed to cross, and nothing here ever carries one BACK (the editor learns
-    // only `passwordSet` from the snapshot's SecretStatus list).
+    // TASK.141: the named proxy registry. Four thin invoke wrappers, no logic.
+    // The password rides the UPSERT itself as a `{action}` field rather than the
+    // generic `setSecret` bridge — that bridge REFUSES `proxy.profile.*` keys, so
+    // that a password and the profile it belongs to can never land as two
+    // separately-failing writes. Nothing here carries a password BACK: the editor
+    // learns only `passwordSet` from the snapshot's SecretStatus list.
     proxyProfileUpsert: (req: ProxyProfileUpsertRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(PROXY_PROFILE_UPSERT_CHANNEL, req) as Promise<SettingsMutationResult>,
     proxyProfileDelete: (req: ProxyProfileDeleteRequest): Promise<ProxyProfileDeleteResult> =>
