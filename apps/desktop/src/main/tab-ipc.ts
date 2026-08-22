@@ -744,10 +744,14 @@ export async function handleWorkspacePick(deps: TabIpcDeps): Promise<WorkspacePi
  *  - `not_ready`: `ensureConnectionEnv` threw, or `rebindTab` found the
  *    target's env unprimed after all.
  *
- * On the commit path the session row is re-pinned BEFORE the re-fork
- * (`touchSession({ connectionId, model })`) so a crash between the two leaves
- * the durable pin already answering the NEW connection — a later resume of
- * that session boots on the picked account, never silently on the old one.
+ * On the commit path the session row is re-pinned only AFTER `rebindTab`
+ * reports the new host spawned. The reverse order would make a refused
+ * re-bind leave a durable pin on the TARGET while the tab keeps running on
+ * the original connection — the row and the live host disagreeing about the
+ * account, and the next resume of that session silently jumping to a
+ * connection the user never got. Writing after costs a crash window in which
+ * the pin still names the old connection, which is the honest failure: the
+ * switch simply did not stick, and the model chip says so.
  */
 export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): Promise<TabRebindResult> {
   const tab = deps.manager.getTab(req.tabId);
@@ -779,19 +783,21 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
       return { ok: false, reason: "not_ready" };
     }
   }
+  const rebound = await deps.manager.rebindTab(tab, req.connectionId);
+  if (!rebound.ok) {
+    // Nothing durable was written, so the refusal leaves the session row
+    // pinned where the tab still runs.
+    return { ok: false, reason: rebound.reason };
+  }
   // Design doc §D3/D5: the target connection's own model is the authority for
   // the re-bound host (the core resume boot reads the model off the fork env),
-  // so the session row is stamped with it in the SAME touch as the pin — one
-  // durable write, no window where row and env disagree about the account.
+  // so the row is stamped with it in the SAME touch as the pin — one durable
+  // write, no window where the row and the env disagree about the account.
   const model = deps.readConnectionModel?.(req.connectionId);
   await deps.persistence.touchSession(tab.sessionId, {
     connectionId: req.connectionId,
     ...(model !== undefined ? { model } : {}),
   });
-  const rebound = await deps.manager.rebindTab(tab, req.connectionId);
-  if (!rebound.ok) {
-    return { ok: false, reason: rebound.reason };
-  }
   return { ok: true, connectionId: req.connectionId };
 }
 

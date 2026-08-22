@@ -1976,6 +1976,11 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
     const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
 
     expect(res).toEqual({ ok: false, reason: "not_ready" });
+    // The pin is durable state: a refused re-bind must not leave the row
+    // naming the TARGET while the tab keeps running on the original
+    // connection — that row is what a later resume would boot on, so the
+    // switch would arrive silently, on a connection the user never got.
+    expect(touchSession).not.toHaveBeenCalled();
   });
 
   it("without a readConnectionModel seam the pin is still written, the model column is left as-is", async () => {
