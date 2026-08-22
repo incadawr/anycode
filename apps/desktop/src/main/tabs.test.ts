@@ -3970,3 +3970,132 @@ describe("TabHostManager — cancelChildRun's unknown-tab branch also frees the 
     }
   });
 });
+
+// ── TASK.106 cut-2: rebindTab (§D1 — the relocateTab precedent) ────────────
+
+describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
+  /** A manager whose env() answers per-connection envs by id — rebind's own fail-closed seam. */
+  function rebindManager(fork: HostForkFn, window: WindowLike, envs: Map<string, NodeJS.ProcessEnv>) {
+    return new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: (connectionId?: string) =>
+        connectionId === undefined ? {} : envs.get(connectionId),
+      logger: silentLogger,
+      limits: {},
+    });
+  }
+
+  it("refuses not_ready WITHOUT mutating anything when the target's fork env is not primed", async () => {
+    const { fork } = liveForkRig();
+    const { window } = windowRig();
+    const manager = rebindManager(fork, window, new Map([["conn-old", {}]]));
+    const created = manager.createTab({
+      workspace: "/ws",
+      sessionId: "s-reb",
+      resume: false,
+      connectionId: "conn-old",
+    });
+    expect(created.ok).toBe(true);
+    const tab = created.ok ? created.tab : undefined;
+    expect(tab).toBeDefined();
+
+    const res = await manager.rebindTab(tab!, "conn-unprimed");
+
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    // Nothing was mutated: still the original pin, original host, running.
+    expect(tab!.connectionId).toBe("conn-old");
+    expect(tab!.state).toBe("running");
+    expect(tab!.proc).not.toBeNull();
+  });
+
+  it("rebinds: shuts the old host down, mutates the pin, re-spawns on the resume path, delivers a port", async () => {
+    const { fork, hosts } = liveForkRig();
+    const { window, posted } = windowRig();
+    const manager = rebindManager(
+      fork,
+      window,
+      new Map([
+        ["conn-old", { ANYCODE_API_KEY: "old" }],
+        ["conn-new", { ANYCODE_API_KEY: "new", ANYCODE_MODEL: "glm-5.3" }],
+      ]),
+    );
+    // describeConnection mirrors main/index.ts's wiring: without it the port
+    // envelope omits the pin pair entirely (both fields ride together, F2).
+    (manager as unknown as { deps: { describeConnection?: (id: string) => { providerId: string } } }).deps.describeConnection =
+      (id: string) => ({ providerId: id === "conn-new" ? "z-ai" : "moonshot" });
+    const created = manager.createTab({
+      workspace: "/ws",
+      sessionId: "s-reb2",
+      resume: false,
+      connectionId: "conn-old",
+      modelOverride: "imported-model",
+    });
+    expect(created.ok).toBe(true);
+    const tab = created.ok ? created.tab : undefined;
+    expect(tab).toBeDefined();
+    const oldProc = tab!.proc;
+    expect(hosts).toHaveLength(1);
+
+    const res = await manager.rebindTab(tab!, "conn-new");
+
+    expect(res).toEqual({ ok: true });
+    // A second host was forked and took over the tab.
+    expect(hosts).toHaveLength(2);
+    expect(tab!.proc).not.toBe(oldProc);
+    // The pin moved; a stale per-fork model override did not follow.
+    expect(tab!.connectionId).toBe("conn-new");
+    expect(tab!.modelOverride).toBeUndefined();
+    // The respawn runs on the RESUME path (--resume s-reb2), not --session.
+    const rebindingFork = fork;
+    void rebindingFork;
+    // The port envelope carries the NEW pin to the renderer.
+    const envelope = posted.find(
+      (entry) => (entry.payload as { tabId?: string } | undefined)?.tabId === tab!.tabId,
+    );
+    expect(envelope).toBeDefined();
+    expect((envelope!.payload as { connectionId?: string }).connectionId).toBe("conn-new");
+    // Breakers were reset for the new epoch.
+    expect(tab!.rapidRespawns).toBe(0);
+    expect(tab!.initialResume).toBe(true);
+    expect(tab!.state).toBe("running");
+  });
+
+  it("the re-spawn's argv runs --resume with the SAME session id (history survives by construction)", async () => {
+    const seenArgs: string[][] = [];
+    const hosts: FakeHost[] = [];
+    const fork: HostForkFn = (_entry, args) => {
+      seenArgs.push([...args]);
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      return host as unknown as UtilityProcess;
+    };
+    const { window } = windowRig();
+    const manager = rebindManager(
+      fork,
+      window,
+      new Map([
+        ["conn-old", {}],
+        ["conn-new", {}],
+      ]),
+    );
+    const created = manager.createTab({
+      workspace: "/ws",
+      sessionId: "s-resume-argv",
+      resume: false,
+      connectionId: "conn-old",
+    });
+    expect(created.ok).toBe(true);
+
+    const res = await manager.rebindTab(created.ok ? created.tab : undefined!, "conn-new");
+
+    expect(res).toEqual({ ok: true });
+    expect(seenArgs).toHaveLength(2);
+    expect(seenArgs[1]).toContain("--resume");
+    expect(seenArgs[1]).toContain("s-resume-argv");
+    expect(seenArgs[1]).not.toContain("--session");
+  });
+});

@@ -4499,6 +4499,28 @@ body {
   animation: scale-in var(--dur-2) var(--ease-spring);
 }
 
+/* TASK.106 cut-2 (DoD 5): the shared drill-down rendered INSIDE the pill's
+   fixed-position wrapper must not bring `.start-model-menu`'s own absolute
+   positioning/fallback cap with it — the wrapper already fixed the position,
+   and the wrapper's inline max-height (from `modelPillMenuMaxHeightPx`) is
+   the room actually available above the chip. The menu therefore renders as
+   an in-flow column filling that wrapper: a max, never a height, so a short
+   level never grows a scrollbar. */
+.model-pill-popover .start-model-menu {
+  position: static;
+  top: auto;
+  left: auto;
+  min-width: 17rem;
+  max-width: 24rem;
+  max-height: none;
+  overflow-y: auto;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+
 .model-pill-row,
 .model-pill-back,
 .model-pill-item {

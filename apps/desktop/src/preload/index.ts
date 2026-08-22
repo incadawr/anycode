@@ -138,6 +138,7 @@ import {
   SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
+  TAB_REBIND_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
 import type {
@@ -147,6 +148,8 @@ import type {
   DeleteSessionResult,
   DeleteSessionsOlderResult,
   SessionSummary,
+  TabRebindRequest,
+  TabRebindResult,
   WorkspacePickResult,
 } from "../shared/tabs.js";
 // TASK.102 CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
@@ -576,6 +579,12 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(TAB_CREATE_CHANNEL, req) as Promise<CreateTabResult>,
   closeTab: (tabId: string): Promise<CloseTabResult> =>
     ipcRenderer.invoke(TAB_CLOSE_CHANNEL, { tabId }) as Promise<CloseTabResult>,
+  // TASK.106 cut-2: re-bind a running tab's session to another provider
+  // connection. The tab/session/terminal survive; main replaces the host
+  // with a resume host on the target connection's fork env. Every refusal is
+  // fail-closed and leaves the tab on its original connection.
+  tabRebind: (request: TabRebindRequest): Promise<TabRebindResult> =>
+    ipcRenderer.invoke(TAB_REBIND_CHANNEL, request) as Promise<TabRebindResult>,
   listSessions: (): Promise<SessionSummary[]> =>
     ipcRenderer.invoke(SESSIONS_LIST_CHANNEL) as Promise<SessionSummary[]>,
   // TASK.114: hard-delete one persisted session (its TASK.102 children ride
