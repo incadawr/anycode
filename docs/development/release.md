@@ -30,13 +30,23 @@ user by accident.
 2. Choose the next SemVer number and update package manifests together.
 3. Add a concise user-facing entry to [`CHANGELOG.md`](../../CHANGELOG.md):
    `Added`, `Changed`, `Fixed`, `Removed`, or `Security`.
-4. Run typecheck, targeted tests, and the desktop build; for UI flows, run the
+4. Refresh the Codex support policy: run `pnpm check:codex-manifest`. It fails
+   when the newest stable `@openai/codex` has moved outside the range
+   `codex-support.json` declares — the state in which every user on a current
+   Codex is refused by default and must click through a risk acceptance. Fix it
+   by running the Codex live smoke against that version and then updating BOTH
+   `codex-support.json` and `BUNDLED_CODEX_MANIFEST`
+   (`apps/desktop/src/shared/codex-support.ts`), including `updatedAt`. The two
+   copies must stay identical — the gate enforces that, but only the smoke
+   entitles you to widen the range. Exit code 2 means the check could not run
+   (no network); that is not permission to skip it.
+5. Run typecheck, targeted tests, and the desktop build; for UI flows, run the
    appropriate smoke from the [automation guide](automation-smoke.md).
-5. Create annotated tag `v<version>` only after the verified commit has been
+6. Create annotated tag `v<version>` only after the verified commit has been
    merged and pushed.
-6. Push the tag. Pushing is what starts the release — the tag alone does
+7. Push the tag. Pushing is what starts the release — the tag alone does
    nothing until it reaches the remote.
-7. Install the draft's own artifact and open it before pressing Publish. A green
+8. Install the draft's own artifact and open it before pressing Publish. A green
    run is not a working release; only the artifact is.
 
 `CHANGELOG.md` records functional changes, not internal refactor-only noise.
