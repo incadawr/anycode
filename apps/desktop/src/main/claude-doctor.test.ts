@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { discoverClaudeBinary } from "./claude-binary.js";
+import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY } from "../shared/engines.js";
 import {
   buildClaudeDoctorChildEnv,
   meetsClaudeVersionFloor,
@@ -78,6 +79,88 @@ describe("buildClaudeDoctorChildEnv", () => {
   it("does not spread the source env wholesale (allowlist, not passthrough)", () => {
     const env = buildClaudeDoctorChildEnv({ HOME: "/home/me", PATH: "/usr/bin", SOME_RANDOM_VAR: "leak-me-not" }, "/tmp/p", "linux");
     expect(env.SOME_RANDOM_VAR).toBeUndefined();
+  });
+});
+
+describe("buildClaudeDoctorChildEnv — engine proxy carrier (TASK.139)", () => {
+  /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
+  const ENGINE_PROXY = "http://user:pass@claude-proxy.example.com:3128";
+  const SHELL_PROXY = "http://shell-proxy.internal:8080";
+  /** PATH after `augmentPathForGui` on a POSIX platform. */
+  const AUGMENTED_PATH = "/usr/bin:/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin";
+  const HYGIENE = {
+    DISABLE_AUTOUPDATER: "1",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    DISABLE_TELEMETRY: "1",
+    DISABLE_ERROR_REPORTING: "1",
+    CLAUDE_CODE_ENTRYPOINT: "anycode",
+  };
+
+  // Byte-identity, asserted over the WHOLE child env rather than selected keys.
+  it("without a carrier the doctor child env is byte-identical to the pre-TASK.139 build", () => {
+    const env = buildClaudeDoctorChildEnv({ HOME: "/home/me", PATH: "/usr/bin" }, undefined, "linux");
+    expect(env).toEqual({ HOME: "/home/me", PATH: AUGMENTED_PATH, ...HYGIENE });
+  });
+
+  // The pre-existing asymmetry with the codex doctor, pinned so a later change
+  // cannot silently "fix" it: this builder's allowlist names NO proxy var, so a
+  // SHELL-exported proxy has never reached this child and still does not. The
+  // override triggers only on a carrier, and main emits no carrier when the
+  // shell owns the family — so the two facts can never collide.
+  it("a shell-exported proxy in the source STILL does not leak (asymmetry deliberately preserved)", () => {
+    const env = buildClaudeDoctorChildEnv(
+      { HOME: "/home/me", PATH: "/usr/bin", HTTPS_PROXY: SHELL_PROXY, https_proxy: SHELL_PROXY, NO_PROXY: "corp" },
+      undefined,
+      "linux",
+    );
+    expect(env).toEqual({ HOME: "/home/me", PATH: AUGMENTED_PATH, ...HYGIENE });
+  });
+
+  it("a carrier writes the family plus both loopback exemptions", () => {
+    const env = buildClaudeDoctorChildEnv(
+      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      undefined,
+      "linux",
+    );
+    expect(env).toEqual({
+      HOME: "/home/me",
+      PATH: AUGMENTED_PATH,
+      ...HYGIENE,
+      HTTPS_PROXY: ENGINE_PROXY,
+      HTTP_PROXY: ENGINE_PROXY,
+      https_proxy: ENGINE_PROXY,
+      http_proxy: ENGINE_PROXY,
+      NO_PROXY: LOOPBACK_NO_PROXY,
+      no_proxy: LOOPBACK_NO_PROXY,
+    });
+  });
+
+  it("never forwards the carrier itself — the allowlist does not name it", () => {
+    const env = buildClaudeDoctorChildEnv(
+      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      undefined,
+      "linux",
+    );
+    expect(ENV_CLAUDE_PROXY_URL in env).toBe(false);
+  });
+
+  it("ignores the codex carrier", () => {
+    const env = buildClaudeDoctorChildEnv(
+      { HOME: "/home/me", PATH: "/usr/bin", ANYCODE_CODEX_PROXY_URL: ENGINE_PROXY },
+      undefined,
+      "linux",
+    );
+    expect(env.HTTPS_PROXY).toBeUndefined();
+  });
+
+  it("leaves an explicit CLAUDE_CONFIG_DIR override intact alongside the proxy", () => {
+    const env = buildClaudeDoctorChildEnv(
+      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      "/tmp/some-profile",
+      "linux",
+    );
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/tmp/some-profile");
+    expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
 });
 

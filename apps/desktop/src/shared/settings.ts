@@ -72,6 +72,16 @@ export const CONNECTION_DELETE_CHANNEL = "anycode:connection-delete";
 /** invoke channel: re-check a connection's health ({id}) — scaffold (W11 wires the probe). */
 export const CONNECTION_CHECK_CHANNEL = "anycode:connection-check";
 
+/**
+ * invoke channel: set/clear ONE engine's proxy (TASK.139) — `{engine, proxyUrl}`.
+ * Deliberately its own channel rather than a `settings-set` patch: the persisted
+ * schema for `codex`/`claude` is lenient (`z.string()`, settings/schema.ts), so a
+ * generic patch would let an unvalidated value onto disk, while this channel
+ * refines against `isProxyUrl` at the trust boundary — the same split the
+ * connection CRUD channels make against the equally lenient `connections[]`.
+ */
+export const ENGINE_PROXY_SET_CHANNEL = "anycode:engine-proxy-set";
+
 // ── settings schema (design §2; mirrored 1:1 by the zod schema in settings/schema.ts) ──
 
 /**
@@ -313,6 +323,32 @@ export interface AnycodeSettings {
     activeProfileId?: string;
     /** Codex versions the user explicitly accepted running outside the supported range (cut §7.4), per-version — not a blanket opt-out. */
     riskAcceptedVersions?: string[];
+    /**
+     * HTTP(S) proxy for everything the Codex CLI does (TASK.139): the tab's
+     * app-server child, a Codex subagent spawned from ANY tab, and the
+     * doctor/`codex login` probes main spawns itself. ENGINE-level, not
+     * per-profile: a profile is an auth home (`CODEX_HOME`), never a network
+     * path, and this is machine network infrastructure.
+     *
+     * Priority ladder for those children — `shell > this field >
+     * connection.proxyUrl > none`. Main materialises it into every host fork as
+     * the carrier `ANYCODE_CODEX_PROXY_URL` (main/host-env.ts
+     * `engineProxyCarriers`) and the child-env builders turn the carrier into
+     * the real HTTP(S)_PROXY family (`applyEngineProxyOverride`). The carrier is
+     * emitted ONLY when the shell owns no proxy var, which is what makes the
+     * builders' unconditional overwrite of the connection-inherited family
+     * correct. The host fork's OWN env is untouched, so a Bash/terminal child in
+     * a Codex tab keeps the connection-level semantics unchanged.
+     *
+     * CUSTODY: identical to `ProviderConnection.proxyUrl` above — stored
+     * verbatim in the 0644 settings.json, `user:pass@` userinfo deliberately
+     * allowed, and visible in the env of every process the engine starts. This
+     * field widens the TASK.135 perimeter by exactly two names,
+     * `ANYCODE_CODEX_PROXY_URL` and `ANYCODE_CLAUDE_PROXY_URL`.
+     *
+     * Only a non-empty value is persisted (only-truthy-on-disk).
+     */
+    proxyUrl?: string;
   };
   /**
    * Claude engine onboarding metadata (SLICE-CC A1, cut §1.2, additive-optional;
@@ -334,6 +370,22 @@ export interface AnycodeSettings {
       /** ISO timestamp; advisory-cache only. */
       at: string;
     };
+    /**
+     * HTTP(S) proxy for everything the Claude Code CLI does (TASK.139) — the
+     * exact mirror of `codex.proxyUrl` above: same ladder (`shell > this field >
+     * connection.proxyUrl > none`), same carrier mechanism
+     * (`ANYCODE_CLAUDE_PROXY_URL`), same custody (plain text in the 0644 file,
+     * userinfo allowed, inherited by every child the CLI starts, TASK.135
+     * perimeter). Read that field's doc for the reasoning; it is not repeated.
+     *
+     * One asymmetry worth naming: the claude LOGIN flow opens a real
+     * Terminal.app window rather than spawning a child (main/claude-login.ts),
+     * so it runs under the user's shell env and this field cannot reach it —
+     * by construction, not by omission.
+     *
+     * Only a non-empty value is persisted (only-truthy-on-disk).
+     */
+    proxyUrl?: string;
   };
   /**
    * Browser-preview settings (night-track wave-1 cut §1(e)/§2.7, TASK.96
@@ -668,6 +720,13 @@ export interface ConnectionDeleteRequest {
 
 export interface ConnectionCheckRequest {
   id: string;
+}
+
+/** Payload of `ENGINE_PROXY_SET_CHANNEL` (TASK.139) — one engine's proxy, set or cleared. */
+export interface EngineProxySetRequest {
+  engine: "codex" | "claude";
+  /** Non-empty is validated by `isProxyUrl` at the IPC boundary; `""` is the clear sentinel. */
+  proxyUrl: string;
 }
 
 export interface SecretSetRequest {

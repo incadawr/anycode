@@ -26,6 +26,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
+import { ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
 import { classifyClaudeBinaryPathTrust, type ClaudeBinaryTrustGateOutcome } from "./claude-binary.js";
 import { augmentPathForGui } from "./codex-doctor.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
@@ -152,6 +153,17 @@ export function buildClaudeDoctorChildEnv(
   env.DISABLE_TELEMETRY = "1";
   env.DISABLE_ERROR_REPORTING = "1";
   env.CLAUDE_CODE_ENTRYPOINT = "anycode";
+  // TASK.139: the engine-level proxy, if main stamped its carrier into `source`.
+  // This probe makes no network call of its own, so the override is here for the
+  // mirror claim in this function's header — the session child's builder applies
+  // the same call, and a builder that declares itself a mirror has to stay one.
+  //
+  // Note what this does NOT change: the allowlist above still names no proxy
+  // var, so a SHELL-exported proxy leaks into this child exactly as little as it
+  // did before (i.e. not at all). That asymmetry with the codex doctor is
+  // pre-existing and deliberately left alone here — only a carrier triggers this
+  // override, and main emits no carrier when the shell owns the family.
+  applyEngineProxyOverride(env, source, ENV_CLAUDE_PROXY_URL);
   return env;
 }
 

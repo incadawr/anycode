@@ -13,6 +13,12 @@
  */
 
 import { ENV_AUTH_MODE } from "../shared/credentials.js";
+import {
+  ENV_CLAUDE_PROXY_URL,
+  ENV_CODEX_PROXY_URL,
+  LOOPBACK_NO_PROXY,
+  stripEngineProxyCarriers,
+} from "../shared/engines.js";
 import type { AnycodeSettings, CustomProviderRecord, SecretEnvKey, SecretKey } from "../shared/settings.js";
 import { activeProviderView, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
 
@@ -70,20 +76,10 @@ const PROXY_FAMILY_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_pro
  */
 const NO_PROXY_KEYS = ["NO_PROXY", "no_proxy"] as const;
 
-/**
- * Loopback exemption written alongside a settings-provided proxy (TASK.132):
- * without it a local endpoint (LM Studio/ollama) or a loopback MCP server would
- * be dialled THROUGH the proxy and break.
- *
- * BOTH IPv6 spellings are listed on purpose. undici splits each entry on
- * `host:port`, so a bare `::1` parses as host `:` + port `1` and matches
- * nothing — measured: with `NO_PROXY=localhost,127.0.0.1,::1` a fetch of
- * `http://[::1]:PORT` still reached the proxy, while `[::1]` sent it direct.
- * curl-convention consumers (the engine CLIs) compare against the unbracketed
- * form instead, and an entry the other side cannot parse is inert rather than
- * harmful, so listing both is what covers every consumer.
- */
-const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,[::1],::1";
+// The loopback exemption (`LOOPBACK_NO_PROXY`) moved to ../shared/engines.ts in
+// TASK.139: the engine-proxy override writes the identical value from a module
+// the host side can import, and two copies of a measured constant is exactly the
+// kind of drift that silently un-exempts an IPv6 loopback endpoint.
 
 /**
  * Node's opt-in switch for env-driven proxying of the GLOBAL fetch (undici's
@@ -349,9 +345,19 @@ function transportToEmit(resolved: EffectiveTransport): string | undefined {
  * BEFORE the scrub. All later provider-env reads in main (host fork env,
  * envOverrides, readiness) go through this snapshot, so scrubbing the live
  * `process.env` afterwards is invisible to them.
+ *
+ * The one thing the snapshot does NOT preserve is the engine-proxy carrier
+ * namespace (TASK.139 F1): those two names are main's private main→child
+ * transport, so an ambient value is dropped at the origin and every consumer of
+ * this snapshot — the fork env, the doctor/login source env, the discovery
+ * ladder — is carrier-clean by construction. `engineProxyCarriers` is the only
+ * writer. See `stripEngineProxyCarriers` for why these names are stripped while
+ * every other ambient `ANYCODE_*` is honoured.
  */
 export function snapshotBootEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...env };
+  const snapshot: NodeJS.ProcessEnv = { ...env };
+  stripEngineProxyCarriers(snapshot);
+  return snapshot;
 }
 
 /**
@@ -457,6 +463,46 @@ export function applyConnectionProxy(
   fillFromSettings(env, ENV_NODE_USE_ENV_PROXY, "1");
 }
 
+/**
+ * The engine-level proxy carriers (TASK.139) main stamps into EVERY host fork's
+ * engine overlay, and the single authority the doctor/login spawn sites read
+ * through as well. Returns only the keys that should exist — an absent key is
+ * how "no engine proxy" is expressed, so the result spreads into an env literal
+ * without changing a byte when it is empty.
+ *
+ * The shell-wins gate is ONE family-atomic check covering BOTH engines: if the
+ * shell exported any of the four proxy vars it owns the network path for
+ * everything this app spawns, and no setting emits anything anywhere. That gate
+ * living here — and only here — is what licenses `applyEngineProxyOverride` to
+ * clobber the proxy family unconditionally on the other side; see its doc.
+ *
+ * A malformed value is fail-soft (key omitted), not fatal: `settings.codex` /
+ * `settings.claude` carry a LENIENT persisted schema, so a hand-edited or
+ * generic-`settings-set`-written value can be anything, and the worst it may
+ * ever mean is "this engine gets no proxy".
+ *
+ * `NODE_USE_ENV_PROXY` is deliberately not part of this: the carriers configure
+ * ENGINE CHILDREN (a Rust binary and a CLI that read the proxy env natively),
+ * never the host's own `fetch`, whose proxying stays connection-governed.
+ */
+export function engineProxyCarriers(
+  settings: AnycodeSettings,
+  bootEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name))) {
+    return {};
+  }
+  const carriers: NodeJS.ProcessEnv = {};
+  const emit = (value: string | undefined, name: string): void => {
+    if (value !== undefined && value.trim() !== "" && isProxyUrl(value)) {
+      carriers[name] = value;
+    }
+  };
+  emit(settings.codex?.proxyUrl, ENV_CODEX_PROXY_URL);
+  emit(settings.claude?.proxyUrl, ENV_CLAUDE_PROXY_URL);
+  return carriers;
+}
+
 
 
 /** Reads a secret value from the vault (decrypt); undefined = unset/undecryptable. */
@@ -529,6 +575,14 @@ export interface HostEnvParams {
 export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.ProcessEnv> {
   const { bootEnv, settings, getSecret, resolveSelection, resolveActiveCredential } = params;
   const env: NodeJS.ProcessEnv = { ...bootEnv };
+  // TASK.139 F1: the engine-proxy carriers are main-authored, and this spread is
+  // the structural hole they would otherwise ride through — same reasoning as
+  // `applyCodexProfilesHomeOverride`'s delete branch above. Repeated here rather
+  // than relied upon from `snapshotBootEnv` because this function accepts ANY
+  // env object, and the guarantee must not depend on where the caller got it.
+  // `engineEnv` (main/index.ts) puts the authoritative carriers back, spread
+  // over this env at spawn time.
+  stripEngineProxyCarriers(env);
   // Active-connection legacy-shaped view (TASK.45 v2): model/baseUrl/transport/
   // effort come from the ACTIVE connection, not the removed v1 singleton. Post
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT

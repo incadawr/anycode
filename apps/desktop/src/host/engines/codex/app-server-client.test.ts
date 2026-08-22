@@ -13,6 +13,7 @@ import {
   checkCodexBinaryTrustOnDisk,
 } from "./app-server-client.js";
 import { EngineVersionError } from "./protocol.js";
+import { ENV_CODEX_PROXY_URL, LOOPBACK_NO_PROXY } from "../../../shared/engines.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
 // Data files only (JSONL fixtures, pid files): nothing here is ever EXECUTED as
@@ -544,6 +545,99 @@ describe("AppServerClient", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     expect(alive(grandchildPid)).toBe(false);
+  });
+});
+
+describe("buildCodexChildEnv — engine proxy carrier (TASK.139)", () => {
+  /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
+  const ENGINE_PROXY = "http://user:pass@codex-proxy.example.com:3128";
+  /** What a connection-level proxy looks like once `applyConnectionProxy` put it in the host fork's env. */
+  const CONNECTION_PROXY = "http://connection-proxy.internal:8080";
+  /** PATH after `augmentCodexPathForGui` on a POSIX platform. */
+  const AUGMENTED_PATH = "/usr/bin:/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin";
+  const CONNECTION_SOURCE: NodeJS.ProcessEnv = {
+    HOME: "/home/test",
+    PATH: "/usr/bin",
+    HTTPS_PROXY: CONNECTION_PROXY,
+    HTTP_PROXY: CONNECTION_PROXY,
+    https_proxy: CONNECTION_PROXY,
+    http_proxy: CONNECTION_PROXY,
+    NO_PROXY: "localhost,127.0.0.1,[::1],::1",
+    no_proxy: "localhost,127.0.0.1,[::1],::1",
+  };
+
+  // Byte-identity, asserted over the WHOLE child env rather than selected keys:
+  // the guarantee is that an unconfigured engine proxy changes nothing at all.
+  it("without a carrier the child env is byte-identical to the pre-TASK.139 build", () => {
+    const env = buildCodexChildEnv(CONNECTION_SOURCE, "linux");
+    expect(env).toEqual({
+      HOME: "/home/test",
+      PATH: AUGMENTED_PATH,
+      HTTPS_PROXY: CONNECTION_PROXY,
+      HTTP_PROXY: CONNECTION_PROXY,
+      https_proxy: CONNECTION_PROXY,
+      http_proxy: CONNECTION_PROXY,
+      NO_PROXY: "localhost,127.0.0.1,[::1],::1",
+      no_proxy: "localhost,127.0.0.1,[::1],::1",
+    });
+  });
+
+  // The ladder's middle rung: engine beats connection. Safe to clobber because
+  // main withholds the carrier entirely when the SHELL owns the proxy family.
+  it("a carrier overwrites the connection proxy the passthrough list copied in", () => {
+    const env = buildCodexChildEnv({ ...CONNECTION_SOURCE, [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, "linux");
+    expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
+    expect(env.HTTP_PROXY).toBe(ENGINE_PROXY);
+    expect(env.https_proxy).toBe(ENGINE_PROXY);
+    expect(env.http_proxy).toBe(ENGINE_PROXY);
+    // The connection's own exemptions came through the passthrough list and
+    // survive untouched — family-atomic, so neither case is rewritten.
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
+    expect(env.no_proxy).toBe("localhost,127.0.0.1,[::1],::1");
+  });
+
+  it("a carrier with no inherited proxy writes the family plus both loopback exemptions", () => {
+    const env = buildCodexChildEnv(
+      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: ENGINE_PROXY },
+      "linux",
+    );
+    expect(env).toEqual({
+      HOME: "/home/test",
+      PATH: AUGMENTED_PATH,
+      HTTPS_PROXY: ENGINE_PROXY,
+      HTTP_PROXY: ENGINE_PROXY,
+      https_proxy: ENGINE_PROXY,
+      http_proxy: ENGINE_PROXY,
+      NO_PROXY: LOOPBACK_NO_PROXY,
+      no_proxy: LOOPBACK_NO_PROXY,
+    });
+  });
+
+  it("never forwards the carrier itself — the allowlist does not name it", () => {
+    const env = buildCodexChildEnv(
+      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: ENGINE_PROXY },
+      "linux",
+    );
+    expect(ENV_CODEX_PROXY_URL in env).toBe(false);
+  });
+
+  // Both carriers ride EVERY fork (subagents), so reading the wrong one would
+  // route codex children through the claude proxy.
+  it("ignores the claude carrier", () => {
+    const env = buildCodexChildEnv({ ...CONNECTION_SOURCE, ANYCODE_CLAUDE_PROXY_URL: ENGINE_PROXY }, "linux");
+    expect(env.HTTPS_PROXY).toBe(CONNECTION_PROXY);
+  });
+
+  // The proxy override and the profile home are independent surgery on the same
+  // env; neither may consume the other.
+  it("leaves the selected profile's CODEX_HOME intact", () => {
+    const env = buildCodexChildEnv(
+      { ...CONNECTION_SOURCE, CODEX_HOME: "/ambient", [ENV_CODEX_PROXY_URL]: ENGINE_PROXY },
+      "linux",
+      "/home/test/.anycode/codex/profile-personal",
+    );
+    expect(env.CODEX_HOME).toBe("/home/test/.anycode/codex/profile-personal");
+    expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
 });
 

@@ -29,6 +29,7 @@ import {
   handleConnectionDelete,
   handleConnectionSetActive,
   handleConnectionUpdate,
+  handleEngineProxySet,
   handleGet,
   handleOAuthCancel,
   handleOAuthStart,
@@ -2621,5 +2622,125 @@ describe("handleBinaryTrustGrant — grant custody v2 (TASK.103 fix wave, D-S4-1
       { path: "/opt/codex" },
     );
     expect(res.ok).toBe(true);
+  });
+});
+
+describe("handleEngineProxySet (TASK.139) — strict at the IPC boundary, only-truthy on disk", () => {
+  /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
+  const PROXY = "http://user:pass@proxy.example.com:3128";
+
+  it("persists a valid codex proxy verbatim and answers with a fresh snapshot", async () => {
+    const res = await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.snapshot.settings.codex?.proxyUrl).toBe(PROXY);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.codex?.proxyUrl).toBe(PROXY);
+  });
+
+  it("persists a valid claude proxy without touching the codex block", async () => {
+    await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
+    const res = await handleEngineProxySet(makeDeps(), { engine: "claude", proxyUrl: "https://other.example.com:8443" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.claude?.proxyUrl).toBe("https://other.example.com:8443");
+    expect(loaded.settings.codex?.proxyUrl).toBe(PROXY);
+  });
+
+  it("fires onMutation with the post-write snapshot", async () => {
+    const seen: string[] = [];
+    const res = await handleEngineProxySet(
+      makeDeps({ onMutation: async (snap) => void seen.push(snap.settings.codex?.proxyUrl ?? "") }),
+      { engine: "codex", proxyUrl: PROXY },
+    );
+    expect(res.ok).toBe(true);
+    expect(seen).toEqual([PROXY]);
+  });
+
+  // `""` is a delete, never a value: persisting an empty string would leave a
+  // falsy proxy on disk that every reader then has to special-case.
+  it('the "" sentinel deletes the key AND the block it emptied', async () => {
+    await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
+    const res = await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: "" });
+    expect(res.ok).toBe(true);
+
+    // Round-trip byte-identity for a user who never configured codex: the file
+    // must not permanently acquire a `"codex": {}` husk from one visit.
+    const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
+    expect("codex" in raw).toBe(false);
+  });
+
+  it('the "" sentinel keeps a block that still has siblings', async () => {
+    await handleSet(makeDeps(), { codex: { binaryPath: "/usr/local/bin/codex" } });
+    await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
+    const res = await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: "" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.codex?.binaryPath).toBe("/usr/local/bin/codex");
+    expect("proxyUrl" in (loaded.settings.codex ?? {})).toBe(false);
+  });
+
+  // §4: the connection channel resets `lastHealth` because that is a NETWORK
+  // observation made through the old path. An engine's `lastCheck` is a disk
+  // fact (binary found, version, local auth file) — nothing a proxy can stale.
+  it("leaves lastCheck untouched", async () => {
+    await handleSet(makeDeps(), {
+      codex: { lastCheck: { status: "ready", version: "0.9.0", at: "2026-08-20T00:00:00.000Z" } },
+    });
+    await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.codex?.lastCheck).toEqual({
+      status: "ready",
+      version: "0.9.0",
+      at: "2026-08-20T00:00:00.000Z",
+    });
+  });
+
+  // Strictness lives HERE, not in the persisted schema (settings/schema.ts is
+  // deliberately lenient so one bad value cannot corrupt the document).
+  it("refuses an invalid proxy `invalid` and writes nothing to disk", async () => {
+    for (const garbage of ["proxy.example.com:3128", "socks5://proxy.example.com:1080", "not a url"]) {
+      const res = await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: garbage });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+    }
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.codex).toBeUndefined();
+  });
+
+  it("refuses an invalid proxy without disturbing an already-stored value", async () => {
+    await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
+    const res = await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: "proxy.example.com:3128" });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.codex?.proxyUrl).toBe(PROXY);
+  });
+
+  // `.strict()`: AnyCode's own engine proxies through the CONNECTION, so
+  // `"core"` has no engine-level field to write — and an unknown key must not
+  // ride along into settings.json either.
+  it('refuses engine "core" and any unknown key', async () => {
+    expect(await handleEngineProxySet(makeDeps(), { engine: "core", proxyUrl: PROXY })).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
+    expect(await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY, binaryPath: "/x" })).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
+    expect(await handleEngineProxySet(makeDeps(), { engine: "codex" })).toEqual({ ok: false, reason: "invalid" });
+    expect(await handleEngineProxySet(makeDeps(), 42)).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("refuses read_only when settings.json is newer than this binary", async () => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({ version: 3, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }),
+    );
+    const res = await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
+    expect(res).toEqual({ ok: false, reason: "read_only" });
   });
 });

@@ -5,7 +5,9 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { TrustedBinaryConsent } from "../shared/settings.js";
 import type { CodexBinaryFs } from "./codex-binary.js";
-import { CODEX_DOCTOR_TTL_MS, createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardingSnapshot } from "./codex-ipc.js";
+import { CODEX_DOCTOR_TTL_MS, codexDoctorSourceEnv, createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardingSnapshot } from "./codex-ipc.js";
+import { ENV_CLAUDE_PROXY_URL, ENV_CODEX_PROXY_URL } from "../shared/engines.js";
+import type { RunCodexDoctorOptions } from "./codex-doctor.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "anycode-codex-ipc-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -1038,5 +1040,79 @@ describe("discoverAndCheck / loginStart — explicit-rung hard-stop (D-S4-22)", 
     const result = await controller.loginStart();
     expect(result).toEqual({ ok: false, reason: "unsupported" });
     expect(runLogin).not.toHaveBeenCalled();
+  });
+});
+
+describe("doctor/login source env — engine-proxy carrier custody (TASK.139)", () => {
+  const ENGINE_PROXY = "http://user:pass@codex-proxy.example.com:3128";
+  /** What a shell that happens to export the carrier name would inject. */
+  const AMBIENT_PROXY = "http://ambient-carrier.invalid:9999";
+  const SHELL_PROXY = "http://shell-proxy.internal:8080";
+
+  /** Runs one recheck and returns the SOURCE env the doctor child was spawned with. */
+  async function doctorEnv(overrides: Partial<CodexIpcDeps>): Promise<NodeJS.ProcessEnv> {
+    const runDoctor = vi.fn(async (_binaryPath: string, options?: RunCodexDoctorOptions) => {
+      captured = options?.env;
+      return { status: "ready" as const, version: "0.144.3", account: { type: "chatgpt" as const, plan: "plus" }, models: [] };
+    });
+    let captured: NodeJS.ProcessEnv | undefined;
+    const controller = createCodexOnboardingController(makeDeps({ ...overrides, runDoctor }));
+    await controller.recheck();
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(captured).toBeDefined();
+    return captured!;
+  }
+
+  it("stamps the configured carrier into the source env the doctor reads", async () => {
+    const env = await doctorEnv({ engineProxyUrl: () => ENGINE_PROXY });
+    expect(env[ENV_CODEX_PROXY_URL]).toBe(ENGINE_PROXY);
+  });
+
+  // F1: main is the SOLE author of the carrier namespace. A shell that exports
+  // the carrier name would otherwise ride the `{...bootEnv}` spread straight
+  // into the doctor/login child, bypassing the shell-wins gate that licenses
+  // `applyEngineProxyOverride` to clobber the proxy family unconditionally.
+  it("drops an AMBIENT carrier from the boot env instead of honouring it", async () => {
+    const env = await doctorEnv({
+      bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev", [ENV_CODEX_PROXY_URL]: AMBIENT_PROXY },
+    });
+    expect(env[ENV_CODEX_PROXY_URL]).toBeUndefined();
+  });
+
+  it("main's configured carrier wins over an ambient one of the same name", async () => {
+    const env = await doctorEnv({
+      bootEnv: { PATH: "/usr/local/bin", HOME: "/home/dev", [ENV_CODEX_PROXY_URL]: AMBIENT_PROXY },
+      engineProxyUrl: () => ENGINE_PROXY,
+    });
+    expect(env[ENV_CODEX_PROXY_URL]).toBe(ENGINE_PROXY);
+  });
+
+  // Byte-identity: with the shell owning the proxy family `engineProxyUrl`
+  // returns undefined (its gate lives in main's `engineProxyCarriers`), so the
+  // source env must deep-equal the boot env minus the carrier namespace — the
+  // shell's own proxy is the only one the child can ever see.
+  it("with a shell proxy and an ambient carrier, the source env is byte-identical to the shell's boot env", async () => {
+    const env = await doctorEnv({
+      bootEnv: {
+        PATH: "/usr/local/bin",
+        HOME: "/home/dev",
+        HTTPS_PROXY: SHELL_PROXY,
+        https_proxy: SHELL_PROXY,
+        [ENV_CODEX_PROXY_URL]: AMBIENT_PROXY,
+        [ENV_CLAUDE_PROXY_URL]: AMBIENT_PROXY,
+      },
+      engineProxyUrl: () => undefined,
+    });
+    expect(env).toEqual({ PATH: "/usr/local/bin", HOME: "/home/dev", HTTPS_PROXY: SHELL_PROXY, https_proxy: SHELL_PROXY });
+  });
+
+  // The exported helper is what main/codex-install.ts spawns its post-install
+  // gate doctor through (F4) — same authority, no second composition.
+  it("codexDoctorSourceEnv strips the whole carrier namespace, not just this engine's", () => {
+    const env = codexDoctorSourceEnv(
+      { PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: AMBIENT_PROXY, [ENV_CLAUDE_PROXY_URL]: AMBIENT_PROXY },
+      () => ENGINE_PROXY,
+    );
+    expect(env).toEqual({ PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: ENGINE_PROXY });
   });
 });
