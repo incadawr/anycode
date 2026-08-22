@@ -26,17 +26,33 @@ protocol AnyCode's Codex adapter is built against (design
      `SUPPORTED_CODEX_VERSION` covers the pinned `generatedFrom`; the
      translator digests every fixture line without an unknown-throw.
   2. **Env-gated** (`ANYCODE_CODEX_DRIFT_BIN=<path>`): regenerates the schema
-     from a real binary, re-extracts with the same extractor, and deep-equals
-     the pinned file. Skipped (not failed) when the env var is unset.
+     from a real binary, re-extracts with the same extractor, then holds
+     `methods` and `decisionEnums` to byte-equality while checking the shapes as
+     a COMPATIBLE SUPERSET — a later in-range binary that only adds optional
+     fields passes, a removed definition/property/union-variant fails unless it
+     is named in `REVIEWED_REMOVALS`. Deep equality would make any range wider
+     than one patch unverifiable by this instrument. Skipped (not failed) when
+     the env var is unset.
 
 ## Supported version range
 
-`>=0.144.0 <0.145.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`>=0.144.0 <0.150.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). The Codex CLI's TypeScript bindings are
 byte-identical across the observed 0.144.x patch releases; the generated
 JSON-schema differs only in property insertion order, which is why
 `codex-contract-extract.mjs` canonicalizes by recursively sorting object keys
 before comparing.
+
+The pin itself stays on 0.144.x — it is the baseline the adapter was written
+and live-smoked against, not a moving target. `0.145.0 .. 0.149.x` was admitted
+on the weaker evidence layer 2 now checks: regenerated from the real 0.147.0 and
+0.149.0 binaries, `methods` and `decisionEnums` came back byte-identical and no
+union variant disappeared, and the handful of removed fields
+(`Account.amazonBedrock.credentialSource`, `McpToolCallAppContext.templateId`)
+are unconsumed and named in the test's `REVIEWED_REMOVALS`. `codex-support.json`
+records the two grades separately (`tested` vs `contract-verified`), and
+`recommended` deliberately stays on the live-smoked patch: the range says which
+Codex a user may bring, `recommended` says which one AnyCode downloads itself.
 
 ## Widening the range / updating the pin
 

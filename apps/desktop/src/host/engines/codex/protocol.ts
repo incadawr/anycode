@@ -4,7 +4,7 @@
  * or event-to-AgentEvent translation is implied by these shapes.
  */
 
-export const SUPPORTED_CODEX_VERSION = ">=0.144.0 <0.145.0";
+export const SUPPORTED_CODEX_VERSION = ">=0.144.0 <0.150.0";
 
 export interface CodexVersion {
   major: number;
@@ -26,8 +26,36 @@ export function parseCodexVersion(output: string): CodexVersion | null {
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
 }
 
+/**
+ * Inclusive lower / exclusive upper bound, PARSED from
+ * `SUPPORTED_CODEX_VERSION` rather than restated. The predicate used to be
+ * hardcoded (`minor === 144`) while the constant above was a display string
+ * only: the two could disagree silently, and widening the string alone would
+ * have advertised a range the code still refused. One edit now moves both.
+ */
+const SUPPORTED_BOUNDS = parseSupportedRange(SUPPORTED_CODEX_VERSION);
+
+function parseSupportedRange(range: string): { min: CodexVersion; max: CodexVersion } {
+  const match = /^>=(\d+)\.(\d+)\.(\d+) <(\d+)\.(\d+)\.(\d+)$/.exec(range);
+  if (match === null) throw new Error(`unsupported SUPPORTED_CODEX_VERSION form: ${range}`);
+  const [, a, b, c, d, e, f] = match;
+  return {
+    min: { major: Number(a), minor: Number(b), patch: Number(c) },
+    max: { major: Number(d), minor: Number(e), patch: Number(f) },
+  };
+}
+
+function compareCodexVersions(left: CodexVersion, right: CodexVersion): number {
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  return left.patch - right.patch;
+}
+
 export function isSupportedCodexVersion(version: CodexVersion): boolean {
-  return version.major === 0 && version.minor === 144;
+  return (
+    compareCodexVersions(version, SUPPORTED_BOUNDS.min) >= 0 &&
+    compareCodexVersions(version, SUPPORTED_BOUNDS.max) < 0
+  );
 }
 
 export interface JsonRpcNotification {
