@@ -17,7 +17,7 @@
 import { join } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { discoverPlugins } from "../plugins/discovery.js";
-import { MAX_AGENT_PROFILES } from "../types/config.js";
+import { MAX_AGENT_PROFILES, SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
 import {
   AGENT_PROFILE_MODEL_RE,
   AGENT_PROFILE_NAME_RE,
@@ -261,6 +261,17 @@ export async function scanAgentProfilesAdmin(
             claimed.add(err.name);
             problems.push(
               `Agent profile ${path}: engine "${err.engine}" must be "codex" or "claude" — ignored`,
+            );
+            break;
+          case "bad_max_turns":
+            // Same claim semantics as bad_model/bad_engine (mirrors discovery's
+            // switch verbatim — parseAgentProfileMd is the single oracle).
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: maxTurns "${err.maxTurns}" must be an integer between 1 and ${SUBAGENT_MAX_TURNS_CEILING} — ignored`,
             );
             break;
           case "engine_tools_conflict":

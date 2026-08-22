@@ -9,7 +9,10 @@ import { agentTool } from "./agent.js";
 import { agentInputSchema } from "./schemas.js";
 import type { ToolContext, ToolEmittedEvent } from "../types/tools.js";
 import type { CorePorts } from "../ports/index.js";
-import { SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS } from "../types/config.js";
+import {
+  SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS,
+  SUBAGENT_TIME_BUDGET_MS,
+} from "../types/config.js";
 import { SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS } from "../subagents/summarize-tool.js";
 import type {
   SubagentOutcome,
@@ -166,12 +169,20 @@ describe("agentTool — honest outcome mapping (TASK.44)", () => {
     expect(result.errorKind).toBe("max_turns");
     // The partial result is forwarded so it is not lost...
     expect(result.error).toContain("I found three files but did not finish the analysis.");
-    // ...and the message names the limit explicitly so the model cannot mistake
-    // this for success.
-    expect(result.error).toContain("max turn limit");
+    // ...behind a marker the parent model cannot read as a finished report
+    // (TASK.74 §5), and the message names the budget and the turns spent.
+    expect(result.error).toContain("INCOMPLETE SUBAGENT RESULT");
+    expect(result.error).toContain("ran out of budget");
     expect(result.error).toContain("8 turns");
+    // The marker precedes the partial, so the warning is read first.
+    expect(result.error!.indexOf("INCOMPLETE SUBAGENT RESULT")).toBeLessThan(
+      result.error!.indexOf("I found three files"),
+    );
     // The model-visible text is the error (non-empty), never an empty success.
     expect(agentTool.formatResultForModel?.(result)).toBe(result.error);
+    // "raise maxTurns" is gone: the Agent schema has no such field, so the
+    // advice was unactionable (TASK.74 §2.6/§5).
+    expect(agentTool.formatResultForModel?.(result)).not.toContain("raise maxTurns");
   });
 
   it("REGRESSION: max_turns with an EMPTY finalText → ok:false, non-empty error, never a silent success", async () => {
@@ -193,13 +204,21 @@ describe("agentTool — honest outcome mapping (TASK.44)", () => {
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe("max_turns");
     // The error is non-empty and actionable even with no partial text.
-    expect(result.error).toContain("max turn limit");
+    expect(result.error).toContain("ran out of budget");
     expect(result.error).toContain("8 turns");
     expect(result.error).toContain("not completed");
+    // Nothing to mark INCOMPLETE when there is no partial at all.
+    expect(result.error).not.toContain("INCOMPLETE SUBAGENT RESULT");
     // The model-visible text is non-empty — a blind re-delegation would now
-    // see the limit message, not an empty success.
+    // see the budget message, not an empty success.
     const modelText = agentTool.formatResultForModel?.(result) ?? "";
     expect(modelText.length).toBeGreaterThan(0);
+    expect(modelText).not.toContain("raise maxTurns");
+  });
+
+  it("the dispatcher wall comes from SUBAGENT_TIME_BUDGET_MS (TASK.74 §5)", () => {
+    expect(agentTool.metadata.timeoutMs).toBe(SUBAGENT_TIME_BUDGET_MS);
+    expect(agentTool.metadata.maxTimeoutMs).toBe(SUBAGENT_TIME_BUDGET_MS);
   });
 
   it("cancelled → ok:false, errorKind cancelled, never success", async () => {

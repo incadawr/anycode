@@ -51,7 +51,29 @@ const COLOR = createCliTheme({ color: true });
 describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => {
   it("surfaces output and turn limits explicitly", () => {
     expect(collect([{ type: "turn_end", turn: 1, finishReason: "length" }])).toContain("output truncated");
-    expect(collect([{ type: "loop_end", reason: "max_turns", turns: 100 }])).toContain("reached the turn limit (100 turns)");
+    expect(collect([{ type: "loop_end", reason: "max_turns", turns: 100 }])).toContain("turn limit reached (100 turns)");
+  });
+
+  it("renders a ceiling grant with round, grant, total and remaining (TASK.124 T19)", () => {
+    const out = collect([
+      {
+        type: "ceiling_grant",
+        round: 2,
+        granted: 25,
+        totalGranted: 75,
+        remaining: ["fix the test", "commit"],
+      },
+    ]);
+    expect(out).toContain("round 2");
+    expect(out).toContain("+25 turn(s)");
+    expect(out).toContain("total 75");
+    expect(out).toContain("fix the test; commit");
+    // The grant line never points at a setting — the ladder IS the action.
+    expect(out).not.toContain("ANYCODE_MAX_TURNS");
+    // The stopped line likewise no longer sends the user to Settings.
+    expect(collect([{ type: "loop_end", reason: "max_turns", turns: 150 }])).not.toContain(
+      "ANYCODE_MAX_TURNS",
+    );
   });
 
   const events: AgentEvent[] = [

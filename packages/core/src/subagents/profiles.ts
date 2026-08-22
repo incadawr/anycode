@@ -26,7 +26,11 @@ import { join } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { parseFrontmatter, splitList } from "../skills/frontmatter.js";
 import { capUtf8Bytes } from "../util/bytes.js";
-import { AGENT_PROFILE_PROMPT_MAX_BYTES, MAX_AGENT_PROFILES } from "../types/config.js";
+import {
+  AGENT_PROFILE_PROMPT_MAX_BYTES,
+  MAX_AGENT_PROFILES,
+  SUBAGENT_MAX_TURNS_CEILING,
+} from "../types/config.js";
 import { PERSONAS, isKnownPersona, type PersonaDefinition } from "./personas.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 
@@ -56,6 +60,14 @@ export const AGENT_PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
  * instead of reaching the host as a nonsense model id.
  */
 export const AGENT_PROFILE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+/**
+ * Frontmatter `maxTurns:` shape — plain decimal digits only. Deliberately
+ * stricter than Number(): `0x20`, `1e1`, `+5` and `12.0` all parse to a number
+ * a reader would not predict from the text, so they are refused at parse time
+ * rather than silently accepted as a budget nobody wrote.
+ */
+export const AGENT_PROFILE_MAX_TURNS_RE = /^[0-9]+$/;
 
 /**
  * Frontmatter `engine:` shape (subagent-model contract). When set, children of
@@ -100,6 +112,15 @@ export interface ParsedAgentProfile {
    */
   engine?: AgentProfileEngine;
   /**
+   * Frontmatter `maxTurns:` — the per-run turn budget children of this profile
+   * get, carried into PersonaDefinition.turnBudget. Absent (or blank) leaves it
+   * undefined, i.e. inherit DEFAULT_SUBAGENT_MAX_TURNS. An out-of-range or
+   * malformed value is FATAL (bad_max_turns) rather than clamped — same
+   * rationale as `model`: a profile that asks for a budget and silently gets a
+   * different one is worse than a profile that is loudly refused.
+   */
+  turnBudget?: number;
+  /**
    * Non-fatal per-file problems (path-free suffixes) — currently only explicit
    * spawn-tool requests. The caller prefixes each with `Agent profile <path>: `.
    */
@@ -119,6 +140,7 @@ export type AgentProfileParseError =
   | { kind: "missing_description"; name: string }
   | { kind: "bad_model"; name: string; model: string }
   | { kind: "bad_engine"; name: string; engine: string }
+  | { kind: "bad_max_turns"; name: string; maxTurns: string }
   | { kind: "engine_tools_conflict"; name: string; engine: AgentProfileEngine };
 
 export type ParseAgentProfileResult =
@@ -206,6 +228,24 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     engine = normalized;
   }
 
+  // maxTurns: optional. Blank/absent means "inherit the default turn budget".
+  // A non-empty value must be a plain integer within 1..SUBAGENT_MAX_TURNS_CEILING; a
+  // malformed or out-of-range one is FATAL rather than clamped, mirroring
+  // `model` above — a profile whose declared budget is silently replaced by
+  // another number is exactly the dishonesty the fatal branches exist to stop.
+  const rawMaxTurns = (parsed.fields.maxTurns ?? "").trim();
+  let turnBudget: number | undefined;
+  if (rawMaxTurns !== "") {
+    if (!AGENT_PROFILE_MAX_TURNS_RE.test(rawMaxTurns)) {
+      return { error: { kind: "bad_max_turns", name, maxTurns: rawMaxTurns } };
+    }
+    const value = Number(rawMaxTurns);
+    if (value < 1 || value > SUBAGENT_MAX_TURNS_CEILING) {
+      return { error: { kind: "bad_max_turns", name, maxTurns: rawMaxTurns } };
+    }
+    turnBudget = value;
+  }
+
   // engine + tools: TASK.97 R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's
   // `--allowedTools` is a permission allowlist, not a registry restriction (the
   // complement-ban `--disallowedTools` is an open set across CLI versions), and
@@ -236,6 +276,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
       problems,
       ...(model !== undefined ? { model } : {}),
       ...(engine !== undefined ? { engine } : {}),
+      ...(turnBudget !== undefined ? { turnBudget } : {}),
     },
   };
 }
@@ -354,6 +395,18 @@ export async function discoverAgentProfiles(
               `Agent profile ${path}: engine "${err.engine}" must be "codex" or "claude" — ignored`,
             );
             break;
+          case "bad_max_turns":
+            // Same claim semantics as bad_model/bad_engine: the name IS claimed
+            // (validation happens after the name resolves), so a lower-precedence
+            // same-named file stays shadowed rather than silently taking over.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: maxTurns "${err.maxTurns}" must be an integer between 1 and ${SUBAGENT_MAX_TURNS_CEILING} — ignored`,
+            );
+            break;
           case "engine_tools_conflict":
             // Same claim semantics as bad_model/bad_engine: the name IS claimed
             // (validation happens after the name resolves), so a lower-precedence
@@ -370,7 +423,7 @@ export async function discoverAgentProfiles(
         continue;
       }
 
-      const { name, description, tools, body, model, engine } = result.ok;
+      const { name, description, tools, body, model, engine, turnBudget } = result.ok;
 
       // Precedence dedupe: a lower source's same-named file is shadowed silently.
       if (claimed.has(name)) {
@@ -400,6 +453,7 @@ export async function discoverAgentProfiles(
         systemPrompt: body,
         ...(model !== undefined ? { model } : {}),
         ...(engine !== undefined ? { engine } : {}),
+        ...(turnBudget !== undefined ? { turnBudget } : {}),
       });
     }
   }

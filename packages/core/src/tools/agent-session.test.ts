@@ -279,7 +279,11 @@ describe("agentTool handler — session-tier outcome mapping, all 4 terminal sta
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe("max_turns");
     expect(result.error).toContain("partial child work");
-    expect(result.error).toContain("max turn limit");
+    // Wording is shared with the inline tier (outcomeToResult): TASK.74 made
+    // the status cover the wall-clock deadline too, so it names the budget, not
+    // the turn cap, and marks the partial INCOMPLETE.
+    expect(result.error).toContain("ran out of budget");
+    expect(result.error).toContain("INCOMPLETE SUBAGENT RESULT");
     expect(result.error).toContain("8 turns");
   });
 

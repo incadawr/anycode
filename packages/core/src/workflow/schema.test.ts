@@ -299,6 +299,25 @@ describe("parseWorkflowDefinition — caps", () => {
     expect(result.definition).toBeUndefined();
   });
 
+  it("accepts a trusted step budget of 20 — above the retired 8-turn ceiling (TASK.74 §2.5)", () => {
+    const raw = minimalRaw({
+      steps: [{ id: "a", agentType: "general-purpose", promptTemplate: "x", maxTurns: 20 }],
+    });
+    const result = parseWorkflowDefinition(raw, ctx());
+    expect(result.problem).toBeUndefined();
+    expect(result.definition?.steps[0]?.maxTurns).toBe(20);
+  });
+
+  it("rejects a maxTurns one over the hard ceiling", () => {
+    const raw = minimalRaw({
+      steps: [
+        { id: "a", agentType: "general-purpose", promptTemplate: "x", maxTurns: SUBAGENT_MAX_TURNS_CEILING + 1 },
+      ],
+    });
+    const result = parseWorkflowDefinition(raw, ctx());
+    expect(result.definition).toBeUndefined();
+  });
+
   it("rejects a maxTurns of 0", () => {
     const raw = minimalRaw({
       steps: [{ id: "a", agentType: "general-purpose", promptTemplate: "x", maxTurns: 0 }],
