@@ -263,6 +263,35 @@ describe("Vault.statuses — multi-key (slice 2.5)", () => {
     expect(status?.source).toBe("env");
     expect(status?.set).toBe(true);
   });
+
+  // TASK.141: the proxy-profile password is the one vault key with NO env
+  // materialisation — it is composed into a proxy URL in main and rides the
+  // HTTP(S)_PROXY family, never a SECRET_ENV_KEY. Surfacing it here at all is
+  // what lets the profile editor learn `passwordSet` (the value never comes
+  // back), and reading "env" off an unrelated provider credential would tell
+  // that editor the password is being overridden by something it is not.
+  it("a proxy-profile password is reported, and NEVER reads source:env", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await v.setSecret("proxy.profile.proxy-corp.password", "pr0xy-p@ss", { allowWeak: false });
+    const status = (await v.statuses({ ANYCODE_API_KEY: "sk-env" }, catalogIds)).find(
+      (s) => s.key === "proxy.profile.proxy-corp.password",
+    );
+    expect(status).toEqual({
+      key: "proxy.profile.proxy-corp.password",
+      set: true,
+      source: "vault",
+      tier: "os_encrypted",
+    });
+  });
+
+  it("a proxy-profile password is listed with no catalog ids at all (it is not a provider credential)", async () => {
+    const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await v.setSecret("proxy.profile.proxy-corp.password", "pw", { allowWeak: false });
+    expect((await v.statuses({})).map((s) => s.key)).toEqual([
+      "provider.apiKey",
+      "proxy.profile.proxy-corp.password",
+    ]);
+  });
 });
 
 describe("Vault OAuth token blob (slice 2.5 §3.3 + TASK.45: keyed by CONNECTION id)", () => {

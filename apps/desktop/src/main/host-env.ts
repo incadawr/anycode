@@ -17,8 +17,19 @@ import {
   ENV_CLAUDE_PROXY_URL,
   ENV_CODEX_PROXY_URL,
   LOOPBACK_NO_PROXY,
+  PROXY_CARRIER_DIRECT,
   stripEngineProxyCarriers,
 } from "../shared/engines.js";
+import type { MaterializedProxy, ProxyRung, ProxyScopeId } from "../shared/proxy.js";
+import {
+  composeProxyUrl,
+  engineProxyChain,
+  hostForkProxyChain,
+  isProxyProfileSecretKey,
+  isProxyProfileUrl,
+  PROXY_PROFILE_SECRET_KEY_RE,
+  resolveProxyLadder,
+} from "../shared/proxy.js";
 import type { AnycodeSettings, CustomProviderRecord, SecretEnvKey, SecretKey } from "../shared/settings.js";
 import { activeProviderView, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
 
@@ -105,8 +116,23 @@ export const SECRET_KEYS: readonly SecretKey[] = ["provider.apiKey"];
  * template-literal members yields `_ | undefined` under `noUncheckedIndexedAccess`
  * (can no longer index `bootEnv`). Legacy `provider.apiKey` -> `ANYCODE_API_KEY`,
  * byte-for-byte 2.2.
+ *
+ * TASK.141 fail-closed belt (the `customProviderSecretKey` precedent): a
+ * proxy-profile password is NOT a provider credential and has no fork-env
+ * materialisation at all — it is composed into a proxy URL in main and rides the
+ * HTTP(S)_PROXY family, never `ANYCODE_API_KEY`. Answering "ANYCODE_API_KEY" for
+ * such a key would be a category error whose visible symptom is a host fork
+ * booting on a proxy password as its provider credential, so the key is refused
+ * loudly instead. Every legitimate caller either holds a provider key already or
+ * filters with `isProxyProfileSecretKey` (main/vault.ts's status projection), so
+ * this never trips in normal flow.
  */
-export function secretEnvFor(_key: SecretKey): SecretEnvKey {
+export function secretEnvFor(key: SecretKey): SecretEnvKey {
+  if (isProxyProfileSecretKey(key)) {
+    throw new Error(
+      `secretEnvFor refuses a proxy-profile key (${key}) — a proxy password has no host-env materialisation (TASK.141 §5)`,
+    );
+  }
   return "ANYCODE_API_KEY";
 }
 
@@ -129,6 +155,17 @@ export function isKnownSecretKey(key: string, catalogIds: readonly string[]): ke
   const connMatch = /^provider\.connection\.([^.]+)\.(apiKey|oauth)$/.exec(key);
   if (connMatch !== null) {
     return connMatch[1] !== undefined && connMatch[1].length > 0;
+  }
+  // Proxy-profile password (TASK.141 §5): `proxy.profile.<id>.password`. Same
+  // `[^.]+`-segment shape and same division of labour as the connection keys —
+  // the id's membership in the registry is enforced at the CRUD boundary
+  // (main/settings-ipc.ts), this predicate only says the key is well-formed and
+  // belongs to a namespace this app owns. Being recognised here is also what
+  // surfaces the key in `Vault.statuses`, which is the ONLY way the renderer
+  // learns `passwordSet` — the value itself never crosses back.
+  const proxyMatch = PROXY_PROFILE_SECRET_KEY_RE.exec(key);
+  if (proxyMatch !== null) {
+    return proxyMatch[1] !== undefined && proxyMatch[1].length > 0;
   }
   const match = /^provider\.(.+)\.(apiKey|oauth)$/.exec(key);
   if (match === null) {
@@ -440,14 +477,14 @@ export function applyCodexProfilesHomeOverride(env: NodeJS.ProcessEnv, override:
 export function applyConnectionProxy(
   env: NodeJS.ProcessEnv,
   bootEnv: NodeJS.ProcessEnv,
-  proxyUrl: string | undefined,
+  proxy: MaterializedProxy | undefined,
 ): void {
-  if (proxyUrl === undefined || proxyUrl.trim() === "" || !isProxyUrl(proxyUrl)) {
+  if (proxy === undefined || proxy.url.trim() === "" || !isProxyUrl(proxy.url)) {
     return;
   }
   if (!PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name))) {
     for (const name of PROXY_FAMILY_KEYS) {
-      env[name] = proxyUrl;
+      env[name] = proxy.url;
     }
   }
   // The exemption is a property of switching proxying ON, not of where the
@@ -455,12 +492,111 @@ export function applyConnectionProxy(
   // what activates it, so local endpoints need the same protection. Atomic for
   // the shadowing reason in NO_PROXY_KEYS — a shell that named its own
   // exemptions keeps both keys untouched.
+  //
+  // TASK.141: a profile's own exemptions are APPENDED to the loopback default,
+  // never substituted for it — a list that replaced it would send a local
+  // Ollama/vLLM endpoint (and every loopback MCP server) through the proxy. Both
+  // cases get the identical composed string, atomically, for the shadowing
+  // reason above.
   if (!NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))) {
+    const extra = proxy.noProxy?.trim() ?? "";
+    const value = extra === "" ? LOOPBACK_NO_PROXY : `${LOOPBACK_NO_PROXY},${extra}`;
     for (const name of NO_PROXY_KEYS) {
-      env[name] = LOOPBACK_NO_PROXY;
+      env[name] = value;
     }
   }
   fillFromSettings(env, ENV_NODE_USE_ENV_PROXY, "1");
+}
+
+// ── proxy-registry materialisation (TASK.141) ──
+
+/**
+ * The two main-side caches every SYNCHRONOUS proxy call site reads through
+ * (TASK.141 §4/§5). Both are injected rather than imported so this module stays
+ * electron-free and unit-testable, and so lane A can ship — and pin with tests —
+ * the "no cache ⇒ direct / no password" behaviour before lane B's modules exist.
+ *
+ * Absent (or returning undefined) is a MEANINGFUL answer in both cases, not an
+ * error: a `system` profile with nothing resolved yet materialises as DIRECT
+ * (before `app.whenReady` there is no Chromium session to ask, and guessing a
+ * proxy would be worse than not using one), and a profile with no cached
+ * password materialises without userinfo.
+ */
+export interface ProxyMaterializationDeps {
+  /**
+   * Last value `session.resolveProxy` gave for a `system` profile, as
+   * `http(s)://host:port`; undefined = resolved DIRECT / not resolved yet / the
+   * OS proxy is SOCKS (unsupported by construction — env proxying is HTTP-only).
+   * Owned by main/system-proxy.ts (lane B).
+   */
+  systemProxyUrl?: () => string | undefined;
+  /**
+   * Plaintext password of ONE profile, from main's in-memory cache (the vault is
+   * async and these call sites are not). Owned by lane B alongside the resolve
+   * cache; refreshed BEFORE `emitMutation` so the first spawn after a save
+   * already carries the new value. Never crosses to the renderer.
+   */
+  proxyPassword?: (profileId: string) => string | undefined;
+}
+
+/**
+ * Turns the rung a ladder picked into what an env needs, or `undefined` for
+ * "direct" (TASK.141 §2). Every failure mode collapses to DIRECT rather than to
+ * the rung below — a dangling ref, a profile whose `url` was hand-edited into
+ * garbage, a `system` profile with nothing resolved: an explicit rung with a
+ * broken value must not silently route this scope's traffic into another rung's
+ * proxy, which is the same law TASK.132 applied to a malformed `proxyUrl`.
+ *
+ * The one rung that is NOT registry-shaped — a legacy `proxyUrl` string — is
+ * materialised verbatim, byte-for-byte its TASK.132/139 semantics, because that
+ * is the whole promise "legacy strings keep working with no user action" makes.
+ */
+export function materializeProxyRung(
+  rung: ProxyRung | undefined,
+  deps: ProxyMaterializationDeps = {},
+): MaterializedProxy | undefined {
+  if (rung === undefined) {
+    return undefined;
+  }
+  if (rung.legacyUrl !== undefined) {
+    return isProxyUrl(rung.legacyUrl) ? { url: rung.legacyUrl } : undefined;
+  }
+  const profile = rung.profile;
+  if (profile === undefined) {
+    return undefined; // `direct`, or a dangling ref — same outcome by law.
+  }
+  const base = profile.mode === "system" ? deps.systemProxyUrl?.() : profile.url;
+  if (base === undefined || base.trim() === "") {
+    return undefined;
+  }
+  // A hand-edited profile URL is held to the SAME rule the editor enforces
+  // (`isProxyProfileUrl`): userinfo in the host field would put a password back
+  // into the plaintext settings.json this slice just moved it out of, so such a
+  // value is not honoured — it degrades to direct like any other broken value.
+  // A `system` answer comes from Chromium and never carries userinfo.
+  if (!isProxyProfileUrl(base)) {
+    return undefined;
+  }
+  const url = composeProxyUrl(base, profile.login, deps.proxyPassword?.(profile.id));
+  if (url === undefined) {
+    return undefined;
+  }
+  return profile.noProxy !== undefined && profile.noProxy.trim() !== ""
+    ? { url, noProxy: profile.noProxy }
+    : { url };
+}
+
+/**
+ * The materialised proxy for ONE chain, or undefined for "direct"/"nothing
+ * said" — the single call every consumer makes instead of re-deriving the
+ * ladder plus the materialisation separately.
+ */
+export function resolveProxyFor(
+  settings: AnycodeSettings,
+  chain: readonly ProxyScopeId[],
+  deps: ProxyMaterializationDeps = {},
+): MaterializedProxy | undefined {
+  return materializeProxyRung(resolveProxyLadder(settings, chain), deps);
 }
 
 /**
@@ -488,19 +624,65 @@ export function applyConnectionProxy(
 export function engineProxyCarriers(
   settings: AnycodeSettings,
   bootEnv: NodeJS.ProcessEnv,
+  deps: ProxyMaterializationDeps = {},
 ): NodeJS.ProcessEnv {
-  if (PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name))) {
-    return {};
-  }
   const carriers: NodeJS.ProcessEnv = {};
-  const emit = (value: string | undefined, name: string): void => {
-    if (value !== undefined && value.trim() !== "" && isProxyUrl(value)) {
-      carriers[name] = value;
-    }
-  };
-  emit(settings.codex?.proxyUrl, ENV_CODEX_PROXY_URL);
-  emit(settings.claude?.proxyUrl, ENV_CLAUDE_PROXY_URL);
+  const codex = engineProxyCarrierValue(settings, bootEnv, "codex", false, deps);
+  if (codex !== undefined) {
+    carriers[ENV_CODEX_PROXY_URL] = codex;
+  }
+  const claude = engineProxyCarrierValue(settings, bootEnv, "claude", false, deps);
+  if (claude !== undefined) {
+    carriers[ENV_CLAUDE_PROXY_URL] = claude;
+  }
   return carriers;
+}
+
+/**
+ * The value ONE engine's carrier should hold: a materialised proxy URL, the
+ * `PROXY_CARRIER_DIRECT` sentinel, or undefined for "emit nothing" (TASK.141
+ * §8). The shell-wins gate lives here, so every consumer — the per-fork overlay
+ * above and main's doctor/login stubs — inherits it from one place.
+ *
+ * `includeApp` selects the traffic class, and the difference is not cosmetic:
+ *  - a TAB/subagent child (`false`) gets the engine rung ALONE, because its
+ *    connection and app rungs are already materialised into the host fork's env
+ *    and reach it through the builders' passthrough lists. Adding the app rung
+ *    here would make the ENGINE carrier clobber a connection proxy that ranks
+ *    ABOVE the app rung — inverting the ladder;
+ *  - a DOCTOR/`codex login` child (`true`) has no connection rung by
+ *    construction (it is connection-less) and no host fork to inherit from, so
+ *    the app rung has to arrive through the carrier or not at all.
+ *
+ * A profile's own `noProxy` does NOT ride the carrier: there is one carrier per
+ * engine and the exemption pair is deliberately never clobbered in the child
+ * builder (a shell-exported `NO_PROXY` must survive, and the builder cannot tell
+ * a shell value from a passthrough one). Exemptions therefore apply on the
+ * connection/app rungs — which DO reach engine children, since both `NO_PROXY`
+ * spellings are in every builder's passthrough list — but an ENGINE-scoped
+ * profile's extra exemptions are not carried in this slice; its children still
+ * get `LOOPBACK_NO_PROXY`.
+ */
+export function engineProxyCarrierValue(
+  settings: AnycodeSettings,
+  bootEnv: NodeJS.ProcessEnv,
+  engine: "codex" | "claude",
+  includeApp: boolean,
+  deps: ProxyMaterializationDeps = {},
+): string | undefined {
+  if (PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name))) {
+    return undefined;
+  }
+  const chain = engineProxyChain(engine, includeApp);
+  const rung = resolveProxyLadder(settings, chain);
+  if (rung === undefined) {
+    return undefined; // no rung spoke — the child keeps whatever it inherited.
+  }
+  const materialized = materializeProxyRung(rung, deps);
+  // An EXPLICIT rung that materialises to nothing is "direct", and that has to
+  // be said out loud: the connection's proxy is already in the child env via the
+  // passthrough list, so staying silent would leave the engine on it.
+  return materialized === undefined ? PROXY_CARRIER_DIRECT : materialized.url;
 }
 
 
@@ -557,6 +739,13 @@ export interface HostEnvParams {
    * fixtures only).
    */
   resolveActiveCredential?: () => Promise<string | undefined>;
+  /**
+   * TASK.141: the system-resolve / password caches the proxy registry
+   * materialises through. Absent (unit fixtures, and lane A's shipped default)
+   * means a `system` profile resolves DIRECT and no profile carries a password —
+   * both are honest answers, never an error.
+   */
+  proxy?: ProxyMaterializationDeps;
 }
 
 /**
@@ -672,11 +861,16 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).
   fillFromSettings(env, ENV_REASONING_EFFORT, view.reasoningEffort);
-  // Connection-level HTTP(S) proxy (TASK.132). Sourced from the active-connection
-  // view so the custom/legacy/catalog branches all get it uniformly, and so a
+  // The host fork's own network path (TASK.132, generalised by TASK.141 §2
+  // ladder (a)/(b)): the ACTIVE connection's rung, then the app's. Keyed off
+  // `activeConnectionId` — the same handle `activeProviderView` reads — so a
   // per-tab pin (`buildHostEnvFor(settingsPinnedTo(...))`, main/index.ts) picks
-  // up ITS connection's proxy without any extra plumbing.
-  applyConnectionProxy(env, bootEnv, view.proxyUrl);
+  // up ITS connection's rung with no extra plumbing, exactly as before.
+  applyConnectionProxy(
+    env,
+    bootEnv,
+    resolveProxyFor(settings, hostForkProxyChain(settings.provider.activeConnectionId), params.proxy ?? {}),
+  );
 
   return env;
 }

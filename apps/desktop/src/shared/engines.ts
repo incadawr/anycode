@@ -49,6 +49,27 @@ export const ENV_CLAUDE_PROXY_URL = "ANYCODE_CLAUDE_PROXY_URL";
 export const ENGINE_PROXY_CARRIER_NAMES = [ENV_CODEX_PROXY_URL, ENV_CLAUDE_PROXY_URL] as const;
 
 /**
+ * Carrier VALUE meaning "this engine explicitly uses no proxy" (TASK.141): the
+ * engine scope's `proxyRef` is `direct`, or it names a profile whose path
+ * resolves to direct (a `system` profile the OS answers `DIRECT` for, a manual
+ * profile with a broken URL, a dangling id).
+ *
+ * A sentinel is needed because the child-env builder has to do something ACTIVE
+ * here: the connection's proxy family is already in the child env via the
+ * builder's passthrough list, so "emit no carrier" would leave the engine on the
+ * connection's proxy — the opposite of what the user selected. The clobber-to-
+ * NOTHING this licenses is licensed by the same invariant as the clobber-to-a-
+ * value: main emits no carrier at all while the shell owns the family.
+ *
+ * Its string is deliberately the same word as `PROXY_REF_DIRECT` (shared/proxy.ts)
+ * but the two are different namespaces — one is a settings REF, one is an env
+ * carrier value — and neither imports the other. An ambient
+ * `ANYCODE_*_PROXY_URL=direct` exported by a user's shell dies in
+ * `stripEngineProxyCarriers` with every other ambient carrier value.
+ */
+export const PROXY_CARRIER_DIRECT = "direct";
+
+/**
  * Deletes every carrier name from `env` in place (TASK.139 F1). Called wherever
  * main composes an env from the boot snapshot — the host fork env, the doctor/
  * login source env — BEFORE `engineProxyCarriers` writes the authoritative
@@ -125,6 +146,13 @@ export const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,[::1],::1";
  * emits validated values) and keeps a hand-edited settings.json degrading to
  * "no engine proxy" rather than to a broken child env.
  *
+ * `PROXY_CARRIER_DIRECT` (TASK.141) is the one carrier value that is not a URL:
+ * it DELETES the whole family instead of overwriting it, which is what "this
+ * engine explicitly uses no proxy" has to mean when the connection's proxy is
+ * already sitting in `env` from the passthrough list. The exemption pair is left
+ * alone in that branch — the shell may have named exemptions that have nothing
+ * to do with our proxy decision, and `NO_PROXY` without a proxy is inert anyway.
+ *
  * The carrier name itself is never copied into `env` — the builders' allowlists
  * do not know it, and the child has no use for it.
  */
@@ -134,7 +162,16 @@ export function applyEngineProxyOverride(
   carrierName: string,
 ): void {
   const carrier = source[carrierName];
-  if (carrier === undefined || carrier.trim() === "" || !isProxyUrl(carrier)) {
+  if (carrier === undefined || carrier.trim() === "") {
+    return;
+  }
+  if (carrier === PROXY_CARRIER_DIRECT) {
+    for (const name of PROXY_FAMILY_KEYS) {
+      delete env[name];
+    }
+    return;
+  }
+  if (!isProxyUrl(carrier)) {
     return;
   }
   for (const name of PROXY_FAMILY_KEYS) {

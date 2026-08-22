@@ -58,6 +58,7 @@ import {
   customProviderIds,
   customProviderSecretKey,
   customSupportedTransports,
+  engineProxyCarrierValue,
   engineProxyCarriers,
   findCustomProviderRecord,
   isCustomProviderRecordId,
@@ -65,6 +66,7 @@ import {
   scrubSecretEnv,
   shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
+  type ProxyMaterializationDeps,
   type ResolvedProviderSelection,
 } from "./host-env.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
@@ -116,10 +118,11 @@ import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 // SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
-// TASK.139: the engine-proxy carrier names, read back out of `engineProxyCarriers`
-// by the doctor/login deps below so shell-wins is decided in exactly one place;
-// `stripEngineProxyCarriers` keeps an AMBIENT one out of the live env (F1).
-import { ENV_CLAUDE_PROXY_URL, ENV_CODEX_PROXY_URL, stripEngineProxyCarriers } from "../shared/engines.js";
+// TASK.139 F1: `stripEngineProxyCarriers` keeps an AMBIENT carrier out of main's
+// own live env, so main stays the sole author of that namespace. The carrier
+// NAMES are no longer needed here — the doctor/login deps below read their value
+// through `engineProxyCarrierValue`, which is also where shell-wins is decided.
+import { stripEngineProxyCarriers } from "../shared/engines.js";
 import {
   ENGINES_CHANGED_CHANNEL,
   codexDoctorSourceEnv,
@@ -830,21 +833,48 @@ function catalogIdsFor(current: AnycodeSettings): string[] {
 }
 
 /**
+ * The two main-side caches the SYNCHRONOUS proxy call sites read through
+ * (TASK.141 §4/§5): the last Chromium answer for a `mode:"system"` profile, and
+ * the plaintext password of a profile (the vault is async; `engineEnv` and the
+ * doctor stubs are not).
+ *
+ * Lane A ships both as "no value", and that is a MEANINGFUL default, not a stub
+ * that fails: a system profile with nothing resolved materialises as DIRECT
+ * (before `app.whenReady` there is no session to ask, and inventing a proxy is
+ * worse than not using one), and a profile with no cached password materialises
+ * without userinfo. Lane B (main/system-proxy.ts) replaces these two bodies and
+ * adds the refreshes — on boot, in `refreshProviderState`, and fire-and-forget
+ * after every fork — so the NEXT spawn sees a network change.
+ */
+const proxyMaterialization: ProxyMaterializationDeps = {
+  systemProxyUrl: () => undefined,
+  proxyPassword: () => undefined,
+};
+
+/**
  * The effective engine proxy for the codex children MAIN itself spawns — the
  * doctor, `codex login`, and the post-install gate doctor (TASK.139 §2 case
- * (e)). Read back out of the ONE authority that also decides shell-wins, rather
- * than re-reading `settings.codex.proxyUrl` behind a second copy of that gate.
- * Fresh per call for the same reason `readBinaryPathSetting` is: an edited proxy
- * applies to the next spawn, with no cache to invalidate. `settings` is null
- * until boot loads it, and that window means "no engine proxy".
+ * (e), TASK.141 §2 case (f)). Read back out of the ONE authority that also
+ * decides shell-wins, rather than re-reading the setting behind a second copy of
+ * that gate. Fresh per call for the same reason `readBinaryPathSetting` is: an
+ * edited proxy applies to the next spawn, with no cache to invalidate.
+ * `settings` is null until boot loads it, and that window means "no engine
+ * proxy".
+ *
+ * The ladder here includes the APP rung (`includeApp: true`), unlike the
+ * per-fork carriers: a doctor has no connection rung by construction and no host
+ * fork env to inherit from, so the application default reaches it through this
+ * value or not at all.
  */
 function codexEngineProxyUrl(): string | undefined {
-  return settings === null ? undefined : engineProxyCarriers(settings, bootEnv)[ENV_CODEX_PROXY_URL];
+  return settings === null ? undefined : engineProxyCarrierValue(settings, bootEnv, "codex", true, proxyMaterialization);
 }
 
 /** Claude mirror of `codexEngineProxyUrl` (its only consumer is the claude doctor — claude login opens a real Terminal.app and is out of reach by construction). */
 function claudeEngineProxyUrl(): string | undefined {
-  return settings === null ? undefined : engineProxyCarriers(settings, bootEnv)[ENV_CLAUDE_PROXY_URL];
+  return settings === null
+    ? undefined
+    : engineProxyCarrierValue(settings, bootEnv, "claude", true, proxyMaterialization);
 }
 
 /**
@@ -877,6 +907,10 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     getSecret,
     resolveSelection,
     resolveActiveCredential: resolveActiveCredential(current),
+    // TASK.141: this is the ASYNC path, so it is the one place lane B awaits a
+    // FRESH `session.resolveProxy` before composing the env (§4); the sync call
+    // sites below can only read the cache these deps expose.
+    proxy: proxyMaterialization,
   });
   applySubagentsHomeOverride(env, resolveSubagentsHome(bootEnv, app.isPackaged));
   // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
@@ -899,6 +933,11 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
  */
 async function refreshProviderState(): Promise<void> {
   const current = currentSettings();
+  // TASK.141 lane-B seam (§4/§5): the system-resolve and password caches
+  // `proxyMaterialization` exposes are refreshed HERE, before the env below is
+  // composed and — since every mutating handler calls this through `onMutation`
+  // — before the renderer is told the mutation landed. Refreshing after would
+  // let the first spawn following a save go out on the previous value.
   currentHostEnv = await buildHostEnvFor(current);
   const transportInfo = selectedTransportInfo(current);
   const credential = activeCredential(current);
@@ -1508,7 +1547,7 @@ void app.whenReady().then(async () => {
       ...(claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
       // `settings` is null until boot finishes loading it; an early fork must
       // spread `{}` rather than dereference it.
-      ...(settings === null ? {} : engineProxyCarriers(settings, bootEnv)),
+      ...(settings === null ? {} : engineProxyCarriers(settings, bootEnv, proxyMaterialization)),
     }),
     reapEngineProcess: createEngineProcessReaper(),
     // Credential channel (slice 2.5 §3.3 + TASK.45 W10): an oauth-mode host asks

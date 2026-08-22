@@ -33,6 +33,7 @@ import {
   saveSecrets,
 } from "../settings/files.js";
 import type { SecretKey, SecretSource, SecretStatus, SecretTier } from "../shared/settings.js";
+import { isProxyProfileSecretKey } from "../shared/proxy.js";
 import { isKnownSecretKey, secretEnvFor } from "./host-env.js";
 
 /**
@@ -334,8 +335,14 @@ export class Vault {
     effective: string | undefined,
     bootEnv: NodeJS.ProcessEnv,
   ): SecretSource {
-    const envName = secretEnvFor(key);
-    const fromEnv = bootEnv[envName];
+    // TASK.141: a proxy-profile password has no env materialisation at all — it
+    // is composed into a proxy URL in main and rides the HTTP(S)_PROXY family,
+    // never a `SECRET_ENV_KEY`. Asking `secretEnvFor` for its var would be a
+    // category error (it refuses such a key fail-closed), and answering "env"
+    // here whenever `ANYCODE_API_KEY` happened to be exported would tell the
+    // editor a proxy password is overridden by a provider credential.
+    const envName = isProxyProfileSecretKey(key) ? undefined : secretEnvFor(key);
+    const fromEnv = envName === undefined ? undefined : bootEnv[envName];
     if (fromEnv !== undefined && fromEnv.trim() !== "") {
       return "env";
     }

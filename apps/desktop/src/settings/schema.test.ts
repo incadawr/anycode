@@ -1092,3 +1092,104 @@ describe("codex/claude proxyUrl (TASK.139) — persisted schema stays LENIENT on
     expect(parsed.settings.claude?.proxyUrl).toBe(PROXY);
   });
 });
+
+describe("network.proxyProfiles + proxyRef (TASK.141) — round-trip + zod-granularity", () => {
+  const CORP = { id: "proxy-corp", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" };
+  const SYS = { id: "proxy-sys", name: "System", mode: "system", noProxy: "a.corp", login: "user" };
+
+  it("round-trips the whole registry and the app ref verbatim", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: { proxyProfiles: [CORP, SYS], proxyRef: "proxy-corp" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network).toEqual({ proxyProfiles: [CORP, SYS], proxyRef: "proxy-corp" });
+    }
+  });
+
+  it("round-trips a proxyRef on all four scopes", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      provider: { connections: [{ id: "conn-1", providerId: "z-ai", proxyRef: "direct" }] },
+      codex: { proxyRef: "proxy-corp" },
+      claude: { proxyRef: "direct" },
+      network: { proxyProfiles: [CORP], proxyRef: "proxy-corp" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.proxyRef).toBe("direct");
+      expect(parsed.data.codex?.proxyRef).toBe("proxy-corp");
+      expect(parsed.data.claude?.proxyRef).toBe("direct");
+      expect(parsed.data.network?.proxyRef).toBe("proxy-corp");
+    }
+  });
+
+  // Per-element tolerance (the `codex.profiles` precedent): one hand-edited
+  // profile must not blank the user's other profiles — every survivor keeps
+  // working, and a scope pointing at the dropped one reads fail-soft as
+  // "direct", never as a silent fall-through to another rung's proxy.
+  it("drops ONE malformed profile without disturbing its siblings or the app ref", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: {
+        proxyProfiles: [CORP, { id: "proxy-bad", name: "Bad", mode: "socks" }, SYS],
+        proxyRef: "proxy-corp",
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles).toEqual([CORP, SYS]);
+      expect(parsed.data.network?.proxyRef).toBe("proxy-corp");
+    }
+  });
+
+  // Strictness lives at the IPC boundary, never here: this file validates a
+  // WHOLE document, and one hand-edited character must not reset every other
+  // section to defaults.
+  it("stays LENIENT about a profile URL — a garbage value round-trips and is gated at emission instead", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: { proxyProfiles: [{ ...CORP, url: "proxy.corp:3128" }] },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles?.[0]?.url).toBe("proxy.corp:3128");
+      expect(isProxyUrl("proxy.corp:3128")).toBe(false);
+    }
+  });
+
+  it("a wrong-SHAPED network value drops to undefined without failing the document", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), network: "corporate", ui: { theme: "dark" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network).toBeUndefined();
+      expect(parsed.data.ui.theme).toBe("dark");
+      expect(parsed.data.permissions).toEqual({ alwaysAllow: [] });
+    }
+  });
+
+  it("a non-array proxyProfiles falls back to an empty registry, keeping the ref", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      network: { proxyProfiles: "nope", proxyRef: "proxy-corp" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.network?.proxyProfiles).toEqual([]);
+      expect(parsed.data.network?.proxyRef).toBe("proxy-corp");
+    }
+  });
+
+  // Additive-optional, version NOT bumped: a settings.json that never heard of
+  // this feature round-trips byte-identically.
+  it("a document with no network key round-trips byte-identically", () => {
+    const before = JSON.parse(JSON.stringify(cloneDefaults())) as unknown;
+    const parsed = settingsSchema.safeParse(before);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).toEqual(before);
+      expect("network" in (parsed.data as object)).toBe(false);
+    }
+  });
+});

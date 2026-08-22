@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
 import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "../shared/settings.js";
 import { activeConnection, activeProviderView } from "../shared/settings.js";
+import { isProxyProfileSecretKey, proxyProfileSecretKey } from "../shared/proxy.js";
 import { ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import { handleCustomProviderCreate, type ProviderIpcDeps } from "./provider-ipc.js";
@@ -33,6 +34,9 @@ import {
   handleGet,
   handleOAuthCancel,
   handleOAuthStart,
+  handleProxyProfileDelete,
+  handleProxyProfileUpsert,
+  handleProxyRefSet,
   handleSet,
   handleSetSecret,
   mapProviderFailureCodeToHealthStatus,
@@ -177,7 +181,11 @@ class FakeVault implements VaultLike {
       return {
         key,
         set,
-        source: envOverride ? "env" : set ? "vault" : "none",
+        // TASK.141: a proxy-profile password has no env materialisation at all,
+        // so `ANYCODE_API_KEY` can never override one — the real Vault's own
+        // `sourceFor` makes the same distinction (main/vault.ts), and a fake
+        // that flattened it would teach this suite a false fact.
+        source: envOverride && !isProxyProfileSecretKey(key) ? "env" : set ? "vault" : "none",
         tier: this.tier,
       } satisfies SecretStatus;
     });
@@ -2742,5 +2750,529 @@ describe("handleEngineProxySet (TASK.139) — strict at the IPC boundary, only-t
     );
     const res = await handleEngineProxySet(makeDeps(), { engine: "codex", proxyUrl: PROXY });
     expect(res).toEqual({ ok: false, reason: "read_only" });
+  });
+});
+
+// ── TASK.141: the named proxy registry ──
+
+describe("proxy registry handlers (TASK.141)", () => {
+  const CORP = { id: "proxy-corp", name: "Corp", mode: "manual" as const, url: "http://proxy.corp:3128" };
+  const PROXY_PASSWORD = "pr0xy-p@ss";
+
+  /** A settings.json seeded with an arbitrary shape (the file is the assertion target throughout). */
+  async function seed(over: Record<string, unknown>): Promise<void> {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: { connections: [] },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+        ...over,
+      }),
+    );
+  }
+
+  /** Deterministic profile ids, so a minted id is assertable. */
+  function proxyIds(...values: string[]): () => string {
+    let i = 0;
+    return () => values[i++] ?? `proxy-overflow-${i}`;
+  }
+
+  describe("handleProxyProfileUpsert", () => {
+    it("mints an id, persists the profile, and returns it as createdProxyProfileId", async () => {
+      const res = await handleProxyProfileUpsert(makeDeps({ genProxyProfileId: proxyIds("proxy-1") }), {
+        name: "Corp",
+        mode: "manual",
+        url: "http://proxy.corp:3128",
+        noProxy: "a.corp",
+        login: "user",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.ok && res.createdProxyProfileId).toBe("proxy-1");
+
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles).toEqual([
+        { id: "proxy-1", name: "Corp", mode: "manual", url: "http://proxy.corp:3128", noProxy: "a.corp", login: "user" },
+      ]);
+    });
+
+    // Only-truthy-on-disk, the discipline every optional field here follows: an
+    // emptied editor field removes the key instead of persisting "".
+    it("omits blank optional fields rather than persisting empty strings", async () => {
+      await handleProxyProfileUpsert(makeDeps({ genProxyProfileId: proxyIds("proxy-1") }), {
+        name: "  Corp  ",
+        mode: "manual",
+        url: "http://proxy.corp:3128",
+        noProxy: "   ",
+        login: "",
+      });
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles?.[0]).toEqual({
+        id: "proxy-1",
+        name: "Corp",
+        mode: "manual",
+        url: "http://proxy.corp:3128",
+      });
+    });
+
+    // The mode decides where the path comes from; a host/port left over from a
+    // mode switch in the editor is stale data, not user intent.
+    it("drops the url on a system profile", async () => {
+      await handleProxyProfileUpsert(makeDeps({ genProxyProfileId: proxyIds("proxy-1") }), {
+        name: "System",
+        mode: "system",
+        url: "http://proxy.corp:3128",
+      });
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles?.[0]).toEqual({ id: "proxy-1", name: "System", mode: "system" });
+    });
+
+    // A rename is a pure display change: the id, and therefore the vault key and
+    // every scope's ref, is untouched — which is exactly why a rename cannot
+    // lose the password.
+    it("renames in place, keeping the id and every reference to it", async () => {
+      await seed({ network: { proxyProfiles: [CORP], proxyRef: CORP.id }, codex: { proxyRef: CORP.id } });
+      const res = await handleProxyProfileUpsert(makeDeps(), {
+        id: CORP.id,
+        name: "Corporate",
+        mode: "manual",
+        url: CORP.url,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.ok && "createdProxyProfileId" in res).toBe(false);
+
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles).toEqual([{ ...CORP, name: "Corporate" }]);
+      expect(loaded.settings.network?.proxyRef).toBe(CORP.id);
+      expect(loaded.settings.codex?.proxyRef).toBe(CORP.id);
+    });
+
+    // The name is the ONLY thing the pickers show — two profiles called "Corp"
+    // make the dropdown a coin flip.
+    it("refuses a case-insensitive name collision with a DIFFERENT profile", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      const res = await handleProxyProfileUpsert(makeDeps(), { name: "corp", mode: "system" });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles).toHaveLength(1);
+    });
+
+    it("allows a profile to keep its own name on an edit", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      const res = await handleProxyProfileUpsert(makeDeps(), {
+        id: CORP.id,
+        name: "Corp",
+        mode: "manual",
+        url: "http://proxy.corp:9999",
+      });
+      expect(res.ok).toBe(true);
+    });
+
+    it("refuses an unknown id `not_found` and a blank name `invalid`", async () => {
+      expect(await handleProxyProfileUpsert(makeDeps(), { id: "proxy-gone", name: "X", mode: "system" })).toEqual({
+        ok: false,
+        reason: "not_found",
+      });
+      expect(await handleProxyProfileUpsert(makeDeps(), { name: "   ", mode: "system" })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+    });
+
+    // The boundary rule: credentials belong in `login` + the vault, and a
+    // `user:pass@` in the host field would put a password back into the 0644
+    // settings.json this slice exists to take it out of.
+    it("refuses a URL carrying userinfo, and one with an unusable scheme", async () => {
+      for (const url of ["http://user:pass@proxy.corp:3128", "socks5://proxy.corp:1080", "proxy.corp:3128"]) {
+        expect(await handleProxyProfileUpsert(makeDeps(), { name: "X", mode: "manual", url })).toEqual({
+          ok: false,
+          reason: "invalid",
+        });
+      }
+      const raw = JSON.parse(await readFile(settingsPath, "utf8").catch(() => "{}")) as Record<string, unknown>;
+      expect("network" in raw).toBe(false);
+    });
+
+    it("refuses an unknown field (strict payload) and a dotted id", async () => {
+      expect(await handleProxyProfileUpsert(makeDeps(), { name: "X", mode: "system", password: "x" })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+      expect(await handleProxyProfileUpsert(makeDeps(), { id: "proxy.a", name: "X", mode: "system" })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+    });
+
+    it("refuses in read_only", async () => {
+      await writeFile(settingsPath, READ_ONLY_SETTINGS_JSON);
+      expect(await handleProxyProfileUpsert(makeDeps(), { name: "X", mode: "system" })).toEqual({
+        ok: false,
+        reason: "read_only",
+      });
+    });
+
+    // §7: a health reading measured through the OLD path is stale the moment
+    // the path moves — including for a connection that merely INHERITS the app
+    // default the edited profile is attached to.
+    it("stales the health of every connection whose effective path moved, including inheritors", async () => {
+      const health = { status: "ready", at: "2026-08-01T00:00:00.000Z" };
+      await seed({
+        provider: {
+          activeConnectionId: "conn-1",
+          connections: [
+            { id: "conn-1", providerId: "z-ai", lastHealth: health },
+            { id: "conn-2", providerId: "z-ai", proxyRef: "direct", lastHealth: health },
+          ],
+        },
+        network: { proxyProfiles: [CORP], proxyRef: CORP.id },
+      });
+      await handleProxyProfileUpsert(makeDeps({ now: () => "2026-08-22T00:00:00.000Z" }), {
+        id: CORP.id,
+        name: "Corp",
+        mode: "manual",
+        url: "http://proxy.corp:9999",
+      });
+      const loaded = await loadSettings(settingsPath);
+      const [inheritor, pinnedDirect] = loaded.settings.provider.connections;
+      expect(inheritor?.lastHealth).toEqual({ status: "unchecked", at: "2026-08-22T00:00:00.000Z" });
+      // `direct` does not descend to the app rung, so this connection's path did
+      // not move and its reading is still evidence.
+      expect(pinnedDirect?.lastHealth).toEqual(health);
+    });
+
+    it("a rename stales nothing (the path did not move)", async () => {
+      const health = { status: "ready", at: "2026-08-01T00:00:00.000Z" };
+      await seed({
+        provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai", lastHealth: health }] },
+        network: { proxyProfiles: [CORP], proxyRef: CORP.id },
+      });
+      await handleProxyProfileUpsert(makeDeps(), { id: CORP.id, name: "Corporate", mode: "manual", url: CORP.url });
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.provider.connections[0]?.lastHealth).toEqual(health);
+    });
+  });
+
+  describe("handleProxyProfileDelete", () => {
+    // Silently detaching the refs would re-route scopes the user is not looking
+    // at, and the worst outcome of that is traffic leaving the corporate proxy.
+    it("refuses while consumers exist and names every one of them", async () => {
+      await seed({
+        provider: {
+          activeConnectionId: "conn-1",
+          connections: [{ id: "conn-1", providerId: "z-ai", label: "Work", proxyRef: CORP.id }],
+        },
+        codex: { proxyRef: CORP.id },
+        network: { proxyProfiles: [CORP], proxyRef: CORP.id },
+      });
+      vault.store.set(proxyProfileSecretKey(CORP.id), PROXY_PASSWORD);
+      const res = await handleProxyProfileDelete(makeDeps(), { id: CORP.id });
+      expect(res).toEqual({
+        ok: false,
+        reason: "in_use",
+        consumers: ["Application default", "Codex engine", "connection «Work»"],
+      });
+      // Zero-touch on refusal: neither the registry nor the vault moved.
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles).toEqual([CORP]);
+      expect(vault.store.get(proxyProfileSecretKey(CORP.id))).toBe(PROXY_PASSWORD);
+    });
+
+    it("deletes a detached profile, clears its vault password and prunes the emptied section", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      vault.store.set(proxyProfileSecretKey(CORP.id), PROXY_PASSWORD);
+      const res = await handleProxyProfileDelete(makeDeps(), { id: CORP.id });
+      expect(res.ok).toBe(true);
+      expect(vault.store.has(proxyProfileSecretKey(CORP.id))).toBe(false);
+
+      const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
+      expect("network" in raw).toBe(false);
+    });
+
+    it("keeps the section when other profiles or the app ref remain", async () => {
+      const other = { id: "proxy-other", name: "Other", mode: "system" as const };
+      await seed({ network: { proxyProfiles: [CORP, other] } });
+      const res = await handleProxyProfileDelete(makeDeps(), { id: CORP.id });
+      expect(res.ok).toBe(true);
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles).toEqual([other]);
+    });
+
+    it("refuses an unknown id `not_found`, a malformed payload `invalid`, and read_only", async () => {
+      expect(await handleProxyProfileDelete(makeDeps(), { id: "proxy-gone" })).toEqual({
+        ok: false,
+        reason: "not_found",
+      });
+      expect(await handleProxyProfileDelete(makeDeps(), {})).toEqual({ ok: false, reason: "invalid" });
+      await writeFile(settingsPath, READ_ONLY_SETTINGS_JSON);
+      expect(await handleProxyProfileDelete(makeDeps(), { id: CORP.id })).toEqual({ ok: false, reason: "read_only" });
+    });
+  });
+
+  describe("handleProxyRefSet", () => {
+    it("points the app scope at a profile and back to inherit", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      expect((await handleProxyRefSet(makeDeps(), { scope: { kind: "app" }, ref: CORP.id })).ok).toBe(true);
+      expect((await loadSettings(settingsPath)).settings.network?.proxyRef).toBe(CORP.id);
+
+      expect((await handleProxyRefSet(makeDeps(), { scope: { kind: "app" }, ref: null })).ok).toBe(true);
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyRef).toBeUndefined();
+      expect(loaded.settings.network?.proxyProfiles).toEqual([CORP]);
+    });
+
+    it("points an engine scope at `direct` and drops the emptied block on clear", async () => {
+      expect(
+        (await handleProxyRefSet(makeDeps(), { scope: { kind: "engine", engine: "claude" }, ref: "direct" })).ok,
+      ).toBe(true);
+      expect((await loadSettings(settingsPath)).settings.claude?.proxyRef).toBe("direct");
+
+      await handleProxyRefSet(makeDeps(), { scope: { kind: "engine", engine: "claude" }, ref: null });
+      const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
+      expect("claude" in raw).toBe(false);
+    });
+
+    // Grabli: the legacy string must go with the ref, or it resurrects the OLD
+    // proxy the moment the ref is cleared.
+    it("clearing a ref removes the scope's legacy proxyUrl too", async () => {
+      await seed({ codex: { proxyUrl: "http://legacy:8080", binaryPath: "/usr/local/bin/codex" } });
+      await handleProxyRefSet(makeDeps(), { scope: { kind: "engine", engine: "codex" }, ref: null });
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.codex).toEqual({ binaryPath: "/usr/local/bin/codex" });
+    });
+
+    it("refuses a dangling ref `invalid` and writes nothing", async () => {
+      const res = await handleProxyRefSet(makeDeps(), { scope: { kind: "app" }, ref: "proxy-gone" });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+      const raw = JSON.parse(await readFile(settingsPath, "utf8").catch(() => "{}")) as Record<string, unknown>;
+      expect("network" in raw).toBe(false);
+    });
+
+    // A connection's ref rides its own CRUD payload so it is saved atomically
+    // with the connection — never through a second call that can be lost.
+    it("refuses a CONNECTION scope on this channel", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      const res = await handleProxyRefSet(makeDeps(), {
+        scope: { kind: "connection", connectionId: "conn-1" },
+        ref: CORP.id,
+      });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+    });
+
+    it("refuses a malformed scope, an unknown engine and read_only", async () => {
+      expect(await handleProxyRefSet(makeDeps(), { scope: { kind: "core" }, ref: "direct" })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+      expect(
+        await handleProxyRefSet(makeDeps(), { scope: { kind: "engine", engine: "core" }, ref: "direct" }),
+      ).toEqual({ ok: false, reason: "invalid" });
+      await writeFile(settingsPath, READ_ONLY_SETTINGS_JSON);
+      expect(await handleProxyRefSet(makeDeps(), { scope: { kind: "app" }, ref: null })).toEqual({
+        ok: false,
+        reason: "read_only",
+      });
+    });
+
+    // The conversion path: a legacy string becomes a real profile, its inline
+    // credential splits into `login` (settings.json) + the vault, and the legacy
+    // key is gone.
+    it("converts a legacy string into a profile, banking the password in the vault", async () => {
+      await seed({ codex: { proxyUrl: "http://user:pass@proxy.corp:3128" } });
+      const res = await handleProxyRefSet(makeDeps({ genProxyProfileId: proxyIds("proxy-1") }), {
+        scope: { kind: "engine", engine: "codex" },
+        ref: "legacy",
+      });
+      expect(res.ok).toBe(true);
+
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.codex).toEqual({ proxyRef: "proxy-1" });
+      expect(loaded.settings.network?.proxyProfiles).toEqual([
+        { id: "proxy-1", name: "proxy.corp:3128", mode: "manual", url: "http://proxy.corp:3128/", login: "user" },
+      ]);
+      expect(vault.store.get("proxy.profile.proxy-1.password")).toBe("pass");
+      // The password left the plaintext document entirely.
+      expect(JSON.stringify(loaded.settings)).not.toContain("pass@");
+    });
+
+    it("refuses a `legacy` conversion on a scope that has no legacy string", async () => {
+      expect(
+        await handleProxyRefSet(makeDeps(), { scope: { kind: "engine", engine: "codex" }, ref: "legacy" }),
+      ).toEqual({ ok: false, reason: "invalid" });
+    });
+
+    it("stales the health of connections that inherit a changed app rung", async () => {
+      const health = { status: "ready", at: "2026-08-01T00:00:00.000Z" };
+      await seed({
+        provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai", lastHealth: health }] },
+        network: { proxyProfiles: [CORP] },
+      });
+      await handleProxyRefSet(makeDeps({ now: () => "2026-08-22T00:00:00.000Z" }), {
+        scope: { kind: "app" },
+        ref: CORP.id,
+      });
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.provider.connections[0]?.lastHealth).toEqual({
+        status: "unchecked",
+        at: "2026-08-22T00:00:00.000Z",
+      });
+    });
+
+    it("an ENGINE ref change stales no connection health (different traffic class)", async () => {
+      const health = { status: "ready", at: "2026-08-01T00:00:00.000Z" };
+      await seed({
+        provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai", lastHealth: health }] },
+        network: { proxyProfiles: [CORP] },
+      });
+      await handleProxyRefSet(makeDeps(), { scope: { kind: "engine", engine: "codex" }, ref: CORP.id });
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.provider.connections[0]?.lastHealth).toEqual(health);
+    });
+  });
+
+  describe("connection CRUD carries the ref (TASK.141)", () => {
+    const CATALOG = ["z-ai"];
+
+    it("create persists a validated ref and refuses a dangling one", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      const ok = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG }), {
+        providerId: "z-ai",
+        proxyRef: CORP.id,
+      });
+      expect(ok.ok).toBe(true);
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.proxyRef).toBe(CORP.id);
+
+      const bad = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG }), {
+        providerId: "z-ai",
+        proxyRef: "proxy-gone",
+      });
+      expect(bad).toEqual({ ok: false, reason: "invalid" });
+      // `"legacy"` has nothing to convert on a connection that does not exist yet.
+      const legacy = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG }), {
+        providerId: "z-ai",
+        proxyRef: "legacy",
+      });
+      expect(legacy).toEqual({ ok: false, reason: "invalid" });
+    });
+
+    it("update sets the ref and stales the connection's health", async () => {
+      await seed({
+        provider: {
+          activeConnectionId: "conn-1",
+          connections: [{ id: "conn-1", providerId: "z-ai", lastHealth: { status: "ready", at: "2026-08-01T00:00:00.000Z" } }],
+        },
+        network: { proxyProfiles: [CORP] },
+      });
+      const res = await handleConnectionUpdate(makeDeps({ now: () => "2026-08-22T00:00:00.000Z" }), {
+        id: "conn-1",
+        proxyRef: CORP.id,
+      });
+      expect(res.ok).toBe(true);
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.provider.connections[0]?.proxyRef).toBe(CORP.id);
+      expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("unchecked");
+    });
+
+    it('the "" sentinel clears BOTH the ref and the legacy proxyUrl', async () => {
+      await seed({
+        provider: {
+          activeConnectionId: "conn-1",
+          connections: [{ id: "conn-1", providerId: "z-ai", proxyUrl: "http://legacy:8080", proxyRef: CORP.id }],
+        },
+        network: { proxyProfiles: [CORP] },
+      });
+      const res = await handleConnectionUpdate(makeDeps(), { id: "conn-1", proxyRef: "" });
+      expect(res.ok).toBe(true);
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]).toEqual({
+        id: "conn-1",
+        providerId: "z-ai",
+        lastHealth: expect.objectContaining({ status: "unchecked" }),
+      });
+    });
+
+    it("refuses a dangling ref on update and writes nothing", async () => {
+      await seed({
+        provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai" }] },
+      });
+      expect(await handleConnectionUpdate(makeDeps(), { id: "conn-1", proxyRef: "proxy-gone" })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.proxyRef).toBeUndefined();
+    });
+
+    // The dedup promise, end to end and across SCOPES: a connection and an
+    // engine holding the same corporate string converge on ONE profile.
+    it("converts a connection's legacy string and DEDUPES against a profile another scope already imported", async () => {
+      await seed({
+        provider: {
+          activeConnectionId: "conn-1",
+          connections: [{ id: "conn-1", providerId: "z-ai", proxyUrl: "http://user:pass@proxy.corp:3128" }],
+        },
+        codex: { proxyUrl: "http://user:pass@proxy.corp:3128" },
+      });
+      await handleProxyRefSet(makeDeps({ genProxyProfileId: proxyIds("proxy-1") }), {
+        scope: { kind: "engine", engine: "codex" },
+        ref: "legacy",
+      });
+      const res = await handleConnectionUpdate(makeDeps({ genProxyProfileId: proxyIds("proxy-2") }), {
+        id: "conn-1",
+        proxyRef: "legacy",
+      });
+      expect(res.ok).toBe(true);
+
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.network?.proxyProfiles).toHaveLength(1);
+      expect(loaded.settings.codex?.proxyRef).toBe("proxy-1");
+      expect(loaded.settings.provider.connections[0]?.proxyRef).toBe("proxy-1");
+      expect(loaded.settings.provider.connections[0]?.proxyUrl).toBeUndefined();
+    });
+  });
+
+  describe("the profile password rides the existing secret channel", () => {
+    it("stores a password for a known profile and NEVER returns it in the snapshot", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      const res = await handleSetSecret(makeDeps(), {
+        key: proxyProfileSecretKey(CORP.id),
+        value: SECRET_VALUE,
+      });
+      expect(res.ok).toBe(true);
+      expect(vault.store.get(proxyProfileSecretKey(CORP.id))).toBe(SECRET_VALUE);
+      expect(containsSecret(res)).toBe(false);
+      // `passwordSet` is derived from this status list and nothing else.
+      expect(res.ok && res.snapshot.secrets).toContainEqual({
+        key: proxyProfileSecretKey(CORP.id),
+        set: true,
+        source: "vault",
+        tier: "os_encrypted",
+      });
+    });
+
+    it("refuses a password for a profile that does not exist", async () => {
+      expect(await handleSetSecret(makeDeps(), { key: proxyProfileSecretKey("proxy-gone"), value: "x" })).toEqual({
+        ok: false,
+        reason: "not_found",
+      });
+    });
+
+    it("clears a password without needing the profile to still exist", async () => {
+      vault.store.set(proxyProfileSecretKey("proxy-orphan"), SECRET_VALUE);
+      const res = await handleClearSecret(makeDeps(), { key: proxyProfileSecretKey("proxy-orphan") });
+      expect(res.ok).toBe(true);
+      expect(vault.store.has(proxyProfileSecretKey("proxy-orphan"))).toBe(false);
+    });
+
+    // The law: a proxy password has no fork-env materialisation, so its status
+    // can never read "env" just because a provider credential is exported.
+    it("reports source `vault`, not `env`, even when ANYCODE_API_KEY is exported", async () => {
+      await seed({ network: { proxyProfiles: [CORP] } });
+      vault.store.set(proxyProfileSecretKey(CORP.id), SECRET_VALUE);
+      const snap = await handleGet(makeDeps({ bootEnv: { ANYCODE_API_KEY: "sk-env" } }));
+      const status = snap.secrets.find((entry) => entry.key === proxyProfileSecretKey(CORP.id));
+      expect(status).toEqual({ key: proxyProfileSecretKey(CORP.id), set: true, source: "vault", tier: "os_encrypted" });
+    });
   });
 });

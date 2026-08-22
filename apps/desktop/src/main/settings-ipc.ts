@@ -25,6 +25,28 @@ import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
+import type { ProxyProfile, ProxyProfileDeleteResult } from "../shared/proxy.js";
+import {
+  findProxyProfile,
+  isProxyProfileSecretKey,
+  isProxyProfileUrl,
+  proxyPathFingerprint,
+  proxyProfiles,
+  proxyProfileSecretKey,
+  PROXY_PROFILE_DELETE_CHANNEL,
+  PROXY_PROFILE_SECRET_KEY_RE,
+  PROXY_PROFILE_UPSERT_CHANNEL,
+  PROXY_REF_DIRECT,
+  PROXY_REF_LEGACY,
+  PROXY_REF_SET_CHANNEL,
+  hostForkProxyChain,
+} from "../shared/proxy.js";
+import {
+  defaultProxyProfileId,
+  importLegacyProxy,
+  proxyProfileConsumers,
+  PROXY_SCOPE_BINDINGS,
+} from "./proxy-scopes.js";
 import {
   BINARY_TRUST_GRANT_CHANNEL,
   BINARY_TRUST_REVOKE_CHANNEL,
@@ -129,6 +151,8 @@ export interface SettingsIpcDeps {
   oauthConfigFor?: (providerId: string) => OAuthProviderConfig | undefined;
   /** Mints an opaque connection id (`conn-<uuid>`). Injected for determinism in tests. */
   genConnectionId?: () => string;
+  /** Mints an opaque proxy-profile id (`proxy-<uuid>`, dot-free — it is a vault-key segment). Injected for determinism in tests. */
+  genProxyProfileId?: () => string;
   /**
    * True when a connection is pinned to a LIVE session (TASK.45 W10 delete-guard).
    * Main injects `(id) => manager.pinnedConnectionIds().has(id)`. Absent = no live
@@ -300,6 +324,11 @@ const connectionCreateSchema = z
     // trust boundary — the persisted schema stays lenient so one hand-edited
     // value can never corrupt the whole document (settings/schema.ts).
     proxyUrl: z.string().refine(isProxyUrl).optional(),
+    // Proxy-registry reference (TASK.141). Shape only here — `"direct"` or an
+    // existing profile id is checked in the handler, which is where the registry
+    // is in hand. Carried on CREATE so a new connection's proxy choice is saved
+    // atomically with the connection, never as a second call that can be lost.
+    proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
     authOptional: z.boolean().optional(),
     setActive: z.boolean().optional(),
@@ -319,6 +348,10 @@ const connectionUpdateSchema = z
     // `transport` above; a non-empty value must pass the strict `isProxyUrl`
     // gate before it can reach disk.
     proxyUrl: z.union([z.string().refine(isProxyUrl), z.literal("")]).optional(),
+    // Proxy-registry reference (TASK.141) with the same `""` clear sentinel;
+    // `"legacy"` additionally requests the one-shot conversion of this
+    // connection's own legacy `proxyUrl` into a real profile.
+    proxyRef: z.string().optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
     // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
@@ -336,6 +369,43 @@ const engineProxySetSchema = z
   .object({
     engine: z.enum(["codex", "claude"]),
     proxyUrl: z.union([z.string().refine(isProxyUrl), z.literal("")]),
+  })
+  .strict();
+
+// ── proxy-registry payload schemas (TASK.141) ──
+
+/**
+ * A profile as the editor submits it. `url` is held to `isProxyProfileUrl`, i.e.
+ * `isProxyUrl` PLUS "no userinfo": credentials belong in `login` + the vault, and
+ * a `user:pass@` typed into the host field would put a password straight back
+ * into the 0644 settings.json this slice exists to take it out of. `id` is
+ * dot-free because it is a vault-key segment.
+ */
+const proxyProfileUpsertSchema = z
+  .object({
+    id: z.string().min(1).refine((value) => !value.includes(".")).optional(),
+    name: z.string().min(1),
+    mode: z.enum(["system", "manual"]),
+    url: z.string().refine(isProxyProfileUrl).optional(),
+    noProxy: z.string().optional(),
+    login: z.string().optional(),
+  })
+  .strict();
+
+const proxyProfileDeleteSchema = z.object({ id: z.string().min(1) }).strict();
+
+/** The serialised scope identity (`ProxyScopeId`) — `.strict()` per variant, so an unknown scope shape is refused rather than half-read. */
+const proxyScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("app") }).strict(),
+  z.object({ kind: z.literal("connection"), connectionId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("engine"), engine: z.enum(["codex", "claude"]) }).strict(),
+]);
+
+/** `ref: null` = remove the scope's ref (and its legacy string) — "inherit the rung below". */
+const proxyRefSetSchema = z
+  .object({
+    scope: proxyScopeSchema,
+    ref: z.union([z.string().min(1), z.null()]),
   })
   .strict();
 
@@ -655,6 +725,10 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
   if (!isKnownSecretKey(key, deps.catalogIds ?? [])) {
     return { ok: false, reason: "invalid" };
   }
+  const proxyMatch = PROXY_PROFILE_SECRET_KEY_RE.exec(key);
+  if (proxyMatch !== null) {
+    return setProxyProfilePassword(deps, key, proxyMatch[1] ?? "", parsed.data.value);
+  }
   const connMatch = CONNECTION_SECRET_KEY_RE.exec(key);
   if (connMatch === null) {
     return { ok: false, reason: "invalid" }; // legacy-shaped key: no longer a write target
@@ -712,6 +786,22 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
   const { key } = parsed.data;
   if (!isKnownSecretKey(key, deps.catalogIds ?? [])) {
     return { ok: false, reason: "invalid" };
+  }
+  if (isProxyProfileSecretKey(key)) {
+    // A proxy password clears with no membership check and no health reset: an
+    // orphaned key stays removable (the connection-key precedent), and a
+    // connection's `lastHealth` is not evidence about a proxy password — the
+    // path itself did not move.
+    return withSettingsFileLock(deps.settingsPath, async () => {
+      const loaded = await loadSettings(deps.settingsPath, deps.logger);
+      if (loaded.readOnly) {
+        return { ok: false, reason: "read_only" };
+      }
+      await deps.vault.clearSecret(key);
+      const snapshot = await snapshotFrom(deps, loaded.settings, false);
+      await emitMutation(deps, snapshot);
+      return { ok: true, snapshot };
+    });
   }
   const connMatch = CONNECTION_SECRET_KEY_RE.exec(key);
   if (connMatch === null) {
@@ -1168,6 +1258,17 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     if (loaded.readOnly) {
       return { ok: false, reason: "read_only" };
     }
+    // Registry membership at the trust boundary (TASK.141). `"legacy"` is
+    // meaningless here and refused rather than silently ignored: a connection
+    // being created has no legacy string to convert, so a caller sending it is
+    // confused about what it is asking for.
+    if (
+      req.proxyRef !== undefined &&
+      req.proxyRef !== PROXY_REF_DIRECT &&
+      findProxyProfile(loaded.settings, req.proxyRef) === undefined
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
     const id = (deps.genConnectionId ?? defaultConnectionId)();
     const connection: ProviderConnection = {
       id,
@@ -1177,6 +1278,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.transport !== undefined ? { transport: req.transport } : {}),
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
       ...(req.proxyUrl !== undefined ? { proxyUrl: req.proxyUrl } : {}),
+      ...(req.proxyRef !== undefined ? { proxyRef: req.proxyRef } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
     };
@@ -1222,6 +1324,34 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // TASK.132: same `""`-sentinel normalization as `transport`, for the same
     // reason — `""` never lands on disk as a value.
     const normalizedProxyUrl = req.proxyUrl === "" ? undefined : req.proxyUrl;
+    // TASK.141: the ref request is resolved BEFORE the connection is rebuilt,
+    // because a `"legacy"` conversion writes into the REGISTRY section and the
+    // resulting id is what the connection then references. `draft` is a shallow
+    // copy — `importLegacyProxy` assigns a fresh `network` object onto it, so
+    // `loaded.settings` stays the untouched "before" the health diff compares
+    // against. `undefined` = the field was not sent; `null` = clear it.
+    const draft: AnycodeSettings = { ...loaded.settings };
+    let normalizedProxyRef: string | null | undefined;
+    let importedPassword: string | undefined;
+    if (req.proxyRef !== undefined) {
+      if (req.proxyRef === "") {
+        normalizedProxyRef = null;
+      } else if (req.proxyRef === PROXY_REF_LEGACY) {
+        const imported =
+          existing.proxyUrl === undefined
+            ? undefined
+            : importLegacyProxy(draft, existing.proxyUrl, deps.genProxyProfileId);
+        if (imported === undefined) {
+          return { ok: false, reason: "invalid" };
+        }
+        normalizedProxyRef = imported.profileId;
+        importedPassword = imported.password;
+      } else if (req.proxyRef !== PROXY_REF_DIRECT && findProxyProfile(draft, req.proxyRef) === undefined) {
+        return { ok: false, reason: "invalid" };
+      } else {
+        normalizedProxyRef = req.proxyRef;
+      }
+    }
     // TASK.45 §3 (Фаза 3): editing a significant ENDPOINT field invalidates the
     // last observed health — a health status confirmed against the OLD
     // model/transport/baseUrl must not linger under the new one. A label-only
@@ -1233,7 +1363,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       (req.model !== undefined && req.model !== existing.model) ||
       (req.transport !== undefined && normalizedTransport !== existing.transport) ||
       (req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl) ||
-      (req.proxyUrl !== undefined && normalizedProxyUrl !== existing.proxyUrl);
+      (req.proxyUrl !== undefined && normalizedProxyUrl !== existing.proxyUrl) ||
+      // A ref change moves the network path exactly the way a `proxyUrl` change
+      // does — including a change to `direct`, which is a path, not an absence.
+      (normalizedProxyRef !== undefined && normalizedProxyRef !== (existing.proxyRef ?? null));
     // A baseUrl change re-points the connection at a DIFFERENT endpoint, so a
     // live-fetched model list from the old one must not linger (same staleness
     // rationale as the lastHealth reset, scoped to baseUrl only — a model/
@@ -1283,17 +1416,43 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         updatedConnection.proxyUrl = normalizedProxyUrl;
       }
     }
+    // Proxy REF write (TASK.141). Applied AFTER the `proxyUrl` branch above and
+    // deleting that key unconditionally: the ref outranks the legacy string on
+    // the same scope, and a dead string left behind would resurrect the old
+    // proxy the moment the ref is cleared.
+    if (normalizedProxyRef !== undefined) {
+      delete updatedConnection.proxyUrl;
+      if (normalizedProxyRef === null) {
+        delete updatedConnection.proxyRef;
+      } else {
+        updatedConnection.proxyRef = normalizedProxyRef;
+      }
+    }
     if (baseUrlChanged) {
       delete updatedConnection.models;
       delete updatedConnection.modelsFetchedAt;
     }
+    if (importedPassword !== undefined && typeof normalizedProxyRef === "string") {
+      // Same posture as the ref-set handler: a conversion whose password cannot
+      // be stored is refused whole rather than persisting a profile that
+      // silently authenticates against nothing. Nothing is on disk yet.
+      const stored = await deps.vault.setSecret(proxyProfileSecretKey(normalizedProxyRef), importedPassword, {
+        allowWeak: loaded.settings.security.allowWeakSecretStorage,
+      });
+      if (!stored.ok) {
+        return { ok: false, reason: stored.reason };
+      }
+    }
     const provider: ProviderSettingsV2 = {
-      ...loaded.settings.provider,
-      connections: loaded.settings.provider.connections.map((connection) =>
+      ...draft.provider,
+      connections: draft.provider.connections.map((connection) =>
         connection.id === req.id ? updatedConnection : connection,
       ),
     };
-    return persistProvider(deps, loaded.settings, provider);
+    // `draft`, not `loaded.settings`: a `"legacy"` conversion put the new profile
+    // in `draft.network`, and persisting the pre-import document would save a
+    // connection referencing a profile that was never written.
+    return persistProvider(deps, draft, provider);
   });
 }
 
@@ -1528,6 +1687,250 @@ export async function handleEngineProxySet(deps: SettingsIpcDeps, raw: unknown):
   });
 }
 
+// ── proxy registry (TASK.141) ──
+
+/**
+ * Stores ONE profile's password in the vault. Split out of `handleSetSecret`
+ * because a proxy password shares nothing with a provider credential beyond the
+ * file it lands in: no connection graph, no auth-kind suffix to match, and no
+ * `lastHealth` to invalidate (storing a password does not move the network
+ * path — the profile it belongs to is unchanged).
+ *
+ * Registry membership IS required: the vault must not accumulate secrets for
+ * profiles that do not exist, and this is the boundary where that is checked
+ * (the `SecretKey` template type deliberately cannot express it).
+ */
+async function setProxyProfilePassword(
+  deps: SettingsIpcDeps,
+  key: SecretKey,
+  profileId: string,
+  value: string,
+): Promise<SettingsMutationResult> {
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    if (findProxyProfile(loaded.settings, profileId) === undefined) {
+      return { ok: false, reason: "not_found" };
+    }
+    const result = await deps.vault.setSecret(key, value, {
+      allowWeak: loaded.settings.security.allowWeakSecretStorage,
+    });
+    if (!result.ok) {
+      return { ok: false, reason: result.reason };
+    }
+    const snapshot = await snapshotFrom(deps, loaded.settings, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
+  });
+}
+
+/**
+ * Resets `lastHealth` to `unchecked` on every connection whose EFFECTIVE proxy
+ * path moved between `before` and the draft (TASK.141 §7) — the direct
+ * continuation of TASK.132's "the path changed ⇒ the health reading is stale".
+ *
+ * Fingerprinted per connection over ITS OWN ladder (connection rung, then app),
+ * so editing the profile an app default points at also stales every connection
+ * that INHERITS that default, while a rename — which changes no path — stales
+ * nothing. Engine `lastCheck` is deliberately untouched: it records disk facts
+ * (binary found, version, signed-in), and no proxy change can stale those
+ * (TASK.139 §4).
+ */
+function resetHealthForMovedProxyPaths(before: AnycodeSettings, draft: AnycodeSettings, at: string): void {
+  for (const connection of draft.provider.connections) {
+    const chain = hostForkProxyChain(connection.id);
+    if (proxyPathFingerprint(before, chain) !== proxyPathFingerprint(draft, chain)) {
+      connection.lastHealth = { status: "unchecked", at };
+    }
+  }
+}
+
+/** Commits a proxy-mutated draft: persist, project, broadcast. */
+async function persistProxyDraft(deps: SettingsIpcDeps, draft: AnycodeSettings): Promise<SettingsMutationResult> {
+  await saveSettings(deps.settingsPath, draft);
+  const snapshot = await snapshotFrom(deps, draft, false);
+  await emitMutation(deps, snapshot);
+  return { ok: true, snapshot };
+}
+
+/**
+ * proxy-profile-upsert: create a profile (no `id` — main mints one and returns
+ * it as `createdProxyProfileId`) or edit/rename an existing one.
+ *
+ * Names are unique case-insensitively because they are the ONLY thing the
+ * pickers show — two profiles called "Corp" make the dropdown a coin flip. The
+ * id is never derived from the name, so a rename is a pure display change: the
+ * vault key and every scope's ref keep pointing at the same profile, which is
+ * exactly why a rename cannot lose the password.
+ *
+ * `url` is dropped for a `system` profile rather than refused: the mode decides
+ * where the path comes from, and a leftover host/port from a mode switch in the
+ * editor is stale data, not user intent.
+ */
+export async function handleProxyProfileUpsert(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
+  const parsed = proxyProfileUpsertSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid" };
+  }
+  const req = parsed.data;
+  const name = req.name.trim();
+  if (name === "") {
+    return { ok: false, reason: "invalid" };
+  }
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const existing = req.id === undefined ? undefined : findProxyProfile(loaded.settings, req.id);
+    if (req.id !== undefined && existing === undefined) {
+      return { ok: false, reason: "not_found" };
+    }
+    const clash = proxyProfiles(loaded.settings).some(
+      (profile) => profile.id !== req.id && profile.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (clash) {
+      return { ok: false, reason: "invalid" };
+    }
+    const id = req.id ?? (deps.genProxyProfileId ?? defaultProxyProfileId)();
+    const url = req.mode === "manual" ? req.url?.trim() ?? "" : "";
+    const noProxy = req.noProxy?.trim() ?? "";
+    const login = req.login?.trim() ?? "";
+    // Only-truthy-on-disk, the discipline every optional settings field here
+    // follows: an emptied editor field removes the key instead of persisting "".
+    const profile: ProxyProfile = {
+      id,
+      name,
+      mode: req.mode,
+      ...(url !== "" ? { url } : {}),
+      ...(noProxy !== "" ? { noProxy } : {}),
+      ...(login !== "" ? { login } : {}),
+    };
+    const draft = structuredClone(loaded.settings);
+    const registry = proxyProfiles(draft);
+    draft.network = {
+      ...draft.network,
+      proxyProfiles:
+        existing === undefined
+          ? [...registry, profile]
+          : registry.map((entry) => (entry.id === id ? profile : entry)),
+    };
+    resetHealthForMovedProxyPaths(loaded.settings, draft, (deps.now ?? defaultNowIso)());
+    const result = await persistProxyDraft(deps, draft);
+    return result.ok && existing === undefined ? { ...result, createdProxyProfileId: id } : result;
+  });
+}
+
+/**
+ * proxy-profile-delete: remove a profile and its vault password.
+ *
+ * REFUSED while any scope still references it, with the consumers named. The
+ * alternative — silently detaching the refs — would re-route scopes the user is
+ * not looking at, and the worst outcome of that is traffic leaving the corporate
+ * proxy: a leak class, not an inconvenience. The product already takes this
+ * shape elsewhere (a connection pinned to a live session refuses deletion too).
+ *
+ * A clean delete clears the vault entry FIRST, then the metadata — the
+ * connection-delete ordering and for the same reason: a crash between the two
+ * leaves a visible profile with no password, never an orphan secret nothing can
+ * ever reach again.
+ */
+export async function handleProxyProfileDelete(deps: SettingsIpcDeps, raw: unknown): Promise<ProxyProfileDeleteResult> {
+  const parsed = proxyProfileDeleteSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid" };
+  }
+  const id = parsed.data.id;
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    if (findProxyProfile(loaded.settings, id) === undefined) {
+      return { ok: false, reason: "not_found" };
+    }
+    const consumers = proxyProfileConsumers(loaded.settings, id);
+    if (consumers.length > 0) {
+      return { ok: false, reason: "in_use", consumers };
+    }
+    await deps.vault.clearSecret(proxyProfileSecretKey(id));
+    const draft = structuredClone(loaded.settings);
+    const remaining = proxyProfiles(draft).filter((profile) => profile.id !== id);
+    draft.network = { ...draft.network, proxyProfiles: remaining };
+    if (remaining.length === 0) {
+      delete draft.network.proxyProfiles;
+    }
+    if (Object.keys(draft.network).length === 0) {
+      delete draft.network;
+    }
+    const result = await persistProxyDraft(deps, draft);
+    return result.ok ? { ok: true, snapshot: result.snapshot } : { ok: false, reason: "invalid" };
+  });
+}
+
+/**
+ * proxy-ref-set: point the APP or an ENGINE scope at a profile / at `direct` /
+ * back at "inherit".
+ *
+ * A CONNECTION scope is refused here by design: its ref rides
+ * `connection-create`/`connection-update`, so a new connection saves its proxy
+ * choice atomically with itself instead of through a two-phase "create it, then
+ * attach the proxy" dance that can be interrupted halfway.
+ *
+ * `PROXY_REF_LEGACY` is the conversion request: "keep what this scope's legacy
+ * `proxyUrl` says, as a real profile". It runs the ONE shared `importLegacyProxy`
+ * (deduped by URL + login), so the same corporate string on three scopes
+ * converges on one profile instead of minting three twins.
+ */
+export async function handleProxyRefSet(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
+  const parsed = proxyRefSetSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid" };
+  }
+  const { scope, ref } = parsed.data;
+  if (scope.kind === "connection") {
+    return { ok: false, reason: "invalid" };
+  }
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const draft = structuredClone(loaded.settings);
+    const binding = PROXY_SCOPE_BINDINGS[scope.kind];
+    let effective: string | null = ref;
+    let password: string | undefined;
+    if (ref === PROXY_REF_LEGACY) {
+      const legacyUrl = binding.read(draft, scope).legacyUrl;
+      const imported = legacyUrl === undefined ? undefined : importLegacyProxy(draft, legacyUrl, deps.genProxyProfileId);
+      if (imported === undefined) {
+        return { ok: false, reason: "invalid" };
+      }
+      effective = imported.profileId;
+      password = imported.password;
+    } else if (ref !== null && ref !== PROXY_REF_DIRECT && findProxyProfile(draft, ref) === undefined) {
+      return { ok: false, reason: "invalid" };
+    }
+    binding.write(draft, scope, effective);
+    if (password !== undefined && effective !== null) {
+      const stored = await deps.vault.setSecret(proxyProfileSecretKey(effective), password, {
+        allowWeak: draft.security.allowWeakSecretStorage,
+      });
+      // The password is the reason the import is worth doing; refusing to store
+      // it and persisting the profile anyway would leave a profile that silently
+      // authenticates against nothing. Nothing has been written yet, so this
+      // refusal touches neither the file nor the vault.
+      if (!stored.ok) {
+        return { ok: false, reason: stored.reason };
+      }
+    }
+    resetHealthForMovedProxyPaths(loaded.settings, draft, (deps.now ?? defaultNowIso)());
+    return persistProxyDraft(deps, draft);
+  });
+}
+
 /**
  * Wires the frozen channels onto ipcMain. A payload the handler cannot validate
  * is answered with that channel's safe negative (never thrown across the bridge).
@@ -1553,4 +1956,10 @@ export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vau
   // Engine-level proxy (TASK.139): main-authoritative, additive — the only write
   // path the engine panes' proxy field may use.
   ipcMain.handle(ENGINE_PROXY_SET_CHANNEL, (_event, raw: unknown) => handleEngineProxySet(deps, raw));
+  // Proxy registry (TASK.141): the profile CRUD + the scope-ref write. The
+  // CHECK channel is not here — it spawns a probe child and lives in
+  // main/network-ipc.ts, which has no business inside the settings lock.
+  ipcMain.handle(PROXY_PROFILE_UPSERT_CHANNEL, (_event, raw: unknown) => handleProxyProfileUpsert(deps, raw));
+  ipcMain.handle(PROXY_PROFILE_DELETE_CHANNEL, (_event, raw: unknown) => handleProxyProfileDelete(deps, raw));
+  ipcMain.handle(PROXY_REF_SET_CHANNEL, (_event, raw: unknown) => handleProxyRefSet(deps, raw));
 }

@@ -20,6 +20,16 @@
  * SettingsSnapshot whose `secrets` are `SecretStatus` (set/source/tier only).
  */
 
+// TASK.141: the ONLY import in this module, and a TYPE one — `verbatimModuleSyntax`
+// erases the statement outright, so the zero-runtime-import rule above is intact
+// and no bundle grows by a byte. The single VALUE edge between the two modules
+// runs the other way (shared/proxy.ts imports `isProxyUrl` from here), so there
+// is no runtime cycle either. Redeclaring `ProxyProfile` structurally here — the
+// `AlwaysAllowRule` precedent — was rejected: the registry is written by main and
+// read by main, host AND renderer, and two hand-synced copies of a persisted
+// shape is exactly the drift that silently drops a field on a round-trip.
+import type { ProxyProfile } from "./proxy.js";
+
 // ── invoke channels (5 — frozen; named consistently with shared/tabs.ts) ──
 
 /** invoke channel: read the full SettingsSnapshot. */
@@ -195,6 +205,24 @@ export interface ProviderConnection {
    * discipline as `transport`/`authOptional`).
    */
   proxyUrl?: string;
+  /**
+   * Reference into the named proxy registry (TASK.141) — the REPLACEMENT for
+   * the verbatim `proxyUrl` above. Absent = inherit the app rung; `"direct"` =
+   * this connection explicitly uses no proxy (the one falsy-MEANING string this
+   * field persists, and a value rather than a `false`, so only-truthy-on-disk
+   * still holds); a `proxy-<uuid>` id = that profile.
+   *
+   * Beats `proxyUrl` on the SAME connection when both are present. The legacy
+   * string keeps working untouched — there is no migration on READ; the first
+   * write through the picker converts it into a real profile
+   * (`importLegacyProxy`, deduped by URL) and removes the legacy key.
+   *
+   * A ref naming a profile that no longer exists resolves to "direct" for this
+   * connection, NEVER to a fall-through into the app's proxy: an explicit rung
+   * with a broken value must not quietly route this connection's traffic into
+   * someone else's proxy.
+   */
+  proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
   /**
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
@@ -253,7 +281,15 @@ export interface ActiveProviderView {
   model?: string;
   baseUrl?: string;
   transport?: ProviderTransportId;
-  /** The active connection's HTTP(S) proxy (TASK.132); `buildHostEnv` reads it from here so every branch and every per-tab pin resolves it uniformly. */
+  /**
+   * The active connection's LEGACY HTTP(S) proxy string (TASK.132), projected
+   * for display. No longer the fork env's source: TASK.141 resolves the fork's
+   * network path through the proxy LADDER (`resolveProxyLadder` over the active
+   * connection's rung, then the app's), because a connection can now express
+   * "inherit", "direct" or "profile X" — none of which a single string can
+   * carry. The per-tab-pin property is unchanged: the ladder keys off
+   * `activeConnectionId`, the same handle this projection does.
+   */
   proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
 }
@@ -349,6 +385,20 @@ export interface AnycodeSettings {
      * Only a non-empty value is persisted (only-truthy-on-disk).
      */
     proxyUrl?: string;
+    /**
+     * Reference into the named proxy registry (TASK.141) — the replacement for
+     * `proxyUrl` above, with the identical three-state semantics as
+     * `ProviderConnection.proxyRef`: absent = inherit the app rung, `"direct"` =
+     * this engine's children explicitly use no proxy, a `proxy-<uuid>` id = that
+     * profile. Beats `proxyUrl` on this same block; a dangling id resolves to
+     * "direct" for this engine, never to a fall-through into the app rung.
+     *
+     * The `"direct"` case is what the `PROXY_CARRIER_DIRECT` sentinel exists
+     * for (shared/engines.ts): the child-env builder has to actively DELETE the
+     * proxy family the connection's passthrough put there, and "delete nothing"
+     * would silently leave the engine on the connection's proxy.
+     */
+    proxyRef?: string;
   };
   /**
    * Claude engine onboarding metadata (SLICE-CC A1, cut §1.2, additive-optional;
@@ -386,6 +436,25 @@ export interface AnycodeSettings {
      * Only a non-empty value is persisted (only-truthy-on-disk).
      */
     proxyUrl?: string;
+    /** Reference into the named proxy registry (TASK.141) — the exact mirror of `codex.proxyRef`; read that field's doc. */
+    proxyRef?: string;
+  };
+  /**
+   * Named proxy profiles + the APP-level reference (TASK.141, редакция 2;
+   * additive-optional, `version` NOT bumped — a settings.json with no `network`
+   * key round-trips byte-identically and every child env stays byte-for-byte
+   * what it was before this slice).
+   *
+   * `proxyProfiles` is the ONE registry every scope references. `proxyRef` is
+   * the application-wide default rung, the bottom of every ladder. On THIS scope
+   * — and only this one — "no proxy" and "inherit" mean the same thing (there is
+   * nothing below the app), so the picker's "No proxy" DELETES the key rather
+   * than persisting `"direct"`; a `"direct"` that reaches the file by hand is
+   * read the same way regardless.
+   */
+  network?: {
+    proxyProfiles?: ProxyProfile[];
+    proxyRef?: string;
   };
   /**
    * Browser-preview settings (night-track wave-1 cut §1(e)/§2.7, TASK.96
@@ -493,7 +562,21 @@ export type SecretKey =
   // explicitly for readability; catalog/connection membership is enforced at the
   // main boundary via `isKnownSecretKey`).
   | `provider.connection.${string}.apiKey`
-  | `provider.connection.${string}.oauth`;
+  | `provider.connection.${string}.oauth`
+  // ── proxy-profile password (TASK.141 §5) ──
+  //   `proxy.profile.<profileId>.password` — the authenticated-proxy password of
+  // ONE registry profile. Keyed by the profile's immutable `id` (which carries
+  // no dots, so it is a `[^.]+` segment exactly like a connectionId), which is
+  // what makes a rename lose nothing. Registry membership is enforced at the
+  // CRUD boundary, same as connection-graph membership above.
+  //
+  // Custody, stated plainly and not oversold: the vault takes the password out
+  // of the 0644 settings.json (and out of backups and dotfile syncs). It does
+  // NOT take it out of the env — the composed `http://user:pass@host:port` still
+  // rides `HTTPS_PROXY` into every child, where a model running `env` can read
+  // it. That half is TASK.135's open decision, and this slice widens TASK.135's
+  // perimeter to cover profiles and vault-sourced passwords.
+  | `proxy.profile.${string}.password`;
 
 /** What will actually win when a host is spawned (env-override is visible to the UI). */
 export type SecretSource = "env" | "vault" | "plaintext" | "none";
@@ -610,6 +693,13 @@ export type SettingsMutationResult =
        * diffing the snapshot to guess which entry is new.
        */
       createdConnectionId?: string;
+      /**
+       * The profile id `proxy-profile-upsert` just minted (TASK.141) —
+       * additive/optional, exact sibling of `createdConnectionId` above and
+       * populated ONLY by that channel. Lets "Create profile…" attach the new
+       * profile to the scope it was opened from without diffing the registry.
+       */
+      createdProxyProfileId?: string;
     }
   | { ok: false; reason: SettingsMutationReason };
 
@@ -672,6 +762,14 @@ export interface ConnectionCreateRequest {
   baseUrl?: string;
   /** HTTP(S) proxy for this connection (see `ProviderConnection.proxyUrl`); validated against `isProxyUrl` at the main boundary, omitted = no proxy. */
   proxyUrl?: string;
+  /**
+   * Proxy-registry reference for this connection (TASK.141): `"direct"` or an
+   * existing profile id, validated at the main boundary; omitted = inherit the
+   * app rung. Carried on the CREATE payload (rather than set by a follow-up
+   * call) so a new connection's proxy choice lands atomically with the
+   * connection — no window in which it exists un-proxied.
+   */
+  proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
   /** "No API key" declaration (see `ProviderConnection.authOptional`); only `true` is persisted. */
   authOptional?: boolean;
@@ -701,6 +799,20 @@ export interface ConnectionUpdateRequest {
    * `proxyUrl`.
    */
   proxyUrl?: string;
+  /**
+   * Proxy-registry reference (TASK.141), same `""`-sentinel convention as
+   * `transport`/`proxyUrl` above: absent = keep the current value, `"direct"`
+   * or an existing profile id = set it, `""` = clear the ref back to "inherit
+   * the app rung". `""` is never persisted; clearing removes BOTH the ref and
+   * the legacy `proxyUrl` key, so a legacy string cannot resurrect from under a
+   * ref the user just removed.
+   *
+   * `"legacy"` is accepted as a one-shot conversion request: it means "keep
+   * what this connection's `proxyUrl` already says, but as a real profile" —
+   * main runs `importLegacyProxy` (deduped by URL, so three connections sharing
+   * a corporate string converge on ONE profile) and persists the minted id.
+   */
+  proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
   /**
    * "No API key" declaration: absent = keep the current value, `true` = set,
