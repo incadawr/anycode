@@ -1763,6 +1763,50 @@ export class TabHostManager {
     });
   }
 
+  /**
+   * Re-binds a running tab to another provider connection (TASK.106 cut-2 §D1):
+   * the provider is baked into the fork env (base env, `ANYCODE_API_KEY`,
+   * `ANYCODE_MODEL`, the proxy family — TASK.132/TASK.133 measured that mutating
+   * a live process's env does NOT take effect), so the only honest switch is the
+   * one `relocateTab` already performs for a workspace move — drain children,
+   * shut the host down, mutate the tab's own fields, re-spawn on the resume path,
+   * deliver a fresh port. The session id, tab row, and terminal panel all survive;
+   * the transcript re-hydrates from history exactly as it does after a respawn.
+   *
+   * Fail-closed BEFORE any mutation: a target whose per-connection fork env is not
+   * primed refuses `not_ready` with the tab still running on its original host —
+   * mutating first would leave the tab shut down and unspawnable (`spawnTabHost`
+   * refuses a missing env, W10-FIX F3), i.e. a broken tab as the price of a typo.
+   *
+   * The breakers do not count this: `shutdownTabHost` marks the tab `closing`, and
+   * `handleExit` returns on that guard before `decideRespawn` ever runs.
+   * `rapidRespawns` is reset for the same reason `relocateTab` resets it — a new
+   * process on a new account is a new epoch, not a continuation of a crash streak.
+   */
+  async rebindTab(tab: TabHost, connectionId: string): Promise<{ ok: true } | { ok: false; reason: "not_ready" }> {
+    if (this.env(connectionId) === undefined) {
+      this.logger.error(
+        `[main] tab ${tab.tabId} rebind to ${connectionId} refused: no primed fork env for that connection`,
+      );
+      return { ok: false, reason: "not_ready" };
+    }
+    // A rebind is as terminal for an in-flight child as a rehost is (cut §0.6):
+    // the parent is about to run on a different account entirely.
+    await this.drainChildren(tab);
+    await this.shutdownTabHost(tab);
+    tab.connectionId = connectionId;
+    // The target connection's own env model is the authority for the new host
+    // (core reads its model off the fork env on a resume boot); a stale per-fork
+    // override from an imported session must not follow the tab to another account.
+    delete tab.modelOverride;
+    tab.initialResume = true;
+    tab.rapidRespawns = 0;
+    tab.state = "running";
+    this.spawnTabHost(tab, { firstSpawn: false });
+    this.deliverTabPort(tab);
+    return { ok: true };
+  }
+
   /** Gracefully replaces one host with a resume host rooted at the transition target. */
   private async relocateTab(
     tab: TabHost,

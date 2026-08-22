@@ -1564,6 +1564,12 @@ void app.whenReady().then(async () => {
     // path (`resolveResumePin` above) already uses to prime a stored pin, so a
     // non-active pick is no longer the only pin path that skips priming.
     ensureConnectionEnv: ensurePinnedEnv,
+    // TASK.106 cut-2 (design doc §D3/D5): the model the TARGET connection is
+    // currently configured with — handleTabRebind stamps it over the session
+    // row together with the new pin, so the row answers the posture the
+    // re-bound host actually boots (the core resume boot reads its model off
+    // the fork env, which after the rebind IS this connection's model).
+    readConnectionModel: (id) => connectionById(currentSettings(), id)?.model,
     // S4-1 arm 2: consume-once import-model override for the first resume of an
     // imported session (see the holder above). Undefined until the rollout IPC
     // wires it below; harmless (no override) for any resume before then.

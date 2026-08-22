@@ -730,6 +730,20 @@ export function MessageList({
                   )}
                 </div>
               );
+            // TASK.106 cut-2 §D5: the provider switch reads as what it is — a
+            // session boundary (the host really was respawned), so it borrows
+            // the loop-end divider's register rather than an error tint.
+            case "connection_changed":
+              return (
+                <div
+                  key={block.id}
+                  data-block-id={block.id}
+                  className={`message message-loop-end${enterClass(block.id)}`}
+                >
+                  {`Provider switched: ${block.fromLabel} → ${block.toLabel} · ${block.model}`}
+                  {block.effortResetTo !== undefined ? ` · effort reset to ${block.effortResetTo}` : ""}
+                </div>
+              );
             case "output_truncated":
               return <div key={block.id} className="message message-error" role="alert">Output truncated at the model token limit. Raise ANYCODE_MAX_OUTPUT_TOKENS or split the write.</div>;
             case "preview_console":
