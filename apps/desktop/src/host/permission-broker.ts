@@ -55,6 +55,34 @@ import type { HostToUiMessage, WireToolMeta } from "../shared/protocol.js";
 export const PERMISSION_ASK_TIMEOUT_MS = 120_000;
 
 /**
+ * Deny reasons for the two "nobody answered" paths (TASK.138). These strings are
+ * read by a MODEL, not by a human: the dispatcher hands the deny reason back as
+ * the tool result. The previous wording ("permission request timed out after
+ * 120000ms") read like an infrastructure hiccup, and a live run showed what that
+ * costs — the model retried four spellings of the same command and then started
+ * debugging its PATH, burning 120 s per attempt. So both texts state three things
+ * explicitly: the refusal is not on the merits, the command itself did not fail,
+ * and rephrasing it will not help.
+ */
+function unansweredDenyReason(toolName: string, timeoutMs: number): string {
+  return (
+    `${toolName}: no one answered the approval request (it expired after ${timeoutMs}ms). ` +
+    `This is NOT a refusal on the merits and NOT a failure of the command — there is no human at the screen. ` +
+    `Retrying this command, or a rephrased equivalent, will be denied the same way. ` +
+    `Continue with work that needs no approval, or stop and report exactly what is blocked.`
+  );
+}
+
+function unattendedDenyReason(toolName: string): string {
+  return (
+    `${toolName}: denied without asking — an earlier approval request in this session expired unanswered, ` +
+    `so the session is treated as unattended. This is NOT a refusal on the merits and NOT a failure of the command. ` +
+    `Asking resumes as soon as a human interacts with the session. ` +
+    `Continue with work that needs no approval, or stop and report exactly what is blocked.`
+  );
+}
+
+/**
  * Deadline for an ExitPlanMode ask (TASK.27). The generic 120 s suits a
  * one-glance "allow this command?"; an ExitPlanMode ask is a human READING a
  * complete implementation plan, and a fail-closed deny mid-read would be
@@ -105,12 +133,34 @@ export class IpcPermissionBroker implements PermissionBroker {
   /** requestId of the single `permission_request` currently in front of the UI, or null when the slot is free. */
   private current: string | null = null;
 
+  /**
+   * "Nobody is at the screen" latch (TASK.138). Armed by the first ask that
+   * expires unanswered, disarmed by a deliberate human act — answering a
+   * permission prompt or typing a message. A UI merely attaching is NOT such a
+   * proof: a renderer re-attaching on its own would disarm the latch on a run
+   * nobody is actually watching. While armed, an ask is denied
+   * immediately instead of being presented: waiting a second full deadline for
+   * an answer that already failed to arrive buys nothing and costs the run its
+   * wall clock — the observed failure mode was four serial asks burning 120 s
+   * each, and a subagent losing its whole 600 s budget to unanswered asks.
+   *
+   * Fail-closed either way: the latch only ever turns a slow deny into a fast
+   * one, never an ask into an allow.
+   */
+  private unattended = false;
+
   constructor(
     private readonly emit: (message: HostToUiMessage) => void,
     private readonly timeoutMs: number = PERMISSION_ASK_TIMEOUT_MS,
   ) {}
 
   requestPermission(request: PermissionRequest): Promise<PermissionDecision> {
+    if (this.unattended) {
+      return Promise.resolve({
+        behavior: "deny",
+        reason: unattendedDenyReason(request.toolName),
+      });
+    }
     const requestId = randomUUID();
     return new Promise<PermissionDecision>((resolve) => {
       const entry: PendingAsk = { resolve, request, timer: null };
@@ -129,6 +179,9 @@ export class IpcPermissionBroker implements PermissionBroker {
    * dispatcher re-validates it against the tool schema.
    */
   handleResponse(requestId: string, behavior: "allow" | "deny", updatedInput?: unknown): void {
+    // A click is proof of a human — disarm before settling, and do it even for an
+    // unknown/already-settled requestId, since the click happened either way.
+    this.noteHumanPresent();
     const decision: PermissionDecision =
       behavior === "allow"
         ? updatedInput !== undefined
@@ -163,6 +216,20 @@ export class IpcPermissionBroker implements PermissionBroker {
     }
   }
 
+  /**
+   * Disarms the unattended latch (TASK.138). Called on a deliberate human act —
+   * answering a permission prompt (below) or typing a message (session.ts).
+   * Idempotent and safe to call when the latch was never armed.
+   */
+  noteHumanPresent(): void {
+    this.unattended = false;
+  }
+
+  /** Whether asks are currently short-circuited because nobody answered (diagnostics / tests). */
+  get isUnattended(): boolean {
+    return this.unattended;
+  }
+
   /** Number of asks currently awaiting a decision — shown + queued (diagnostics / tests). */
   get pendingCount(): number {
     return this.pending.size;
@@ -187,11 +254,14 @@ export class IpcPermissionBroker implements PermissionBroker {
     // queued ask still cannot start its clock before a human sees it.
     const timeoutMs = resolveAskTimeoutMs(entry.request.toolName, this.timeoutMs);
     entry.timer = setTimeout(() => {
+      // An expired ask is evidence that nobody is watching; every later ask in
+      // this session is denied outright until a human proves otherwise.
+      this.unattended = true;
       this.settle(
         requestId,
         {
           behavior: "deny",
-          reason: `${entry.request.toolName}: permission request timed out after ${timeoutMs}ms`,
+          reason: unansweredDenyReason(entry.request.toolName, timeoutMs),
         },
         "timeout",
       );

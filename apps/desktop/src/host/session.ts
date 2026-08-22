@@ -1078,6 +1078,10 @@ export class Session {
         }
         break;
       case "user_message":
+        // Typed input is proof that a human is at the screen (TASK.138): it
+        // disarms the broker's unattended latch, so a session that went quiet
+        // long enough to expire an ask starts asking again once its owner is back.
+        this.broker.noteHumanPresent();
         this.onUserMessage(message.requestId, message.text, message.images);
         break;
       case "cancel_turn":
