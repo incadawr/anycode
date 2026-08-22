@@ -10,6 +10,7 @@
  *
  *   | Event                         | Result                                    |
  *   |-------------------------------|-------------------------------------------|
+ *   | always-allow rule matches     | allow, never parked, no UI event          |
  *   | UI allow/deny                 | that decision, origin "ui"                |
  *   | timeout PERMISSION_ASK_TIMEOUT| deny, origin "timeout"                    |
  *   | turn cancel (session.denyAll) | deny, origin "turn_cancelled"             |
@@ -118,6 +119,34 @@ export function toWireToolMeta(metadata: ToolMetadata): WireToolMeta {
   };
 }
 
+/**
+ * The always-allow store, as the one method this broker needs (TASK.144).
+ * Structurally satisfied by core's `SessionPermissionRules`; kept as a narrow
+ * interface so the broker never imports the class, mirroring the
+ * `SessionPersistence`/`GitUiBridge` narrow-seam posture elsewhere in the host.
+ *
+ * WHO PASSES ONE, AND WHO MUST NOT:
+ *
+ *  - **Engine boots (codex, claude) DO.** `supportsCorePermissions` is false
+ *    for both (claude-engine.ts / codex-engine.ts), so their approval bridges
+ *    call `requestPermission` DIRECTLY — core's permission engine, and with it
+ *    `RuleAwarePermissionEngine`, is not in the path at all. Without this seam
+ *    a persisted `alwaysAllow` rule cannot reach an engine session by
+ *    construction, which is the whole defect TASK.144 names.
+ *  - **The core boot does NOT**, and this is load-bearing rather than an
+ *    omission. On the core path a rule has already been applied upstream
+ *    (`RuleAware(SafeCommand(Mode))`, host/index.ts), so re-checking here would
+ *    be redundant for every ordinary call — but NOT inert: the dispatcher
+ *    merges the engine ruling with a PreToolUse hook's by DECISION_RANK
+ *    (dispatch/dispatcher.ts), so a hook may raise an already-rule-allowed call
+ *    back up to `ask`. That upgrade is exactly the documented invariant "a
+ *    PreToolUse hook can still ask/deny regardless of a session rule"
+ *    (permissions/rules.ts header). A broker-side check would silently undo it.
+ */
+export interface PermissionRuleMatcher {
+  matches(toolName: string, input: unknown): boolean;
+}
+
 interface PendingAsk {
   resolve: (decision: PermissionDecision) => void;
   request: PermissionRequest;
@@ -152,9 +181,28 @@ export class IpcPermissionBroker implements PermissionBroker {
   constructor(
     private readonly emit: (message: HostToUiMessage) => void,
     private readonly timeoutMs: number = PERMISSION_ASK_TIMEOUT_MS,
+    private readonly rules: PermissionRuleMatcher | null = null,
   ) {}
 
   requestPermission(request: PermissionRequest): Promise<PermissionDecision> {
+    // Always-allow, engine edition (TASK.144). Answered here rather than parked,
+    // and silently — a rule-allowed call produces no `permission_request`, so
+    // the UI never sees a modal it would have to auto-dismiss. Mirrors
+    // RuleAwarePermissionEngine's own posture exactly: `ask` -> `allow`, never
+    // `deny` -> anything (a bridge that has already refused a call — Claude's
+    // read-only ExitPlanMode / AskUserQuestion denials — answers without ever
+    // reaching this method).
+    //
+    // Ordered BEFORE the unattended latch on purpose. The latch (TASK.138)
+    // answers "nobody is at the screen to resolve an ask"; a rule-matched call
+    // is not an ask — the human resolved it in advance, once, durably. Checking
+    // the latch first would switch every always-allow rule off the moment the
+    // latch arms, which is precisely the unattended run the rules exist to
+    // serve. This mirrors the core path, where RuleAware sits upstream of
+    // everything the broker does.
+    if (this.rules !== null && this.rules.matches(request.toolName, request.input)) {
+      return Promise.resolve({ behavior: "allow" });
+    }
     if (this.unattended) {
       return Promise.resolve({
         behavior: "deny",

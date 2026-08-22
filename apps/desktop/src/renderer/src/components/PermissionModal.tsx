@@ -52,7 +52,7 @@ import type { PermissionRuleAddRequest } from "../../../shared/settings.js";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { Markdown } from "./Markdown.js";
 import { X } from "./icons.js";
-import { commandBinary, sanitizeBashPattern } from "../permission-pattern.js";
+import { commandBinary, isCommandLineTool, sanitizeBashPattern } from "../permission-pattern.js";
 import { classifyBashCommandLine } from "@anycode/core/permissions/safe-command";
 import "../settings.css";
 
@@ -254,8 +254,12 @@ function capPreviewLines(text: string, maxLines: number): CappedPreview {
 /**
 
 
- * for a non-Bash tool, or a Bash call with no `command` string, means the
- * checkbox produces a bare `{toolName}` rule with no pattern field shown.
+ * for a non-command tool, or a command call with no `command` string, means
+ * the checkbox produces a bare `{toolName}` rule with no pattern field shown.
+ * TASK.144: "command tool" is `isCommandLineTool`, so a Codex session's
+ * `CodexExec` ask gets the same suggestion + editable pattern field a `Bash`
+ * ask does — without it, checking the box in a Codex session could only ever
+ * mint a patternless allow-every-command rule.
  *
  * Slice P7.16 §4.2: the "first token" is `commandBinary`, not a naive
  * `split(/\s+/)[0]` — a leading env-assignment (`OUT="/tmp/o" node x.mjs`)
@@ -263,7 +267,7 @@ function capPreviewLines(text: string, maxLines: number): CappedPreview {
  * seen by the user is therefore already clean.
  */
 export function suggestAlwaysAllowPattern(toolName: string, input: unknown): string | undefined {
-  if (toolName !== "Bash") {
+  if (!isCommandLineTool(toolName)) {
     return undefined;
   }
   const record = input !== null && typeof input === "object" ? (input as Record<string, unknown>) : {};
@@ -277,17 +281,17 @@ export function suggestAlwaysAllowPattern(toolName: string, input: unknown): str
 /**
  * Builds the control-plane `addRule` request (design §5) — trims and omits a
  * blank pattern entirely rather than sending it as `""`. Slice P7.16 §4.2:
- * Bash patterns additionally run through `sanitizeBashPattern` — this is a
- * birth point shared by the modal's hand-edited pattern field AND the
+ * command-line patterns additionally run through `sanitizeBashPattern` — this
+ * is a birth point shared by the modal's hand-edited pattern field AND the
  * Settings manual-add form, so both get env-prefix stripping for free.
- * Non-Bash tools pass the trimmed pattern through untouched.
+ * Path/URL tools pass the trimmed pattern through untouched.
  */
 export function buildAlwaysAllowRule(toolName: string, pattern?: string): PermissionRuleAddRequest {
   const trimmed = pattern?.trim();
   if (!trimmed) {
     return { toolName };
   }
-  const finalPattern = toolName === "Bash" ? sanitizeBashPattern(trimmed) : trimmed;
+  const finalPattern = isCommandLineTool(toolName) ? sanitizeBashPattern(trimmed) : trimmed;
   return { toolName, pattern: finalPattern };
 }
 
@@ -300,7 +304,7 @@ export function buildAlwaysAllowRule(toolName: string, pattern?: string): Permis
  * pattern was typed.
  *
  * **W1-FIX (Codex-terra P2-divergence, §4.2 REVISED):** takes an explicit
- * `toolName` and sanitizes `remember.pattern` ONLY when `toolName === "Bash"`
+ * `toolName` and sanitizes `remember.pattern` ONLY for a command-line tool
  * — mirrors `buildAlwaysAllowRule`'s own gate exactly, so the data-plane rule
  * (this message) and the control-plane rule can never diverge. The previous
  * version sanitized unconditionally, relying on the modal only ever
@@ -318,7 +322,7 @@ export function buildPermissionAllowMessage(
     return { type: "permission_response", requestId, behavior: "allow" };
   }
   const trimmed = remember.pattern?.trim();
-  const sanitized = trimmed && toolName === "Bash" ? sanitizeBashPattern(trimmed) : trimmed;
+  const sanitized = trimmed && isCommandLineTool(toolName) ? sanitizeBashPattern(trimmed) : trimmed;
   return {
     type: "permission_response",
     requestId,
@@ -662,9 +666,26 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
 
 
  */
-/** Core's absent presentation retains remember; a non-core engine needs both facts true. */
+/**
+ * Core's absent presentation retains remember; an engine needs approvals it can
+ * actually answer.
+ *
+ * TASK.144 dropped the second conjunct, `supportsCorePermissions`. That flag
+ * means "core's permission engine drives this session" — it gates the ModeMenu
+ * and `/mode`, and it was ALSO gating remember on the reasoning that a rule
+ * stored by a session with no RuleAwarePermissionEngine would never be read
+ * back. That reasoning no longer holds: an engine session's rule store is now
+ * consulted by the IpcPermissionBroker itself (host/permission-broker.ts), so
+ * the rule is honoured on the very next ask and after every restart. Hiding the
+ * checkbox left the owner of a Claude/Codex session with no in-app way to stop
+ * being asked the same question — the wall TASK.144 was filed for.
+ *
+ * `supportsInteractiveApprovals` stays, and is the correct gate on its own: it
+ * is false exactly when the engine has no approval bridge, and Session drops a
+ * `permission_response` from such a session outright (session.ts's `route`).
+ */
 export function canRememberPermission(engine: EnginePresentation | null): boolean {
-  return engine === null || (engine.capabilities.supportsCorePermissions && engine.capabilities.supportsInteractiveApprovals);
+  return engine === null || engine.capabilities.supportsInteractiveApprovals;
 }
 
 export function ConnectedPermissionModal() {

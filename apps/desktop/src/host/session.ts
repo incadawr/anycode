@@ -1137,9 +1137,14 @@ export class Session {
         if (!this.engine.capabilities.supportsInteractiveApprovals) {
           break;
         }
-        if (this.engine.capabilities.supportsCorePermissions) {
-          this.maybeRemember(message.requestId, message.behavior, message.remember);
-        }
+        // TASK.144: no longer gated on `supportsCorePermissions`. That gate was
+        // honest while a stored rule could only be honoured by
+        // RuleAwarePermissionEngine — remembering in a session that had no such
+        // engine wrote a rule nothing would ever read. The engine boots now hand
+        // their rule store to the IpcPermissionBroker itself (host/index.ts), so
+        // the store is consulted on BOTH paths and a remembered allow is
+        // meaningful in every session that reaches here.
+        this.maybeRemember(message.requestId, message.behavior, message.remember);
         this.broker.handleResponse(message.requestId, message.behavior, message.updatedInput);
         break;
       case "set_mode":
