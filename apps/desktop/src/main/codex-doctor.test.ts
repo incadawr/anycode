@@ -5,8 +5,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { CodexRpcClient, augmentPathForGui, buildDoctorChildEnv, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
-import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
-import type { CodexSupportManifest } from "../shared/codex-support.js";
+import { manifestSupportedRange, resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
+import { BUNDLED_CODEX_MANIFEST, type CodexSupportManifest } from "../shared/codex-support.js";
+
+/**
+ * Derived, never restated: these reports carry whatever range the bundled
+ * manifest declares, so admitting a Codex release is one edit in
+ * codex-support.ts + codex-support.json — not that plus a sweep through every
+ * doctor expectation that had the old string typed into it.
+ */
+const BUNDLED_SUPPORTED_RANGE = manifestSupportedRange(BUNDLED_CODEX_MANIFEST);
 import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import { makeTrustedScratchDir } from "../shared/test-scratch.js";
 import type { ResolvedCodexProfile } from "./codex-profiles.js";
@@ -227,7 +235,7 @@ describe("runCodexDoctor", () => {
 
   it("reports signed_out when account/read returns a null account and auth IS required (automat row 6)", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--signed-out"]) });
-    expect(report).toEqual({ status: "signed_out", version: "0.144.3", requiresOpenaiAuth: true, supportedRange: ">=0.144.0 <0.145.0" });
+    expect(report).toEqual({ status: "signed_out", version: "0.144.3", requiresOpenaiAuth: true, supportedRange: BUNDLED_SUPPORTED_RANGE });
   });
 
   it("reports READY when account is null but requiresOpenaiAuth is false (automat row 7 — the api-key/bedrock config.toml setup)", async () => {
@@ -243,7 +251,7 @@ describe("runCodexDoctor", () => {
       trust: TRUSTED,
       spawnImpl: fakeSpawn(["--signed-out", "--no-requires-field"]),
     });
-    expect(report).toEqual({ status: "signed_out", version: "0.144.3", supportedRange: ">=0.144.0 <0.145.0" });
+    expect(report).toEqual({ status: "signed_out", version: "0.144.3", supportedRange: BUNDLED_SUPPORTED_RANGE });
   });
 
   it("reports ready for an apiKey account that has no planType (automat row 5 — ANY union variant)", async () => {
@@ -303,7 +311,7 @@ describe("runCodexDoctor", () => {
 
   it("reports update_required for a version outside the supported range, without spawning app-server at all", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--bad-version"]) });
-    expect(report).toEqual({ status: "update_required", version: "0.99.0", supportedRange: ">=0.144.0 <0.145.0" });
+    expect(report).toEqual({ status: "update_required", version: "0.99.0", supportedRange: BUNDLED_SUPPORTED_RANGE });
   });
 
   it("reports error for unparseable version output", async () => {
@@ -360,7 +368,7 @@ describe("runCodexDoctor", () => {
   it("stamps supportedRange onto ready reports so the renderer never hardcodes the range string", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
     expect(report.status).toBe("ready");
-    expect(report.supportedRange).toBe(">=0.144.0 <0.145.0");
+    expect(report.supportedRange).toBe(BUNDLED_SUPPORTED_RANGE);
   });
 
   it("bounds a hung version preflight with its own timeout, never the overall watchdog", async () => {
