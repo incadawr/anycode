@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { discoverClaudeBinary } from "./claude-binary.js";
-import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY } from "../shared/engines.js";
+import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../shared/engines.js";
 import {
   buildClaudeDoctorChildEnv,
   meetsClaudeVersionFloor,
@@ -85,6 +85,17 @@ describe("buildClaudeDoctorChildEnv", () => {
 describe("buildClaudeDoctorChildEnv — engine proxy carrier (TASK.139)", () => {
   /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
   const ENGINE_PROXY = "http://user:pass@claude-proxy.example.com:3128";
+  /**
+   * The carrier as MAIN emits it (design review B-02): the url plus the value
+   * the exemption pair must be replaced with. A doctor child is composed off
+   * main's bootEnv overlay, so the licence is present whenever the shell named
+   * no exemptions of its own.
+   */
+  const ENGINE_CARRIER = encodeEngineProxyCarrier({
+    kind: "proxy",
+    url: ENGINE_PROXY,
+    noProxy: LOOPBACK_NO_PROXY,
+  }) as string;
   const SHELL_PROXY = "http://shell-proxy.internal:8080";
   /** PATH after `augmentPathForGui` on a POSIX platform. */
   const AUGMENTED_PATH = "/usr/bin:/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin";
@@ -118,7 +129,7 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier (TASK.139)", () => 
 
   it("a carrier writes the family plus both loopback exemptions", () => {
     const env = buildClaudeDoctorChildEnv(
-      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_CARRIER },
       undefined,
       "linux",
     );
@@ -137,7 +148,7 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier (TASK.139)", () => 
 
   it("never forwards the carrier itself — the allowlist does not name it", () => {
     const env = buildClaudeDoctorChildEnv(
-      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_CARRIER },
       undefined,
       "linux",
     );
@@ -146,7 +157,7 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier (TASK.139)", () => 
 
   it("ignores the codex carrier", () => {
     const env = buildClaudeDoctorChildEnv(
-      { HOME: "/home/me", PATH: "/usr/bin", ANYCODE_CODEX_PROXY_URL: ENGINE_PROXY },
+      { HOME: "/home/me", PATH: "/usr/bin", ANYCODE_CODEX_PROXY_URL: ENGINE_CARRIER },
       undefined,
       "linux",
     );
@@ -155,7 +166,7 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier (TASK.139)", () => 
 
   it("leaves an explicit CLAUDE_CONFIG_DIR override intact alongside the proxy", () => {
     const env = buildClaudeDoctorChildEnv(
-      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_PROXY },
+      { HOME: "/home/me", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: ENGINE_CARRIER },
       "/tmp/some-profile",
       "linux",
     );
