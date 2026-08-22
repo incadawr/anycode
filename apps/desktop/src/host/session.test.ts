@@ -45,6 +45,7 @@ import {
   RuleAwarePermissionEngine,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SessionPermissionRules,
+  bashTool,
   createDefaultToolRegistry,
   matchCatalogEntryByBaseUrl,
   resolveEffortLevels,
@@ -1097,6 +1098,19 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   }
 
   /** Records every `handleCommand` call so a test can assert which git_command reached the bridge. */
+  /** The requestId of the single ask the broker put in front of the UI. */
+  function permissionRequestId(port: FakeWirePort): string {
+    const found = port.received.find(
+      (m): m is HostToUiMessage & { type: "permission_request" } =>
+        typeof m === "object" && m !== null && (m as { type?: unknown }).type === "permission_request",
+    );
+    if (!found) {
+      throw new Error("no permission_request emitted");
+    }
+    return found.requestId;
+  }
+
+  /** Records every `handleCommand` call so a test can assert which git_command reached the bridge. */
   class FakeGitBridge implements GitUiBridge {
     readonly handled: { requestId: string; command: { op: string } }[] = [];
 
@@ -1153,7 +1167,9 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     worktree?: { id: string; path: string; branch: string; baseRef: string; ownedByAnyCode: boolean };
     worktreeControl?: SessionOptions["worktreeControl"];
     onWorkspaceTransition?: SessionOptions["onWorkspaceTransition"];
-  }): { port: FakeWirePort; session: Session } {
+    /** TASK.144: an explicit store so a test can assert what a remembered allow appended to it. */
+    rules?: SessionPermissionRules;
+  }): { port: FakeWirePort; session: Session; broker: IpcPermissionBroker } {
     const outbound = new Outbound();
     const broker = new IpcPermissionBroker((message) => outbound.emit(message));
     const session = new Session({
@@ -1170,14 +1186,75 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
       ...(opts.worktreeControl !== undefined ? { worktreeControl: opts.worktreeControl } : {}),
       ...(opts.onWorkspaceTransition !== undefined ? { onWorkspaceTransition: opts.onWorkspaceTransition } : {}),
-      rules: new SessionPermissionRules(),
+      rules: opts.rules ?? new SessionPermissionRules(),
       ...(opts.git !== undefined ? { git: opts.git } : {}),
       ...(opts.shell !== undefined ? { shell: opts.shell } : {}),
     });
     const port = new FakeWirePort();
     session.bindPort(port);
-    return { port, session };
+    return { port, session, broker };
   }
+
+  /**
+   * TASK.144. `maybeRemember` used to be gated on `supportsCorePermissions`,
+   * which is false for both foreign engines — so "Always allow" in a Codex or
+   * Claude session wrote nothing anywhere. It is now gated only by reaching the
+   * `permission_response` case at all (i.e. by `supportsInteractiveApprovals`),
+   * because an engine session's store IS read back: host/index.ts hands the same
+   * instance to the IpcPermissionBroker.
+   */
+  it("a remembered allow appends a rule even though the engine has no core permission engine", async () => {
+    const rules = new SessionPermissionRules();
+    const { port, broker } = buildTestSession({
+      rules,
+      engine: buildFakeEngine({
+        capabilities: { ...buildFakeEngine().capabilities, supportsInteractiveApprovals: true },
+      }),
+    });
+    port.send({ type: "ui_ready" });
+
+    // Exactly what an approval bridge does: straight to the broker, no core
+    // permission engine anywhere in the path.
+    const decision = broker.requestPermission({
+      toolName: "Bash",
+      input: { command: "git status" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    const requestId = permissionRequestId(port);
+
+    port.send({
+      type: "permission_response",
+      requestId,
+      behavior: "allow",
+      remember: { pattern: "git *" },
+    });
+    await expect(decision).resolves.toMatchObject({ behavior: "allow" });
+    expect(rules.list()).toEqual([{ toolName: "Bash", pattern: "git *" }]);
+  });
+
+  it("a remembered allow is still a no-op for an engine that cannot answer approvals at all", async () => {
+    const rules = new SessionPermissionRules();
+    const { port, broker } = buildTestSession({ rules });
+    port.send({ type: "ui_ready" });
+    const decision = broker.requestPermission({
+      toolName: "Bash",
+      input: { command: "git status" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    const requestId = permissionRequestId(port);
+
+    port.send({
+      type: "permission_response",
+      requestId,
+      behavior: "allow",
+      remember: { pattern: "git *" },
+    });
+    expect(rules.list()).toEqual([]);
+    broker.denyAll("test teardown", "shutdown");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
 
   it("never emits host_ready.shell for a core-shaped engine (id \"core\"), even if the host mistakenly supplied one — core wire stays byte-identical", () => {
     const { port } = buildTestSession({

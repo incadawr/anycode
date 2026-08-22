@@ -14,10 +14,12 @@
  * still applies unchanged on top, so a PreToolUse hook can still ask/deny
  * regardless of a session rule.
  *
- * Bash subjects are matched PER COMMAND, not per command line (TASK.104): the
- * command is split on the shell's separators and the pattern must match every
- * segment — see `splitBashSegments` for the rationale and the fail-closed
- * cases. All other tools keep raw whole-string matching.
+ * Command-line subjects are matched PER COMMAND, not per command line
+ * (TASK.104): the command is split on the shell's separators and the pattern
+ * must match every segment — see `splitBashSegments` for the rationale and the
+ * fail-closed cases. `Bash` and (TASK.144) the desktop Codex bridge's
+ * `CodexExec` share that treatment because they share the subject SHAPE; every
+ * path/URL tool keeps raw whole-string matching.
  */
 
 import picomatch from "picomatch";
@@ -32,7 +34,26 @@ const SUBJECT_FIELD: Record<string, string> = {
   Glob: "path",
   Grep: "path",
   WebFetch: "url",
+  // TASK.144. Not a core tool: this is the name the desktop's Codex approval
+  // bridge stamps on a `commandExecution` approval, whose input carries the
+  // same `command: string` a Bash call does. It is listed here because rules
+  // are matched by the tool name the USER approved, never by a translated one
+  // — a stored `Bash` rule must not silently vouch for a foreign engine's
+  // commands. Without an entry a patterned CodexExec rule has no subject and
+  // so can never match (fail-closed), leaving a bare patternless
+  // `{toolName:"CodexExec"}` — allow-EVERY-command — as the only rule a Codex
+  // user could write. That footgun is the reason for the entry.
+  CodexExec: "command",
 };
+
+/**
+ * Tools whose subject is a shell COMMAND LINE rather than a single path/URL,
+ * and which therefore match per-segment (see `bashMatchSubjects`). Membership
+ * is about the shape of the subject, not about which engine produced it.
+ */
+function isCommandLineTool(toolName: string): boolean {
+  return toolName === "Bash" || toolName === "CodexExec";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -291,7 +312,7 @@ function ruleMatches(rule: PermissionRule, toolName: string, input: unknown): bo
     return false;
   }
   const isMatch = picomatch(rule.pattern, { nonegate: true, noext: true });
-  if (toolName !== "Bash") {
+  if (!isCommandLineTool(toolName)) {
     // Path/URL subjects (Read/Edit/Write/Glob/Grep/WebFetch) are single values,
     // not command lines: they keep whole-string matching untouched.
     return isMatch(subject);
