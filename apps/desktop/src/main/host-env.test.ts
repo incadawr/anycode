@@ -20,17 +20,29 @@ import {
   customProviderIds,
   customProviderSecretKey,
   customSupportedTransports,
+  engineProxyCarrierValue,
   engineProxyCarriers,
   envOverrides,
   findCustomProviderRecord,
   isCustomProviderRecordId,
   isKnownSecretKey,
+  materializeProxyRung,
   resolveEffectiveTransport,
+  resolveProxyFor,
   scrubSecretEnv,
   secretEnvFor,
   shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
+  type ProxyMaterializationDeps,
 } from "./host-env.js";
+import {
+  hostForkProxyChain,
+  proxyProfileSecretKey,
+  resolveProxyLadder,
+  PROXY_REF_DIRECT,
+  type ProxyProfile,
+} from "../shared/proxy.js";
+import { PROXY_CARRIER_DIRECT } from "../shared/engines.js";
 import { resolveProviderSelection, type ProviderSelectionDeps } from "./token-broker.js";
 import { connectionFixture, providerV2, providerV2Multi, type SingletonFixture } from "../shared/provider-v2-fixture.js";
 
@@ -695,10 +707,10 @@ describe("buildHostEnv — connection proxy (TASK.132)", () => {
 });
 
 describe("applyConnectionProxy (TASK.132) — the exported env mutator", () => {
-  it("is a no-op for an absent or blank proxyUrl", () => {
+  it("is a no-op for an absent or blank materialised proxy", () => {
     const env: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
     applyConnectionProxy(env, {}, undefined);
-    applyConnectionProxy(env, {}, "   ");
+    applyConnectionProxy(env, {}, { url: "   " });
     expect(env).toEqual({ PATH: "/usr/bin" });
   });
 
@@ -707,7 +719,7 @@ describe("applyConnectionProxy (TASK.132) — the exported env mutator", () => {
   it("never writes into the bootEnv snapshot it reads", () => {
     const bootEnv: NodeJS.ProcessEnv = {};
     const env: NodeJS.ProcessEnv = { ...bootEnv };
-    applyConnectionProxy(env, bootEnv, "https://proxy.example.com:8443");
+    applyConnectionProxy(env, bootEnv, { url: "https://proxy.example.com:8443" });
     expect(bootEnv).toEqual({});
     expect(env.https_proxy).toBe("https://proxy.example.com:8443");
   });
@@ -1301,5 +1313,299 @@ describe("ambient engine-proxy carriers never reach a fork (TASK.139 F1)", () =>
     expect(env.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
     const overlay = { ...env, ...engineProxyCarriers(current, bootEnv) };
     expect(pick(overlay)).toEqual({ ANYCODE_CODEX_PROXY_URL: CODEX_PROXY });
+  });
+});
+
+// ── TASK.141: the named proxy registry ──
+
+describe("materializeProxyRung — a rung turned into what an env needs", () => {
+  const MANUAL: ProxyProfile = { id: "proxy-corp", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" };
+  const SYSTEM: ProxyProfile = { id: "proxy-sys", name: "System", mode: "system" };
+
+  const rungFor = (profile: ProxyProfile): AnycodeSettings =>
+    settings({ network: { proxyProfiles: [profile], proxyRef: profile.id } });
+
+  const materialize = (current: AnycodeSettings, deps: ProxyMaterializationDeps = {}) =>
+    materializeProxyRung(resolveProxyLadder(current, [{ kind: "app" }]), deps);
+
+  it("materialises a manual profile's URL", () => {
+    expect(materialize(rungFor(MANUAL))).toEqual({ url: "http://proxy.corp:3128/" });
+  });
+
+  it("carries the profile's exemptions alongside the URL", () => {
+    expect(materialize(rungFor({ ...MANUAL, noProxy: "a.corp,b.corp" }))).toEqual({
+      url: "http://proxy.corp:3128/",
+      noProxy: "a.corp,b.corp",
+    });
+  });
+
+  // Lane A's shipped default for the system-resolve cache is "no value", and
+  // that is a real answer: before `app.whenReady` there is no Chromium session
+  // to ask, and inventing a proxy would be worse than not using one.
+  it("materialises a system profile to DIRECT while the resolve cache is empty", () => {
+    expect(materialize(rungFor(SYSTEM))).toBeUndefined();
+    expect(materialize(rungFor(SYSTEM), { systemProxyUrl: () => undefined })).toBeUndefined();
+  });
+
+  it("materialises a system profile from the injected resolve cache once it has a value", () => {
+    expect(materialize(rungFor(SYSTEM), { systemProxyUrl: () => "http://pac-resolved:8080" })).toEqual({
+      url: "http://pac-resolved:8080/",
+    });
+  });
+
+  // The password never lives in settings.json — it comes from the vault via
+  // main's in-memory cache, and it is percent-encoded on the way into the URL.
+  it("composes login + the cached password into percent-encoded userinfo", () => {
+    const withLogin = rungFor({ ...MANUAL, login: "user@corp" });
+    expect(materialize(withLogin, { proxyPassword: () => "p@ss:word" })).toEqual({
+      url: "http://user%40corp:p%40ss%3Aword@proxy.corp:3128/",
+    });
+  });
+
+  it("emits the login alone when the password cache holds nothing for the profile", () => {
+    expect(materialize(rungFor({ ...MANUAL, login: "user" }))).toEqual({ url: "http://user@proxy.corp:3128/" });
+  });
+
+  it("asks the password cache for THIS profile's id", () => {
+    const seen: string[] = [];
+    materialize(rungFor({ ...MANUAL, login: "user" }), {
+      proxyPassword: (id) => {
+        seen.push(id);
+        return "pw";
+      },
+    });
+    expect(seen).toEqual([MANUAL.id]);
+  });
+
+  // Every broken value collapses to DIRECT rather than to the rung below — the
+  // law that keeps a typo from routing a scope's traffic into another rung's
+  // proxy.
+  it("materialises a dangling ref, a broken URL and a userinfo-bearing URL all to DIRECT", () => {
+    expect(materializeProxyRung({ source: { kind: "app" }, ref: "proxy-gone" })).toBeUndefined();
+    expect(materialize(rungFor({ ...MANUAL, url: "proxy.corp:3128" }))).toBeUndefined();
+    // Hand-edited userinfo in the host field is refused for the same reason the
+    // editor refuses it: it would put a password back into the 0644 file.
+    expect(materialize(rungFor({ ...MANUAL, url: "http://u:p@proxy.corp:3128" }))).toBeUndefined();
+    expect(materialize(rungFor({ ...MANUAL, url: undefined }))).toBeUndefined();
+  });
+
+  it("materialises an explicit `direct` ref and an absent ladder to the same nothing", () => {
+    expect(materializeProxyRung(undefined)).toBeUndefined();
+    expect(materializeProxyRung({ source: { kind: "app" }, ref: PROXY_REF_DIRECT })).toBeUndefined();
+  });
+
+  it("materialises a legacy string verbatim — byte-for-byte its TASK.132 semantics", () => {
+    const legacy = settings({ provider: { id: "z-ai", model: "m", proxyUrl: "http://user:pass@legacy:8080" } });
+    expect(resolveProxyFor(legacy, hostForkProxyChain("conn-z-ai"))).toEqual({
+      url: "http://user:pass@legacy:8080",
+    });
+  });
+});
+
+describe("applyConnectionProxy — profile exemptions (TASK.141)", () => {
+  const PROXY = { url: "http://proxy.corp:3128" };
+
+  // Grabli: the list is APPENDED. A profile list that REPLACED the loopback
+  // default would send a local Ollama/vLLM endpoint (and every loopback MCP
+  // server) through the corporate proxy.
+  it("appends the profile's exemptions to the loopback default, in both cases", () => {
+    const env: NodeJS.ProcessEnv = {};
+    applyConnectionProxy(env, {}, { ...PROXY, noProxy: "a.corp,b.corp" });
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1,a.corp,b.corp");
+    expect(env.no_proxy).toBe("localhost,127.0.0.1,[::1],::1,a.corp,b.corp");
+  });
+
+  it("writes the loopback default alone when the profile names no exemptions", () => {
+    const env: NodeJS.ProcessEnv = {};
+    applyConnectionProxy(env, {}, { ...PROXY, noProxy: "   " });
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
+  });
+
+  // TASK.132's law is untouched: a shell that named its own exemptions keeps
+  // BOTH keys, and a profile's list never shadows them.
+  it("leaves a shell-exported NO_PROXY completely untouched", () => {
+    const env: NodeJS.ProcessEnv = { NO_PROXY: "corp.internal" };
+    applyConnectionProxy(env, { NO_PROXY: "corp.internal" }, { ...PROXY, noProxy: "a.corp" });
+    expect(env.NO_PROXY).toBe("corp.internal");
+    expect("no_proxy" in env).toBe(false);
+    expect(env.HTTPS_PROXY).toBe(PROXY.url);
+  });
+});
+
+describe("engineProxyCarrierValue — the engine rung, with and without the app rung", () => {
+  const PROFILE: ProxyProfile = { id: "proxy-corp", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" };
+
+  it("emits nothing when the engine scope is silent and no app rung is consulted", () => {
+    const current = settings({ network: { proxyProfiles: [PROFILE], proxyRef: PROFILE.id } });
+    expect(engineProxyCarrierValue(current, {}, "codex", false)).toBeUndefined();
+  });
+
+  // The doctor has no connection rung and no host fork env to inherit from, so
+  // the application default reaches it through this value or not at all.
+  it("picks up the app rung for a doctor child", () => {
+    const current = settings({ network: { proxyProfiles: [PROFILE], proxyRef: PROFILE.id } });
+    expect(engineProxyCarrierValue(current, {}, "codex", true)).toBe("http://proxy.corp:3128/");
+  });
+
+  // An explicit `direct` must be SAID: the connection's proxy is already in the
+  // child env through the passthrough list, and silence would leave the engine
+  // on it.
+  it("emits the DIRECT sentinel for an explicit `direct` engine ref", () => {
+    const current = settings({ codex: { proxyRef: PROXY_REF_DIRECT } });
+    expect(engineProxyCarrierValue(current, {}, "codex", false)).toBe(PROXY_CARRIER_DIRECT);
+  });
+
+  it("emits the DIRECT sentinel for a dangling ref and for a system profile with an empty cache", () => {
+    expect(engineProxyCarrierValue(settings({ codex: { proxyRef: "proxy-gone" } }), {}, "codex", false)).toBe(
+      PROXY_CARRIER_DIRECT,
+    );
+    const systemRef = settings({
+      claude: { proxyRef: "proxy-sys" },
+      network: { proxyProfiles: [{ id: "proxy-sys", name: "System", mode: "system" }] },
+    });
+    expect(engineProxyCarrierValue(systemRef, {}, "claude", false)).toBe(PROXY_CARRIER_DIRECT);
+  });
+
+  // The shell-wins gate lives here and nowhere else — it is what licenses the
+  // child builder's unconditional clobber, sentinel included.
+  it("emits NOTHING — not even the sentinel — when the shell owns the proxy family", () => {
+    const current = settings({ codex: { proxyRef: PROXY_REF_DIRECT }, claude: { proxyRef: PROXY_REF_DIRECT } });
+    expect(engineProxyCarrierValue(current, { http_proxy: "http://shell:8080" }, "codex", false)).toBeUndefined();
+    expect(engineProxyCarriers(current, { http_proxy: "http://shell:8080" })).toEqual({});
+  });
+
+  it("keeps the two engines' carriers independent", () => {
+    const current = settings({
+      codex: { proxyRef: PROFILE.id },
+      claude: { proxyRef: PROXY_REF_DIRECT },
+      network: { proxyProfiles: [PROFILE] },
+    });
+    expect(engineProxyCarriers(current, {})).toEqual({
+      ANYCODE_CODEX_PROXY_URL: "http://proxy.corp:3128/",
+      ANYCODE_CLAUDE_PROXY_URL: PROXY_CARRIER_DIRECT,
+    });
+  });
+
+  it("lets a profile ref beat the legacy string on the same engine block", () => {
+    const current = settings({
+      codex: { proxyUrl: "http://legacy:8080", proxyRef: PROFILE.id },
+      network: { proxyProfiles: [PROFILE] },
+    });
+    expect(engineProxyCarriers(current, {})).toEqual({ ANYCODE_CODEX_PROXY_URL: "http://proxy.corp:3128/" });
+  });
+});
+
+describe("TASK.141 byte-identity — a registry-free document changes not one byte", () => {
+  /** Every env var this slice could conceivably touch; byte-identity is asserted over exactly this set. */
+  const PROXY_SURFACE = [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "NODE_USE_ENV_PROXY",
+    "ANYCODE_CODEX_PROXY_URL",
+    "ANYCODE_CLAUDE_PROXY_URL",
+  ] as const;
+
+  const bootEnv = { PATH: "/usr/bin", HOME: "/home/me" };
+
+  it("a fork env with no network section is deep-equal to one with an EMPTY registry", async () => {
+    const plain = await buildHostEnv({
+      bootEnv,
+      settings: settings({ provider: { id: "z-ai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    const withEmptyRegistry = await buildHostEnv({
+      bootEnv,
+      settings: settings({ provider: { id: "z-ai", model: "m" }, network: { proxyProfiles: [] } }),
+      getSecret: noSecret,
+    });
+    expect(withEmptyRegistry).toEqual(plain);
+    // And the whole object, not a filtered view: no proxy var exists at all.
+    expect(plain).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m" });
+  });
+
+  // The DoD's second half: a document carrying ONLY legacy strings produces the
+  // exact pre-slice env, including the four family vars and the loopback pair.
+  it("a legacy-only document produces the exact pre-slice fork env", async () => {
+    const env = await buildHostEnv({
+      bootEnv,
+      settings: settings({ provider: { id: "z-ai", model: "m", proxyUrl: "http://user:pass@legacy:8080" } }),
+      getSecret: noSecret,
+    });
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/home/me",
+      ANYCODE_MODEL: "m",
+      HTTPS_PROXY: "http://user:pass@legacy:8080",
+      HTTP_PROXY: "http://user:pass@legacy:8080",
+      https_proxy: "http://user:pass@legacy:8080",
+      http_proxy: "http://user:pass@legacy:8080",
+      NO_PROXY: "localhost,127.0.0.1,[::1],::1",
+      no_proxy: "localhost,127.0.0.1,[::1],::1",
+      NODE_USE_ENV_PROXY: "1",
+    });
+  });
+
+  it("a legacy-only engine block produces the exact pre-slice carrier overlay", () => {
+    const current = settings({
+      codex: { proxyUrl: "http://codex-legacy:3128" },
+      claude: { proxyUrl: "http://claude-legacy:3128" },
+    });
+    expect(engineProxyCarriers(current, {})).toEqual({
+      ANYCODE_CODEX_PROXY_URL: "http://codex-legacy:3128",
+      ANYCODE_CLAUDE_PROXY_URL: "http://claude-legacy:3128",
+    });
+  });
+
+  // Fail-soft on a hand-edited legacy string is preserved verbatim: it is NOT a
+  // rung, so nothing is emitted and nothing falls through to a `direct`
+  // sentinel that would newly clobber the connection's proxy.
+  it("a malformed legacy engine string still emits no carrier at all (never the sentinel)", () => {
+    for (const garbage of ["proxy.example.com:3128", "socks5://p", "http://", "   "]) {
+      expect(engineProxyCarriers(settings({ codex: { proxyUrl: garbage } }), {})).toEqual({});
+    }
+  });
+
+  it("the doctor stubs' ladder emits nothing for a registry-free document", () => {
+    const current = settings({ provider: { id: "z-ai", model: "m" } });
+    expect(engineProxyCarrierValue(current, {}, "codex", true)).toBeUndefined();
+    expect(engineProxyCarrierValue(current, {}, "claude", true)).toBeUndefined();
+    for (const key of PROXY_SURFACE) {
+      expect(key in bootEnv).toBe(false);
+    }
+  });
+});
+
+describe("proxy-profile vault key (TASK.141 §5)", () => {
+  // The whole custody point of keying by the immutable id: `isKnownSecretKey`
+  // recognising the key is ALSO what surfaces it in `Vault.statuses`, which is
+  // the only way the renderer ever learns `passwordSet` — the value itself never
+  // crosses back.
+  it("is recognised by isKnownSecretKey with no catalog involvement", () => {
+    expect(isKnownSecretKey("proxy.profile.proxy-abc.password", [])).toBe(true);
+    expect(isKnownSecretKey(proxyProfileSecretKey("proxy-abc"), ["anthropic"])).toBe(true);
+  });
+
+  it("rejects a malformed proxy key rather than half-matching it", () => {
+    expect(isKnownSecretKey("proxy.profile..password", [])).toBe(false);
+    expect(isKnownSecretKey("proxy.profile.a.b.password", [])).toBe(false);
+    expect(isKnownSecretKey("proxy.profile.proxy-abc.token", [])).toBe(false);
+  });
+
+  // The law: a proxy password has NO host-env materialisation — it is composed
+  // into a proxy URL, never into `ANYCODE_API_KEY`. Answering that var for such
+  // a key would boot a host fork on a proxy password as its provider credential,
+  // so the call is refused loudly instead of silently mis-answered.
+  it("secretEnvFor REFUSES a proxy-profile key", () => {
+    expect(() => secretEnvFor(proxyProfileSecretKey("proxy-abc"))).toThrow(/proxy-profile key/);
+  });
+
+  it("secretEnvFor still answers every provider key exactly as before", () => {
+    expect(secretEnvFor("provider.apiKey")).toBe("ANYCODE_API_KEY");
+    expect(secretEnvFor("provider.connection.conn-1.apiKey")).toBe("ANYCODE_API_KEY");
+    expect(secretEnvFor("provider.anthropic.oauth")).toBe("ANYCODE_API_KEY");
   });
 });

@@ -15,6 +15,7 @@ import {
   ENV_CLAUDE_PROXY_URL,
   ENV_CODEX_PROXY_URL,
   LOOPBACK_NO_PROXY,
+  PROXY_CARRIER_DIRECT,
   applyEngineProxyOverride,
   stripEngineProxyCarriers,
 } from "./engines.js";
@@ -181,6 +182,65 @@ describe("carrier names are frozen wire contract", () => {
     applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: ENGINE_PROXY }, ENV_CODEX_PROXY_URL);
     const touched = Object.keys(env).filter((key) => key !== "HOME");
     expect(touched.every((key) => (AFFECTED_KEYS as readonly string[]).includes(key))).toBe(true);
+  });
+});
+
+describe("applyEngineProxyOverride — the DIRECT sentinel (TASK.141)", () => {
+  // "This engine explicitly uses no proxy" has to be an ACTIVE deletion: the
+  // connection's proxy is already in the child env via the builder's passthrough
+  // list, so staying silent would leave the engine on it — the opposite of what
+  // the user picked in the dropdown.
+  it("deletes the whole family a connection proxy put in the child env", () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: "/home/me",
+      HTTPS_PROXY: CONNECTION_PROXY,
+      HTTP_PROXY: CONNECTION_PROXY,
+      https_proxy: CONNECTION_PROXY,
+      http_proxy: CONNECTION_PROXY,
+      NO_PROXY: LOOPBACK_NO_PROXY,
+      no_proxy: LOOPBACK_NO_PROXY,
+    };
+    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: PROXY_CARRIER_DIRECT }, ENV_CODEX_PROXY_URL);
+    // The exemption pair is deliberately NOT touched: the builder cannot tell a
+    // shell-exported NO_PROXY from a passthrough one, and an exemption with no
+    // proxy left to bypass is inert anyway.
+    expect(env).toEqual({ HOME: "/home/me", NO_PROXY: LOOPBACK_NO_PROXY, no_proxy: LOOPBACK_NO_PROXY });
+  });
+
+  it("leaves a child env that had no proxy family byte-identical", () => {
+    const env: NodeJS.ProcessEnv = { HOME: "/home/me", PATH: "/usr/bin" };
+    const before = { ...env };
+    applyEngineProxyOverride(env, { [ENV_CLAUDE_PROXY_URL]: PROXY_CARRIER_DIRECT }, ENV_CLAUDE_PROXY_URL);
+    expect(env).toEqual(before);
+    expect(Object.keys(env)).toEqual(["HOME", "PATH"]);
+  });
+
+  it("is engine-scoped like every other carrier value", () => {
+    const env: NodeJS.ProcessEnv = { HOME: "/home/me", HTTPS_PROXY: CONNECTION_PROXY };
+    const before = { ...env };
+    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: PROXY_CARRIER_DIRECT }, ENV_CLAUDE_PROXY_URL);
+    expect(env).toEqual(before);
+  });
+
+  it("never sets NODE_USE_ENV_PROXY or copies the carrier through", () => {
+    const env: NodeJS.ProcessEnv = { HOME: "/home/me", HTTPS_PROXY: CONNECTION_PROXY };
+    applyEngineProxyOverride(env, { [ENV_CODEX_PROXY_URL]: PROXY_CARRIER_DIRECT }, ENV_CODEX_PROXY_URL);
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
+    expect(ENV_CODEX_PROXY_URL in env).toBe(false);
+  });
+
+  it("pins the sentinel string — main writes it, the builders read it, and neither imports the other", () => {
+    expect(PROXY_CARRIER_DIRECT).toBe("direct");
+  });
+
+  // F1 composed with the new value: an ambient `ANYCODE_CODEX_PROXY_URL=direct`
+  // must not be able to strip a shell-exported proxy out of a child env either.
+  it("an AMBIENT `direct` carrier dies in the strip like every other ambient value", () => {
+    const source: NodeJS.ProcessEnv = { HTTPS_PROXY: CONNECTION_PROXY, [ENV_CODEX_PROXY_URL]: PROXY_CARRIER_DIRECT };
+    stripEngineProxyCarriers(source);
+    const env: NodeJS.ProcessEnv = { HTTPS_PROXY: CONNECTION_PROXY };
+    applyEngineProxyOverride(env, source, ENV_CODEX_PROXY_URL);
+    expect(env.HTTPS_PROXY).toBe(CONNECTION_PROXY);
   });
 });
 
