@@ -112,9 +112,12 @@
  * seedAlwaysAllowRules, fail-soft — main is the only writer of settings.json,
  * host only ever reads it) and wraps ModePermissionEngine in a
  * SafeCommandPermissionEngine (slice 5.1 §2.4: auto-approves a Bash command
- * proven read-only by the conservative classifier, narrowing ask->allow only)
- * and then a RuleAwarePermissionEngine over it, so a persisted always-allow
- * rule auto-allows a matching tool from the session's very first turn. The SAME
+ * proven read-only by the conservative classifier, narrowing ask->allow only),
+ * then a RunAllowBashPermissionEngine (TASK.138 slice 2: a per-RUN, non-persisted
+ * Bash allow-list read once from `ANYCODE_RUN_ALLOW_BASH` — a process input for
+ * an unattended run, never a setting; see run-allow-bash.ts), and finally a
+ * RuleAwarePermissionEngine over that, so a persisted always-allow rule
+ * auto-allows a matching tool from the session's very first turn. The SAME
  * rules instance is handed to Session, which appends to it when a
  * `permission_response` carries `remember` on an "allow" (data-plane half of
  * "Always allow"; main's `permission-rule-add` IPC is the control-plane half
@@ -169,7 +172,9 @@ import {
   NodeGitAdapter,
   NodeHttpAdapter,
   NodeMcpTransportFactory,
+  parseRunAllowBash,
   RuleAwarePermissionEngine,
+  RunAllowBashPermissionEngine,
   SafeCommandPermissionEngine,
   SessionPermissionRules,
   SqlitePersistenceAdapter,
@@ -297,6 +302,15 @@ function hostSettingsPathOverride(): string | undefined {
  * the same connection. Never a credential — the resolved key rides ANYCODE_API_KEY.
  */
 const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
+/**
+ * TASK.138 slice 2: per-run Bash allow-list. Set by whoever LAUNCHED this
+ * process (an autonomous/unattended run), never persisted, never a setting —
+ * see the module doc on `RunAllowBashPermissionEngine`
+ * (packages/core/src/permissions/run-allow-bash.ts) for the full rationale
+ * and matching rules. Comma-separated command prefixes, e.g.
+ * `"pnpm test,pnpm typecheck"`.
+ */
+const ENV_RUN_ALLOW_BASH = "ANYCODE_RUN_ALLOW_BASH";
 import { resolveExtensionsHomeOverride } from "./dev-home.js";
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
@@ -1236,6 +1250,21 @@ async function boot(): Promise<void> {
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
 
+    // TASK.138 slice 2: per-run Bash allow-list, a PROCESS INPUT (whoever
+    // launched this fork), never a setting — see run-allow-bash.ts's module
+    // doc. Parsed once here so the same list feeds both the permission engine
+    // below and this startup diagnostic; an unset/empty env var parses to []
+    // (RunAllowBashPermissionEngine's own no-op fast path, zero behavior
+    // change). Logged unconditionally so a widened run is never silent, even
+    // when every configured entry was malformed and none were accepted.
+    const runAllowBashEntries = parseRunAllowBash(process.env[ENV_RUN_ALLOW_BASH]);
+    if (process.env[ENV_RUN_ALLOW_BASH] !== undefined) {
+      console.log(
+        `[host] ${ENV_RUN_ALLOW_BASH}: accepted ${runAllowBashEntries.length} entr${runAllowBashEntries.length === 1 ? "y" : "ies"} ` +
+          `(${runAllowBashEntries.map((entry) => JSON.stringify(entry.join(" "))).join(", ")})`,
+      );
+    }
+
     // Oauth-mode credential broker (design §3.3, slice 2.5.3): buildResolveApiKey
     // returns undefined unless this fork was spawned with ANYCODE_AUTH_MODE=oauth,
     // in which case AiSdkModelPort omits `resolveApiKey` entirely from its config
@@ -1918,8 +1947,15 @@ async function boot(): Promise<void> {
       // whatever Session.maybeRemember appends in-session; an empty `rules`
       // store is behaviorally identical to the bare ModePermissionEngine
       // (packages/core/src/permissions/rules.test.ts's own regression invariant).
+      // TASK.138 slice 2: RunAllowBashPermissionEngine sits OUTSIDE the
+      // untouched SafeCommand(Mode) pair — an empty runAllowBashEntries (the
+      // env-unset default) makes it a byte-identical no-op wrapper, so this
+      // composition degrades to exactly the pre-slice-2 chain.
       permissionEngine: new RuleAwarePermissionEngine(
-        new SafeCommandPermissionEngine(new ModePermissionEngine()),
+        new RunAllowBashPermissionEngine(
+          new SafeCommandPermissionEngine(new ModePermissionEngine()),
+          runAllowBashEntries,
+        ),
         rules,
       ),
       permissionBroker: broker,
