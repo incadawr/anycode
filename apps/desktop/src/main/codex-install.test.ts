@@ -14,6 +14,7 @@ import {
   resolveCodexArtifact,
 } from "./codex-install.js";
 import { resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
+import type { RunCodexDoctorOptions } from "./codex-doctor.js";
 
 /** BM3 red-proof plumbing: a call-log of every `open(...).sync()` and `rename`
  * this whole test file's production code triggers, so ONE test (below) can
@@ -627,5 +628,68 @@ describe("createCodexInstallController (IPC surface — verdict gate, doctor gat
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error).toMatch(/in progress/i);
     expect((await first).ok).toBe(true);
+  });
+});
+
+describe("createCodexInstallController — post-install doctor runs behind the engine proxy (TASK.139 F4)", () => {
+  const CARRIER_ENV = { PATH: "/usr/local/bin", ANYCODE_CODEX_PROXY_URL: "http://user:pass@codex-proxy.example.com:3128" };
+
+  /** Installs the recommended version and returns every `runDoctor` call's options. */
+  async function installCapturingDoctor(
+    overrides: Partial<Parameters<typeof createCodexInstallController>[0]> = {},
+  ): Promise<Array<RunCodexDoctorOptions | undefined>> {
+    setActiveCodexVersionPolicy({
+      manifest: { ...BUNDLED_CODEX_MANIFEST, supported: [{ range: ">=0.144.0 <0.145.0", status: "tested" }], recommended: VERSION },
+    });
+    const seen: Array<RunCodexDoctorOptions | undefined> = [];
+    const { fetchImpl } = fetchServing(goodArchive());
+    const controller = createCodexInstallController({
+      home: home(),
+      ...DARWIN_ARM,
+      fetchImpl,
+      trust: () => null,
+      runDoctor: async (_binaryPath: string, options?: RunCodexDoctorOptions) => {
+        seen.push(options);
+        return { status: "ready", version: VERSION } satisfies CodexDoctorReport;
+      },
+      readRiskAcceptedVersions: async () => [],
+      writeCodexSettings: async () => ({ ok: true }) as never,
+      ...overrides,
+    });
+    const result = await controller.install();
+    expect(result.ok).toBe(true);
+    return seen;
+  }
+
+  // The gate doctor is a main-spawned codex probe like the onboarding recheck
+  // and `codex login`, so it must read through the SAME source env. Without the
+  // dep it falls back to main's live `process.env`, where a carrier never lives
+  // — the probe would ignore `settings.codex.proxyUrl` and, behind a corporate
+  // proxy, fail the install of a perfectly good binary.
+  it("spawns the gate doctor with the carrier-bearing source env main supplies", async () => {
+    const seen = await installCapturingDoctor({ doctorSourceEnv: () => ({ ...CARRIER_ENV }) });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.env).toEqual(CARRIER_ENV);
+  });
+
+  it("reads the dep FRESH per install, so an edited proxy applies without a restart", async () => {
+    let current = "http://first-proxy.example.com:3128";
+    const seen = await installCapturingDoctor({
+      doctorSourceEnv: () => ({ ANYCODE_CODEX_PROXY_URL: current }),
+    });
+    expect(seen[0]?.env?.ANYCODE_CODEX_PROXY_URL).toBe(current);
+    current = "http://second-proxy.example.com:3128";
+    const again = await installCapturingDoctor({
+      doctorSourceEnv: () => ({ ANYCODE_CODEX_PROXY_URL: current }),
+    });
+    expect(again[0]?.env?.ANYCODE_CODEX_PROXY_URL).toBe("http://second-proxy.example.com:3128");
+  });
+
+  // Optional dep: with none supplied the doctor is called exactly as it was
+  // before TASK.139 — no options object at all, so `runCodexDoctor` keeps its
+  // own `process.env` default and every existing deps bag stays valid.
+  it("passes no options at all when main supplies no source env", async () => {
+    const seen = await installCapturingDoctor();
+    expect(seen).toEqual([undefined]);
   });
 });

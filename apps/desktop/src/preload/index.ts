@@ -109,6 +109,7 @@ import {
   CONNECTION_DELETE_CHANNEL,
   CONNECTION_SET_ACTIVE_CHANNEL,
   CONNECTION_UPDATE_CHANNEL,
+  ENGINE_PROXY_SET_CHANNEL,
   OAUTH_CANCEL_CHANNEL,
   OAUTH_START_CHANNEL,
   PERMISSION_RULE_ADD_CHANNEL,
@@ -125,6 +126,7 @@ import type {
   ConnectionSetActiveRequest,
   ConnectionUpdateRequest,
   CustomProviderRecord,
+  EngineProxySetRequest,
   OAuthStartResult,
   PermissionRuleAddRequest,
   SecretKey,
@@ -754,6 +756,11 @@ contextBridge.exposeInMainWorld("anycode", {
     // id (off the v1-patch shim). Returns a fresh snapshot; never carries a secret.
     connectionUpdate: (req: ConnectionUpdateRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_UPDATE_CHANNEL, req) as Promise<SettingsMutationResult>,
+    // TASK.139: the engine panes' proxy field. Its own channel because the
+    // generic `set` above would carry the value past a lenient persisted schema
+    // unrefined; `proxyUrl: ""` is the clear sentinel, never a stored value.
+    engineProxySet: (req: EngineProxySetRequest): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(ENGINE_PROXY_SET_CHANNEL, req) as Promise<SettingsMutationResult>,
     // TASK.45 W12: the connections grid/drawer's CRUD surface — main-authoritative,
     // additive. No credential ever crosses these (create/update payloads are
     // `.strict()`-refused if they carry one); a value only ever travels via

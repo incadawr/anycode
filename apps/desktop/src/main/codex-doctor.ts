@@ -19,6 +19,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
+import { ENV_CODEX_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
 import { classifyCodexBinaryPathTrust, type CodexBinaryTrustGateOutcome } from "./codex-binary.js";
 import { registerCodexChild } from "./codex-children.js";
 import {
@@ -118,6 +119,12 @@ export function buildDoctorChildEnv(source: NodeJS.ProcessEnv, platform: NodeJS.
     if (value !== undefined) env[key] = value;
   }
   env.PATH = augmentPathForGui(env.PATH, platform);
+  // TASK.139: the engine-level proxy, if main stamped its carrier into `source`.
+  // `codex login` is the reason this belongs on the DOCTOR builder and not only
+  // on the session child's: the login flow is a real OAuth round trip and it
+  // builds its env right here (main/codex-login.ts). With no carrier this is a
+  // no-op and the env is byte-identical to the pre-TASK.139 build.
+  applyEngineProxyOverride(env, source, ENV_CODEX_PROXY_URL);
   return env;
 }
 

@@ -94,6 +94,7 @@ import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
 import { ClaudeEnginePane } from "./ClaudeEnginePane.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
+import { EngineProxyField } from "./EngineProxyField.js";
 import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
@@ -164,8 +165,8 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
 export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = {
   profile: ["profile", "usage", "stats", "tokens", "streak", "heatmap"],
   provider: ["api key", "model", "base url", "oauth", "sign in", "credentials"],
-  codex: ["codex", "agent", "engine", "sign in", "chatgpt", "cli", "binary", "install", "update"],
-  claude: ["claude", "agent", "engine", "sign in", "anthropic", "cli", "binary"],
+  codex: ["codex", "agent", "engine", "sign in", "chatgpt", "cli", "binary", "install", "update", "proxy"],
+  claude: ["claude", "agent", "engine", "sign in", "anthropic", "cli", "binary", "proxy"],
   permissions: ["always allow", "rules", "bash", "pattern", "tool", "trusted", "binary", "consent", "security"],
   tools: ["concurrency", "stall timeout", "max turns", "tool"],
   mcp: ["mcp", "server", "status"],
@@ -1344,7 +1345,12 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
 
             {activePane === "codex" && <CodexEnginePane onRequestCloseSettings={onClose} />}
 
+            {/* TASK.139 lane B: engine-level proxy, stacked after the pane it belongs to — not a patch to CodexEnginePane itself. */}
+            {activePane === "codex" && <EngineProxyField engine="codex" store={store} />}
+
             {activePane === "claude" && <ClaudeEnginePane />}
+
+            {activePane === "claude" && <EngineProxyField engine="claude" store={store} />}
 
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 

@@ -58,6 +58,7 @@ import {
   customProviderIds,
   customProviderSecretKey,
   customSupportedTransports,
+  engineProxyCarriers,
   findCustomProviderRecord,
   isCustomProviderRecordId,
   resolveEffectiveTransport,
@@ -115,7 +116,16 @@ import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 // SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
-import { ENGINES_CHANGED_CHANNEL, registerCodexIpc, type CodexOnboardingController } from "./codex-ipc.js";
+// TASK.139: the engine-proxy carrier names, read back out of `engineProxyCarriers`
+// by the doctor/login deps below so shell-wins is decided in exactly one place;
+// `stripEngineProxyCarriers` keeps an AMBIENT one out of the live env (F1).
+import { ENV_CLAUDE_PROXY_URL, ENV_CODEX_PROXY_URL, stripEngineProxyCarriers } from "../shared/engines.js";
+import {
+  ENGINES_CHANGED_CHANNEL,
+  codexDoctorSourceEnv,
+  registerCodexIpc,
+  type CodexOnboardingController,
+} from "./codex-ipc.js";
 // SLICE-CC A3 (cut §1.2): new import line — mirrors the codex-ipc import above.
 // Doctor-spawn-loop fix: the dedicated snapshot push + its material-change
 // gate (see the `claudeOnboarding` `onSnapshot` wiring below).
@@ -820,6 +830,24 @@ function catalogIdsFor(current: AnycodeSettings): string[] {
 }
 
 /**
+ * The effective engine proxy for the codex children MAIN itself spawns — the
+ * doctor, `codex login`, and the post-install gate doctor (TASK.139 §2 case
+ * (e)). Read back out of the ONE authority that also decides shell-wins, rather
+ * than re-reading `settings.codex.proxyUrl` behind a second copy of that gate.
+ * Fresh per call for the same reason `readBinaryPathSetting` is: an edited proxy
+ * applies to the next spawn, with no cache to invalidate. `settings` is null
+ * until boot loads it, and that window means "no engine proxy".
+ */
+function codexEngineProxyUrl(): string | undefined {
+  return settings === null ? undefined : engineProxyCarriers(settings, bootEnv)[ENV_CODEX_PROXY_URL];
+}
+
+/** Claude mirror of `codexEngineProxyUrl` (its only consumer is the claude doctor — claude login opens a real Terminal.app and is out of reach by construction). */
+function claudeEngineProxyUrl(): string | undefined {
+  return settings === null ? undefined : engineProxyCarriers(settings, bootEnv)[ENV_CLAUDE_PROXY_URL];
+}
+
+/**
  * A copy of `current` with the active connection overridden to `connectionId`
  * (TASK.45 W10): routes every existing active-connection resolver
  * (resolveProviderSelection / activeCredential / activeProviderView) at the
@@ -1141,6 +1169,14 @@ void app.whenReady().then(async () => {
   // gate) stay in the live env.
   bootEnv = snapshotBootEnv(process.env);
   scrubSecretEnv(process.env);
+  // TASK.139 F1: the engine-proxy carriers are main's private main→child
+  // transport, so an ambient one from the owner's shell is deleted from the LIVE
+  // env too — `snapshotBootEnv` above already dropped it from the snapshot, and
+  // this closes the second door: the doctor/login child-env builders fall back
+  // to `options.env ?? process.env` (codex-doctor.ts, claude-doctor.ts,
+  // codex-login.ts), which would otherwise honour an ambient carrier on any
+  // spawn path that forgot to thread a source env.
+  stripEngineProxyCarriers(process.env);
   // Codex discovery+diagnosis itself is wired further below (registerCodexIpc
   // + the fire-and-forget initial recheck), once `settings` is loaded — the
   // discovery ladder's "settings" rung needs `settings.codex.binaryPath`,
@@ -1459,11 +1495,20 @@ void app.whenReady().then(async () => {
     // doctor-confirmed path (`!== null`) — an unconfigured engine simply never
     // gets a key, same fail-soft posture as before this widened from
     // engine-conditional to unconditional.
+    // TASK.139: both engine-proxy carriers ride every fork for exactly the
+    // reason the two binary paths above do — a subagent of the OTHER engine can
+    // be spawned from any tab. The overlay is rebuilt per spawn off the live
+    // module-scope `settings`, so a respawn picks up an edited proxy with no
+    // cache to invalidate; a session already running keeps its old one, the same
+    // semantics the connection-level field has.
     engineEnv: (engine: EngineId, generation: number) => ({
       [ENV_ENGINE]: engine,
       [ENV_HOST_GENERATION]: String(generation),
       ...(codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
       ...(claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
+      // `settings` is null until boot finishes loading it; an early fork must
+      // spread `{}` rather than dereference it.
+      ...(settings === null ? {} : engineProxyCarriers(settings, bootEnv)),
     }),
     reapEngineProcess: createEngineProcessReaper(),
     // Credential channel (slice 2.5 §3.3 + TASK.45 W10): an oauth-mode host asks
@@ -1758,6 +1803,9 @@ void app.whenReady().then(async () => {
   // automation never reaches here (module-top boot refusal).
   codexOnboarding = registerCodexIpc({
     bootEnv,
+    // TASK.139: the doctor and `codex login` are children main spawns itself, so
+    // they get the engine proxy through the same carrier the tab children use.
+    engineProxyUrl: codexEngineProxyUrl,
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
     // TASK.103: fresh read of settings.security.trustedBinaries per gate
@@ -1822,6 +1870,11 @@ void app.whenReady().then(async () => {
   // scope for this track (profile CRUD, quotas, install/manifest — CC-E).
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
+    // TASK.139: mirror of the codex dep above. The claude doctor makes no network
+    // call of its own, so this buys parity rather than function — but the doctor
+    // env builder declares itself a mirror of the session child's builder, and
+    // that declaration has to stay true.
+    engineProxyUrl: claudeEngineProxyUrl,
     readBinaryPathSetting: async () => settings?.claude?.binaryPath,
     // TASK.103: fresh read of settings.security.trustedBinaries per gate
     // check — mirror of readBinaryPathSetting's dep shape.
@@ -1866,6 +1919,13 @@ void app.whenReady().then(async () => {
   // supported range).
   registerCodexInstallIpc({
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
+    // TASK.139 F4: the post-install gate doctor is a main-spawned codex probe
+    // like every other one, so it reads through the SAME source env — the shared
+    // `codexDoctorSourceEnv`, not a second composition. Without it that one
+    // probe would fall back to main's live `process.env`, where a carrier never
+    // lives, and would ignore `settings.codex.proxyUrl` while the onboarding
+    // recheck and `codex login` honour it.
+    doctorSourceEnv: () => codexDoctorSourceEnv(bootEnv, codexEngineProxyUrl),
     readRiskAcceptedVersions: async () => settings?.codex?.riskAcceptedVersions ?? [],
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     onChanged: () => {

@@ -20,7 +20,7 @@
 import { ipcMain } from "electron";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
-import { ENV_CODEX_BIN } from "../shared/engines.js";
+import { ENV_CODEX_BIN, ENV_CODEX_PROXY_URL, stripEngineProxyCarriers } from "../shared/engines.js";
 import { CODEX_ONBOARDING_SHUTDOWN_BUDGET_MS } from "../shared/codex-timeouts.js";
 import { closeAllCodexChildren } from "./codex-children.js";
 import {
@@ -96,6 +96,17 @@ export interface DialogLike {
 export interface CodexIpcDeps {
   /** Immutable boot-env snapshot (main/index.ts's `bootEnv`) — read for `ANYCODE_CODEX_BIN`/`PATH`/`HOME`/`APPDATA`, and passed through as the doctor/login child's SOURCE env (buildDoctorChildEnv still allowlists it). */
   bootEnv: NodeJS.ProcessEnv;
+  /**
+   * The effective `settings.codex.proxyUrl` for the doctor/login children
+   * (TASK.139), read fresh per call — `undefined` when unset, malformed, or
+   * overridden by a shell-exported proxy. Optional so every existing test deps
+   * object stays valid and behaves exactly as before (no carrier ⇒ no override).
+   *
+   * `codex login` is the load-bearing consumer: it is a real OAuth round trip
+   * spawned by main, so behind a corporate proxy it simply cannot complete
+   * without this.
+   */
+  engineProxyUrl?: () => string | undefined;
   /** Reads the currently-persisted `settings.codex.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
   /** TASK.103: reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
@@ -261,6 +272,43 @@ export const CODEX_DOCTOR_TTL_MS = 60_000;
 const LOGIN_KEY = "login:active";
 
 /**
+ * The SOURCE env every main-spawned codex child reads through (TASK.139):
+ * `bootEnv` minus any ambient carrier, plus the engine-proxy carrier when one
+ * applies. `buildDoctorChildEnv` turns that carrier into the real proxy family;
+ * with no carrier the result is a plain copy of `bootEnv` and the child's env is
+ * byte-identical to before this existed.
+ *
+ * The strip is F1: the carrier namespace is main-authored, and `{...bootEnv}` is
+ * exactly the hole an ambient `ANYCODE_CODEX_PROXY_URL` would ride through —
+ * bypassing the shell-wins gate that licenses the child builder's unconditional
+ * family overwrite. (`snapshotBootEnv` already strips it at the origin; this
+ * repeats it because the dep is an arbitrary env object supplied by the caller.)
+ * Both carrier names go, not just this engine's: the namespace is stripped as a
+ * unit, and main re-authors only what belongs in THIS child.
+ *
+ * Exported, and not merely a closure over `deps`, because the post-install
+ * doctor lives in another module (main/codex-install.ts, F4) and must spawn with
+ * the identical source env — one authority, no second composition to drift.
+ *
+ * The binary-discovery ladder reads through it too. Discovery consults only
+ * PATH-ish keys, so the carrier is inert there — it goes through the same helper
+ * purely so no `bootEnv` read site can drift out of sync with the spawn sites it
+ * feeds.
+ */
+export function codexDoctorSourceEnv(
+  bootEnv: NodeJS.ProcessEnv,
+  engineProxyUrl?: () => string | undefined,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...bootEnv };
+  stripEngineProxyCarriers(env);
+  const url = engineProxyUrl?.();
+  if (url !== undefined) {
+    env[ENV_CODEX_PROXY_URL] = url;
+  }
+  return env;
+}
+
+/**
  * Builds the exclusive controller: `recheck`/`pickBinary`/`loginStart` funnel
  * through `runExclusive`, which COALESCES work sharing one profile key and
  * SERIALIZES work across different keys behind a single tail promise — so the
@@ -404,10 +452,15 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     };
   }
 
+  /** This controller's binding of `codexDoctorSourceEnv` — every main-spawned codex child reads through it. */
+  function doctorSourceEnv(): NodeJS.ProcessEnv {
+    return codexDoctorSourceEnv(deps.bootEnv, deps.engineProxyUrl);
+  }
+
   function discover(): { path: string | null; source: CodexBinarySource } {
     return discoverCodexBinary({
       envOverride: deps.bootEnv[ENV_CODEX_BIN],
-      env: deps.bootEnv,
+      env: doctorSourceEnv(),
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
@@ -503,7 +556,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             }
           : { status: "not_installed" }
         : await runDoctor(binaryPath, {
-            env: deps.bootEnv,
+            env: doctorSourceEnv(),
             // Quit aborts the doctor and awaits its bounded teardown; without
             // this signal the child outlives the app (W2-review Critical).
             signal: lifetime.signal,
@@ -543,7 +596,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     const discovery = discoverCodexBinary({
       envOverride: deps.bootEnv[ENV_CODEX_BIN],
       ...(settingsPath !== undefined ? { settingsPath } : {}),
-      env: deps.bootEnv,
+      env: doctorSourceEnv(),
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
@@ -695,7 +748,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         const discovery = discoverCodexBinary({
           envOverride: deps.bootEnv[ENV_CODEX_BIN],
           ...(settingsPath !== undefined ? { settingsPath } : {}),
-          env: deps.bootEnv,
+          env: doctorSourceEnv(),
           ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
           ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
@@ -712,7 +765,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           runLogin(binaryPath, {
             openExternal: deps.openExternal,
             signal: controller.signal,
-            env: deps.bootEnv,
+            env: doctorSourceEnv(),
             // The login signs INTO the profile's home (TASK.50 п.2): the
             // runner overwrites any ambient CODEX_HOME with it, so codex
             // writes the credential into the profile tree, never ~/.codex.

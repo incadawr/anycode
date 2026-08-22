@@ -10,6 +10,7 @@ import type { CodexSupportManifest } from "../shared/codex-support.js";
 import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import { makeTrustedScratchDir } from "../shared/test-scratch.js";
 import type { ResolvedCodexProfile } from "./codex-profiles.js";
+import { ENV_CODEX_PROXY_URL, LOOPBACK_NO_PROXY } from "../shared/engines.js";
 
 /** A syntactically valid manifest with one arbitrary supported range — the doctor must follow IT, not any hardcode. */
 function narrowManifest(range: string): CodexSupportManifest {
@@ -115,6 +116,57 @@ describe("buildDoctorChildEnv", () => {
   it("synthesises the well-known prefixes when the GUI launch left PATH unset", () => {
     const env = buildDoctorChildEnv({}, "darwin");
     expect(env.PATH).toBe("/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin");
+  });
+});
+
+describe("buildDoctorChildEnv — engine proxy carrier (TASK.139)", () => {
+  /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
+  const ENGINE_PROXY = "http://user:pass@codex-proxy.example.com:3128";
+  const SHELL_PROXY = "http://shell-proxy.internal:8080";
+  /** PATH after `augmentPathForGui` on a POSIX platform. */
+  const AUGMENTED_PATH = "/usr/bin:/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin";
+
+  // Byte-identity, asserted over the WHOLE child env rather than selected keys:
+  // the guarantee is that an unconfigured engine proxy changes nothing at all.
+  // The shell's own proxy still rides the passthrough list exactly as before.
+  it("without a carrier the doctor child env is byte-identical to the pre-TASK.139 build", () => {
+    const env = buildDoctorChildEnv({ HOME: "/home/dev", PATH: "/usr/bin", HTTPS_PROXY: SHELL_PROXY }, "linux");
+    expect(env).toEqual({ HOME: "/home/dev", PATH: AUGMENTED_PATH, HTTPS_PROXY: SHELL_PROXY });
+  });
+
+  // `codex login` builds its env with THIS function (main/codex-login.ts), so
+  // this is what makes an OAuth sign-in possible from behind a corporate proxy.
+  it("a carrier writes the family plus both loopback exemptions", () => {
+    const env = buildDoctorChildEnv(
+      { HOME: "/home/dev", PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: ENGINE_PROXY },
+      "linux",
+    );
+    expect(env).toEqual({
+      HOME: "/home/dev",
+      PATH: AUGMENTED_PATH,
+      HTTPS_PROXY: ENGINE_PROXY,
+      HTTP_PROXY: ENGINE_PROXY,
+      https_proxy: ENGINE_PROXY,
+      http_proxy: ENGINE_PROXY,
+      NO_PROXY: LOOPBACK_NO_PROXY,
+      no_proxy: LOOPBACK_NO_PROXY,
+    });
+  });
+
+  it("never forwards the carrier itself — the allowlist does not name it", () => {
+    const env = buildDoctorChildEnv(
+      { HOME: "/home/dev", PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: ENGINE_PROXY },
+      "linux",
+    );
+    expect(ENV_CODEX_PROXY_URL in env).toBe(false);
+  });
+
+  it("ignores the claude carrier", () => {
+    const env = buildDoctorChildEnv(
+      { HOME: "/home/dev", PATH: "/usr/bin", ANYCODE_CLAUDE_PROXY_URL: ENGINE_PROXY },
+      "linux",
+    );
+    expect(env.HTTPS_PROXY).toBeUndefined();
   });
 });
 

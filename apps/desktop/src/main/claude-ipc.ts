@@ -26,7 +26,7 @@
 import { ipcMain } from "electron";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
-import { ENV_CLAUDE_BIN } from "../shared/engines.js";
+import { ENV_CLAUDE_BIN, ENV_CLAUDE_PROXY_URL, stripEngineProxyCarriers } from "../shared/engines.js";
 import type { TrustedBinaryConsent } from "../shared/settings.js";
 import {
   checkClaudeBinaryPathTrust,
@@ -84,6 +84,18 @@ export interface DialogLike {
 export interface ClaudeIpcDeps {
   /** Immutable boot-env snapshot (main/index.ts's `bootEnv`) — read for `ANYCODE_CLAUDE_BIN`/`PATH`/`HOME`/`APPDATA`, and passed through as the doctor child's SOURCE env. */
   bootEnv: NodeJS.ProcessEnv;
+  /**
+   * The effective `settings.claude.proxyUrl` for the doctor child (TASK.139),
+   * read fresh per call — `undefined` when unset, malformed, or overridden by a
+   * shell-exported proxy. Optional, so an existing test deps object behaves
+   * exactly as before (no carrier ⇒ no override).
+   *
+   * Unlike its codex counterpart this buys parity, not function: the claude
+   * doctor is a local handshake that makes no network call. It exists because
+   * `buildClaudeDoctorChildEnv` declares itself a mirror of the session child's
+   * env builder, and that declaration must not quietly become false.
+   */
+  engineProxyUrl?: () => string | undefined;
   /** Reads the currently-persisted `settings.claude.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
   /** TASK.103: reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
@@ -195,6 +207,36 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
     return promise;
   }
 
+  /**
+   * The SOURCE env every main-spawned claude child reads through (TASK.139) —
+   * mirror of main/codex-ipc.ts's `codexDoctorSourceEnv`: `bootEnv` minus any
+   * ambient carrier, plus the engine-proxy carrier when one applies, which
+   * `buildClaudeDoctorChildEnv` turns into the real proxy family. With no
+   * carrier this is a plain copy of `bootEnv` and the child's env is
+   * byte-identical to before.
+   *
+   * The strip is F1: the carrier namespace is main-authored, so `{...bootEnv}`
+   * must not let an ambient `ANYCODE_CLAUDE_PROXY_URL` from the user's shell
+   * bypass the shell-wins gate in `engineProxyCarriers` — the gate that licenses
+   * the child builder to overwrite the proxy family unconditionally. Both
+   * carrier names go, not just this engine's: the namespace is stripped as a
+   * unit and main re-authors only what belongs in THIS child. Unlike the codex
+   * side this stays a closure — no second module spawns a claude doctor.
+   *
+   * The discovery ladder reads through it too; discovery consults only PATH-ish
+   * keys, so the carrier is inert there and the shared helper exists only to
+   * keep every `deps.bootEnv` read site from drifting apart.
+   */
+  function doctorSourceEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...deps.bootEnv };
+    stripEngineProxyCarriers(env);
+    const url = deps.engineProxyUrl?.();
+    if (url !== undefined) {
+      env[ENV_CLAUDE_PROXY_URL] = url;
+    }
+    return env;
+  }
+
   function discover(
     settingsPath: string | undefined,
   ): {
@@ -208,7 +250,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
     return discoverClaudeBinary({
       envOverride: deps.bootEnv[ENV_CLAUDE_BIN],
       ...(settingsPath !== undefined ? { settingsPath } : {}),
-      env: deps.bootEnv,
+      env: doctorSourceEnv(),
       ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
       ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
@@ -271,7 +313,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
             }
           : { status: "not_installed" }
         : await runDoctor(binaryPath, {
-            env: deps.bootEnv,
+            env: doctorSourceEnv(),
             // Ambient by default (owner pivot): no profileDir override, so the
             // doctor diagnoses the SAME `~/.claude` the user's own terminal is
             // signed into.

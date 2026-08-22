@@ -20,6 +20,7 @@ import {
   customProviderIds,
   customProviderSecretKey,
   customSupportedTransports,
+  engineProxyCarriers,
   envOverrides,
   findCustomProviderRecord,
   isCustomProviderRecordId,
@@ -1138,5 +1139,167 @@ describe("customProviderIds (owner-decision #6, cut §9.2, TASK.54)", () => {
     // With the union `customProviderIds` provides, it resolves correctly.
     const unioned = [...builtinOnly, ...customProviderIds(withCustom)];
     expect(isKnownSecretKey("provider.custom:foo.apiKey", unioned)).toBe(true);
+  });
+});
+
+describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
+  /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
+  const CODEX_PROXY = "http://user:pass@codex-proxy.example.com:3128";
+  const CLAUDE_PROXY = "https://claude-proxy.example.com:8443";
+  const SHELL_PROXY = "http://shell-proxy.internal:8080";
+  /** The COMPLETE key set this function may ever emit — byte-identity is asserted over exactly this. */
+  const CARRIER_KEYS = ["ANYCODE_CODEX_PROXY_URL", "ANYCODE_CLAUDE_PROXY_URL"] as const;
+
+  it("emits nothing when neither engine has a proxy", () => {
+    expect(engineProxyCarriers(settings(), {})).toEqual({});
+  });
+
+  it("emits only the codex carrier when only codex is configured", () => {
+    const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), {});
+    expect(result).toEqual({ ANYCODE_CODEX_PROXY_URL: CODEX_PROXY });
+  });
+
+  it("emits only the claude carrier when only claude is configured", () => {
+    const result = engineProxyCarriers(settings({ claude: { proxyUrl: CLAUDE_PROXY } }), {});
+    expect(result).toEqual({ ANYCODE_CLAUDE_PROXY_URL: CLAUDE_PROXY });
+  });
+
+  it("emits both carriers, each with its own engine's value", () => {
+    const result = engineProxyCarriers(
+      settings({ codex: { proxyUrl: CODEX_PROXY }, claude: { proxyUrl: CLAUDE_PROXY } }),
+      {},
+    );
+    expect(result).toEqual({
+      ANYCODE_CODEX_PROXY_URL: CODEX_PROXY,
+      ANYCODE_CLAUDE_PROXY_URL: CLAUDE_PROXY,
+    });
+  });
+
+  // Family-atomic shell-wins, and ONE check for BOTH engines: a shell that
+  // configured any single proxy var owns the network path for everything this
+  // app spawns. This is also the invariant that licenses
+  // `applyEngineProxyOverride` to clobber the family unconditionally — if it
+  // ever stopped holding, the builders would start beating the user's shell.
+  for (const shellVar of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+    it(`emits NOTHING for either engine when the shell exports ${shellVar}`, () => {
+      const result = engineProxyCarriers(
+        settings({ codex: { proxyUrl: CODEX_PROXY }, claude: { proxyUrl: CLAUDE_PROXY } }),
+        { [shellVar]: SHELL_PROXY },
+      );
+      expect(result).toEqual({});
+    });
+  }
+
+  // A blank shell var is not a configured proxy (same present-AND-non-blank
+  // test the rest of this module applies).
+  it("ignores a blank shell proxy var and still emits the carriers", () => {
+    const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), { HTTPS_PROXY: "  " });
+    expect(result).toEqual({ ANYCODE_CODEX_PROXY_URL: CODEX_PROXY });
+  });
+
+  // Fail-soft: `settings.codex`/`settings.claude` validate LENIENTLY on disk
+  // (settings/schema.ts) and the generic `settings-set` channel would accept an
+  // unrefined value, so a garbage proxy must degrade to "no proxy for this
+  // engine" — never to a broken child env, and never taking the other engine
+  // down with it.
+  it("drops a malformed value per-engine and keeps the valid sibling", () => {
+    for (const garbage of ["proxy.example.com:3128", "socks5://proxy.example.com:1080", "", "   ", "http://"]) {
+      const result = engineProxyCarriers(
+        settings({ codex: { proxyUrl: garbage }, claude: { proxyUrl: CLAUDE_PROXY } }),
+        {},
+      );
+      expect(result).toEqual({ ANYCODE_CLAUDE_PROXY_URL: CLAUDE_PROXY });
+    }
+  });
+
+  // Byte-identity of the fork overlay: with nothing configured the spread adds
+  // no key at all, so a fork's env is exactly its pre-TASK.139 self.
+  it("spreads into an env overlay without changing a byte when empty", () => {
+    const overlay = {
+      ANYCODE_ENGINE: "core",
+      ANYCODE_HOST_GENERATION: "3",
+      ...engineProxyCarriers(settings(), {}),
+    };
+    expect(overlay).toEqual({ ANYCODE_ENGINE: "core", ANYCODE_HOST_GENERATION: "3" });
+    for (const key of CARRIER_KEYS) {
+      expect(key in overlay).toBe(false);
+    }
+  });
+});
+
+describe("ambient engine-proxy carriers never reach a fork (TASK.139 F1)", () => {
+  const CODEX_PROXY = "http://user:pass@codex-proxy.example.com:3128";
+  const AMBIENT_PROXY = "http://ambient-carrier.invalid:9999";
+  const SHELL_PROXY = "http://shell-proxy.internal:8080";
+  /**
+   * The COMPLETE key set an ambient carrier could disturb: the proxy family the
+   * child builders overwrite from a carrier, the exemption pair, and the two
+   * carrier names themselves. Byte-identity is asserted over exactly this set.
+   */
+  const AFFECTED_KEYS = [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "NODE_USE_ENV_PROXY",
+    "ANYCODE_CODEX_PROXY_URL",
+    "ANYCODE_CLAUDE_PROXY_URL",
+  ] as const;
+
+  const pick = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+    Object.fromEntries(AFFECTED_KEYS.filter((key) => key in env).map((key) => [key, env[key]]));
+
+  it("snapshotBootEnv drops both carrier names and keeps every other var", () => {
+    const snapshot = snapshotBootEnv({
+      PATH: "/usr/bin",
+      HOME: "/home/me",
+      ANYCODE_MODEL: "m",
+      ANYCODE_CODEX_PROXY_URL: AMBIENT_PROXY,
+      ANYCODE_CLAUDE_PROXY_URL: AMBIENT_PROXY,
+    });
+    expect(snapshot).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m" });
+  });
+
+  // The contrast this slice is built on: every OTHER ambient ANYCODE_* is an
+  // honoured override (fillFromSettings never overwrites an env value) — the
+  // carriers are a private main->child transport and are stripped instead.
+  it("still honours an ambient ANYCODE_MODEL as an override while stripping the carriers", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_MODEL: "env-model", ANYCODE_CODEX_PROXY_URL: AMBIENT_PROXY },
+      settings: settings({ provider: { model: "settings-model" } }),
+      getSecret: noSecret,
+    });
+    expect(env.ANYCODE_MODEL).toBe("env-model");
+    expect(env.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
+  });
+
+  // The regression: a shell that exports its own proxy owns the family, so
+  // `engineProxyCarriers` emits nothing — an ambient carrier riding the
+  // `{...bootEnv}` spread would then be the ONLY carrier in the fork, and the
+  // child builder's unconditional overwrite would beat the shell's own proxy.
+  it("with a shell proxy and ambient carriers, the fork env is byte-identical to the shell's own", async () => {
+    const bootEnv = {
+      PATH: "/usr/bin",
+      HTTPS_PROXY: SHELL_PROXY,
+      ANYCODE_CODEX_PROXY_URL: AMBIENT_PROXY,
+      ANYCODE_CLAUDE_PROXY_URL: AMBIENT_PROXY,
+    };
+    const current = settings({ provider: { id: "z-ai", model: "m" } });
+    const env = await buildHostEnv({ bootEnv, settings: current, getSecret: noSecret });
+    const overlay = { ...env, ...engineProxyCarriers(current, bootEnv) };
+    expect(pick(overlay)).toEqual({ HTTPS_PROXY: SHELL_PROXY });
+  });
+
+  // And with an engine proxy configured, main's value is the one that lands —
+  // the ambient one is gone rather than merely losing a spread order fight.
+  it("main's configured carrier replaces an ambient one of the same name", async () => {
+    const bootEnv = { PATH: "/usr/bin", ANYCODE_CODEX_PROXY_URL: AMBIENT_PROXY };
+    const current = settings({ codex: { proxyUrl: CODEX_PROXY } });
+    const env = await buildHostEnv({ bootEnv, settings: current, getSecret: noSecret });
+    expect(env.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
+    const overlay = { ...env, ...engineProxyCarriers(current, bootEnv) };
+    expect(pick(overlay)).toEqual({ ANYCODE_CODEX_PROXY_URL: CODEX_PROXY });
   });
 });
