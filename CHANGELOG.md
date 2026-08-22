@@ -5,6 +5,33 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.15] — 2026-08-22
+
+### Added
+
+- A document can be opened from the tool card that created it. A successful
+  `Read`/`Write`/`Edit` of an `.html`/`.htm`/`.md`/`.markdown` path now carries
+  an `Open` control in its header row, so the one place where the path is known
+  exactly is finally a place you can click. Until now the only way into the
+  viewer was a markdown link the model happened to write, which gated the
+  affordance on markup rather than on the file.
+- A path stated in prose or in inline code is now clickable too — "saved it to
+  `report.html`" opens like a link, without the model having had to format it
+  as one. False positives are cut by existence rather than by guesswork: a path
+  becomes a link only after it is confirmed to be a real file inside the same
+  allowed roots the viewer already enforces, so a name that is merely mentioned,
+  or a file since deleted, stays ordinary text. Nothing is linkified inside a
+  code block, inside a link that already exists, or in inline code the path does
+  not fill completely.
+
+### Fixed
+
+- `.markdown` is treated exactly like `.md`. The list of viewable extensions had
+  been copied by hand into six independent places and `.markdown` was absent
+  from every one of them, so a file named `notes.markdown` could not be opened
+  through any path at all — not the tool card, not a link, not the automatic
+  open at the end of a turn. The six now read from one list.
+
 ## [0.0.14] — 2026-08-22
 
 ### Added
