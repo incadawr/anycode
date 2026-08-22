@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "pnpm -r run typecheck",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:codex-manifest": "node scripts/check-codex-manifest.mjs"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
