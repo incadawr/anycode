@@ -132,7 +132,26 @@ describe("codexVersionVerdict", () => {
 
 describe("manifestSupportedRange", () => {
   it("renders a single range verbatim and multiple ranges joined with ||", () => {
-    expect(manifestSupportedRange(BUNDLED_CODEX_MANIFEST)).toBe(">=0.144.0 <0.145.0");
+    // Synthetic inputs, not the bundled constant: the bundled range is a policy
+    // decision that moves whenever a Codex release is admitted, while the join
+    // is the behavior under test. Asserting the constant here made the "multiple
+    // ranges" half of this test's own name unexercised.
+    expect(manifestSupportedRange({ ...BUNDLED_CODEX_MANIFEST, supported: [{ range: ">=1.0.0 <2.0.0", status: "tested" }] })).toBe(
+      ">=1.0.0 <2.0.0",
+    );
+    expect(
+      manifestSupportedRange({
+        ...BUNDLED_CODEX_MANIFEST,
+        supported: [
+          { range: ">=1.0.0 <2.0.0", status: "tested" },
+          { range: ">=3.0.0 <4.0.0", status: "contract-verified" },
+        ],
+      }),
+    ).toBe(">=1.0.0 <2.0.0 || >=3.0.0 <4.0.0");
+    // The bundled manifest is one contiguous range today, so its rendering is
+    // the range itself — derived, never restated, so admitting a Codex release
+    // does not drag this test along.
+    expect(manifestSupportedRange(BUNDLED_CODEX_MANIFEST)).toBe(BUNDLED_CODEX_MANIFEST.supported[0]!.range);
   });
 });
 

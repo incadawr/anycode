@@ -21,8 +21,13 @@ if (args.includes("--version")) {
     // on timeout strands this grandchild with nothing left to reap it.
     forkStubbornGrandchild();
     setInterval(() => {}, 1_000);
-  } else if (args.includes("--bad-version")) process.stdout.write("codex-cli 0.145.0\n");
-  else if (args.includes("--hang-version")) setInterval(() => {}, 1_000);
+  } else if (args.includes("--bad-version")) {
+    // Deliberately BELOW the supported floor rather than above the ceiling:
+    // widening SUPPORTED_CODEX_VERSION only ever raises the upper bound, so an
+    // above-ceiling literal would silently become "supported" one widening
+    // later and this fail-closed test would stop testing anything.
+    process.stdout.write("codex-cli 0.100.0\n");
+  } else if (args.includes("--hang-version")) setInterval(() => {}, 1_000);
   else process.stdout.write("codex-cli 0.144.1\n");
   if (!args.includes("--hang-version") && !args.includes("--version-grandchild")) process.exit(0);
 } else {

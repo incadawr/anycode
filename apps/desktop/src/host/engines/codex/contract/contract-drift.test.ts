@@ -72,8 +72,33 @@ describe("contract-drift layer 1 (always-on)", () => {
     const version = parseCodexVersion("codex-cli 0.144.1");
     expect(version).not.toBeNull();
     expect(isSupportedCodexVersion(version!)).toBe(true);
-    expect(SUPPORTED_CODEX_VERSION).toBe(">=0.144.0 <0.145.0");
+    // Deliberately a LITERAL, not a re-derivation: widening the range must trip
+    // this test, so that admitting a version is always a reviewed edit here
+    // rather than a constant quietly drifting upward.
+    expect(SUPPORTED_CODEX_VERSION).toBe(">=0.144.0 <0.150.0");
     expect(pinned.generatedFrom.startsWith("codex-cli 0.144")).toBe(true);
+  });
+
+  it("isSupportedCodexVersion agrees with SUPPORTED_CODEX_VERSION at both bounds", () => {
+    // The predicate was once hardcoded (`minor === 144`) while the constant was
+    // a display string: widening the string alone advertised a range the code
+    // still refused, and the codex-support manifest would have promised users a
+    // version the transport rejected on sight. These four probes are the joint.
+    const at = (text: string): boolean => {
+      const version = parseCodexVersion(`codex-cli ${text}`);
+      expect(version, `unparsable probe version ${text}`).not.toBeNull();
+      return isSupportedCodexVersion(version!);
+    };
+    const bounds = /^>=(\S+) <(\S+)$/.exec(SUPPORTED_CODEX_VERSION);
+    expect(bounds, `SUPPORTED_CODEX_VERSION is not a ">=min <max" range: ${SUPPORTED_CODEX_VERSION}`).not.toBeNull();
+    const min = bounds![1]!;
+    const max = bounds![2]!;
+
+    expect(at(min), `${min} is the inclusive lower bound and must be supported`).toBe(true);
+    expect(at(max), `${max} is the EXCLUSIVE upper bound and must not be supported`).toBe(false);
+    // One patch inside each end, so a range collapsed to a single point fails too.
+    expect(at("0.144.1")).toBe(true);
+    expect(at("0.100.0"), "below the floor is never supported").toBe(false);
   });
 
   it("protocol.ts's observed approval methods are pinned server-request methods", () => {
@@ -317,6 +342,96 @@ describe("contract-drift hardening — the gate can actually go red (always-on, 
   });
 });
 
+/**
+ * Definition shapes that a LATER in-range Codex removed, each reviewed once and
+ * found unconsumed by the adapter — the allowance that lets `shapeRegressions`
+ * stay strict about everything else. Verified by grepping host/engines/codex
+ * for each name: none appears outside this contract directory. A removal NOT
+ * listed here fails the gate, which is the point.
+ */
+const REVIEWED_REMOVALS: Readonly<Record<string, string>> = {
+  // Bedrock credential plumbing; AnyCode never reads an Account's credential source.
+  "v2/AmazonBedrockCredentialSource": "0.147: replaced by usesCodexManagedCredentials",
+  "v2/Account/amazonBedrock/credentialSource": "0.147: replaced by usesCodexManagedCredentials",
+  // App-template id on an MCP tool call; the translator reads name/arguments/status only.
+  "v2/McpToolCallAppContext/templateId": "0.147: dropped from the app context",
+};
+
+/**
+ * Every way the live schema is NOT a compatible superset of the pin, as a list
+ * of human-readable paths (empty means compatible). Compatible means: every
+ * pinned definition still exists, every pinned object property still exists,
+ * and every pinned union VARIANT — keyed by its `type` discriminator, the
+ * literal the adapter actually switches on — still exists. Additions are
+ * invisible to this check by construction; a removal must be reviewed into
+ * REVIEWED_REMOVALS to pass.
+ */
+function shapeRegressions(pinnedDefs: unknown, freshDefs: unknown): string[] {
+  const out: string[] = [];
+
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+  /** The `type` discriminator literal of one oneOf variant, or null when it is not a discriminated variant. */
+  const discriminator = (variant: unknown): string | null => {
+    if (!isObj(variant)) return null;
+    const props = variant.properties;
+    if (!isObj(props)) return null;
+    const type = props.type;
+    if (!isObj(type)) return null;
+    const values = type.enum;
+    return Array.isArray(values) && typeof values[0] === "string" ? values[0] : null;
+  };
+
+  const walk = (pinnedNode: unknown, freshNode: unknown, path: string): void => {
+    if (REVIEWED_REMOVALS[path] !== undefined) return;
+    if (freshNode === undefined) {
+      out.push(path);
+      return;
+    }
+    if (!isObj(pinnedNode) || !isObj(freshNode)) return;
+
+    const pinnedProps = pinnedNode.properties;
+    const freshProps = freshNode.properties;
+    if (isObj(pinnedProps)) {
+      for (const name of Object.keys(pinnedProps)) {
+        walk(pinnedProps[name], isObj(freshProps) ? freshProps[name] : undefined, `${path}/${name}`);
+      }
+    }
+
+    const pinnedVariants = pinnedNode.oneOf;
+    const freshVariants = freshNode.oneOf;
+    if (Array.isArray(pinnedVariants)) {
+      const freshByDiscriminator = new Map<string, unknown>();
+      for (const variant of Array.isArray(freshVariants) ? freshVariants : []) {
+        const key = discriminator(variant);
+        if (key !== null) freshByDiscriminator.set(key, variant);
+      }
+      for (const variant of pinnedVariants) {
+        const key = discriminator(variant);
+        if (key === null) continue;
+        walk(variant, freshByDiscriminator.get(key), `${path}/${key}`);
+      }
+    }
+  };
+
+  if (!isObj(pinnedDefs) || !isObj(freshDefs)) return ["definitions"];
+  for (const group of Object.keys(pinnedDefs)) {
+    const pinnedGroup = pinnedDefs[group];
+    const freshGroup = freshDefs[group];
+    // `definitions.v2` is a MAP of definitions; every sibling is a definition itself.
+    if (group === "v2") {
+      if (!isObj(pinnedGroup)) continue;
+      for (const name of Object.keys(pinnedGroup)) {
+        walk(pinnedGroup[name], isObj(freshGroup) ? freshGroup[name] : undefined, `v2/${name}`);
+      }
+      continue;
+    }
+    walk(pinnedGroup, freshGroup, group);
+  }
+  return out;
+}
+
 describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (env-gated, live binary)", () => {
   it("the live binary's version is within SUPPORTED_CODEX_VERSION, and its freshly-generated schema structurally matches the pinned contract", () => {
     const bin = process.env.ANYCODE_CODEX_DRIFT_BIN!;
@@ -350,9 +465,17 @@ describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (e
       // actually probed (already asserted in-range above) — only the
       // schema-derived structure below is drift-relevant.
       const pinned = loadPinned();
+      // The DISPATCH surface stays byte-equal: a consumed method or an approval
+      // decision literal that changed is a break no matter which version
+      // produced it.
       expect(fresh.methods).toEqual(pinned.methods);
       expect(fresh.decisionEnums).toEqual(pinned.decisionEnums);
-      expect(fresh.definitions).toEqual(pinned.definitions);
+      // The SHAPES are checked as a compatible superset instead. The pin is one
+      // version's snapshot while SUPPORTED_CODEX_VERSION is a range, so a later
+      // in-range binary that only ADDS optional fields is compatible and must
+      // not fail — deep equality here would make every range wider than a single
+      // patch unverifiable by this instrument.
+      expect(shapeRegressions(pinned.definitions, fresh.definitions)).toEqual([]);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

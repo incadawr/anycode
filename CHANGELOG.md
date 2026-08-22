@@ -5,6 +5,67 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.14] — 2026-08-22
+
+### Added
+
+- A proxy is now a named profile in one registry instead of a string retyped on
+  every scope. Settings gained a Network panel where profiles are created and
+  edited once; a provider connection and each engine simply point at one. The
+  editor plaque exists in exactly one place, and every scope offers a dropdown.
+- "Check connection" actually goes through the proxy being tested — the probe
+  spawns a child rather than asking the app's own network stack, so what it
+  reports is what a session will experience, including eight distinct failure
+  shapes taken from live measurement instead of one generic error.
+- The Codex and Claude engines can each use their own proxy, separate from any
+  provider connection. `codex login`, which main spawns itself, finally
+  completes behind a corporate proxy. The ladder is shell > engine >
+  connection, with the shell winning as a whole family.
+- A running session can be moved to a different provider connection without
+  losing it: children are drained, the host is shut down, and the session
+  resumes on the new connection.
+- Hitting the turn cap is now a decision instead of an ending. The run asks for
+  more turns once, and the answer is structural — a single declared tool whose
+  arguments are checked byte-for-byte, never parsed prose. Grants shrink each
+  round (half the budget, then a quarter, then an eighth) with at most three
+  rounds, so an autonomous run can finish a job it underestimated while a
+  runaway one still stops. Anything unreadable is a refusal.
+
+### Changed
+
+- Codex versions up to 0.149.x are accepted. The supported range had fallen
+  behind the CLI's own releases, so anyone on a current Codex — including a
+  plain `npm i -g @openai/codex` — was refused by default and had to click
+  through a risk acceptance. The consumed app-server contract was regenerated
+  from the real 0.147.0 and 0.149.0 binaries and came back byte-identical in
+  every method and decision the adapter speaks. AnyCode still installs 0.144.3
+  when it downloads Codex itself, since that is the version with a full live
+  smoke behind it.
+
+### Fixed
+
+- A run with nobody at the screen no longer pays the full two-minute permission
+  deadline for every tool call. The first unanswered ask marks the session
+  unattended and later asks are refused at once, so the wait is bounded by one
+  deadline instead of growing with the number of calls — four serial asks used
+  to cost eight minutes of dead time. Answering a prompt or typing a message
+  brings it back; a window merely reattaching does not.
+- The refusal text those calls receive is written for the model that reads it.
+  It used to say "permission request timed out", which read as a broken
+  environment: in a live run the model retried four spellings of the same
+  command and then started debugging its PATH. It now states that the command
+  did not fail, that the refusal is not on the merits, and that rephrasing will
+  not help.
+- Sessions running on the Codex or Claude engines honour always-allow rules.
+  Those engines never pass through the core permission layer, so a rule saved
+  from a permission prompt could not reach them at all and the same prompt came
+  back every time.
+- An autonomous run can be given a narrow, per-run list of Bash commands to
+  allow (`ANYCODE_RUN_ALLOW_BASH`) — the middle ground between asking for
+  everything and the blanket yolo mode. It is a process input, never persisted
+  and never shown in Settings, matched by exact token prefix with no globs, and
+  refused outright for anything containing shell composition.
+
 ## [0.0.13] — 2026-08-18
 
 ### Added
