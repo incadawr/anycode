@@ -30,6 +30,7 @@ import {
   CHILD_RUNS_PER_PARENT_MAX,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_RUN_EVENT_TYPE,
+  CHILD_SPAWN_QUEUE_MAX,
   CHILD_SPAWN_REQUEST_TYPE,
   CHILD_START_DEADLINE_MS,
   CHILD_START_TYPE,
@@ -1618,7 +1619,7 @@ describe("TabHostManager — canSpawn(\"claude\") follows doctor readiness (SLIC
  * spawned child lands at whatever index its fork call landed at.
  */
 describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 B3)", () => {
-  it("4 synchronous spawns from the SAME parent, no await between them, admit exactly 3 and refuse the 4th limit_parent", () => {
+  it("4 synchronous spawns from the SAME parent, no await between them, admit exactly 3 and PARK the 4th (TASK.147 срез 1) — it wakes once a slot frees and reaches its own terminal", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -1632,28 +1633,51 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     rootHost.emit("message", spawnRequest({ requestId: "r1" }));
     rootHost.emit("message", spawnRequest({ requestId: "r2" }));
     rootHost.emit("message", spawnRequest({ requestId: "r3" }));
-    rootHost.emit("message", spawnRequest({ requestId: "r4" }));
+    rootHost.emit("message", spawnRequest({ requestId: "r4", spawnToolCallId: "r4-call" }));
 
     const events = childRunEvents(rootHost);
     const accepted = events.filter((e) => e.kind === "accepted");
-    const rejected = events.filter((e) => e.kind === "rejected");
     expect(accepted).toHaveLength(CHILD_RUNS_PER_PARENT_MAX);
     expect(accepted.map((e) => e.requestId)).toEqual(["r1", "r2", "r3"]);
-    expect(rejected).toEqual([
-      {
-        type: CHILD_RUN_EVENT_TYPE,
-        requestId: "r4",
-        kind: "rejected",
-        reason: "limit_parent",
-        message:
-          'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
-      },
-    ]);
+    // TASK.147 срез 1: the cap no longer terminates a 4th request — it
+    // parks. No reply (neither accepted nor rejected) has gone out for it.
+    expect(events.some((e) => e.requestId === "r4")).toBe(false);
     // 1 root + 3 admitted children forked; the 4th never reached fork at all.
     expect(hosts).toHaveLength(1 + CHILD_RUNS_PER_PARENT_MAX);
+
+    // The parked request already reserved its dedup key, exactly like a
+    // running one would (§10.5 п.3's dedup discipline extends to a waiter).
+    const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
+    expect(raw.childSpawnQueue).toEqual(["r4"]);
+    // The dedup key's join character is `childSpawnKey`'s own NUL separator
+    // (§10.5 п.3) — built here via `String.fromCharCode`, not a literal
+    // escape, so no NUL byte ever passes through as source text.
+    const dedupKey = ["root-atomic", "r4-call"].join(String.fromCharCode(0));
+    expect(raw.childSpawnKeys.has(dedupKey)).toBe(true);
+
+    // Free r1's slot through the ONE honest release point (finalizeChildRun,
+    // via a normal ChildTerminal) — the parked r4 must wake and actually fork.
+    const child1Host = hosts[1]!;
+    child1Host.emit("message", childTerminalMsg({ status: "completed" }));
+
+    const afterFree = childRunEvents(rootHost);
+    const r4Accepted = afterFree.find((e) => e.requestId === "r4");
+    expect(r4Accepted).toMatchObject({ kind: "accepted" });
+    expect(hosts).toHaveLength(1 + CHILD_RUNS_PER_PARENT_MAX + 1); // r4 forked now
+    expect(raw.childSpawnQueue).toEqual([]);
+
+    // ...and it reaches an actual terminal (the DoD's own "доходит до
+    // терминала"), exactly like an immediately-admitted child would.
+    const r4ChildTabId = r4Accepted?.kind === "accepted" ? r4Accepted.childTabId : "";
+    const r4Host = hosts[hosts.length - 1]!;
+    r4Host.emit("message", childTerminalMsg({ status: "completed" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "r4" && e.kind === "terminal")).toMatchObject({
+      status: "completed",
+    });
+    expect(manager.getTab(r4ChildTabId)).toBeUndefined();
   });
 
-  it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) is refused limit_global", () => {
+  it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) PARKS on limit_global (TASK.147 срез 1) — and wakes when a DIFFERENT parent's slot frees, not just its own", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -1674,19 +1698,31 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
       expect(childRunEvents(rootHosts[p]!).filter((e) => e.kind === "accepted")).toHaveLength(perParentCounts[p]!);
     }
 
-    // A 9th spawn from the parent that still has per-parent room (2 of 3 used).
+    // A 9th spawn from the parent that still has per-parent room (2 of 3
+    // used) — blocked purely by the GLOBAL cap. TASK.147 срез 1: it parks,
+    // it is not told `limit_global` yet.
     rootHosts[2]!.emit("message", spawnRequest({ requestId: "p2-overflow" }));
-    expect(childRunEvents(rootHosts[2]!).filter((e) => e.requestId === "p2-overflow")).toEqual([
-      {
-        type: CHILD_RUN_EVENT_TYPE,
-        requestId: "p2-overflow",
-        kind: "rejected",
-        reason: "limit_global",
-        message:
-          'Agent: application-wide session-subagent limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".',
-      },
-    ]);
-    expect(hosts).toHaveLength(3 + 8); // 3 roots + exactly 8 children, the 9th never forked
+    expect(childRunEvents(rootHosts[2]!).some((e) => e.requestId === "p2-overflow")).toBe(false);
+    expect(hosts).toHaveLength(3 + 8); // 3 roots + exactly 8 children; the 9th never forked
+
+    // Free a slot on PARENT 0 (`p0-0`, the first of the 8 children forked
+    // above, at hosts[3]) — a DIFFERENT parent than the one the parked
+    // request belongs to. The global cap is what was blocking it, and a
+    // global slot just freed no matter WHOSE child released it (TASK.147's
+    // own "заявка могла ждать из-за ГЛОБАЛЬНОГО кэпа, а освободился слот у
+    // ДРУГОГО родителя — такую тоже надо будить").
+    hosts[3]!.emit("message", childTerminalMsg({ status: "completed" }));
+
+    const overflowEvent = childRunEvents(rootHosts[2]!).find((e) => e.requestId === "p2-overflow");
+    expect(overflowEvent).toMatchObject({ kind: "accepted" });
+    expect(hosts).toHaveLength(3 + 8 + 1); // the parked 9th finally forked
+
+    const overflowChildTabId = overflowEvent?.kind === "accepted" ? overflowEvent.childTabId : "";
+    hosts[hosts.length - 1]!.emit("message", childTerminalMsg({ status: "completed" }));
+    expect(
+      childRunEvents(rootHosts[2]!).find((e) => e.requestId === "p2-overflow" && e.kind === "terminal"),
+    ).toMatchObject({ status: "completed" });
+    expect(manager.getTab(overflowChildTabId)).toBeUndefined();
   });
 
   it("the core engine being unready refuses not_ready without reserving a slot", () => {
@@ -1887,7 +1923,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(hosts).toHaveLength(hostsBefore); // spawnTabHost's soft-fail path never reaches fork()
   });
 
-  it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays limit_parent until the cancelled child actually exits, then succeeds", () => {
+  it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays PARKED (TASK.147 срез 1) until the cancelled child actually exits, then wakes it (not whoever asks next)", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -1903,12 +1939,10 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     rootHost.emit("message", runCancel("hold-1"));
     expect(child1Host.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
 
-    // Still refused: cancelling still occupies the slot.
+    // Still no slot: cancelling still occupies it, so this parks rather
+    // than being told `limit_parent` (TASK.147 срез 1).
     rootHost.emit("message", spawnRequest({ requestId: "too-soon" }));
-    expect(childRunEvents(rootHost).find((e) => e.requestId === "too-soon")).toMatchObject({
-      kind: "rejected",
-      reason: "limit_parent",
-    });
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "too-soon")).toBe(false);
 
     // The cancelled child ACTUALLY exits now (shutdownableForkRig's auto-responder
     // already queued this on a microtask from the shutdown postMessage above, but
@@ -1916,11 +1950,173 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     // any change in that timing).
     child1Host.emit("exit", 0);
 
-    rootHost.emit("message", spawnRequest({ requestId: "after-reap" }));
-    expect(childRunEvents(rootHost).find((e) => e.requestId === "after-reap")).toMatchObject({ kind: "accepted" });
+    // The freed slot goes to the FIFO's rightful waiter, "too-soon" — not to
+    // a fresh request arriving after it.
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "too-soon")).toMatchObject({ kind: "accepted" });
     const terminalForHold1 = childRunEvents(rootHost).find((e) => e.requestId === "hold-1" && e.kind === "terminal");
     expect(terminalForHold1).toMatchObject({ status: "cancelled" });
+
+    // A brand-new request arriving NOW sees the cap full again (hold-2,
+    // hold-3, too-soon) and parks in its turn — the freed slot was not
+    // handed to it instead of the waiter that was already ahead of it.
+    rootHost.emit("message", spawnRequest({ requestId: "after-reap" }));
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "after-reap")).toBe(false);
   });
+});
+
+/**
+ * TASK.147 срез 1: a spawn request exceeding the per-parent/global cap now
+ * parks instead of being refused outright — the tests above (in "…admission
+ * is ATOMIC") re-purpose the ORIGINAL cap tests to prove the park-then-wake
+ * lifecycle end to end. These tests cover the three properties that lifecycle
+ * specifically needs and nothing above already exercises: the queue's own
+ * dedup surface, the queue's own upper bound, and app-quit purging every
+ * waiter app-wide (as opposed to `drainChildren`'s per-parent purge, already
+ * covered by the "spawn around a root's close" suite below).
+ */
+describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
+  it("a duplicate (parentSessionId, spawnToolCallId) pair is refused spawn_failed WHILE the first spawn is still queued, not only while it is running", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-dedup-queued", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "fill-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "fill-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "fill-3" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+
+    rootHost.emit("message", spawnRequest({ requestId: "queued-1", spawnToolCallId: "dupe-call" }));
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "queued-1")).toBe(false); // parked, not answered
+
+    // Same (parentSessionId, spawnToolCallId) pair, a second attempt, WHILE
+    // the first is still only queued — never yet reserved in `childRuns`.
+    rootHost.emit("message", spawnRequest({ requestId: "queued-2", spawnToolCallId: "dupe-call" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "queued-2")).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "queued-2",
+      kind: "rejected",
+      reason: "spawn_failed",
+      message:
+        "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.",
+    });
+
+    // Exactly the first attempt is queued — the duplicate never enqueues a
+    // second entry for the same pair.
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["queued-1"]);
+  });
+
+  it("the queue itself is bounded by CHILD_SPAWN_QUEUE_MAX — beyond it, a further cap-exceeding spawn is refused OUTRIGHT with the existing frozen limit text, not parked", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-queue-overflow", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "run-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "run-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "run-3" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+
+    for (let n = 0; n < CHILD_SPAWN_QUEUE_MAX; n++) {
+      rootHost.emit("message", spawnRequest({ requestId: `queued-${n}` }));
+    }
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toHaveLength(CHILD_SPAWN_QUEUE_MAX);
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "rejected")).toHaveLength(0);
+
+    // One more, past the queue's own bound: refused outright, with the SAME
+    // frozen text a cap-exceeding spawn always got pre-TASK.147 — the
+    // "Границы решения" texts stay reachable exactly on this path.
+    rootHost.emit("message", spawnRequest({ requestId: "overflow" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "overflow")).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "overflow",
+      kind: "rejected",
+      reason: "limit_parent",
+      message:
+        'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
+    });
+    expect(raw.childSpawnQueue).toHaveLength(CHILD_SPAWN_QUEUE_MAX); // never enqueued
+  });
+
+  it("shutdownAllTabHosts (this.quitting) purges EVERY queued spawn request app-wide — rejected closing, no ghosts left in any map", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-quit-purge", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "run-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "run-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "run-3" }));
+    rootHost.emit("message", spawnRequest({ requestId: "queued", spawnToolCallId: "quit-call" }));
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "queued")).toBe(false);
+
+    await manager.shutdownAllTabHosts();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "queued")).toMatchObject({
+      kind: "rejected",
+      reason: "closing",
+      message: "Agent: the child session could not be started (host is closing).",
+    });
+    const raw = manager as unknown as {
+      childSpawnQueue: string[];
+      childSpawnWaiters: Map<string, unknown>;
+      childSpawnKeys: Map<string, string>;
+    };
+    expect(raw.childSpawnQueue).toEqual([]);
+    expect(raw.childSpawnWaiters.size).toBe(0);
+    const dedupKey = ["root-quit-purge", "quit-call"].join(String.fromCharCode(0));
+    expect(raw.childSpawnKeys.has(dedupKey)).toBe(false);
+  });
+
+  it("a spawn arriving DURING its parent's drain is refused limit_parent, not parked — a waiter would otherwise be admitted by the reaps that drain is waiting for, forking a child into a parent mid-rebind", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const created = manager.createTab({ workspace: "/ws", sessionId: "root-drain-window", resume: false, connectionId: "conn-old" });
+    expect(created.ok).toBe(true);
+    const tab = created.ok ? created.tab : undefined;
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "d1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "d2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "d3" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+    const hostsBeforeDrain = hosts.length;
+
+    // A rebind drains the children WITHOUT sealing the tab `closing` first
+    // (only `closeTab` seals; `handleExit` instead nulls `proc`), so the
+    // parent host is still live, still `running`, and can still issue a
+    // spawn while the drain awaits its reaps. Not awaited yet: an async
+    // function body runs synchronously to its first `await`, so the drain
+    // window is already open on the line below.
+    const rebinding = manager.rebindTab(tab!, "conn-new");
+    rootHost.emit("message", spawnRequest({ requestId: "d4", spawnToolCallId: "drain-window-call" }));
+
+    // Every child is `cancelling` and §0.7 has `cancelling` hold its slot, so
+    // the cap reads FULL for the whole drain — parking here would park in
+    // every rebind rather than a rare one, and the waiter would then be
+    // admitted by the very reaps the drain is waiting for.
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "d4")).toMatchObject({
+      kind: "rejected",
+      reason: "limit_parent",
+    });
+    const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
+    expect(raw.childSpawnQueue).toEqual([]);
+    expect(raw.childSpawnKeys.has(["root-drain-window", "drain-window-call"].join(String.fromCharCode(0)))).toBe(false);
+
+    expect(await rebinding).toEqual({ ok: true });
+    await flush();
+    // Exactly one new host: the tab's own respawned root. No child was forked
+    // for d4 on the way out, and the drain window is closed again.
+    expect(hosts).toHaveLength(hostsBeforeDrain + 1);
+    expect((manager as unknown as { drainingParents: Map<string, number> }).drainingParents.size).toBe(0);
+    expect(raw.childSpawnQueue).toEqual([]);
+  });
+
 });
 
 describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", () => {
@@ -2180,6 +2376,58 @@ describe("TabHostManager — spawn around a root's close: seal + cascade drain (
     expect(manager.listTabs().some((t) => t.childOf !== undefined)).toBe(false);
   });
 
+  it("close on a root with a QUEUED (not yet admitted) spawn kills the waiter too — rejected closing, no ghosts in childRuns/childrenByParentTab/childSpawnKeys (TASK.147 срез 1)", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const a = manager.createTab({ workspace: "/a", sessionId: "root-close-queued", resume: false });
+    manager.createTab({ workspace: "/b", sessionId: "root-close-queued-b", resume: false });
+    expect(a.ok).toBe(true);
+    const rootTabId = a.ok ? a.tab.tabId : "";
+    const rootHost = hosts[0]!;
+
+    // Fill the per-parent cap, then a 4th request parks instead of forking.
+    rootHost.emit("message", spawnRequest({ requestId: "close-run-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "close-run-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "close-run-3" }));
+    rootHost.emit("message", spawnRequest({ requestId: "close-queued", spawnToolCallId: "close-call" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "close-queued")).toBe(false);
+    const hostsBeforeClose = hosts.length;
+
+    const result = await manager.closeTab(rootTabId);
+    expect(result).toEqual({ ok: true });
+
+    // The waiter never forked (closing purges it before it could) and gets
+    // the SAME `rejected closing` reply a spawn arriving after the seal
+    // already gets (TASK.147's "отвечай существующим CHILD_CLOSING_MESSAGE
+    // через тот же rejected-путь").
+    expect(hosts).toHaveLength(hostsBeforeClose);
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "close-queued")).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "close-queued",
+      kind: "rejected",
+      reason: "closing",
+      message: "Agent: the child session could not be started (host is closing).",
+    });
+
+    // No ghosts anywhere — including the queue-specific structures a waiter
+    // (as opposed to a running child) reserves.
+    const raw = manager as unknown as {
+      childRuns: Map<string, unknown>;
+      childrenByParentTab: Map<string, Set<string>>;
+      childSpawnKeys: Map<string, string>;
+      childSpawnQueue: string[];
+      childSpawnWaiters: Map<string, unknown>;
+    };
+    expect(raw.childRuns.size).toBe(0);
+    expect(raw.childrenByParentTab.has(rootTabId)).toBe(false);
+    expect(raw.childSpawnQueue).toEqual([]);
+    expect(raw.childSpawnWaiters.size).toBe(0);
+    const dedupKey = ["root-close-queued", "close-call"].join(String.fromCharCode(0));
+    expect(raw.childSpawnKeys.has(dedupKey)).toBe(false);
+  });
+
   it("public closeTab(childTabId) reports unknown_tab — a child is never externally addressable", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -2333,6 +2581,50 @@ describe("TabHostManager — child start-deadline (CHILD_START_DEADLINE_MS, TASK
 
     const terminal = childRunEvents(rootHost).find((e) => e.requestId === "on-time" && e.kind === "terminal");
     expect(terminal).toBeUndefined();
+  });
+
+  it("TASK.147 срез 1: the deadline is NOT consumed while a request sits queued — it starts only at the REAL fork, never at park time", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-deadline-queued", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "fill-1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "fill-2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "fill-3" }));
+    // Clear the 3 fillers' OWN start-deadlines (child-ready) — otherwise
+    // their unrelated 30s timeouts would fire during the long wait below
+    // and confound this test via their own finalize/pump side effect.
+    for (let n = 1; n <= 3; n++) {
+      hosts[n]!.emit("message", childReadyMsg());
+    }
+    rootHost.emit("message", spawnRequest({ requestId: "queued-slow" }));
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "queued-slow")).toBe(false);
+
+    // Sit queued for LONGER than the start-deadline itself — if the timer
+    // wrongly started at park time, this alone would already have produced
+    // a spurious timeout terminal for a request that never even forked.
+    vi.advanceTimersByTime(CHILD_START_DEADLINE_MS * 3);
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "queued-slow")).toBe(false);
+
+    // Free a slot — the queued request wakes and forks NOW.
+    const fill1Host = hosts[1]!;
+    fill1Host.emit("message", childTerminalMsg({ status: "completed" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "queued-slow");
+    expect(accepted).toMatchObject({ kind: "accepted" });
+
+    // Its own deadline gets a FULL fresh window counted from THIS fork, not
+    // whatever remained after the (already longer) wait above.
+    vi.advanceTimersByTime(CHILD_START_DEADLINE_MS - 1);
+    expect(
+      childRunEvents(rootHost).find((e) => e.requestId === "queued-slow" && e.kind === "terminal"),
+    ).toBeUndefined();
+
+    vi.advanceTimersByTime(1);
+    expect(
+      childRunEvents(rootHost).find((e) => e.requestId === "queued-slow" && e.kind === "terminal"),
+    ).toMatchObject({ status: "error" });
   });
 });
 
@@ -3728,12 +4020,10 @@ describe("TabHostManager — drainChildren's deadline branch administratively to
     newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r4", spawnToolCallId: "n2ii-call-3" }));
     expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r3")?.kind).toBe("accepted");
     expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r4")?.kind).toBe("accepted");
-    // ...and a 4th is refused as over-quota.
-    const fifth = childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r5");
+    // ...and a 4th PARKS rather than being refused outright (TASK.147 срез
+    // 1) — no reply has gone out for it yet.
     newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r5", spawnToolCallId: "n2ii-call-4" }));
-    const fifthEvent = childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r5");
-    expect(fifthEvent?.kind).toBe("rejected");
-    expect(fifthEvent?.kind === "rejected" ? fifthEvent.reason : undefined).toBe("limit_parent");
+    expect(childRunEvents(newRootHost).some((e) => e.requestId === "n2ii-r5")).toBe(false);
   });
 
   it("(iii) the crash-path respawn's own drain deadline (handleExit's THIRD drainChildren call site) tombstones a stuck child too — ledger/dedup-key/quota are all free on the RESPAWNED root", async () => {

@@ -32,6 +32,7 @@ import {
   CHILD_RUNS_PER_PARENT_MAX,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_RUN_EVENT_TYPE,
+  CHILD_SPAWN_QUEUE_MAX,
   CHILD_SPAWN_REQUEST_TYPE,
   CHILD_START_DEADLINE_MS,
   CHILD_START_TYPE,
@@ -403,6 +404,26 @@ interface ChildRunLedgerEntry {
 }
 
 /**
+ * One spawn request parked past the per-parent/global cap (TASK.147 срез 1),
+ * keyed by `requestId` in `TabHostManager.childSpawnWaiters` and ordered by
+ * `childSpawnQueue`. Unlike `ChildRunLedgerEntry`, a waiter never held a fork
+ * — it is pure bookkeeping for a request `spawnChild` has neither accepted
+ * nor rejected yet, so it carries the ORIGINAL `req` verbatim (needed intact
+ * once `admitChildSpawn` finally runs) and `spawnKey`, which is ALREADY
+ * reserved in `childSpawnKeys` from the moment this waiter is created — the
+ * in-flight dedup check must see a still-queued request exactly as it sees a
+ * running one (TASK.147's "Дедуп спавна сохраняется"). `parentTabId` is all
+ * that is needed to re-resolve the live `TabHost` at wake time (never a
+ * captured `TabHost` reference, which a respawn would make stale).
+ */
+interface ChildSpawnWaiter {
+  requestId: string;
+  parentTabId: string;
+  spawnKey: string;
+  req: ChildSpawnRequest;
+}
+
+/**
  * Pure respawn decision + counter accounting for a single host exit (design
 
  * the current per-tab + global-storm counters, applies the returned counters,
@@ -680,8 +701,47 @@ export class TabHostManager {
    * `finalizeChildRun` (or `spawnChild`'s own fork-failure rollback) — so a
    * pair can never outlive the run it names, on ANY of the terminal paths
    * (completed/error/cancelled/crash/start-deadline) that lead there.
+   *
+   * TASK.147 срез 1 amendment: `spawnChild` now reserves a pair's entry HERE
+   * the moment the dedup check passes — one step BEFORE it is known whether
+   * the request will admit immediately or park in `childSpawnQueue` — rather
+   * than only once `childRuns`/`childrenByParentTab` are also written. A
+   * parked request is therefore just as dedup-protected as a running one; it
+   * is released by the same `finalizeChildRun`/rollback paths above, plus
+   * `purgeChildSpawnWaiters` for a waiter that dies before ever admitting.
    */
   private readonly childSpawnKeys = new Map<string, string>();
+  /**
+   * FIFO arrival order of currently-queued `requestId`s (TASK.147 срез 1) —
+   * one manager-wide queue, not one per parent: a slot freed by ANY parent's
+   * `finalizeChildRun` can admit a waiter belonging to a DIFFERENT parent
+   * (it was blocked on the GLOBAL cap, not its own per-parent one), so
+   * wake-up must scan arrival order across every parent at once rather than
+   * only the freed parent's own backlog. Bounded by `CHILD_SPAWN_QUEUE_MAX`.
+   */
+  private readonly childSpawnQueue: string[] = [];
+  /** requestId -> the parked spawn request `childSpawnQueue` orders (TASK.147 срез 1); see `ChildSpawnWaiter`'s own doc for why this is not simply folded into `childRuns`. */
+  private readonly childSpawnWaiters = new Map<string, ChildSpawnWaiter>();
+  /**
+   * Parent tabIds with a `drainChildren` pass currently in flight, refcounted
+   * because two teardown paths can legally overlap on one tab (`handleExit`
+   * fires its drain with `void` and does not await it, so a `closeTab` or
+   * `rebindTab` arriving mid-respawn starts a second pass while the first is
+   * still awaiting reaps) — a plain Set would let whichever pass finished
+   * first clear the flag out from under the other.
+   *
+   * A drain is exactly the window in which the per-parent cap is guaranteed
+   * FULL and yet meaningless: every child is `cancelling`, and §0.7 has
+   * `cancelling` hold its slot until a real reap. Parking a request there
+   * would therefore park it in every case rather than the rare one, and the
+   * waiter would then be admitted by `pumpChildSpawnQueue` as those very
+   * reaps land — forking a brand-new child into a parent that is midway
+   * through being torn down, rebound to a different account, or rehosted to
+   * a different workspace. `rebindTab` and the rehost path hold no `closing`
+   * seal while they drain (only `closeTab` does, and `handleExit` instead
+   * nulls `proc`), so tab state alone cannot distinguish this window.
+   */
+  private readonly drainingParents = new Map<string, number>();
   /**
    * `UtilityProcess` references whose `shutdownTabHost` call hit its
    * `exitDeadlineMs` timeout and force-killed rather than seeing a real exit
@@ -1137,14 +1197,16 @@ export class TabHostManager {
   }
 
   /**
-   * Admits (or refuses) a session-tier `Agent` spawn request from a root tab
-   * (TASK.102 CUT-S2 §2.6.4). Everything from the stale-sender check through
-   * the fork attempt below is ONE synchronous section — no `await` anywhere
-   * in it — so that two spawn requests processed back to back (the SAME
-   * parent issuing several `Agent(tier:"session")` calls in one turn) always
-   * see each other's reservation: admission atomicity (cut §5.9) depends on
-   * there being no yield point between "check the quota" and "reserve the
-   * slot".
+   * Admits, queues, or refuses a session-tier `Agent` spawn request from a
+   * root tab (TASK.102 CUT-S2 §2.6.4, TASK.147 срез 1). Everything from the
+   * stale-sender check through either the fork attempt or the park decision
+   * below is ONE synchronous section — no `await` anywhere in it — so that
+   * two spawn requests processed back to back (the SAME parent issuing
+   * several `Agent(tier:"session")` calls in one turn) always see each
+   * other's reservation: admission atomicity (cut §5.9) depends on there
+   * being no yield point between "check the quota" and "reserve the slot",
+   * and that now applies equally to a request that ends up queued rather
+   * than forked immediately.
    */
   private spawnChild(parentTab: TabHost, sender: UtilityProcess, req: ChildSpawnRequest): void {
     const reject = (reason: ChildRunRejectReason, message: string): void => {
@@ -1179,24 +1241,97 @@ export class TabHostManager {
     // `req`'s payload (same law as everything else in this section) —
     // `spawnToolCallId` is the only piece that comes from `req`, and it is
     // exactly the durable spawn identity §10.5 established. A second spawn
-    // for a pair whose first run is still starting/running/cancelling is
-    // refused HERE, synchronously, rather than being left to the SQLite v13
-    // unique index (which only fires once a child session row exists) or
-    // the 30s start-deadline path.
+    // for a pair whose first run is still starting/running/cancelling — OR
+    // still QUEUED (TASK.147 срез 1: `childSpawnKeys` is reserved the moment
+    // a waiter parks, below) — is refused HERE, synchronously, rather than
+    // being left to the SQLite v13 unique index (which only fires once a
+    // child session row exists) or the 30s start-deadline path.
     const spawnKey = childSpawnKey(parentTab.sessionId, req.spawnToolCallId);
     if (this.childSpawnKeys.has(spawnKey)) {
       reject("spawn_failed", CHILD_DUPLICATE_SPAWN_MESSAGE);
       return;
     }
-    const perParent = this.childrenByParentTab.get(parentTab.tabId)?.size ?? 0;
-    if (perParent >= CHILD_RUNS_PER_PARENT_MAX) {
-      reject("limit_parent", CHILD_LIMIT_PARENT_MESSAGE);
+    const capBlock = this.childSpawnCapBlock(parentTab.tabId);
+    if (capBlock !== undefined) {
+      // TASK.147 срез 1: the cap itself is unchanged (`childSpawnCapBlock`
+      // runs the EXACT same two checks the pre-queue code ran inline here) —
+      // only the RESPONSE to hitting it changes, from an immediate reject to
+      // a park, UNLESS the queue itself is already full, in which case this
+      // request gets the same honest refusal a cap-exceeding request always
+      // got (the two frozen texts stay reachable exactly on this path).
+      // A parent mid-drain refuses exactly as it did before this task: its
+      // cap is full only because every child is `cancelling`, and admitting
+      // the waiter once those reaps land would fork a child into a parent
+      // that is already being torn down (see `drainingParents`). The
+      // immediate, under-cap path is deliberately NOT gated on draining —
+      // that behaviour stays byte-identical to pre-TASK.147.
+      if (this.childSpawnQueue.length >= CHILD_SPAWN_QUEUE_MAX || this.drainingParents.has(parentTab.tabId)) {
+        reject(capBlock.reason, capBlock.message);
+        return;
+      }
+      this.childSpawnKeys.set(spawnKey, req.requestId);
+      this.childSpawnWaiters.set(req.requestId, {
+        requestId: req.requestId,
+        parentTabId: parentTab.tabId,
+        spawnKey,
+        req,
+      });
+      this.childSpawnQueue.push(req.requestId);
+      // No reply yet: this request has been neither accepted nor rejected —
+      // `pumpChildSpawnQueue` (from `finalizeChildRun`) or
+      // `purgeChildSpawnWaiters` (parent death) settles it later.
       return;
+    }
+
+    this.childSpawnKeys.set(spawnKey, req.requestId);
+    this.admitChildSpawn(parentTab, req, spawnKey);
+  }
+
+  /**
+   * The per-parent/global cap check (TASK.147 срез 1 extraction — byte-
+   * identical to the two checks `spawnChild` ran inline before this task):
+   * shared by `spawnChild`'s own immediate admission and by
+   * `pumpChildSpawnQueue`'s per-waiter check, so a queued request is
+   * evaluated against EXACTLY the rule an immediate one is, never a
+   * relaxed or stricter twin.
+   */
+  private childSpawnCapBlock(
+    parentTabId: string,
+  ): { reason: "limit_parent" | "limit_global"; message: string } | undefined {
+    const perParent = this.childrenByParentTab.get(parentTabId)?.size ?? 0;
+    if (perParent >= CHILD_RUNS_PER_PARENT_MAX) {
+      return { reason: "limit_parent", message: CHILD_LIMIT_PARENT_MESSAGE };
     }
     if (this.childRuns.size >= CHILD_RUNS_GLOBAL_MAX) {
-      reject("limit_global", CHILD_LIMIT_GLOBAL_MESSAGE);
-      return;
+      return { reason: "limit_global", message: CHILD_LIMIT_GLOBAL_MESSAGE };
     }
+    return undefined;
+  }
+
+  /**
+   * Runs the engine-readiness/provider-resolution/fork sequence for a spawn
+   * request that has ALREADY cleared the per-parent/global cap (TASK.147
+   * срез 1 extraction) — either because `spawnChild` found it under cap
+   * immediately, or because `pumpChildSpawnQueue` just dequeued it once a
+   * slot freed. `spawnKey` is ALREADY reserved in `childSpawnKeys` by the
+   * caller in both cases. Checking engine-readiness/provider resolution HERE
+   * rather than at park time is deliberate: a request that waited is
+   * re-checked against whatever is true NOW — an engine that came up or went
+   * down, a provider connection that was deleted, while it sat in the queue
+   * — never against a stale answer computed before the wait began.
+   */
+  private admitChildSpawn(parentTab: TabHost, req: ChildSpawnRequest, spawnKey: string): void {
+    const reject = (reason: ChildRunRejectReason, message: string): void => {
+      this.childSpawnKeys.delete(spawnKey);
+      this.replyChildRunEvent(parentTab, {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: req.requestId,
+        kind: "rejected",
+        reason,
+        message,
+      });
+    };
+
     // TASK.102 CUT-S4 §3.2 п.1-2: `req.engine` chooses which readiness
     // authority gates this spawn — the SAME `isEngineReady` a root tab's
     // `createTab` consults, never a second authority. Absent = core, byte-
@@ -1230,7 +1365,9 @@ export class TabHostManager {
     // Reservation: the child's tabId/sessionId are minted and the ledger
     // entry + per-parent index are written HERE, before the fork is even
     // attempted — the slot exists from this point regardless of whether the
-    // fork below succeeds (a throw rolls it back explicitly).
+    // fork below succeeds (a throw rolls it back explicitly). `spawnKey`
+    // itself is NOT (re-)written here — the caller already holds it, from
+    // before this request was even known to fit under cap (TASK.147 срез 1).
     const childTabId = this.genId();
     const childSessionId = this.genId();
     const entry: ChildRunLedgerEntry = {
@@ -1244,7 +1381,6 @@ export class TabHostManager {
       prompt: req.prompt,
     };
     this.childRuns.set(req.requestId, entry);
-    this.childSpawnKeys.set(spawnKey, req.requestId);
     let siblings = this.childrenByParentTab.get(parentTab.tabId);
     if (siblings === undefined) {
       siblings = new Set<string>();
@@ -1316,6 +1452,10 @@ export class TabHostManager {
     }
 
     this.tabs.set(childTabId, childTab);
+    // TASK.147 срез 1: this timer starts HERE, at the REAL fork, whether the
+    // request forked immediately or spent time queued first — never at
+    // park/enqueue time. A long wait therefore never eats into the window a
+    // child gets to answer `child-ready` once it actually starts.
     entry.startDeadline = setTimeout(() => this.handleChildStartTimeout(req.requestId), CHILD_START_DEADLINE_MS);
     this.deliverTabPort(childTab);
     // TASK.102 S4 gate-fix (L1): connectionId is "Never consulted for a
@@ -1332,6 +1472,110 @@ export class TabHostManager {
       childTabId,
       model: req.model ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
     });
+  }
+
+  /**
+   * Tries to admit as many queued spawn requests as currently fit, in FIFO
+   * arrival order (TASK.147 срез 1) — called from `finalizeChildRun`, the
+   * ONLY honest slot-release point. A single freed slot can unblock a waiter
+   * belonging to a DIFFERENT parent than the one whose child just finished
+   * (the waiter was blocked on the GLOBAL cap, not its own per-parent one),
+   * so this scans the WHOLE queue in arrival order rather than only the
+   * freed parent's own backlog — skipping (not stopping at) a waiter that
+   * still does not fit, so one parent's still-full per-parent cap can never
+   * starve a different parent's otherwise-eligible waiter behind it. Each
+   * admission consumes exactly the capacity it needed, updating the very
+   * maps `childSpawnCapBlock` reads, so a later waiter's check in the SAME
+   * pass automatically reflects it — no separate "how many slots freed"
+   * bookkeeping is needed.
+   */
+  private pumpChildSpawnQueue(): void {
+    if (this.quitting) {
+      // Mirrors `spawnChild`'s own immediate-path guard: never fork a NEW
+      // child once shutdown has been signalled. `shutdownAllTabHosts`
+      // already purges the whole queue before this could matter in
+      // practice; this is a defensive second guard, not the primary one.
+      return;
+    }
+    let i = 0;
+    while (i < this.childSpawnQueue.length) {
+      const requestId = this.childSpawnQueue[i]!;
+      const waiter = this.childSpawnWaiters.get(requestId);
+      if (waiter === undefined) {
+        // Already purged (parent closed/quit) but not yet spliced out here.
+        this.childSpawnQueue.splice(i, 1);
+        continue;
+      }
+      const parentTab = this.tabs.get(waiter.parentTabId);
+      if (parentTab === undefined || parentTab.state !== "running" || this.drainingParents.has(waiter.parentTabId)) {
+        // Should not happen — `purgeChildSpawnWaiters` runs synchronously
+        // before any parent state change that would cause this — but fail
+        // closed rather than fork against a dead/foreign tab.
+        this.childSpawnQueue.splice(i, 1);
+        this.childSpawnWaiters.delete(requestId);
+        this.childSpawnKeys.delete(waiter.spawnKey);
+        continue;
+      }
+      if (this.childSpawnCapBlock(waiter.parentTabId) !== undefined) {
+        i += 1;
+        continue;
+      }
+      this.childSpawnQueue.splice(i, 1);
+      this.childSpawnWaiters.delete(requestId);
+      this.admitChildSpawn(parentTab, waiter.req, waiter.spawnKey);
+      // Do not advance `i` — the next element has shifted into this index.
+    }
+  }
+
+  /**
+   * Rejects (reason `closing`, the existing verbatim text) and releases
+   * every currently-queued spawn request belonging to `parentTabId` — or, if
+   * omitted, every queued request application-wide (TASK.147 срез 1's
+   * "Отменяемость": a waiter must die with its parent, exactly like a
+   * running/starting child already does via the cascade below it). Called
+   * from `drainChildren`'s own synchronous prefix (so it runs before ANY of
+   * that same call's awaits — before a respawn's `spawnTabHost` could ever
+   * observe a stale waiter surviving a generation change, the same
+   * synchronous-prefix discipline `handleExit`'s own comment relies on for
+   * `drainChildren` itself) and from `shutdownAllTabHosts` (no
+   * `parentTabId` — the whole app is going down). A waiter never held a
+   * `childRuns`/`childrenByParentTab` reservation (only `admitChildSpawn`
+   * writes those), so releasing `childSpawnKeys` plus the queue/map
+   * bookkeeping here is this function's entire cleanup — there is no ledger
+   * entry to finalize.
+   */
+  private purgeChildSpawnWaiters(parentTabId?: string): void {
+    if (this.childSpawnQueue.length === 0) {
+      return;
+    }
+    const remaining: string[] = [];
+    for (const requestId of this.childSpawnQueue) {
+      const waiter = this.childSpawnWaiters.get(requestId);
+      if (waiter === undefined) {
+        continue;
+      }
+      if (parentTabId !== undefined && waiter.parentTabId !== parentTabId) {
+        remaining.push(requestId);
+        continue;
+      }
+      this.childSpawnWaiters.delete(requestId);
+      this.childSpawnKeys.delete(waiter.spawnKey);
+      const parentTab = this.tabs.get(waiter.parentTabId);
+      if (parentTab !== undefined) {
+        // Best-effort, same discipline as `finalizeChildRun`'s own terminal
+        // relay: the parent may already be gone (dead-generation crash path,
+        // where `tab.proc` is already null and `replyChildRunEvent` no-ops).
+        this.replyChildRunEvent(parentTab, {
+          type: CHILD_RUN_EVENT_TYPE,
+          requestId,
+          kind: "rejected",
+          reason: "closing",
+          message: CHILD_CLOSING_MESSAGE,
+        });
+      }
+    }
+    this.childSpawnQueue.length = 0;
+    this.childSpawnQueue.push(...remaining);
   }
 
   /**
@@ -1452,8 +1696,27 @@ export class TabHostManager {
    * the SAME single release funnel every other terminal path already uses —
    * §0.7's carve-out: this is the one place a `cancelling` slot is released
    * without a real process reap ever landing.
+   *
+   * TASK.147 срез 1: also purges `parentTab`'s own queued (not yet
+   * admitted) spawn requests, synchronously, as the very first thing this
+   * function does — before the loop below, before this call's own first
+   * `await`. A waiter is not a running child (it has no host to cancel), so
+   * it needs none of the cascade below; it only needs to stop existing.
    */
   private async drainChildren(parentTab: TabHost): Promise<void> {
+    this.purgeChildSpawnWaiters(parentTab.tabId);
+    this.drainingParents.set(parentTab.tabId, (this.drainingParents.get(parentTab.tabId) ?? 0) + 1);
+    try {
+      return await this.drainChildrenInner(parentTab);
+    } finally {
+      const depth = (this.drainingParents.get(parentTab.tabId) ?? 1) - 1;
+      if (depth <= 0) this.drainingParents.delete(parentTab.tabId);
+      else this.drainingParents.set(parentTab.tabId, depth);
+    }
+  }
+
+  /** The cascade itself; `drainChildren` wraps it only to hold the `drainingParents` window across every one of its exits. */
+  private async drainChildrenInner(parentTab: TabHost): Promise<void> {
     const deadline = this.now() + this.limits.exitDeadlineMs * DRAIN_CHILDREN_DEADLINE_MULTIPLIER;
     for (;;) {
       const childIds = this.childrenByParentTab.get(parentTab.tabId);
@@ -1538,6 +1801,12 @@ export class TabHostManager {
    * is already gone) and removes the child tab from `tabs`: a finished child
    * never holds a live utilityProcess (cut §0's "Завершённый ребёнок НЕ
    * держит utilityProcess").
+   *
+   * TASK.147 срез 1: this is also the ONE honest slot-release point the
+   * queue wakes up on — `pumpChildSpawnQueue` runs at the very end, after
+   * every map above has already reached its new steady state, so the
+   * waiter(s) it may admit see the SAME freed capacity a caller reading the
+   * maps right after this function returns would see.
    */
   private finalizeChildRun(
     requestId: string,
@@ -1595,6 +1864,8 @@ export class TabHostManager {
         void this.shutdownTabHost(childTab);
       }
     }
+
+    this.pumpChildSpawnQueue();
   }
 
   /** No `child-ready` within CHILD_START_DEADLINE_MS of a successful fork (cut §2.3/§2.6.4). */
@@ -2224,9 +2495,17 @@ export class TabHostManager {
    * Shuts every host down in PARALLEL (design §2.2): quit with 8 tabs costs the
    * same ~2s wall-clock as one, because each host aborts its own turn and runs
    * its own SIGTERM->SIGKILL child chain from t=0. Called by before-quit.
+   *
+   * TASK.147 срез 1: also purges EVERY queued spawn request application-wide
+   * (no `parentTabId` filter — the whole app is going down), synchronously,
+   * before any of the `shutdownTabHost` calls below even start their async
+   * work — unlike a single tab's `drainChildren`, this function never visits
+   * `drainChildren` per tab (it shuts every host down directly), so nothing
+   * else would ever purge a waiter here.
    */
   async shutdownAllTabHosts(): Promise<void> {
     this.quitting = true;
+    this.purgeChildSpawnWaiters();
     await Promise.allSettled([...this.tabs.values()].map((tab) => this.shutdownTabHost(tab)));
   }
 

@@ -180,6 +180,17 @@ export const CHILD_RUNS_GLOBAL_MAX = 8;
 export const CHILD_START_DEADLINE_MS = 30_000;
 /** Bound on the child's host-side steer-message queue (§0.5/§1.1); beyond this, `turn_rejected busy`. */
 export const CHILD_STEER_QUEUE_MAX = 16;
+/**
+ * Max spawn requests parked waiting for a per-parent/global slot,
+ * application-wide (TASK.147 срез 1: a cap-exceeding spawn now queues
+ * instead of being refused outright). Bounds the queue itself — an
+ * unbounded queue would only trade a lost task for a silently, indefinitely
+ * stuck one, which the task's own "Границы решения" rules out just as
+ * firmly as dropping the cap would be. Sized like `CHILD_STEER_QUEUE_MAX`
+ * (no empirical basis exists yet for either number; TASK.147 срез 2
+ * revisits both).
+ */
+export const CHILD_SPAWN_QUEUE_MAX = 16;
 
 // ── field-length caps (review finding 1, TASK.102 S2a): every string field on
 // this wire that can originate from MODEL-controlled text (a provider mints
