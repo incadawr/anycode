@@ -616,12 +616,25 @@ describe("TASK.35 fix wave 1 — tree removal and divergence pins (V-series)", (
     expect(READ_ONLY_BINARIES.has("sed")).toBe(false);
   });
 
-  it("V4: unbalanced-quote divergence is pinned narrowing-only (D-S2-4 caveat, RES-11)", () => {
-    // Base laxity, documented not endorsed: the single-command path never sees
-    // quote state, so `cat 'f` (a /bin/sh syntax error) classifies read-only
-    // there. The line classifier refuses it (splitter refusal). The divergence
-    // must only ever point in the strict direction; this pin notices a flip.
-    expect(classifyBashCommand("cat 'f")).toBe("read-only");
+  it("V4: unbalanced-quote divergence CLOSED for the flag-screened path (TASK.136, was D-S2-4/RES-11)", () => {
+    // History: before TASK.136, the single-command path's write-flag screen
+    // never looked at quote state at all — `tokenize()` is a plain whitespace
+    // split — so `cat 'f` (a /bin/sh syntax error) fell through every check
+    // and classified "read-only" there, while the line classifier already
+    // refused it (splitter refusal, upstream of this file). That was pinned
+    // narrowing-only: the single-command path could be laxer than the line
+    // classifier, never stricter.
+    // TASK.136 made `classifyBashCommand` reuse `tokenizeSegment` (the
+    // pipeline path's quote-aware splitter) for its write-flag screen; an
+    // unterminated quote makes that splitter return `undefined`, which the
+    // screen now treats as "cannot prove flag-free" and fails closed to
+    // "unknown" (see safe-command.ts step 4b). For a command that reaches the
+    // flag screen at all (binary allowlisted or `git`, at least one arg —
+    // exactly the shape needed to even contain a stray quote), this closes
+    // the divergence outright rather than merely narrowing it: both paths now
+    // agree on "unknown".
+    expect(classifyBashCommand("cat 'f")).toBe("unknown");
+    expect(classifyBashCommand('cat "f')).toBe("unknown");
     expect(classifyBashCommandLine("cat 'f").class).toBe("unknown");
     expect(classifyBashCommandLine('cat "f').class).toBe("unknown");
   });
@@ -641,19 +654,22 @@ describe("TASK.35 fix wave 2 — RES-1 witness pins (GP-series)", () => {
     expect(classifyBashCommand('git diff "--zzzz=victim"')).toBe("unknown");
   });
 
-  it("GP2: RES-1's LIVE spellings — quote-hidden git write flags classify read-only TODAY (base P1, documented NOT endorsed)", () => {
-    // Divergence pin in the spirit of V4: these are FALSE ALLOWS on the
-    // frozen single-command path (base debt, RESIDUALS-S2.md RES-1 —
-    // owner-facing, NOT fixed by this track). isWriteFlag sees the raw
-    // token (`"--output"` starts with `"`; `--outp"ut"` normalization only
-    // strips a `=value` suffix), so classifyGit's flag loop passes them.
-    // Executed against real git 2.37.1 in an isolated repo (W2):
-    // diff/log/show/shortlog WROTE the named file; blame TRUNCATED an
-    // existing file to 0 bytes. The RES-1 fix flips this test red — rewrite
-    // it to expectAllUnknown as the fix's acceptance criterion. A fix that
-    // leaves it green has not closed the hole. MG1 (the fix-spec mutation)
-    // proves that mechanism today.
-    expectAllReadOnly([
+  it("GP2: RES-1 CLOSED — quote-hidden git write flags now classify unknown (TASK.136)", () => {
+    // Closed-hole acceptance pin (RESIDUALS-S2.md RES-1, closed by TASK.136).
+    // History: on the pre-fix single-command path, `isWriteFlag` only ever
+    // saw the raw whitespace-split token (`"--output"` starts with `"`, not
+    // `-`; `--outp"ut"` normalization only strips a `=value` suffix), so
+    // `classifyGit`'s flag loop missed every spelling below and the command
+    // classified "read-only". Executed against real git 2.37.1 in an
+    // isolated repo (W2): diff/log/show/shortlog WROTE the named file;
+    // blame TRUNCATED an existing file to 0 bytes — this was a live
+    // auto-approved-write hole, not a hypothetical.
+    // The fix: `classifyGit`'s flag loop (and `classifyBashCommand` step 4b)
+    // now also check each argument's quote-stripped form via
+    // `tokenizeSegment` (the same quote-aware splitter the pipeline path
+    // already used), the same dual raw/unquoted check `classifyPipelineSegment`
+    // performs. A fix that leaves this test green has not closed the hole.
+    expectAllUnknown([
       'git diff "--output" victim',
       'git diff --outp"ut" victim',
       "git diff '--output' victim",
@@ -662,5 +678,47 @@ describe("TASK.35 fix wave 2 — RES-1 witness pins (GP-series)", () => {
       'git shortlog "--output" victim',
       'git blame "--output" victim f',
     ]);
+  });
+});
+
+describe("TASK.136 — RES-1 fix, non-git single-command path (classifyBashCommand step 4b)", () => {
+  it("quote-hidden write flags on plain allowlisted binaries now ask", () => {
+    // Same hole as GP2, on the non-git branch of the single-command path:
+    // `isWriteFlag` on the naive whitespace token alone never recognized a
+    // quoted flag (`"-o"` starts with `"`, not `-`), so `cat "-o" f` and
+    // friends classified "read-only" before this fix. Step 4b now also
+    // checks each argument's quote-stripped form (`tokenizeSegment`), so
+    // these ask like their unquoted twins.
+    expectAllUnknown([
+      'cat "-o" f',
+      "cat '-o' f",
+      'cat "--output" f',
+      'head "--output" f',
+      'wc --outp"ut" f', // splice form (GP2's `--outp"ut"` twin)
+      'cksum "-O" f',
+      'md5sum "--write" f',
+    ]);
+  });
+
+  it("unquoted write flags still ask exactly as before the fix (no regression)", () => {
+    expectAllUnknown([
+      "cksum -o foo",
+      "head --output=x f",
+      "cat -o out",
+      "wc --write f",
+      "git diff --output=victim",
+      "git diff -o victim",
+      "git log --output=f",
+      "git show --output f",
+    ]);
+  });
+
+  it("an unterminated quote in the argument list is undecidable and fails closed", () => {
+    // `tokenizeSegment` returns undefined only when a quote is never closed
+    // (its one failure mode once the metacharacter screen has already run).
+    // The flag screen cannot prove such a command flag-free, so it refuses
+    // rather than falling through to "read-only" (see the updated V4 pin,
+    // and classifyGit's mirrored branch for the git case below).
+    expectAllUnknown(["cat 'unterminated f", 'head "unterminated f', "git diff 'unterminated victim"]);
   });
 });

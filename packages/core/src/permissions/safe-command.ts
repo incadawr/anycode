@@ -25,11 +25,20 @@
  * TASK.35 (`classifyBashCommandLine`, below `classifyBashCommand`): widens
  * auto-allow to Bash PIPELINES under grammar v1 (`|` only). A line the
  * splitter reads as one segment routes to `classifyBashCommand` on the
- * ORIGINAL string, bit-for-bit — the single-command path below is completely
- * unmodified by this addition. The widening surface is exactly all-`|`
+ * ORIGINAL string, bit-for-bit. The widening surface is exactly all-`|`
  * multi-segment pipelines whose every segment independently proves read-only
  * through a doubly-conservative per-segment screen (raw metacharacter screen,
  * THEN quote-aware tokenization) — see `classifyPipelineSegment`.
+ *
+ * TASK.136 (RES-1 fix): the single-command path's write-flag screens
+ * (`classifyBashCommand` step 4b, `classifyGit`'s flag loop) now reuse that
+ * same quote-aware tokenizer (`tokenizeSegment`) to check each argument on
+ * BOTH its raw and quote-stripped form — closing a hole where a quoted flag
+ * (`git diff "--output" victim`) read as `unknown` to the naive whitespace
+ * splitter (the token starts with `"`, not `-`) and so sailed through as
+ * "read-only" while live git 2.37.1 wrote/truncated the named file. Every
+ * OTHER check on this path (basename lookup, subcommand grammar, bare-only
+ * arity) still runs off the plain `tokenize()` split, unchanged.
  *
  * KNOWN, SANCTIONED LIMITS (all lexical; true enforcement is the OS layer in
  * slice 5.2):
@@ -197,8 +206,14 @@ function isWriteFlag(arg: string, flags: ReadonlySet<string>): boolean {
   return flags.has(normalized);
 }
 
-/** Classifies a `git <subcommand> …` invocation (tokens[0] basename is `git`). */
-function classifyGit(tokens: string[]): BashCommandClass {
+/**
+ * Classifies a `git <subcommand> …` invocation (tokens[0] basename is `git`).
+ * `tokens` drives subcommand/arity checks unchanged; `segmentTokens` is the
+ * quote-aware split of the SAME command string (from `tokenizeSegment`,
+ * defined below), consulted ONLY by the write-flag loop (TASK.136 RES-1 fix
+ * — see that loop for why a single raw-string check is not enough).
+ */
+function classifyGit(tokens: string[], segmentTokens: SegmentToken[] | undefined): BashCommandClass {
   if (tokens.length < 2) {
     // Bare `git` (prints help) — harmless, but not worth allowlisting.
     return "unknown";
@@ -210,8 +225,22 @@ function classifyGit(tokens: string[]): BashCommandClass {
   if (!GIT_SAFE_SUBCOMMANDS.has(subcommand)) {
     return "unknown";
   }
-  for (const arg of tokens.slice(2)) {
-    if (isWriteFlag(arg, GIT_WRITE_FLAGS)) {
+  if (tokens.length === 2) {
+    // No args to screen.
+    return "read-only";
+  }
+  // Args follow the subcommand: screen each on BOTH its raw (quotes intact)
+  // and quote-stripped form — `isWriteFlag` on the raw string alone is fooled
+  // by a quoted flag (`"--output"` starts with `"`, not `-`, so the verbatim
+  // check never fires; TASK.136 RES-1). `segmentTokens` is undefined only on
+  // an unterminated quote (`tokenizeSegment`'s one failure mode once the
+  // metacharacter screen has already run) — that is undecidable, not proven
+  // safe, so it fails closed to "unknown" rather than looping over nothing.
+  if (segmentTokens === undefined) {
+    return "unknown";
+  }
+  for (const token of segmentTokens.slice(2)) {
+    if (isWriteFlag(token.raw, GIT_WRITE_FLAGS) || isWriteFlag(token.unquoted, GIT_WRITE_FLAGS)) {
       return "unknown";
     }
   }
@@ -239,11 +268,19 @@ export function classifyBashCommand(command: string): BashCommandClass {
     return "unknown";
   }
 
+  // 2b. Quote-aware split of the SAME string, reused verbatim from the
+  //     pipeline path (`tokenizeSegment`, below `classifyBashCommandLine`).
+  //     Consulted ONLY by the write-flag screens (step 4b here, and
+  //     `classifyGit`'s flag loop) — every other check in this function keeps
+  //     running off the naive `tokens` above, unchanged. `undefined` here
+  //     means an unterminated quote; see 4b for what that means downstream.
+  const segmentTokens = tokenizeSegment(command);
+
   // 3. Basename of the first token against the allowlist. See the basename-trust
   //    limit in the module doc: `/bin/ls` -> `ls` is intentionally read-only.
   const binary = basename(tokens[0]!);
   if (binary === "git") {
-    return classifyGit(tokens);
+    return classifyGit(tokens, segmentTokens);
   }
   if (!READ_ONLY_BINARIES.has(binary)) {
     return "unknown";
@@ -254,9 +291,23 @@ export function classifyBashCommand(command: string): BashCommandClass {
     return "unknown";
   }
 
-  // 4b. Write-flag safety net across every argument.
-  for (const arg of tokens.slice(1)) {
-    if (isWriteFlag(arg, WRITE_CAPABLE_FLAGS)) {
+  // 4b. Write-flag safety net across every argument, screened on BOTH the raw
+  //     (quotes intact) and quote-stripped form (TASK.136 RES-1 fix): a
+  //     quoted flag like `"--output"` starts with `"`, not `-`, so checking
+  //     the naive string alone never recognizes it (`git diff "--output" f`
+  //     wrote `f` on live git 2.37.1 before this fix — see GP2). Fail-closed
+  //     on an unterminated quote: `segmentTokens === undefined` means the
+  //     quote-aware split could not prove any argument flag-free, and
+  //     "unprovable" is "unknown" by this module's own rule (module doc,
+  //     top), not "read-only" by default. This is a real, intentional
+  //     behavior change from the pre-TASK.136 code, which never looked at
+  //     quote state on this path at all and would fall through to
+  //     "read-only" here (see the now-updated V4 pin).
+  if (segmentTokens === undefined) {
+    return "unknown";
+  }
+  for (const token of segmentTokens.slice(1)) {
+    if (isWriteFlag(token.raw, WRITE_CAPABLE_FLAGS) || isWriteFlag(token.unquoted, WRITE_CAPABLE_FLAGS)) {
       return "unknown";
     }
   }
