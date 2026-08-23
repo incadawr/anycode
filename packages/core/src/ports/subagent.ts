@@ -17,8 +17,8 @@ export interface SubagentRequest {
   prompt: string;
   /**
    * Requested turn budget; wins over the host default, capped at
-   * SUBAGENT_MAX_TURNS_CEILING. Turns are the runaway guard; the budget that
-   * usually ends a long child run is wall-clock (SUBAGENT_LOOP_DEADLINE_MS).
+   * SUBAGENT_MAX_TURNS_CEILING. Turns are what ends a long child run;
+   * SUBAGENT_LOOP_DEADLINE_MS only catches a hung one (TASK.148).
    */
   maxTurns?: number;
   /**

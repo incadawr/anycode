@@ -48,8 +48,8 @@ describe("agentTool", () => {
       riskLevel: "low",
       sideEffectScope: "process",
       needsApproval: false,
-      timeoutMs: 600_000,
-      maxTimeoutMs: 600_000,
+      timeoutMs: 21_600_000,
+      maxTimeoutMs: 21_600_000,
       maxOutputBytes: 100_000,
     });
   });

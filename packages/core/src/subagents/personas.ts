@@ -50,9 +50,9 @@ export interface PersonaDefinition {
    * Clamped to SUBAGENT_MAX_TURNS_CEILING by the runner; absent => the host's
    * `tools.subagentMaxTurns` setting, else DEFAULT_SUBAGENT_MAX_TURNS. Built-in
    * personas leave it undefined ON PURPOSE: a hardcoded role budget would
-   * silently outrank the owner-visible setting shipped in 0.0.12. The budget
-   * that actually decides a run is wall-clock (SUBAGENT_LOOP_DEADLINE_MS) —
-   * turns are the runaway guard.
+   * silently outrank the owner-visible setting shipped in 0.0.12. Turns are
+   * what actually decides a run: SUBAGENT_LOOP_DEADLINE_MS is sized to catch a
+   * hung child, not to end a working one (TASK.148).
    */
   turnBudget?: number;
   /**

@@ -2191,8 +2191,11 @@ describe("wrap-up window gate (TASK.74 §4.3, DoD-6)", () => {
   }
 
   it("(a) skips the rescue entirely when too little of the dispatcher budget remains", async () => {
-    // 580s elapsed leaves a 10s window — under SUBAGENT_WRAPUP_MIN_WINDOW_MS.
-    const { outcome, calls } = await runWithElapsed(580_000);
+    // Elapsed so that exactly 10s of the outcome deadline remain — under
+    // SUBAGENT_WRAPUP_MIN_WINDOW_MS. Derived rather than a literal: the wall
+    // moved from ten minutes to six hours (TASK.148), and a hardcoded 580_000
+    // would have pinned this gate to the old size instead of to the rule.
+    const { outcome, calls } = await runWithElapsed(SUBAGENT_OUTCOME_DEADLINE_MS - 10_000);
     expect(outcome.status).toBe("max_turns");
     expect(outcome.finalText).toBe("turn-2");
     expect(calls).toBe(2);
