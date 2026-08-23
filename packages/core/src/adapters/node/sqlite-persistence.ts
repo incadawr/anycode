@@ -278,7 +278,66 @@ const MIGRATIONS: readonly Migration[] = [
          WHERE parent_session_id IS NOT NULL`,
     ],
   },
+  {
+    // Version 17 backfills `updated_at` from the history a session already
+    // carries. From this version on the column is written by every history
+    // append (see touchSessionActivity), but rows written before it hold the
+    // time of their last METADATA edit instead. Without this pass the fix
+    // would reach only sessions that happen to speak again, and the sidebar
+    // would keep ordering the rest by a stale column: measured on the owner's
+    // live database, 133 root sessions with a worst lag of 1.6 days.
+    //
+    // `json_extract(h.data, '$.createdAt')` is the item's own clock — the same
+    // expression listSessionsOlderThan already trusts for the irreversible
+    // bulk-delete filter. A session with no history, or with items carrying no
+    // createdAt, yields NULL from the subquery; `NULL > updated_at` is not
+    // true, so those rows are left exactly as they are. The WHERE also makes
+    // the pass monotonic: it can only ever move a timestamp forward.
+    //
+    // 17 and not a higher number: the shared-namespace hazard that forced v13
+    // to be renumbered to 16 was re-checked here — no branch in the repository
+    // declares a migration above 16, and the live database's highest applied
+    // version is 16.
+    version: 17,
+    statements: [
+      `UPDATE sessions
+          SET updated_at = (SELECT MAX(json_extract(h.data, '$.createdAt'))
+                              FROM history_items h WHERE h.session_id = sessions.id)
+        WHERE (SELECT MAX(json_extract(h.data, '$.createdAt'))
+                 FROM history_items h WHERE h.session_id = sessions.id) > updated_at`,
+    ],
+  },
 ];
+
+/**
+ * Advances `sessions.updated_at` to the newest item of a history write.
+ *
+ * The column names the last time the session was ACTIVE — that is how every
+ * consumer already reads it: the sidebar's row order and its `7d` age label,
+ * the session picker, the maintenance sweep. Until TASK.125 only metadata
+ * edits (title/model/mode/worktree) ever wrote it, so a session could talk for
+ * hours without its own row moving. Measured on the owner's live database
+ * before this fix: `updated_at` lagged the last message by up to 3.3 days, and
+ * one session sat inside a top-10 by that column that did not belong there.
+ *
+ * Monotonic by construction (`WHERE updated_at < ?`): a metadata edit stamped
+ * AFTER the newest item keeps the later time, and a history rewrite that drops
+ * items (compaction via replaceHistory) can never walk the timestamp
+ * backwards. Costs one primary-key UPDATE per write batch — not per item —
+ * inside the transaction the caller has already opened.
+ */
+function touchSessionActivity(db: DatabaseSync, sessionId: string, items: readonly HistoryItem[]): void {
+  let newest = 0;
+  for (const item of items) {
+    if (item.createdAt > newest) {
+      newest = item.createdAt;
+    }
+  }
+  if (newest === 0) {
+    return;
+  }
+  db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ? AND updated_at < ?").run(newest, sessionId, newest);
+}
 
 /**
  * Idempotent migration runner: tracks applied versions in schema_migrations
@@ -1032,6 +1091,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       for (const item of items) {
         stmt.run(sessionId, item.id, JSON.stringify(item));
       }
+      touchSessionActivity(db, sessionId, items);
     });
   }
 
@@ -1043,6 +1103,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       for (const item of items) {
         stmt.run(sessionId, item.id, JSON.stringify(item));
       }
+      touchSessionActivity(db, sessionId, items);
     });
   }
 

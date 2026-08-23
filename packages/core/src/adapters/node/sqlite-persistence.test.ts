@@ -716,6 +716,11 @@ describe("SqlitePersistenceAdapter", () => {
       );
       INSERT INTO sessions VALUES ('legacy-v5', '/repo', 'm', 'build', 1, 2, NULL, NULL, NULL);
     `);
+    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // fixture claiming v1 is applied has to carry the table too.
+    old.exec(
+      `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+    );
     old.close();
 
     for (let open = 0; open < 2; open += 1) {
@@ -736,7 +741,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -785,6 +790,11 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('legacy-v9', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
+    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // fixture claiming v1 is applied has to carry the table too.
+    old.exec(
+      `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+    );
     old.close();
 
     // Opening the pre-migration DB must not crash, must migrate to v10, and a
@@ -802,7 +812,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -833,6 +843,11 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('legacy-v10', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
+    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // fixture claiming v1 is applied has to carry the table too.
+    old.exec(
+      `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+    );
     old.close();
 
     // Opening the pre-migration DB must not crash, must migrate to v11, and a
@@ -850,7 +865,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -897,6 +912,11 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('root-foreign', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
+    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // fixture claiming v1 is applied has to carry the table too.
+    old.exec(
+      `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+    );
     old.close();
 
     const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -923,7 +943,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     migrated.close();
   });
 
@@ -953,6 +973,11 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('legacy-v12', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
+    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // fixture claiming v1 is applied has to carry the table too.
+    old.exec(
+      `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+    );
     old.close();
 
     // Opening the pre-migration DB must not crash, must migrate to v16, and a
@@ -973,7 +998,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1042,6 +1067,11 @@ describe("SqlitePersistenceAdapter", () => {
     insert.run("exact", target, transition("anycode-wt/legacy"));
     insert.run("foreign", target, transition("user/precious"));
     insert.run("mismatch", target, transition("anycode-wt/other", "/repo/.anycode/worktrees/other"));
+    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // fixture claiming v1 is applied has to carry the table too.
+    old.exec(
+      `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+    );
     old.close();
 
     const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -1064,6 +1094,11 @@ describe("SqlitePersistenceAdapter", () => {
       );
       INSERT INTO sessions VALUES ('legacy', '/w', 'm', 'build', 1, 1, NULL);
     `);
+    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // fixture claiming v1 is applied has to carry the table too.
+    old.exec(
+      `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+    );
     old.close();
 
     const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -1137,6 +1172,108 @@ describe("SqlitePersistenceAdapter", () => {
     const loaded = await reopened.loadHistory(session.id);
     expect(loaded).toEqual(items);
     await reopened.close();
+  });
+
+  it(
+    "advances updated_at to the newest appended item, so row order and the age label stop " +
+      "reading a metadata-only column (TASK.125)",
+    async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-activity-"));
+      const dbPath = join(tmpDir, "anycode.sqlite");
+      const first = new SqlitePersistenceAdapter(dbPath);
+      const session = await first.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+      await first.close();
+
+      // Backdate the row four days: a session that has spoken since but whose
+      // metadata was never edited again — exactly the shape that mis-sorted the
+      // live sidebar. createSession stamps Date.now(), so without this the
+      // append below could not be the newer of the two.
+      const stale = session.createdAt - 4 * 24 * 60 * 60 * 1000;
+      const raw = new DatabaseSync(dbPath);
+      raw.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(stale, "s1");
+      raw.close();
+
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      const newest = session.createdAt + 5_000;
+      await adapter.appendHistory("s1", [
+        makeItem({ id: "u1", createdAt: newest - 1_000 }),
+        makeItem({ id: "u2", createdAt: newest }),
+      ]);
+      expect((await adapter.getRootSession("s1"))?.updatedAt).toBe(newest);
+
+      // A rewrite of the same conversation (compaction) keeps the stamp: the
+      // items carry their original clocks, so the newest one is unchanged.
+      await adapter.replaceHistory("s1", [makeItem({ id: "c1", createdAt: newest })]);
+      expect((await adapter.getRootSession("s1"))?.updatedAt).toBe(newest);
+      await adapter.close();
+    },
+  );
+
+  it("never walks updated_at backwards — an item older than the row's stamp leaves it alone (TASK.125)", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-activity-back-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+    // A late metadata edit (title change) legitimately stamps a time after the
+    // last message. Replaying an older item must not undo it, or a compaction
+    // that drops the tail would make a session look stale.
+    await adapter.appendHistory("s1", [makeItem({ id: "u1", createdAt: session.updatedAt - 10_000 })]);
+
+    expect((await adapter.getRootSession("s1"))?.updatedAt).toBe(session.updatedAt);
+    await adapter.close();
+  });
+
+  it("migrates a v16 database to v17, backfilling updated_at from history and leaving a historyless row alone (TASK.125)", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v16-activity-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    const old = new DatabaseSync(dbPath);
+    old.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations (version, applied_at) VALUES
+        (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15),(16,16);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        engine_id TEXT, external_session_ref TEXT, project_root TEXT,
+        worktree_id TEXT, worktree_path TEXT, worktree_branch TEXT, worktree_base_ref TEXT,
+        worktree_owned_by_anycode INTEGER, continuation_pending INTEGER NOT NULL DEFAULT 0,
+        continuation_mode TEXT, worktree_exit_notice_pending INTEGER NOT NULL DEFAULT 0,
+        worktree_cleanup_path TEXT, worktree_cleanup_mode TEXT,
+        worktree_cleanup_owned_by_anycode INTEGER, worktree_cleanup_branch TEXT, worktree_transition_json TEXT,
+        connection_id TEXT, codex_profile_id TEXT, parent_session_id TEXT, spawn_tool_call_id TEXT
+      );
+      CREATE TABLE history_items (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id)
+      );
+      INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
+        VALUES ('talked', '/repo', 'm', 'build', 1000, 1000, '/repo'),
+               ('silent', '/repo', 'm', 'build', 2000, 2000, '/repo');
+    `);
+    const insert = old.prepare("INSERT INTO history_items (session_id, item_id, data) VALUES (?, ?, ?)");
+    insert.run("talked", "h1", JSON.stringify(makeItem({ id: "h1", createdAt: 50_000 })));
+    insert.run("talked", "h2", JSON.stringify(makeItem({ id: "h2", createdAt: 90_000 })));
+    old.close();
+
+    // Twice: the backfill is a migration, so the second open must find version
+    // 17 already recorded and change nothing.
+    for (let open = 0; open < 2; open += 1) {
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      expect((await adapter.getRootSession("talked"))?.updatedAt).toBe(90_000);
+      // No history at all: the subquery is NULL, the row keeps its own stamp
+      // rather than being zeroed by a naive UPDATE.
+      expect((await adapter.getRootSession("silent"))?.updatedAt).toBe(2_000);
+      await adapter.close();
+    }
+
+    const migrated = new DatabaseSync(dbPath);
+    expect(
+      (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
+        ({ version }) => version,
+      ),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    migrated.close();
   });
 
   it(
@@ -2120,6 +2257,11 @@ describe("SqlitePersistenceAdapter", () => {
         `CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT, engine_id TEXT, external_session_ref TEXT)`,
       );
       seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0)").run();
+      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // fixture claiming v1 is applied has to carry the table too.
+      seed.exec(
+        `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+      );
       seed.close();
 
       const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -2147,6 +2289,11 @@ describe("SqlitePersistenceAdapter", () => {
         created_at INTEGER NOT NULL, PRIMARY KEY (thread_id, item_id)
       )`);
       seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0)").run();
+      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // fixture claiming v1 is applied has to carry the table too.
+      seed.exec(
+        `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+      );
       seed.close();
 
       const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -2185,6 +2332,11 @@ describe("SqlitePersistenceAdapter", () => {
         )
         .run("thread-1", 0, 3, "exec-old", "echo old", 0);
       seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0)").run();
+      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // fixture claiming v1 is applied has to carry the table too.
+      seed.exec(
+        `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+      );
       seed.close();
 
       const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -2219,6 +2371,11 @@ describe("SqlitePersistenceAdapter", () => {
       // name. v5's FIRST statement (the DELETE) still runs, inside the SAME
       // migration transaction, before the poisoned ALTER throws.
       seed.exec(`ALTER TABLE codex_thread_items ADD COLUMN seq_in_turn INTEGER`);
+      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // fixture claiming v1 is applied has to carry the table too.
+      seed.exec(
+        `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
+      );
       seed.close();
 
       const adapter = new SqlitePersistenceAdapter(dbPath);
