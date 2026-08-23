@@ -93,9 +93,12 @@ function buildMetadata(sessionTier: boolean): ToolMetadata {
     riskLevel: "low",
     sideEffectScope: "process",
     needsApproval: false,
-    // The dispatcher wall for one spawn. The child's own wall-clock deadline
-    // and wrap-up window derive from this same constant, so the three can never
-    // drift into a run that returns after the dispatcher stopped listening.
+    // The dispatcher wall for one spawn, and the ONLY wall the session tier
+    // has (`host/child-session-port.ts` deliberately keeps no client-side
+    // timeout of its own). One number for both tiers on purpose: metadata is
+    // per-DECLARATION, not per-call, so a `sessionTier:true` registry serves
+    // this same wall to the inline spawns of that host as well — a split here
+    // would separate hosts, not tiers.
     timeoutMs: SUBAGENT_TIME_BUDGET_MS,
     maxTimeoutMs: SUBAGENT_TIME_BUDGET_MS,
     maxOutputBytes: SUBAGENT_OUTPUT_MAX_BYTES,
