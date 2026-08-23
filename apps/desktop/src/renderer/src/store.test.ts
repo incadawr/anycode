@@ -776,6 +776,146 @@ describe("desktop store — notice channel (Wave-1 revision)", () => {
   });
 });
 
+describe("desktop store — child_report enqueues through the P7.14 prompt queue (TASK.145 срез 1/2)", () => {
+  it("enqueues the notification text verbatim, with no images, stamped origin:\"system\" and originId — the queue's own drainer (tab-registry.ts's maybeDrain) then decides WHEN to send it; see tab-registry.test.ts for the end-to-end idle-dispatch proof", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store
+      .getState()
+      .applyHostMessage({ type: "child_report", id: "report-1", text: "<task-notification>...</task-notification>" });
+
+    expect(store.getState().promptQueue).toHaveLength(1);
+    expect(store.getState().promptQueue[0]).toMatchObject({
+      text: "<task-notification>...</task-notification>",
+      images: [],
+      origin: "system",
+      originId: "report-1",
+    });
+  });
+
+  it("does NOT touch turn/connection state directly — it is purely an enqueue, never a new-turn-start path of its own", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    const turnBefore = store.getState().turn;
+
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "report text" });
+
+    expect(store.getState().turn).toEqual(turnBefore);
+  });
+
+  it("dedupes a re-delivered report already sitting in promptQueue — a second child_report with the SAME id is not enqueued twice (TASK.145 срез 2 §4 point 1: host resends an un-acked report on every ui_ready)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "first delivery" });
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "resent (renderer never acked in time)" });
+
+    expect(store.getState().promptQueue).toHaveLength(1);
+    expect(store.getState().promptQueue[0]!.text).toBe("first delivery");
+  });
+
+  it("dedupes a re-delivered report that is currently in flight (already off promptQueue, wire-sent, turn_started not yet acked)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "first delivery" });
+    const taken = store.getState().takeQueueHead("req-1");
+    expect(taken).not.toBeNull();
+    expect(store.getState().promptQueue).toHaveLength(0);
+
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "resent" });
+
+    expect(store.getState().promptQueue).toHaveLength(0);
+  });
+
+  it("a DIFFERENT report id is never treated as a duplicate — both are enqueued", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "one" });
+    store.getState().applyHostMessage({ type: "child_report", id: "report-2", text: "two" });
+
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["one", "two"]);
+  });
+});
+
+describe("desktop store — takeQueueHead pause-bypass for a system report (TASK.145 срез 2 §4 point 2)", () => {
+  it("while paused, a system-origin item is still taken even though a HUMAN-typed item is ahead of it in the queue — FIFO among user items is preserved (the user item stays queued, untouched, in its original relative position)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().enqueuePrompt({ text: "held human prompt", images: [] });
+    store.setState({ queuePaused: true });
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "background report" });
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["held human prompt", "background report"]);
+
+    const taken = store.getState().takeQueueHead("req-1");
+
+    expect(taken?.text).toBe("background report");
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["held human prompt"]);
+    expect(store.getState().queuePaused).toBe(true);
+  });
+
+  it("while paused, a plain human-typed item is NOT taken (queuePaused still holds ordinary prompts)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().enqueuePrompt({ text: "held", images: [] });
+    store.setState({ queuePaused: true });
+
+    expect(store.getState().takeQueueHead("req-1")).toBeNull();
+    expect(store.getState().promptQueue).toHaveLength(1);
+  });
+
+  it("while paused with NO system item present, takeQueueHead returns null (nothing eligible)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().enqueuePrompt({ text: "a", images: [] });
+    store.getState().enqueuePrompt({ text: "b", images: [] });
+    store.setState({ queuePaused: true });
+
+    expect(store.getState().takeQueueHead("req-1")).toBeNull();
+    expect(store.getState().promptQueue).toHaveLength(2);
+  });
+
+  it("while paused, two system reports drain in FIFO order relative to each other", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "first" });
+    store.getState().applyHostMessage({ type: "child_report", id: "report-2", text: "second" });
+    store.setState({ queuePaused: true });
+
+    const first = store.getState().takeQueueHead("req-1");
+    expect(first?.text).toBe("first");
+    store.setState({ queueInFlight: null }); // simulate the first having settled
+    const second = store.getState().takeQueueHead("req-2");
+    expect(second?.text).toBe("second");
+  });
+
+  it("reentrancy: takeQueueHead returns null (not the item) while another drain is already in flight — a system report is never lost nor sent twice", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().enqueuePrompt({ text: "in-flight user prompt", images: [] });
+    store.getState().takeQueueHead("req-1"); // req-1 now owns queueInFlight
+    store.getState().applyHostMessage({ type: "child_report", id: "report-1", text: "arrives mid-drain" });
+
+    // A second drain attempt racing the first (e.g. another maybeDrain fire)
+    // must bail — the atomic double-guard is unconditional, regardless of pause.
+    expect(store.getState().takeQueueHead("req-2")).toBeNull();
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["arrives mid-drain"]);
+
+    // Once the first item's turn settles (queueInFlight cleared), the report
+    // is taken exactly once — never duplicated, never dropped.
+    store.setState({ queueInFlight: null });
+    const taken = store.getState().takeQueueHead("req-3");
+    expect(taken?.text).toBe("arrives mid-drain");
+    expect(store.getState().promptQueue).toHaveLength(0);
+  });
+});
+
 describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.12)", () => {
   function beginTurn(store: ReturnType<typeof createDesktopStore>, turnId: string): void {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });

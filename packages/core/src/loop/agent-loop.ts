@@ -439,6 +439,8 @@ export class AgentLoop {
       attachments?: ImageAttachment[];
       /** Ephemeral context added to this turn's system prompt, never history. */
       systemContext?: string;
+      /** TASK.145 срез 2: stamps the appended user HistoryItem's `origin` (host-injected, not human-typed). See HistoryItem.origin's doc. */
+      origin?: "system";
     },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const tap = this.config.eventTap;
@@ -487,6 +489,7 @@ export class AgentLoop {
       mode?: PermissionMode;
       attachments?: ImageAttachment[];
       systemContext?: string;
+      origin?: "system";
     },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const signal = options?.signal;
@@ -523,11 +526,14 @@ export class AgentLoop {
         return;
       }
 
-      this.history.append({
-        role: "user",
-        content: promptText,
-        ...(options?.attachments?.length ? { images: options.attachments } : {}),
-      });
+      this.history.append(
+        {
+          role: "user",
+          content: promptText,
+          ...(options?.attachments?.length ? { images: options.attachments } : {}),
+        },
+        { origin: options?.origin },
+      );
     }
 
     // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved

@@ -261,7 +261,14 @@ export interface ErrorRetryMeta {
  * instead of appending a new block.
  */
 export type TranscriptBlock =
-  | { kind: "user_text"; id: string; text: string; images?: readonly ImageAttachment[] }
+  | {
+      kind: "user_text";
+      id: string;
+      text: string;
+      images?: readonly ImageAttachment[];
+      /** TASK.145 срез 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
+      origin?: "system";
+    }
   | { kind: "assistant_text"; id: string; text: string }
   | { kind: "reasoning"; id: string; text: string; collapsed: boolean }
   | {
@@ -616,6 +623,24 @@ export interface QueuedPrompt {
   /** Final send text — paste markers already reconstituted at enqueue time. */
   text: string;
   images: readonly QueuedPromptImage[];
+  /**
+   * TASK.145 срез 2: presence marks this item as a detached child's terminal
+   * report (a SYSTEM-origin queue item), not an ordinary human-typed prompt —
+   * absent for every other enqueue call site (Composer, App.tsx's retry
+   * offer, automation.ts). Drives two things: `takeQueueHead`'s pause-bypass
+   * below (spec §4 point 2 — "a system report passes through queuePaused"),
+   * and the wire `user_message.origin`/transcript `user_text.origin` a drain
+   * stamps (tab-registry.ts's `dispatchQueuedPrompt`).
+   */
+  origin?: "system";
+  /**
+   * The report's own stable id (`spawnToolCallId`, carried on the wire as
+   * `child_report.id`) — used ONLY to dedupe a re-delivered-but-not-yet-acked
+   * report (host's `child-report-queue.ts` resends on every `ui_ready`)
+   * against one already sitting in this queue or in flight. Always present
+   * alongside `origin`; always absent otherwise.
+   */
+  originId?: string;
 }
 
 /**
@@ -859,8 +884,13 @@ export interface DesktopState {
   setChildSurface(): void;
   /** Sets or clears (null) the transient notice; the toast UI (MVP.5) dismisses through this. */
   setNotice(notice: Notice | null): void;
-  /** Appends the local user's message to the transcript (the wire never echoes user input back, §3). */
-  appendUserText(id: string, text: string): void;
+  /**
+   * Appends the local user's message to the transcript (the wire never echoes
+   * user input back, §3). `origin` (TASK.145 срез 2) is `"system"` only when
+   * this append is draining a queued detached-child report — see
+   * `QueuedPrompt.origin`; absent for every ordinary human-typed send.
+   */
+  appendUserText(id: string, text: string, origin?: "system"): void;
   /** Appends a renderer-only persisted provider diagnostic; never sent to the host/model. */
   appendUsageLimitNotice(notice: UsageLimitNotice): void;
   /**
@@ -1134,7 +1164,16 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
       if (text !== message.content && text.trim() === "") {
         continue;
       }
-      blocks.push({ kind: "user_text", id: `${item.id}:0`, text, ...(message.images?.length ? { images: message.images } : {}) });
+      blocks.push({
+        kind: "user_text",
+        id: `${item.id}:0`,
+        text,
+        ...(message.images?.length ? { images: message.images } : {}),
+        // TASK.145 срез 2: reload-path parity with the live append (store.ts's
+        // appendUserText) — a persisted `HistoryItem.origin` rehydrates into
+        // the SAME system-card view, not the ordinary user bubble.
+        ...(item.origin !== undefined ? { origin: item.origin } : {}),
+      });
       continue;
     }
 
@@ -2653,6 +2692,44 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             });
             return;
           }
+          case "child_report": {
+            // TASK.145 срез 1/2: enqueues the detached child's report through
+            // the SAME P7.14 queue a typed-ahead prompt uses (enqueuePrompt
+            // below) — tab-registry's `maybeDrain` fires synchronously on
+            // this set() and dispatches it right away (idle, or paused with
+            // ONLY this system item eligible — takeQueueHead) or holds it
+            // until the current turn ends otherwise, with zero new
+            // turn-start machinery. `images: []`: the notification text is
+            // the WHOLE payload, never an attachment carrier.
+            //
+            // Dedup by `message.id` (спец §4 point 1: "рендерер дедуплицирует
+            // по нему при постановке в очередь"): the host's pending-report
+            // queue re-`sendDirect`s an unacknowledged report on every
+            // `ui_ready`, so the SAME report can legitimately arrive twice
+            // before this renderer's own ack (tab-registry.ts) reaches the
+            // host. A duplicate is recognized against BOTH the still-queued
+            // items and the one currently in flight (already off promptQueue,
+            // wire-sent, `turn_started` not yet acked) — re-enqueuing it there
+            // would produce a second turn for the same report. Either way
+            // tab-registry.ts acks unconditionally right after this call, so
+            // the host stops resending regardless of which branch ran.
+            const { promptQueue, queueInFlight } = get();
+            const alreadyQueued =
+              promptQueue.some((prompt) => prompt.originId === message.id) ||
+              queueInFlight?.item.originId === message.id;
+            if (!alreadyQueued) {
+              get().enqueuePrompt({ text: message.text, images: [], origin: "system", originId: message.id });
+            }
+            return;
+          }
+          case "background_children":
+          case "background_child_cancel_result":
+            // TASK.145 срез 3: data/command-only this slice (host/session.ts,
+            // shared/protocol.ts) — deliberately no renderer surface yet (the
+            // mandate reserves that for a later slice). No-op here purely to
+            // keep the exhaustive switch below total; not a decision that
+            // this data goes unused forever.
+            return;
           default: {
             const _exhaustive: never = message;
             void _exhaustive;
@@ -2704,8 +2781,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         set({ notice });
       },
 
-      appendUserText(id: string, text: string): void {
-        appendBlock({ kind: "user_text", id, text });
+      appendUserText(id: string, text: string, origin?: "system"): void {
+        appendBlock({ kind: "user_text", id, text, ...(origin !== undefined ? { origin } : {}) });
       },
 
       appendUsageLimitNotice(notice: UsageLimitNotice): void {
@@ -2795,16 +2872,34 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       takeQueueHead(requestId: string): QueuedPrompt | null {
         const { promptQueue, queuePaused, queueInFlight } = get();
-        // Atomic double-guard: nothing to take, held, or a drain already in
-        // flight. Read-then-set is atomic in single-threaded JS (no await
-        // between), so a re-entrant subscriber fired by the set() below always
-        // observes the new inFlight and bails.
-        if (queuePaused || queueInFlight !== null || promptQueue.length === 0) {
+        // Atomic double-guard: held, or a drain already in flight. Read-then-set
+        // is atomic in single-threaded JS (no await between), so a re-entrant
+        // subscriber fired by the set() below always observes the new inFlight
+        // and bails. Checked BEFORE the pause-aware index search below — an
+        // in-flight drain gates EVERY kind of item, system report included.
+        if (queueInFlight !== null || promptQueue.length === 0) {
           return null;
         }
-        const [head, ...rest] = promptQueue;
-        set({ promptQueue: rest, queueInFlight: { requestId, item: head! } });
-        return head!;
+        // TASK.145 срез 2 (spec §4 point 2): `queuePaused` exists to hold
+        // HUMAN-typed prompts after a turn ended anomalously ("don't send
+        // silently after an anomaly") — a detached child's system report is
+        // not that; it must still leave the queue. While paused, only the
+        // EARLIEST system-origin item is eligible; while not paused, the
+        // ordinary FIFO head (any kind) is. Splicing out an item from the
+        // middle (rather than always shift()ing index 0) is what lets a
+        // system report jump a paused, still-held user prompt WITHOUT
+        // reordering the user prompts relative to each other — FIFO stays
+        // intact within each kind.
+        // `promptQueue.length > 0` is already guaranteed by the guard above —
+        // the unpaused branch is always index 0 (plain FIFO head).
+        const takeIndex = queuePaused ? promptQueue.findIndex((prompt) => prompt.origin === "system") : 0;
+        if (takeIndex === -1) {
+          return null;
+        }
+        const head = promptQueue[takeIndex]!;
+        const rest = [...promptQueue.slice(0, takeIndex), ...promptQueue.slice(takeIndex + 1)];
+        set({ promptQueue: rest, queueInFlight: { requestId, item: head } });
+        return head;
       },
 
       resumeQueue(): void {

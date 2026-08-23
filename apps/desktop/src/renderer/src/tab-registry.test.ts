@@ -1212,6 +1212,89 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(userMessages(port).map((m) => m.text)).toEqual(["now"]);
   });
 
+  // TASK.145 срез 1: a detached child's terminal report reaches the renderer
+  // as a `child_report` HostToUiMessage (store.ts's applyHostMessage calls
+  // enqueuePrompt for it) — proving end-to-end that an idle parent's own
+  // EXISTING queue-drainer opens a brand-new turn for it, with no bespoke
+  // turn-start path added anywhere in this stack.
+  /** Filters port.sent down to child_report_ack sends. */
+  function reportAcks(port: FakeMessagePort): Array<{ id: string }> {
+    return (port.sent.filter((m) => (m as { type: string }).type === "child_report_ack") as Array<{ id: string }>).map(
+      (m) => ({ id: m.id }),
+    );
+  }
+
+  it("a child_report on an IDLE parent is enqueued and drained immediately as a NEW user_message (TASK.145 срез 1: doставка when the parent is free)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    port.emit({ type: "child_report", id: "report-1", text: "<task-notification>...</task-notification>" });
+
+    const messages = userMessages(port);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.text).toBe("<task-notification>...</task-notification>");
+    // TASK.145 срез 2: the wire user_message this drain sent carries the
+    // system origin — host stamps the persisted HistoryItem with it.
+    expect((messages[0] as { origin?: string }).origin).toBe("system");
+  });
+
+  it("acks a child_report the instant it is enqueued/deduped — BEFORE the queue actually drains it onto the wire (TASK.145 срез 2 §4 point 1)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    port.emit({ type: "child_report", id: "report-1", text: "hello" });
+
+    expect(reportAcks(port)).toEqual([{ id: "report-1" }]);
+  });
+
+  it("a child_report while the parent is BUSY is queued, not dropped or force-started mid-turn — it drains on the existing turn-end trigger like any other queued prompt", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+
+    port.emit({ type: "turn_started", requestId: "user-1", turnId: "t1" });
+    port.emit({ type: "child_report", id: "report-1", text: "report while busy" });
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["report while busy"]);
+    expect(userMessages(port)).toHaveLength(0);
+
+    port.emit({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(userMessages(port).map((m) => m.text)).toEqual(["report while busy"]);
+  });
+
+  it("a child_report delivered while queuePaused is true (a PRIOR turn ended anomalously) still drains — the pause is for human-typed prompts, not a background report (TASK.145 срез 2 §4 point 2)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+
+    // A turn is already running when the human types ahead (so the prompt
+    // PARKS instead of draining immediately); the turn then ends
+    // non-"completed" — the existing anomaly-pause machinery arms `queuePaused`.
+    port.emit({ type: "turn_started", requestId: "user-1", turnId: "t1" });
+    store.getState().enqueuePrompt({ text: "typed before the anomaly", images: [] });
+    port.emit({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "error", turns: 1 } });
+    expect(store.getState().queuePaused).toBe(true);
+    expect(userMessages(port)).toHaveLength(0);
+
+    port.emit({ type: "child_report", id: "report-1", text: "background report" });
+
+    // The report drains despite the pause; the held human prompt does not.
+    expect(userMessages(port).map((m) => m.text)).toEqual(["background report"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["typed before the anomaly"]);
+    expect(store.getState().queuePaused).toBe(true);
+  });
+
   it("a busy turn_rejected on the drain restores the head + pauses; Resume re-drains it", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);

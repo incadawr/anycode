@@ -54,6 +54,17 @@ export type { ClaudeTranscriptItem } from "./adapters/node/sqlite-persistence.js
 // below does not apply): re-exported for the desktop host's notice injection
 // (slice 6.DP-2), so both wiring paths append byte-identical reminder blocks.
 export { withBackgroundTaskNotices } from "./cli/background-notice.js";
+// Pure string helper (TASK.145 срез 1): builds a detached child session's
+// terminal report as a ZCode-form `<task-notification>` block. Re-exported
+// so the desktop host's detach-delivery seam (host/index.ts's
+// `onDetachedTerminal`) formats byte-identical text to what this module's
+// own tests pin.
+export {
+  formatChildTaskNotification,
+  formatChildReportCapNotice,
+  mapChildRunStatusToNotification,
+} from "./cli/child-notification.js";
+export type { ChildTaskNotificationInput, ChildTaskNotificationStatus } from "./cli/child-notification.js";
 // Pure string helper (TASK.27): the plan-discipline reminder both the CLI REPL
 // and the desktop host append to a plan-mode turn's user prompt. Exported so
 // there is exactly ONE copy of the rule text in the repo.

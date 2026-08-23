@@ -57,4 +57,15 @@ export interface HistoryItem {
   /** Cached token estimate (items are immutable after append; replacement recomputes). */
   tokenEstimate?: number;
   kind?: "normal" | "compact_summary" | "microcompact_cleared";
+  /**
+   * TASK.145 срез 2: marks a `role:"user"` item the human never typed — the
+   * host injected it on the model's behalf (a detached background child's
+   * terminal report). `role` stays "user" (owner decision, spec §4bis п.1:
+   * the MODEL must not be able to tell the two apart), so this field exists
+   * purely for PRESENTATION — a renderer/CLI reading persisted history picks
+   * a different view for it without the model-facing role ever lying about
+   * who "spoke". Absent = an ordinary human-typed turn (the overwhelming
+   * majority of items).
+   */
+  origin?: "system";
 }

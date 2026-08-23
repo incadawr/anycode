@@ -307,6 +307,14 @@ export interface HarnessOptions {
    * unaffected, and the tool stays invisible to the model).
    */
   planExit?: boolean;
+  /**
+   * TASK.145 срез 2: the host's pending-detached-child-report queue seam,
+   * threaded DIRECTLY to Session (mirror of the checkpointsSeam/
+   * reportProviderHealth precedent above). Omitted -> `ui_ready`'s
+   * `resendAll()` call and `child_report_ack`'s `ack()` call are both no-ops
+   * (every pre-existing test unaffected).
+   */
+  pendingChildReports?: SessionOptions["pendingChildReports"];
 }
 
 export interface Harness {
@@ -480,6 +488,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.onContinuationReady !== undefined ? { onContinuationReady: options.onContinuationReady } : {}),
     ...(options.onContinuationComplete !== undefined ? { onContinuationComplete: options.onContinuationComplete } : {}),
     ...(options.reportProviderHealth !== undefined ? { reportProviderHealth: options.reportProviderHealth } : {}),
+    ...(options.pendingChildReports !== undefined ? { pendingChildReports: options.pendingChildReports } : {}),
   });
   session.bindPort(nodeWirePort(hostPort));
 

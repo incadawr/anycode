@@ -38,14 +38,20 @@ export class ConversationHistory {
     return this.list;
   }
 
-  /** Appends a message as a new item (uuid, timestamp, token estimate) and feeds the sink. */
-  append(message: ChatMessage): HistoryItem {
+  /**
+   * Appends a message as a new item (uuid, timestamp, token estimate) and
+   * feeds the sink. `meta.origin` (TASK.145 срез 2) stamps a `role:"user"`
+   * item as host-injected rather than human-typed — see HistoryItem.origin's
+   * own doc for why this is presentation-only and never touches `message`.
+   */
+  append(message: ChatMessage, meta?: { origin?: "system" }): HistoryItem {
     const item: HistoryItem = {
       id: globalThis.crypto.randomUUID(),
       createdAt: Date.now(),
       message,
       tokenEstimate: estimateMessageTokens(this.tokenizer, message),
       kind: "normal",
+      ...(meta?.origin !== undefined ? { origin: meta.origin } : {}),
     };
     this.list.push(item);
     this.sink?.append([item]);

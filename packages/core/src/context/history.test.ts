@@ -38,8 +38,19 @@ describe("ConversationHistory", () => {
     expect(item.createdAt).toBeGreaterThan(0);
     expect(item.tokenEstimate).toBeGreaterThan(0);
     expect(item.kind).toBe("normal");
+    expect(item.origin).toBeUndefined();
     expect(history.items).toHaveLength(1);
     expect(sink.appended).toEqual([[item]]);
+  });
+
+  it("append(message, {origin:\"system\"}) stamps the item's origin (TASK.145 срез 2) — absent by default for every ordinary call", () => {
+    const history = new ConversationHistory();
+
+    const injected = history.append({ role: "user", content: "background report" }, { origin: "system" });
+    const typed = history.append({ role: "user", content: "hi" });
+
+    expect(injected.origin).toBe("system");
+    expect(typed.origin).toBeUndefined();
   });
 
   it("toMessages returns the messages in append order", () => {
