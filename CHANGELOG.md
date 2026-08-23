@@ -5,6 +5,28 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.17] — 2026-08-23
+
+### Fixed
+
+- A quoted flag can no longer smuggle a write past the read-only check. The
+  screen that decides a Bash command is safe enough to run without asking
+  compared each argument exactly as written, so putting quotes around a flag
+  hid it: `git diff "--output" notes.md` read as harmless and was approved
+  automatically, and against real git it wrote the named file — `git blame`
+  in the same shape truncated an existing one to nothing. The screen now
+  reads each argument both as written and with its quotes removed, the way
+  the equivalent check for pipelines already did. A command whose quoting
+  never closes is no longer assumed harmless either; it asks.
+- A session moves to the top of the list when it is used, not only when it is
+  renamed. The value that orders the sidebar, labels a session's age and backs
+  the session picker is meant to name the last time the session was active,
+  but only edits to a session's title, model, mode or worktree ever wrote it —
+  talking to a session left it untouched, so a conversation from an hour ago
+  could sit below one nobody had opened in days. Writing history now advances
+  it, and sessions that already exist are corrected once from the history they
+  carry.
+
 ## [0.0.16] — 2026-08-23
 
 ### Added
