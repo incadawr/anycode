@@ -5,6 +5,41 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.16] — 2026-08-23
+
+### Added
+
+- A subagent can be sent to work in the background. A detached child hands the
+  turn back the moment it starts instead of holding the conversation still
+  until it finishes, so the session carries on and the child's report arrives
+  on its own later. If a turn is in flight when the report lands it waits and
+  is delivered once that turn settles — nothing is spliced into a turn already
+  running; if the session is idle, the report wakes it. The list of running
+  background children and the command to cancel one are on the wire already; a
+  panel that shows them is a later change.
+
+### Changed
+
+- A subagent is bounded by its turns, not by a ten-minute clock. The old wall
+  was 600 seconds of pure elapsed time counted from the moment the child was
+  asked for, and it could not tell "the model is thinking" from "we are waiting
+  for a person who has not answered a permission prompt yet". A child session
+  sitting in front of an unanswered dialog therefore spent its entire budget on
+  waiting, and a child doing real work was cut off mid-task at eight minutes.
+  The clocks are resized so they can only catch a child that is genuinely hung
+  — six hours, the figure already used here for long-running background work —
+  and what ends a subagent is now the turn budget, which is visible and
+  settable.
+
+### Fixed
+
+- Asking for more session children than the limit allows now queues them
+  instead of throwing the work away. Over the cap the spawn was refused outright
+  and the delegated task simply vanished, while the in-process tier — on a
+  smaller limit — had always just waited its turn. A spawn that cannot start yet
+  waits in line and starts the moment a slot frees, and a parent sitting at its
+  own limit no longer holds up a different parent that has room.
+
 ## [0.0.15] — 2026-08-22
 
 ### Added
