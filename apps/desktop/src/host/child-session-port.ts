@@ -22,7 +22,7 @@
  * `permission-broker.ts`'s `settle()`.
  *
  * No client-side timeout: the sync-join semantics (cut §0.5) rely on the
- * dispatcher's EXISTING 600s tool timeout (`tools/agent.ts`'s metadata,
+ * dispatcher's EXISTING Agent-tool timeout (`tools/agent.ts`'s metadata,
  * `dispatch/dispatcher.ts`) to bound a stuck child — this client only reacts
  * to `opts.signal` (parent turn cancel/timeout) by sending exactly one
  * `ChildRunCancel`, and never resolves a run on its own initiative: main
@@ -89,7 +89,7 @@ import {
  * main. Necessary, not cosmetic: `parseChildSpawnRequest` on the main side is
  * fail-closed and silent (malformed input -> the message is just dropped,
  * never a reply), so without this pre-flight check a malformed id would leave
- * the caller's promise pending until the dispatcher's 600s tool timeout — an
+ * the caller's promise pending until the dispatcher's Agent-tool timeout — an
  * honest, immediate refusal here is the only alternative to that.
  */
 const MALFORMED_SPAWN_ID_MESSAGE = "Agent: the child session failed to start (malformed spawn tool-call id).";
@@ -101,7 +101,7 @@ const MALFORMED_SPAWN_ID_MESSAGE = "Agent: the child session failed to start (ma
  * fail-closed-and-silent about all of them (violation -> `null` -> main drops
  * the message, no reply). The pre-flight above used to check ONLY
  * `spawnToolCallId`, so an oversized value on any of these other five reached
- * main and hung the caller's promise until the dispatcher's 600s tool
+ * main and hung the caller's promise until the dispatcher's Agent-tool
  * timeout. `description`/`prompt` in particular are free MODEL text (`tools/
  * agent.ts`'s `runSessionTier` stamps them straight from `AgentInput`,
  * unbounded) — this is reachable by an ordinary turn, no adversarial input
@@ -220,7 +220,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // malformed request must fail IMMEDIATELY and HONESTLY here, rather than
     // being sent and silently dropped by main's fail-closed
     // `parseChildSpawnRequest` — that path would leave this call's promise
-    // pending until the dispatcher's 600s tool timeout with no explanation.
+    // pending until the dispatcher's Agent-tool timeout with no explanation.
     const shapeError = findSpawnRequestShapeError(req);
     if (shapeError !== null) {
       return Promise.resolve({

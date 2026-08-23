@@ -216,16 +216,35 @@ export const DEFAULT_SUBAGENT_MAX_TURNS = 40;
  */
 export const SUBAGENT_MAX_TURNS_CEILING = 200;
 
-/** The Agent tool's dispatcher wall (tools/agent.ts metadata imports this). */
-export const SUBAGENT_TIME_BUDGET_MS = 600_000;
+/**
+ * The Agent tool's dispatcher wall for one spawn, and the outer bound the two
+ * deadlines below are carved out of.
+ *
+ * What bounds a subagent is its TURN budget (DEFAULT_SUBAGENT_MAX_TURNS plus
+ * the TASK.124 ladder), not the clock. This wall was 600_000, and at that size
+ * it did not act as a backstop — it was the thing that decided a run. An inline
+ * child was cut mid-work at eight minutes; a session child, which is a separate
+ * host process with its own turn ceiling, its own permission prompts and a
+ * human in front of it, derives no deadline from this constant at all, so the
+ * wall was its ONLY clock and ten minutes spent waiting for a person to answer
+ * a permission dialog spent the entire budget (TASK.148).
+ *
+ * No reference implementation bounds a subagent by wall-clock work time; they
+ * watch for absence of PROGRESS instead. Until that detector exists here, the
+ * wall is sized so it can only ever catch a genuinely hung child: the same 6h
+ * as BACKGROUND_TASK_TIMEOUT_MS, the number this codebase already uses for
+ * "long-running work, not a stall".
+ */
+export const SUBAGENT_TIME_BUDGET_MS = 21_600_000;
 
 /**
  * A child loop must not START another model step after this much elapsed time
  * from SubagentPort.run entry (pre-semaphore — the dispatcher bills a queued
  * child from the moment its handler is called, so a child parked behind
- * siblings is only entitled to the remainder).
+ * siblings is only entitled to the remainder). Held two minutes under the wall
+ * so the wrap-up rescue still has a window when the wall is what ends the run.
  */
-export const SUBAGENT_LOOP_DEADLINE_MS = 480_000;
+export const SUBAGENT_LOOP_DEADLINE_MS = 21_480_000;
 
 /** Ceiling on the wrap-up model call. */
 export const SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS = 60_000;
@@ -234,7 +253,7 @@ export const SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS = 60_000;
  * The outcome must be on its way back by this elapsed time (10s reserve under
  * SUBAGENT_TIME_BUDGET_MS for SubagentStop observers + plumbing).
  */
-export const SUBAGENT_OUTCOME_DEADLINE_MS = 590_000;
+export const SUBAGENT_OUTCOME_DEADLINE_MS = 21_590_000;
 
 /** Below this remaining window the wrap-up call is skipped entirely. */
 export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
@@ -366,7 +385,12 @@ export const MAX_WORKFLOWS = 32;
 /** Cap on the number of steps in one workflow definition. */
 export const MAX_WORKFLOW_STEPS = 16;
 
-/** Per-step wall-clock timeout (= Agent-tool precedent); armed on the child's actual start, not on enqueue. */
+/**
+ * Per-step wall-clock timeout, armed on the child's actual start, not on
+ * enqueue. Stands on its own: it no longer tracks SUBAGENT_TIME_BUDGET_MS,
+ * because a workflow run as a whole is already bounded by
+ * WORKFLOW_TOOL_TIMEOUT_MS and a step may not outlive it.
+ */
 export const WORKFLOW_STEP_TIMEOUT_MS = 600_000;
 
 /** Workflow tool metadata.timeoutMs: the hard dispatcher wall for the whole run. */
