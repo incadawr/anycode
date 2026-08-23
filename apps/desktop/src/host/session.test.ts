@@ -73,7 +73,14 @@ import type {
   TelemetryStatus,
 } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
-import type { HostToUiMessage, ShellCapabilitiesProjection, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
+import type {
+  HostToUiMessage,
+  ShellCapabilitiesProjection,
+  UiToHostMessage,
+  WireBackgroundChild,
+  WireEnvStatus,
+  WirePort,
+} from "../shared/protocol.js";
 import { CHILD_PROGRESS_TYPE, CHILD_STEER_QUEUE_MAX, parseChildProgress } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import { CoreEngine } from "./engines/core-engine.js";
@@ -1169,6 +1176,8 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     onWorkspaceTransition?: SessionOptions["onWorkspaceTransition"];
     /** TASK.144: an explicit store so a test can assert what a remembered allow appended to it. */
     rules?: SessionPermissionRules;
+    /** TASK.145 срез 3: see SessionOptions.backgroundChildren's own doc. */
+    backgroundChildren?: SessionOptions["backgroundChildren"];
   }): { port: FakeWirePort; session: Session; broker: IpcPermissionBroker } {
     const outbound = new Outbound();
     const broker = new IpcPermissionBroker((message) => outbound.emit(message));
@@ -1176,6 +1185,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       outbound,
       engine: opts.engine ?? buildFakeEngine(),
       broker,
+      ...(opts.backgroundChildren !== undefined ? { backgroundChildren: opts.backgroundChildren } : {}),
       fs: new MemFs(),
       workspace: opts.workspace ?? "/workspace",
       model: "m1",
@@ -1254,6 +1264,240 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     expect(rules.list()).toEqual([]);
     broker.denyAll("test teardown", "shutdown");
     await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  /**
+   * TASK.145 срезы 2+3 (§4bis п.2/§4ter): a `user_message` normally proves a
+   * human is at the keyboard and disarms the TASK.138 unattended latch
+   * (route()'s `case "user_message"`). `origin:"system"` — set on a
+   * background child's report auto-drained through the renderer's own prompt
+   * queue (TASK.145 срез 1) — must NOT count: it is a system-originated
+   * wake-up, not evidence anyone is watching. The same field срез 2 uses to
+   * pick the transcript's system-card rendering is the one read here; the two
+   * slices' independent additions were merged onto it.
+   */
+  describe("user_message.origin and the TASK.138 unattended latch", () => {
+    /**
+     * A Session wired to a CALLER-supplied broker (buildTestSession always
+     * constructs its own, so this test needs its own minimal harness to arm
+     * the latch on the broker instance the session actually uses).
+     */
+    function buildSessionOnBroker(broker: IpcPermissionBroker): { port: FakeWirePort } {
+      const session = new Session({
+        outbound: new Outbound(),
+        engine: buildFakeEngine(),
+        broker,
+        fs: new MemFs(),
+        workspace: "/workspace",
+        model: "m1",
+        sessionId: "s-system-origin",
+        rules: new SessionPermissionRules(),
+      });
+      const port = new FakeWirePort();
+      session.bindPort(port);
+      port.send({ type: "ui_ready" });
+      return { port };
+    }
+
+    /** Arms the broker's unattended latch the same way TASK.138's own suite does: one unanswered ask times out. */
+    async function armUnattendedLatch(broker: IpcPermissionBroker): Promise<void> {
+      const pending = broker.requestPermission({
+        toolName: "Bash",
+        input: { command: "git status" },
+        metadata: bashTool.metadata,
+        mode: "build",
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toMatchObject({ behavior: "deny" });
+      expect(broker.isUnattended).toBe(true);
+    }
+
+    it("an ORDINARY user_message (no origin) still disarms the latch, unchanged", async () => {
+      vi.useFakeTimers();
+      try {
+        const broker = new IpcPermissionBroker(() => {}, 1_000);
+        const { port } = buildSessionOnBroker(broker);
+
+        await armUnattendedLatch(broker);
+
+        port.send({ type: "user_message", requestId: "r1", text: "hello" });
+        expect(broker.isUnattended).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a SYSTEM-ORIGIN user_message (child_report auto-drain) does NOT disarm the latch", async () => {
+      vi.useFakeTimers();
+      try {
+        const broker = new IpcPermissionBroker(() => {}, 1_000);
+        const { port } = buildSessionOnBroker(broker);
+
+        await armUnattendedLatch(broker);
+
+        port.send({ type: "user_message", requestId: "r1", text: "<task-notification>...</task-notification>", origin: "system" });
+        expect(broker.isUnattended).toBe(true);
+
+        // A REAL follow-up message from the human still disarms it normally —
+        // origin:"system" only withholds disarming for the message it is set on.
+        port.send({ type: "user_message", requestId: "r2", text: "ok thanks" });
+        expect(broker.isUnattended).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  /**
+   * TASK.145 срез 3 §2/§3: the `backgroundChildren` seam wiring — a pure host
+   * unit-test surface, deliberately NOT exercised through a real
+   * ChildSessionPort (that registry logic is child-session-port.test.ts's
+   * job); here a fake seam proves session.ts's OWN plumbing: ui_ready push,
+   * on-demand pull, cancel request/ack, live-push-on-change, and the explicit
+   * shutdown sweep (§3).
+   */
+  describe("backgroundChildren seam (TASK.145 срез 3 §2/§3)", () => {
+    function fakeBackgroundChildren(initial: WireBackgroundChild[] = []) {
+      let children = initial;
+      let changeListener: (() => void) | undefined;
+      const cancelCalls: string[] = [];
+      return {
+        seam: {
+          list: () => children,
+          cancel: (childSessionId: string) => {
+            cancelCalls.push(childSessionId);
+            const before = children.length;
+            children = children.filter((c) => c.childSessionId !== childSessionId);
+            return children.length < before;
+          },
+          cancelAll: vi.fn(() => {
+            children = [];
+          }),
+          onChange: (listener: () => void) => {
+            changeListener = listener;
+            return () => {
+              if (changeListener === listener) changeListener = undefined;
+            };
+          },
+        },
+        setChildren: (next: WireBackgroundChild[]) => {
+          children = next;
+          changeListener?.();
+        },
+        cancelCalls,
+      };
+    }
+
+    function backgroundChildrenMessages(port: FakeWirePort): Array<HostToUiMessage & { type: "background_children" }> {
+      return port.received.filter(
+        (m): m is HostToUiMessage & { type: "background_children" } =>
+          typeof m === "object" && m !== null && (m as { type?: unknown }).type === "background_children",
+      );
+    }
+
+    const CHILD_A: WireBackgroundChild = {
+      childSessionId: "child-a",
+      agentType: "explore",
+      description: "sweep the repo",
+      startedAt: 1_000,
+    };
+
+    it("pushes the current list (possibly empty) on ui_ready, mirroring pushTaskList/pushHooksList", () => {
+      const { seam } = fakeBackgroundChildren([CHILD_A]);
+      const { port } = buildTestSession({ backgroundChildren: seam });
+      port.send({ type: "ui_ready" });
+
+      const pushes = backgroundChildrenMessages(port);
+      expect(pushes).toHaveLength(1);
+      expect(pushes[0]!.children).toEqual([CHILD_A]);
+    });
+
+    it("an absent seam pushes an empty list on ui_ready (legacy/claude/codex boot — no crash, no undefined)", () => {
+      const { port } = buildTestSession({});
+      port.send({ type: "ui_ready" });
+
+      const pushes = backgroundChildrenMessages(port);
+      expect(pushes).toHaveLength(1);
+      expect(pushes[0]!.children).toEqual([]);
+    });
+
+    it("background_children_request re-pushes the CURRENT list on demand, even after ui_ready's own push", () => {
+      const { seam, setChildren } = fakeBackgroundChildren([CHILD_A]);
+      const { port } = buildTestSession({ backgroundChildren: seam });
+      port.send({ type: "ui_ready" });
+      // setChildren also fires onChange (a live push) — this test's own
+      // concern is the EXPLICIT pull below, not the live-push count (that is
+      // its own test further down).
+      setChildren([]);
+
+      port.send({ type: "background_children_request" });
+      const pushes = backgroundChildrenMessages(port);
+      expect(pushes.at(-1)!.children).toEqual([]);
+      expect(pushes.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("background_child_cancel_request calls seam.cancel with the id, acks ok:true, and re-pushes the updated list", () => {
+      const { seam, cancelCalls } = fakeBackgroundChildren([CHILD_A]);
+      const { port } = buildTestSession({ backgroundChildren: seam });
+      port.send({ type: "ui_ready" });
+
+      port.send({ type: "background_child_cancel_request", requestId: "cr1", childSessionId: "child-a" });
+
+      expect(cancelCalls).toEqual(["child-a"]);
+      const ack = port.received.find(
+        (m): m is HostToUiMessage & { type: "background_child_cancel_result" } =>
+          typeof m === "object" && m !== null && (m as { type?: unknown }).type === "background_child_cancel_result",
+      );
+      expect(ack).toMatchObject({ requestId: "cr1", ok: true });
+      expect(backgroundChildrenMessages(port).at(-1)!.children).toEqual([]);
+    });
+
+    it("background_child_cancel_request on an unknown id acks ok:false with a non-merits reason", () => {
+      const { seam } = fakeBackgroundChildren([]);
+      const { port } = buildTestSession({ backgroundChildren: seam });
+      port.send({ type: "ui_ready" });
+
+      port.send({ type: "background_child_cancel_request", requestId: "cr1", childSessionId: "no-such-child" });
+
+      const ack = port.received.find(
+        (m): m is HostToUiMessage & { type: "background_child_cancel_result" } =>
+          typeof m === "object" && m !== null && (m as { type?: unknown }).type === "background_child_cancel_result",
+      );
+      expect(ack).toMatchObject({ requestId: "cr1", ok: false });
+      expect((ack as { reason?: string }).reason).toContain("no such background child");
+    });
+
+    it("seam.onChange live-pushes an updated snapshot to an already-ui_ready renderer (mirror of lsp.onStatusChange)", () => {
+      const { seam, setChildren } = fakeBackgroundChildren([]);
+      const { port } = buildTestSession({ backgroundChildren: seam });
+      port.send({ type: "ui_ready" });
+      expect(backgroundChildrenMessages(port)).toHaveLength(1);
+
+      setChildren([CHILD_A]);
+
+      const pushes = backgroundChildrenMessages(port);
+      expect(pushes).toHaveLength(2);
+      expect(pushes[1]!.children).toEqual([CHILD_A]);
+    });
+
+    it("a change BEFORE ui_ready does not push (mirrors the LSP subscription's uiReady gate — no push-before-mount)", () => {
+      const { seam, setChildren } = fakeBackgroundChildren([]);
+      const { port } = buildTestSession({ backgroundChildren: seam });
+      setChildren([CHILD_A]); // no ui_ready yet
+      expect(backgroundChildrenMessages(port)).toHaveLength(0);
+
+      port.send({ type: "ui_ready" });
+      expect(backgroundChildrenMessages(port)).toHaveLength(1);
+    });
+
+    it("TASK.145 срез 3 §3: session shutdown explicitly calls seam.cancelAll (not a side effect of aborting the turn)", async () => {
+      const { seam } = fakeBackgroundChildren([CHILD_A]);
+      const { session } = buildTestSession({ backgroundChildren: seam });
+
+      await session.shutdown();
+
+      expect(seam.cancelAll).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("never emits host_ready.shell for a core-shaped engine (id \"core\"), even if the host mistakenly supplied one — core wire stays byte-identical", () => {
@@ -4348,5 +4592,159 @@ describe("tapChildPermissions (TASK.102 CUT-S2 §0.8/§2.6.3)", () => {
     tapped({ type: "task_list", tasks: [] });
     tapped({ type: "hooks_list", hooks: [] });
     expect(attention).toEqual([]);
+  });
+});
+
+// TASK.145 срез 2: the host-side pending-detached-child-report queue seam
+// (SessionOptions.pendingChildReports) — resendAll on ui_ready, ack on
+// child_report_ack, and the origin plumbing from a wire user_message through
+// to the appended/persisted HistoryItem.
+describe("Session — TASK.145 срез 2: pendingChildReports seam + origin plumbing", () => {
+  const isSessionHistory = (m: HostToUiMessage): m is Of<"session_history"> => m.type === "session_history";
+  const isLoopEnd = agentEventOf("loop_end");
+
+  function stubPendingChildReports(): SessionOptions["pendingChildReports"] & {
+    resendCalls: number;
+    acked: string[];
+  } {
+    const calls = { resendCalls: 0, acked: [] as string[] };
+    return {
+      get resendCalls() {
+        return calls.resendCalls;
+      },
+      get acked() {
+        return calls.acked;
+      },
+      resendAll: () => {
+        calls.resendCalls += 1;
+      },
+      ack: (id: string) => {
+        calls.acked.push(id);
+      },
+    };
+  }
+
+  it("calls resendAll() on the FIRST ui_ready, right after replay/session_history", async () => {
+    const pendingChildReports = stubPendingChildReports();
+    const h = createHarness({ steps: [finishStep()], pendingChildReports });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(pendingChildReports.resendCalls).toBe(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("calls resendAll() AGAIN on a later reconnect ui_ready — the exact race this seam exists to cover (a renderer reload right as a detached child's terminal report was being delivered)", async () => {
+    const pendingChildReports = stubPendingChildReports();
+    const h = createHarness({ steps: [finishStep()], pendingChildReports });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(pendingChildReports.resendCalls).toBe(1);
+
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length >= 2);
+      expect(pendingChildReports.resendCalls).toBe(2);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("routes child_report_ack.id to ack() and nothing else", async () => {
+    const pendingChildReports = stubPendingChildReports();
+    const h = createHarness({ steps: [finishStep()], pendingChildReports });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "child_report_ack", id: "report-1" });
+      h.send({ type: "child_report_ack", id: "report-2" });
+      // child_report_ack produces no host->ui reply of its own (unlike ui_ready
+      // above), so `waitUntil` (which only re-checks on an incoming message)
+      // would hang — `flush()` just lets the postMessage delivery settle.
+      await h.flush();
+
+      expect(pendingChildReports.acked).toEqual(["report-1", "report-2"]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("an absent pendingChildReports seam (every pre-existing test/harness call) makes ui_ready and child_report_ack harmless no-ops — the session keeps working afterwards, proving neither silently crashed the message-handling task", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(() => h.send({ type: "child_report_ack", id: "ghost" })).not.toThrow();
+
+      // A second ui_ready still round-trips normally — an unhandled throw
+      // inside route()'s async message handler would otherwise silently kill
+      // all FURTHER processing on this port without ever surfacing here.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length >= 2);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a live user_message.origin:\"system\" stamps the appended HistoryItem's origin — the model-facing role/content stay an ordinary user message either way", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "background report", origin: "system" });
+      await h.waitFor(isLoopEnd);
+
+      const [item] = h.engine.historyItems();
+      expect(item?.origin).toBe("system");
+      expect(item?.message).toEqual({ role: "user", content: "background report" });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("an ordinary user_message (no origin field) never stamps origin", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(isLoopEnd);
+
+      const [item] = h.engine.historyItems();
+      expect(item?.origin).toBeUndefined();
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a persisted origin:\"system\" HistoryItem survives the boot -> session_history wire projection (reload-path parity for the transcript's system-card view)", async () => {
+    const bootHistory: HistoryItem[] = [
+      {
+        id: "h1",
+        createdAt: 1,
+        message: { role: "user", content: "background report" },
+        origin: "system",
+      },
+      {
+        id: "h2",
+        createdAt: 2,
+        message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
+      },
+    ];
+    const h = createHarness({ steps: [finishStep()], bootHistory });
+    try {
+      h.send({ type: "ui_ready" });
+      const sessionHistory = await h.waitFor(isSessionHistory);
+
+      expect(sessionHistory.items[0]).toMatchObject({ id: "h1", origin: "system" });
+      expect(sessionHistory.items[1]).not.toHaveProperty("origin");
+    } finally {
+      h.close();
+    }
   });
 });

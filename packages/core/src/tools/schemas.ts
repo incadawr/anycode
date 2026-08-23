@@ -288,11 +288,12 @@ export interface WebFetchOutput {
  * against the persona registry so slice 3.3 can add md-profiles without
  * touching this frozen schema (design §3.4). Absent => "general-purpose".
  *
- * `tier`/`provider` (TASK.102 CUT-S2 §2.1) are the FULL declaration — only
- * used when `createAgentTool({sessionTier:true})` builds the root desktop
- * host's tool (tools/agent.ts). `model` stays valid for BOTH tiers (CUT-S2
- * §1 p.2: the inline `model` override is an existing, tested capability —
- * narrowing it to session-only would be a regression outside S2's mandate).
+ * `tier`/`provider`/`detach` (TASK.102 CUT-S2 §2.1; `detach` added TASK.145
+ * срез 1) are the FULL declaration — only used when
+ * `createAgentTool({sessionTier:true})` builds the root desktop host's tool
+ * (tools/agent.ts). `model` stays valid for BOTH tiers (CUT-S2 §1 p.2: the
+ * inline `model` override is an existing, tested capability — narrowing it
+ * to session-only would be a regression outside S2's mandate).
  */
 export const agentInputSchema = z.object({
   description: z.string().min(1).describe("Short 3-5 word description of the subagent task"),
@@ -324,6 +325,22 @@ export const agentInputSchema = z.object({
     .optional()
     .describe(
       "Exact model id to run the subagent on (defaults to the parent's model); if this host cannot honor it the call fails with an explanation",
+    ),
+  /**
+   * TASK.145 срез 1: session-tier-only, mirrors the `provider` field's
+   * "invalid for inline tier" discipline exactly (handler-level check,
+   * agent.ts). true: the tool returns immediately once the child session is
+   * admitted, instead of waiting for it to finish — the child runs in the
+   * background and its report arrives later as a separate message. Absent/
+   * false: today's sync-join behavior, unchanged.
+   */
+  detach: z
+    .boolean()
+    .optional()
+    .describe(
+      'Session tier only: if true, return immediately once the child session starts (do not wait for it to finish). ' +
+        "The child runs in the background; its report arrives later as a new message in this conversation. " +
+        "Invalid for inline tier.",
     ),
 });
 

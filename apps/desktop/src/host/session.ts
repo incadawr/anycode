@@ -79,6 +79,7 @@ import type {
   EnginePresentation,
   ShellCapabilitiesProjection,
   UiToHostMessage,
+  WireBackgroundChild,
   WireCheckpointMeta,
   WireEnvStatus,
   WireHistoryItem,
@@ -558,6 +559,27 @@ export interface SessionOptions {
     kill?(taskId: string): boolean;
   };
   /**
+   * TASK.145 срез 3 §2/§3: narrow read/cancel seam onto the host's own
+   * detached-children registry (host/child-session-port.ts's `ChildSessionPort`,
+   * core-engine-only — absent for a claude/codex-master boot, which never wires
+   * `config.sessionSubagents` at all, spec §5). Mirrors the `tasks`/`lsp`
+   * seams above: Session holds only this narrow interface, never the whole
+   * port. `onChange` is optional-but-present here (host/index.ts always wires
+   * it when this seam exists), mirroring `lsp.onStatusChange`'s live-push
+   * discipline: a child admitting or reaching its terminal live-pushes an
+   * updated `background_children` snapshot to an already-`ui_ready` renderer,
+   * not just on the next reconnect. `cancelAll` backs срез 3 §3 (session
+   * shutdown explicitly sweeping every live background child — see
+   * `shutdown()` below); it is a distinct, explicit call, never a side effect
+   * of `this.abort.abort()`.
+   */
+  backgroundChildren?: {
+    list(): WireBackgroundChild[];
+    cancel(childSessionId: string): boolean;
+    cancelAll(): void;
+    onChange?(listener: () => void): () => void;
+  };
+  /**
    * Renderer Panels sub-slice A: narrow read-only LSP status seam. Slice
    * P7.25/F3 adds an optional `onStatusChange` subscription so the host can
    * live-push `lsp_status` on every server state transition (coalesced upstream
@@ -650,6 +672,35 @@ export interface SessionOptions {
    * omits this field).
    */
   child?: ChildSessionOptions;
+  /**
+   * TASK.145 срез 2: the host-side pending-report queue seam
+   * (child-report-queue.ts's `ChildReportQueue`, wired only where a
+   * `sessionSubagents` port was also wired — host/index.ts, always the ROOT
+   * engine construction site, never a child-mode one, mirroring the
+   * non-recursion lock on `config.sessionSubagents` itself). Absent in every
+   * legacy test/child-mode Session -> `ui_ready` and `child_report_ack` are
+   * both silent no-ops for this concern, byte-identical to pre-срез-2.
+   */
+  pendingChildReports?: PendingChildReportsOptions;
+}
+
+/**
+ * TASK.145 срез 2: Session's own narrow view of the host's pending
+ * detached-child-report queue — mirrors the `SessionPersistence`/`tasks`/`lsp`
+ * seam posture (a small closure-based interface, not the whole queue object)
+ * so Session never needs to import `child-report-queue.ts` itself.
+ */
+export interface PendingChildReportsOptions {
+  /**
+   * Re-sends every still-unacknowledged detached-child report to the
+   * (re)attached renderer. Called on every `ui_ready`, right after
+   * `outbound.replay()` — the SAME "a fresh connect gets the full picture"
+   * discipline every other post-ui_ready push in this class already follows
+   * (session_history, git snapshot, lsp status, hooks list).
+   */
+  resendAll: () => void;
+  /** Clears one report the renderer has confirmed it enqueued (wire: `child_report_ack.id`). */
+  ack: (id: string) => void;
 }
 
 export class Session {
@@ -683,6 +734,8 @@ export class Session {
   /** Design TASK.40 §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
   private readonly shell: ShellCapabilitiesProjection | undefined;
   private readonly tasks: SessionOptions["tasks"];
+  /** TASK.145 срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
+  private readonly backgroundChildren: SessionOptions["backgroundChildren"];
   private readonly lsp: SessionOptions["lsp"];
   private readonly hooksList: SessionOptions["hooksList"];
   private readonly envStatus: SessionOptions["envStatus"];
@@ -756,6 +809,10 @@ export class Session {
   private uiReady = false;
   /** Slice P7.25/F3: unsubscribes the LSP status listener on shutdown (no leaked listener, no push-after-dispose). */
   private lspUnsubscribe: (() => void) | undefined;
+  /** TASK.145 срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
+  private readonly pendingChildReports: PendingChildReportsOptions | undefined;
+  /** TASK.145 срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
+  private backgroundChildrenUnsubscribe: (() => void) | undefined;
 
   // ── child-mode state (TASK.102 CUT-S2 §2.6.3); every field below is inert
   // (never read or mutated) whenever `this.child === undefined`. ──
@@ -828,6 +885,7 @@ export class Session {
     this.git = options.git;
     this.shell = options.shell;
     this.tasks = options.tasks;
+    this.backgroundChildren = options.backgroundChildren;
     this.lsp = options.lsp;
     this.hooksList = options.hooksList;
     this.envStatus = options.envStatus;
@@ -839,6 +897,7 @@ export class Session {
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
     this.child = options.child;
+    this.pendingChildReports = options.pendingChildReports;
     this.now = options.child?.now ?? Date.now;
     this.titleSet = options.hasTitle ?? false;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? []);
@@ -848,6 +907,13 @@ export class Session {
     // dispose. Absent seam (legacy tests) -> no subscription, pull-only.
     this.lspUnsubscribe = this.lsp?.onStatusChange?.(() => {
       if (this.uiReady) this.pushLspStatus();
+    });
+    // TASK.145 срез 3 §2: live-push background_children on registry change
+    // (a detached child admitted or reaching its terminal), mirroring the LSP
+    // subscription immediately above. Absent seam (claude/codex-master boot,
+    // or a legacy test) -> no subscription, ui_ready-only pull.
+    this.backgroundChildrenUnsubscribe = this.backgroundChildren?.onChange?.(() => {
+      if (this.uiReady) this.pushBackgroundChildren();
     });
     // Phase 2 of the settings ack (TASK.39, cut §2(k).3). This fires from inside
     // the engine's turn/start, i.e. always while a turn is running and therefore
@@ -923,8 +989,19 @@ export class Session {
     this.uiReady = false;
     this.lspUnsubscribe?.();
     this.lspUnsubscribe = undefined;
+    this.backgroundChildrenUnsubscribe?.();
+    this.backgroundChildrenUnsubscribe = undefined;
     this.engineSettingsUnsubscribe?.();
     this.engineSettingsUnsubscribe = undefined;
+    // TASK.145 срез 3 §3: closing this session's tab is a deliberate decision
+    // to give up on any detached background child it spawned — nobody
+    // remains to receive an eventual report, and an orphaned child process is
+    // worse than a lost report. This is now an EXPLICIT registry sweep, not a
+    // side effect of `this.abort.abort()` below: срез 3 disarms a detached
+    // child's abort listener at admit time (child-session-port.ts) precisely
+    // so that Stop-cancelling the turn that spawned it no longer cancels the
+    // child — shutdown is the one place that still deliberately does.
+    this.backgroundChildren?.cancelAll();
     if (this.abort) {
       this.abort.abort();
     }
@@ -1056,6 +1133,12 @@ export class Session {
           });
         }
         this.outbound.replay();
+        // TASK.145 срез 2: re-post every still-unacknowledged detached-child
+        // report to the just-(re)attached renderer — covers the race the
+        // outer `sendDirect` at delivery time cannot: a renderer that was
+        // reloading/disconnected exactly when the report was first sent. See
+        // PendingChildReportsOptions.resendAll's own doc for ordering.
+        this.pendingChildReports?.resendAll();
         // Slice 5.7-hostfix: the per-connect git_status snapshot fires HERE, not
         // at physical port bind — sendDirect is un-buffered, and a bind-time
         // post raced a not-yet-mounted renderer (lost with no recovery; R8 live
@@ -1070,6 +1153,14 @@ export class Session {
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         this.pushEnvStatus();
         this.pushPendingEngineSettings();
+        // TASK.145 срез 3 §2: always pushed, unconditionally — unlike
+        // pushTaskList's `supportsTasks` gate (an ENGINE capability), a
+        // detached child is a CORE-engine-only feature (spec §5: claude/codex
+        // masters have no Agent tool at all) already expressed by the seam's
+        // own presence/absence (`this.backgroundChildren`, wired only for a
+        // core-engine boot, host/index.ts). `?? []` makes this a no-op push
+        // of an empty list for every other engine/legacy test.
+        this.pushBackgroundChildren();
         if (this.continuationPending) {
           this.continuationPending = false;
           this.currentTurn = this.startContinuation().catch((error) => {
@@ -1081,8 +1172,21 @@ export class Session {
         // Typed input is proof that a human is at the screen (TASK.138): it
         // disarms the broker's unattended latch, so a session that went quiet
         // long enough to expire an ask starts asking again once its owner is back.
-        this.broker.noteHumanPresent();
-        this.onUserMessage(message.requestId, message.text, message.images);
+        //
+        // TASK.145 срезы 2+3 (merged): `message.origin === "system"` marks a
+        // `user_message` the renderer auto-drained from its own prompt queue
+        // rather than a human actually typing (today: a detached child's
+        // report, срез 1's `child_report` -> `enqueuePrompt` path). ONE field
+        // carries both meanings the two slices needed independently: how the
+        // block renders in the transcript (срез 2, threaded on to
+        // `onUserMessage` below) and whether it counts as human presence
+        // (срез 3, the gate here). A background wake-up is NOT proof anyone is
+        // watching the screen, so it must not rearm TASK.138's unattended
+        // latch on an autonomous run nobody is actually attending.
+        if (message.origin !== "system") {
+          this.broker.noteHumanPresent();
+        }
+        this.onUserMessage(message.requestId, message.text, message.images, message.origin);
         break;
       case "cancel_turn":
         this.onCancel();
@@ -1287,6 +1391,19 @@ export class Session {
         // existing busy gate (drift-flag-3). void: route() never awaits.
         void this.onRewind(message);
         break;
+      case "child_report_ack":
+        // TASK.145 срез 2: no reply of its own — the renderer already has
+        // what it needs (the enqueued/deduped item). Undefined seam (child-
+        // mode host, legacy test) -> silent no-op, same posture as every
+        // other optional seam this switch reads.
+        this.pendingChildReports?.ack(message.id);
+        break;
+      case "background_children_request":
+        this.pushBackgroundChildren();
+        break;
+      case "background_child_cancel_request":
+        this.onBackgroundChildCancelRequest(message.requestId, message.childSessionId);
+        break;
     }
   }
 
@@ -1317,6 +1434,34 @@ export class Session {
 
   private pushTaskList(): void {
     this.outbound.sendDirect({ type: "task_list", tasks: this.tasks?.list?.() ?? [] });
+  }
+
+  /**
+   * TASK.145 срез 3 §2: mirror of pushTaskList/pushHooksList — a pure read of
+   * the host's own detached-children registry. Pushed on ui_ready, in
+   * response to a background_children_request, on registry change (the
+   * `backgroundChildrenUnsubscribe` listener above), and after handling a
+   * background_child_cancel_request (mirrors onTaskKillRequest's own
+   * pushTaskList() call — an immediate refreshed snapshot beside the ack).
+   */
+  private pushBackgroundChildren(): void {
+    this.outbound.sendDirect({ type: "background_children", children: this.backgroundChildren?.list() ?? [] });
+  }
+
+  /**
+   * TASK.145 срез 3 §2(a): mirror of onTaskKillRequest. `ok:false` covers an
+   * unknown/already-finished childSessionId — not a refusal on the merits,
+   * same discipline as task_kill_result's own reason text.
+   */
+  private onBackgroundChildCancelRequest(requestId: string, childSessionId: string): void {
+    const ok = this.backgroundChildren?.cancel(childSessionId) ?? false;
+    this.outbound.sendDirect({
+      type: "background_child_cancel_result",
+      requestId,
+      ok,
+      ...(ok ? {} : { reason: "no such background child (already finished, or never existed)" }),
+    });
+    this.pushBackgroundChildren();
   }
 
   /**
@@ -1534,7 +1679,7 @@ export class Session {
     }
   }
 
-  private onUserMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
+  private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
     if (this.relocating) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
@@ -1563,7 +1708,7 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "busy" });
       return;
     }
-    this.acceptUserMessage(requestId, text, images);
+    this.acceptUserMessage(requestId, text, images, origin);
   }
 
   /**
@@ -1621,7 +1766,7 @@ export class Session {
    * tell "started, own `currentTurn` now covers it" apart from "refused, this
    * queued item is fully spent and produced nothing to wait on."
    */
-  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[]): boolean {
+  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): boolean {
     const attachments = images?.length ? [...images] : undefined;
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
@@ -1665,7 +1810,7 @@ export class Session {
       }
     }
     this.busy = true;
-    const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice).finally(
+    const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice, origin).finally(
       async () => {
         // TASK.102 CUT-S2 §10.10.1 O1: `busy` means something different for a
         // root session than for a child, and that asymmetry is now explicit
@@ -2059,6 +2204,7 @@ export class Session {
     text: string | undefined,
     attachments?: ImageAttachment[],
     carriesWorktreeExitNotice = false,
+    origin?: "system",
   ): Promise<void> {
     const turnId = randomUUID();
     const controller = new AbortController();
@@ -2073,6 +2219,11 @@ export class Session {
         ...(carriesWorktreeExitNotice
           ? { systemContext: worktreeExitSystemContext(this.projectRoot) }
           : {}),
+        // TASK.145 срез 2: harmless on the `continueTurn` (text===undefined)
+        // branch below — that path never appends a synthetic user frame at
+        // all (its own doc comment), so AgentLoop.continueTurn's forwarded
+        // `origin` is simply never read.
+        ...(origin !== undefined ? { origin } : {}),
       };
       const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
@@ -2431,6 +2582,7 @@ function buildSessionHistory(
     id: item.id,
     createdAt: item.createdAt,
     ...(item.kind !== undefined ? { kind: item.kind } : {}),
+    ...(item.origin !== undefined ? { origin: item.origin } : {}),
     message: item.message,
   }));
   return { items, truncated };

@@ -211,6 +211,7 @@ import {
   enterWorktreeTool,
   exitWorktreeTool,
   discoverExtensions,
+  formatChildTaskNotification,
   generateSessionTitle,
   loadEnvConfig,
   loadHookConfigs,
@@ -219,6 +220,7 @@ import {
   loadRepoMapConfig,
   loadTelemetryConfig,
   loadWebSearchConfig,
+  mapChildRunStatusToNotification,
   matchCatalogEntryByBaseUrl,
   resolveContextWindow,
   resolveEffortLevels,
@@ -250,12 +252,15 @@ import type {
   ResolvedTelemetryConfig,
   ResolvedWebSearchBackend,
   RepoMapConfig,
+  SessionSubagentOutcome,
+  SessionSubagentRequest,
   SystemPromptEnv,
   TelemetryPort,
   WorktreeControlPort,
   WorkspaceTransition,
 } from "@anycode/core";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
+import { ChildReportQueue } from "./child-report-queue.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -366,7 +371,7 @@ import { Outbound, Session, tapChildPermissions, type ChildSessionOptions } from
 // attention, terminal report). Slice S2b B5 (below) adds the PARENT side: the
 // RPC-client wiring (createChildSessionPort), the ChildRunEvent dispatch
 // table, and the sessionTier:true/sessionSubagents non-recursion locks.
-import { createChildSessionPort } from "./child-session-port.js";
+import { createChildSessionPort, type ChildSessionPort } from "./child-session-port.js";
 import {
   CHILD_PROGRESS_TYPE,
   CHILD_READY_TYPE,
@@ -401,6 +406,13 @@ const outbound = new Outbound();
 const emit = (message: HostToUiMessage): void => {
   outbound.emit(message);
 };
+// TASK.145 срез 2: one pending-report queue per host process, i.e. per parent
+// session — see child-report-queue.ts's own header for why a bare
+// `outbound.sendDirect` (срез 1) is not reconnect-safe on its own. Wired into
+// `deliverDetachedChildReport` below and, once the root Session exists, into
+// its own `pendingChildReports` seam (resendAll on ui_ready, ack on
+// child_report_ack).
+const childReportQueue = new ChildReportQueue(outbound);
 
 // Credential broker (design §3.3, slice 2.5.3): CredentialResponse messages
 // arrive on the same parentPort "message" event as the port-handoff/shutdown
@@ -442,6 +454,34 @@ function subscribeChildRunEvents(listener: (event: ChildRunEvent) => void): () =
 
 function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel): void {
   process.parentPort.postMessage(message);
+}
+
+/**
+ * TASK.145 срез 1/2: builds and delivers a detached child's terminal report
+ * to its parent tab. Wired as `createChildSessionPort`'s `onDetachedTerminal`
+ * seam above — called ONLY for a `detach:true` session-tier spawn, strictly
+ * AFTER the spawning Agent tool call already resolved at admit, so this is
+ * entirely decoupled from that call's own (already-settled) promise.
+ *
+ * Handed to `childReportQueue` (срез 2) rather than a bare `outbound.
+ * sendDirect` (срез 1's original posture) — see that queue's own header for
+ * why a direct send is not reconnect-safe, and protocol.ts's `child_report`
+ * doc for why `Outbound.emit`'s buffered replay is the wrong fix (no
+ * per-message identity -> a resend would re-enqueue a second turn). `id` is
+ * `outcome.spawnToolCallId` — stable across every re-delivery of THIS same
+ * report, load-bearing for both the queue's own dedup-by-id and the
+ * renderer's (store.ts's `child_report` case).
+ */
+function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): void {
+  const text = formatChildTaskNotification({
+    taskId: outcome.spawnToolCallId,
+    toolUseId: outcome.spawnToolCallId,
+    agentId: outcome.childSessionId,
+    subagentType: req.agentType,
+    status: mapChildRunStatusToNotification(outcome.status),
+    summary: outcome.finalText,
+  });
+  childReportQueue.add(outcome.spawnToolCallId, text);
 }
 
 // Preview RPC broker (night-track wave-1 cut §2.3): PreviewResponseMessage
@@ -2070,13 +2110,26 @@ async function boot(): Promise<void> {
     // mismatch. The THIRD, independent defense lives in a different process
     // entirely: `main/tabs.ts`'s own `childOf` ledger + sender check
     // (`spawnChild`) — that one does not read anything boot built here.
+    // TASK.145 срез 3 §2: kept as its OWN reference (not narrowed to the
+    // frozen `SessionSubagentPort` core interface `config.sessionSubagents`
+    // holds below) so the richer `ChildSessionPort` surface —
+    // list/cancel/cancelAll/onChange for the desktop's own detached-children
+    // registry — reaches `new Session({...})`'s `backgroundChildren` seam
+    // further down. `undefined` for a child-session boot or a claude/codex
+    // master, exactly mirroring `config.sessionSubagents`'s own absence.
+    let childSessionPortHandle: ChildSessionPort | undefined;
     if (!isChildSessionBoot(args, sessionMeta)) {
-      config.sessionSubagents = createChildSessionPort({
+      childSessionPortHandle = createChildSessionPort({
         parentSessionId: sessionMeta.id,
         getPermissionMode: () => config.mode,
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
+        // TASK.145 срез 1: the detach-delivery seam. Fires strictly AFTER
+        // the spawning Agent tool call already returned at admit — see
+        // deliverDetachedChildReport's own comment for the full picture.
+        onDetachedTerminal: deliverDetachedChildReport,
       });
+      config.sessionSubagents = childSessionPortHandle;
     }
     // Subagent wiring (design §4.2, task 3.1.4; md-profile personas as of
     // slice-3.3-cut.md §6): withSubagents attaches a SubagentPort derived from
@@ -2211,6 +2264,15 @@ async function boot(): Promise<void> {
       fs: fsAdapter,
       workspace,
       projectRoot: sessionMeta.projectRoot ?? sessionMeta.workspace,
+      // TASK.145 срез 2: wired unconditionally — for a child-mode boot (no
+      // `config.sessionSubagents`, non-recursion lock above) the queue simply
+      // stays empty forever, so `resendAll`/`ack` are harmless no-ops. This is
+      // the ONLY Session construction site among the three engines (core is
+      // the only engine session-tier children can attach to, spec §5).
+      pendingChildReports: {
+        resendAll: () => childReportQueue.resendAll(),
+        ack: (id) => childReportQueue.ack(id),
+      },
       ...(sessionMeta.worktree !== undefined ? { worktree: sessionMeta.worktree } : {}),
       continuationPending: sessionMeta.continuationPending === true,
       continuationMode: sessionMeta.continuationMode ?? "model",
@@ -2403,6 +2465,22 @@ async function boot(): Promise<void> {
         list: () => hookDeclarations,
         ...(hookConfigError !== undefined ? { configError: hookConfigError } : {}),
       },
+      // TASK.145 срез 3 §2: read/cancel seam onto the detached-children
+      // registry `childSessionPortHandle` owns. Absent for a child-session
+      // boot or a claude/codex master (`childSessionPortHandle` itself is
+      // undefined there) — Session's own `?? []` makes that a silent
+      // empty-list `background_children` push, mirroring every other
+      // absent-seam default on this same object.
+      ...(childSessionPortHandle !== undefined
+        ? {
+            backgroundChildren: {
+              list: () => childSessionPortHandle!.listBackgroundChildren(),
+              cancel: (childSessionId: string) => childSessionPortHandle!.cancelBackgroundChild(childSessionId),
+              cancelAll: () => childSessionPortHandle!.cancelAllBackgroundChildren(),
+              onChange: (listener: () => void) => childSessionPortHandle!.onBackgroundChildrenChanged(listener),
+            },
+          }
+        : {}),
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
       // above): telemetry reads live counters on every push; repo-map is
       // boot-frozen (computed once above, right after buildRepoMapPromptSection).

@@ -48,6 +48,11 @@ import type {
 import type { LspServerStatus } from "@anycode/core";
 import type { EngineId } from "./engines.js";
 import type { UsageLimitNotice } from "./usage-limit.js";
+// TASK.145 срез 3 §2(a): the exact childSessionId shape bound every producer
+// on the host<->main child-session wire already validates against — reused
+// here rather than re-derived, so the UI wire's cap can never silently drift
+// from the id shape this system actually mints.
+import { CHILD_ID_MAX_CHARS } from "./child-sessions.js";
 // Slice 5.7 (design slice-5.7-cut.md §2.1): git-domain types for the additive
 // git wire surface. Type-only (verbatimModuleSyntax erases them from the renderer
 // bundle — hard requirement, see this file's header). They ride the ports barrel
@@ -185,6 +190,8 @@ export interface WireHistoryItem {
   id: string;
   createdAt: number;
   kind?: "normal" | "compact_summary" | "microcompact_cleared";
+  /** TASK.145 срез 2: mirrors core's `HistoryItem.origin` — marks a `role:"user"` item the host injected (a detached child's report), not the human. See that field's own doc. */
+  origin?: "system";
   message: ChatMessage; // type-only import from core; erased from the renderer bundle
 }
 
@@ -322,10 +329,44 @@ export interface WireCheckpointMeta {
 /** Scope of a rewind: files, conversation, or both (mirror of core RewindScope). */
 export type RewindScopeWire = "both" | "files" | "conversation";
 
+/**
+ * TASK.145 срез 3 §2: one live detached (background) child, as pushed to the
+ * renderer. Deliberately its own type rather than an import of host/
+ * child-session-port.ts's `BackgroundChildSnapshot` (same "Wire"-prefixed,
+ * self-contained-projection precedent as `WireCheckpointMeta` above) — the
+ * two shapes are intentionally kept field-for-field identical.
+ */
+export interface WireBackgroundChild {
+  childSessionId: string;
+  agentType: string;
+  description: string;
+  startedAt: number; // epoch ms
+}
+
 // ── renderer -> host ──
 export type UiToHostMessage =
   | { type: "ui_ready" } // handshake; host replies host_ready + replay
-  | { type: "user_message"; requestId: string; text: string; images?: ImageAttachment[] } // starts a turn
+  | {
+      type: "user_message";
+      requestId: string;
+      text: string;
+      images?: ImageAttachment[];
+      // TASK.145 срезы 2+3 (merged): set ONLY when the renderer is draining a
+      // queued detached-child report (tab-registry.ts's dispatchQueuedPrompt,
+      // mirror of `QueuedPrompt.origin` — store.ts). Absent for every ordinary
+      // human-typed send (Composer, App.tsx's retry offer, automation.ts).
+      // This ONE field carries both things the host needs to know about such a
+      // message. (1) Display, срез 2: threaded verbatim onto the appended
+      // HistoryItem's own `origin` (session.ts's runTurn -> RunTurnOptions ->
+      // AgentLoop.runTurn) so a reload's `session_history` replay renders the
+      // SAME system card — see WireHistoryItem.origin. (2) Presence, срез 3:
+      // `session.ts`'s `route()` skips `broker.noteHumanPresent()` for it, so
+      // a background wake-up cannot silently rearm TASK.138's unattended latch
+      // on an autonomous run nobody is actually attending — a wake-up is not
+      // proof anyone is at the screen. Untrusted input: `userMessageSchema`
+      // below is the fail-closed authority, not this type comment.
+      origin?: "system";
+    } // starts a turn
   | { type: "cancel_turn" } // abort the in-flight turn
   | { type: "exit_worktree"; cleanup: "auto" | "keep" }
   | {
@@ -377,7 +418,26 @@ export type UiToHostMessage =
   // `rewindRequestSchema` below (fail-closed). Honored only between turns (Session
   // busy-rejects WITH a rewind_result reply while a turn runs, unlike set_model's
   // silent drop — the timeline needs a non-silent refusal).
-  | { type: "rewind_request"; requestId: string; checkpointId: string; scope: RewindScopeWire };
+  | { type: "rewind_request"; requestId: string; checkpointId: string; scope: RewindScopeWire }
+  // TASK.145 срез 2: acknowledges ONE `child_report` (HostToUiMessage below)
+  // by its stable `id` — the renderer sends this the instant it has enqueued
+  // (or recognized as an already-queued duplicate of) that report, BEFORE the
+  // queue actually drains it onto the wire as a real `user_message`. The
+  // host's pending-report queue (child-report-queue.ts) removes the report on
+  // receipt and stops resending it on future `ui_ready`s — see that file's
+  // doc for why "renderer confirmed enqueue" (not "turn actually sent") is
+  // the chosen removal point.
+  | { type: "child_report_ack"; id: string }
+  // TASK.145 срез 3 §2: read-only background-children list request (mirror of
+  // task_list_request — payload-less, served even mid-turn: listing the
+  // host's own in-memory registry is a pure read). This slice wires only the
+  // data + command on the wire, purposely NOT a renderer surface (design
+  // mandate: no new panel here, a later slice draws it).
+  | { type: "background_children_request" }
+  // TASK.145 срез 3 §2(a): cancel ONE detached child by id (mirror of
+  // task_kill_request's shape). Untrusted -> validated by
+  // `backgroundChildCancelRequestSchema` below.
+  | { type: "background_child_cancel_request"; requestId: string; childSessionId: string };
 
 // ── host -> renderer ──
 export interface WorktreeProjection {
@@ -527,6 +587,15 @@ export type HostToUiMessage =
   | { type: "task_list"; tasks: BackgroundTaskSnapshot[] }
   | { type: "task_output"; taskId: string; snapshot: BackgroundTaskSnapshot | null; newOutput: string }
   | { type: "task_kill_result"; requestId: string; ok: boolean; reason?: string }
+  // TASK.145 срез 3 §2: trusted snapshot of the host's own live
+  // background-children registry (host/child-session-port.ts). Pushed on
+  // ui_ready (mirror of hooks_list/task_list) and in response to a
+  // background_children_request; no zod schema (host->renderer direction).
+  | { type: "background_children"; children: WireBackgroundChild[] }
+  // TASK.145 срез 3 §2(a): trusted result of one background_child_cancel_request
+  // (mirror of task_kill_result). `ok:false` covers an unknown/already-finished
+  // childSessionId — not a refusal on the merits.
+  | { type: "background_child_cancel_result"; requestId: string; ok: boolean; reason?: string }
   // Slice P7.8: trusted composite telemetry + repo-map status snapshot. Pushed
   // on ui_ready (after pushTaskList) and on turn teardown — never a pull
 
@@ -555,6 +624,24 @@ export type HostToUiMessage =
       restoredPaths: number | null;
       safetyCheckpointId?: string;
     }
+  // TASK.145 срез 1/2: delivers a DETACHED child session's terminal report to
+  // its parent. `text` is the FULL pre-formatted `<task-notification>` block
+  // (@anycode/core's formatChildTaskNotification) — already XML-escaped and
+  // length-capped; the renderer treats it as opaque prompt text and enqueues
+  // it through the EXISTING P7.14 prompt queue (store.ts's applyHostMessage,
+  // tab-registry.ts's maybeDrain), so it is sent right away if the parent is
+  // idle or held until the current turn ends otherwise — no new turn-start
+  // path is introduced by this message. Sent via `sendDirect` (UNBUFFERED),
+  // deliberately not `emit`: a REPLAY-ring resend on renderer reconnect would
+  // re-enqueue the same report under a FRESH `enqueuePrompt`-minted id every
+  // time (no dedup possible). Reconnect-safety instead lives one level up
+  // (срез 2): `id` — the spawning Agent tool_call id (`spawnToolCallId`),
+  // stable across every re-delivery of THIS report — lets the renderer dedupe
+  // at enqueue time (store.ts's `child_report` case) and lets the host's own
+  // pending-report queue (child-report-queue.ts) track which reports are
+  // still unacknowledged and re-`sendDirect` them on the NEXT `ui_ready`
+  // (session.ts) if this attempt never reached a live renderer.
+  | { type: "child_report"; id: string; text: string }
   | { type: "fatal"; message: string };
 
 /** Minimal port abstraction — host logic is unit-tested over worker_threads MessageChannel. */
@@ -602,6 +689,13 @@ export const userMessageSchema = z
       )
       .max(IMAGE_MAX_PER_MESSAGE)
       .optional(),
+    // TASK.145 срезы 2+3 (merged): renderer-set only when draining a queued
+    // detached-child report (QueuedPrompt.origin). Validated here like every
+    // other untrusted field — and unlike срез 2's original reading, a mis-set
+    // value is NOT display-only: it also suppresses TASK.138's human-presence
+    // signal (see the UiToHostMessage union's own doc), so fail-closed
+    // validation here is load-bearing, not just defense in depth.
+    origin: z.literal("system").optional(),
   })
   .strict();
 
@@ -790,6 +884,36 @@ export const rewindRequestSchema = z
   })
   .strict();
 
+// TASK.145 срез 2: untrusted ack for ONE `child_report` — see that
+// HostToUiMessage variant's own doc for the id's provenance (spawnToolCallId).
+export const childReportAckSchema = z
+  .object({
+    type: z.literal("child_report_ack"),
+    id: z.string().min(1).max(256),
+  })
+  .strict();
+
+// TASK.145 срез 3 §2: payload-less background-children list request (mirror
+// of taskListRequestSchema). Fail-closed on any extra key under .strict().
+export const backgroundChildrenRequestSchema = z
+  .object({
+    type: z.literal("background_children_request"),
+  })
+  .strict();
+
+// TASK.145 срез 3 §2(a): untrusted background-child cancel request (mirror
+// of taskKillRequestSchema). `childSessionId` is capped at CHILD_ID_MAX_CHARS
+// — the exact bound `shared/child-sessions.ts`'s own `isValidChildId` enforces
+// on every childSessionId this system ever mints, reused here rather than
+// re-derived so the two sides of "what a valid id looks like" never drift.
+export const backgroundChildCancelRequestSchema = z
+  .object({
+    type: z.literal("background_child_cancel_request"),
+    requestId: z.string().min(1).max(128),
+    childSessionId: z.string().min(1).max(CHILD_ID_MAX_CHARS),
+  })
+  .strict();
+
 /** Discriminated union validating any incoming UiToHostMessage; unknown `type` values fail closed. */
 export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   uiReadySchema,
@@ -810,4 +934,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   taskKillRequestSchema,
   checkpointListRequestSchema,
   rewindRequestSchema,
+  childReportAckSchema,
+  backgroundChildrenRequestSchema,
+  backgroundChildCancelRequestSchema,
 ]);
