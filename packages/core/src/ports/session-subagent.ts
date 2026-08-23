@@ -57,6 +57,18 @@ export interface SessionSubagentRequest {
    * frontmatter fact.
    */
   engine?: "claude" | "codex";
+  /**
+   * TASK.145 срез 1: `Agent{tier:"session", detach:true}`'s own field,
+   * threaded straight through (tools/agent.ts validates it is only ever set
+   * alongside `tier:"session"` before building this request). This flag is
+   * consumed ENTIRELY by the parent host's own RPC client
+   * (host/child-session-port.ts) — it never crosses the parentPort wire to
+   * main (`ChildSpawnRequest` carries no such field): whether a run's promise
+   * settles at admit vs. terminal is a fact about THIS client's own waiter,
+   * not something main's spawn/accept/terminal protocol needs to know. Absent
+   * = the existing sync-join behavior, byte-identical to pre-145.
+   */
+  detach?: boolean;
 }
 
 /**

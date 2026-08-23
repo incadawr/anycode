@@ -789,3 +789,182 @@ describe("agentTool export sanity (CUT-S2 §2.1)", () => {
     expect(z.toJSONSchema(agentTool.inputSchema)).toEqual(z.toJSONSchema(fresh.inputSchema));
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK.145 срез 1: `detach` (session-tier only). Same non-recursion-lock
+// discipline as `provider`/`tier` above — restricted schema never declares
+// it, the handler refuses it on the wrong tier, and (unlike `provider`) a
+// plain `false` is a legitimate no-op on any tier rather than a violation.
+
+describe("createAgentTool — detach declaration (TASK.145 срез 1)", () => {
+  it("restricted (default) has NO detach key and no \"background\" leak anywhere in the serialized JSON schema", () => {
+    const restricted = createAgentTool();
+    const jsonSchema = z.toJSONSchema(restricted.inputSchema) as { properties?: Record<string, unknown> };
+    expect(Object.keys(jsonSchema.properties ?? {})).not.toContain("detach");
+  });
+
+  it("restricted schema REJECTS a smuggled detach:true instead of silently stripping it (F15 parity with provider)", () => {
+    const smuggled = restrictedAgentInputSchema.safeParse({ description: "d", prompt: "p", detach: true });
+    expect(smuggled.success).toBe(false);
+  });
+
+  it("full (sessionTier:true) DOES declare a detach key in the serialized JSON schema", () => {
+    const full = createAgentTool({ sessionTier: true });
+    const jsonSchema = z.toJSONSchema(full.inputSchema) as { properties?: Record<string, unknown> };
+    expect(Object.keys(jsonSchema.properties ?? {})).toContain("detach");
+  });
+
+  it("full schema parses detach:true and detach:false", () => {
+    expect(agentInputSchema.safeParse({ description: "d", prompt: "p", tier: "session", detach: true }).success).toBe(
+      true,
+    );
+    expect(
+      agentInputSchema.safeParse({ description: "d", prompt: "p", tier: "session", detach: false }).success,
+    ).toBe(true);
+  });
+});
+
+describe("agentTool handler — detach validation (TASK.145 срез 1, precedent: provider check agent.ts:207-212)", () => {
+  it("detach:true with tier:\"inline\" (explicit) => invalid_input with the exact message", async () => {
+    const full = createAgentTool({ sessionTier: true });
+    const result = await full.handler({ description: "d", prompt: "p", tier: "inline", detach: true }, makeCtx());
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("invalid_input");
+    expect(result.error).toBe('Agent: "detach" is only valid with tier "session".');
+  });
+
+  it("detach:true with tier omitted (default inline) => invalid_input, same exact message", async () => {
+    const full = createAgentTool({ sessionTier: true });
+    const result = await full.handler({ description: "d", prompt: "p", detach: true }, makeCtx());
+    expect(result.errorKind).toBe("invalid_input");
+    expect(result.error).toBe('Agent: "detach" is only valid with tier "session".');
+  });
+
+  it("detach:true validation fires even with NO ports at all wired (fails fast, before any availability check)", async () => {
+    const full = createAgentTool({ sessionTier: true });
+    const result = await full.handler({ description: "d", prompt: "p", detach: true }, makeCtx());
+    expect(result.errorKind).toBe("invalid_input");
+  });
+
+  it("detach:false with tier:\"inline\" is VALID input (a false/no-op flag never conflicts with the tier) — reaches ctx.subagents unavailable instead", async () => {
+    const full = createAgentTool({ sessionTier: true });
+    const result = await full.handler({ description: "d", prompt: "p", tier: "inline", detach: false }, makeCtx());
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toBe("Agent: subagents are unavailable in this context.");
+  });
+
+  it("detach:true WITH tier:\"session\" is valid input (no invalid_input) — reaches the availability lock instead", async () => {
+    const full = createAgentTool({ sessionTier: true });
+    const result = await full.handler({ description: "d", prompt: "p", tier: "session", detach: true }, makeCtx());
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toContain("unavailable");
+  });
+});
+
+describe("agentTool handler — detach forwarding onto SessionSubagentRequest (TASK.145 срез 1)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  it("forwards detach:true onto the request when input.detach is true", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return BASE_SESSION_OUTCOME;
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", detach: true },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(seen?.detach).toBe(true);
+  });
+
+  it("omits the detach key entirely when input.detach is false or absent (no silent `detach:false` riding the wire)", async () => {
+    const seen: SessionSubagentRequest[] = [];
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen.push(req);
+        return BASE_SESSION_OUTCOME;
+      },
+    };
+    await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", detach: false },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(seen[0] && "detach" in seen[0]).toBe(false);
+    expect(seen[1] && "detach" in seen[1]).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.145 срез 1: the ADMIT-shaped outcome a detached port returns (this is
+// what child-session-port.ts's `run()` actually resolves with at "accepted",
+// never waiting for the child's own terminal — see that file's own tests for
+// the port-level split). This suite proves agent.ts's SHARED outcome-mapping
+// path (`outcomeToResult`/`finalizeSubagentCard`) handles that shape exactly
+// as agent.ts's own header comment predicts, with ZERO detach-specific code
+// in agent.ts itself: `status:"completed"` reads as success, and no
+// presentation card is fabricated because no `subagent_start` progress ever
+// preceded it.
+
+describe("agentTool handler — detach admit outcome mapping (TASK.145 срез 1, zero special-casing in agent.ts)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  function admitOnlyPort(finalText: string, childSessionId: string): SessionSubagentPort {
+    // Mirrors child-session-port.ts's actual detach behavior: resolves
+    // immediately on "accepted" with NO onProgress call at all (no start, no
+    // end) — the run is still going; this port double never simulates its
+    // eventual real terminal, matching the port's own "run() promise settles
+    // at admit" contract.
+    return {
+      run: async () => ({
+        status: "completed",
+        finalText,
+        truncated: false,
+        turns: 0,
+        toolCalls: 0,
+        durationMs: 0,
+        childSessionId,
+        parentSessionId: "parent-1",
+        spawnToolCallId: "call-1",
+      }),
+    };
+  }
+
+  it("ok:true, and the model-visible text is the admit message (never empty, never waits for a 'real' result)", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", detach: true },
+      makeCtx({ sessionSubagents: admitOnlyPort("Agent: child session child-42 started in the background.", "child-42") }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.output?.finalText).toContain("child-42");
+    expect(result.output?.finalText).toContain("background");
+  });
+
+  it("builds NO presentation card (mirrors the sync 'never fabricated' rule — no subagent_start ever fired)", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", detach: true },
+      makeCtx({ sessionSubagents: admitOnlyPort("started", "child-1") }),
+    );
+    expect(result.presentation).toBeUndefined();
+  });
+
+  it("the admit outcome's zero counters (turns/toolCalls/durationMs) ride the tool output honestly — they describe the SPAWN, not fabricated child progress", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", detach: true },
+      makeCtx({ sessionSubagents: admitOnlyPort("started", "child-1") }),
+    );
+    expect(result.output).toMatchObject({ turns: 0, toolCalls: 0, durationMs: 0, truncated: false, status: "completed" });
+  });
+
+  it("the tool's own output never leaks the three session ids — mirrors the sync-tier rule (CUT-S2 §2.1): ids ride ONLY the (absent-here) presentation target", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", detach: true },
+      makeCtx({ sessionSubagents: admitOnlyPort("started", "child-1") }),
+    );
+    expect(result.output).not.toHaveProperty("childSessionId");
+    expect(result.output).not.toHaveProperty("parentSessionId");
+    expect(result.output).not.toHaveProperty("spawnToolCallId");
+  });
+});

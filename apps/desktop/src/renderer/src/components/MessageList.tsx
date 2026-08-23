@@ -25,6 +25,7 @@ import type {
   TurnState,
 } from "../store.js";
 import { TabContext } from "../tab-context.js";
+import { ChildReportBlock } from "./ChildReportBlock.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { Markdown } from "./Markdown.js";
 import { ReasoningBlock } from "./ReasoningBlock.js";
@@ -640,6 +641,14 @@ export function MessageList({
           const block = item.block;
           switch (block.kind) {
             case "user_text":
+              // TASK.145 срез 2 (spec §4 point 3): a host-injected ("system"-
+              // origin) turn renders as a compact system card, never the
+              // ordinary user bubble — the model still sees this as a
+              // `role:"user"` turn (owner decision, unchanged), only the
+              // TRANSCRIPT view differs.
+              if (block.origin === "system") {
+                return <ChildReportBlock key={block.id} block={block} enter={enterIds.has(block.id)} />;
+              }
               return (
                 <div key={block.id} className={`message message-user${enterClass(block.id)}`}>
                   <div className="message-label">You</div>
