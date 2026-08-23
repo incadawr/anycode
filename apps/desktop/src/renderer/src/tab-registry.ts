@@ -377,7 +377,14 @@ export function createTabRegistry(
     if (item === null) {
       return;
     }
-    entry.store.getState().appendUserText(requestId, transcriptTextWithImages(item.text, item.images.length));
+    // TASK.145 срез 2: `item.origin` (set only for a detached-child report,
+    // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
+    // append (live system-card render) and the wire `user_message` (host
+    // stamps the persisted HistoryItem with it, so a reload renders the SAME
+    // card — see protocol.ts's `user_message.origin` doc).
+    entry.store
+      .getState()
+      .appendUserText(requestId, transcriptTextWithImages(item.text, item.images.length), item.origin);
     // TASK.33 W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(item.text, item.images);
@@ -386,6 +393,7 @@ export function createTabRegistry(
       requestId,
       text: item.text,
       ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),
+      ...(item.origin !== undefined ? { origin: item.origin } : {}),
     });
   }
 
@@ -433,6 +441,16 @@ export function createTabRegistry(
       // §3.3 respawn semantics) — dispatch AFTER that reset, or a queued
       // initial prompt appended before it would be wiped along with it (§4.2).
       entry.store.getState().applyHostMessage(message);
+      if (message.type === "child_report") {
+        // TASK.145 срез 2: acks UNCONDITIONALLY — whether store.ts's
+        // `child_report` case just enqueued a NEW item or recognized this as
+        // a re-delivered duplicate of one already queued/in-flight (dedup by
+        // `originId`), the renderer now durably has it either way, so the
+        // host's pending-report queue can stop resending this id (child-
+        // report-queue.ts's `ack`, its own doc explains why "enqueued" and
+        // not "turn sent" is the chosen removal point).
+        entry.connection?.send({ type: "child_report_ack", id: message.id });
+      }
       if (message.type === "host_ready") {
         // Renderer-only quota diagnostics are restored after host_ready's
         // session reset. They are intentionally not part of session_history.
@@ -562,12 +580,20 @@ export function createTabRegistry(
           // inFlight synchronously so the re-entrant fire this dispatch causes
           // bails. `entry` is captured (not reassigned) so it always points at
           // the live connection after a respawn's `attach`.
+          //
+          // TASK.145 срез 2 (spec §4 point 2): `queuePaused` alone no longer
+          // means "nothing to drain" — a detached child's SYSTEM-origin report
+          // must still leave the queue while paused (takeQueueHead enforces
+          // the actual per-kind eligibility; this is only the cheap pre-check
+          // that decides whether it's even worth calling dispatch).
           const capturedEntry = entry;
           const maybeDrain = (state: DesktopState): void => {
+            const hasDeliverableItem =
+              !state.queuePaused || state.promptQueue.some((prompt) => prompt.origin === "system");
             if (
               state.connection === "ready" &&
               state.turn.status === "idle" &&
-              !state.queuePaused &&
+              hasDeliverableItem &&
               state.queueInFlight === null &&
               state.promptQueue.length > 0
             ) {

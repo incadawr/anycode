@@ -383,6 +383,10 @@ function toWireHistoryItems(items: readonly HistoryItem[]): WireHistoryItem[] {
     id: item.id,
     createdAt: item.createdAt,
     ...(item.kind !== undefined ? { kind: item.kind } : {}),
+    // TASK.145 срез 2: kept in parity with host/session.ts's buildSessionHistory
+    // (this file's own doc comment above) — a child never actually receives a
+    // system-origin item itself, but the projection stays byte-identical either way.
+    ...(item.origin !== undefined ? { origin: item.origin } : {}),
     message: item.message,
   }));
 }

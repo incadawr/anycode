@@ -21,6 +21,21 @@
  * version here validates agent_type, enforces the fail-closed "unavailable"
  * lock, and keeps the run() seam clean.
  *
+ * TASK.145 срез 1 adds `detach` (session-tier only, same "FULL declaration
+ * only" discipline as `tier`/`provider`): `runSessionTier` below just
+ * forwards it onto `SessionSubagentRequest` after the same fail-fast
+ * tier-mismatch check `provider` already has. Everything past that point —
+ * whether the call returns at admit or waits for the child's terminal — is
+ * the host-side RPC client's business (host/child-session-port.ts), never
+ * this module's: `runSessionTier`'s own outcome handling
+ * (`outcomeToResult`/`finalizeSubagentCard`) is untouched, because a detached
+ * admit is shaped to arrive as an ordinary `SessionSubagentOutcome` with
+ * `status:"completed"` (the SPAWN succeeded — see the port's own comment for
+ * why this is honest) and no `subagent_start` progress ever precedes it, so
+ * `finalizeSubagentCard` naturally returns null (its own "never fabricated"
+ * rule) and no presentation card is built for a call that has not actually
+ * finished.
+ *
  * TASK.102 CUT-S2 §2.1/§3 B1 widens this into a FACTORY, `createAgentTool`.
  * A single handler now branches on `tier`: "inline" (default, unchanged
  * behavior above) runs through `ctx.subagents` (SubagentPort, in-process
@@ -215,6 +230,21 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
+      // TASK.145 срез 1: same precedent as the provider check above — an
+      // explicit `detach:true` on a tier that cannot honor it (only
+      // "session" spawns a real child process to detach FROM) is a fail-fast
+      // invalid_input, not a silent downgrade to sync-join. `detach:false`
+      // (or absent) is a no-op on any tier, so it is never rejected here —
+      // only an ACTUAL request for background semantics can conflict with
+      // the tier.
+      if (input.detach === true && tier !== "session") {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: 'Agent: "detach" is only valid with tier "session".',
+        };
+      }
+
       // Validate the agent_type (design §2.3/§3.4): the set of runnable types is
       // delegated to the port (built-in personas + md-profiles) so slice 3.3's
       // profiles are reachable WITHOUT touching the frozen schema. A port lacking
@@ -395,6 +425,12 @@ async function runSessionTier(
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(engineProfile !== undefined ? { engine: engineProfile.engine } : {}),
+    // TASK.145 срез 1: only ever `true` here — the validation check above
+    // already refused `detach:true` on any tier but "session", and `false`/
+    // absent is dropped rather than riding the wire as an explicit `false`
+    // (byte-compatible default, same discipline as every other optional
+    // field on this request).
+    ...(input.detach === true ? { detach: true } : {}),
   };
 
   // Same accumulation/bridge discipline as the inline tier above — the

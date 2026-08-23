@@ -322,6 +322,17 @@ export const SUBAGENT_CARD_AGENT_TYPE_MAX_CHARS = 100;
 export const SUBAGENT_CARD_DESCRIPTION_MAX_CHARS = 500;
 export const SUBAGENT_CARD_MODEL_MAX_CHARS = 200;
 
+/**
+ * TASK.145 срез 1 (cli/child-notification.ts): cap on a detached child's
+ * report `summary` field inside the `<task-notification>` block delivered to
+ * the parent session. Bigger than a card description (500) — this is a real
+ * digest of what the child did/found, not a one-line label — but far below
+ * SUBAGENT_OUTPUT_MAX_BYTES (100_000): the notification must stay a "short
+ * report", never the child's full raw output (spec §7's "path, not content"
+ * discipline — the parent opens the child's own tab for the full transcript).
+ */
+export const CHILD_NOTIFICATION_SUMMARY_MAX_CHARS = 2_000;
+
 // ---------------------------------------------------------------------------
 // Phase 3 slice 3.2 constants (MCP client, design slice-3.2-cut.md §3.3)
 

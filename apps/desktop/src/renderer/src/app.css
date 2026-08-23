@@ -2518,6 +2518,67 @@ body {
   margin-top: var(--sp-2);
 }
 
+/* ── TASK.145 срез 2: detached-child report system card ──
+   Collapsed-by-default plate, styled after .reasoning-block (quiet, not a
+   user bubble) — the role stays "user" for the model, but the transcript
+   view is deliberately NOT the accent-soft .message-user card, so a human
+   scanning the transcript never mistakes it for their own typed input. */
+.message-child-report {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.child-report-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  background: none;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: var(--sp-1) 0;
+  font: inherit;
+  font-weight: var(--w-medium);
+}
+
+.child-report-toggle:hover {
+  color: var(--text-1);
+}
+
+.child-report-status {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.child-report-status-completed {
+  background: var(--success, var(--accent));
+}
+
+.child-report-status-failed {
+  background: var(--danger);
+}
+
+.child-report-status-cancelled,
+.child-report-status-unknown {
+  background: var(--text-ghost);
+}
+
+.child-report-text {
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-inset);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-ui);
+  line-height: var(--lh-body);
+}
+
 .message-image {
   display: block;
   max-width: min(28rem, 100%);

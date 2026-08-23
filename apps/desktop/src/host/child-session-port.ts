@@ -58,6 +58,48 @@
  *    client's own `Map<requestId, waiter>` key, minted per `run()` call for
  *    cancel-addressing and concurrent-run disambiguation) — the two ids must
  *    never be collapsed into one again.
+ *
+ * TASK.145 срез 1 (`req.detach`): the ONE deliberate exception to the
+ * sync-join contract above. A detached run's `run()` promise settles at
+ * `accepted` (admit) instead of `terminal` — the tool call that spawned it
+ * returns immediately, telling the model the child is now running in the
+ * background. The waiter is deliberately NOT removed at that point (unlike
+ * every `finish()` call elsewhere in this file): it stays registered so the
+ * EVENTUAL `terminal` event still reaches this client, where it is handed to
+ * `options.onDetachedTerminal` instead of trying to resolve an
+ * already-settled promise. Consequences, all confined to a detached waiter:
+ *  - `progress`/`activity`/`attention` events arriving between admit and
+ *    terminal are NOT bridged to `opts.onProgress` — the Agent tool call
+ *    that owned that callback has already returned by the time they arrive,
+ *    so its `ctx.emit` closure may belong to a turn that has already ended;
+ *    nothing downstream needs a live card for a call that already settled
+ *    (agent.ts's own header comment explains why no presentation is built
+ *    for it either).
+ *  - `rejected` is UNCHANGED for a detached request: no admission ever
+ *    happened, so there is nothing to detach FROM — the tool call fails
+ *    exactly like a sync one would.
+ *
+ * TASK.145 срез 3 (revises срез 1's original abort-listener choice): `opts.
+ * signal`'s abort listener is now REMOVED at the moment a detached run
+ * admits, not left armed past it. Срез 1 kept it armed on the reasoning that
+ * "жизненный цикл наследуются от sync-яруса" — cancelling the parent's turn
+ * should cascade into the child it just detached. Срез 3 inverts that: a
+ * detach is an EXIT from the turn (design §8), and Stop cancels a TURN, not
+ * every process that turn ever spawned into the background — the same
+ * distinction bash background tasks and ZCode's own background tier both
+ * make (neither dies when the turn that started them is cancelled/stopped).
+ * Concretely, `onAbort` is unregistered in the SAME "accepted" branch that
+ * resolves the promise (below), so a LATER abort of `opts.signal` (the
+ * parent's Stop, or the parent's own turn timeout) no longer sends a
+ * `ChildRunCancel` for this child at all — the eventual `terminal` still
+ * reaches `onDetachedTerminal` normally, just never triggered by the parent
+ * turn's cancellation. Cancelling a detached child is now an entirely
+ * separate, EXPLICIT act: `cancelBackgroundChild`/`cancelAllBackgroundChildren`
+ * below, addressed by `childSessionId` against the registry this file now
+ * keeps of every live detached child — reusing the exact same
+ * `ChildRunCancel` wire message `onAbort` used to send, just triggered by a
+ * different caller (host/session.ts's explicit background-child cancel
+ * command, or explicit session shutdown) instead of a turn's AbortSignal.
  */
 
 import { randomUUID } from "node:crypto";
@@ -161,6 +203,41 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   return null;
 }
 
+/**
+ * TASK.145 срез 1: the admit-time `finalText` for a detached run — the ONLY
+ * text the model ever sees for this call, since a detached call never waits
+ * for the child's own finalText. `status:"completed"` on the outcome this
+ * feeds (see the "accepted" case below) is honest under the SAME reading
+ * agent.ts's header comment gives it: the delegation call's own job —
+ * spawn and hand off — did complete; the CHILD's work has not, and this
+ * sentence says so explicitly rather than leaving that to the status enum.
+ */
+function detachAdmitMessage(childSessionId: string): string {
+  return (
+    `Agent: child session ${childSessionId} started in the background. ` +
+    "It is running independently of this turn; its report will arrive as a new message once it finishes."
+  );
+}
+
+/**
+ * TASK.145 срез 3: one live detached (background) child, as tracked by this
+ * port's own in-memory registry — surfaced host-side so `session.ts` can
+ * answer "how many children are running in the background" and let the
+ * renderer (a later slice's job, not this one) cancel one by id. Deliberately
+ * NOT a wire type: `apps/desktop/src/shared/protocol.ts` defines its own
+ * structurally-identical `WireBackgroundChild` for the host<->renderer
+ * direction (the repo's existing "Wire"-prefixed-projection precedent,
+ * e.g. `WireCheckpointMeta`), so this module never has to import protocol.ts
+ * or reason about renderer-wire concerns.
+ */
+export interface BackgroundChildSnapshot {
+  childSessionId: string;
+  agentType: string;
+  description: string;
+  /** Epoch ms, captured when this child's spawn was admitted (the "accepted" ChildRunEvent). */
+  startedAt: number;
+}
+
 export interface CreateChildSessionPortOptions {
   /**
    * This host's own (root) session id — copied verbatim into every
@@ -192,11 +269,59 @@ export interface CreateChildSessionPortOptions {
   subscribe: (listener: (event: ChildRunEvent) => void) => () => void;
   /** Injectable request-id generator (tests only); defaults to randomUUID. */
   createRequestId?: () => string;
+  /**
+   * TASK.145 срез 1: invoked when a DETACHED run's `terminal` ChildRunEvent
+   * arrives — strictly AFTER this same run's `run()` promise already
+   * resolved at `accepted` (see the file header's TASK.145 addendum), so the
+   * terminal can no longer settle it. `req` is the ORIGINAL request (the
+   * outcome alone carries no `agentType`/`description`), letting the caller
+   * build a delivery notification without this port knowing anything about
+   * notification formatting itself — that stays the caller's job
+   * (host/index.ts wires it to `formatChildTaskNotification`). Never invoked
+   * for a non-detached run, whose terminal still settles `run()` directly.
+   */
+  onDetachedTerminal?: (outcome: SessionSubagentOutcome, req: SessionSubagentRequest) => void;
+}
+
+/**
+ * TASK.145 срез 3: the port's own return type widens `SessionSubagentPort`
+ * (`run` alone) with the background-children surface — never part of the
+ * frozen `SessionSubagentPort` core interface itself (core has no concept of
+ * "background", only the host does; see `ports/session-subagent.ts`'s own
+ * header on why `detach` lives on the REQUEST, not the port). host/index.ts
+ * holds this richer type directly (never narrowed to `SessionSubagentPort`)
+ * so `session.ts`'s `backgroundChildren` seam can read it.
+ */
+export interface ChildSessionPort extends SessionSubagentPort {
+  /** Every currently-live detached child this port has admitted and not yet seen a terminal for. */
+  listBackgroundChildren(): BackgroundChildSnapshot[];
+  /**
+   * Sends a `ChildRunCancel` for the ONE detached child matching this
+   * `childSessionId`, addressed via the registry's own `requestId` (the
+   * model-visible `childSessionId` never rides that wire message itself —
+   * see `shared/child-sessions.ts`). Returns `false` for an unknown id (never
+   * registered, or already reached its terminal) — the same "not running or
+   * does not exist" outcome `tasks.kill` reports for a background bash task.
+   * Idempotent: a second cancel on an id already mid-cancel still returns
+   * `true` but sends no second `ChildRunCancel`.
+   */
+  cancelBackgroundChild(childSessionId: string): boolean;
+  /** Cancels every currently-live detached child (TASK.145 срез 3 §3: an explicit sweep, not a side effect of aborting a turn). */
+  cancelAllBackgroundChildren(): void;
+  /** Subscribes to registry changes (a child admitted or reaching its terminal). Returns an unsubscribe fn, mirroring `lsp.onStatusChange`. */
+  onBackgroundChildrenChanged(listener: () => void): () => void;
 }
 
 /** One in-flight `run()` call's event handler, keyed by `requestId` in the port-wide waiter map. */
 interface Waiter {
   onEvent(event: ChildRunEvent): void;
+}
+
+/** TASK.145 срез 3: one registry row — the detach waiter's `requestId` (for cancel-addressing) plus the public snapshot and its own cancel-idempotency flag. */
+interface BackgroundChildEntry {
+  requestId: string;
+  snapshot: BackgroundChildSnapshot;
+  cancelRequested: boolean;
 }
 
 /**
@@ -206,9 +331,20 @@ interface Waiter {
  * stream into `SubagentProgress` callbacks and a final `SessionSubagentOutcome`
  * — the exact shape `tools/agent.ts`'s session-tier branch (S2b B1) awaits.
  */
-export function createChildSessionPort(options: CreateChildSessionPortOptions): SessionSubagentPort {
+export function createChildSessionPort(options: CreateChildSessionPortOptions): ChildSessionPort {
   const createRequestId = options.createRequestId ?? randomUUID;
   const waiters = new Map<string, Waiter>();
+  // TASK.145 срез 3: registry of live detached children, keyed by
+  // childSessionId (the id `cancelBackgroundChild`/the renderer's future list
+  // both address by) — populated at admit, removed at terminal, see the two
+  // `req.detach === true` branches below.
+  const backgroundChildren = new Map<string, BackgroundChildEntry>();
+  const backgroundChildrenListeners = new Set<() => void>();
+  function notifyBackgroundChildrenChanged(): void {
+    for (const listener of backgroundChildrenListeners) {
+      listener();
+    }
+  }
 
   options.subscribe((event) => {
     waiters.get(event.requestId)?.onEvent(event);
@@ -291,6 +427,50 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         onEvent: (event) => {
           switch (event.kind) {
             case "accepted": {
+              // TASK.145 срез 1: a detached run settles `run()` HERE, at
+              // admit — not at terminal. No `subagent_start` progress is
+              // emitted (file header: nothing downstream needs a live card
+              // for a call that already returned; agent.ts's own header
+              // comment explains why finalizeSubagentCard naturally produces
+              // no presentation for it). The waiter is deliberately left
+              // registered (no `finish()`/no `waiters.delete`) so the
+              // eventual `terminal` still reaches this `onEvent` and is
+              // routed to `onDetachedTerminal` below.
+              //
+              // TASK.145 срез 3: the abort listener IS removed here, though
+              // (file header's срез-3 addendum) — a detach is an exit from
+              // the turn, so cancelling the parent's turn after this point
+              // must NOT cascade into this child. Registered into the
+              // background-children registry in the SAME step, so a child is
+              // never observably "live" without ALSO being cancellable/listed,
+              // and never listed without ALSO having had its cascade-cancel
+              // disarmed.
+              if (req.detach === true) {
+                opts.signal?.removeEventListener("abort", onAbort);
+                backgroundChildren.set(event.childSessionId, {
+                  requestId,
+                  snapshot: {
+                    childSessionId: event.childSessionId,
+                    agentType: req.agentType,
+                    description: req.description,
+                    startedAt: Date.now(),
+                  },
+                  cancelRequested: false,
+                });
+                notifyBackgroundChildrenChanged();
+                resolve({
+                  status: "completed",
+                  finalText: detachAdmitMessage(event.childSessionId),
+                  truncated: false,
+                  turns: 0,
+                  toolCalls: 0,
+                  durationMs: 0,
+                  childSessionId: event.childSessionId,
+                  parentSessionId: options.parentSessionId,
+                  spawnToolCallId: req.spawnToolCallId,
+                });
+                return;
+              }
               // TASK.102 CUT-S4 §3.1: `engine` rides verbatim from the
               // REQUEST (never from main's `accepted` event, which carries
               // no engine field) — the card's chip reflects what this run
@@ -324,6 +504,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "progress": {
+              // TASK.145 срез 1: a detached run's own tool call already
+              // returned at admit (above) — no live card exists for
+              // opts.onProgress to update (file header).
+              if (req.detach === true) {
+                return;
+              }
               const progress: SubagentProgress = {
                 kind: "progress",
                 turns: event.turns,
@@ -334,16 +520,57 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "activity": {
+              if (req.detach === true) {
+                return;
+              }
               const progress: SubagentProgress = { kind: "tool", toolName: event.toolName, summary: event.summary };
               opts.onProgress?.(progress);
               return;
             }
             case "attention": {
+              if (req.detach === true) {
+                return;
+              }
               const progress: SubagentProgress = { kind: "attention", waiting: event.waiting };
               opts.onProgress?.(progress);
               return;
             }
             case "terminal": {
+              const outcome: SessionSubagentOutcome = {
+                status: event.status,
+                finalText: event.finalText,
+                truncated: event.truncated,
+                turns: event.turns,
+                toolCalls: event.toolCalls,
+                durationMs: event.durationMs,
+                childSessionId: event.childSessionId,
+                parentSessionId: options.parentSessionId,
+                spawnToolCallId: req.spawnToolCallId,
+              };
+              // TASK.145 срез 1: this run's `run()` promise already settled
+              // at admit (above) — this terminal can no longer resolve it.
+              // No `subagent_end` progress either (symmetry with the other
+              // three cases above: no live card exists to close out). Clean
+              // up HERE instead — this is the true end of this waiter's
+              // life, the one point a detached waiter still needs its own
+              // teardown that `finish()` would otherwise have done.
+              //
+              // TASK.145 срез 3: also the true end of this child's life in
+              // the background-children registry — removed here (whether the
+              // terminal followed an explicit `cancelBackgroundChild` or the
+              // child simply finished on its own), and the abort-listener
+              // removal below is now a defensive no-op in the common case
+              // (срез 3 already removed it at admit) but stays cheap and
+              // harmless for a request that somehow never reached "accepted"'s
+              // detach branch (defense in depth, not a reachable path today).
+              if (req.detach === true) {
+                waiters.delete(requestId);
+                opts.signal?.removeEventListener("abort", onAbort);
+                backgroundChildren.delete(event.childSessionId);
+                notifyBackgroundChildrenChanged();
+                options.onDetachedTerminal?.(outcome, req);
+                return;
+              }
               // CUT-S2 §10.7 п.4: passthrough of the honest suppressed-count
               // (main relayed it verbatim from the child's own ChildTerminal)
               // — mirrors the inline runner's own `activitySuppressed` on its
@@ -357,17 +584,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 ...(event.activitySuppressed !== undefined ? { activitySuppressed: event.activitySuppressed } : {}),
               };
               opts.onProgress?.(progress);
-              finish({
-                status: event.status,
-                finalText: event.finalText,
-                truncated: event.truncated,
-                turns: event.turns,
-                toolCalls: event.toolCalls,
-                durationMs: event.durationMs,
-                childSessionId: event.childSessionId,
-                parentSessionId: options.parentSessionId,
-                spawnToolCallId: req.spawnToolCallId,
-              });
+              finish(outcome);
               return;
             }
             default: {
@@ -406,5 +623,38 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     });
   }
 
-  return { run };
+  /** TASK.145 срез 3, `ChildSessionPort.listBackgroundChildren` — see that interface's own doc. */
+  function listBackgroundChildren(): BackgroundChildSnapshot[] {
+    return [...backgroundChildren.values()].map((entry) => entry.snapshot);
+  }
+
+  /** TASK.145 срез 3, `ChildSessionPort.cancelBackgroundChild` — see that interface's own doc. */
+  function cancelBackgroundChild(childSessionId: string): boolean {
+    const entry = backgroundChildren.get(childSessionId);
+    if (entry === undefined) {
+      return false;
+    }
+    if (!entry.cancelRequested) {
+      entry.cancelRequested = true;
+      options.send({ type: CHILD_RUN_CANCEL_TYPE, requestId: entry.requestId });
+    }
+    return true;
+  }
+
+  /** TASK.145 срез 3, `ChildSessionPort.cancelAllBackgroundChildren` — see that interface's own doc. */
+  function cancelAllBackgroundChildren(): void {
+    for (const childSessionId of [...backgroundChildren.keys()]) {
+      cancelBackgroundChild(childSessionId);
+    }
+  }
+
+  /** TASK.145 срез 3, `ChildSessionPort.onBackgroundChildrenChanged` — see that interface's own doc. */
+  function onBackgroundChildrenChanged(listener: () => void): () => void {
+    backgroundChildrenListeners.add(listener);
+    return () => {
+      backgroundChildrenListeners.delete(listener);
+    };
+  }
+
+  return { run, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
 }

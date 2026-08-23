@@ -283,6 +283,42 @@ describe("user_message images protocol", () => {
   });
 });
 
+// TASK.145 срез 2: the detached-child-report delivery wire additions —
+// user_message's optional `origin` and the new child_report_ack ack message.
+describe("TASK.145 срез 2 protocol additions", () => {
+  it("user_message.origin accepts the literal \"system\" and is absent by default", () => {
+    expect(
+      uiToHostMessageSchema.safeParse({ type: "user_message", requestId: "r1", text: "hi", origin: "system" })
+        .success,
+    ).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "user_message", requestId: "r1", text: "hi" }).success).toBe(
+      true,
+    );
+  });
+
+  it("user_message.origin rejects any value other than the literal \"system\"", () => {
+    expect(
+      uiToHostMessageSchema.safeParse({ type: "user_message", requestId: "r1", text: "hi", origin: "user" }).success,
+    ).toBe(false);
+    expect(
+      uiToHostMessageSchema.safeParse({ type: "user_message", requestId: "r1", text: "hi", origin: 1 }).success,
+    ).toBe(false);
+  });
+
+  it("child_report_ack accepts a bounded non-empty id and rejects a missing/empty/oversized one", () => {
+    expect(uiToHostMessageSchema.safeParse({ type: "child_report_ack", id: "call-1" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "child_report_ack" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "child_report_ack", id: "" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "child_report_ack", id: "x".repeat(257) }).success).toBe(false);
+  });
+
+  it("child_report_ack is strict — an unknown extra key fails closed", () => {
+    expect(uiToHostMessageSchema.safeParse({ type: "child_report_ack", id: "call-1", extra: 1 }).success).toBe(
+      false,
+    );
+  });
+});
+
 // Phase 4 slice 4.4-T (design feature-session-titles.md §4): the additive
 // `title_changed` HostToUiMessage variant. Same posture as `mcp_status`
 // above — trusted host->renderer direction, no zod schema, the one protocol
