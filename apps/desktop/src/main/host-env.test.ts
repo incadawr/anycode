@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
+  ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
   applyCodexProfilesHomeOverride,
@@ -279,6 +280,37 @@ describe("buildHostEnv — active-connection model/effort (TASK.45 v2, F14 §2.4
     });
     expect(env.ANYCODE_MODEL).toBe("settings-model");
     expect(env[ENV_REASONING_EFFORT]).toBeUndefined();
+  });
+});
+
+describe("buildHostEnv — ANYCODE_MAX_OUTPUT_TOKENS (TASK.150)", () => {
+  it("emits the active connection's explicit output-token ceiling", async () => {
+    const conn = { ...connectionFixture({ id: "z-ai", model: "m" }), maxOutputTokens: 65536 };
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_MAX_OUTPUT_TOKENS]).toBe("65536");
+  });
+
+  it("leaves it unset when the active connection persists no ceiling (no hardcoded literal)", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "z-ai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    expect(env[ENV_MAX_OUTPUT_TOKENS]).toBeUndefined();
+  });
+
+  it("env still wins over the persisted ceiling (I2 unchanged) — settings never overwrites a present value", async () => {
+    const conn = { ...connectionFixture({ id: "z-ai", model: "m" }), maxOutputTokens: 65536 };
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_MAX_OUTPUT_TOKENS: "8192" },
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_MAX_OUTPUT_TOKENS]).toBe("8192");
   });
 });
 
@@ -854,6 +886,10 @@ describe("envOverrides", () => {
 
   it("includes ANYCODE_REASONING_EFFORT (F14 §2.4 ladder addition)", () => {
     expect(envOverrides({ ANYCODE_REASONING_EFFORT: "high" })).toEqual([ENV_REASONING_EFFORT]);
+  });
+
+  it("includes ANYCODE_MAX_OUTPUT_TOKENS (TASK.150 ladder addition)", () => {
+    expect(envOverrides({ ANYCODE_MAX_OUTPUT_TOKENS: "65536" })).toEqual([ENV_MAX_OUTPUT_TOKENS]);
   });
 });
 

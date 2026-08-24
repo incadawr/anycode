@@ -52,8 +52,24 @@ export interface CoreEnvConfig {
 /** Main-loop turn budget when not overridden (subagents get a lower budget in Phase 3). */
 export const DEFAULT_MAX_TURNS = 100;
 
-/** Safe fallback for non-Claude model ids missing a catalog output limit. */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
+/**
+ * Fallback for non-Claude model ids missing a catalog output limit (TASK.150).
+ *
+ * This is the value EVERY on-prem / free-text model id lands on: the `vllm`,
+ * `custom` and `openrouter` catalog entries carry `models: []` by construction
+ * (free-text ids only), so no model behind them can ever match a catalog hint.
+ * The former 8_192 was low enough that a reasoning model — a self-hosted Qwen3,
+ * whose thinking is on by default — spent the entire budget inside `<think>`
+ * and finished at `length` before emitting one visible character: on the OpenAI
+ * transports this number IS the wire `max_tokens`, and reasoning is billed
+ * against it, not beside it.
+ *
+ * 32_768 is the measured peer default: ZCode 3.2.3 falls back to 32_000 for an
+ * unknown model, Claude Code 2.1.241 to 32_000 (upper 128_000); Codex sends no
+ * output cap at all and lets the server pick. Kept as a power of two to match
+ * the catalog's own values.
+ */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
 
 /** Default per-tool-call execution timeout enforced by the dispatcher. */
 export const DEFAULT_TOOL_TIMEOUT_MS = 120_000;

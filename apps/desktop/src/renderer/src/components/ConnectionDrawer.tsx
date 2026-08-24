@@ -132,7 +132,12 @@ export function resolveDrawerOAuthStartArgs(
  * instead of clearing it back to catalog default, the exact asymmetry this
  * fix closes. `createConnection`'s payload is NOT this shape — at create time
  * an omitted transport already means "use the default", so it keeps the old
- * conditional-spread form. Exported for direct testing (no jsdom).
+ * conditional-spread form. `maxOutputTokens` (TASK.150) follows the exact same
+ * unconditional-send discipline as `transport`/`proxyRef`: the local state
+ * already speaks the channel's `number | ""` clear sentinel (validated by
+ * `maxOutputTokensField` before this is called), so omitting it on `""` would
+ * leave a previously-set cap in force instead of clearing it back to the
+ * catalog/default ceiling. Exported for direct testing (no jsdom).
  */
 export function buildConnectionUpdatePayload(params: {
   connectionId: string;
@@ -143,6 +148,7 @@ export function buildConnectionUpdatePayload(params: {
   showBaseUrl: boolean;
   proxyRef: string;
   authOptional: boolean;
+  maxOutputTokens: number | "";
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -161,8 +167,43 @@ export function buildConnectionUpdatePayload(params: {
     // Sent unconditionally, same rationale as `transport`: `false` must CLEAR
     // a previously-persisted flag, not leave it untouched.
     authOptional: params.authOptional,
+    // Sent unconditionally (TASK.150), same rationale as `transport`/`proxyRef`:
+    // clearing the field back to blank must CLEAR the persisted cap, not leave
+    // an old explicit value in force.
+    maxOutputTokens: params.maxOutputTokens,
   };
 }
+
+/**
+ * Validates the "Max output tokens" field's raw string (TASK.150): main
+ * (`settings-ipc.ts`) accepts an integer in [1024, 1000000] or refuses with
+ * `reason: "invalid"`, so the drawer validates client-side first to give a
+ * specific, actionable error instead of a bare refusal toast. Blank (or
+ * whitespace-only) is the channel's own clear sentinel — `ok:true,
+ * value:""` — matching how `transport`/`proxyRef` already use `""` to mean
+ * "drop back to the catalog/provider default", NOT zero and NOT "invalid".
+ * Anything else that isn't a whole number in range is `ok:false`. Exported
+ * for direct testing (no jsdom in this package's vitest config, see file
+ * docstring).
+ */
+export function maxOutputTokensField(raw: string): { ok: true; value: number | "" } | { ok: false } {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return { ok: true, value: "" };
+  }
+  if (!/^-?\d+$/.test(trimmed)) {
+    return { ok: false };
+  }
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n < 1024 || n > 1000000) {
+    return { ok: false };
+  }
+  return { ok: true, value: n };
+}
+
+/** Shared by both write paths so create and save refuse a bad cap identically. */
+const MAX_OUTPUT_TOKENS_ERROR =
+  "Max output tokens must be a whole number between 1024 and 1000000 — leave it empty for the provider default.";
 
 /**
  * The model suggestions a catalog connection's drawer offers (datalist +
@@ -340,6 +381,13 @@ export function ConnectionDrawerFields({
       : proxyRefInitialValue({ kind: "connection", connectionId: editConnection.id }, proxySnapshot.settings),
   );
   const [noAuth, setNoAuth] = useState(editConnection?.authOptional === true);
+  // TASK.150: stored as a string (it backs a plain `<input type="number">`) so
+  // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
+  // through `Number()` before the user is done typing; `maxOutputTokensField`
+  // does the actual parse/validate at save time.
+  const [maxOutputTokens, setMaxOutputTokens] = useState(
+    editConnection?.maxOutputTokens === undefined ? "" : String(editConnection.maxOutputTokens),
+  );
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
   const [customName, setCustomName] = useState("");
@@ -477,6 +525,17 @@ export function ConnectionDrawerFields({
     if (providerId === "") {
       return;
     }
+    // TASK.150: a BLANK cap already means "provider default" at create time
+    // (same asymmetry as `baseUrl`/`transport` just above), so it is simply
+    // left out of the payload. A MALFORMED one is refused here rather than
+    // dropped: `min`/`max` on a number input only constrain the spinner, not
+    // what can be typed, so silently discarding e.g. `500` would create a
+    // connection whose ceiling the user believes they set.
+    const mot = maxOutputTokensField(maxOutputTokens);
+    if (!mot.ok) {
+      setError(MAX_OUTPUT_TOKENS_ERROR);
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -487,6 +546,7 @@ export function ConnectionDrawerFields({
         ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
         ...connectionCreateProxyRefField(proxyRef),
         ...(noAuth ? { authOptional: true } : {}),
+        ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
       });
       const createdId = resolveCreatedConnectionId(result);
       if (createdId === undefined) {
@@ -532,6 +592,15 @@ export function ConnectionDrawerFields({
       setError("Pick a model before saving — without one this connection can't open a tab.");
       return;
     }
+    // TASK.150: refuse to send a malformed cap — main's own [1024, 1000000]
+    // bound refuses the whole update with a bare `reason: "invalid"`, so this
+    // gives the specific, actionable message instead (same pattern as the
+    // `modelSaveBlocked` guard just above).
+    const mot = maxOutputTokensField(maxOutputTokens);
+    if (!mot.ok) {
+      setError(MAX_OUTPUT_TOKENS_ERROR);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -545,6 +614,7 @@ export function ConnectionDrawerFields({
           showBaseUrl,
           proxyRef,
           authOptional: noAuth,
+          maxOutputTokens: mot.value,
         }),
       );
       let keyRefused = false;
@@ -736,6 +806,36 @@ export function ConnectionDrawerFields({
           ))}
         </select>
       </label>
+
+      <label className="settings-field">
+        <span className="settings-field-label">Max output tokens</span>
+        {/* `step={1}` on purpose: every whole number in [min, max] is accepted,
+            and a coarser step would make the browser paint the peers' own 32000
+            as `:invalid`. */}
+        <input
+          className="settings-field-input"
+          type="number"
+          min={1024}
+          max={1000000}
+          step={1}
+          value={maxOutputTokens}
+          disabled={readOnly}
+          placeholder="(provider default)"
+          onChange={(e) => setMaxOutputTokens(e.target.value)}
+        />
+      </label>
+      {/* TASK.150: on-prem/custom endpoints (vllm/custom/openrouter) carry no
+          curated model list in the catalog, so every such connection falls
+          back to the same DEFAULT_MAX_OUTPUT_TOKENS — this field is the only
+          user-facing knob for it. Called out explicitly because a reasoning
+          model spends part of that budget on its own hidden thinking before
+          it writes anything, so the default that's plenty for a plain chat
+          model can cut a self-hosted reasoning model off mid-write. */}
+      <div className="settings-field-hint" role="note">
+        Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they
+        write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if
+        output keeps cutting off.
+      </div>
 
       {/* TASK.141: one instance of the same picker the engine panes and the
           Network pane render — CONTROLLED here, because a connection's ref

@@ -126,6 +126,13 @@ const connectionSchema = z.object({
   // fail-soft as "direct for this connection" by `resolveProxyLadder`.
   proxyRef: z.string().optional(),
   reasoningEffort: reasoningEffortSchema.optional(),
+  // Output-token ceiling (TASK.150). `.catch(undefined)` for the same reason
+  // `proxyUrl` above is lenient: `connections` is a plain `z.array` with no
+  // per-element tolerance, so a hand-edited `"lots"` here would fail the whole
+  // document and reset every other section to defaults. A rejected value reads
+  // back as "no explicit ceiling", which is the pre-TASK.150 behaviour.
+  // Strictness lives at the IPC boundary (main/settings-ipc.ts).
+  maxOutputTokens: z.number().int().positive().optional().catch(undefined),
   authOptional: z.boolean().optional(),
   // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —
   // advisory display data, same round-trip discipline as `lastHealth`.

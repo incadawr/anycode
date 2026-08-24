@@ -1941,6 +1941,118 @@ describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, on
   });
 });
 
+describe("connection maxOutputTokens CRUD (TASK.150) — bounded at the IPC boundary, only-truthy on disk", () => {
+  it("create persists a valid maxOutputTokens", async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "m",
+      maxOutputTokens: 65536,
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.maxOutputTokens).toBe(65536);
+  });
+
+  it("create with no maxOutputTokens leaves the key off disk entirely", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect("maxOutputTokens" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  // Strictness lives HERE, not in the persisted schema (settings/schema.ts is
+  // deliberately lenient with `.catch(undefined)` so one bad value cannot
+  // corrupt the document) — a payload value outside [MIN, MAX], non-integer, or
+  // wrong-typed is refused at the trust boundary and nothing is written.
+  it.each([[1023], [1000001], [12.5], ["65536"]])(
+    "create refuses an out-of-bounds/non-integer/wrong-typed maxOutputTokens (%p) and persists nothing",
+    async (bad) => {
+      const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+        providerId: "z-ai",
+        model: "m",
+        maxOutputTokens: bad,
+      });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.provider.connections).toEqual([]);
+    },
+  );
+
+  it("update sets maxOutputTokens on an existing connection", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      maxOutputTokens: 65536,
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.maxOutputTokens).toBe(65536);
+  });
+
+  // The `""` clear sentinel must DELETE the key, not persist an empty string or
+  // leave `undefined` sitting on the object — same asymmetry the transport/
+  // proxyUrl clear branches close.
+  it('update with the "" sentinel deletes the key from disk (checked via `in`, not `=== undefined`)', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "m",
+      maxOutputTokens: 65536,
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", maxOutputTokens: "" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    const connection = loaded.settings.provider.connections[0] ?? {};
+    expect(Object.hasOwn(connection, "maxOutputTokens")).toBe(false);
+    expect("maxOutputTokens" in connection).toBe(false);
+  });
+
+  // "Absent = keep" sentinel: an update that never mentions the field must not
+  // disturb a previously-persisted ceiling.
+  it("update without the field leaves a previously-set maxOutputTokens untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "m",
+      maxOutputTokens: 65536,
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", label: "Work" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.maxOutputTokens).toBe(65536);
+  });
+
+  it('update with "" on a connection that never had the field does not throw and leaves the key absent', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", maxOutputTokens: "" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect("maxOutputTokens" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  // A ceiling is not an endpoint identity (unlike model/transport/baseUrl/proxy):
+  // an update that touches ONLY maxOutputTokens must NOT invalidate a `ready`
+  // health observed against the (unchanged) endpoint.
+  it("changing ONLY maxOutputTokens leaves a `ready` lastHealth untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+    const before = (await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth;
+    expect(before?.status).toBe("ready");
+
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", maxOutputTokens: 65536 });
+    expect(res.ok).toBe(true);
+
+    const after = (await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth;
+    expect(after).toEqual(before);
+    expect(after?.status).toBe("ready");
+  });
+});
+
 describe("handleConnectionUpdate — a baseUrl change drops the live-fetched model list", () => {
   /** Stamps a live-fetched list onto conn-1 on disk (what provider-ipc's connection-scoped fetch persists). */
   async function stampFetchedModels(): Promise<void> {
