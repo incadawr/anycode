@@ -333,6 +333,19 @@ const reasoningEffortEnum = z.enum(["off", "low", "medium", "high", "max"]);
 // `.strict()` (custody, §6.5): a CRUD payload carrying a credential field
 // (`apiKey`/`token`/…) is rejected `invalid` — plaintext NEVER crosses IPC on a
 // metadata channel; secrets travel only via `secret-set`.
+
+/**
+ * Output-token ceiling (TASK.150) at the trust boundary. Bounded on both sides
+ * rather than merely `.positive()`: a fat-fingered `10` produces a connection
+ * that truncates every single reply, and an absurd `1e12` is a request the
+ * provider will 400 on — neither is worth persisting. The persisted schema
+ * stays lenient (`.catch(undefined)`) for document-tolerance reasons; strictness
+ * belongs here, where exactly one value is being written.
+ */
+const MAX_OUTPUT_TOKENS_MIN = 1_024;
+const MAX_OUTPUT_TOKENS_MAX = 1_000_000;
+const maxOutputTokensSchema = z.number().int().min(MAX_OUTPUT_TOKENS_MIN).max(MAX_OUTPUT_TOKENS_MAX);
+
 const connectionCreateSchema = z
   .object({
     providerId: z.string().min(1),
@@ -350,6 +363,7 @@ const connectionCreateSchema = z
     // atomically with the connection, never as a second call that can be lost.
     proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
+    maxOutputTokens: maxOutputTokensSchema.optional(),
     authOptional: z.boolean().optional(),
     setActive: z.boolean().optional(),
   })
@@ -373,6 +387,9 @@ const connectionUpdateSchema = z
     // connection's own legacy `proxyUrl` into a real profile.
     proxyRef: z.string().optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
+    // Output-token ceiling (TASK.150) with the same `""` clear sentinel as
+    // `transport`/`proxyRef` above.
+    maxOutputTokens: z.union([maxOutputTokensSchema, z.literal("")]).optional(),
     // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
   })
@@ -1404,6 +1421,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.proxyUrl !== undefined ? { proxyUrl: req.proxyUrl } : {}),
       ...(req.proxyRef !== undefined ? { proxyRef: req.proxyRef } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+      ...(req.maxOutputTokens !== undefined ? { maxOutputTokens: req.maxOutputTokens } : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
     };
     const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
@@ -1527,6 +1545,18 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         updatedConnection.authOptional = true;
       } else {
         delete updatedConnection.authOptional;
+      }
+    }
+    // Output-token ceiling (TASK.150): identical shape to the transport clear
+    // branch — `""` means "back to the catalog hint / core default", and that
+    // has to DELETE the key, not spread `undefined` over it. Health is
+    // deliberately NOT invalidated: a ceiling is not an endpoint identity, so a
+    // `ready` observed a minute ago stays true.
+    if (req.maxOutputTokens !== undefined) {
+      if (req.maxOutputTokens === "") {
+        delete updatedConnection.maxOutputTokens;
+      } else {
+        updatedConnection.maxOutputTokens = req.maxOutputTokens;
       }
     }
     // Proxy clear (`""`) must remove the key entirely (TASK.132) — identical

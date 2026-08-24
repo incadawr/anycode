@@ -218,6 +218,22 @@ export interface ProviderConnection {
   proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
   /**
+   * Explicit output-token ceiling for this connection (TASK.150), materialised
+   * as `ANYCODE_MAX_OUTPUT_TOKENS` on the fork env — so an env value set by the
+   * launching shell still wins, exactly like `reasoningEffort`.
+   *
+   * This is the ONLY user-reachable rung for an on-prem / free-text model: the
+   * `vllm`, `custom` and `openrouter` catalog entries carry `models: []`, so
+   * core's `resolveMaxOutputTokens` can never find a per-model hint for them and
+   * falls back to `DEFAULT_MAX_OUTPUT_TOKENS`. A self-hosted model that really
+   * serves 128K of output says so here. Absent = the catalog hint, else the
+   * core default.
+   *
+   * Beats the catalog hint when present (it is an explicit statement about THIS
+   * endpoint, which the static hint cannot know), and is beaten by the env var.
+   */
+  maxOutputTokens?: number;
+  /**
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
    * local servers — LM Studio/ollama/llama.cpp). UI-level truth for the
    * drawer's "no API key" checkbox and the tile's health derivation (a keyless
@@ -285,6 +301,8 @@ export interface ActiveProviderView {
    */
   proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
+  /** The active connection's explicit output-token ceiling (TASK.150); absent = catalog/default. */
+  maxOutputTokens?: number;
 }
 
 /** Non-secret, human-editable settings persisted to ~/.anycode/settings.json (0644). */
@@ -771,6 +789,8 @@ export interface ConnectionCreateRequest {
    */
   proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
+  /** Output-token ceiling (see `ProviderConnection.maxOutputTokens`); omitted = catalog/default. */
+  maxOutputTokens?: number;
   /** "No API key" declaration (see `ProviderConnection.authOptional`); only `true` is persisted. */
   authOptional?: boolean;
   /** Make the new connection active (default for new sessions). */
@@ -814,6 +834,13 @@ export interface ConnectionUpdateRequest {
    */
   proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Output-token ceiling (TASK.150) with the same `""` clear sentinel as
+   * `transport`/`proxyRef` above: absent = keep the current value, a positive
+   * integer = set it, `""` = clear back to the catalog hint / core default.
+   * `""` is never persisted — the handler deletes the key.
+   */
+  maxOutputTokens?: number | "";
   /**
    * "No API key" declaration: absent = keep the current value, `true` = set,
    * `false` = clear (the handler removes the key from disk rather than
@@ -937,6 +964,7 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     transport: connection.transport,
     proxyUrl: connection.proxyUrl,
     reasoningEffort: connection.reasoningEffort,
+    maxOutputTokens: connection.maxOutputTokens,
   };
 }
 

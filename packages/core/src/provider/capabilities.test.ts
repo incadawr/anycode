@@ -76,10 +76,14 @@ describe("output and reasoning capability resolution", () => {
     { id: "glm-basic", contextWindow: 128_000, maxOutputTokens: 16_384 },
   ] };
 
-  it("resolves env > catalog > non-Claude fallback while leaving Claude native", () => {
+  it("resolves override > catalog > non-Claude fallback while leaving Claude native", () => {
     expect(resolveMaxOutputTokens("glm-5.2", entry, 1234)).toBe(1234);
     expect(resolveMaxOutputTokens("glm-5.2", entry, undefined)).toBe(32_768);
-    expect(resolveMaxOutputTokens("custom-model", entry, undefined)).toBe(8_192);
+    // TASK.150: an on-prem / non-catalog model id lands on the DEFAULT, and 8_192
+    // was low enough that a reasoning model spent the whole budget thinking and
+    // finished at `length` before emitting a visible character. Pinned against
+    // the two references measured 2026-08-23 (ZCode 32_000, Claude Code 32_000).
+    expect(resolveMaxOutputTokens("custom-model", entry, undefined)).toBe(32_768);
     expect(resolveMaxOutputTokens("claude-custom", entry, undefined)).toBeUndefined();
   });
 

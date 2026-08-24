@@ -730,6 +730,77 @@ describe("connection.proxyUrl (TASK.132) — persisted schema stays LENIENT on p
   });
 });
 
+describe("connection.maxOutputTokens (TASK.150) — persisted schema stays LENIENT on purpose", () => {
+  it("round-trips a valid maxOutputTokens verbatim", () => {
+    const settings = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [{ id: "c1", providerId: "z-ai", maxOutputTokens: 65536 }],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(settings)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.maxOutputTokens).toBe(65536);
+    }
+  });
+
+  it("a connection with no maxOutputTokens round-trips with the key absent", () => {
+    const parsed = settingsSchema.safeParse(
+      JSON.parse(JSON.stringify({ ...cloneDefaults(), provider: providerV2({ id: "z-ai" }) })),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect("maxOutputTokens" in (parsed.data.provider.connections[0] ?? {})).toBe(false);
+    }
+  });
+
+  // The whole-document-corruption guard (`.catch(undefined)`, same discipline as
+  // `proxyUrl` above): `connections` is a plain z.array with NO per-element
+  // tolerance, so any of these (wrong type, zero, negative, non-integer) must
+  // read back as "no explicit ceiling" for THIS connection while every sibling
+  // field, every OTHER connection, and every OTHER top-level section survive
+  // untouched. A regression that drops `.catch(undefined)` (or narrows it to
+  // only wrong-typed input) fails the whole document here instead.
+  it.each([["lots"], [0], [-5], [12.5]])(
+    "a garbage maxOutputTokens (%p) reads back as absent, without corrupting the rest of the document",
+    (garbage) => {
+      const before = {
+        version: 2,
+        provider: {
+          activeConnectionId: "c1",
+          connections: [
+            { id: "c1", providerId: "z-ai", label: "Work", maxOutputTokens: garbage },
+            { id: "c2", providerId: "openai", model: "gpt-5" },
+          ],
+        },
+        tools: { maxTurns: 7 },
+        permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
+        ui: { theme: "dark" },
+        security: { allowWeakSecretStorage: false },
+      };
+      const parsed = settingsSchema.safeParse(before);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        // `.catch()` leaves the key present-but-`undefined` on the in-memory
+        // parsed object (zod assigns the fallback rather than deleting the
+        // key) — `toBeUndefined()` is the right check here, not an `in`/
+        // `Object.keys` probe: `JSON.stringify` drops an `undefined`-valued
+        // key the same way an actually-absent one is dropped, so the on-disk
+        // shape (what settings.json ends up holding) is identical either way.
+        expect(parsed.data.provider.connections[0]?.maxOutputTokens).toBeUndefined();
+        expect(JSON.stringify(parsed.data.provider.connections[0])).not.toContain("maxOutputTokens");
+        expect(parsed.data.provider.connections[0]?.label).toBe("Work");
+        expect(parsed.data.provider.connections[1]).toEqual({ id: "c2", providerId: "openai", model: "gpt-5" });
+        expect(parsed.data.tools).toEqual({ maxTurns: 7 });
+        expect(parsed.data.permissions).toEqual({ alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] });
+        expect(parsed.data.ui).toEqual({ theme: "dark" });
+      }
+    },
+  );
+});
+
 describe("provider.custom (cut §9.2) — round-trip + zod-granularity", () => {
   it("reads a file with no provider.custom, round-tripping byte-identically", () => {
     const base = cloneDefaults();

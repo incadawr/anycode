@@ -754,7 +754,12 @@ export function MessageList({
                 </div>
               );
             case "output_truncated":
-              return <div key={block.id} className="message message-error" role="alert">Output truncated at the model token limit. Raise ANYCODE_MAX_OUTPUT_TOKENS or split the write.</div>;
+              return (
+                <div key={block.id} className="message message-error" role="alert">
+                  Output truncated at the model token limit. Raise "Max output tokens" on this connection in Settings — reasoning
+                  models spend part of that budget just thinking before they write anything.
+                </div>
+              );
             case "preview_console":
               return <PreviewConsoleRow key={block.id} block={block} enter={enterIds.has(block.id)} />;
             // Turn-ceiling grant (TASK.124 cut-1): minimal visibility row —

@@ -57,6 +57,13 @@ export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
  */
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
 /**
+ * Explicit output-token ceiling (TASK.150). Literal mirror of core's
+ * `provider/env.ts:12` ENV_MAX_OUTPUT_TOKENS — same local-literal convention
+ * as every other var above (host-env stays core-free, never value-imports the
+ * core runtime).
+ */
+export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
+/**
  * Wire transport override (TASK.43 W5). Literal mirrors core's
  * `provider/env.ts` `ENV_PROVIDER_TRANSPORT` — same local-literal convention
  * as every other var above (host-env stays core-free).
@@ -312,6 +319,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_MAX_TURNS,
   ENV_SUBAGENT_MAX_TURNS,
   ENV_REASONING_EFFORT,
+  ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
 ];
 
@@ -955,6 +963,13 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).
   fillFromSettings(env, ENV_REASONING_EFFORT, view.reasoningEffort);
+  // Output-token ceiling (TASK.150): the same F14 §2.4 inheritance rung as
+  // ENV_REASONING_EFFORT above. `fillFromSettings` only fills a slot the boot
+  // snapshot left blank, so a launching shell's own ANYCODE_MAX_OUTPUT_TOKENS
+  // ALWAYS wins over the persisted connection value — this is the load-bearing
+  // property of the whole ladder (env > settings), not incidental to how
+  // fillFromSettings happens to be implemented.
+  fillFromSettings(env, ENV_MAX_OUTPUT_TOKENS, numToStr(view.maxOutputTokens));
   // The host fork's own network path (TASK.132, generalised by TASK.141 §2
   // ladder (a)/(b)): the ACTIVE connection's rung, then the app's. Keyed off
   // `activeConnectionId` — the same handle `activeProviderView` reads — so a

@@ -10,6 +10,7 @@ import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } 
 import {
   buildConnectionUpdatePayload,
   liveModelSuggestions,
+  maxOutputTokensField,
   modelAfterCatalogPrefill,
   modelSaveBlocked,
   providerSelectDisplayValue,
@@ -117,6 +118,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       showBaseUrl: false,
       proxyRef: "",
       authOptional: false,
+      maxOutputTokens: "",
     });
     expect(payload).toEqual({
       id: "conn-1",
@@ -126,6 +128,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       baseUrl: "",
       proxyRef: "",
       authOptional: false,
+      maxOutputTokens: "",
     });
   });
 
@@ -139,6 +142,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       showBaseUrl: false,
       proxyRef: "",
       authOptional: false,
+      maxOutputTokens: "",
     });
     expect(payload.transport).toBe("openai-responses");
   });
@@ -153,6 +157,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       showBaseUrl: true,
       proxyRef: "",
       authOptional: false,
+      maxOutputTokens: "",
     });
     expect(shown.baseUrl).toBe("https://x");
     const hidden = buildConnectionUpdatePayload({
@@ -164,6 +169,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       showBaseUrl: false,
       proxyRef: "",
       authOptional: false,
+      maxOutputTokens: "",
     });
     expect(hidden.baseUrl).toBe("");
   });
@@ -181,6 +187,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       baseUrl: "",
       showBaseUrl: false,
       proxyRef: "",
+      maxOutputTokens: "" as const,
     };
     expect(buildConnectionUpdatePayload({ ...base, authOptional: true }).authOptional).toBe(true);
     expect(buildConnectionUpdatePayload({ ...base, authOptional: false }).authOptional).toBe(false);
@@ -196,6 +203,7 @@ describe("buildConnectionUpdatePayload — proxyRef (TASK.141, replacing TASK.13
     baseUrl: "",
     showBaseUrl: false,
     authOptional: false,
+    maxOutputTokens: "" as const,
   };
 
   it("sends the picked profile id", () => {
@@ -346,5 +354,64 @@ describe("modelSaveBlocked (TASK.108-A: a catalog connection cannot save an empt
 
   it("never blocks a provider that offers no model list", () => {
     expect(modelSaveBlocked("", true, [])).toBe(false);
+  });
+});
+
+describe("maxOutputTokensField (TASK.150: on-prem/custom endpoints get no catalog model list to guess a cap from)", () => {
+  it("blank (or whitespace-only) is the clear sentinel, not invalid", () => {
+    expect(maxOutputTokensField("")).toEqual({ ok: true, value: "" });
+    expect(maxOutputTokensField("   ")).toEqual({ ok: true, value: "" });
+  });
+
+  it("accepts the inclusive range boundaries", () => {
+    expect(maxOutputTokensField("1024")).toEqual({ ok: true, value: 1024 });
+    expect(maxOutputTokensField("1000000")).toEqual({ ok: true, value: 1000000 });
+  });
+
+  it("accepts a mid-range whole number", () => {
+    expect(maxOutputTokensField("65536")).toEqual({ ok: true, value: 65536 });
+  });
+
+  it("rejects one below the floor and one above the ceiling", () => {
+    expect(maxOutputTokensField("1023")).toEqual({ ok: false });
+    expect(maxOutputTokensField("1000001")).toEqual({ ok: false });
+  });
+
+  it("rejects a fractional value", () => {
+    expect(maxOutputTokensField("12.5")).toEqual({ ok: false });
+  });
+
+  it("rejects non-numeric input", () => {
+    expect(maxOutputTokensField("abc")).toEqual({ ok: false });
+  });
+
+  it("rejects a negative value", () => {
+    expect(maxOutputTokensField("-1")).toEqual({ ok: false });
+  });
+});
+
+describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same unconditional-send discipline as transport/proxyRef)", () => {
+  const base = {
+    connectionId: "conn-1",
+    label: "",
+    model: "",
+    transport: "" as const,
+    baseUrl: "",
+    showBaseUrl: false,
+    proxyRef: "",
+    authOptional: false,
+  };
+
+  it("a chosen number lands in the payload", () => {
+    expect(buildConnectionUpdatePayload({ ...base, maxOutputTokens: 65536 }).maxOutputTokens).toBe(65536);
+  });
+
+  // The clear sentinel: `""` must be SENT (not omitted) so main clears a
+  // previously-persisted cap back to the catalog/provider default — mirrors
+  // the `proxyRef:""` unconditional-send assertion above.
+  it('sends maxOutputTokens:"" as the clear sentinel, never omits it', () => {
+    const payload = buildConnectionUpdatePayload({ ...base, maxOutputTokens: "" });
+    expect(payload.maxOutputTokens).toBe("");
+    expect("maxOutputTokens" in payload).toBe(true);
   });
 });
