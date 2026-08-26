@@ -369,6 +369,15 @@ const providerDrawerSetBody = z
     model: z.string().max(256).optional(),
     transport: z.string().max(64).optional(),
     baseUrl: z.string().max(4096).optional(),
+    // TASK.150 "Max output tokens": a STRING, mirroring what the drawer's own
+    // `<input type="number">` holds — the driver must be able to type a
+    // deliberately malformed value ("500", "abc") to exercise the field's
+    // client-side refusal, which a `z.number()` here would make untestable.
+    maxOutputTokens: z.string().max(32).optional(),
+    // TASK.150 slice 3: a preset chip is addressed BY LABEL, so the driver
+    // exercises the chip's own click path instead of the value it happens to
+    // write — a chip wired to the wrong number stays visible to a smoke.
+    maxOutputTokensPreset: z.string().max(32).optional(),
     apiKey: z.string().max(8192).optional(),
   })
   .strict();

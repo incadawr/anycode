@@ -1476,6 +1476,10 @@ export interface ProviderDrawerDomState {
   transportOptions: string[];
   baseUrlVisible: boolean;
   baseUrl: string;
+  /** TASK.150 "Max output tokens" — the raw field text, `""` when left at the provider default. */
+  maxOutputTokens: string;
+  /** TASK.150 slice 3 — the click-to-fill preset chips under that field, in render order, each with whether it currently reads as active. Exactly one is active at a time ("Custom" when the field holds a value no chip spells). */
+  maxOutputTokensPresets: { label: string; selected: boolean }[];
   authKind: "api_key" | "oauth";
   /** Whether the credential input currently holds a non-empty typed value — never the value itself (custody: a plaintext-in-progress credential never crosses this dev-only channel either). */
   apiKeyEntered: boolean;
@@ -1515,6 +1519,9 @@ export interface ProviderPaneDom {
   setDrawerModel(value: string): boolean;
   setDrawerTransport(value: string): boolean;
   setDrawerBaseUrl(value: string): boolean;
+  setDrawerMaxOutputTokens(value: string): boolean;
+  /** TASK.150 slice 3: clicks a "Max output tokens" preset chip BY LABEL ("Default"/"8192"/"16384"/"32768"/"Custom") — the chip's own click path, not a typed value, so a driver can prove the chip writes what it says. `false` when no chip carries that label. */
+  clickDrawerMaxOutputPreset(label: string): boolean;
   setDrawerApiKey(value: string): boolean;
   /** Clicks the drawer's own top-level action button — "Create connection"/"Save" pre-creation, the single unified "Save" post-creation (TASK.58 folded "Save changes"+"Save key" into one). */
   clickDrawerPrimary(): boolean;
@@ -1548,6 +1555,8 @@ export interface ProviderDrawerView {
   transportOptions: string[];
   baseUrlVisible: boolean;
   baseUrl: string | null;
+  maxOutputTokens: string | null;
+  maxOutputTokensPresets: { label: string; selected: boolean }[];
   authKind: "api_key" | "oauth" | null;
   apiKeyEntered: boolean;
   credentialStatusText: string | null;
@@ -3728,6 +3737,8 @@ function realProviderPaneDom(): ProviderPaneDom {
       const modelInput = fieldControl(body, "Model") as HTMLInputElement | null;
       const transportSelect = fieldControl(body, "Transport") as HTMLSelectElement | null;
       const baseUrlInput = fieldControl(body, "Base URL") as HTMLInputElement | null;
+      const maxOutputTokensInput = fieldControl(body, "Max output tokens") as HTMLInputElement | null;
+      const maxOutputPresetChips = Array.from(body.querySelectorAll<HTMLButtonElement>(".connection-drawer-preset-chip"));
       const secretInput = credentialInput(body);
       const authKind: "api_key" | "oauth" = sec?.querySelector(".settings-oauth-block") ? "oauth" : "api_key";
       const credentialStatusEl = sec?.querySelector<HTMLElement>('[class*="settings-secret-status"]') ?? null;
@@ -3752,6 +3763,11 @@ function realProviderPaneDom(): ProviderPaneDom {
           : [],
         baseUrlVisible: baseUrlInput !== null,
         baseUrl: baseUrlInput?.value ?? "",
+        maxOutputTokens: maxOutputTokensInput?.value ?? "",
+        maxOutputTokensPresets: maxOutputPresetChips.map((chip) => ({
+          label: chip.textContent ?? "",
+          selected: chip.classList.contains("connection-drawer-preset-chip-selected"),
+        })),
         authKind,
         apiKeyEntered: (secretInput?.value ?? "") !== "",
         credentialStatusText: credentialStatusEl?.textContent ?? null,
@@ -3805,6 +3821,29 @@ function realProviderPaneDom(): ProviderPaneDom {
         return false;
       }
       setNativeInputValue(input, value);
+      return true;
+    },
+    setDrawerMaxOutputTokens(value: string): boolean {
+      const body = drawerBody();
+      const input = body && (fieldControl(body, "Max output tokens") as HTMLInputElement | null);
+      if (!input || input.disabled) {
+        return false;
+      }
+      setNativeInputValue(input, value);
+      return true;
+    },
+    clickDrawerMaxOutputPreset(label: string): boolean {
+      const body = drawerBody();
+      if (!body) {
+        return false;
+      }
+      const chip = Array.from(body.querySelectorAll<HTMLButtonElement>(".connection-drawer-preset-chip")).find(
+        (candidate) => (candidate.textContent ?? "").trim() === label,
+      );
+      if (!chip || chip.disabled) {
+        return false;
+      }
+      chip.click();
       return true;
     },
     setDrawerApiKey(value: string): boolean {
@@ -6462,6 +6501,8 @@ export function createAutomationFacade(
             transportOptions: [],
             baseUrlVisible: false,
             baseUrl: null,
+            maxOutputTokens: null,
+            maxOutputTokensPresets: [],
             authKind: null,
             apiKeyEntered: false,
             credentialStatusText: null,
@@ -6582,6 +6623,8 @@ export function createAutomationFacade(
       model?: string;
       transport?: string;
       baseUrl?: string;
+      maxOutputTokens?: string;
+      maxOutputTokensPreset?: string;
       apiKey?: string;
     }): Promise<FacadeResult> {
       if (providerPaneDom.drawer() === null) {
@@ -6601,6 +6644,19 @@ export function createAutomationFacade(
       }
       if (args.baseUrl !== undefined && !providerPaneDom.setDrawerBaseUrl(args.baseUrl)) {
         return { ok: false, reason: "base_url_unavailable" };
+      }
+      if (args.maxOutputTokens !== undefined && !providerPaneDom.setDrawerMaxOutputTokens(args.maxOutputTokens)) {
+        return { ok: false, reason: "max_output_tokens_unavailable" };
+      }
+      // Applied AFTER the typed value on purpose: a driver that sends both is
+      // exercising "type something, then click a chip over it", which is the
+      // order a human produces and the only one where the chip's write is
+      // observable.
+      if (
+        args.maxOutputTokensPreset !== undefined &&
+        !providerPaneDom.clickDrawerMaxOutputPreset(args.maxOutputTokensPreset)
+      ) {
+        return { ok: false, reason: "max_output_tokens_preset_unavailable" };
       }
       if (args.apiKey !== undefined && !providerPaneDom.setDrawerApiKey(args.apiKey)) {
         return { ok: false, reason: "api_key_unavailable" };
