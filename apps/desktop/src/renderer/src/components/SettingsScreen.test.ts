@@ -158,6 +158,26 @@ describe("isEnvOverridden", () => {
   });
 });
 
+// TASK.159: the second banner's predicate — the SAME already-exported pure
+// helper, pointed at the ceiling var. These pin the exact invocations
+// ProviderSettings' gate makes, so widening it to the wrong var (or folding it
+// into the API-key boolean) turns red.
+describe("isEnvOverridden — ANYCODE_MAX_OUTPUT_TOKENS banner gate (TASK.159)", () => {
+  const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
+
+  it("fires when the ceiling var is exported", () => {
+    expect(isEnvOverridden([ENV_MAX_OUTPUT_TOKENS], ENV_MAX_OUTPUT_TOKENS)).toBe(true);
+  });
+
+  it("does not fire for an unrelated override list — nor from the API key's boolean", () => {
+    expect(isEnvOverridden([], ENV_MAX_OUTPUT_TOKENS)).toBe(false);
+    expect(isEnvOverridden(["ANYCODE_API_KEY"], ENV_MAX_OUTPUT_TOKENS)).toBe(false);
+    // The two banners stay independent: exporting the ceiling var must not
+    // light the API-key banner and vice versa.
+    expect(isEnvOverridden([ENV_MAX_OUTPUT_TOKENS], "ANYCODE_API_KEY")).toBe(false);
+  });
+});
+
 describe("parseOptionalInt", () => {
   it("parses a plain integer string", () => {
     expect(parseOptionalInt("4")).toBe(4);

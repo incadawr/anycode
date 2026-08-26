@@ -20,7 +20,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import type { AnycodeSettings, SecretKey, TrustedBinaryConsent } from "../shared/settings.js";
+import type { AnycodeSettings, ProviderConnection, SecretKey, TrustedBinaryConsent } from "../shared/settings.js";
 import { cloneDefaults, parseSettings, trustedBinaryConsentSchema } from "./schema.js";
 
 /**
@@ -54,6 +54,43 @@ export function normalizeActiveConnection(settings: AnycodeSettings): AnycodeSet
   }
   const activeExists = activeConnectionId !== undefined && connections.some((c) => c.id === activeConnectionId);
   return activeExists ? settings : { ...settings, provider: { ...settings.provider, activeConnectionId: first.id } };
+}
+
+// Read-time bounds for connection.maxOutputTokens (TASK.159 slice D) — the same
+// window the IPC boundary enforces on writes (main/settings-ipc.ts
+// MAX_OUTPUT_TOKENS_MIN/MAX). Kept as literals here: settings/ must not depend
+// on main/, and the two must move together anyway.
+const MAX_OUTPUT_TOKENS_MIN = 1_024;
+const MAX_OUTPUT_TOKENS_MAX = 1_000_000;
+
+/**
+ * Drops connection `maxOutputTokens` values outside `[1_024, 1_000_000]` on
+ * load (TASK.159): each is read as ABSENT ("no explicit ceiling", the
+ * pre-TASK.150 behaviour), restoring what a hand-edited `512` or `1e9` should
+ * have meant all along. The persisted schema deliberately stays lenient
+ * (settings/schema.ts `.catch(undefined)` — ONE bad key must never fail the
+ * whole document and reset every other section), which is why IPC strictness
+ * alone can't see these; the filter runs here instead of tightening the schema.
+ * Connections' other fields are untouched, and the document itself is NOT
+ * rewritten now — in-memory only, same discipline as `normalizeActiveConnection`
+ * above. Documented consequence: the healed object lives in main, so the NEXT
+ * unrelated settings write persists the stripped value. Same behavior as
+ * `normalizeActiveConnection`; deliberate.
+ */
+function dropOutOfBoundsMaxOutputTokens(settings: AnycodeSettings): AnycodeSettings {
+  const connections = settings.provider.connections;
+  let stripped = false;
+  const healed = connections.map((connection) => {
+    const value = connection.maxOutputTokens;
+    if (value === undefined || (value >= MAX_OUTPUT_TOKENS_MIN && value <= MAX_OUTPUT_TOKENS_MAX)) return connection;
+    stripped = true;
+    // Spread before delete (same discipline as the FX3-L1 G-C arms above):
+    // never rebuild the connection from named fields.
+    const rest: ProviderConnection = { ...connection };
+    delete rest.maxOutputTokens;
+    return rest;
+  });
+  return stripped ? { ...settings, provider: { ...settings.provider, connections: healed } } : settings;
 }
 
 /** ~/.anycode directory permissions (owner-only traversal). */
@@ -229,7 +266,9 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
   // TASK.45 W12-FIX2 §2: repair the active<->non-empty invariant on BOTH
   // success arms (ok and read_only) in memory — a newer-version file must
   // read out healed too, without this binary ever writing it back.
-  return { settings: normalizeActiveConnection(result.settings), readOnly: result.readOnly };
+  // TASK.159: out-of-bounds connection.maxOutputTokens is stripped the same
+  // way (in memory only) on both arms.
+  return { settings: dropOutOfBoundsMaxOutputTokens(normalizeActiveConnection(result.settings)), readOnly: result.readOnly };
 }
 
 /** Atomically persist settings.json (0644). Caller is responsible for the read-only guard. */

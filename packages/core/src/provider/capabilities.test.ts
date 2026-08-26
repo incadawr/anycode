@@ -76,7 +76,11 @@ describe("output and reasoning capability resolution", () => {
     { id: "glm-basic", contextWindow: 128_000, maxOutputTokens: 16_384 },
   ] };
 
-  it("resolves override > catalog > non-Claude fallback while leaving Claude native", () => {
+  // TASK.159: an above-catalog override now CLAMPS (see the dedicated describe
+  // below); this pin keeps the pre-existing arms that must not move — a legal
+  // below-catalog override, the bare catalog hint, the non-Claude DEFAULT
+  // fallback, and Claude's undefined native ceiling.
+  it("resolves override ≤ catalog > fallback while leaving Claude native", () => {
     expect(resolveMaxOutputTokens("glm-5.2", entry, 1234)).toBe(1234);
     expect(resolveMaxOutputTokens("glm-5.2", entry, undefined)).toBe(32_768);
     // TASK.150: an on-prem / non-catalog model id lands on the DEFAULT, and 8_192
@@ -101,6 +105,52 @@ describe("output and reasoning capability resolution", () => {
     expect(resolveEffortLevels("custom-model", entry)).toBeUndefined();
     expect(resolveEffortLevels("glm-basic", entry)).toBeUndefined();
     expect(resolveEffortLevels("glm-5.2", undefined)).toBeUndefined();
+  });
+});
+
+// ── TASK.159 slice A: a hand-typed override no longer outruns the catalog — ──
+
+describe("resolveMaxOutputTokens override × catalog clamp (TASK.159)", () => {
+  const entry: CatalogProviderEntry = { id: "z-ai", name: "Z.AI", baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
+    { id: "glm-5.2", contextWindow: 200_000, maxOutputTokens: 32_768, reasoning: true, effortLevels: ["off", "high", "max"] },
+    { id: "claude-test", contextWindow: 200_000, reasoning: true },
+    { id: "glm-basic", contextWindow: 128_000, maxOutputTokens: 16_384 },
+  ] };
+
+  it("override > catalog clamps to the catalog ceiling and reports it via onClamp", () => {
+    const clamps: Array<{ requested: number; clamped: number; modelId: string }> = [];
+    // A 65_536 override on a model pinned to 32_768 is a guaranteed provider
+    // 400; the resolved value must be the ceiling, and the clamp must be
+    // observable without spying on console.
+    expect(resolveMaxOutputTokens("glm-5.2", entry, 65_536, (requested, clamped, modelId) => clamps.push({ requested, clamped, modelId }))).toBe(32_768);
+    expect(clamps).toEqual([{ requested: 65_536, clamped: 32_768, modelId: "glm-5.2" }]);
+  });
+
+  it("a clamp at exact equality never fires (override == catalog passes, no report)", () => {
+    const clamps: number[] = [];
+    expect(resolveMaxOutputTokens("glm-5.2", entry, 32_768, (requested) => clamps.push(requested))).toBe(32_768);
+    expect(clamps).toEqual([]);
+  });
+
+  it("override < catalog passes through unchanged and onClamp stays silent", () => {
+    const clamps: number[] = [];
+    expect(resolveMaxOutputTokens("glm-basic", entry, 4_096, (requested) => clamps.push(requested))).toBe(4_096);
+    expect(clamps).toEqual([]);
+  });
+
+  it("no catalog ceiling for the matched model -> override wins as-is, unclamped", () => {
+    // claude-test declares no maxOutputTokens; the claude- branch sits AFTER
+    // the lookup, so an explicit override still reaches the wire untouched.
+    expect(resolveMaxOutputTokens("claude-test", entry, 65_536)).toBe(65_536);
+  });
+
+  it("no entry / no model match -> override passes through (TASK.151 not regressed)", () => {
+    expect(resolveMaxOutputTokens("glm-5.2", undefined, 999_999)).toBe(999_999);
+    expect(resolveMaxOutputTokens("on-prem-model", entry, 999_999)).toBe(999_999);
+  });
+
+  it("without an onClamp argument the clamp still resolves correctly (callers unchanged)", () => {
+    expect(resolveMaxOutputTokens("glm-5.2", entry, 65_536)).toBe(32_768);
   });
 });
 

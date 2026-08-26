@@ -233,6 +233,57 @@ export function maxOutputPresetSelection(raw: string): string {
   return MAX_OUTPUT_TOKEN_PRESETS.find((preset) => preset.value === trimmed)?.id ?? "custom";
 }
 
+/** Local literal (TASK.159), same convention as host-env.ts's `ENV_MAX_OUTPUT_TOKENS` — renderer modules don't import main, let alone core. */
+const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
+
+/**
+ * Hint under the "Max output tokens" field while ANYCODE_MAX_OUTPUT_TOKENS is
+ * live (TASK.159): the env rung always beats what this field saves
+ * (`fillFromSettings` never overwrites a boot-provided slot), so an edited cap
+ * would silently do nothing — say so instead of letting the field pretend to
+ * work. `null` (no hint) when the variable isn't overriding. Exported for
+ * direct testing (no jsdom in this package's vitest config, see file
+ * docstring).
+ */
+export function maxOutputTokensEnvHint(envOverrides: readonly string[]): string | null {
+  return envOverrides.includes(ENV_MAX_OUTPUT_TOKENS)
+    ? `${ENV_MAX_OUTPUT_TOKENS} is set in the environment — it overrides this field for every new session.`
+    : null;
+}
+
+/**
+ * The number a BLANK "Max output tokens" field resolves to for the selected
+ * model (TASK.159), naming what the old "(provider default)" placeholder left
+ * blind: a catalog model with a declared ceiling answers `catalog: N`,
+ * anything without one answers the snapshot-projected core default
+ * (`provider default: N`) — EXCEPT claude-* ids, which core deliberately sends
+ * no cap for; they keep showing no number, as today. A non-blank field
+ * suppresses the hint (the field itself already shows what wins). The default
+ * rides the snapshot (`defaultMaxOutputTokens`), never hardcoded here — the
+ * renderer cannot import core; an older snapshot without the field degrades to
+ * the claude-like no-number display rather than inventing a figure. Exported
+ * for direct testing (no jsdom in this package's vitest config, see file
+ * docstring).
+ */
+export function maxOutputTokensEffectiveHint(
+  entry: CatalogSummaryEntry | undefined,
+  modelId: string,
+  defaultMaxOutputTokens: number | undefined,
+  raw: string,
+): string | null {
+  if (raw.trim() !== "") {
+    return null;
+  }
+  const matched = entry?.models.find((candidate) => candidate.id === modelId);
+  if (matched?.maxOutputTokens !== undefined) {
+    return `catalog: ${matched.maxOutputTokens}`;
+  }
+  if (modelId.startsWith("claude-") || defaultMaxOutputTokens === undefined) {
+    return null;
+  }
+  return `provider default: ${defaultMaxOutputTokens}`;
+}
+
 /**
  * The model suggestions a catalog connection's drawer offers (datalist +
  * click-to-fill chips): the LIVE list when one exists — this session's fetch
@@ -482,6 +533,18 @@ export function ConnectionDrawerFields({
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
+  // TASK.159 hints for the Max-output-tokens field (pure logic above): whether
+  // the env rung currently silences this field, and what number a blank field
+  // actually resolves to. Both read only state already in hand — the drawer's
+  // own proxySnapshot and the projected catalog/snapshot.
+  const motEnvHint = proxySnapshot === null ? null : maxOutputTokensEnvHint(proxySnapshot.envOverrides);
+  const motDefaultHint = maxOutputTokensEffectiveHint(
+    selectedEntry,
+    model.trim(),
+    proxySnapshot?.defaultMaxOutputTokens,
+    maxOutputTokens,
+  );
+
   async function reloadSnapshot(): Promise<void> {
     await store.getState().load();
   }
@@ -854,6 +917,11 @@ export function ConnectionDrawerFields({
           onChange={(e) => setMaxOutputTokens(e.target.value)}
         />
       </label>
+      {/* TASK.159: one line naming the number a blank field resolves to
+            (catalog ceiling vs the projected core default); claude-* and a
+            non-blank field show none — pure logic above, claude still gets no
+            number today. Outside the <label>, same reason the chips are. */}
+      {motDefaultHint !== null && <div className="settings-field-hint">{motDefaultHint}</div>}
       {/* Click-to-fill presets (TASK.150 slice 3): the same chip affordance
           the Model field above already offers, for the one field whose
           sensible values cannot be looked up anywhere — a self-hosted
@@ -903,6 +971,12 @@ export function ConnectionDrawerFields({
       </div>
 
 
+      {/* TASK.159: shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
+      {motEnvHint !== null && (
+        <div className="settings-field-hint" role="note">
+          {motEnvHint}
+        </div>
+      )}
       {/* TASK.141: one instance of the same picker the engine panes and the
           Network pane render — CONTROLLED here, because a connection's ref
           rides this drawer's own create/update payload rather than a channel of

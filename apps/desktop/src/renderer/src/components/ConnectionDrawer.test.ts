@@ -20,6 +20,8 @@ import {
   resolveCreatedCustomProviderId,
   resolveDrawerOAuthStartArgs,
   transportAfterNoAuthToggle,
+  maxOutputTokensEnvHint,
+  maxOutputTokensEffectiveHint,
 } from "./ConnectionDrawer.js";
 
 function conn(id: string, providerId = "z-ai"): ProviderConnection {
@@ -461,5 +463,71 @@ describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same uncon
     const payload = buildConnectionUpdatePayload({ ...base, maxOutputTokens: "" });
     expect(payload.maxOutputTokens).toBe("");
     expect("maxOutputTokens" in payload).toBe(true);
+  });
+});
+
+describe("maxOutputTokensEnvHint (TASK.159: the env rung silences this field)", () => {
+  it("names the variable and says the field is overridden while it is live", () => {
+    expect(maxOutputTokensEnvHint(["ANYCODE_MAX_OUTPUT_TOKENS"])).toBe(
+      "ANYCODE_MAX_OUTPUT_TOKENS is set in the environment — it overrides this field for every new session.",
+    );
+  });
+
+  it("null when the variable is absent, alone among others, or the list is empty", () => {
+    expect(maxOutputTokensEnvHint([])).toBeNull();
+    expect(maxOutputTokensEnvHint(["ANYCODE_API_KEY", "ANYCODE_MODEL"])).toBeNull();
+  });
+
+  // Same fixture style as SettingsScreen.test.ts's isEnvOverridden block.
+  it("fires on the exact name only, not a prefix", () => {
+    expect(maxOutputTokensEnvHint(["ANYCODE_MAX_OUTPUT_TOKENS_X"])).toBeNull();
+  });
+});
+
+describe("maxOutputTokensEffectiveHint (TASK.159: name the number a blank field resolves to)", () => {
+  const GLM: CatalogSummaryEntry = {
+    id: "z-ai",
+    name: "Z.AI",
+    authKind: "api_key",
+    models: [
+      { id: "glm-5.3", name: "GLM-5.3", maxOutputTokens: 131_072 },
+      { id: "glm-4.6", name: "GLM-4.6" },
+    ],
+  };
+  const CLAUDE: CatalogSummaryEntry = {
+    id: "anthropic",
+    name: "Anthropic",
+    authKind: "api_key",
+    models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }],
+  };
+
+  it("a catalog model with a declared ceiling answers catalog: N", () => {
+    expect(maxOutputTokensEffectiveHint(GLM, "glm-5.3", 32_768, "")).toBe("catalog: 131072");
+  });
+
+  it("a catalog model WITHOUT a ceiling answers provider default: N from the snapshot projection", () => {
+    expect(maxOutputTokensEffectiveHint(GLM, "glm-4.6", 32_768, "")).toBe("provider default: 32768");
+  });
+
+  it("an unknown model id (no entry / no match) also answers provider default: N", () => {
+    expect(maxOutputTokensEffectiveHint(undefined, "qwen3-selfhosted", 32_768, "")).toBe("provider default: 32768");
+    expect(maxOutputTokensEffectiveHint(GLM, "not-in-catalog", 32_768, "")).toBe("provider default: 32768");
+  });
+
+  // Core sends claude-* no cap when nothing is set — the drawer keeps showing
+  // no number for them rather than inventing one.
+  it("claude-* without a catalog ceiling shows no number, as today", () => {
+    expect(maxOutputTokensEffectiveHint(CLAUDE, "claude-sonnet-5", 32_768, "")).toBeNull();
+    expect(maxOutputTokensEffectiveHint(undefined, "claude-3-haiku", 32_768, "")).toBeNull();
+  });
+
+  it("a non-blank field suppresses the hint (the field itself already shows what wins)", () => {
+    expect(maxOutputTokensEffectiveHint(GLM, "glm-5.3", 32_768, "65536")).toBeNull();
+    expect(maxOutputTokensEffectiveHint(GLM, "glm-5.3", 32_768, "   ")).toBe("catalog: 131072");
+  });
+
+  it("an older snapshot without defaultMaxOutputTokens degrades to no number, never an invented figure", () => {
+    expect(maxOutputTokensEffectiveHint(GLM, "glm-4.6", undefined, "")).toBeNull();
+    expect(maxOutputTokensEffectiveHint(undefined, "qwen3-selfhosted", undefined, "")).toBeNull();
   });
 });

@@ -190,6 +190,53 @@ describe("loadSettings — normalizeActiveConnection repairs the active<->non-em
   });
 });
 
+// ── TASK.159 slice D: load drops out-of-bounds connection.maxOutputTokens (read as absent) ──
+
+describe("loadSettings — out-of-bounds connection maxOutputTokens is read as absent (TASK.159)", () => {
+  /** A settings.json with one connection carrying the given (hand-editable) ceiling. */
+  function withCeiling(maxOutputTokens: number): string {
+    return JSON.stringify({
+      ...cloneDefaults(),
+      provider: providerV2Multi("A", [{ ...conn("A"), maxOutputTokens }]),
+    });
+  }
+
+  it("§3.1 a hand-edited 512 (< 1_024) loads with maxOutputTokens absent; sibling fields intact", async () => {
+    await writeFile(settingsPath(), withCeiling(512), "utf8");
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.connections[0]?.maxOutputTokens).toBeUndefined();
+    expect("maxOutputTokens" in (result.settings.provider.connections[0] ?? {})).toBe(false);
+    // Other sections untouched by the strip.
+    expect(result.settings.provider.connections[0]?.id).toBe("A");
+    expect(result.settings.provider.activeConnectionId).toBe("A");
+    expect(result.settings.ui.theme).toBe(DEFAULT_SETTINGS.ui.theme);
+  });
+
+  it("§3.2 an absurd 2_000_000 (> 1_000_000) also reads as absent", async () => {
+    await writeFile(settingsPath(), withCeiling(2_000_000), "utf8");
+    const result = await loadSettings(settingsPath());
+    expect(result.settings.provider.connections[0]?.maxOutputTokens).toBeUndefined();
+  });
+
+  it("§3.3 pin: in-bounds values (the boundaries included) survive untouched", async () => {
+    await writeFile(settingsPath(), withCeiling(1_024), "utf8");
+    expect((await loadSettings(settingsPath())).settings.provider.connections[0]?.maxOutputTokens).toBe(1_024);
+    await writeFile(settingsPath(), withCeiling(65536), "utf8");
+    expect((await loadSettings(settingsPath())).settings.provider.connections[0]?.maxOutputTokens).toBe(65536);
+    await writeFile(settingsPath(), withCeiling(1_000_000), "utf8");
+    expect((await loadSettings(settingsPath())).settings.provider.connections[0]?.maxOutputTokens).toBe(1_000_000);
+  });
+
+  // §3.4 — same discipline as normalizeActiveConnection: heal is in-memory
+  // only; the document on disk keeps the bad value until some future write.
+  it("§3.4 the strip stays in memory: settings.json is not rewritten at load", async () => {
+    await writeFile(settingsPath(), withCeiling(512), "utf8");
+    await loadSettings(settingsPath());
+    const onDisk = JSON.parse(await readFile(settingsPath(), "utf8"));
+    expect(onDisk.provider.connections[0]?.maxOutputTokens).toBe(512);
+  });
+});
+
 describe("withSettingsFileLock — the ONE per-path settings mutation lock (FX3-L1 G-C)", () => {
   it("serializes two critical sections on the same path (the second never starts before the first ends)", async () => {
     const events: string[] = [];
