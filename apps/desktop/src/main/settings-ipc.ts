@@ -488,8 +488,8 @@ export interface CatalogEntryShape {
   name: string;
   auth: { kind: string };
   baseUrl: string;
-  /** `reasoning`/`effortLevels` (TASK.131) ride along for the draft-time effort picker; `string[]`-typed to keep this module core-import-free. */
-  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: readonly string[] }[];
+  /** `reasoning`/`effortLevels` (TASK.131) and `maxOutputTokens` (TASK.159) ride along for the draft-time effort picker / ceiling display; `string[]`-typed to keep this module core-import-free. */
+  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: readonly string[]; maxOutputTokens?: number }[];
   /** True for the literal `custom` sentinel (TASK.43 W5-FIX); main supplies it from core's `isCustomProvider`. */
   isCustom?: boolean;
   /** Wire transport fields (TASK.43 W5); `string`-typed to keep this module core-import-free. */
@@ -503,8 +503,9 @@ export interface CatalogEntryShape {
  * only — no baseUrl secret, no key). `needsBaseUrl` is set for an entry with an
  * empty baseUrl (e.g. the `custom`/`vllm` endpoints, whose baseUrl lives in
  * settings). `isCustom` (TASK.43 W5-FIX) / `defaultTransport` /
- * `supportedTransports` / `authOptional` (TASK.43 W5) are projected only when
- * the source entry declares them, so a legacy caller's plain
+ * `supportedTransports` / `authOptional` (TASK.43 W5) — and each model's
+ * `maxOutputTokens` (TASK.159) — are projected only when the source entry/model
+ * declares them, so a legacy caller's plain
  * `{id,name,auth,baseUrl,models}` fixtures keep producing the exact same output
  * as before this wave.
  */
@@ -520,6 +521,9 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
       // model still projects to exactly `{id,name}`.
       ...(m.reasoning === true ? { reasoning: true } : {}),
       ...(m.effortLevels !== undefined ? { effortLevels: [...m.effortLevels] } : {}),
+      // TASK.159: same conditional-spread precedent — only when the catalog
+      // declares a ceiling, so legacy fixtures stay byte-identical.
+      ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
     })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : {}),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
@@ -654,6 +658,16 @@ const patchSchema = z.record(z.string(), z.unknown());
 // ── snapshot projection ──
 
 /**
+ * TASK.159: pin of packages/core/src/types/config.ts's DEFAULT_MAX_OUTPUT_TOKENS
+ * (32_768). This module sits on the IPC boundary beside shared/settings.ts, so
+ * it must stay core-import-free — the default crosses to the renderer as this
+ * literal (`SettingsSnapshot.defaultMaxOutputTokens`) instead of an import.
+ * When core's default moves, move BOTH pins together (this one and the
+ * renderer-facing field); the renderer never hardcodes the number.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
+
+/**
  * Builds the SettingsSnapshot the renderer renders Settings/Welcome from without
  * a second round-trip. Loads settings fresh (main is the sole writer, atomic),
  * projects vault statuses (NEVER a value), and computes providerReady +
@@ -697,6 +711,10 @@ async function snapshotFrom(
     envOverrides: envOverrides(deps.bootEnv),
     readOnly,
     ...(deps.catalog !== undefined ? { catalog: deps.catalog } : {}),
+    // TASK.159: the fallback output ceiling a blank "Max output tokens"
+    // resolves to for a model no catalog entry knows — projected so the
+    // renderer can NAME the effective number without importing core.
+    defaultMaxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     ...(deps.getAppVersion !== undefined ? { appVersion: deps.getAppVersion() } : {}),
   };
 }

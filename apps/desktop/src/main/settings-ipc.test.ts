@@ -597,6 +597,29 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
+  it("TASK.159: projects each model's maxOutputTokens only when declared, leaving legacy fixtures byte-identical", () => {
+    const summary = projectCatalogSummary([
+      {
+        id: "z-ai",
+        name: "Z.AI",
+        auth: { kind: "api_key" },
+        baseUrl: "https://z",
+        models: [
+          { id: "glm-5.3", name: "GLM-5.3", maxOutputTokens: 131_072 },
+          { id: "glm-4.6", name: "GLM-4.6" },
+          { id: "sonnet-ish" },
+        ],
+      },
+    ]);
+    // Conditional spread, same precedent as reasoning/effortLevels above: only
+    // the declaring model gains the key, at its exact position in the object.
+    expect(summary[0]?.models).toEqual([
+      { id: "glm-5.3", name: "GLM-5.3", maxOutputTokens: 131_072 },
+      { id: "glm-4.6", name: "GLM-4.6" },
+      { id: "sonnet-ish" },
+    ]);
+  });
+
   it("projects defaultTransport/supportedTransports/authOptional only when the source entry declares them (TASK.43 W5)", () => {
     const summary = projectCatalogSummary([
       {
@@ -926,6 +949,15 @@ describe("snapshot — catalog projection + oauth readiness (slice 2.5)", () => 
     ]);
     const snap = await buildSettingsSnapshot(makeDeps({ catalog, catalogIds: CATALOG_IDS }));
     expect(snap.catalog).toEqual(catalog);
+  });
+
+  // TASK.159: the renderer cannot import core (shared/settings.ts rule), so
+  // core's DEFAULT_MAX_OUTPUT_TOKENS crosses the wire as this snapshot field.
+  // Reverting the pin (either direction — hand-hardcoding 32_768 here or
+  // dropping the projection) turns this red.
+  it("TASK.159: carries defaultMaxOutputTokens = core's DEFAULT_MAX_OUTPUT_TOKENS (32_768)", async () => {
+    const snap = await buildSettingsSnapshot(makeDeps());
+    expect(snap.defaultMaxOutputTokens).toBe(32_768);
   });
 
   it("providerReady uses the oauth credentialKey (the active connection's oauth key present)", async () => {

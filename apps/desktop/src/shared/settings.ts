@@ -627,8 +627,13 @@ export interface CatalogSummaryEntry {
    * that rule stays a pure function over them. Both optional/additive: an
    * older main, or a model the catalog says nothing about, projects neither
    * and the renderer then offers no effort level at all.
+   *
+   * TASK.159: a model's `maxOutputTokens` joins the same way — projected only
+   * when the catalog declares it (conditional spread), optional/additive so
+   * legacy fixtures stay byte-identical. The drawer uses it to NAME the
+   * effective ceiling for an otherwise-blank field instead of guessing.
    */
-  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: string[] }[];
+  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: string[]; maxOutputTokens?: number }[];
   needsBaseUrl?: boolean;
   /**
    * True ONLY for the literal `custom` sentinel entry (TASK.43 W5-FIX). Distinct
@@ -672,6 +677,15 @@ export interface SettingsSnapshot {
    * builder. Renderers treat an absent value as an empty catalog.
    */
   catalog?: CatalogSummary;
+  /**
+   * TASK.159: core's `DEFAULT_MAX_OUTPUT_TOKENS`, pinned main-side
+   * (settings-ipc.ts) and projected here — the renderer cannot import core
+   * (this file's own rule, slice 2.5 §4.1), so the fallback a BLANK
+   * "Max output tokens" field resolves to must cross the wire like this
+   * instead of being hardcoded in renderer code. Always present on every
+   * snapshot main builds; optional so older snapshots stay assignable.
+   */
+  defaultMaxOutputTokens?: number;
   /**
    * The running app's version (TASK.49), sourced from `app.getVersion()` — in
    * dev that resolves to `apps/desktop/package.json`'s `version`, in a packaged

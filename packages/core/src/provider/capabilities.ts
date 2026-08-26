@@ -53,14 +53,35 @@ export function resolveContextWindow(
   return model?.contextWindow;
 }
 
+/**
+ * Output-token resolution (TASK.150 → TASK.159): precedence is an explicit
+ * override clamped by the matched catalog model's `maxOutputTokens` ceiling,
+ * else the catalog hint, else the DEFAULT / Claude-native fallbacks. A
+ * below-catalog override is legal (deliberate economy) and passes through
+ * untouched; an above-catalog one is clamped to the ceiling — a request the
+ * provider will 400 is worth nothing. When there is no catalog entry, no model
+ * match, or no declared ceiling there is nothing to clamp against and the
+ * override wins as-is (TASK.151: an on-prem endpoint whose model the catalog
+ * does not know must not gain a say). The claude- special case sits AFTER the
+ * lookup, as before. Clamping is never silent: `onClamp`, when provided, fires
+ * exactly once, only on an actual clamp — env handle and connection field
+ * arrive here indistinguishably, so a stale catalog pinning a model low would
+ * otherwise quietly swallow even the escape hatch, undiagnosable.
+ */
 export function resolveMaxOutputTokens(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   override: number | undefined,
+  onClamp?: (requested: number, clamped: number, modelId: string) => void,
 ): number | undefined {
-  if (override !== undefined) return override;
   const matched = entry?.models.find((candidate) => candidate.id === modelId);
-  if (matched?.maxOutputTokens !== undefined) return matched.maxOutputTokens;
+  const ceiling = matched?.maxOutputTokens;
+  if (override !== undefined) {
+    if (ceiling === undefined || override <= ceiling) return override;
+    onClamp?.(override, ceiling, modelId);
+    return ceiling;
+  }
+  if (ceiling !== undefined) return ceiling;
   return modelId.startsWith("claude-") ? undefined : DEFAULT_MAX_OUTPUT_TOKENS;
 }
 

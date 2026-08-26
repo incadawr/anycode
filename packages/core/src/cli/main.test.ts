@@ -26,6 +26,7 @@ import {
   renderSkillsTable,
   renderWorkflowsTable,
   runCli,
+  buildCliEndpointConfig,
 } from "./main.js";
 import { NodeFileSystemAdapter } from "../adapters/node/index.js";
 import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js";
@@ -36,6 +37,7 @@ import type { ModelPort, ModelRequest } from "../ports/index.js";
 import type { McpServerStatus, McpTransportFactory, McpWireTransport } from "../ports/mcp.js";
 import type { SkillMeta } from "../ports/skills.js";
 import type { WorkflowDefinition, WorkflowMeta } from "../ports/workflow.js";
+import { resolveIncludeUsage } from "../provider/openai-compatible.js";
 import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js";
 import type { PersonaDefinition } from "../subagents/personas.js";
 import { backgroundCapableBashTool, bashKillTool, bashOutputTool, createDefaultToolRegistry } from "../tools/index.js";
@@ -4072,5 +4074,120 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/L4): default byte-lo
     expect(await runPromise).toBe(0);
     expect(existsSync(join(workspace, ".anycode"))).toBe(false);
     expect(getText()).not.toContain("[warn] telemetry");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.158: the ONE endpoint-literal builder both production port constructions
+// (baseModelPort + /model hot-swap factory) funnel through. Pins that the CLI
+// actually forwards a resolved includeUsage instead of dropping it.
+describe("buildCliEndpointConfig (TASK.158 endpoint-builder)", () => {
+  const retryOverride = { maxRetries: 2 };
+  /** Minimal CoreEnvConfig carrying only the fields the builder reads. */
+  function envConfig(baseUrl: string, includeUsage?: boolean): Parameters<typeof buildCliEndpointConfig>[0]["envConfig"] {
+    return {
+      baseUrl,
+      model: "unused-here",
+      ...(includeUsage !== undefined ? { includeUsage } : {}),
+    } as unknown as Parameters<typeof buildCliEndpointConfig>[0]["envConfig"];
+  }
+  function catalogEntry(name: string | undefined) {
+    return name === undefined
+      ? undefined
+      : ({ name, baseUrl: "", models: [] } as unknown as Parameters<typeof buildCliEndpointConfig>[0]["catalogEntry"]);
+  }
+
+  it("default-on for openai-chat-completions: spreads includeUsage exactly once", () => {
+    const cfg = buildCliEndpointConfig({
+      transport: "openai-chat-completions",
+      envConfig: envConfig("https://gw.example.com/v1"),
+      catalogEntry: undefined,
+      retryOverride,
+      includeUsageResolved: true,
+      model: "gpt-oss-120b",
+    });
+    expect(cfg).toEqual({
+      transport: "openai-chat-completions",
+      baseUrl: "https://gw.example.com/v1",
+      apiKey: undefined,
+      model: "gpt-oss-120b",
+      retry: { maxRetries: 2 },
+      includeUsage: true,
+    });
+  });
+
+  it("unset verdict for anthropic-messages (includeUsageResolved=false) omits the field entirely — byte-identical legacy shape", () => {
+    const cfg = buildCliEndpointConfig({
+      transport: "anthropic-messages",
+      envConfig: envConfig("https://api.anthropic.com"),
+      catalogEntry: catalogEntry("Anthropic"),
+      retryOverride,
+      includeUsageResolved: false,
+      model: "claude-x",
+    });
+    expect("includeUsage" in cfg).toBe(false);
+    expect(cfg.transport).toBe("anthropic-messages");
+    expect(cfg.providerName).toBe("Anthropic");
+  });
+
+  it("an explicit ANYCODE_INCLUDE_USAGE override wins over the transport default", () => {
+    // Escape hatch: openai-chat-completions but the user forced usage off.
+    expect(
+      buildCliEndpointConfig({
+        transport: "openai-chat-completions",
+        envConfig: envConfig("https://gw.example.com/v1", false),
+        catalogEntry: undefined,
+        retryOverride: {},
+        includeUsageResolved: resolveIncludeUsage("openai-chat-completions", false),
+        model: "m",
+      }),
+    ).not.toHaveProperty("includeUsage");
+    // And forcing ON where the default is off (anthropic) honours the env too.
+    expect(
+      buildCliEndpointConfig({
+        transport: "anthropic-messages",
+        envConfig: envConfig("https://api.anthropic.com", true),
+        catalogEntry: undefined,
+        retryOverride: {},
+        includeUsageResolved: resolveIncludeUsage("anthropic-messages", true),
+        model: "m",
+      }),
+    ).toHaveProperty("includeUsage", true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// TASK.159: the catalog clamp at boot is not silent — an override above the
+// catalog ceiling prints one `[warn]` line naming the model, both numbers and
+// the catalog as the reason (same channel as the other boot warns).
+// ─────────────────────────────────────────────────────────────────────────
+describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
+  it("an ANYCODE_MAX_OUTPUT_TOKENS above the catalog ceiling prints one [warn] clamp line at boot", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const output = new PassThrough();
+    const errorOutput = new PassThrough();
+    const getText = collectOutput(output);
+    const getErr = collectOutput(errorOutput);
+    // DeepSeek pins deepseek-chat to 8 192 — a 65 536 override must clamp and warn.
+    const exitCode = await runCli({
+      argv: ["-p", "probe the clamp warning"],
+      env: {
+        ...makeTitleTestEnv(dbPath),
+        ANYCODE_BASE_URL: "https://api.deepseek.com/anthropic",
+        ANYCODE_MODEL: "deepseek-chat",
+        ANYCODE_MAX_OUTPUT_TOKENS: "65536",
+      },
+      input: new PassThrough(),
+      output,
+      errorOutput,
+      modelPort: new CountingModelPort(),
+      cwd: workspace,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(getErr()).toContain("[warn] deepseek-chat max output tokens clamped: 65536 > provider catalog ceiling, using 8192");
+    // Exactly one line, on the diagnostics channel only.
+    expect(getErr().match(/max output tokens clamped/g)).toHaveLength(1);
+    expect(getText()).not.toContain("clamped");
   });
 });

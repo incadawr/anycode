@@ -68,8 +68,11 @@ import { buildRepoMapPromptSection, loadRepoMapConfig, type RepoMapConfig } from
 import { resolveImageInput, resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "../provider/capabilities.js";
 import { getBuiltinCatalog } from "../provider/catalog-data.js";
 import type { ProviderTransport } from "../provider/catalog.js";
+import type { CatalogProviderEntry } from "../provider/catalog.js";
+import type { EndpointConfig } from "../provider/endpoint.js";
 import { ENV_API_KEY, ENV_MODEL, loadEnvConfig } from "../provider/env.js";
 import { AiSdkModelPort } from "../provider/model-port.js";
+import { resolveIncludeUsage } from "../provider/openai-compatible.js";
 import type { RetryPolicy } from "../provider/retry.js";
 import { createSkillPort } from "../skills/discovery.js";
 import { withSubagents } from "../subagents/index.js";
@@ -106,6 +109,7 @@ import {
   REPO_MAP_MIN_TOKENS,
   REPO_MAP_WINDOW_FRACTION,
 } from "../types/config.js";
+import type { CoreEnvConfig } from "../types/config.js";
 import { type PermissionMode } from "../types/permissions.js";
 import { loadImageAttachment } from "../util/images.js";
 import { loadWebSearchConfig, type ResolvedWebSearchBackend } from "../websearch/index.js";
@@ -157,6 +161,41 @@ export type { AllowCommandParse, SlashCommandDeps } from "./commands.js";
 function basenameOf(path: string): string {
   const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return slash === -1 ? path : path.slice(slash + 1);
+}
+
+/**
+ * The ONE place the CLI builds an `EndpointConfig` for `AiSdkModelPort`
+ * (TASK.158 P3): both production construction sites below (`baseModelPort`
+ * and the `/model` hot-swap factory) funnel through this helper so the
+ * include-usage wiring is pinned by a unit test instead of two eyeball
+ * comparisons. Field order mirrors the previous inline literals byte-for-byte;
+ * `includeUsage` is CONDITIONAL, never defaulted here —
+ * `resolveIncludeUsage` (called once after the transport ladder, where the
+ * resolved transport lives) already produced the verdict the caller passes as
+ * part of `includeUsageResolved`, and a `false` spreads nothing, keeping the
+ * anthropic-messages path byte-identical to the pre-TASK.158 literals.
+ * `options?.modelPort` short-circuits BEFORE this helper at both call sites,
+ * exactly as before — an injected test port bypasses config construction.
+ */
+export function buildCliEndpointConfig(args: {
+  transport: ProviderTransport;
+  envConfig: CoreEnvConfig;
+  catalogEntry: CatalogProviderEntry | undefined;
+  retryOverride: Partial<RetryPolicy>;
+  /** Resolved usage-streaming verdict (`resolveIncludeUsage` output); true ⇒ spread the flag in. */
+  includeUsageResolved: boolean;
+  model: string;
+}): EndpointConfig {
+  const { transport, envConfig, catalogEntry, retryOverride, includeUsageResolved, model } = args;
+  return {
+    transport,
+    baseUrl: envConfig.baseUrl,
+    apiKey: envConfig.apiKey,
+    model,
+    ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
+    ...(Object.keys(retryOverride).length > 0 ? { retry: retryOverride } : {}),
+    ...(includeUsageResolved ? { includeUsage: true as const } : {}),
+  };
 }
 
 export interface CliOptions {
@@ -402,16 +441,26 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     ...(envConfig.maxRetries !== undefined ? { maxRetries: envConfig.maxRetries } : {}),
     ...(envConfig.stallTimeoutMs !== undefined ? { stallTimeoutMs: envConfig.stallTimeoutMs } : {}),
   };
+
+  // TASK.158: resolved ONCE here, right after the transport ladder, because the
+  // verdict is transport-conditional — an explicit ANYCODE_INCLUDE_USAGE wins
+  // outright; unset defaults to true only for `openai-chat-completions` (the
+  // one transport that honours stream_options.include_usage). Both port
+  // constructions below share the verdict via buildCliEndpointConfig.
+  const includeUsage = resolveIncludeUsage(providerTransport, envConfig.includeUsage);
+
   const baseModelPort =
     options?.modelPort ??
-    new AiSdkModelPort({
-      transport: providerTransport,
-      baseUrl: envConfig.baseUrl,
-      apiKey: envConfig.apiKey,
-      model: envConfig.model,
-      ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
-      ...(Object.keys(retryOverride).length > 0 ? { retry: retryOverride } : {}),
-    });
+    new AiSdkModelPort(
+      buildCliEndpointConfig({
+        transport: providerTransport,
+        envConfig,
+        catalogEntry,
+        retryOverride,
+        includeUsageResolved: includeUsage,
+        model: envConfig.model,
+      }),
+    );
   // Port factory for /model and Agent-tool model overrides (design
 
   // this closure (A9 — the scrub only clears the live env, not the captured
@@ -1457,7 +1506,15 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
               // to the DEFAULT window (never a stale previous model's window).
               const contextWindow =
                 resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-              loopConfig.maxOutputTokens = resolveMaxOutputTokens(id, catalogEntry, envConfig.maxOutputTokens);
+              loopConfig.maxOutputTokens = resolveMaxOutputTokens(
+                id,
+                catalogEntry,
+                envConfig.maxOutputTokens,
+                (requested, clamped, modelId) =>
+                  bootWrite(
+                    `[warn] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}\n`,
+                  ),
+              );
               loopConfig.reasoningEffort = resolveReasoningEffort(id, catalogEntry, selectedReasoningEffort);
               liveContextWindow = contextWindow;
               loopConfig.systemPrompt = composeSystemPrompt();

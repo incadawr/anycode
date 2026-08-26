@@ -114,6 +114,9 @@ import "../settings.css";
 
 const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 
+/** TASK.159: the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
+const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
+
 export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "network" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
@@ -869,6 +872,11 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   const connections = snapshot.settings.provider.connections;
   const activeConnectionId = snapshot.settings.provider.activeConnectionId;
   const envOverridden = isEnvOverridden(snapshot.envOverrides, API_KEY_ENV_VAR);
+  // TASK.159: a SECOND, independent env override — the output-token ceiling.
+  // Not folded into `envOverridden`: that boolean gates the API-key banner,
+  // whose "overrides every stored connection" sentence is simply false for the
+  // ceiling (the field still stores; only new sessions are beaten by env).
+  const maxOutputEnvOverridden = isEnvOverridden(snapshot.envOverrides, ENV_MAX_OUTPUT_TOKENS);
   // Captured as a plain local (not re-read off `snapshot` inside the nested
   // functions below) so TS's null-narrowing of `snapshot` — which does not
   // cross a nested function boundary — stays sound (same discipline the old
@@ -959,6 +967,19 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
             <span>
               {API_KEY_ENV_VAR} is set in the environment — it overrides every stored connection for new
               sessions. Your saved connections are unaffected and remain selected for later.
+            </span>
+          </div>
+        )}
+        {/* TASK.159: same banner treatment, its OWN text — the ceiling var
+            doesn't "override every stored connection" like the key does; it
+            only beats the Max-output-tokens field of whatever connection new
+            sessions launch with. */}
+        {maxOutputEnvOverridden && (
+          <div className="connection-env-banner" role="status">
+            <span className="connection-env-banner-label">Environment override</span>
+            <span>
+              {ENV_MAX_OUTPUT_TOKENS} is set in the environment — it overrides the connections' max output tokens field for
+              new sessions, including this drawer's own.
             </span>
           </div>
         )}

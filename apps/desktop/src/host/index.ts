@@ -1381,14 +1381,18 @@ async function boot(): Promise<void> {
     // setPort between turns is instantly visible to every holder. Name/shape are
     // preserved so config/Session/refineTitle are unchanged.
     const modelPortFactory = (m: string): ModelPort =>
-      new AiSdkModelPort({
-        transport: providerTransport,
-        baseUrl: envConfig.baseUrl,
-        apiKey: envConfig.apiKey,
-        model: m,
-        ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
-        ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
-      }, hostDiagnosticSink);
+      new AiSdkModelPort(
+        {
+          transport: providerTransport,
+          baseUrl: envConfig.baseUrl,
+          apiKey: envConfig.apiKey,
+          model: m,
+          ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
+          ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
+          ...(includeUsage ? { includeUsage: true } : {}),
+        },
+        hostDiagnosticSink,
+      );
     const modelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
     // Mutable source of truth for the live model (mirror of the CLI's
     // `currentModel`, loopConfig.mode's model twin). Boot-frozen readers below
@@ -1654,7 +1658,13 @@ async function boot(): Promise<void> {
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens);
-    const bootMaxOutputTokens = resolveMaxOutputTokens(envConfig.model, catalogEntry, envConfig.maxOutputTokens);
+    const bootMaxOutputTokens = resolveMaxOutputTokens(
+      envConfig.model,
+      catalogEntry,
+      envConfig.maxOutputTokens,
+      (requested, clamped, modelId) =>
+        console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
+    );
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry);
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
@@ -2239,7 +2249,13 @@ async function boot(): Promise<void> {
         // back to the DEFAULT window (never a stale previous model's window).
         const contextWindow =
           resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-        config.maxOutputTokens = resolveMaxOutputTokens(id, catalogEntry, envConfig.maxOutputTokens);
+        config.maxOutputTokens = resolveMaxOutputTokens(
+          id,
+          catalogEntry,
+          envConfig.maxOutputTokens,
+          (requested, clamped, modelId) =>
+            console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
+        );
         const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier);
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
