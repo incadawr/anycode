@@ -10,7 +10,11 @@
 
 import { describe, expect, it } from "vitest";
 import type { EndpointConfig } from "./endpoint.js";
-import { createOpenAICompatibleLanguageModel, OPENAI_COMPATIBLE_PROVIDER_NAME } from "./openai-compatible.js";
+import {
+  createOpenAICompatibleLanguageModel,
+  OPENAI_COMPATIBLE_PROVIDER_NAME,
+  resolveIncludeUsage,
+} from "./openai-compatible.js";
 
 function config(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
   return {
@@ -62,5 +66,23 @@ describe("createOpenAICompatibleLanguageModel", () => {
     expect(() => createOpenAICompatibleLanguageModel(config({ includeUsage: true }))).not.toThrow();
     expect(() => createOpenAICompatibleLanguageModel(config({ includeUsage: false }))).not.toThrow();
     expect(() => createOpenAICompatibleLanguageModel(config())).not.toThrow();
+  });
+});
+
+describe("resolveIncludeUsage (TASK.158)", () => {
+  it("an explicit setting wins for every transport (true and false)", () => {
+    for (const transport of ["openai-chat-completions", "anthropic-messages", "openai-responses"] as const) {
+      expect(resolveIncludeUsage(transport, true)).toBe(true);
+      expect(resolveIncludeUsage(transport, false)).toBe(false);
+    }
+  });
+
+  it("unset defaults to true only for openai-chat-completions", () => {
+    expect(resolveIncludeUsage("openai-chat-completions", undefined)).toBe(true);
+  });
+
+  it("unset defaults to false for anthropic-messages and openai-responses", () => {
+    expect(resolveIncludeUsage("anthropic-messages", undefined)).toBe(false);
+    expect(resolveIncludeUsage("openai-responses", undefined)).toBe(false);
   });
 });

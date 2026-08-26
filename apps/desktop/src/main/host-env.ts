@@ -66,9 +66,21 @@ export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 /**
  * Wire transport override (TASK.43 W5). Literal mirrors core's
  * `provider/env.ts` `ENV_PROVIDER_TRANSPORT` — same local-literal convention
- * as every other var above (host-env stays core-free).
+ * as every other var above (host-env stays core-free, never value-imports the
+ * core runtime).
  */
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
+/**
+ * Usage-streaming override (TASK.158): `1/true/on` or `0/false/off`; an
+ * explicit value wins over resolveIncludeUsage's transport-conditional default
+ * (default-on for openai-chat-completions, the escape hatch for strict
+ * servers). Literal mirror of core's `provider/env.ts`
+ * `ENV_INCLUDE_USAGE` — same local-literal convention (host-env stays
+ * core-free). Registered in PROVIDER_ENV_KEYS so the settings UI shows the
+ * env-override warning; there is deliberately NO settings field or
+ * `fillFromSettings` step: ambient/shell env is the desktop user's opt-out.
+ */
+export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
 /**
  * The provider connection pinned to a tab's session (TASK.45 W10). Informational
  * for the host: it is NOT a secret and NOT a credential — the resolved
@@ -321,6 +333,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_REASONING_EFFORT,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
+  ENV_INCLUDE_USAGE,
 ];
 
 /** True when an env var is present AND non-blank (mirrors loadEnvConfig's own test). */

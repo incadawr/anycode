@@ -18,6 +18,7 @@ export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
 export const ENV_STALL_TIMEOUT_MS = "ANYCODE_STALL_TIMEOUT_MS";
 export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
+export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
 
 const PROVIDER_TRANSPORT_VALUES: readonly ProviderTransport[] = [
   "anthropic-messages",
@@ -38,7 +39,10 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
  * invalid value throws (never a silent anthropic fallback). ANYCODE_API_KEY is
  * required when the resolved transport is undefined or `anthropic-messages`
  * (byte-compat: that path is fail-closed), and optional for the two OpenAI
- * transports (no-auth local endpoints).
+ * transports (no-auth local endpoints). ANYCODE_INCLUDE_USAGE is an optional
+ * boolean override of the `stream_options.include_usage` default (TASK.158);
+ * it is carried verbatim — the transport-conditional DEFAULT is applied by
+ * `resolveIncludeUsage`, not here, so unset stays undefined.
  * Throws a descriptive error naming the offending variable.
  */
 export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConfig {
@@ -72,6 +76,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
 
   const imageInput = readImageInputOverride(env);
   const reasoningEffort = readReasoningEffort(env);
+  const includeUsage = readOptionalBoolean(env, ENV_INCLUDE_USAGE);
 
   return {
     apiKey,
@@ -88,6 +93,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
     stallTimeoutMs,
     imageInput,
     providerTransport,
+    includeUsage,
   };
 }
 
@@ -136,6 +142,26 @@ function readImageInputOverride(env: NodeJS.ProcessEnv): ImageInputOverride | un
     return raw;
   }
   console.warn(`Invalid ${ENV_IMAGE_INPUT}: "${raw}" is not "on" or "off" — ignoring`);
+  return undefined;
+}
+
+/**
+ * Parses ANYCODE_INCLUDE_USAGE (TASK.158) into an explicit boolean override.
+ * Both boolean vocabularies are accepted — `on|off` per the ANYCODE_IMAGE_INPUT
+ * precedent, `1|0` per the integer-var habit — because the var is read by
+ * humans editing shell profiles/export lines. Like `readImageInputOverride`
+ * (and unlike `readProviderTransport`), a bad value is NON-FATAL: warn + leave
+ * undefined, so a typo degrades to the transport-conditional default resolved
+ * by `resolveIncludeUsage` rather than killing startup.
+ */
+function readOptionalBoolean(env: NodeJS.ProcessEnv, name: string): boolean | undefined {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return undefined;
+  }
+  if (raw === "1" || raw === "true" || raw === "on") return true;
+  if (raw === "0" || raw === "false" || raw === "off") return false;
+  console.warn(`Invalid ${name}: "${raw}" is not 1/true/on or 0/false/off — ignoring`);
   return undefined;
 }
 

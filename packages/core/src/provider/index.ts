@@ -18,6 +18,7 @@ export { createLanguageModel } from "./language-model.js";
 export {
   createOpenAICompatibleLanguageModel,
   OPENAI_COMPATIBLE_PROVIDER_NAME,
+  resolveIncludeUsage,
 } from "./openai-compatible.js";
 export {
   createOpenAIResponsesLanguageModel,

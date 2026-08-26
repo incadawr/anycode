@@ -47,6 +47,13 @@ export interface CoreEnvConfig {
    * `anthropic-messages` (TASK.43 §0.4).
    */
   providerTransport?: ProviderTransport;
+  /**
+   * Explicit usage-streaming override (ANYCODE_INCLUDE_USAGE; TASK.158):
+   * `1/true/on` → true, `0/false/off` → false, invalid ⇒ warn + ignore.
+   * Undefined means "no opinion" — the transport-conditional DEFAULT is
+   * applied by `resolveIncludeUsage`, never here.
+   */
+  includeUsage?: boolean;
 }
 
 /** Main-loop turn budget when not overridden (subagents get a lower budget in Phase 3). */

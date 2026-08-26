@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
+  ENV_INCLUDE_USAGE,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
@@ -890,6 +891,10 @@ describe("envOverrides", () => {
 
   it("includes ANYCODE_MAX_OUTPUT_TOKENS (TASK.150 ladder addition)", () => {
     expect(envOverrides({ ANYCODE_MAX_OUTPUT_TOKENS: "65536" })).toEqual([ENV_MAX_OUTPUT_TOKENS]);
+  });
+
+  it("includes ANYCODE_INCLUDE_USAGE (TASK.158 ladder addition)", () => {
+    expect(envOverrides({ ANYCODE_INCLUDE_USAGE: "off" })).toEqual([ENV_INCLUDE_USAGE]);
   });
 });
 

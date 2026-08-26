@@ -32,10 +32,13 @@ export interface EndpointConfig {
   /** Model id to request from the endpoint. */
   model: string;
   /**
-   * Ask the endpoint to stream token usage (`stream_options.include_usage` on the
-   * OpenAI chat-completions transport). A capability, not a constant: strict
-   * OpenAI-compatible servers reject the unknown field. Ignored by
-   * anthropic-messages, which always streams usage.
+   * Ask the endpoint to stream token usage (`stream_options.include_usage` on
+   * the OpenAI chat-completions transport). The transport-conditional DEFAULT
+   * is owned by `resolveIncludeUsage` (TASK.158): production construction
+   * sites resolve it once per boot and only spread the field in on an
+   * affirmative verdict, so an explicit false here means "omit
+   * stream_options" — the `ANYCODE_INCLUDE_USAGE=0|false|off` strict-server
+   * escape hatch. Ignored by anthropic-messages, which always streams usage.
    */
   includeUsage?: boolean;
   /** Overrides over DEFAULT_RETRY_POLICY; maxRetries 0 disables retries (design §2.9). */

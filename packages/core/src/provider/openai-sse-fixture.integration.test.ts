@@ -27,6 +27,7 @@ import type { ToolDeclaration } from "../types/tools.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { AiSdkModelPort } from "./model-port.js";
+import { resolveIncludeUsage } from "./openai-compatible.js";
 
 interface CapturedRequest {
   method: string | undefined;
@@ -211,7 +212,24 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.
     expect(captured!.headers["x-api-key"]).toBeUndefined();
   });
 
-  it("omits stream_options entirely when includeUsage is not set (strict-server capability, not a constant)", async () => {
+  it("requests usage on the PRODUCTION DEFAULT path: resolveIncludeUsage(openai-chat-completions, unset) turns stream_options on", async () => {
+    responseChunks = [
+      { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } },
+    ];
+    const request: ModelRequest = { messages: [{ role: "user", content: "hi" }], tools: [] };
+
+    // The exact composition production performs at the transport-resolution
+    // point (TASK.158): no explicit setting (undefined env), openai-chat-
+    // completions transport → the resolver's default-on verdict feeds the port.
+    const events = await collect(
+      portFor({ includeUsage: resolveIncludeUsage("openai-chat-completions", undefined) }).streamText(request),
+    );
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(captured!.body["stream_options"]).toEqual({ include_usage: true });
+  });
+
+  it("omits stream_options entirely when the EndpointConfig omits includeUsage (factory level; production default comes from resolveIncludeUsage)", async () => {
     responseChunks = [
       { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } },
     ];
