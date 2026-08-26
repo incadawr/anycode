@@ -8,8 +8,10 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
 import {
+  MAX_OUTPUT_TOKEN_PRESETS,
   buildConnectionUpdatePayload,
   liveModelSuggestions,
+  maxOutputPresetSelection,
   maxOutputTokensField,
   modelAfterCatalogPrefill,
   modelSaveBlocked,
@@ -357,6 +359,50 @@ describe("modelSaveBlocked (TASK.108-A: a catalog connection cannot save an empt
   });
 });
 
+describe("maxOutputPresetSelection (TASK.150 slice 3: owner asked for presets so the round numbers need not be recalled)", () => {
+  it("reads a blank field as the Default chip, not as 'nothing selected'", () => {
+    expect(maxOutputPresetSelection("")).toBe("default");
+    expect(maxOutputPresetSelection("   ")).toBe("default");
+  });
+
+  it("lights the chip whose number the field holds exactly", () => {
+    expect(maxOutputPresetSelection("8192")).toBe("8192");
+    expect(maxOutputPresetSelection("16384")).toBe("16384");
+    expect(maxOutputPresetSelection("32768")).toBe("32768");
+    expect(maxOutputPresetSelection(" 32768 ")).toBe("32768");
+  });
+
+  it("falls to Custom for a valid value no chip offers", () => {
+    expect(maxOutputPresetSelection("50000")).toBe("custom");
+    expect(maxOutputPresetSelection("1024")).toBe("custom");
+  });
+
+  it("falls to Custom mid-typing and for malformed input, never lighting a chip the field does not hold", () => {
+    expect(maxOutputPresetSelection("5")).toBe("custom");
+    expect(maxOutputPresetSelection("819")).toBe("custom");
+    expect(maxOutputPresetSelection("abc")).toBe("custom");
+    // Numerically 8192, but not what the chip writes — matching loosely here
+    // would claim the row produced a value the user typed by hand.
+    expect(maxOutputPresetSelection("08192")).toBe("custom");
+    expect(maxOutputPresetSelection("8192.0")).toBe("custom");
+  });
+
+  it("offers only values the field itself accepts, so no chip can write a value Save then refuses", () => {
+    for (const preset of MAX_OUTPUT_TOKEN_PRESETS) {
+      expect(maxOutputTokensField(preset.value).ok).toBe(true);
+      expect(maxOutputPresetSelection(preset.value)).toBe(preset.id);
+    }
+  });
+
+  it("keeps Default distinct from pinning the current default value", () => {
+    const blank = MAX_OUTPUT_TOKEN_PRESETS.find((p) => p.id === "default");
+    expect(blank?.value).toBe("");
+    // Both mean 32768 today; only the blank one keeps following the default.
+    expect(maxOutputTokensField("")).toEqual({ ok: true, value: "" });
+    expect(maxOutputTokensField("32768")).toEqual({ ok: true, value: 32768 });
+  });
+});
+
 describe("maxOutputTokensField (TASK.150: on-prem/custom endpoints get no catalog model list to guess a cap from)", () => {
   it("blank (or whitespace-only) is the clear sentinel, not invalid", () => {
     expect(maxOutputTokensField("")).toEqual({ ok: true, value: "" });
@@ -389,6 +435,8 @@ describe("maxOutputTokensField (TASK.150: on-prem/custom endpoints get no catalo
     expect(maxOutputTokensField("-1")).toEqual({ ok: false });
   });
 });
+
+
 
 describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same unconditional-send discipline as transport/proxyRef)", () => {
   const base = {

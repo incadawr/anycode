@@ -878,7 +878,16 @@ export function settingsProviderMenuAction(deps: HandlerDeps, connectionId: stri
 
 export function settingsProviderDrawerSet(
   deps: HandlerDeps,
-  args: { providerId?: string; label?: string; model?: string; transport?: string; baseUrl?: string; apiKey?: string },
+  args: {
+    providerId?: string;
+    label?: string;
+    model?: string;
+    transport?: string;
+    baseUrl?: string;
+    maxOutputTokens?: string;
+    maxOutputTokensPreset?: string;
+    apiKey?: string;
+  },
 ): Promise<unknown> {
   return deps.callFacade("settingsProviderDrawerSet", [args]);
 }

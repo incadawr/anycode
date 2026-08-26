@@ -206,6 +206,34 @@ const MAX_OUTPUT_TOKENS_ERROR =
   "Max output tokens must be a whole number between 1024 and 1000000 — leave it empty for the provider default.";
 
 /**
+ * The click-to-fill presets offered under the "Max output tokens" field
+ * (TASK.150 slice 3). Blank is a real entry rather than the absence of one:
+ * an empty field sends no cap at all and keeps tracking
+ * `DEFAULT_MAX_OUTPUT_TOKENS`, whereas pinning today's identical number
+ * freezes the connection if that default ever moves again.
+ */
+export const MAX_OUTPUT_TOKEN_PRESETS: readonly { readonly id: string; readonly label: string; readonly value: string }[] = [
+  { id: "default", label: "Default", value: "" },
+  { id: "8192", label: "8192", value: "8192" },
+  { id: "16384", label: "16384", value: "16384" },
+  { id: "32768", label: "32768", value: "32768" },
+];
+
+/**
+ * Which preset chip reads as active for the field's current raw string, with
+ * `"custom"` covering everything the presets do not spell exactly — a
+ * hand-typed 50000, and equally a half-typed "5". Matched on the trimmed
+ * STRING rather than numerically on purpose: `08192` and `8192.0` are values
+ * the field tolerates but no chip wrote, and lighting 8192 for them would
+ * claim the row put them there. Exported for direct testing (no jsdom in
+ * this package's vitest config, see file docstring).
+ */
+export function maxOutputPresetSelection(raw: string): string {
+  const trimmed = raw.trim();
+  return MAX_OUTPUT_TOKEN_PRESETS.find((preset) => preset.value === trimmed)?.id ?? "custom";
+}
+
+/**
  * The model suggestions a catalog connection's drawer offers (datalist +
  * click-to-fill chips): the LIVE list when one exists — this session's fetch
  * result first, else the ids persisted on the connection by an earlier fetch
@@ -345,6 +373,7 @@ export function ConnectionDrawerFields({
   footer,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
+  const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
   const secretInputRef = useRef<HTMLInputElement>(null);
   const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
   // TASK.141: the settings document behind the proxy picker's seed. Read here
@@ -426,6 +455,7 @@ export function ConnectionDrawerFields({
   // The connection-level base URL (vLLM/legacy templates) — NOT the new-custom
   // endpoint's own record baseUrl, which has its own field below.
   const showBaseUrl = shouldShowBaseUrlField(selectedEntry) && !isNewCustomEndpoint;
+  const maxOutputPreset = maxOutputPresetSelection(maxOutputTokens);
   const transportChoices = transportOptions(selectedEntry);
   const authKind = selectedEntry?.authKind ?? "api_key";
   // A custom:<id> connection's credential lives on the custom provider's OWN
@@ -452,7 +482,6 @@ export function ConnectionDrawerFields({
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
-
   async function reloadSnapshot(): Promise<void> {
     await store.getState().load();
   }
@@ -813,6 +842,7 @@ export function ConnectionDrawerFields({
             and a coarser step would make the browser paint the peers' own 32000
             as `:invalid`. */}
         <input
+          ref={maxOutputTokensInputRef}
           className="settings-field-input"
           type="number"
           min={1024}
@@ -824,6 +854,41 @@ export function ConnectionDrawerFields({
           onChange={(e) => setMaxOutputTokens(e.target.value)}
         />
       </label>
+      {/* Click-to-fill presets (TASK.150 slice 3): the same chip affordance
+          the Model field above already offers, for the one field whose
+          sensible values cannot be looked up anywhere — a self-hosted
+          endpoint has no curated model list in the catalog, so a bare number
+          input asks the user to recall the round numbers unaided. Buttons sit
+          OUTSIDE the <label> above: nested in it, a click would also be a
+          click on the input it labels. */}
+      <div className="connection-drawer-preset-chips" role="group" aria-label="Max output token presets">
+        {MAX_OUTPUT_TOKEN_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            className={`connection-drawer-preset-chip${
+              maxOutputPreset === preset.id ? " connection-drawer-preset-chip-selected" : ""
+            }`}
+            disabled={readOnly}
+            onClick={() => setMaxOutputTokens(preset.value)}
+          >
+            {preset.label}
+          </button>
+        ))}
+        {/* "Custom" reports as much as it acts: it lights up on its own
+            whenever the field holds something no preset spells, and clicking
+            it hands focus to that field rather than writing a value. */}
+        <button
+          type="button"
+          className={`connection-drawer-preset-chip${
+            maxOutputPreset === "custom" ? " connection-drawer-preset-chip-selected" : ""
+          }`}
+          disabled={readOnly}
+          onClick={() => maxOutputTokensInputRef.current?.focus()}
+        >
+          Custom
+        </button>
+      </div>
       {/* TASK.150: on-prem/custom endpoints (vllm/custom/openrouter) carry no
           curated model list in the catalog, so every such connection falls
           back to the same DEFAULT_MAX_OUTPUT_TOKENS — this field is the only
@@ -836,6 +901,7 @@ export function ConnectionDrawerFields({
         write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if
         output keeps cutting off.
       </div>
+
 
       {/* TASK.141: one instance of the same picker the engine panes and the
           Network pane render — CONTROLLED here, because a connection's ref

@@ -1007,16 +1007,21 @@
   gap: 0.7rem;
 }
 
-/* Click-to-fill model chips under the drawer's Model field (live-fetched
-   list, or static catalog hints before any fetch). */
-.connection-drawer-model-chips {
+/* Click-to-fill chips under the drawer's Model field (live-fetched list,
+   or static catalog hints before any fetch) and under "Max output
+   tokens" (TASK.150 slice 3). One set of rules on purpose: both rows
+   are the same gesture — click a suggestion, it lands in the field
+   above — so they must not drift into two chip languages. */
+.connection-drawer-model-chips,
+.connection-drawer-preset-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
 }
 
-.connection-drawer-model-chip {
+.connection-drawer-model-chip,
+.connection-drawer-preset-chip {
   padding: 0.2rem 0.55rem;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -1026,12 +1031,14 @@
   cursor: pointer;
 }
 
-.connection-drawer-model-chip:hover:not(:disabled) {
+.connection-drawer-model-chip:hover:not(:disabled),
+.connection-drawer-preset-chip:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--text-dim);
 }
 
-.connection-drawer-model-chip-selected {
+.connection-drawer-model-chip-selected,
+.connection-drawer-preset-chip-selected {
   color: var(--accent, var(--text));
   border-color: var(--accent, var(--text-dim));
 }
