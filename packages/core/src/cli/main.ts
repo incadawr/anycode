@@ -422,21 +422,31 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     options?.modelPortFactory ??
     (options?.modelPort === undefined
       ? (m: string) =>
-          new AiSdkModelPort({
-            transport: providerTransport,
-            baseUrl: envConfig.baseUrl,
-            apiKey: envConfig.apiKey,
-            model: m,
-            ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
-            ...(Object.keys(retryOverride).length > 0 ? { retry: retryOverride } : {}),
-          })
+          new AiSdkModelPort(
+            buildCliEndpointConfig({
+              transport: providerTransport,
+              envConfig,
+              catalogEntry,
+              retryOverride,
+              includeUsageResolved: includeUsage,
+              model: m,
+            }),
+          )
       : undefined);
 
   // ContextManager, subagents and titling — a /model setPort re-routes them all
   // between turns. Name kept `modelPort` so loopConfig/titling need no changes.
   const modelPort = new SwitchableModelPort(baseModelPort);
   const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens);
-  const bootMaxOutputTokens = resolveMaxOutputTokens(envConfig.model, catalogEntry, envConfig.maxOutputTokens);
+  const bootMaxOutputTokens = resolveMaxOutputTokens(
+    envConfig.model,
+    catalogEntry,
+    envConfig.maxOutputTokens,
+    (requested, clamped, modelId) =>
+      bootWrite(
+        `[warn] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}\n`,
+      ),
+  );
   let selectedReasoningEffort = envConfig.reasoningEffort ?? "off";
   const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, selectedReasoningEffort);
   let liveContextWindow = bootContextWindow ?? DEFAULT_CONTEXT_WINDOW_TOKENS;

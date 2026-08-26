@@ -225,6 +225,7 @@ import {
   resolveContextWindow,
   resolveEffortLevels,
   resolveImageInput,
+  resolveIncludeUsage,
   resolveMaxOutputTokens,
   resolveReasoningEffort,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -1362,6 +1363,14 @@ async function boot(): Promise<void> {
     // anthropic-messages is the final legacy fallback.
     const providerTransport: ProviderTransport =
       envConfig.providerTransport ?? catalogEntry?.defaultTransport ?? "anthropic-messages";
+
+    // TASK.158: usage streaming resolved ONCE, immediately after the transport
+    // ladder (mirror of the CLI's resolution point): an explicit
+    // ANYCODE_INCLUDE_USAGE wins outright; unset defaults to true only for
+    // `openai-chat-completions`, the one transport that honours
+    // stream_options.include_usage. The hot-swap factory below spreads the flag
+    // in conditionally, so `false` (strict-server escape hatch) sends nothing.
+    const includeUsage = resolveIncludeUsage(providerTransport, envConfig.includeUsage);
 
     // Slice P7.15 (F14, design §2.1): mid-session model switch mirrors the CLI
     // `/model` recipe (host-side hot-swap, NOT a respawn). The factory rebuilds a

@@ -12,6 +12,7 @@ import {
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
+  ENV_INCLUDE_USAGE,
   ENV_MAX_TURNS,
   ENV_MODEL,
   ENV_STALL_TIMEOUT_MS,
@@ -208,6 +209,44 @@ describe("loadEnvConfig", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe("ANYCODE_INCLUDE_USAGE (TASK.158)", () => {
+    it("leaves includeUsage undefined when unset", () => {
+      const config = loadEnvConfig(envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" }));
+      expect(config.includeUsage).toBeUndefined();
+    });
+
+    it("parses the true vocabulary: 1 / true / on", () => {
+      for (const value of ["1", "true", "on"]) {
+        expect(
+          loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_INCLUDE_USAGE]: value }))
+            .includeUsage,
+        ).toBe(true);
+      }
+    });
+
+    it("parses the false vocabulary: 0 / false / off", () => {
+      for (const value of ["0", "false", "off"]) {
+        expect(
+          loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_INCLUDE_USAGE]: value }))
+            .includeUsage,
+        ).toBe(false);
+      }
+    });
+
+    it("warns and leaves includeUsage undefined on an invalid value (yes — no throw)", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const config = loadEnvConfig(
+          envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_INCLUDE_USAGE]: "yes" }),
+        );
+        expect(config.includeUsage).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(ENV_INCLUDE_USAGE));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
   });
 
   it("throws naming the offending variable on non-integer Phase 1 optionals", () => {

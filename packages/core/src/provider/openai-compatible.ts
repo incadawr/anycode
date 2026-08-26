@@ -8,6 +8,7 @@
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
+import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { normalizeExplicitBaseUrl } from "./endpoint.js";
 
@@ -29,9 +30,11 @@ export const OPENAI_COMPATIBLE_PROVIDER_NAME = "openaiCompatible";
  *    receive an `Authorization` header at all — `createOpenAICompatible` only
  *    adds it when `apiKey` is passed, so an `undefined` config.apiKey is
  *    forwarded as absence, never as an empty-string key;
- *  - `includeUsage` is a capability (some strict chat-completions servers
- *    reject the unknown `stream_options` field), so it is opt-in per
- *    `EndpointConfig.includeUsage` rather than always-on.
+ *  - `includeUsage` arrives from `resolveIncludeUsage` (TASK.158), which IS the
+ *    default authority: production construction sites resolve the transport-
+ *    conditional default there and only set the field on an affirmative
+ *    verdict, so this factory stays a pure capability forwarder — it spreads
+ *    the flag in when and only when it is explicitly `true`.
  */
 export function createOpenAICompatibleLanguageModel(config: EndpointConfig): LanguageModel {
   const provider = createOpenAICompatible({
@@ -42,4 +45,28 @@ export function createOpenAICompatibleLanguageModel(config: EndpointConfig): Lan
     ...(config.includeUsage === true ? { includeUsage: true } : {}),
   });
   return provider.chatModel(config.model);
+}
+
+/**
+ * The default authority for `stream_options.include_usage` (TASK.158): an
+ * explicit setting wins outright, and unset resolves to true exactly when the
+ * transport is `openai-chat-completions` — the only transport here that honours
+ * the flag (`anthropic-messages` always streams usage and ignores it;
+ * `openai-responses` is out of scope for TASK.158 and stays off).
+ *
+ * History of the default: the original opt-in rationale ("strict
+ * chat-completions servers reject the unknown `stream_options` field") was
+ * never measured against a real server. It is hereby deliberately downgraded
+ * to a minority risk with `ANYCODE_INCLUDE_USAGE=0|false|off` as the escape
+ * hatch — leaving it opt-in kept the session token counter dead at 0 for every
+ * user who never hand-edits a config, which is strictly worse than a
+ * hypothetical strict server whose operator can now flip one env var.
+ *
+ * Called once at each transport-resolution point (CLI `cli/main.ts`, desktop
+ * host `host/index.ts`) AFTER the transport ladder, then carried into every
+ * `EndpointConfig` those sites build.
+ */
+export function resolveIncludeUsage(transport: ProviderTransport, explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  return transport === "openai-chat-completions";
 }
