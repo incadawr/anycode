@@ -74,22 +74,32 @@ const ENTRIES: CatalogProviderEntry[] = [
     // missing. Corrected below. docs.z.ai/guides/vlm/glm-5.3-flash adds the
     // flash row: "Text parameters are consistent with GLM-5.3" (1M context,
     // same low/high/max family), "`thinking.type` only supports `enabled`;
-    // thinking cannot be disabled". That page never states a max output
-    // length, so `maxOutputTokens` stays OMITTED (resolveMaxOutputTokens then
-    // falls back honestly instead of a guessed number); its multimodality is
-    // demonstrated only via the native API's Chat Completions `image_url`
-    // examples, never confirmed through the Anthropic-messages endpoint this
-    // entry speaks, so `imageInput` also stays OMITTED (fail-closed;
-    // ANYCODE_IMAGE_INPUT=on remains the escape hatch). The GLM wire mapping
-    // (`reasoningRequestOptions` in model-port.ts) was fixed in the same slice
-    // so a selected `low` reaches the wire as `low` instead of silently
-    // upgrading to `high` — otherwise advertising `low` here would have been a
-    // fresh lie.
+    // thinking cannot be disabled". Its multimodality is demonstrated only via
+    // the native API's Chat Completions `image_url` examples, never confirmed
+    // through the Anthropic-messages endpoint this entry speaks, so
+    // `imageInput` stays OMITTED (fail-closed; ANYCODE_IMAGE_INPUT=on remains
+    // the escape hatch). The GLM wire mapping (`reasoningRequestOptions` in
+    // model-port.ts) was fixed in the same slice so a selected `low` reaches
+    // the wire as `low` instead of silently upgrading to `high` — otherwise
+    // advertising `low` here would have been a fresh lie.
+    //
+    // TASK.170 (2026-08-29, re-verified via direct fetch of the raw page, not
+    // just the summarizing fetch): the flash page's spec card now reads
+    // "Input Modality: Video / Image / Text / File", "Output Modality: Text",
+    // "Context Length: 1M", "Maximum Output Tokens: 128K" — the "max output
+    // length is never stated" claim above was true on 2026-08-28 but the page
+    // has since been filled in (site was mid-launch: TASK.163's own comment
+    // flagged "API coming soon" for 5.3 the day before). `maxOutputTokens` is
+    // filled in below from that spec card. Without it, a subagent spawned on
+    // glm-5.3-flash silently got DEFAULT_MAX_OUTPUT_TOKENS (32_768, a ~4x drop
+    // from the parent glm-5.3's 131_072) — the TASK.170 defect. `imageInput`
+    // stays OMITTED regardless: the spec card's input modality is not itself
+    // confirmation the Anthropic-messages endpoint accepts image_url on this
+    // model, and that verification is a separate concern from output tokens.
     models: [
-      // GLM-5.3/5.3-flash/5.2: 1M context (docs.z.ai spec boxes). 5.3 and 5.2
-      // document a 128K max output; 5.3-flash's page never states one.
+      // GLM-5.3/5.3-flash/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
       { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
-      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
       { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
       { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
@@ -133,6 +143,26 @@ const ENTRIES: CatalogProviderEntry[] = [
     // is thinking-only (no "off"), k3 natively declares low/high/max efforts.
     // k3-256k is the same K3 served under its context-suffixed id (both appear
     // in the endpoint's live model list), so it carries K3's capabilities.
+    //
+    // TASK.170 (2026-08-29): `maxOutputTokens` is deliberately OMITTED on all
+    // four rows below. The product's own docs
+    // (kimi.com/code/docs/en/kimi-code/models, "Model Configuration" table,
+    // fetched and read as raw HTML — not just the summarized version) list
+    // Model ID / version / description / speed / context window / reasoning /
+    // availability / multimodal input for k3, k3-256k, kimi-for-coding and
+    // kimi-for-coding-highspeed, and there is no output-ceiling row or
+    // sentence anywhere on that page. The Moonshot Open Platform's separate
+    // docs (platform.kimi.ai, api.moonshot.ai) DO document a K3
+    // max_completion_tokens default of 131_072 (settable up to 1_048_576), but
+    // that is a different product on a different base URL — the comment above
+    // already established sk-kimi-* keys 401 against that platform entry, so
+    // its numbers are not evidence for what THIS endpoint (api.kimi.com/coding)
+    // actually enforces. Copying that sibling's number here would be exactly
+    // the guess this file's own convention (effortLevels/reasoning) forbids.
+    // Until kimi.com/code publishes an output ceiling or support confirms one,
+    // these four resolve through `resolveMaxOutputTokens`'s DEFAULT stub
+    // (32_768, TASK.150) — now observable via `onStubFallback` (TASK.170)
+    // instead of silently.
     id: "kimi",
     name: "Kimi (kimi.com subscription)",
     baseUrl: "https://api.kimi.com/coding",

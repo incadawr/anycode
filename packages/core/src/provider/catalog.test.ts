@@ -144,19 +144,26 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   // TASK.163 (2026-08-28): docs.z.ai/guides/vlm/glm-5.3-flash states "Text
   // parameters are consistent with GLM-5.3" (1M-token context window) and
   // "`thinking.type` only supports `enabled`; thinking cannot be disabled" —
-  // same low/high/max family as glm-5.3, no `off`. Max output length is NOT
-  // specified anywhere on that page, so `maxOutputTokens` stays OMITTED
-  // (resolveMaxOutputTokens falls back honestly instead of guessing a number).
-  // Multimodality is documented only via the native API's Chat Completions
-  // image_url examples, never verified through the Anthropic-messages endpoint
-  // this catalog entry speaks, so `imageInput` also stays OMITTED (fail-closed;
-  // ANYCODE_IMAGE_INPUT=on remains the escape hatch).
-  it("declares the glm-5.3-flash row with no output ceiling and no unverified image-input claim (docs.z.ai/guides/vlm/glm-5.3-flash, accessed 2026-08-28)", () => {
+  // same low/high/max family as glm-5.3, no `off`. Multimodality is documented
+  // only via the native API's Chat Completions image_url examples, never
+  // verified through the Anthropic-messages endpoint this catalog entry
+  // speaks, so `imageInput` stays OMITTED (fail-closed; ANYCODE_IMAGE_INPUT=on
+  // remains the escape hatch).
+  //
+  // TASK.170 (2026-08-29): the page's spec card now states "Maximum Output
+  // Tokens: 128K" (re-verified via raw-HTML fetch, not just the summarized
+  // fetch, to rule out a hallucinated/conflated number) — the 2026-08-28 "not
+  // specified anywhere" claim this test used to pin no longer holds; the page
+  // was filled in after that pass. Leaving `maxOutputTokens` empty meant a
+  // subagent spawned on this model fell to DEFAULT_MAX_OUTPUT_TOKENS (32_768)
+  // instead of the real 131_072 the parent glm-5.3 already declared.
+  it("declares the glm-5.3-flash row with its documented 128K output ceiling and no unverified image-input claim (docs.z.ai/guides/vlm/glm-5.3-flash, accessed 2026-08-29)", () => {
     const flash = findCatalogEntry("z-ai")?.models.find((model) => model.id === "glm-5.3-flash");
     expect(flash).toEqual({
       id: "glm-5.3-flash",
       name: "GLM-5.3 Flash",
       contextWindow: 1_000_000,
+      maxOutputTokens: 131_072,
       reasoning: true,
       effortLevels: ["low", "high", "max"],
     });

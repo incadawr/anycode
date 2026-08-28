@@ -11,9 +11,14 @@ import { DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS } from "../typ
 import { buildChildModelSettingsResolver } from "./child-model-settings.js";
 
 // Fixture entry, model-agnostic on purpose (this module has no A2 dependency):
-// glm-5.3-flash mirrors the documented row A2 adds (no declared output
-// ceiling, 1M context, low/high/max efforts); glm-5.3 mirrors the corrected
-// row (a declared ceiling, same effort family).
+// "glm-5.3-flash" here is a deliberately synthetic stand-in for "a known
+// model with no declared output ceiling" (1M context, low/high/max efforts) —
+// it no longer mirrors the real catalog row of the same id, which gained a
+// declared 131_072 ceiling in TASK.170. "glm-5.3" mirrors the corrected row
+// (a declared ceiling, same effort family). The resolver under test is
+// exercised purely against these local models, never the real catalog, so
+// this drift is cosmetic — see capabilities.test.ts / catalog.test.ts for
+// coverage tied to the actual catalog data.
 const Z_AI_ENTRY: CatalogProviderEntry = {
   id: "z-ai",
   name: "Z.AI (GLM)",
@@ -114,5 +119,58 @@ describe("buildChildModelSettingsResolver", () => {
       reasoningEffort: undefined,
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     });
+  });
+
+  // TASK.170: onStubFallback names the child spawned on a model the catalog
+  // declares no ceiling for — the case a bare onClamp wiring cannot surface,
+  // since there is no ceiling to clamp an override against.
+
+  it("onStubFallback fires exactly once for a known model with no declared ceiling and no override", () => {
+    const stubs: Array<{ modelId: string; applied: number }> = [];
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: undefined,
+      envContextWindow: undefined,
+      onStubFallback: (modelId, applied) => stubs.push({ modelId, applied }),
+    });
+    const settings = resolve("glm-5.3-flash", "low");
+    expect(settings.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+    expect(stubs).toEqual([{ modelId: "glm-5.3-flash", applied: DEFAULT_MAX_OUTPUT_TOKENS }]);
+  });
+
+  it("onStubFallback also fires for a catalog-unknown model id (the degraded-shape branch), not only the matched-but-ceilingless one", () => {
+    const stubs: Array<{ modelId: string; applied: number }> = [];
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: undefined,
+      envContextWindow: undefined,
+      onStubFallback: (modelId, applied) => stubs.push({ modelId, applied }),
+    });
+    resolve("glm-5.3-flash-nonexistent", "high");
+    expect(stubs).toEqual([{ modelId: "glm-5.3-flash-nonexistent", applied: DEFAULT_MAX_OUTPUT_TOKENS }]);
+  });
+
+  it("onStubFallback stays silent when the catalog declares a ceiling (nothing was defaulted)", () => {
+    const stubs: unknown[] = [];
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: undefined,
+      envContextWindow: undefined,
+      onStubFallback: () => stubs.push(1),
+    });
+    resolve("glm-5.3", "high");
+    expect(stubs).toEqual([]);
+  });
+
+  it("onStubFallback stays silent when an explicit env override is supplied (nothing was defaulted)", () => {
+    const stubs: unknown[] = [];
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: 5_000,
+      envContextWindow: undefined,
+      onStubFallback: () => stubs.push(1),
+    });
+    resolve("glm-5.3-flash", "high");
+    expect(stubs).toEqual([]);
   });
 });
