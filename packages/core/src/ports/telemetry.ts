@@ -15,6 +15,14 @@
  * `sub` are all names/enums/ids by type — the privacy theorem above still
  * holds, no free-text field was added.
  *
+ * TASK.171 addition: `subagent_end.model` (the REQUESTED child model id,
+ * closing the gap where a completed child's model attribution never reached
+ * this whitelist at all) and `subagent_end.responseModel` (the provider's
+ * own model CLAIM, a separate id-typed datum — never free text, and never
+ * conflated with `model`). Owner's ruling: the request is authoritative for
+ * "which model did the child run on"; the provider's claim is kept only as
+ * distinct evidence for the open z.ai accounting investigation (TASK.174).
+ *
  * S9 addendum: `session_start.enginePreset` — an id from a closed,
  * host-validated preset table (same shape as `engine`: a name, never free
  * text). WARNING for any future reader of `mode`: the short window between
@@ -42,7 +50,16 @@ export type TelemetryEventRecord =
   | { t: "microcompact"; clearedToolResults: number; savedTokens: number }
   | { t: "context_usage"; estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" }
   | { t: "subagent_start"; agentType: string; model?: string; engine?: string }
-  | { t: "subagent_end"; status: "completed" | "max_turns" | "cancelled" | "error"; turns: number; durationMs: number }
+  | {
+      t: "subagent_end";
+      status: "completed" | "max_turns" | "cancelled" | "error";
+      turns: number;
+      durationMs: number;
+      /** REQUESTED child model id — TASK.171, same value as `subagent_start.model`. */
+      model?: string;
+      /** Provider's own model CLAIM — TASK.171/TASK.174, distinct from `model`. */
+      responseModel?: string;
+    }
   | { t: "workflow_end"; status: "completed" | "failed" | "cancelled"; completedSteps: number; totalSteps: number; durationMs: number }
   | { t: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number }
   | { t: "error" }

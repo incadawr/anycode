@@ -161,6 +161,50 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
+  // TASK.171: closes the gap where a completed child's model attribution
+  // never reached telemetry at all — `model` (the REQUESTED id) and
+  // `responseModel` (the provider's own claim) are now whitelisted onto
+  // subagent_end, field-by-field, same as every other case in this file.
+  it("subagent_end with model+responseModel (toolCallId still dropped, TASK.171 gap closed)", () => {
+    const event: AgentEvent = {
+      type: "subagent_end",
+      toolCallId: "call-2",
+      status: "completed",
+      turns: 2,
+      durationMs: 300,
+      model: "glm-5.3-flash",
+      responseModel: "glm-5.3",
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "subagent_end",
+      status: "completed",
+      turns: 2,
+      durationMs: 300,
+      model: "glm-5.3-flash",
+      responseModel: "glm-5.3",
+    });
+  });
+
+  it("subagent_end with model but no responseModel — a provider that reported nothing back never fabricates a claim", () => {
+    const event: AgentEvent = {
+      type: "subagent_end",
+      toolCallId: "call-2",
+      status: "completed",
+      turns: 2,
+      durationMs: 300,
+      model: "glm-5.3-flash",
+    };
+    const rec = telemetryRecordFor(event);
+    expect(rec).toEqual({
+      t: "subagent_end",
+      status: "completed",
+      turns: 2,
+      durationMs: 300,
+      model: "glm-5.3-flash",
+    });
+    expect(rec && "responseModel" in rec).toBe(false);
+  });
+
   it("workflow_end (toolCallId dropped)", () => {
     const event: AgentEvent = {
       type: "workflow_end",

@@ -600,6 +600,64 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
     expect(end).toBeDefined();
     expect(end && "activitySuppressed" in end).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // TASK.171: mapProgressToEvent's "end" case now bridges TWO distinct model
+  // fields — `model` (the requested id) and `responseModel` (the provider's
+  // own claim) — onto the subagent_end AgentEvent, neither one a fallback for
+  // the other.
+
+  it("bridges progress.model and progress.responseModel onto subagent_end as two distinct fields", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({
+          kind: "end",
+          status: "completed",
+          turns: 1,
+          durationMs: 5,
+          model: "glm-5.3-flash",
+          responseModel: "glm-5.3",
+        });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 5 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-model-pair", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const end = emitted.find((e) => e.type === "subagent_end");
+    expect(end).toEqual({
+      type: "subagent_end",
+      toolCallId: "call-model-pair",
+      status: "completed",
+      turns: 1,
+      durationMs: 5,
+      model: "glm-5.3-flash",
+      responseModel: "glm-5.3",
+    });
+  });
+
+  it("a provider that reports nothing back omits responseModel from subagent_end without dropping model", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 5, model: "glm-5.3-flash" });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 5 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-model-only", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const end = emitted.find((e) => e.type === "subagent_end");
+    expect(end && "model" in end && end.model).toBe("glm-5.3-flash");
+    expect(end && "responseModel" in end).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
