@@ -2645,12 +2645,13 @@ describe("run() — child capabilities resolved for the child's own model (TASK.
   });
 });
 
-describe("start progress — constructed-port identity readback (TASK.161)", () => {
-  it("reports the CONSTRUCTED port's modelId when it differs from the requested string", async () => {
-    // Contract coverage of constructed-port identity ONLY: no production port
-    // canonicalizes ids, so this divergence cannot happen live today. The point
-    // is that the card reports what the host BUILT rather than echoing the
-    // request — it is not, and must never be read as, execution identity.
+describe("start progress — requested id is authoritative (TASK.171, reverses TASK.161)", () => {
+  it("reports the REQUESTED string even when the constructed port's modelId differs", async () => {
+    // Owner's TASK.171 ruling: "модель никогда не ответит, главное какие
+    // запросы мы шлем" — the request is what we control and can prove; a
+    // port's own modelId is our construction too, not independent evidence,
+    // so it must never outrank the request even when a future port
+    // canonicalizes ids (no production port does today).
     const childPort = makeChildPort({ modelId: "glm-5.3-flash-canonical" });
     const runner = createSubagentRunner(makeParent(), {
       resolveChildModelPort: () => childPort,
@@ -2659,10 +2660,10 @@ describe("start progress — constructed-port identity readback (TASK.161)", () 
 
     await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
 
-    expect(startOf(progress).model).toBe("glm-5.3-flash-canonical");
+    expect(startOf(progress).model).toBe("glm-5.3-flash");
   });
 
-  it("a port exposing no modelId falls back to the requested string", async () => {
+  it("a port exposing no modelId still reports the requested string", async () => {
     const childPort = makeChildPort({});
     const runner = createSubagentRunner(makeParent(), {
       resolveChildModelPort: () => childPort,
@@ -2687,8 +2688,8 @@ describe("start progress — constructed-port identity readback (TASK.161)", () 
   });
 });
 
-describe("responseModel — the provider's own claim reaches subagent_end (TASK.161)", () => {
-  it("end progress carries the claim the child's port observed", async () => {
+describe("responseModel — the provider's own claim reaches subagent_end (TASK.161, telemetry gap closed by TASK.171)", () => {
+  it("end progress carries the claim the child's port observed, ALONGSIDE the requested id", async () => {
     const childPort = makeChildPort({ modelId: "glm-5.3-flash", claims: ["glm-5.3"] });
     const runner = createSubagentRunner(makeParent(), {
       resolveChildModelPort: () => childPort,
@@ -2700,22 +2701,33 @@ describe("responseModel — the provider's own claim reaches subagent_end (TASK.
     });
 
     expect(outcome.status).toBe("completed");
+    // The port's own modelId ("glm-5.3-flash", unused above the claim) plays
+    // no role here — `model` is the REQUESTED id, `responseModel` is the
+    // provider's separate claim, both recoverable off the SAME end record.
+    expect(endOf(progress).model).toBe("glm-5.3-flash");
     expect(endOf(progress).responseModel).toBe("glm-5.3");
   });
 
-  it("a port that never saw a claim leaves the key ABSENT (absence preserved as absence)", async () => {
+  it("a provider that reports nothing back leaves responseModel ABSENT without touching the requested id (TASK.171 (c))", async () => {
+    // No `claims` supplied: makeChildPort's port never sets lastResponseModel
+    // at all, mirroring a transport with no raw message_start.message.model
+    // to read (e.g. a non-anthropic-messages provider). The requested id must
+    // survive this untouched — absence of one field must never corrupt or
+    // blank the other.
     const childPort = makeChildPort({ modelId: "glm-5.3-flash" });
     const runner = createSubagentRunner(makeParent(), {
       resolveChildModelPort: () => childPort,
     });
     const progress: SubagentProgress[] = [];
 
-    await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
+    const outcome = await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
 
+    expect(outcome.status).toBe("completed");
+    expect(endOf(progress).model).toBe("glm-5.3-flash");
     expect("responseModel" in endOf(progress)).toBe(false);
   });
 
-  it("an inherited-port child reports nothing: a shared port's last claim is not attributable to it", async () => {
+  it("an inherited-port child reports no claim, but still echoes the requested id when one was made", async () => {
     const parentPort = new ScriptedModelPort((req) =>
       isChildRequest(req) ? textStep("child") : textStep("n/a"),
     );
@@ -2724,10 +2736,14 @@ describe("responseModel — the provider's own claim reaches subagent_end (TASK.
 
     await runner.run(REQ, { onProgress: (p) => progress.push(p) });
 
+    // REQ carries no `model` override and the built-in persona used here has
+    // none either, so `model` is legitimately absent too — this is the
+    // "inherited the parent's port" case, not a corruption of the field.
+    expect("model" in endOf(progress)).toBe(false);
     expect("responseModel" in endOf(progress)).toBe(false);
   });
 
-  it("bridges through parent-loop -> agentTool -> runner onto the subagent_end AgentEvent", async () => {
+  it("bridges through parent-loop -> agentTool -> runner onto the subagent_end AgentEvent, both fields intact", async () => {
     const childPort = makeChildPort({ modelId: "glm-5.3-flash", claims: ["glm-5.3"] });
     const parentPort = new ScriptedModelPort((req) =>
       lastRole(req) === "user"
@@ -2748,6 +2764,7 @@ describe("responseModel — the provider's own claim reaches subagent_end (TASK.
     const events = await collect(loop.runTurn("spawn a child on flash"));
 
     const end = events.find((e) => e.type === "subagent_end");
+    expect(end?.type === "subagent_end" && end.model).toBe("glm-5.3-flash");
     expect(end?.type === "subagent_end" && end.responseModel).toBe("glm-5.3");
     const start = events.find((e) => e.type === "subagent_start");
     expect(start?.type === "subagent_start" && start.model).toBe("glm-5.3-flash");

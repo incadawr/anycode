@@ -534,6 +534,10 @@ function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): Sub
         turns: progress.turns,
         durationMs: progress.durationMs,
         ...(progress.activitySuppressed !== undefined ? { activitySuppressed: progress.activitySuppressed } : {}),
+        // TASK.171: the requested id (same field/semantics as subagent_start's
+        // `model`) and the provider's own claim (`responseModel`) are two
+        // distinct, independently-optional fields — never conflated.
+        ...(progress.model !== undefined ? { model: progress.model } : {}),
         ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
       };
     case "attention":

@@ -202,9 +202,18 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(persona);
-  // TASK.160 §2.2: same precedence as the model-override resolution in run()
-  // (request > persona default) — the spawn identity stamped onto every
-  // telemetry record this child produces, when the parent wired a tap factory.
+  // TASK.160 §2.2, reaffirmed by TASK.171: same precedence as the
+  // model-override resolution in run() (request > persona default) — the
+  // spawn identity stamped onto every telemetry record this child produces,
+  // when the parent wired a tap factory. TASK.171 (owner's ruling — "модель
+  // никогда не ответит, главное какие запросы мы шлем"): this REQUEST ECHO
+  // is now the single authoritative answer to "which model did the child run
+  // on," used identically here and by run()'s own `requestedModel` below —
+  // never the constructed port's own identity (see the `onProgress`
+  // start/end calls in run(), which read this same formula, not
+  // `childModelPort?.modelId`). The provider's own claim (`responseModel`,
+  // read near the end of run()) is a separate, distinctly-named datum for a
+  // different question — what the provider reported, not what we asked for.
   const spawnModel = req.model ?? persona.model;
   return {
 
@@ -545,6 +554,11 @@ export function createSubagentRunner(
             status: outcome.status,
             turns: outcome.turns,
             durationMs: outcome.durationMs,
+            // TASK.171: the requested id, echoed onto the end event too (not
+            // only start) so a completed run's telemetry/end record is
+            // self-describing on its own — an engine child has no port to
+            // read a provider claim off, so `responseModel` never applies here.
+            ...(requestedModel !== undefined ? { model: requestedModel } : {}),
           });
 
           await fireSubagentStop(parent, persona, req, outcome, signal);
@@ -629,15 +643,19 @@ export function createSubagentRunner(
           kind: "start",
           agentType: persona.name,
           description: req.description,
-          // TASK.161: read the id back off the CONSTRUCTED port instead of
-          // echoing the request, so the card reports what the host actually
-          // built (and a port that exposes no identity still degrades to the
-          // requested string). Constructed-port identity only — no production
-          // port canonicalizes ids, and this proves nothing about execution.
-          // Absent still means "inherited the parent's port".
-          ...(requestedModel !== undefined
-            ? { model: childModelPort?.modelId ?? requestedModel }
-            : {}),
+          // TASK.171 REVERSES TASK.161 here: this used to read the id back off
+          // the CONSTRUCTED port (`childModelPort?.modelId ?? requestedModel`),
+          // so the card and telemetry's `spawnModel` (buildChildConfig, ~line
+          // 208) could disagree the moment a port canonicalized an id. Owner's
+          // ruling — "модель никогда не ответит, главное какие запросы мы
+          // шлем" — makes the REQUEST the single authoritative answer to
+          // "which model did the child run on": a constructed port's own
+          // identity is still our own construction, not independent evidence,
+          // so it is never consulted here. Absent still means "inherited the
+          // parent's port". The provider's own claim is carried separately, as
+          // `responseModel` on the end event below — see that comment for why
+          // it is deliberately NOT merged into this field.
+          ...(requestedModel !== undefined ? { model: requestedModel } : {}),
         });
 
         // The config is held in a variable rather than inlined: the wrap-up call
@@ -805,6 +823,19 @@ export function createSubagentRunner(
         // The inherited-port case (no override => childModelPort undefined)
         // reports nothing on purpose: the parent's shared port carries
         // whichever call streamed last, which is not attributable to this child.
+        //
+        // TASK.171 (owner's ruling, verbatim: "модель никогда не ответит,
+        // главное какие запросы мы шлем и что в них фигурирует"): this claim
+        // is evidence ABOUT the provider, never the answer to "which model did
+        // the child run on" — that question is answered exclusively by
+        // `requestedModel` (below, and at the start event above). Kept as its
+        // own field, distinctly named, specifically because it is the only
+        // instrument for the open z.ai accounting investigation (TASK.174);
+        // dropping it would destroy that evidence. A provider/transport that
+        // never surfaces a raw claim (childModelPort has no
+        // `lastResponseModel`, or the child inherited the parent's shared
+        // port) simply leaves this undefined — it never falls back to, blanks,
+        // or otherwise touches `requestedModel`.
         const responseModel = childModelPort?.lastResponseModel;
 
         const capped = capUtf8Bytes(finalText, SUBAGENT_OUTPUT_MAX_BYTES);
@@ -823,6 +854,12 @@ export function createSubagentRunner(
           turns,
           durationMs: outcome.durationMs,
           ...(activitySuppressed > 0 ? { activitySuppressed } : {}),
+          // TASK.171: the requested id travels on the end event too (not only
+          // start), so the end record — the one telemetry's whitelist can
+          // finally carry (records.ts, subagent_end case) — is self-describing:
+          // both "what we asked for" and "what the provider claimed" recover
+          // from ONE record, without correlating back to an earlier start line.
+          ...(requestedModel !== undefined ? { model: requestedModel } : {}),
           ...(responseModel !== undefined ? { responseModel } : {}),
         });
 

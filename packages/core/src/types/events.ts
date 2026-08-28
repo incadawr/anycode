@@ -166,7 +166,13 @@ export type AgentEvent =
       toolCallId: string;
       agentType: string;
       description: string;
-      /** Resolved child model id; absent ⇒ the child inherited the parent's. */
+      /**
+       * REQUESTED child model id (request override, else the persona's own
+       * `model:`) — what we put in the request, not the constructed port's
+       * own identity (TASK.171, reverses TASK.161's port-identity readback:
+       * see `subagent_end.model` below for the same field on the other end
+       * of a run). Absent ⇒ the child inherited the parent's model.
+       */
       model?: string;
       /**
        * Set only for an engine persona (md-profile `engine:`) — a one-shot
@@ -202,11 +208,24 @@ export type AgentEvent =
        */
       activitySuppressed?: number;
       /**
+       * REQUESTED child model id — same value and precedence as
+       * `subagent_start.model` above, echoed again here (TASK.171) so a
+       * completed run's `subagent_end` record is self-describing on its own,
+       * without needing to correlate back to an earlier `subagent_start`
+       * line (telemetry's whitelist projection carries no toolCallId to join
+       * on). Absent ⇒ the child inherited the parent's model.
+       */
+      model?: string;
+      /**
        * Provider-reported model id observed on the child's port after its
        * final model call (including the wrap-up rescue call). Absent for
        * engine children, session-tier children, children that inherited the
        * parent's port, and providers that expose no raw claim. This is the
-       * provider's CLAIM, not proof of serving.
+       * provider's CLAIM, not proof of serving — a SEPARATE datum from
+       * `model` above (TASK.171 owner's ruling: the request, not the
+       * provider's claim, decides "which model did the child run on"); kept
+       * distinct because it is the only instrument for the open z.ai
+       * accounting investigation (TASK.174).
        */
       responseModel?: string;
     }

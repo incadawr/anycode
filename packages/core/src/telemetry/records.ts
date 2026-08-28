@@ -64,11 +64,20 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         ...(event.engine !== undefined ? { engine: event.engine } : {}),
       };
     case "subagent_end":
+      // TASK.171: closes the known gap where a completed child's model
+      // attribution never reached telemetry at all. `model` (the REQUESTED
+      // id, owner's ruling: "модель никогда не ответит, главное какие
+      // запросы мы шлем") and `responseModel` (the provider's own claim,
+      // kept as separate evidence for TASK.174) are added field-by-field,
+      // same whitelist discipline as every other case here — this stays a
+      // projection, never a spread of the raw event.
       return {
         t: "subagent_end",
         status: event.status,
         turns: event.turns,
         durationMs: event.durationMs,
+        ...(event.model !== undefined ? { model: event.model } : {}),
+        ...(event.responseModel !== undefined ? { responseModel: event.responseModel } : {}),
       };
     case "workflow_end":
       return {

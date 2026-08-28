@@ -56,17 +56,35 @@ export interface SubagentOutcome {
   durationMs: number;
 }
 
-/** Coarse progress events bridged into the parent stream as subagent_* AgentEvents (design §3.3). */
+/**
+ * Coarse progress events bridged into the parent stream as subagent_*
+ * AgentEvents (design §3.3).
+ *
+ * TASK.171 (owner's ruling, verbatim: "модель никогда не ответит, главное
+ * какие запросы мы шлем и что в них фигурирует") fixes the vocabulary for
+ * "which model did the child run on" across `start` and `end` alike:
+ *   - `model` is the REQUESTED id — the request override, else the persona's
+ *     own `model:`, i.e. what we actually put in the request. This is the
+ *     single authoritative answer, everywhere the question is asked. It is
+ *     NOT read back off the constructed child port (TASK.161 tried that on
+ *     `start`; reversed here) — a port's own identity is still our own
+ *     construction, not independent evidence of execution. Absent means the
+ *     child inherited the parent's port.
+ *   - `responseModel` (on `end` only) is a SEPARATE, distinctly-named datum:
+ *     the provider's own model CLAIM, read off the child's dedicated port
+ *     after its last model call (the wrap-up rescue included). It answers a
+ *     different question — what the provider reported, not what we asked
+ *     for — and is kept specifically because it is the only instrument for
+ *     the open z.ai accounting investigation (TASK.174); it is never merged
+ *     into, and never overrides, `model`. Absent for engine/session-tier
+ *     children, for a child that inherited the parent's shared port (a
+ *     shared port's last claim is not attributable to one child), and for
+ *     providers/transports that expose no raw claim at all.
+ */
 export type SubagentProgress =
-  // `model` is the id the child was SPAWNED on: read back from the constructed
-  // child port when that port exposes an identity (`ModelPort.modelId`), else the
-  // requested string (request override, else the profile's `model:`). That is
-  // constructed-port identity, NOT execution identity — no production port
-  // canonicalizes ids, and nothing here proves which model the provider ran.
-  // Absent means the child inherited the parent's port —
-  // the renderer shows a model pill only when the child really differs. `engine`
-  // is set only for an engine persona (md-profile `engine:`) — a one-shot foreign
-  // CLI run (Codex or Claude Code) in place of an in-process child.
+  // `engine` is set only for an engine persona (md-profile `engine:`) — a
+  // one-shot foreign CLI run (Codex or Claude Code) in place of an in-process
+  // child.
   | { kind: "start"; agentType: string; description: string; model?: string; engine?: "codex" | "claude" }
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   // Per-child-tool activity (slice P7.18/F16b): one bounded one-liner per child
@@ -76,18 +94,16 @@ export type SubagentProgress =
   // `activitySuppressed` (slice S1 W2, CUT-S1 §0.5): count of tool-kind
   // progress events this run withheld past SUBAGENT_ACTIVITY_MAX_EVENTS.
   // Absent when the run never crossed the cap; feeds the persisted card's
-  // honest dropped-activity count.
-  // `responseModel` is the provider's own model CLAIM, read off the child's
-  // dedicated port after its last model call (the wrap-up rescue included).
-  // Absent for engine/session-tier children, for a child that inherited the
-  // parent's shared port (a shared port's last claim is not attributable to
-  // one child), and for providers that expose no raw claim at all.
+  // honest dropped-activity count. `model`/`responseModel`: see the type's
+  // own doc comment above — both travel on `end` (TASK.171), not only on
+  // `start`, so one record is self-describing.
   | {
       kind: "end";
       status: SubagentOutcome["status"];
       turns: number;
       durationMs: number;
       activitySuppressed?: number;
+      model?: string;
       responseModel?: string;
     }
   // Permission-broker gate crossing (TASK.102 CUT-S2 §2.2/§0.8): ONLY the
