@@ -460,6 +460,13 @@ export const hostDiagnosticSink: DiagnosticSink = (event) => {
     case "provider_stream_artifact":
       console.warn(`[host] dropping unparsable provider stream artifact: ${event.signature}`);
       return;
+    case "include_usage_disabled":
+      console.warn(
+        `[host] ${event.baseUrl} (model ${event.model}) rejected stream_options.include_usage with HTTP 400 — ` +
+          `disabling it for this endpoint. Token usage will not be tracked here. ` +
+          `Set ANYCODE_INCLUDE_USAGE=0 to skip this probe and disable it permanently.`,
+      );
+      return;
   }
 };
 
