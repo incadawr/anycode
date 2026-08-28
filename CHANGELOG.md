@@ -5,6 +5,65 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.19] — 2026-08-29
+
+### Added
+
+- The dev-only automation harness that drives the desktop app for smoke
+  testing can now operate the Profile panel: switching between Today / 7
+  days / 30 days / All time, reading and expanding the full model list,
+  reading the coverage note, and clicking Refresh. It previously could only
+  flip the telemetry toggle, so the panel's biggest feature from the last
+  release could only be checked by opening the app and reading the screen by
+  eye.
+
+### Changed
+
+- Codex support is now a single ceiling — accepted up to 0.150.x — with no
+  floor. AnyCode no longer requires a minimum Codex version by itself; any
+  build below the ceiling passes the version check, and the rejection
+  message no longer carries its own separately-maintained copy of the range.
+  One consequence worth knowing: a very old Codex that used to be turned
+  away immediately with an "unsupported version" message is no longer
+  stopped at that point. It now fails later, once a session actually starts,
+  with a generic transport error instead of a message naming the version
+  problem.
+- The question "which model did a subagent actually run on" is now answered
+  the same way everywhere — the subagent's card, its progress events, and
+  its telemetry record all report the model that was requested. The
+  provider's own claim about which model it ran (on transports that report
+  one) is kept as a separate, clearly labelled value, and — new in this
+  release — that value now also reaches telemetry instead of only being
+  visible live on the card while the subagent is running.
+- `ANYCODE_TELEMETRY_DIR` now only controls where telemetry is written; it
+  no longer turns telemetry on by itself. If telemetry was never enabled
+  through a config file, setting this variable still leaves it off.
+
+### Fixed
+
+- On an OpenAI-compatible chat-completions server that rejects the
+  `stream_options` field used to request usage counts, the request is now
+  retried once with that field turned off, the field is then disabled for
+  that connection, and a single warning explains what happened. Token
+  accounting stays on by default for everyone else, unchanged, and
+  `ANYCODE_INCLUDE_USAGE=0` still turns it off by hand.
+- The Profile panel's coverage note ("History before … not included") now
+  reports the earliest event actually counted in the statistics, instead of
+  the modification time of the oldest file it scanned. A session file's
+  modification time marks when the session ended, not when it started, so
+  the note previously understated how much history was already counted —
+  by as much as the length of the oldest included session.
+- `glm-5.3-flash` now declares its real output ceiling (131,072 tokens,
+  matching `glm-5.3`), so a subagent spawned on that model no longer
+  silently drops to the 32,768-token default. More generally: when a model
+  has no output ceiling on record in the catalog, that gap is now reported
+  — naming the model and the number applied — instead of being applied
+  silently.
+- Telemetry running under a test runner no longer refuses to write at all
+  when no explicit directory is configured; it redirects to a fixed, easy
+  to find temp folder instead, and names that path, so a run's data is
+  recoverable by hand rather than silently lost.
+
 ## [0.0.18] — 2026-08-28
 
 ### Added
