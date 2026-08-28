@@ -38,6 +38,11 @@ import {
   type SkillsPaneRowState,
   type SubagentsPaneDom,
   type SubagentsPaneRowState,
+  type ProfilePaneDom,
+  type ProfilePaneTileState,
+  type ProfilePaneToolState,
+  type ProfilePaneModelRow,
+  type ProfilePaneRefreshResult,
   type LspPanelDom,
   type HooksPanelDom,
   type CheckpointPanelDom,
@@ -4489,6 +4494,357 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
       };
       const facade = buildFacade(dom);
       await expect(facade.subagentsDelete("summarizer")).resolves.toEqual({ ok: true });
+    });
+  });
+});
+
+describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cut.md §4 W4, period/models/refresh added TASK.172)", () => {
+  /**
+   * Builds a facade wired ONLY for the Profile pane methods. Every other DI
+   * slot is left `undefined` (relying on `createAutomationFacade`'s own
+   * defaults) rather than the verbose explicit-inert-fake list the sibling
+   * blocks above use — safe because every `real*Dom` factory in this file is
+   * lazy (it only ever touches `document` inside a returned closure, never at
+   * construction time, per `realProfilePaneDom`'s own doc comment), same
+   * posture `buildTrustFacade` (TASK.103, further below) relies on for every
+   * slot it isn't exercising.
+   */
+  function buildFacade(dom: ProfilePaneDom) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // dom
+      undefined, // todoPanelDom
+      undefined, // startScreenDom
+      undefined, // modelPillDom
+      createSettingsStore(),
+      undefined, // settingsDom
+      undefined, // ctxPopoverDom
+      undefined, // agentCardDom
+      undefined, // mcpPaneDom
+      undefined, // skillsPaneDom
+      undefined, // subagentsPaneDom
+      dom, // profilePaneDom
+    );
+  }
+
+  const ALL_PERIOD_LABELS = ["Today", "7 days", "30 days", "All"];
+  const ALL_PERIODS = [
+    { period: "today", label: "Today" },
+    { period: "7d", label: "7 days" },
+    { period: "30d", label: "30 days" },
+    { period: "all", label: "All" },
+  ];
+
+  /**
+   * A fully-controllable fake `ProfilePaneDom` (same discipline as
+   * `fakeSkillsPaneDom`/`fakeSubagentsPaneDom`): most read probes are frozen
+   * at construction via `overrides`, but the period-button/models-expander
+   * state is genuinely mutable internally, so `clickPeriodButtonAt`/
+   * `clickModelsExpand`'s DEFAULT behavior actually commits — a test exercises
+   * the facade's real `waitUntil` poll against a moving target, not a frozen
+   * snapshot, same posture as `fakeSkillsPaneDom`'s in-place `rows` mutation.
+   * `modelsTotal: null` (the default) means no expander at all (<=
+   * `PROFILE_MODELS_COLLAPSED_ROWS` rows) — `modelsExpandButtonText()` then
+   * reads `null`, matching `ToolsAndModelsColumn` never rendering the button.
+   */
+  function fakeProfilePaneDom(
+    overrides: Partial<{
+      mounted: boolean;
+      branch: string | null;
+      bannerVisible: boolean;
+      truncatedVisible: boolean;
+      tiles: ProfilePaneTileState[];
+      insightRows: { label: string; value: string }[];
+      topToolNames: string[];
+      toolRows: ProfilePaneToolState[];
+      heatmapNonEmptyCellCount: number;
+      telemetrySwitch: { checked: boolean; disabled: boolean } | null;
+      clickTelemetryToggleResult: boolean;
+      activePeriodIndex: number;
+      periodLabels: string[];
+      clickPeriodButtonAtResult: boolean;
+      /** `false` simulates a genuine no-op click: `clickPeriodButtonAt` still returns `true` (the button WAS clicked), but `activePeriodIndex` never actually moves — the `did_not_switch` scenario, distinct from the button not existing at all. */
+      clickPeriodButtonAtCommits: boolean;
+      modelRows: ProfilePaneModelRow[];
+      modelsExpanded: boolean;
+      modelsTotal: number | null;
+      clickModelsExpandResult: boolean;
+      /** Same "delivered but doesn't commit" distinction as `clickPeriodButtonAtCommits`, for the models expander. */
+      clickModelsExpandCommits: boolean;
+      coverageNoticeText: string | null;
+      clickRefreshResult: boolean;
+    }> = {},
+  ): ProfilePaneDom {
+    let activePeriodIndex = overrides.activePeriodIndex ?? 3;
+    const periodLabels = overrides.periodLabels ?? ALL_PERIOD_LABELS;
+    let modelsExpanded = overrides.modelsExpanded ?? false;
+    const modelsTotal = overrides.modelsTotal ?? null;
+    return {
+      mounted: () => overrides.mounted ?? true,
+      branch: () => overrides.branch ?? null,
+      bannerVisible: () => overrides.bannerVisible ?? false,
+      truncatedVisible: () => overrides.truncatedVisible ?? false,
+      tiles: () => overrides.tiles ?? [],
+      insightRows: () => overrides.insightRows ?? [],
+      topToolNames: () => overrides.topToolNames ?? [],
+      toolRows: () => overrides.toolRows ?? [],
+      heatmapNonEmptyCellCount: () => overrides.heatmapNonEmptyCellCount ?? 0,
+      telemetrySwitch: () => overrides.telemetrySwitch ?? null,
+      clickTelemetryToggle: vi.fn(() => overrides.clickTelemetryToggleResult ?? true),
+      periodButtons: () => periodLabels.map((label, i) => ({ label, active: i === activePeriodIndex })),
+      clickPeriodButtonAt: vi.fn((index: number) => {
+        if (overrides.clickPeriodButtonAtResult === false || index < 0 || index >= periodLabels.length) {
+          return false;
+        }
+        if (overrides.clickPeriodButtonAtCommits !== false) {
+          activePeriodIndex = index;
+        }
+        return true;
+      }),
+      coverageNoticeText: () => overrides.coverageNoticeText ?? null,
+      modelRows: () => overrides.modelRows ?? [],
+      modelsExpandButtonText: () => {
+        if (modelsTotal === null) {
+          return null;
+        }
+        return modelsExpanded ? "Show less" : `Show all (${modelsTotal})`;
+      },
+      clickModelsExpand: vi.fn(() => {
+        if (overrides.clickModelsExpandResult === false || modelsTotal === null) {
+          return false;
+        }
+        if (overrides.clickModelsExpandCommits !== false) {
+          modelsExpanded = !modelsExpanded;
+        }
+        return true;
+      }),
+      clickRefresh: vi.fn(() => overrides.clickRefreshResult ?? true),
+    };
+  }
+
+  describe("profilePaneState", () => {
+    it("reports the closed shape (empty defaults) when the pane isn't mounted — `periods` stays the real static catalog even unmounted", () => {
+      const dom = fakeProfilePaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      expect(facade.profilePaneState()).toEqual({
+        mounted: false,
+        tiles: [],
+        insights: { tokensInPeriod: "", totalSessions: 0, totalRuns: 0, toolCalls: 0, subagentRuns: 0, mostUsedModel: "" },
+        topTools: [],
+        tools: [],
+        heatmapNonEmptyCells: 0,
+        telemetryEnabled: false,
+        killSwitchActive: false,
+        truncated: false,
+        emptyStateHero: false,
+        frozenBanner: false,
+        period: "all",
+        periods: ALL_PERIODS,
+        coverageNotice: null,
+        models: [],
+        modelsTotalCount: 0,
+        modelsExpanded: false,
+      });
+    });
+
+    it("reads `period` off the active period button's DOM position, mapped back through PROFILE_PERIODS", () => {
+      const dom = fakeProfilePaneDom({ mounted: true, activePeriodIndex: 1 });
+      const facade = buildFacade(dom);
+      expect(facade.profilePaneState().period).toBe("7d");
+    });
+
+    it("defaults `period` to \"all\" when the control isn't rendered at all (hero/io-error branch, or still loading)", () => {
+      const dom = fakeProfilePaneDom({ mounted: true, periodLabels: [] });
+      const facade = buildFacade(dom);
+      expect(facade.profilePaneState().period).toBe("all");
+    });
+
+    it("reads `insights.tokensInPeriod` off the 'Tokens in period' row, distinct from the lifetime tiles", () => {
+      const dom = fakeProfilePaneDom({
+        mounted: true,
+        insightRows: [
+          { label: "Tokens in period", value: "44m" },
+          { label: "Total tasks", value: "12" },
+        ],
+      });
+      const facade = buildFacade(dom);
+      const state = facade.profilePaneState();
+      expect(state.insights.tokensInPeriod).toBe("44m");
+      expect(state.insights.totalSessions).toBe(12);
+    });
+
+    it("reads `tools` with per-row call counts, alongside the pre-existing name-only `topTools`", () => {
+      const dom = fakeProfilePaneDom({
+        mounted: true,
+        topToolNames: ["Read", "Bash"],
+        toolRows: [
+          { name: "Read", count: 40 },
+          { name: "Bash", count: 12 },
+        ],
+      });
+      const facade = buildFacade(dom);
+      const state = facade.profilePaneState();
+      expect(state.topTools).toEqual(["Read", "Bash"]);
+      expect(state.tools).toEqual([
+        { name: "Read", count: 40 },
+        { name: "Bash", count: 12 },
+      ]);
+    });
+
+    it("reads the coverage notice text, `null` when it isn't rendered", () => {
+      const dom = fakeProfilePaneDom({
+        mounted: true,
+        coverageNoticeText: "History before 2026-01-01 not included — telemetry folder exceeds the scan budget.",
+      });
+      const facade = buildFacade(dom);
+      expect(facade.profilePaneState().coverageNotice).toBe(
+        "History before 2026-01-01 not included — telemetry folder exceeds the scan budget.",
+      );
+    });
+
+    it("models list, no expander rendered (<= PROFILE_MODELS_COLLAPSED_ROWS total): modelsTotalCount equals the rendered row count", () => {
+      const dom = fakeProfilePaneDom({ mounted: true, modelRows: [{ model: "glm-4.6", tokens: "44m" }], modelsTotal: null });
+      const facade = buildFacade(dom);
+      const state = facade.profilePaneState();
+      expect(state.models).toEqual([{ model: "glm-4.6", tokens: "44m" }]);
+      expect(state.modelsTotalCount).toBe(1);
+      expect(state.modelsExpanded).toBe(false);
+    });
+
+    it("models list, collapsed: modelsTotalCount is parsed from 'Show all (N)', rows stay the 8-row slice", () => {
+      const rows = Array.from({ length: 8 }, (_, i) => ({ model: `m${i}`, tokens: "1k" }));
+      const dom = fakeProfilePaneDom({ mounted: true, modelRows: rows, modelsTotal: 12, modelsExpanded: false });
+      const facade = buildFacade(dom);
+      const state = facade.profilePaneState();
+      expect(state.models).toHaveLength(8);
+      expect(state.modelsTotalCount).toBe(12);
+      expect(state.modelsExpanded).toBe(false);
+    });
+
+    it("models list, expanded: modelsTotalCount equals the full rendered row count, modelsExpanded true", () => {
+      const rows = Array.from({ length: 12 }, (_, i) => ({ model: `m${i}`, tokens: "1k" }));
+      const dom = fakeProfilePaneDom({ mounted: true, modelRows: rows, modelsTotal: 12, modelsExpanded: true });
+      const facade = buildFacade(dom);
+      const state = facade.profilePaneState();
+      expect(state.models).toHaveLength(12);
+      expect(state.modelsTotalCount).toBe(12);
+      expect(state.modelsExpanded).toBe(true);
+    });
+  });
+
+  describe("profileSelectPeriod", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeProfilePaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileSelectPeriod("7d")).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+
+    it("refuses an out-of-catalog period value", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true });
+      const facade = buildFacade(dom);
+      await expect(facade.profileSelectPeriod("1y" as unknown as "today")).resolves.toEqual({ ok: false, reason: "invalid_period" });
+    });
+
+    it("refuses when the control isn't rendered (hero/io-error branch, or still loading)", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, periodLabels: [] });
+      const facade = buildFacade(dom);
+      await expect(facade.profileSelectPeriod("7d")).resolves.toEqual({ ok: false, reason: "control_not_present" });
+    });
+
+    it("refuses (control_not_present) when the click itself never fires, even though buttons ARE rendered", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, clickPeriodButtonAtResult: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileSelectPeriod("7d")).resolves.toEqual({ ok: false, reason: "control_not_present" });
+    });
+
+    it("clicks the target period button by DOM position and confirms the commit", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, activePeriodIndex: 3 });
+      const facade = buildFacade(dom);
+      await expect(facade.profileSelectPeriod("today")).resolves.toEqual({ ok: true });
+      expect(dom.clickPeriodButtonAt).toHaveBeenCalledWith(0);
+      expect(facade.profilePaneState().period).toBe("today");
+    });
+
+    it("reports did_not_switch when the click never commits (a genuine no-op click)", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, activePeriodIndex: 3, clickPeriodButtonAtCommits: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileSelectPeriod("today")).resolves.toEqual({ ok: false, reason: "did_not_switch" });
+    });
+  });
+
+  describe("profileToggleModelsExpanded", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeProfilePaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileToggleModelsExpanded()).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+
+    it("refuses when the expander isn't rendered (<= PROFILE_MODELS_COLLAPSED_ROWS total rows, nothing to collapse)", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, modelsTotal: null });
+      const facade = buildFacade(dom);
+      await expect(facade.profileToggleModelsExpanded()).resolves.toEqual({ ok: false, reason: "expander_not_present" });
+    });
+
+    it("refuses (expander_not_present) when the click itself never fires, even though the button IS rendered", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, modelsTotal: 12, clickModelsExpandResult: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileToggleModelsExpanded()).resolves.toEqual({ ok: false, reason: "expander_not_present" });
+    });
+
+    it("clicks the expander and confirms the text flips from 'Show all (N)' to 'Show less'", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, modelsTotal: 12, modelsExpanded: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileToggleModelsExpanded()).resolves.toEqual({ ok: true });
+      expect(dom.clickModelsExpand).toHaveBeenCalled();
+      expect(facade.profilePaneState().modelsExpanded).toBe(true);
+    });
+
+    it("reports did_not_toggle when the click never commits", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, modelsTotal: 12, clickModelsExpandCommits: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileToggleModelsExpanded()).resolves.toEqual({ ok: false, reason: "did_not_toggle" });
+    });
+  });
+
+  describe("profileRefresh", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeProfilePaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRefresh()).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+
+    it("reports refresh_not_present when the toolbar button isn't in the DOM at all", async () => {
+      const dom: ProfilePaneDom = { ...fakeProfilePaneDom({ mounted: true }), clickRefresh: vi.fn(() => false) };
+      const facade = buildFacade(dom);
+      const result: ProfilePaneRefreshResult = await facade.profileRefresh();
+      expect(result).toEqual({ ok: false, reason: "refresh_not_present" });
+    });
+
+    it("changed:true when the click's real getStats() round trip lands new numbers before the deadline", async () => {
+      const tiles = [{ label: "Lifetime tokens", value: "1.0bn" }];
+      const dom: ProfilePaneDom = {
+        ...fakeProfilePaneDom({ mounted: true }),
+        tiles: () => tiles,
+        clickRefresh: vi.fn(() => {
+          tiles[0] = { label: "Lifetime tokens", value: "1.1bn" };
+          return true;
+        }),
+      };
+      const facade = buildFacade(dom);
+      const result: ProfilePaneRefreshResult = await facade.profileRefresh();
+      expect(result).toEqual({ ok: true, changed: true });
+    });
+
+    it("changed:false — a genuinely fast re-fetch returning identical data is a normal, honest reading, not a failure", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, tiles: [{ label: "Lifetime tokens", value: "1.0bn" }] });
+      const facade = buildFacade(dom);
+      const result: ProfilePaneRefreshResult = await facade.profileRefresh();
+      expect(result).toEqual({ ok: true, changed: false });
+      expect(dom.clickRefresh).toHaveBeenCalled();
     });
   });
 });

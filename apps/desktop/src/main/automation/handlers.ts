@@ -1123,6 +1123,24 @@ export function profileToggleTelemetry(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("profileToggleTelemetry", []);
 }
 
+// TASK.172: period control + full models list + Refresh became drivable —
+// same thin-wrapper discipline as every route above (the facade owns every
+// guard: pane_not_mounted / control_not_present / invalid_period /
+// did_not_switch / expander_not_present / did_not_toggle /
+// refresh_not_present).
+
+export function profileSelectPeriod(deps: HandlerDeps, period: string): Promise<unknown> {
+  return deps.callFacade("profileSelectPeriod", [period]);
+}
+
+export function profileToggleModelsExpanded(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("profileToggleModelsExpanded", []);
+}
+
+export function profileRefresh(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("profileRefresh", []);
+}
+
 // --- Slash-command menu probe/driver (design/slice-P7.23-cut.md §7 W4): thin
 // wrappers over the frozen facade contract, same discipline as the probes
 // above — the facade owns every guard (tab_not_active / unknown_tab /

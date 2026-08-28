@@ -135,6 +135,9 @@ import {
   subagentsDelete,
   profilePaneState,
   profileToggleTelemetry,
+  profileSelectPeriod,
+  profileToggleModelsExpanded,
+  profileRefresh,
   slashMenuState,
   composerType,
   composerKey,
@@ -427,6 +430,13 @@ const subagentsEditorSetBody = z.object({
   model: z.string().max(128).optional(),
 });
 const subagentsNameBody = z.object({ name: z.string().min(1).max(64) });
+
+// ── Profile pane bodies (TASK.172): global (app-level) route, no `:tabId`
+// segment — same posture as the Subagents bodies above. `period` mirrors
+// `ProfilePeriod` (ProfilePane.tsx) — kept a bare string literal union here
+// rather than importing the component's own type, same "server.ts owns zod,
+// not the shared vocabulary" posture as `skillsImportApplyBody.scope` above. ──
+const profilePeriodBody = z.object({ period: z.enum(["today", "7d", "30d", "all"]) }).strict();
 
 // ── Slash-command menu bodies (slice-P7.23-cut.md §7 W4): `tabId` rides in
 // the path (`/tabs/:tabId/slash-menu/...`), same posture as the model-pill/
@@ -1166,6 +1176,22 @@ async function route(
   if (method === "POST" && pathname === "/settings/profile/telemetry") {
     parseBody(rawBody, emptyBody);
     return profileToggleTelemetry(deps);
+  }
+  // Profile pane routes (TASK.172): mirror the SAME DOM paths ProfilePane.tsx
+  // itself uses (a `.profile-period-button`, the models "Show all (N)" /
+  // "Show less" expander, the toolbar's Refresh button), through the
+  // facade's thin wrappers — no second path.
+  if (method === "POST" && pathname === "/settings/profile/period") {
+    const body = parseBody(rawBody, profilePeriodBody);
+    return profileSelectPeriod(deps, body.period);
+  }
+  if (method === "POST" && pathname === "/settings/profile/models/toggle") {
+    parseBody(rawBody, emptyBody);
+    return profileToggleModelsExpanded(deps);
+  }
+  if (method === "POST" && pathname === "/settings/profile/refresh") {
+    parseBody(rawBody, emptyBody);
+    return profileRefresh(deps);
   }
   // Keyboard shortcuts pane routes (slice-P7.24-cut.md §4 W4): mirror the
   // SAME DOM paths KeyboardShortcutsPane.tsx itself uses (a slot's pencil /
