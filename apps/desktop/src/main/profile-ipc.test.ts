@@ -293,10 +293,44 @@ describe("handleProfileStatsGet", () => {
       expect(result.view.lifetimeTokens).toBe(150);
       expect(result.view.totalSessions).toBe(2);
       expect(result.view.truncated).toBe(true);
-      // coverageStartTs is the oldest INCLUDED file's real mtime — session-a,
-      // not the dropped (older still) aaa-huge.jsonl.
-      const aStat = await stat(join(telemetryDir, "session-a.jsonl"));
-      expect(result.view.coverageStartTs).toBe(aStat.mtimeMs);
+      // coverageStartTs (TASK.169) is the EARLIEST EVENT inside the oldest
+      // INCLUDED file (session-a), not that file's mtime: session-a's mtime
+      // is set to "now" above, but its first record (session_start) carries
+      // ts=DAY1 (year 2020) — mtime is when the session's LAST record was
+      // written (i.e. when it ENDED), so using it would understate coverage
+      // by the session's own length. DAY1 is the honest lower bound here.
+      expect(result.view.coverageStartTs).toBe(DAY1);
+    },
+  );
+
+  it(
+    "falls back to the oldest included file's mtimeMs when its first line has no usable ts " +
+      "(TASK.169 fail-soft path — never throws, never reports null while truncated)",
+    async () => {
+      const home = await tmp();
+      const telemetryDir = join(home, ".anycode/telemetry");
+      await mkdir(telemetryDir, { recursive: true });
+
+      const hugePath = join(telemetryDir, "aaa-huge.jsonl");
+      await seed(hugePath, jsonl([{ v: 1, ts: DAY1, session: "huge", t: "usage", totalTokens: 999_999 }]));
+      await truncate(hugePath, PROFILE_STATS_MAX_SCAN_BYTES + 1);
+
+      // First line is not even JSON (a torn write / corrupt sink) — the rest
+      // of the file is fine and still counts toward the aggregated stats.
+      const oldPath = join(telemetryDir, "bbb-garbage-first-line.jsonl");
+      await seed(oldPath, "not json at all\n" + jsonl([{ v: 1, ts: DAY1, session: "old", t: "usage", totalTokens: 5 }]));
+
+      const base = Date.now() - 60_000;
+      await utimes(hugePath, base / 1000, base / 1000); // oldest, dropped (alone exceeds the budget)
+      await utimes(oldPath, (base + 1000) / 1000, (base + 1000) / 1000); // newer, kept — the only included file
+
+      const result = await handleProfileStatsGet(makeDeps(home));
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.view.truncated).toBe(true);
+      expect(result.view.lifetimeTokens).toBe(5);
+      const oldStat = await stat(oldPath);
+      expect(result.view.coverageStartTs).toBe(oldStat.mtimeMs);
     },
   );
 
@@ -439,7 +473,15 @@ describe("handleProfileRevealDir", () => {
   it("reveals the resolved scan directory", async () => {
     const home = await tmp();
     const telemetryDir = join(home, ".anycode/telemetry");
-    await seed(join(home, ".anycode/config.json"), JSON.stringify({ telemetry: { enabled: true } }));
+    // Explicit `dir` (TASK.121's fail-closed VITEST gate in core/telemetry/
+    // config.ts refuses to resolve an `enabled:true` section onto the DEFAULT
+    // dir under a test runner — a test must always name its sink explicitly,
+    // even though it happens to equal the default here). Same idiom as the
+    // handleProfileStatsGet tests above.
+    await seed(
+      join(home, ".anycode/config.json"),
+      JSON.stringify({ telemetry: { enabled: true, dir: telemetryDir } }),
+    );
 
     let revealed: string | undefined;
     const result = await handleProfileRevealDir(makeDeps(home, { reveal: (p) => (revealed = p) }));

@@ -255,11 +255,21 @@ interface ScanResult {
    *  stopped the scan before every *.jsonl entry was read (W5-FIX finding 1). */
   truncated: boolean;
   /**
-   * `mtimeMs` of the OLDEST file actually included in `files`, when the scan
-   * was truncated (TASK.158 slice 0). `null` when the scan was NOT truncated
-   * (full coverage — no honest lower bound to report) or when truncation hit
-   * before a single file could be included (the newest entry alone already
-   * exceeded the budget — no "oldest included file" exists).
+   * Lower bound of the data actually covered by `files`, when the scan was
+   * truncated (TASK.158 slice 0). Sourced from the EARLIEST EVENT in the
+   * OLDEST included file — that file's own first parseable JSONL record's
+   * `ts` (ms epoch) — NOT the file's `mtimeMs` (TASK.169). `mtime` is when a
+   * session's LAST record was written, i.e. when it ENDED; a file starting
+   * well before its own mtime was previously reported as covering only from
+   * that end-of-session instant, understating coverage by the whole length
+   * of the oldest included session. Falls back to that file's `mtimeMs`
+   * (the old behaviour) when its first line is unparseable or carries no
+   * usable `ts` — fail-soft, same ethic as the rest of this scan, never
+   * throws and never reports `null` on its own account.
+   * `null` when the scan was NOT truncated (full coverage — no honest lower
+   * bound to report) or when truncation hit before a single file could be
+   * included (the newest entry alone already exceeded the budget — no
+   * "oldest included file" exists).
    */
   coverageStartTs: number | null;
 }
@@ -269,6 +279,28 @@ interface StatedJsonlFile {
   fullPath: string;
   size: number;
   mtimeMs: number;
+}
+
+/**
+ * The `ts` (ms epoch) of a sink file's EARLIEST event, read off its first
+ * JSONL line only (TASK.169). Telemetry JSONL is append-ordered (records.ts's
+ * tap always appends), so the first line is always the earliest record in
+ * the file — no need to scan further. Fail-soft: `null` on anything that
+ * isn't a JSON object with a finite numeric `ts` (empty file, torn write,
+ * garbage first line, or a record missing `ts` entirely) — the caller falls
+ * back to the file's `mtimeMs` in that case.
+ */
+function earliestEventTs(firstLine: string | undefined): number | null {
+  if (firstLine === undefined || firstLine.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(firstLine);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const ts = (parsed as Record<string, unknown>).ts;
+  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
 }
 
 /**
@@ -366,8 +398,9 @@ async function listJsonlFiles(fs: ProfileFs, dir: string): Promise<ScanResult | 
       continue;
     }
     accumulatedBytes += entry.size;
-    files.push({ name: entry.name, lines: raw.split("\n") });
-    coverageStartTs = entry.mtimeMs;
+    const lines = raw.split("\n");
+    files.push({ name: entry.name, lines });
+    coverageStartTs = earliestEventTs(lines[0]) ?? entry.mtimeMs;
   }
   return { ok: true, files, truncated, coverageStartTs: truncated ? coverageStartTs : null };
 }
