@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildTelemetryTap, telemetryRecordFor } from "./records.js";
+import { buildEngineTelemetryTap, buildSubagentTelemetryTap, buildTelemetryTap, telemetryRecordFor } from "./records.js";
 import type { AgentEvent } from "../types/events.js";
 import type { TelemetryPort, TelemetryRecord } from "../ports/telemetry.js";
 
@@ -126,6 +126,23 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
       description: SENTINEL,
     };
     expect(telemetryRecordFor(event)).toEqual({ t: "subagent_start", agentType: "sonnet" });
+  });
+
+  it("subagent_start with model+engine (toolCallId + description still dropped)", () => {
+    const event: AgentEvent = {
+      type: "subagent_start",
+      toolCallId: "call-2",
+      agentType: "pb-glm-flash-builder",
+      description: SENTINEL,
+      model: "glm-5.3-flash",
+      engine: "codex",
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "subagent_start",
+      agentType: "pb-glm-flash-builder",
+      model: "glm-5.3-flash",
+      engine: "codex",
+    });
   });
 
   it("subagent_end (toolCallId dropped)", () => {
@@ -272,6 +289,15 @@ describe("telemetryRecordFor — sentinel-leak invariant across every text carri
     }));
   it("subagent_start.description", () =>
     assertNoLeak({ type: "subagent_start", toolCallId: "1", agentType: "clean-agent", description: SENTINEL }));
+  it("subagent_start.description (with model+engine present)", () =>
+    assertNoLeak({
+      type: "subagent_start",
+      toolCallId: "1",
+      agentType: "clean-agent",
+      description: SENTINEL,
+      model: "sonnet",
+      engine: "claude",
+    }));
   it("checkpoint_created.label", () =>
     assertNoLeak({ type: "checkpoint_created", id: "chk-1", label: SENTINEL }));
   it("checkpoint_failed.reason", () => assertNoLeak({ type: "checkpoint_failed", reason: SENTINEL }));
@@ -308,6 +334,197 @@ describe("buildTelemetryTap", () => {
   it("does not call port.record for an unmapped event", () => {
     const { port, records } = makeRecordingPort();
     const tap = buildTelemetryTap(port, "session-abc");
+    tap({ type: "text_delta", id: "1", text: SENTINEL });
+    expect(records).toHaveLength(0);
+  });
+});
+
+describe("buildSubagentTelemetryTap", () => {
+  function makeRecordingPort(): { port: TelemetryPort; records: TelemetryRecord[] } {
+    const records: TelemetryRecord[] = [];
+    const port: TelemetryPort = {
+      record: (record) => {
+        records.push(record);
+      },
+      status: () => ({ filePath: "/tmp/x.jsonl", written: records.length, dropped: 0 }),
+      flush: async () => {},
+      dispose: async () => {},
+    };
+    return { port, records };
+  }
+
+  it("stamps sub on a usage record", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildSubagentTelemetryTap(port, "parent-session", { agentType: "pb-glm-flash-builder" });
+    tap({ type: "finish", finishReason: "stop", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      v: 1,
+      session: "parent-session",
+      sub: { agentType: "pb-glm-flash-builder" },
+      t: "usage",
+      totalTokens: 15,
+    });
+  });
+
+  it("stamps sub on a tool record and includes model when the spawn overrode it", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildSubagentTelemetryTap(port, "parent-session", {
+      agentType: "pb-claude-reviewer",
+      model: "claude-sonnet5-high",
+    });
+    tap({
+      type: "tool_result",
+      outcome: { toolCallId: "c1", toolName: "Bash", status: "success", modelText: SENTINEL, durationMs: 7 },
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      sub: { agentType: "pb-claude-reviewer", model: "claude-sonnet5-high" },
+      t: "tool",
+      tool: "Bash",
+    });
+  });
+
+  it("stamps sub on a turn_end record", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildSubagentTelemetryTap(port, "parent-session", { agentType: "explore" });
+    tap({ type: "turn_end", turn: 2, finishReason: "stop" });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ sub: { agentType: "explore" }, t: "turn_end", turn: 2 });
+  });
+
+  it("does not record (and so does not stamp sub) for a null-mapped event", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildSubagentTelemetryTap(port, "parent-session", { agentType: "explore" });
+    tap({ type: "text_delta", id: "1", text: SENTINEL });
+    expect(records).toHaveLength(0);
+  });
+
+  it("omits sub.model entirely when the spawn did not override the model", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildSubagentTelemetryTap(port, "parent-session", { agentType: "explore" });
+    tap({ type: "turn_end", turn: 1, finishReason: "stop" });
+    expect(records[0]).toEqual(
+      expect.objectContaining({ sub: { agentType: "explore" } }),
+    );
+    expect((records[0] as { sub?: { model?: string } }).sub).not.toHaveProperty("model");
+  });
+});
+
+describe("buildEngineTelemetryTap", () => {
+  function makeRecordingPort(): { port: TelemetryPort; records: TelemetryRecord[] } {
+    const records: TelemetryRecord[] = [];
+    const port: TelemetryPort = {
+      record: (record) => {
+        records.push(record);
+      },
+      status: () => ({ filePath: "/tmp/x.jsonl", written: records.length, dropped: 0 }),
+      flush: async () => {},
+      dispose: async () => {},
+    };
+    return { port, records };
+  }
+
+  it("double-count pin: cumulative (100, 250) -> usage deltas (100, 150), sum 250 NOT 350 — input/output symmetric", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    tap({ type: "engine_session_tokens", input: 80, output: 20, total: 100 });
+    tap({ type: "engine_session_tokens", input: 200, output: 50, total: 250 });
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ t: "usage", inputTokens: 80, outputTokens: 20, totalTokens: 100 });
+    expect(records[1]).toMatchObject({ t: "usage", inputTokens: 120, outputTokens: 30, totalTokens: 150 });
+    const sumTotal = records.reduce((acc, r) => acc + (r as { totalTokens?: number }).totalTokens!, 0);
+    const sumInput = records.reduce((acc, r) => acc + (r as { inputTokens?: number }).inputTokens!, 0);
+    const sumOutput = records.reduce((acc, r) => acc + (r as { outputTokens?: number }).outputTokens!, 0);
+    expect(sumTotal).toBe(250);
+    expect(sumTotal).not.toBe(350);
+    expect(sumInput).toBe(200);
+    expect(sumInput).not.toBe(280);
+    expect(sumOutput).toBe(50);
+    expect(sumOutput).not.toBe(70);
+  });
+
+  it("reset pin: a symmetric drop (total 250->40, input 200->30, output 50->10) starts a new baseline for all three, none negative", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    tap({ type: "engine_session_tokens", input: 200, output: 50, total: 250 });
+    tap({ type: "engine_session_tokens", input: 30, output: 10, total: 40 });
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ t: "usage", inputTokens: 200, outputTokens: 50, totalTokens: 250 });
+    expect(records[1]).toMatchObject({ t: "usage", inputTokens: 30, outputTokens: 10, totalTokens: 40 });
+  });
+
+  it("reset pin: total resets (250->40) while input does NOT (200->210) — each counter independent, none negative", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    tap({ type: "engine_session_tokens", input: 200, output: 50, total: 250 });
+    tap({ type: "engine_session_tokens", input: 210, output: 5, total: 40 });
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ t: "usage", inputTokens: 200, outputTokens: 50, totalTokens: 250 });
+    // total reset (40 < 250) -> delta = 40; input NOT reset (210 >= 200) -> delta = 10; output reset (5 < 50) -> delta = 5.
+    expect(records[1]).toMatchObject({ t: "usage", inputTokens: 10, outputTokens: 5, totalTokens: 40 });
+    for (const r of records) {
+      expect((r as { inputTokens?: number }).inputTokens).toBeGreaterThanOrEqual(0);
+      expect((r as { outputTokens?: number }).outputTokens).toBeGreaterThanOrEqual(0);
+      expect((r as { totalTokens?: number }).totalTokens).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("skips a zero delta (no-op snapshot emits nothing, gated on total only)", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    tap({ type: "engine_session_tokens", input: 80, output: 20, total: 100 });
+    tap({ type: "engine_session_tokens", input: 80, output: 20, total: 100 });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ t: "usage", inputTokens: 80, outputTokens: 20, totalTokens: 100 });
+  });
+
+  it("baselineFromFirstEvent:true — first snapshot emits nothing, second emits deltas for all three counters", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex-resume", { baselineFromFirstEvent: true });
+    tap({ type: "engine_session_tokens", input: 800, output: 200, total: 1000 });
+    expect(records).toHaveLength(0);
+    tap({ type: "engine_session_tokens", input: 824, output: 206, total: 1030 });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ t: "usage", inputTokens: 24, outputTokens: 6, totalTokens: 30 });
+  });
+
+  it("baselineFromFirstEvent omitted (fresh boot) — first snapshot's deltas equal their totals for all three counters", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex-fresh");
+    tap({ type: "engine_session_tokens", input: 40, output: 10, total: 50 });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ t: "usage", inputTokens: 40, outputTokens: 10, totalTokens: 50 });
+  });
+
+  it("event carrying total without input/output -> record has totalTokens only, inputTokens/outputTokens keys absent", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    const malformed = { type: "engine_session_tokens", total: 100 } as unknown as AgentEvent;
+    tap(malformed);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ t: "usage", totalTokens: 100 });
+    expect(records[0]).not.toHaveProperty("inputTokens");
+    expect(records[0]).not.toHaveProperty("outputTokens");
+  });
+
+  it("passes non-engine events through telemetryRecordFor unchanged, tagged with no sub", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    tap({ type: "turn_end", turn: 1, finishReason: "stop" });
+    tap({
+      type: "tool_result",
+      outcome: { toolCallId: "c1", toolName: "Bash", status: "success", modelText: SENTINEL, durationMs: 3 },
+    });
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ t: "turn_end", turn: 1 });
+    expect(records[0]).not.toHaveProperty("sub");
+    expect(records[1]).toMatchObject({ t: "tool", tool: "Bash" });
+  });
+
+  it("still fail-closed for an unmapped/unwhitelisted non-token event (e.g. a future variant)", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
     tap({ type: "text_delta", id: "1", text: SENTINEL });
     expect(records).toHaveLength(0);
   });

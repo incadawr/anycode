@@ -41,6 +41,20 @@ export class SwitchableModelPort implements ModelPort {
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     return this.current.streamText(request);
   }
+
+  /** Identity readback of the port currently installed (undefined when it exposes none). */
+  get modelId(): string | undefined {
+    return this.current.modelId;
+  }
+
+  /**
+   * The provider's model claim from the currently installed port's last raw
+   * response. A `setPort` swap moves the readback to the new port, which has
+   * observed nothing yet — deliberate: a claim belongs to the port that saw it.
+   */
+  get lastResponseModel(): string | undefined {
+    return this.current.lastResponseModel;
+  }
 }
 
 /**
