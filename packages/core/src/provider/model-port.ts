@@ -33,6 +33,16 @@
  * bounded by the shared `attempt < policy.maxRetries` budget. A genuine
  * external abort (request.abortSignal) always wins over a stall and rejects
  * immediately with the abort reason, never retried.
+ *
+ * TASK.168 adds a SEPARATE, budget-exempt one-shot retry on the
+ * openai-chat-completions transport: a pre-content HTTP 400 while
+ * `includeUsage` is on is retried ONCE with the flag forced off (no backoff,
+ * no `stream_retry` event, never counted against `policy.maxRetries`). A
+ * successful retry permanently disables the flag for the rest of THIS port
+ * instance's life and fires a `DiagnosticSink` warning exactly once; a retry
+ * that 400s again restores the flag and re-surfaces the FIRST failure
+ * unchanged (see `includeUsageProbeEligible`/`ProbeFailure` and
+ * `#includeUsageDisabledForEndpoint`).
  */
 
 import { stepCountIs, streamText } from "ai";
@@ -43,7 +53,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
-import { classifyProviderFailure, isModelOutputEvent } from "./failure.js";
+import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { createLanguageModel } from "./language-model.js";
 import { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
@@ -252,6 +262,61 @@ interface StalledOutcome {
   stalled: true;
 }
 
+/**
+ * TASK.168: a failure captured for the `stream_options.include_usage` probe.
+ * `kind` records whether it arrived as a thrown exception or a stream
+ * `error` part, so it can be replayed (on rollback) or re-classified (on
+ * confirm) through the SAME channel it would have used had the probe never
+ * been attempted, instead of silently changing thrown-vs-yielded shape.
+ * Reused for two distinct roles in `streamText`:
+ *  - `includeUsageProbe`: the FIRST failure that started the probe, carried
+ *    from that attempt to the very next one (the probe retry) so a rollback
+ *    can restore it verbatim.
+ *  - `pendingProbeFailure`: THIS pass's own failure, captured inside the
+ *    try/catch and resolved once OUTSIDE it (see the resolution block below)
+ *    — deferring this way means a rollback's `throw` is never at risk of
+ *    being re-caught by this same pass's own `catch`.
+ */
+interface ProbeFailure {
+  error: unknown;
+  kind: "thrown" | "event";
+}
+
+/**
+ * True when `error` is an HTTP 400 that arrived before any model output was
+ * observed — the one shape a strict openai-chat-completions server produces
+ * when it rejects the unknown `stream_options` field (TASK.168). Shared by
+ * the probe-eligibility check (is THIS failure worth probing) and the
+ * probe-resolution check (did the retry attempt reproduce the same failure).
+ */
+function isPreContent400(error: unknown, hadModelOutput: boolean): boolean {
+  return !hadModelOutput && extractStatusCode(error) === 400;
+}
+
+/**
+ * Gate for STARTING an include_usage probe retry: only on the
+ * openai-chat-completions transport (the one transport that honours the
+ * flag), only when the flag was actually ON for the attempt that just failed
+ * (an already-disabled endpoint has nothing to probe), only pre-content (a
+ * mid-stream 400 after real output must never be silently replayed — that
+ * would risk a duplicate answer), and never once the caller's own abort
+ * signal has already fired (an external abort always wins over any retry).
+ */
+function includeUsageProbeEligible(
+  transport: ProviderTransport,
+  attemptIncludeUsage: boolean | undefined,
+  error: unknown,
+  hadModelOutput: boolean,
+  aborted: boolean,
+): boolean {
+  return (
+    transport === "openai-chat-completions" &&
+    attemptIncludeUsage === true &&
+    !aborted &&
+    isPreContent400(error, hadModelOutput)
+  );
+}
+
 function resolveRetryPolicy(override: Partial<RetryPolicy> | undefined): RetryPolicy {
   return { ...DEFAULT_RETRY_POLICY, ...override };
 }
@@ -406,6 +471,22 @@ export class AiSdkModelPort implements ModelPort {
   /** Provider's model claim from the most recent raw `message_start` seen by this port. */
   #lastResponseModel: string | undefined;
 
+  /**
+   * TASK.168: permanent, per-PORT-INSTANCE memory that a strict
+   * openai-chat-completions endpoint has already been confirmed (by a
+   * one-shot probe retry) to reject `stream_options.include_usage`. Once
+   * true, every subsequent attempt on THIS port builds its model with the
+   * flag forced off — no further probing. Scope is deliberately the port
+   * instance, never module/process-global state: a port is constructed
+   * per-endpoint (one `EndpointConfig` — a fixed baseUrl+model+transport —
+   * for the instance's whole life; CLI `/model` and the desktop hot-swap both
+   * construct a FRESH port on a model switch), so this field's lifetime is
+   * exactly "the remainder of that endpoint's lifetime" as long as the same
+   * port keeps serving it. A switch to a different model/endpoint gets its
+   * own port and its own honest first probe.
+   */
+  #includeUsageDisabledForEndpoint = false;
+
   constructor(
     private readonly config: EndpointConfig,
     private readonly onDiagnostic: DiagnosticSink = consoleDiagnosticSink,
@@ -434,11 +515,18 @@ export class AiSdkModelPort implements ModelPort {
    * result falls back to the static `config.apiKey` (the model port never fails
    * just because a refresh hiccupped — the SDK call itself will surface a real
    * auth failure).
+   *
+   * `includeUsage` is the CALLER-resolved effective value for this attempt
+   * (TASK.168: `this.config.includeUsage` unless the endpoint-level probe has
+   * already disabled it, or unless this very attempt IS the probe retry) — it
+   * always wins over `this.config.includeUsage` so the spread below stays a
+   * no-op byte-for-byte match of the pre-TASK.168 shape whenever the two
+   * values happen to be equal (the overwhelming majority of attempts).
    */
-  private async buildAttemptModel(): Promise<LanguageModel> {
+  private async buildAttemptModel(includeUsage: boolean | undefined): Promise<LanguageModel> {
     const { resolveApiKey } = this.config;
     if (resolveApiKey === undefined) {
-      return createLanguageModel(this.config);
+      return createLanguageModel({ ...this.config, includeUsage });
     }
     let apiKey = this.config.apiKey;
     try {
@@ -449,19 +537,57 @@ export class AiSdkModelPort implements ModelPort {
     } catch {
       // Fall back to the static key: a refresh hiccup must not kill the attempt.
     }
-    return createLanguageModel({ ...this.config, apiKey });
+    return createLanguageModel({ ...this.config, apiKey, includeUsage });
+  }
+
+  /**
+   * Commits the TASK.168 include_usage probe: called exactly once, the
+   * moment a probe retry (see `includeUsageProbeEligible`) demonstrates the
+   * flag was the cause of a pre-content HTTP 400 by NOT reproducing that same
+   * failure. `#includeUsageDisabledForEndpoint` is already `true` by the time
+   * this runs (set optimistically when the probe started); this only
+   * announces it. Unreachable more than once per instance: once committed,
+   * every later attempt's effective `includeUsage` is permanently `false`,
+   * which fails `includeUsageProbeEligible`'s `attemptIncludeUsage === true`
+   * check and so can never start another probe on this port.
+   */
+  #confirmIncludeUsageProbe(): void {
+    this.onDiagnostic({
+      kind: "include_usage_disabled",
+      baseUrl: this.config.baseUrl,
+      model: this.config.model,
+    });
   }
 
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
+    // TASK.168: the failure that STARTED the include_usage probe, carried
+    // from that attempt to the very next one (the probe retry) — see
+    // `ProbeFailure`'s docstring.
+    let includeUsageProbe: ProbeFailure | undefined;
 
     for (;;) {
       let hadModelOutput = false;
       let pendingRetryError: unknown = NO_RETRY;
+      // TASK.168: set instead of pendingRetryError when this pass ends by
+      // starting an include_usage probe — that retry is immediate (no
+      // backoff), doesn't consume the connect/stall retry budget, and never
+      // emits a `stream_retry` wire event, so it deliberately bypasses the
+      // pendingRetryError machinery below.
+      let probeRetryNeeded = false;
+      // TASK.168: THIS pass's own failure while a probe was already pending
+      // (i.e. this pass IS the probe retry), captured here and resolved once
+      // OUTSIDE the try/catch below — see `ProbeFailure`'s docstring for why.
+      let pendingProbeFailure: ProbeFailure | undefined;
       // Per-attempt dedup of dropped-artifact warnings (reset with the attempt
       // on retry, alongside hadModelOutput) — slice 3.7 R1, §2.2.
       const warnedArtifacts = new Set<string>();
+      // TASK.168: the effective include_usage verdict for THIS attempt —
+      // forced off once the endpoint-level probe has committed, or while this
+      // attempt IS itself the probe retry (both fold into the same field:
+      // the probe sets it optimistically before the retry runs).
+      const attemptIncludeUsage = this.#includeUsageDisabledForEndpoint ? false : this.config.includeUsage;
 
       // Per-attempt controller so a stall can cancel just this attempt's SDK
       // call without tearing down the caller's own abortSignal; linked so an
@@ -472,7 +598,7 @@ export class AiSdkModelPort implements ModelPort {
         : () => {};
 
       try {
-        const model = await this.buildAttemptModel();
+        const model = await this.buildAttemptModel(attemptIncludeUsage);
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -544,6 +670,37 @@ export class AiSdkModelPort implements ModelPort {
             }
             continue;
           }
+          // TASK.168: this pass IS a probe retry (started by a previous
+          // pass) — defer this failure's fate to the resolution block after
+          // the try/catch instead of classifying it here, regardless of
+          // whether it would otherwise look retryable. Never reachable for
+          // the pass that itself starts a probe (that branch is below, and
+          // is mutually exclusive with this one by construction: a pass only
+          // reaches this branch when `includeUsageProbe` was ALREADY set
+          // before the pass began).
+          if (event.type === "error" && includeUsageProbe !== undefined) {
+            pendingProbeFailure = { error: event.error, kind: "event" };
+            attemptController.abort(event.error);
+            break;
+          }
+          // TASK.168: start a probe when this pre-content 400 is the FIRST
+          // sign the flag might be the cause.
+          if (
+            event.type === "error" &&
+            includeUsageProbeEligible(
+              this.config.transport,
+              attemptIncludeUsage,
+              event.error,
+              hadModelOutput,
+              request.abortSignal?.aborted ?? false,
+            )
+          ) {
+            includeUsageProbe = { error: event.error, kind: "event" };
+            this.#includeUsageDisabledForEndpoint = true;
+            attemptController.abort(event.error);
+            probeRetryNeeded = true;
+            break;
+          }
           // Retry a before-content failure that surfaced as an `error` STREAM
           // PART (the connect/reset/HTTP-error-before-content class — see the
           // gate note in ./failure.ts). The gate is `!hadModelOutput`, so the
@@ -569,11 +726,29 @@ export class AiSdkModelPort implements ModelPort {
           yield event;
         }
       } catch (error) {
-        // Same gate as the error-part branch, for a before-content failure that
-        // surfaced as a THROWN exception from `fullStream` iteration. The
-        // `!request.abortSignal?.aborted` guard makes an external abort always
-        // win over retry, even when the thrown abort reason looks retryable.
-        if (
+        // TASK.168: mirror of the error-part branch above, for a failure that
+        // surfaced as a THROWN exception (e.g. a synchronous validation
+        // error, or a rejection from `fullStream` iteration before any part
+        // was read) instead of a stream part.
+        if (includeUsageProbe !== undefined) {
+          pendingProbeFailure = { error, kind: "thrown" };
+        } else if (
+          includeUsageProbeEligible(
+            this.config.transport,
+            attemptIncludeUsage,
+            error,
+            hadModelOutput,
+            request.abortSignal?.aborted ?? false,
+          )
+        ) {
+          includeUsageProbe = { error, kind: "thrown" };
+          this.#includeUsageDisabledForEndpoint = true;
+          probeRetryNeeded = true;
+        } else if (
+          // Same gate as the error-part branch, for a before-content failure that
+          // surfaced as a THROWN exception from `fullStream` iteration. The
+          // `!request.abortSignal?.aborted` guard makes an external abort always
+          // win over retry, even when the thrown abort reason looks retryable.
           !hadModelOutput &&
           attempt < policy.maxRetries &&
           isRetryableStreamError(error) &&
@@ -585,6 +760,70 @@ export class AiSdkModelPort implements ModelPort {
         }
       } finally {
         disposeLink();
+      }
+
+      // TASK.168: resolve a deferred probe-retry failure OUTSIDE the
+      // try/catch above — deliberately, so a rollback's `throw` propagates
+      // straight out of the generator instead of risking re-entry into this
+      // same pass's own `catch`.
+      if (pendingProbeFailure !== undefined) {
+        const failure = pendingProbeFailure;
+        // Invariant: pendingProbeFailure is only ever set in the two branches
+        // above that first check `includeUsageProbe !== undefined`, so it is
+        // always defined here too.
+        const original = includeUsageProbe as ProbeFailure;
+        if (isPreContent400(failure.error, hadModelOutput)) {
+          // The retry ALSO 400'd pre-content: the flag was NOT the cause.
+          // Roll back the optimistic disable and surface the FIRST failure
+          // unchanged through the channel it originally used — this (second)
+          // error is discarded so a genuine model-side 400 is never
+          // rewritten into a confusing one.
+          this.#includeUsageDisabledForEndpoint = false;
+          includeUsageProbe = undefined;
+          if (original.kind === "thrown") {
+            throw original.error;
+          }
+          yield { type: "error", error: original.error } as ModelStreamEvent;
+          return;
+        }
+        // The retry got past the 400 (success, a stall, or a genuinely
+        // different failure): the flag WAS the cause. Commit permanently and
+        // warn exactly once, then re-classify THIS pass's actual failure
+        // exactly as the non-probe path would have.
+        this.#confirmIncludeUsageProbe();
+        includeUsageProbe = undefined;
+        if (
+          !hadModelOutput &&
+          attempt < policy.maxRetries &&
+          isRetryableStreamError(failure.error) &&
+          !request.abortSignal?.aborted
+        ) {
+          pendingRetryError = failure.error;
+        } else if (failure.kind === "thrown") {
+          throw failure.error;
+        } else {
+          yield { type: "error", error: failure.error } as ModelStreamEvent;
+          return;
+        }
+      }
+
+      if (probeRetryNeeded) {
+        // Immediate, budget-exempt retry: no backoff, no attempt increment,
+        // no stream_retry event — the whole point is that a strict server's
+        // rejection of an unknown wire field is not a transient network
+        // failure the caller needs to see as a retry announcement.
+        continue;
+      }
+
+      // TASK.168: reaching here with a still-pending probe means THIS pass
+      // was the probe retry itself and it finished with NO error part or
+      // thrown exception at all (a clean finish, or a stall — the one
+      // non-error outcome that also breaks the inner loop without going
+      // through pendingProbeFailure above). Either way the flag is no longer
+      // the blocker: commit + warn.
+      if (includeUsageProbe !== undefined) {
+        this.#confirmIncludeUsageProbe();
+        includeUsageProbe = undefined;
       }
 
       if (pendingRetryError === NO_RETRY) {
