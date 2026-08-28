@@ -809,7 +809,7 @@ of the real machine's `~`, with zero production code path reading it (the
 production default is always the real `os.homedir()`). See
 `apps/desktop/scripts/subagents-ui-smoke.mjs` for the reference wiring.
 
-### Profile pane probe/driver (slice P7.22 F19, W4)
+### Profile pane probe/driver (slice P7.22 F19, W4; period/models/refresh added TASK.172)
 
 Mirrors `ProfilePane.tsx` (the Settings "Profile" usage-stats page,
 `design/slice-P7.22-cut.md` §1/§4 W3/W4) — a DOM probe/driver, same "no
@@ -834,6 +834,34 @@ is exactly "how many days in the 12-month window have tokens").
 `banner` branch (data present + disabled — "Telemetry is off — stats are
 frozen").
 
+TASK.172 widened this SAME dedicated route (an additive shape change, same
+posture as `GET /state`'s `engine` field) with everything TASK.158 slice 2
+shipped and the original W4 probe never picked up: `period` is which
+`.profile-period-button` currently reads `aria-pressed="true"`, mapped back
+to a `ProfilePeriod` purely by DOM POSITION — `PeriodControl` renders
+`PROFILE_PERIODS.map(...)` in that exact order and stamps no `data-period`
+attribute, so button position `i` always corresponds to `PROFILE_PERIODS[i]`
+(imported straight from `ProfilePane.tsx`, so this mapping can never drift
+from what the component renders); it defaults to `"all"` whenever the
+control isn't rendered at all (unmounted, still loading, or the hero/
+io-error branch). `periods` is that same static four-entry catalog, always
+present regardless of mount/branch — same "always the static catalog"
+posture as start-screen's `availableEngines`. `coverageNotice` is
+`.profile-coverage-notice`'s rendered text, or `null` when it isn't rendered
+(scan never truncated, or the selected period's start is already within the
+covered range). `models` is the currently rendered `.profile-model-row` list
+(the collapsed 8-row slice, or the full list once expanded);
+`modelsTotalCount` is the TRUE total row count regardless of collapse state —
+while collapsed it's parsed straight off the `.profile-show-all-models`
+button's own "Show all (N)" text (the only place N is rendered at that
+point, since the DOM itself only carries the 8-row slice); `modelsExpanded`
+mirrors that same button reading "Show less". `tools` adds per-row call
+counts (`.profile-top-count`, parsed to a number) the pre-172 `topTools`
+never carried — `topTools` itself stays byte-untouched (name-only) for any
+existing caller. `insights` gains `tokensInPeriod` (the "Tokens in period"
+row) — the value the period-switch DoD below is anchored on, distinct from
+the lifetime-scoped tiles row.
+
 `POST .../profile/telemetry` drives a REAL click on the toggle switch — always
 flips the CURRENT effective state (mirrors a real click, `ProfilePane.tsx`'s
 own `nextTelemetryToggleValue`; there is no separate "set to X" request
@@ -843,15 +871,47 @@ sibling-preserving user-config write); `{ok:false, reason:"toggle_disabled"}`
 when the `ANYCODE_TELEMETRY` env kill-switch has the switch rendered
 `disabled`.
 
+`POST .../profile/period` drives a REAL click on the `.profile-period-button`
+at the DOM position matching the requested `period` (found via the same
+`PROFILE_PERIODS` catalog `period`/`periods` above use) — a pure client-side
+`setState` inside `ProfileBody` (`PeriodControl`'s own `onChange`), no IPC
+round trip at all, same "real click, no reinvented vocabulary" discipline as
+every other driver in this file. `POST .../profile/models/toggle` drives a
+REAL click on `.profile-show-all-models` — always flips the CURRENT
+collapsed/expanded state, same unary posture as the telemetry toggle;
+`{ok:false, reason:"expander_not_present"}` covers both "nothing to expand"
+(`<= PROFILE_MODELS_COLLAPSED_ROWS` total rows, so `ToolsAndModelsColumn`
+never rendered the button) and "the click itself never fired" — a caller
+wanting to tell those apart reads `GET /settings/profile`'s `modelsTotalCount`
+first. `POST .../profile/refresh` drives a REAL click on the toolbar's
+`.profile-refresh-button`, the SAME button `ProfilePane.tsx`'s own `refresh()`
+handler is wired to (a genuine `bridge.getStats()` IPC round trip, re-scanning
+the telemetry directory — not cosmetic); `changed` is a real before/after diff
+of everything this probe can see (tiles, branch, insight rows, model rows,
+coverage notice) — `changed:false` after a genuinely fast re-fetch that
+happened to return identical data (no new telemetry recorded since the last
+read) is a normal, honest reading, **not** folded into `ok` as a failure. This
+is the one action route in this file whose verdict is a real diff rather than
+a plain `{ok:true}`, precisely because "the handler ran without throwing" was
+found insufficient once before (a past live smoke's own finding) — a caller
+that needs to know whether NEW numbers actually landed reads `changed`
+instead of trusting a bare `ok:true`.
+
 | Method / path | Body | Returns |
 |---|---|---|
-| `GET /settings/profile` | — | `{mounted, tiles:[{label, value}], insights:{totalSessions, totalRuns, toolCalls, subagentRuns, mostUsedModel}, topTools:[name], heatmapNonEmptyCells, telemetryEnabled, killSwitchActive, truncated, emptyStateHero, frozenBanner}` |
+| `GET /settings/profile` | — | `{mounted, tiles:[{label, value}], insights:{tokensInPeriod, totalSessions, totalRuns, toolCalls, subagentRuns, mostUsedModel}, topTools:[name], tools:[{name, count}], heatmapNonEmptyCells, telemetryEnabled, killSwitchActive, truncated, emptyStateHero, frozenBanner, period, periods:[{period, label}], coverageNotice, models:[{model, tokens}], modelsTotalCount, modelsExpanded}` |
 | `POST /settings/profile/telemetry` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"toggle_not_present"\|"toggle_disabled"\|"did_not_toggle"}` |
+| `POST /settings/profile/period` | `{period:"today"\|"7d"\|"30d"\|"all"}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"invalid_period"\|"control_not_present"\|"did_not_switch"}` |
+| `POST /settings/profile/models/toggle` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"expander_not_present"\|"did_not_toggle"}` |
+| `POST /settings/profile/refresh` | `{}` | `{ok:true, changed:boolean}` \| `{ok:false, reason:"pane_not_mounted"\|"refresh_not_present"}` |
 
 ```bash
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/pane -d '{"paneId":"profile"}'
 curl "${A[@]}" "$B/settings/profile"
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/telemetry -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/period -d '{"period":"7d"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/models/toggle -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/refresh -d '{}'
 ```
 
 `ANYCODE_PROFILE_HOME=<absolute dir>` is a **dev/test-only** override for the

@@ -52,6 +52,7 @@ import {
   providerModelsFor,
   resolvePillTarget,
 } from "./components/ModelPill.js";
+import { PROFILE_PERIODS, type ProfilePeriod } from "./components/ProfilePane.js";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
@@ -1052,24 +1053,50 @@ export interface SubagentsPaneDom {
  * `.profile-empty-hero[data-profile-branch="hero"]` / `.profile-banner`
  * respectively (`computeProfileBranch`'s own DOM markers, byte-parity with
  * the branch a real render picked).
+ *
+ * TASK.172 addendum (the period filter + full models list this probe
+ * originally shipped without, design/slice-P7.22-cut.md's own §S7 follow-on):
+ * `period`/`periods` cover `PeriodControl`; `coverageNotice`/`models`/
+ * `modelsTotalCount`/`modelsExpanded` cover the honesty note and the full,
+ * expandable Models list; `tools` adds per-row call counts the pre-172
+ * `topTools` (name-only, kept byte-untouched below) never carried.
+ * `PROFILE_PERIODS` is imported straight from `ProfilePane.tsx` — the SAME
+ * array `PeriodControl`'s own `.map()` renders from, so button DOM POSITION
+ * (not a `data-*` attribute the component doesn't stamp) is what maps a
+ * rendered button back to a `ProfilePeriod` value, same "slot index" posture
+ * `ShortcutsPaneDom`'s `slotIndex` addressing uses.
  */
 export interface ProfilePaneTileState {
   label: string;
   value: string;
 }
 export interface ProfilePaneInsightsState {
+  /** "Tokens in period" row, compact-formatted (e.g. "1.1bn") — the value the period switch's own DoD is anchored on (TASK.172): distinct from `tokens` anywhere else in this file, this one is re-sliced by the currently selected period, never the lifetime total the tiles row carries. */
+  tokensInPeriod: string;
   totalSessions: number;
   totalRuns: number;
   toolCalls: number;
   subagentRuns: number;
   mostUsedModel: string;
 }
+/** One `.profile-top-row` under the Tools column: name + parsed "N calls" count (TASK.172 — the pre-existing `topTools` below is name-only). */
+export interface ProfilePaneToolState {
+  name: string;
+  count: number;
+}
+/** One `.profile-model-row` under the (possibly collapsed) Models list. `tokens` is the rendered compact string (e.g. "1.1bn"), same "read the on-screen text, never re-derive" posture as `ProfilePaneTileState.value`. */
+export interface ProfilePaneModelRow {
+  model: string;
+  tokens: string;
+}
 export interface ProfilePaneState {
   /** Whether `.profile-pane` is currently mounted at all (Settings open with the "profile" pane selected) — see the class doc above re: the loading moment. */
   mounted: boolean;
   tiles: ProfilePaneTileState[];
   insights: ProfilePaneInsightsState;
+  /** Name-only reading, kept byte-untouched since before TASK.172 — see `tools` below for the counted version. */
   topTools: string[];
+  tools: ProfilePaneToolState[];
   heatmapNonEmptyCells: number;
   telemetryEnabled: boolean;
   killSwitchActive: boolean;
@@ -1078,23 +1105,44 @@ export interface ProfilePaneState {
   emptyStateHero: boolean;
   /** True only for the `banner` branch (data present + disabled — "Telemetry is off — stats are frozen"). */
   frozenBanner: boolean;
+  /** `ProfileBody`'s own local `period` state (TASK.172), read off which `.profile-period-button` currently reads `aria-pressed="true"`. Defaults to `"all"` (the component's own initial `useState` value) whenever the control isn't rendered at all — unmounted, still loading, or the hero/io-error branch (`PeriodControl` only renders past those). */
+  period: ProfilePeriod;
+  /** The static `PROFILE_PERIODS` catalog, always all four entries regardless of mount/branch — same "always the static catalog" posture as start-screen's `availableEngines`. */
+  periods: { period: ProfilePeriod; label: string }[];
+  /** `.profile-coverage-notice`'s rendered text, or `null` when it isn't rendered (scan never truncated, or the selected period's start is already within the covered range). */
+  coverageNotice: string | null;
+  /** Currently rendered `.profile-model-row`s (the collapsed 8-row slice, or the full list once expanded) — see `modelsTotalCount`/`modelsExpanded` for the collapse state itself. */
+  models: ProfilePaneModelRow[];
+  /** Total row count backing the "Show all (N)" expander, independent of how many rows are currently rendered — equals `models.length` whenever the expander itself isn't rendered (<= `PROFILE_MODELS_COLLAPSED_ROWS` rows total, nothing to collapse). */
+  modelsTotalCount: number;
+  modelsExpanded: boolean;
 }
 
-/** The empty-defaults reading (design §4 W4) — same "valid empty defaults, not an error" posture as `blankSubagentsEditorState`. */
+/** The empty-defaults reading (design §4 W4) — same "valid empty defaults, not an error" posture as `blankSubagentsEditorState`. `periods` is the one field that stays the real static catalog even unmounted (TASK.172 — see the interface doc above). */
 function blankProfilePaneState(): ProfilePaneState {
   return {
     mounted: false,
     tiles: [],
-    insights: { totalSessions: 0, totalRuns: 0, toolCalls: 0, subagentRuns: 0, mostUsedModel: "" },
+    insights: { tokensInPeriod: "", totalSessions: 0, totalRuns: 0, toolCalls: 0, subagentRuns: 0, mostUsedModel: "" },
     topTools: [],
+    tools: [],
     heatmapNonEmptyCells: 0,
     telemetryEnabled: false,
     killSwitchActive: false,
     truncated: false,
     emptyStateHero: false,
     frozenBanner: false,
+    period: "all",
+    periods: PROFILE_PERIODS,
+    coverageNotice: null,
+    models: [],
+    modelsTotalCount: 0,
+    modelsExpanded: false,
   };
 }
+
+/** `profileRefresh()`'s ok-shape (TASK.172): `changed` is a real before/after diff of the rendered tiles/branch/insight-rows/models/coverage-notice signature — `false` is a normal, honest reading (a genuinely fast re-fetch that returned identical data, e.g. no new telemetry recorded since the last read), not a failure. The click itself (a real `.click()` on `.profile-refresh-button`, refused when that button isn't in the DOM at all) is what proves this route did something real; `changed` is the extra transparency the last-smoke warning asked for — a caller that needs to know whether NEW numbers actually landed reads this instead of trusting a bare `ok:true`. */
+export type ProfilePaneRefreshResult = { ok: true; changed: boolean } | { ok: false; reason: string };
 
 /**
  * DOM accessor DI for the Profile pane probe/driver (design §4 W4), same
@@ -1125,6 +1173,22 @@ export interface ProfilePaneDom {
   telemetrySwitch(): { checked: boolean; disabled: boolean } | null;
   /** A real `.click()` on the toggle switch; `false` if it isn't rendered. */
   clickTelemetryToggle(): boolean;
+  /** Every `.profile-period-button`, in rendered DOM order (the SAME order `PeriodControl`'s own `PROFILE_PERIODS.map()` renders, so position `i` always corresponds to `PROFILE_PERIODS[i]`); empty outside the banner/normal branches, same posture as `tiles()`/`insightRows()`. */
+  periodButtons(): { label: string; active: boolean }[];
+  /** A real `.click()` on the `.profile-period-button` at DOM position `index`; `false` if the control isn't rendered or `index` is out of range. */
+  clickPeriodButtonAt(index: number): boolean;
+  /** `.profile-coverage-notice`'s rendered text, or `null` when it isn't rendered. */
+  coverageNoticeText(): string | null;
+  /** Every currently rendered `.profile-model-row`, in DOM order (tokens-desc, as rendered — the collapsed 8-row slice or the full list, whichever `ToolsAndModelsColumn` is currently showing). */
+  modelRows(): { model: string; tokens: string }[];
+  /** The `.profile-show-all-models` expander button's own text ("Show all (N)" / "Show less"), or `null` when it isn't rendered (<= `PROFILE_MODELS_COLLAPSED_ROWS` total rows, nothing to collapse). */
+  modelsExpandButtonText(): string | null;
+  /** A real `.click()` on the models expander button; `false` if it isn't rendered. */
+  clickModelsExpand(): boolean;
+  /** Every `.profile-top-row` under the tools `<ul>` (the FIRST `.profile-top-list`, same scoping `topToolNames()` uses), name + parsed "N calls" count, in rendered (count-desc) order. */
+  toolRows(): { name: string; count: number }[];
+  /** A real `.click()` on the toolbar's `.profile-refresh-button`; `false` if the pane isn't mounted (the button renders unconditionally once mounted, in every branch — `ProfilePane`'s own toolbar sits ABOVE the loading/hero/banner/normal split). */
+  clickRefresh(): boolean;
 }
 
 /**
@@ -2112,9 +2176,23 @@ export interface AutomationFacade {
   // empty defaults, not an error. `profileToggleTelemetry` always flips the
   // CURRENT effective state (mirrors `ProfilePane.tsx`'s own
   // `nextTelemetryToggleValue` — there is no separate "set to X" request
-  // shape, same unary posture as a real click on the switch). ──
+  // shape, same unary posture as a real click on the switch). TASK.172 adds
+  // three more unary/near-unary actions on the SAME pane, same discipline:
+  // `profileSelectPeriod` drives a real click on the target `.profile-
+  // period-button` (found by DOM position, matching `PROFILE_PERIODS`'
+  // order — the component stamps no `data-period` attribute);
+  // `profileToggleModelsExpanded` always flips the CURRENT "Show all (N)" /
+  // "Show less" state, same unary posture as the telemetry toggle;
+  // `profileRefresh` drives a real click on the toolbar's Refresh button and
+  // reports whether the rendered numbers actually changed (`changed`) — a
+  // genuinely fast re-fetch that returns identical data is a normal, honest
+  // `changed:false`, not a failure (see `ProfilePaneRefreshResult`'s own doc
+  // comment). ──
   profilePaneState(): ProfilePaneState;
   profileToggleTelemetry(): Promise<FacadeResult>;
+  profileSelectPeriod(period: ProfilePeriod): Promise<FacadeResult>;
+  profileToggleModelsExpanded(): Promise<FacadeResult>;
+  profileRefresh(): Promise<ProfilePaneRefreshResult>;
   // ── Slash-command menu probe/driver (design/slice-P7.23-cut.md §7 W4) — a
   // DEDICATED probe, every prior probe above stays byte-untouched. `draft`
   // doubles as the insert-assert (§7). `composerType`/`composerKey` drive the
@@ -3249,6 +3327,54 @@ function realProfilePaneDom(): ProfilePaneDom {
       el.click();
       return true;
     },
+    periodButtons: () =>
+      Array.from(pane()?.querySelectorAll<HTMLButtonElement>(".profile-period-control .profile-period-button") ?? []).map((el) => ({
+        label: el.textContent?.trim() ?? "",
+        active: el.getAttribute("aria-pressed") === "true",
+      })),
+    clickPeriodButtonAt: (index) => {
+      const buttons = Array.from(pane()?.querySelectorAll<HTMLButtonElement>(".profile-period-control .profile-period-button") ?? []);
+      const el = buttons[index];
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    coverageNoticeText: () => pane()?.querySelector(".profile-coverage-notice")?.textContent?.trim() ?? null,
+    modelRows: () =>
+      Array.from(pane()?.querySelectorAll<HTMLElement>(".profile-models-list .profile-model-row") ?? []).map((el) => ({
+        model: el.querySelector(".profile-model-name")?.textContent?.trim() ?? "",
+        tokens: el.querySelector(".profile-model-tokens")?.textContent?.trim() ?? "",
+      })),
+    modelsExpandButtonText: () => pane()?.querySelector(".profile-show-all-models")?.textContent?.trim() ?? null,
+    clickModelsExpand: () => {
+      const el = pane()?.querySelector<HTMLButtonElement>(".profile-show-all-models") ?? null;
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    toolRows: () =>
+      Array.from(
+        pane()?.querySelector<HTMLElement>(".profile-top-tools ul.profile-top-list")?.querySelectorAll<HTMLElement>(".profile-top-row") ?? [],
+      ).map((el) => {
+        const raw = el.querySelector(".profile-top-count")?.textContent?.trim() ?? "";
+        const count = Number(raw.replace(/[^\d.]/g, ""));
+        return {
+          name: el.querySelector(".settings-mcp-name")?.textContent?.trim() ?? "",
+          count: Number.isFinite(count) ? count : 0,
+        };
+      }),
+    clickRefresh: () => {
+      const el = pane()?.querySelector<HTMLButtonElement>(".profile-refresh-button") ?? null;
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
   };
 }
 
@@ -4032,6 +4158,9 @@ const SUBAGENTS_PANE_APPLY_DEADLINE_MS = 10_000;
 
 /** Deadline for `profileToggleTelemetry`'s post-click settle poll (design/slice-P7.22-cut.md §4 W4) — same rationale as `SKILLS_PANE_APPLY_DEADLINE_MS`: a real main-process atomic user-config write round-tripped over IPC. */
 const PROFILE_PANE_APPLY_DEADLINE_MS = 10_000;
+
+/** Deadline for `profileSelectPeriod`/`profileToggleModelsExpanded`'s post-click settle polls (TASK.172) — local React `useState` inside `ProfileBody` (`period`/`modelsExpanded`), no IPC round-trip at all, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. Also `profileRefresh`'s poll — that one IS a real IPC round trip (a `getStats()` telemetry-directory scan), but deliberately the SHORT deadline anyway: a local-disk read bounded by the scan's own byte budget, and a "no new data" outcome would otherwise always burn a much longer deadline for no benefit. */
+const PROFILE_PANE_COMMIT_DEADLINE_MS = 500;
 
 /** Deadline for `shortcutsStartRecord`'s post-click settle poll (design/slice-P7.24-cut.md §4 W4) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const SHORTCUTS_PANE_COMMIT_DEADLINE_MS = 500;
@@ -6112,10 +6241,29 @@ export function createAutomationFacade(
         return Number.isFinite(n) ? n : 0;
       };
       const sw = profilePaneDom.telemetrySwitch();
+      // TASK.172: which `.profile-period-button` reads `active` maps back to
+      // a `ProfilePeriod` purely by DOM POSITION — `PeriodControl` renders
+      // `PROFILE_PERIODS.map(...)` in that exact order and stamps no
+      // `data-period` attribute, so position `i` always corresponds to
+      // `PROFILE_PERIODS[i]` (same "slot index" posture as the shortcuts
+      // pane's badge addressing).
+      const periodButtons = profilePaneDom.periodButtons();
+      const activePeriodIndex = periodButtons.findIndex((b) => b.active);
+      const period: ProfilePeriod = activePeriodIndex >= 0 ? (PROFILE_PERIODS[activePeriodIndex]?.period ?? "all") : "all";
+      const modelRows = profilePaneDom.modelRows();
+      const expandText = profilePaneDom.modelsExpandButtonText();
+      const modelsExpanded = expandText === "Show less";
+      // "Show all (N)" is the only place N is rendered while collapsed — the
+      // DOM itself only carries the 8-row slice at that point. No expander
+      // (`expandText === null`) or already-expanded both mean `modelRows`
+      // itself is already the full list.
+      const collapsedTotal = expandText?.match(/\((\d+)\)/)?.[1];
+      const modelsTotalCount = !modelsExpanded && collapsedTotal !== undefined ? Number(collapsedTotal) : modelRows.length;
       return {
         mounted: true,
         tiles: profilePaneDom.tiles(),
         insights: {
+          tokensInPeriod: insightValue("Tokens in period"),
           totalSessions: parseCount("Total tasks"),
           totalRuns: parseCount("Total runs"),
           toolCalls: parseCount("Tool calls"),
@@ -6123,12 +6271,19 @@ export function createAutomationFacade(
           mostUsedModel: insightValue("Most used model"),
         },
         topTools: profilePaneDom.topToolNames(),
+        tools: profilePaneDom.toolRows(),
         heatmapNonEmptyCells: profilePaneDom.heatmapNonEmptyCellCount(),
         telemetryEnabled: sw?.checked ?? false,
         killSwitchActive: sw?.disabled ?? false,
         truncated: profilePaneDom.truncatedVisible(),
         emptyStateHero: branch === "hero",
         frozenBanner: profilePaneDom.bannerVisible(),
+        period,
+        periods: PROFILE_PERIODS,
+        coverageNotice: profilePaneDom.coverageNoticeText(),
+        models: modelRows,
+        modelsTotalCount,
+        modelsExpanded,
       };
     },
 
@@ -6155,6 +6310,82 @@ export function createAutomationFacade(
         PROFILE_PANE_APPLY_DEADLINE_MS,
       );
       return toggled ? { ok: true } : { ok: false, reason: "did_not_toggle" };
+    },
+
+    async profileSelectPeriod(period: ProfilePeriod): Promise<FacadeResult> {
+      if (!profilePaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const index = PROFILE_PERIODS.findIndex((p) => p.period === period);
+      if (index < 0) {
+        return { ok: false, reason: "invalid_period" };
+      }
+      if (profilePaneDom.periodButtons().length === 0) {
+        // The control only renders past the hero/io-error branches (design
+        // §S7 item 4) — a valid refusal, not an internal error.
+        return { ok: false, reason: "control_not_present" };
+      }
+      // A real click on the target button (TASK.172's own "no reinvented
+      // vocabulary" boundary) — `PeriodControl`'s local `setPeriod` is a pure
+      // client-side re-render, no IPC round trip, same posture as
+      // `modelsExpanded` below.
+      if (!profilePaneDom.clickPeriodButtonAt(index)) {
+        return { ok: false, reason: "control_not_present" };
+      }
+      const switched = await waitUntil(() => profilePaneDom.periodButtons()[index]?.active === true, PROFILE_PANE_COMMIT_DEADLINE_MS);
+      return switched ? { ok: true } : { ok: false, reason: "did_not_switch" };
+    },
+
+    async profileToggleModelsExpanded(): Promise<FacadeResult> {
+      if (!profilePaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const before = profilePaneDom.modelsExpandButtonText();
+      if (before === null) {
+        // A valid refusal: <= PROFILE_MODELS_COLLAPSED_ROWS total rows, so
+        // ToolsAndModelsColumn never rendered an expander to click at all.
+        return { ok: false, reason: "expander_not_present" };
+      }
+      if (!profilePaneDom.clickModelsExpand()) {
+        return { ok: false, reason: "expander_not_present" };
+      }
+      const toggled = await waitUntil(() => profilePaneDom.modelsExpandButtonText() !== before, PROFILE_PANE_COMMIT_DEADLINE_MS);
+      return toggled ? { ok: true } : { ok: false, reason: "did_not_toggle" };
+    },
+
+    async profileRefresh(): Promise<ProfilePaneRefreshResult> {
+      if (!profilePaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      // A real getStats() IPC round trip (design's own doc: "a genuine
+      // main-process read, not cosmetic") — `refresh()` sets `result`
+      // directly with no intermediate loading state, so there is no DOM
+      // signal for "request in flight". `changed` is a real before/after
+      // diff of everything this probe can see; identical data after a
+      // genuinely fast re-fetch is a normal, honest `changed:false` (see
+      // `ProfilePaneRefreshResult`'s own doc comment), not folded into `ok`.
+      // Deliberately the SHORT commit deadline, not the 10s write-apply one
+      // above: this is a local-disk read (bounded by the scan's own byte
+      // budget, the same reason `truncated`/`coverageStartTs` exist), and a
+      // "no new data" outcome would otherwise always burn the full deadline
+      // for no benefit — this file's own tests never wait one out.
+      const signature = () =>
+        JSON.stringify({
+          tiles: profilePaneDom.tiles(),
+          branch: profilePaneDom.branch(),
+          insightRows: profilePaneDom.insightRows(),
+          models: profilePaneDom.modelRows(),
+          notice: profilePaneDom.coverageNoticeText(),
+        });
+      const before = signature();
+      if (!profilePaneDom.clickRefresh()) {
+        return { ok: false, reason: "refresh_not_present" };
+      }
+      await waitUntil(() => !profilePaneDom.mounted() || signature() !== before, PROFILE_PANE_COMMIT_DEADLINE_MS);
+      if (!profilePaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      return { ok: true, changed: signature() !== before };
     },
 
     slashMenuState(tabId: string): SlashMenuState | FacadeErr {

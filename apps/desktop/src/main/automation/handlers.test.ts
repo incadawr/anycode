@@ -113,6 +113,11 @@ import {
   subagentsEditorPreview,
   subagentsEditorSave,
   subagentsDelete,
+  profilePaneState,
+  profileToggleTelemetry,
+  profileSelectPeriod,
+  profileToggleModelsExpanded,
+  profileRefresh,
   lspPanelState,
   lspPanelToggle,
   hooksPanelState,
@@ -623,6 +628,38 @@ describe("Subagents pane thin facade commands forward method + args (design/slic
     const deps = fakeDeps();
     await subagentsDelete(deps, "summarizer");
     expect(deps.callFacade).toHaveBeenCalledWith("subagentsDelete", ["summarizer"]);
+  });
+});
+
+describe("Profile pane thin facade commands forward method + args (design/slice-P7.22-cut.md §4 W4, period/models/refresh added TASK.172)", () => {
+  it("profilePaneState -> callFacade('profilePaneState', [])", async () => {
+    const deps = fakeDeps();
+    await profilePaneState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("profilePaneState", []);
+  });
+
+  it("profileToggleTelemetry -> callFacade('profileToggleTelemetry', [])", async () => {
+    const deps = fakeDeps();
+    await profileToggleTelemetry(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("profileToggleTelemetry", []);
+  });
+
+  it("profileSelectPeriod -> callFacade('profileSelectPeriod', [period])", async () => {
+    const deps = fakeDeps();
+    await profileSelectPeriod(deps, "7d");
+    expect(deps.callFacade).toHaveBeenCalledWith("profileSelectPeriod", ["7d"]);
+  });
+
+  it("profileToggleModelsExpanded -> callFacade('profileToggleModelsExpanded', [])", async () => {
+    const deps = fakeDeps();
+    await profileToggleModelsExpanded(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("profileToggleModelsExpanded", []);
+  });
+
+  it("profileRefresh -> callFacade('profileRefresh', [])", async () => {
+    const deps = fakeDeps();
+    await profileRefresh(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("profileRefresh", []);
   });
 });
 

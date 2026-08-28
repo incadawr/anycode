@@ -3011,6 +3011,149 @@ describe("Subagents pane routes (design/slice-P7.21-cut.md §4 W4)", () => {
   });
 });
 
+describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/refresh added TASK.172)", () => {
+  const PROFILE_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
+    { path: "/settings/profile/telemetry", body: {} },
+    { path: "/settings/profile/period", body: { period: "7d" } },
+    { path: "/settings/profile/models/toggle", body: {} },
+    { path: "/settings/profile/refresh", body: {} },
+  ];
+
+  it("401s GET /settings/profile without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/settings/profile"));
+    expect(res.status).toBe(401);
+  });
+
+  it("401s every POST /settings/profile/* route without a token", async () => {
+    const h = await boot();
+    for (const route of PROFILE_POST_ROUTES) {
+      const res = await fetch(url(h, route.path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(route.body),
+      });
+      expect(res.status, `${route.path} should 401 without a token`).toBe(401);
+    }
+  });
+
+  it("GET /settings/profile -> profilePaneState (dedicated route, distinct from GET /settings, /settings/mcp, /settings/skills, /settings/subagents)", async () => {
+    const facadeResult = {
+      mounted: true,
+      tiles: [{ label: "Lifetime tokens", value: "1.1bn" }],
+      insights: { tokensInPeriod: "44m", totalSessions: 12, totalRuns: 20, toolCalls: 100, subagentRuns: 3, mostUsedModel: "glm-4.6" },
+      topTools: ["Read", "Bash"],
+      tools: [{ name: "Read", count: 40 }, { name: "Bash", count: 60 }],
+      heatmapNonEmptyCells: 30,
+      telemetryEnabled: true,
+      killSwitchActive: false,
+      truncated: false,
+      emptyStateHero: false,
+      frozenBanner: false,
+      period: "7d",
+      periods: [
+        { period: "today", label: "Today" },
+        { period: "7d", label: "7 days" },
+        { period: "30d", label: "30 days" },
+        { period: "all", label: "All" },
+      ],
+      coverageNotice: null,
+      models: [{ model: "glm-4.6", tokens: "44m" }],
+      modelsTotalCount: 1,
+      modelsExpanded: false,
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/profile"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"profilePaneState"');
+    expect(calls[0]).toContain("[]");
+  });
+
+  describe("zod fail-closed on POST /settings/profile/* bodies — callFacade never reached", () => {
+    it("POST /settings/profile/period — missing period -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/profile/period"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/profile/period — out-of-enum period -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/profile/period"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ period: "1y" }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("junk JSON on every POST /settings/profile/* route -> 400, facade never invoked", async () => {
+      for (const route of PROFILE_POST_ROUTES) {
+        const { window, calls } = fakeWindowCapture();
+        const h = await boot({ getWindow: () => window });
+        const res = await fetch(url(h, route.path), { method: "POST", headers: auth(), body: "{not json" });
+        expect(res.status, `${route.path} should 400 on junk JSON`).toBe(400);
+        expect(calls).toHaveLength(0);
+      }
+    });
+  });
+
+  describe("happy path — each route forwards to its facade method and returns the facade result", () => {
+    it("POST /settings/profile/telemetry -> profileToggleTelemetry()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/profile/telemetry"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"profileToggleTelemetry"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/profile/period -> profileSelectPeriod([period])", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/profile/period"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ period: "30d" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"profileSelectPeriod"');
+      expect(calls[0]).toContain('["30d"]');
+    });
+
+    it("POST /settings/profile/models/toggle -> profileToggleModelsExpanded()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/profile/models/toggle"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"profileToggleModelsExpanded"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/profile/refresh -> profileRefresh()", async () => {
+      const facadeResult = { ok: true, changed: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/profile/refresh"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"profileRefresh"');
+      expect(calls[0]).toContain("[]");
+    });
+  });
+});
+
 describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-1)", () => {
   const CODEX_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
     { path: "/settings/codex/install", body: {} },
