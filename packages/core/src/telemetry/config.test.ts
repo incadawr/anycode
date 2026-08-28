@@ -5,6 +5,7 @@
  * throws), and the default sink directory.
  */
 
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { loadTelemetryConfig } from "./config.js";
 import type { FileSystemPort } from "../ports/file-system.js";
@@ -240,9 +241,33 @@ describe("loadTelemetryConfig — dir resolution", () => {
   });
 });
 
-describe("loadTelemetryConfig — TASK.121 ANYCODE_TELEMETRY_DIR override", () => {
-  it("an absolute override wins over any file config, without touching the filesystem", async () => {
-    const result = await loadTelemetryConfig(throwingFs(), WORKSPACE, HOME, {
+describe("loadTelemetryConfig — TASK.121/TASK.165 ANYCODE_TELEMETRY_DIR override", () => {
+  // TASK.165: the override REDIRECTS an already-enabled sink; it must never
+  // enable telemetry on its own. This is the red->green pin for that defect —
+  // on the pre-fix code this returned an ENABLED telemetry object even with
+  // zero config files present anywhere.
+  it("an override alone, with no config claiming enabled:true anywhere, does NOT enable telemetry", async () => {
+    const result = await loadTelemetryConfig(makeFs({}), WORKSPACE, HOME, {
+      ANYCODE_TELEMETRY_DIR: "/abs/override-tel",
+    });
+    expect(result).toEqual({ telemetry: null, issues: [] });
+  });
+
+  it("an absolute override wins over the dir written in an already-enabled file config", async () => {
+    const fs = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({ telemetry: { enabled: true, dir: "/proj-tel" } }),
+    });
+    const result = await loadTelemetryConfig(fs, WORKSPACE, HOME, {
+      ANYCODE_TELEMETRY_DIR: "/abs/override-tel",
+    });
+    expect(result).toEqual({ telemetry: { dir: "/abs/override-tel" }, issues: [] });
+  });
+
+  it("an absolute override also redirects an enabled section that omits its own dir", async () => {
+    const fs = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({ telemetry: { enabled: true } }),
+    });
+    const result = await loadTelemetryConfig(fs, WORKSPACE, HOME, {
       ANYCODE_TELEMETRY_DIR: "/abs/override-tel",
     });
     expect(result).toEqual({ telemetry: { dir: "/abs/override-tel" }, issues: [] });
@@ -291,12 +316,19 @@ describe("loadTelemetryConfig — TASK.121 fail-closed test gate (ambient VITEST
     expect(result).toEqual({ telemetry: null, issues: [] });
   });
 
-  it("an enabled section without an explicit dir resolves to null + an issue instead of the default dir", async () => {
+  // TASK.166: a default-dir resolution under the gate must not vanish — it
+  // redirects to a stable, discoverable temp dir instead. This is the
+  // red->green pin for that defect: on the pre-fix code this resolved to
+  // `{telemetry: null, issues: [...]}` (the fixture data was simply lost).
+  it("an enabled section without an explicit dir redirects to a stable temp dir instead of vanishing, and the path is discoverable via issues", async () => {
     const fs = makeFs({ [PROJECT_CONFIG]: JSON.stringify({ telemetry: { enabled: true } }) });
     const result = await loadTelemetryConfig(fs, WORKSPACE, HOME, {});
-    expect(result.telemetry).toBeNull();
+    const expectedDir = `${tmpdir().replace(/[/\\]+$/, "")}/anycode-telemetry-vitest`;
+    expect(result.telemetry).toEqual({ dir: expectedDir });
+    // Never the real default — this is the whole point of the gate and must not weaken.
+    expect(result.telemetry?.dir).not.toBe(`${HOME}/.anycode/telemetry`);
     expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]).toMatch(/telemetry under a test runner requires an explicit dir/);
+    expect(result.issues[0]).toContain(expectedDir);
   });
 
   it("an explicit absolute dir in a project config still resolves normally under the gate", async () => {
