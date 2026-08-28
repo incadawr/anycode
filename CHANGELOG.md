@@ -5,6 +5,64 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.18] — 2026-08-28
+
+### Added
+
+- The Profile panel can be read by period. Everything below the heatmap now
+  answers to Today / 7 days / 30 days / All time, and the model and tool lists
+  are complete instead of being cut to the top three and top five. A model
+  could previously carry millions of tokens across hundreds of sessions and
+  still never appear on the screen, purely because it ranked fourth.
+- Sessions running on the Claude or Codex engine write telemetry at all. They
+  produced zero records until now, so work done on a foreign engine was absent
+  from the Profile panel rather than merely uncounted.
+- An inline subagent's tokens and tool calls count toward your totals. The
+  panel already reported how many subagents had run while what they cost was
+  recorded nowhere, so the number of runs and the price of them disagreed by
+  construction.
+- "Max output tokens" is an editable field in the connection drawer, with
+  click-to-fill presets (Default · 8192 · 16384 · 32768 · Custom), and the
+  ceiling for a model the catalog does not know rises from 8,192 to 32,768. A
+  reasoning model behind a custom or on-prem endpoint could spend its whole
+  output budget thinking and stop before printing a single character.
+- A subagent's card names the model the provider's response actually claimed
+  to run, and marks it when that differs from the model that was requested.
+  Until now the card could only echo the request back at you.
+
+### Changed
+
+- A max-output value above what the model actually supports is clamped to that
+  model's real ceiling and says so once, instead of being sent and rejected by
+  the provider. The field also shows the number in effect when left empty, and
+  an active `ANYCODE_MAX_OUTPUT_TOKENS` override is named on screen instead of
+  silently overriding what you typed.
+- A subagent started on an explicit model gets that model's own ceiling,
+  reasoning levels and context window, rather than inheriting whatever had
+  been resolved for its parent's model. Where the catalog declares no output
+  ceiling for the child's model, that means the 32,768 default, which can be
+  lower than the parent was running with.
+- GLM-5.3's reasoning levels are corrected to Low / High / Max — the "Off" it
+  used to offer was never supported by the provider — and a Low selection now
+  reaches the provider as Low instead of being raised to High. GLM-5.3 Flash
+  is selectable.
+- Codex is accepted up to 0.150.x. The declared range had fallen five minor
+  versions behind the published CLI, so a current Codex met an "unverified
+  version" warning on every launch. The new bound is backed by regenerating
+  the consumed app-server contract from the real 0.150.1 binary: the methods
+  and decision enums AnyCode consumes came back identical to the pin.
+
+### Fixed
+
+- Token counts and cache-hit rate no longer sit at zero on OpenAI-compatible
+  chat-completions connections. Usage reporting is requested by default there
+  now; a server that refuses the field can be told to stop asking with
+  `ANYCODE_INCLUDE_USAGE=0`.
+- The Profile panel no longer chooses which sessions to read at random. When
+  the history outgrows its read budget it keeps the newest and states the date
+  its numbers begin from; before, it truncated in identifier order, so a busy
+  working day could show nothing at all.
+
 ## [0.0.17] — 2026-08-23
 
 ### Fixed
