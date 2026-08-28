@@ -88,13 +88,15 @@ export interface ProfileStatsView {
   /** True when the scan stopped early on the byte cap (design §2-D1). */
   truncated: boolean;
   /**
-   * `mtimeMs` of the oldest file actually included in the scan, when
-   * `truncated` is true; `null` when not truncated (TASK.158 slice 0 —
-   * honest lower bound of what a period filter can trust). REQUIRED (S10):
-   * `main/profile-ipc.ts`'s `toView` now sets this field inside its own
-   * returned object literal (no post-construction assignment left to appease
-   * an optional type), so the type can guarantee the coverage boundary is
-   * never silently dropped by a future producer that forgets to set it.
+   * Earliest event `ts` in the oldest file actually included in the scan
+   * (falls back to that file's `mtimeMs` only when its first line has no
+   * usable `ts` — TASK.169), when `truncated` is true; `null` when not
+   * truncated (TASK.158 slice 0 — honest lower bound of what a period filter
+   * can trust). REQUIRED (S10): `main/profile-ipc.ts`'s `toView` now sets
+   * this field inside its own returned object literal (no post-construction
+   * assignment left to appease an optional type), so the type can guarantee
+   * the coverage boundary is never silently dropped by a future producer
+   * that forgets to set it.
    */
   coverageStartTs: number | null;
   /** dayKey (same `dayKey(ts)` call as the core aggregator) -> that day's stats. TASK.158 slice 2: the period filter's only data source below the heatmap. */
