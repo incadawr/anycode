@@ -24,6 +24,7 @@ import {
   type JsonRpcNotification,
   type JsonRpcResponse,
   type JsonRpcServerRequest,
+  SUPPORTED_CODEX_VERSION,
   UNHANDLED_SERVER_REQUEST_ERROR,
   isSupportedCodexVersion,
   parseCodexVersion,
@@ -605,7 +606,7 @@ export class AppServerClient {
     });
     const version = parseCodexVersion(output);
     if (version === null || !isSupportedCodexVersion(version)) {
-      throw new EngineVersionError(`Unsupported Codex version: ${output.trim() || "unparseable"} (supported >=0.144.0 <0.145.0)`);
+      throw new EngineVersionError(`Unsupported Codex version: ${output.trim() || "unparseable"} (supported ${SUPPORTED_CODEX_VERSION})`);
     }
   }
 
