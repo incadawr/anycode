@@ -518,15 +518,17 @@ export class AiSdkModelPort implements ModelPort {
    *
    * `includeUsage` is the CALLER-resolved effective value for this attempt
    * (TASK.168: `this.config.includeUsage` unless the endpoint-level probe has
-   * already disabled it, or unless this very attempt IS the probe retry) — it
-   * always wins over `this.config.includeUsage` so the spread below stays a
-   * no-op byte-for-byte match of the pre-TASK.168 shape whenever the two
-   * values happen to be equal (the overwhelming majority of attempts).
+   * already disabled it, or unless this very attempt IS the probe retry).
+   * When it matches the config's own value — the overwhelming majority of
+   * attempts — the config is forwarded UNTOUCHED: spreading would both break
+   * the object identity the no-resolver path guarantees and add an
+   * `includeUsage: undefined` key the pre-TASK.168 shape never carried.
    */
   private async buildAttemptModel(includeUsage: boolean | undefined): Promise<LanguageModel> {
     const { resolveApiKey } = this.config;
+    const usageOverridden = includeUsage !== this.config.includeUsage;
     if (resolveApiKey === undefined) {
-      return createLanguageModel({ ...this.config, includeUsage });
+      return createLanguageModel(usageOverridden ? { ...this.config, includeUsage } : this.config);
     }
     let apiKey = this.config.apiKey;
     try {
@@ -537,7 +539,9 @@ export class AiSdkModelPort implements ModelPort {
     } catch {
       // Fall back to the static key: a refresh hiccup must not kill the attempt.
     }
-    return createLanguageModel({ ...this.config, apiKey, includeUsage });
+    return createLanguageModel(
+      usageOverridden ? { ...this.config, apiKey, includeUsage } : { ...this.config, apiKey },
+    );
   }
 
   /**
