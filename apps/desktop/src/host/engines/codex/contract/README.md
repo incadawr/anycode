@@ -34,12 +34,17 @@ protocol AnyCode's Codex adapter is built against (design
      than one patch unverifiable by this instrument. Skipped (not failed) when
      the env var is unset.
 
-## Supported version range
+## Supported version ceiling
 
-`>=0.144.0 <0.151.0` (mirrors `SUPPORTED_CODEX_VERSION` in
-`host/engines/codex/protocol.ts`). The Codex CLI's TypeScript bindings are
-byte-identical across the observed 0.144.x patch releases; the generated
-JSON-schema differs only in property insertion order, which is why
+`<0.151.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`host/engines/codex/protocol.ts`). TASK.173 (owner decision, 2026-08-29)
+dropped the floor this used to pair with: support is a single ceiling, not a
+closed range, so any codex-cli build below 0.151.0 is accepted by version
+number alone, however old. A build genuinely too old to speak the CONSUMED
+wire shapes fails on its own later, at whichever call first needs a shape it
+lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
+bindings are byte-identical across the observed 0.144.x patch releases; the
+generated JSON-schema differs only in property insertion order, which is why
 `codex-contract-extract.mjs` canonicalizes by recursively sorting object keys
 before comparing.
 
@@ -51,15 +56,16 @@ union variant disappeared, and the handful of removed fields
 (`Account.amazonBedrock.credentialSource`, `McpToolCallAppContext.templateId`)
 are unconsumed and named in the test's `REVIEWED_REMOVALS`. `codex-support.json`
 records the two grades separately (`tested` vs `contract-verified`), and
-`recommended` deliberately stays on the live-smoked patch: the range says which
-Codex a user may bring, `recommended` says which one AnyCode downloads itself.
+`recommended` deliberately stays on the live-smoked patch: the ceiling says
+which Codex a user may bring, `recommended` says which one AnyCode downloads
+itself.
 
-## Widening the range / updating the pin
+## Raising the ceiling / updating the pin
 
 Treat this as a single reviewed act, landed in ONE commit:
 
 1. Run `codex app-server generate-json-schema --out <tmpdir>` against the new
-   minimum supported version.
+   version being admitted (the one the ceiling will be raised to reach).
 2. Regenerate, passing the REAL `codex --version` output of that SAME binary
    as the third argument (required, never defaulted — see below):
    ```

@@ -22,11 +22,13 @@ if (args.includes("--version")) {
     forkStubbornGrandchild();
     setInterval(() => {}, 1_000);
   } else if (args.includes("--bad-version")) {
-    // Deliberately BELOW the supported floor rather than above the ceiling:
-    // widening SUPPORTED_CODEX_VERSION only ever raises the upper bound, so an
-    // above-ceiling literal would silently become "supported" one widening
-    // later and this fail-closed test would stop testing anything.
-    process.stdout.write("codex-cli 0.100.0\n");
+    // TASK.173 (owner decision, 2026-08-29): SUPPORTED_CODEX_VERSION dropped
+    // its floor and is now a bare ceiling, so the only way left to be
+    // unsupported is ABOVE it — a below-floor probe (e.g. 0.100.0) would now
+    // pass. Every codex-cli release observed so far (W0 through the 0.150.1
+    // measurement) has stayed on major 0, so a next-major placeholder stays
+    // above the ceiling no matter how far a future edit raises it within 0.x.
+    process.stdout.write("codex-cli 1.0.0\n");
   } else if (args.includes("--hang-version")) setInterval(() => {}, 1_000);
   else process.stdout.write("codex-cli 0.144.1\n");
   if (!args.includes("--hang-version") && !args.includes("--version-grandchild")) process.exit(0);

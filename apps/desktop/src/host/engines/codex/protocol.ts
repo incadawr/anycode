@@ -4,7 +4,7 @@
  * or event-to-AgentEvent translation is implied by these shapes.
  */
 
-export const SUPPORTED_CODEX_VERSION = ">=0.144.0 <0.151.0";
+export const SUPPORTED_CODEX_VERSION = "<0.151.0";
 
 export interface CodexVersion {
   major: number;
@@ -27,22 +27,30 @@ export function parseCodexVersion(output: string): CodexVersion | null {
 }
 
 /**
- * Inclusive lower / exclusive upper bound, PARSED from
- * `SUPPORTED_CODEX_VERSION` rather than restated. The predicate used to be
- * hardcoded (`minor === 144`) while the constant above was a display string
- * only: the two could disagree silently, and widening the string alone would
- * have advertised a range the code still refused. One edit now moves both.
+ * Exclusive ceiling, PARSED from `SUPPORTED_CODEX_VERSION` rather than
+ * restated. The predicate used to be hardcoded (`minor === 144`) while the
+ * constant above was a display string only: the two could disagree silently,
+ * and widening the string alone would have advertised a version the code
+ * still refused. One edit now moves both.
+ *
+ * TASK.173 (owner decision, 2026-08-29): dropped the FLOOR that used to pair
+ * with this ceiling. Support is no longer a closed range ("island") — any
+ * codex-cli build below the ceiling is accepted by version number, however
+ * old. The ceiling itself stays because it is a real measurement: a real
+ * 0.150.1 binary was unpacked and its app-server schema compared against the
+ * pinned contract (`contract/README.md`), so anything at or above 0.151.0 is
+ * genuinely unverified, not merely old. A build old enough to actually lack
+ * the consumed wire shapes fails on its own later — an unparseable/missing
+ * response at whichever call first needs the missing shape — rather than
+ * being preemptively refused here by version number alone.
  */
-const SUPPORTED_BOUNDS = parseSupportedRange(SUPPORTED_CODEX_VERSION);
+const SUPPORTED_CEILING = parseSupportedCeiling(SUPPORTED_CODEX_VERSION);
 
-function parseSupportedRange(range: string): { min: CodexVersion; max: CodexVersion } {
-  const match = /^>=(\d+)\.(\d+)\.(\d+) <(\d+)\.(\d+)\.(\d+)$/.exec(range);
+function parseSupportedCeiling(range: string): CodexVersion {
+  const match = /^<(\d+)\.(\d+)\.(\d+)$/.exec(range);
   if (match === null) throw new Error(`unsupported SUPPORTED_CODEX_VERSION form: ${range}`);
-  const [, a, b, c, d, e, f] = match;
-  return {
-    min: { major: Number(a), minor: Number(b), patch: Number(c) },
-    max: { major: Number(d), minor: Number(e), patch: Number(f) },
-  };
+  const [, a, b, c] = match;
+  return { major: Number(a), minor: Number(b), patch: Number(c) };
 }
 
 function compareCodexVersions(left: CodexVersion, right: CodexVersion): number {
@@ -52,10 +60,7 @@ function compareCodexVersions(left: CodexVersion, right: CodexVersion): number {
 }
 
 export function isSupportedCodexVersion(version: CodexVersion): boolean {
-  return (
-    compareCodexVersions(version, SUPPORTED_BOUNDS.min) >= 0 &&
-    compareCodexVersions(version, SUPPORTED_BOUNDS.max) < 0
-  );
+  return compareCodexVersions(version, SUPPORTED_CEILING) < 0;
 }
 
 export interface JsonRpcNotification {

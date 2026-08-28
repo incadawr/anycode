@@ -12,7 +12,7 @@ import {
   buildCodexChildEnv,
   checkCodexBinaryTrustOnDisk,
 } from "./app-server-client.js";
-import { EngineVersionError } from "./protocol.js";
+import { EngineVersionError, SUPPORTED_CODEX_VERSION } from "./protocol.js";
 import { ENV_CODEX_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../../../shared/engines.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
@@ -124,6 +124,20 @@ describe("AppServerClient", () => {
   it("fails closed for an unsupported or timed-out version", async () => {
     await expect(makeClient(["--bad-version"]).start()).rejects.toBeInstanceOf(EngineVersionError);
     await expect(makeClient(["--hang-version"], { versionTimeoutMs: 150 }).start()).rejects.toBeInstanceOf(EngineVersionError);
+  });
+
+  // TASK.173: the rejection text must be DERIVED from SUPPORTED_CODEX_VERSION,
+  // not a second literal restating it — otherwise widening the constant alone
+  // (as every prior codex bump did) leaves this message advertising a stale
+  // ceiling narrower than the predicate actually accepts. Reads the constant's
+  // live value rather than a copied string, so the assertion cannot itself
+  // become the next place that goes stale. Triggered with `--bad-version`
+  // (above the ceiling): the floor is gone (owner decision, 2026-08-29), so an
+  // old version no longer fails this preflight at all.
+  it("names the CURRENT supported ceiling in the rejection message, not a stale copy", async () => {
+    const failure = await makeClient(["--bad-version"]).start().then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(EngineVersionError);
+    expect((failure as Error).message).toContain(SUPPORTED_CODEX_VERSION);
   });
 
   // W5.5-review Medium: pre-fix, trust was checked ONCE before `preflightVersion()`
