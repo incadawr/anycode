@@ -44,6 +44,7 @@ import { backgroundCapableBashTool, bashKillTool, bashOutputTool, createDefaultT
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
 import type { ImageAttachment } from "../types/images.js";
+import { DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
 
 describe("parseAllowCommand", () => {
   it("treats empty/whitespace-only text as a listing request", () => {
@@ -1782,7 +1783,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(text).toContain("[model] glm-4.6");
     // TASK.113: the refreshed Z.AI catalog line, fresh-first.
     expect(text).toContain(
-      "[model] provider: Z.AI (GLM) — models: glm-5.3, glm-5.2, glm-5.1, glm-5, glm-5-turbo, glm-4.7, glm-4.6, glm-4.5, glm-4.5-air (switch: /model <id>)",
+      "[model] provider: Z.AI (GLM) — models: glm-5.3, glm-5.3-flash, glm-5.2, glm-5.1, glm-5, glm-5-turbo, glm-4.7, glm-4.6, glm-4.5, glm-4.5-air (switch: /model <id>)",
     );
     // /model show never reaches the model.
     expect(modelPort.calls).toBe(0);
@@ -4078,6 +4079,62 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/L4): default byte-lo
 });
 
 // ---------------------------------------------------------------------------
+// TASK.121: pnpm test must never resolve telemetry against a real home dir.
+// The leak path was: a workspace with no project telemetry config falls
+// through to the HOME-scope `.anycode/config.json` (production default:
+// os.homedir() — the owner's real home); if that file has telemetry enabled
+// without an explicit `dir`, resolution lands on `<home>/.anycode/telemetry`
+// and writes real JSONL there. This regression test drives the exact same
+// fallthrough shape (a `home` override standing in for the owner's real home,
+// so this suite never touches the real ~/.anycode) and asserts ZERO `.jsonl`
+// files anywhere under it — this is the seam loadTelemetryConfig's ambient
+// test gate (packages/core/src/telemetry/config.ts) is meant to close.
+function findJsonlFilesRecursive(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...findJsonlFilesRecursive(full));
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) found.push(full);
+  }
+  return found;
+}
+
+describe("CLI telemetry e2e (TASK.121): the home-fallback seam never resolves under a test runner", () => {
+  it("a workspace with no project telemetry config, whose HOME has telemetry enabled without a dir, writes zero .jsonl files under home", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const tmpHome = mkdtempSync(join(tmpdir(), "anycode-cli-telemetry-home-"));
+    titleTestTempDirs.push(tmpHome);
+    // Deliberately NOT calling writeTelemetryConfig on `workspace` — this is the
+    // exact leak path: the project scope is absent, forcing fallthrough to home.
+    mkdirSync(join(tmpHome, ".anycode"), { recursive: true });
+    writeFileSync(
+      join(tmpHome, ".anycode", "config.json"),
+      JSON.stringify({ telemetry: { enabled: true } }), // no `dir` — would default under home
+    );
+    const modelPort = new CountingModelPort();
+    const input = new PassThrough();
+    const output = new PassThrough();
+
+    const runPromise = runCli({
+      argv: [],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort,
+      cwd: workspace,
+      home: tmpHome,
+    });
+
+    input.write("/quit\n");
+    input.end();
+
+    expect(await runPromise).toBe(0);
+    expect(findJsonlFilesRecursive(tmpHome)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // TASK.158: the ONE endpoint-literal builder both production port constructions
 // (baseModelPort + /model hot-swap factory) funnel through. Pins that the CLI
 // actually forwards a resolved includeUsage instead of dropping it.
@@ -4189,5 +4246,114 @@ describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
     // Exactly one line, on the diagnostics channel only.
     expect(getErr().match(/max output tokens clamped/g)).toHaveLength(1);
     expect(getText()).not.toContain("clamped");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.162 slice B1 — the CLI half of the adjudicated tier seam (§0b item 2).
+//
+// The child's capability settings must be re-resolved against the live
+// USER-SELECTED reasoning tier, never against the parent's model-EFFECTIVE
+// effort. The discriminator is a parent switched to a NON-reasoning model
+// after the tier was chosen: `loopConfig.reasoningEffort` is `undefined` there,
+// while `selectedReasoningEffort` still holds the user's tier.
+
+/** TextModelPort that also records the ModelRequest it was handed. */
+class RecordingTextModelPort implements ModelPort {
+  readonly requests: ModelRequest[] = [];
+  constructor(private readonly text: string) {}
+
+  streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    this.requests.push(request);
+    const { text } = this;
+    return (async function* () {
+      yield { type: "start" } as ModelStreamEvent;
+      yield { type: "text_delta", id: "t", text } as ModelStreamEvent;
+      yield { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent;
+    })();
+  }
+}
+
+describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not parent-effective effort)", () => {
+  it("/reasoning high -> /model <non-reasoning> -> reasoning-capable child override: the child gets high", async () => {
+    // Parent script AFTER the switch: one Agent call with a model override,
+    // then the wrap-up turn.
+    const parentAfterSwitch = new SequencedModelPort([
+      [
+        { type: "start" } as ModelStreamEvent,
+        {
+          type: "tool_call",
+          toolCall: {
+            id: "call-1",
+            name: "Agent",
+            input: {
+              agent_type: "general-purpose",
+              description: "delegate",
+              prompt: "do it",
+              model: "glm-5.3-flash",
+            },
+          },
+        } as ModelStreamEvent,
+        { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent,
+      ],
+      [
+        { type: "start" } as ModelStreamEvent,
+        { type: "text_delta", id: "t", text: "parent-done" } as ModelStreamEvent,
+        { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent,
+      ],
+    ]);
+    const childPorts = new Map<string, RecordingTextModelPort>();
+    const modelPortFactory = (id: string): ModelPort => {
+      if (id === "glm-4.6") {
+        return parentAfterSwitch;
+      }
+      const port = new RecordingTextModelPort(`child-from-${id}`);
+      childPorts.set(id, port);
+      return port;
+    };
+
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const runPromise = runCli({
+      argv: [],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        // Real z-ai catalog entry: glm-5.2 accepts off/high/max, glm-4.6 is not
+        // reasoning-capable at all, glm-5.3-flash accepts low/high/max and
+        // declares NO output ceiling.
+        ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANYCODE_MODEL: "glm-5.2",
+        ANYCODE_DB_PATH: ":memory:",
+        ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
+      } as NodeJS.ProcessEnv,
+      input,
+      output,
+      modelPort: new CountingModelPort(),
+      modelPortFactory,
+      cwd: process.cwd(),
+    });
+
+    // The tier is chosen while a reasoning-capable model is live (the CLI
+    // refuses a non-"off" tier otherwise), THEN the parent switches away.
+    input.write("/reasoning high\n");
+    input.write("/model glm-4.6\n");
+    input.write("delegate a task\n");
+    input.write("/quit\n");
+
+    expect(await runPromise).toBe(0);
+    expect(getText()).toContain("[reasoning] model effort is now high");
+    expect(getText()).toContain("child-from-glm-5.3-flash");
+
+    const childPort = childPorts.get("glm-5.3-flash");
+    expect(childPort).toBeDefined();
+    expect(childPort!.requests).toHaveLength(1);
+    // The seam under test: the tier survived the switch to a non-reasoning
+    // parent and was re-resolved against the CHILD's model.
+    expect(childPort!.requests[0]!.reasoningEffort).toBe("high");
+    // F6 in the same request: flash declares no ceiling, so the child gets the
+    // honest DEFAULT — not the 131 072 the parent's glm-4.6 row resolves to.
+    expect(childPort!.requests[0]!.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
   });
 });

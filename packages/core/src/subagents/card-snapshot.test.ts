@@ -188,6 +188,19 @@ describe("reduceSubagentCardEvent — subagent_end", () => {
     acc = reduceSubagentCardEvent(acc, end());
     expect(acc.end && "activitySuppressed" in acc.end).toBe(false);
   });
+
+  it("copies responseModel onto acc.end, capped at SUBAGENT_CARD_MODEL_MAX_CHARS", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    const overlong = "x".repeat(SUBAGENT_CARD_MODEL_MAX_CHARS + 50);
+    acc = reduceSubagentCardEvent(acc, end({ responseModel: overlong }));
+    expect(acc.end?.responseModel).toBe("x".repeat(SUBAGENT_CARD_MODEL_MAX_CHARS));
+  });
+
+  it("responseModel absent on the event => absent on acc.end (no silent fallback)", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    acc = reduceSubagentCardEvent(acc, end());
+    expect(acc.end && "responseModel" in acc.end).toBe(false);
+  });
 });
 
 describe("reduceSubagentCardEvent — subagent_attention (TASK.102 CUT-S2 §2.2/§0.8)", () => {
@@ -237,6 +250,26 @@ describe("finalizeSubagentCard", () => {
     const acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start({ agentType: "explore", description: "d" }));
     const snapshot = finalizeSubagentCard(acc, fallback);
     expect(snapshot?.final).toEqual({ status: "error", durationMs: 42 });
+  });
+
+  it("fallback-settled card carries no responseModel (the runner never emitted a claim)", () => {
+    const acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    const snapshot = finalizeSubagentCard(acc, fallback);
+    expect(snapshot && "responseModel" in snapshot.final).toBe(false);
+  });
+
+  it("reduce+finalize round-trip carries responseModel through to final", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    acc = reduceSubagentCardEvent(acc, end({ status: "completed", turns: 2, durationMs: 100, responseModel: "glm-5.3" }));
+    const snapshot = finalizeSubagentCard(acc, fallback);
+    expect(snapshot?.final).toEqual({ status: "completed", durationMs: 100, responseModel: "glm-5.3" });
+  });
+
+  it("an end event without responseModel produces a final with the key absent, not undefined-valued", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    acc = reduceSubagentCardEvent(acc, end({ status: "completed", turns: 2, durationMs: 100 }));
+    const snapshot = finalizeSubagentCard(acc, fallback);
+    expect(snapshot && "responseModel" in snapshot.final).toBe(false);
   });
 
   it("with an end event, uses the end's status/durationMs (not the fallback)", () => {

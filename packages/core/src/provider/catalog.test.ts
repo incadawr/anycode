@@ -129,6 +129,39 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(glm52).toMatchObject({ contextWindow: 1_000_000, maxOutputTokens: 131_072 });
   });
 
+  // TASK.163 (2026-08-28): docs.z.ai/guides/llm/glm-5.3 states "GLM-5.3 always
+  // operates with reasoning enabled" and "Disabling reasoning is no longer
+  // supported", with three documented effort levels "low", "high", and "max"
+  // (default "max"). The pre-existing row's `["off", "high", "max"]` was stale
+  // — `off` was never a real option for 5.3, and `low` was missing entirely.
+  it("corrects the stale glm-5.3 effortLevels: reasoning cannot be disabled (docs.z.ai/guides/llm/glm-5.3, accessed 2026-08-28)", () => {
+    const glm53 = findCatalogEntry("z-ai")?.models.find((model) => model.id === "glm-5.3");
+    expect(glm53?.effortLevels).toEqual(["low", "high", "max"]);
+    // Unaffected fields stay pinned to the existing spec-box values.
+    expect(glm53).toMatchObject({ contextWindow: 1_000_000, maxOutputTokens: 131_072 });
+  });
+
+  // TASK.163 (2026-08-28): docs.z.ai/guides/vlm/glm-5.3-flash states "Text
+  // parameters are consistent with GLM-5.3" (1M-token context window) and
+  // "`thinking.type` only supports `enabled`; thinking cannot be disabled" —
+  // same low/high/max family as glm-5.3, no `off`. Max output length is NOT
+  // specified anywhere on that page, so `maxOutputTokens` stays OMITTED
+  // (resolveMaxOutputTokens falls back honestly instead of guessing a number).
+  // Multimodality is documented only via the native API's Chat Completions
+  // image_url examples, never verified through the Anthropic-messages endpoint
+  // this catalog entry speaks, so `imageInput` also stays OMITTED (fail-closed;
+  // ANYCODE_IMAGE_INPUT=on remains the escape hatch).
+  it("declares the glm-5.3-flash row with no output ceiling and no unverified image-input claim (docs.z.ai/guides/vlm/glm-5.3-flash, accessed 2026-08-28)", () => {
+    const flash = findCatalogEntry("z-ai")?.models.find((model) => model.id === "glm-5.3-flash");
+    expect(flash).toEqual({
+      id: "glm-5.3-flash",
+      name: "GLM-5.3 Flash",
+      contextWindow: 1_000_000,
+      reasoning: true,
+      effortLevels: ["low", "high", "max"],
+    });
+  });
+
   it("findCatalogEntry returns undefined for an unknown id", () => {
     expect(findCatalogEntry("nope")).toBeUndefined();
   });

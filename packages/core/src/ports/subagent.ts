@@ -58,8 +58,12 @@ export interface SubagentOutcome {
 
 /** Coarse progress events bridged into the parent stream as subagent_* AgentEvents (design §3.3). */
 export type SubagentProgress =
-  // `model` is the RESOLVED id the child actually runs on (request override, else
-  // the profile's `model:`). Absent means the child inherited the parent's port —
+  // `model` is the id the child was SPAWNED on: read back from the constructed
+  // child port when that port exposes an identity (`ModelPort.modelId`), else the
+  // requested string (request override, else the profile's `model:`). That is
+  // constructed-port identity, NOT execution identity — no production port
+  // canonicalizes ids, and nothing here proves which model the provider ran.
+  // Absent means the child inherited the parent's port —
   // the renderer shows a model pill only when the child really differs. `engine`
   // is set only for an engine persona (md-profile `engine:`) — a one-shot foreign
   // CLI run (Codex or Claude Code) in place of an in-process child.
@@ -73,7 +77,19 @@ export type SubagentProgress =
   // progress events this run withheld past SUBAGENT_ACTIVITY_MAX_EVENTS.
   // Absent when the run never crossed the cap; feeds the persisted card's
   // honest dropped-activity count.
-  | { kind: "end"; status: SubagentOutcome["status"]; turns: number; durationMs: number; activitySuppressed?: number }
+  // `responseModel` is the provider's own model CLAIM, read off the child's
+  // dedicated port after its last model call (the wrap-up rescue included).
+  // Absent for engine/session-tier children, for a child that inherited the
+  // parent's shared port (a shared port's last claim is not attributable to
+  // one child), and for providers that expose no raw claim at all.
+  | {
+      kind: "end";
+      status: SubagentOutcome["status"];
+      turns: number;
+      durationMs: number;
+      activitySuppressed?: number;
+      responseModel?: string;
+    }
   // Permission-broker gate crossing (TASK.102 CUT-S2 §2.2/§0.8): ONLY the
   // session-tier port (SessionSubagentPort) ever produces this — a child
   // SESSION has its own IpcPermissionBroker whose ask/settle can suspend the

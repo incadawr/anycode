@@ -51,6 +51,26 @@ describe("reasoningRequestOptions", () => {
     });
   });
 
+  // TASK.163 (2026-08-28): docs.z.ai/guides/llm/glm-5.3 documents `low` as a
+  // real, distinct effort tier (not just "off"), so the wire mapping must stop
+  // silently upgrading it to `high` — that collapse would make the catalog's
+  // now-honest `low` tier a fresh lie. z.ai documents no per-tier budget for
+  // `low`; `high`'s 16_000 budget is reused as a CEILING (a cap on thinking
+  // output, not a floor), so it cannot under-serve `low`'s lighter reasoning.
+  it("maps GLM 'low' effort to the wire as 'low', reusing the high budget as a ceiling", () => {
+    expect(reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "low" }, "Z.AI (GLM)")).toEqual({
+      maxOutputTokens: 512,
+      providerOptions: { anthropic: { effort: "low", thinking: { type: "enabled", budgetTokens: 16_000 } } },
+    });
+  });
+
+  it("still collapses GLM 'medium' effort to 'high' — no documented GLM equivalent", () => {
+    expect(reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "medium" }, "Z.AI (GLM)")).toEqual({
+      maxOutputTokens: 512,
+      providerOptions: { anthropic: { effort: "high", thinking: { type: "enabled", budgetTokens: 16_000 } } },
+    });
+  });
+
   it("keeps GLM reasoning requests within Z.AI's 131072 max_tokens wire ceiling", () => {
     const high = reasoningRequestOptions(
       { ...baseRequest, maxOutputTokens: 131_072, reasoningEffort: "high" },
@@ -860,5 +880,106 @@ describe("AiSdkModelPort — outgoing request bytes per transport (TASK.43 §0.7
         messages: [{ role: "user", content: "hi" }],
       }),
     );
+  });
+});
+describe("AiSdkModelPort — response-model provenance and identity readback", () => {
+  function rawMessageStart(message: Record<string, unknown>): FakeStep {
+    return part({ type: "raw", rawValue: { type: "message_start", message } });
+  }
+
+  it("reads back the id the port was constructed for", () => {
+    expect(new AiSdkModelPort(baseConfig()).modelId).toBe("claude-test");
+    expect(new AiSdkModelPort({ ...baseConfig(), model: "glm-5.3-flash" }).modelId).toBe("glm-5.3-flash");
+  });
+
+  it("has no response-model claim before anything has streamed", () => {
+    expect(new AiSdkModelPort(baseConfig()).lastResponseModel).toBeUndefined();
+  });
+
+  it("captures the provider's claim from the raw message_start chunk", async () => {
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([part(startPart), rawMessageStart({ id: "msg_1", model: "glm-5.3" }), part(finishPart)]),
+    );
+    const port = new AiSdkModelPort({ ...baseConfig(), model: "glm-5.3-flash" });
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(port.lastResponseModel).toBe("glm-5.3");
+    // The claim differs from the constructed identity: that difference is the
+    // only signal the product has that the provider answered for another model.
+    expect(port.modelId).toBe("glm-5.3-flash");
+    // Raw parts have no core-vocabulary counterpart and never reach the caller.
+    expect(events).toEqual([
+      { type: "start" },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ]);
+  });
+
+  it("keeps the last claim observed across a retried step (last write wins)", async () => {
+    mockStreamText
+      .mockImplementationOnce(() =>
+        fakeResult([part(startPart), rawMessageStart({ model: "model-A" }), throwsWith(retryableError())]),
+      )
+      .mockImplementationOnce(() =>
+        fakeResult([part(startPart), rawMessageStart({ model: "model-B" }), part(finishPart)]),
+      );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(true);
+    // The abandoned attempt's claim is superseded by the claim belonging to the
+    // response the caller actually received.
+    expect(port.lastResponseModel).toBe("model-B");
+  });
+
+  it("stays undefined when the stream carries no raw model claim", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    const port = new AiSdkModelPort(baseConfig());
+    await collect(port.streamText(baseRequest));
+
+    // Absence is preserved as absence: never backfilled with the requested id.
+    expect(port.lastResponseModel).toBeUndefined();
+  });
+
+  it("ignores a raw message_start that carries no model, and raw chunks of other types", async () => {
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([
+        part(startPart),
+        rawMessageStart({ id: "msg_1", usage: { input_tokens: 3 } }),
+        part({ type: "raw", rawValue: { type: "content_block_delta", model: "not-a-claim" } }),
+        part(finishPart),
+      ]),
+    );
+    const port = new AiSdkModelPort({ ...baseConfig(), model: "glm-5.3-flash" });
+    await collect(port.streamText(baseRequest));
+
+    expect(port.lastResponseModel).toBeUndefined();
+  });
+
+  it("asks the SDK for raw chunks on the anthropic-messages transport", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest));
+
+    expect(mockStreamText).toHaveBeenCalledWith(expect.objectContaining({ includeRawChunks: true }));
+  });
+
+  it("does not ask for raw chunks on the openai transports (no claim to read there)", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    await collect(
+      new AiSdkModelPort({ ...baseConfig(), transport: "openai-chat-completions", baseUrl: "https://gw.example/v1", model: "gpt-oss" }).streamText(
+        baseRequest,
+      ),
+    );
+    const chatOptions = mockStreamText.mock.calls[0]![0] as Record<string, unknown>;
+    expect("includeRawChunks" in chatOptions).toBe(false);
+
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    await collect(
+      new AiSdkModelPort({ ...baseConfig(), transport: "openai-responses", baseUrl: "https://gw.example/v1", model: "gpt-oss" }).streamText(
+        baseRequest,
+      ),
+    );
+    const responsesOptions = mockStreamText.mock.calls[1]![0] as Record<string, unknown>;
+    expect("includeRawChunks" in responsesOptions).toBe(false);
   });
 });

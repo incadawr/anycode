@@ -213,3 +213,26 @@
   color: var(--text-ghost);
   font-style: italic;
 }
+
+/* Provider-reported model pill (TASK.161 slice C1) — follows the child-model
+   pill in `.tool-call-subagent-line`. A MATCH with the requested model proves
+   nothing beyond "the provider accepted the id", so the base state is neutral,
+   the same quiet tier as `.tool-call-subagent-model`; only a MISMATCH — the
+   informative case — gets the warning tint (mirrors `.tool-call-status-badge`'s
+   running/max_turns tint, app.css), never a success/confirmation styling. */
+.tool-call-subagent-response-model {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--r-full);
+  background: var(--bg-hover);
+  color: var(--text-3);
+  white-space: nowrap;
+  flex: none;
+}
+
+.tool-call-subagent-response-model--mismatch {
+  background: var(--warning-soft);
+  color: var(--warning);
+}

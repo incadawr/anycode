@@ -1,0 +1,99 @@
+/**
+ * Profile pane — period-filter additions (TASK.158 slice 2,
+ * telemetry-track-plan.md §3 S7). NEW classes only: `settings.css` is
+ * no-touch, and everything unchanged by this step (tiles row, heatmap,
+ * `.profile-insight-row`, `.profile-top-list`/`.profile-top-row`, the
+ * telemetry toggle block, the empty-state/banner branches) keeps using its
+ * existing settings.css vocabulary as-is — only imported here for the pieces
+ * that are genuinely new: the period segmented control, the coverage notice,
+ * and the full expandable models list.
+ */
+
+.profile-period-control {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.profile-period-button {
+  padding: 0.3rem var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  background: var(--bg-card);
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.profile-period-button:last-child {
+  border-right: none;
+}
+
+.profile-period-button:hover {
+  color: var(--text-1);
+}
+
+.profile-period-button-active {
+  color: var(--text-1);
+  font-weight: var(--w-semibold);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
+}
+
+/* ── coverage honesty notice (TASK.158 slice 0's coverageStartTs, surfaced
+   per-window rather than the always-global .profile-truncated-note) ── */
+
+.profile-coverage-notice {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* ── full models list (replaces the old top-3 "Top models" sub-list with an
+   unbounded, tokens-desc list + a collapse/expand affordance) ── */
+
+.profile-models-title {
+  margin-top: var(--sp-2);
+}
+
+.profile-models-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.profile-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-sm);
+  padding: 0.2rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-model-name {
+  color: var(--text-1);
+}
+
+.profile-model-tokens {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-show-all-models {
+  align-self: flex-start;
+  margin-top: 0.3rem;
+  font-size: var(--fs-2xs);
+}
+
+.profile-engines-row {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}

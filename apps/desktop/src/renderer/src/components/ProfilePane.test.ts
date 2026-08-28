@@ -10,12 +10,13 @@
  * values its click handlers and render branches feed from.
  */
 import { describe, expect, it } from "vitest";
-import type { ProfileStatsResult, ProfileStatsView } from "../../../shared/profile-config.js";
+import type { ProfileDayStatsView, ProfileStatsResult, ProfileStatsView } from "../../../shared/profile-config.js";
 import {
   buildHeatmapCells,
   buildProfileTiles,
   computeIntensityBuckets,
   computeProfileBranch,
+  coverageNotice,
   formatCompactTokens,
   formatDuration,
   HEATMAP_WEEKS,
@@ -23,9 +24,17 @@ import {
   heatmapMonthLabels,
   isTelemetryToggleDisabled,
   nextTelemetryToggleValue,
-  topModelRows,
-  topToolRows,
+  periodStartKey,
+  PROFILE_MODELS_COLLAPSED_ROWS,
+  PROFILE_PERIODS,
+  sumWindow,
+  tokensByDay,
+  visibleModelRows,
 } from "./ProfilePane.js";
+
+function day(overrides: Partial<ProfileDayStatsView> = {}): ProfileDayStatsView {
+  return { tokens: 0, runs: 0, toolCalls: 0, subagentRuns: 0, sessions: 0, tools: {}, models: {}, ...overrides };
+}
 
 function view(overrides: Partial<ProfileStatsView> = {}): ProfileStatsView {
   return {
@@ -34,14 +43,15 @@ function view(overrides: Partial<ProfileStatsView> = {}): ProfileStatsView {
     longestSessionMs: 0,
     currentStreakDays: 0,
     longestStreakDays: 0,
-    dailyTokens: {},
     totalSessions: 0,
     totalRuns: 0,
     toolCalls: 0,
     subagentRuns: 0,
-    topTools: [],
-    topModels: [],
     truncated: false,
+    coverageStartTs: null,
+    days: {},
+    models: [],
+    engineTokens: {},
     telemetryEnabled: false,
     killSwitchActive: false,
     dir: "/Users/x/.anycode/telemetry",
@@ -176,11 +186,11 @@ describe("computeProfileBranch", () => {
 });
 
 describe("hasProfileData", () => {
-  it("any of lifetimeTokens/totalSessions/dailyTokens non-empty counts as data", () => {
+  it("any of lifetimeTokens/totalSessions/days non-empty counts as data", () => {
     expect(hasProfileData(view())).toBe(false);
     expect(hasProfileData(view({ lifetimeTokens: 1 }))).toBe(true);
     expect(hasProfileData(view({ totalSessions: 1 }))).toBe(true);
-    expect(hasProfileData(view({ dailyTokens: { "2026-07-01": 1 } }))).toBe(true);
+    expect(hasProfileData(view({ days: { "2026-07-01": day({ tokens: 1 }) } }))).toBe(true);
   });
 });
 
@@ -256,16 +266,178 @@ describe("heatmapMonthLabels", () => {
   });
 });
 
-// ── top lists (design §2-D3.8) ──
+// ── period filter (TASK.158 slice 2, telemetry-track-plan.md §3 S7) ──
 
-describe("topToolRows / topModelRows", () => {
-  it("caps at 5 tools / 3 models respectively", () => {
-    const v = view({
-      topTools: Array.from({ length: 8 }, (_, i) => ({ name: `tool-${i}`, count: i })),
-      topModels: Array.from({ length: 5 }, (_, i) => ({ model: `model-${i}`, tokens: i })),
-    });
-    expect(topToolRows(v)).toHaveLength(5);
-    expect(topModelRows(v)).toHaveLength(3);
+describe("PROFILE_PERIODS labels", () => {
+  it("pins the sliding-window vocabulary exactly — '7 days'/'30 days', never 'Week'/'Month' (158's own DoD: a calendar word would misdescribe a sliding window and read as a lie on the 1st)", () => {
+    expect(PROFILE_PERIODS).toEqual([
+      { period: "today", label: "Today" },
+      { period: "7d", label: "7 days" },
+      { period: "30d", label: "30 days" },
+      { period: "all", label: "All" },
+    ]);
+  });
+});
+
+describe("periodStartKey", () => {
+  it("'today' at 00:05 local is a 1-day window — just today's own key, no bleed into yesterday", () => {
+    const now = new Date(2026, 7, 27, 0, 5); // 2026-08-27 00:05 local
+    expect(periodStartKey("today", now)).toBe("2026-08-27");
+  });
+
+  it("'today' late at night is still just today, not tomorrow", () => {
+    const now = new Date(2026, 7, 27, 23, 55);
+    expect(periodStartKey("today", now)).toBe("2026-08-27");
+  });
+
+  it("'7d' is a 7-day INCLUSIVE sliding window (today minus 6), not a calendar week", () => {
+    const now = new Date(2026, 7, 27, 12, 0);
+    expect(periodStartKey("7d", now)).toBe("2026-08-21");
+  });
+
+  it("'30d' is a 30-day inclusive sliding window (today minus 29)", () => {
+    const now = new Date(2026, 7, 27, 12, 0);
+    expect(periodStartKey("30d", now)).toBe("2026-07-29");
+  });
+
+  it("'7d' crosses a month boundary correctly", () => {
+    const now = new Date(2026, 8, 2, 12, 0); // 2026-09-02
+    expect(periodStartKey("7d", now)).toBe("2026-08-27");
+  });
+
+  it("'all' has no lower bound", () => {
+    expect(periodStartKey("all", new Date(2026, 7, 27))).toBeNull();
+  });
+});
+
+describe("sumWindow", () => {
+  const days: Record<string, ProfileDayStatsView> = {
+    "2026-08-01": day({
+      tokens: 100,
+      runs: 1,
+      toolCalls: 2,
+      subagentRuns: 0,
+      sessions: 1,
+      tools: { Bash: 2 },
+      models: { "model-a": 100 },
+    }),
+    "2026-08-02": day({
+      tokens: 50,
+      runs: 0,
+      toolCalls: 1,
+      subagentRuns: 1,
+      sessions: 0,
+      tools: { Read: 1 },
+      models: { "(unknown)": 50 },
+    }),
+    "2026-08-03": day({
+      tokens: 200,
+      runs: 2,
+      toolCalls: 3,
+      subagentRuns: 0,
+      sessions: 1,
+      tools: { Bash: 1, Read: 2 },
+      models: { "model-a": 150, "model-b": 50 },
+    }),
+  };
+
+  it("with startKey null ('all'), sums every bucket — arithmetic + sessions summation", () => {
+    const w = sumWindow(days, null);
+    expect(w.tokens).toBe(350);
+    expect(w.runs).toBe(3);
+    expect(w.toolCalls).toBe(6);
+    expect(w.subagentRuns).toBe(1);
+    expect(w.sessions).toBe(2);
+    expect(w.tools).toEqual([
+      { name: "Bash", count: 3 },
+      { name: "Read", count: 3 },
+    ]);
+  });
+
+  it("with a startKey, excludes buckets strictly before it (string-compare slicing)", () => {
+    const w = sumWindow(days, "2026-08-02");
+    expect(w.tokens).toBe(250); // 08-02 + 08-03 only
+    expect(w.sessions).toBe(1); // only 08-03's session
+  });
+
+  it("(unknown)/(other) model rows sort LAST regardless of token magnitude", () => {
+    const w = sumWindow(days, null);
+    // model-a (250) > model-b (50) > (unknown) (50, but trailing) — (unknown)
+    // ties model-b on tokens yet must still land after it.
+    expect(w.models).toEqual([
+      { model: "model-a", tokens: 250 },
+      { model: "model-b", tokens: 50 },
+      { model: "(unknown)", tokens: 50 },
+    ]);
+  });
+
+  it("an empty days map yields an all-zero summary with empty lists", () => {
+    const w = sumWindow({}, null);
+    expect(w).toEqual({ tokens: 0, runs: 0, toolCalls: 0, subagentRuns: 0, sessions: 0, tools: [], models: [] });
+  });
+});
+
+describe("tokensByDay", () => {
+  it("projects days -> dayKey/tokens, the heatmap's data source", () => {
+    const days: Record<string, ProfileDayStatsView> = {
+      "2026-08-01": day({ tokens: 40 }),
+      "2026-08-02": day({ tokens: 0 }),
+    };
+    expect(tokensByDay(days)).toEqual({ "2026-08-01": 40, "2026-08-02": 0 });
+  });
+});
+
+describe("coverageNotice", () => {
+  const now = new Date(2026, 7, 27, 12, 0);
+
+  it("null coverage (never truncated) -> no notice, for any period", () => {
+    expect(coverageNotice(null, "2026-08-01", now)).toBeNull();
+    expect(coverageNotice(null, null, now)).toBeNull();
+  });
+
+  it("a window starting exactly AT the coverage boundary day -> no notice (fully covered)", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime(); // covers from 2026-08-20
+    expect(coverageNotice(coverageStartTs, "2026-08-20", now)).toBeNull();
+  });
+
+  it("a window starting AFTER the coverage boundary -> no notice", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
+    expect(coverageNotice(coverageStartTs, "2026-08-25", now)).toBeNull();
+  });
+
+  it("a window reaching BEFORE the coverage boundary -> names the boundary date", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now)).toBe(
+      "History before 2026-08-20 not included — telemetry folder exceeds the scan budget.",
+    );
+  });
+
+  it("'all' (startKey null) while truncated -> always notices, regardless of coverage recency", () => {
+    const coverageStartTs = new Date(2026, 7, 26, 9, 0).getTime(); // covers from yesterday
+    expect(coverageNotice(coverageStartTs, null, now)).toBe(
+      "History before 2026-08-26 not included — telemetry folder exceeds the scan budget.",
+    );
+  });
+});
+
+describe("visibleModelRows / PROFILE_MODELS_COLLAPSED_ROWS", () => {
+  const models = Array.from({ length: 12 }, (_, i) => ({ model: `m-${i}`, tokens: 12 - i }));
+
+  it("collapsed (not expanded) shows exactly the first PROFILE_MODELS_COLLAPSED_ROWS rows", () => {
+    expect(PROFILE_MODELS_COLLAPSED_ROWS).toBe(8);
+    const visible = visibleModelRows(models, false);
+    expect(visible).toHaveLength(8);
+    expect(visible).toEqual(models.slice(0, 8));
+  });
+
+  it("expanded shows every row, including the ones past the threshold", () => {
+    expect(visibleModelRows(models, true)).toHaveLength(12);
+  });
+
+  it("a list at or under the threshold is untouched by either expanded state", () => {
+    const small = models.slice(0, 5);
+    expect(visibleModelRows(small, false)).toHaveLength(5);
+    expect(visibleModelRows(small, true)).toHaveLength(5);
   });
 });
 

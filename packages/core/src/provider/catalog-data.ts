@@ -65,9 +65,31 @@ const ENTRIES: CatalogProviderEntry[] = [
     // GLM-5.3's id is owner-confirmed live on the coding plan (works via manual
     // entry); docs.z.ai carries the page but no code sample yet ("API coming
     // soon"). 4.5/4.5-air numbers predate this pass and are kept as-is.
+    //
+    // TASK.163 (2026-08-28, re-verified via WebFetch): the pass above got the
+    // glm-5.3 row wrong. docs.z.ai/guides/llm/glm-5.3 states "GLM-5.3 always
+    // operates with reasoning enabled" and "Disabling reasoning is no longer
+    // supported", with three documented effort levels "low", "high", and "max"
+    // (default "max") — `off` never belonged in effortLevels; `low` was
+    // missing. Corrected below. docs.z.ai/guides/vlm/glm-5.3-flash adds the
+    // flash row: "Text parameters are consistent with GLM-5.3" (1M context,
+    // same low/high/max family), "`thinking.type` only supports `enabled`;
+    // thinking cannot be disabled". That page never states a max output
+    // length, so `maxOutputTokens` stays OMITTED (resolveMaxOutputTokens then
+    // falls back honestly instead of a guessed number); its multimodality is
+    // demonstrated only via the native API's Chat Completions `image_url`
+    // examples, never confirmed through the Anthropic-messages endpoint this
+    // entry speaks, so `imageInput` also stays OMITTED (fail-closed;
+    // ANYCODE_IMAGE_INPUT=on remains the escape hatch). The GLM wire mapping
+    // (`reasoningRequestOptions` in model-port.ts) was fixed in the same slice
+    // so a selected `low` reaches the wire as `low` instead of silently
+    // upgrading to `high` — otherwise advertising `low` here would have been a
+    // fresh lie.
     models: [
-      // GLM-5.3/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
-      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
+      // GLM-5.3/5.3-flash/5.2: 1M context (docs.z.ai spec boxes). 5.3 and 5.2
+      // document a 128K max output; 5.3-flash's page never states one.
+      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, reasoning: true, effortLevels: ["low", "high", "max"] },
       { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
       { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },

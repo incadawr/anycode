@@ -66,6 +66,7 @@ import type { LspServerSpec } from "../ports/lsp.js";
 import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js";
 import { buildRepoMapPromptSection, loadRepoMapConfig, type RepoMapConfig } from "../repoMap/index.js";
 import { resolveImageInput, resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "../provider/capabilities.js";
+import { buildChildModelSettingsResolver } from "../provider/child-model-settings.js";
 import { getBuiltinCatalog } from "../provider/catalog-data.js";
 import type { ProviderTransport } from "../provider/catalog.js";
 import type { CatalogProviderEntry } from "../provider/catalog.js";
@@ -113,7 +114,12 @@ import type { CoreEnvConfig } from "../types/config.js";
 import { type PermissionMode } from "../types/permissions.js";
 import { loadImageAttachment } from "../util/images.js";
 import { loadWebSearchConfig, type ResolvedWebSearchBackend } from "../websearch/index.js";
-import { buildTelemetryTap, loadTelemetryConfig, type ResolvedTelemetryConfig } from "../telemetry/index.js";
+import {
+  buildSubagentTelemetryTap,
+  buildTelemetryTap,
+  loadTelemetryConfig,
+  type ResolvedTelemetryConfig,
+} from "../telemetry/index.js";
 import { withWorkflows } from "../workflow/engine.js";
 import { formatUsage, parseCliArgs } from "./args.js";
 import { renderEvent, toWorkflowMeta, type TranscriptOptions } from "./render.js";
@@ -498,6 +504,21 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   );
   let selectedReasoningEffort = envConfig.reasoningEffort ?? "off";
   const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, selectedReasoningEffort);
+  // TASK.162 (F6): the same catalog + env overrides the boot above reads,
+  // packaged once so an Agent-tool `model` override re-resolves the child's
+  // ceiling/effort/window for ITS model instead of inheriting the parent's.
+  // Built here (not per spawn) because every input is boot-fixed; the one live
+  // input — the user-selected reasoning tier — is supplied at spawn time by the
+  // wiring closure below.
+  const settingsForChild = buildChildModelSettingsResolver({
+    catalogEntry,
+    envMaxOutputTokens: envConfig.maxOutputTokens,
+    envContextWindow: envConfig.contextWindowTokens,
+    onClamp: (requested, clamped, modelId) =>
+      bootWrite(
+        `[warn] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}\n`,
+      ),
+  });
   let liveContextWindow = bootContextWindow ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
 
 
@@ -1064,6 +1085,19 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     });
   }
   const telemetryTap = telemetry === null ? undefined : buildTelemetryTap(telemetry, session.id);
+  // TASK.160 §2.2: factory for an inline subagent's child eventTap, so its
+  // usage/tool/turn_end records land in THIS session's file (marked `sub`)
+  // instead of nowhere. `telemetryPort` is captured into a local const
+  // because TS does not carry a `let`-narrowing across a closure boundary —
+  // without it, the factory below would need to re-check `telemetry` (a
+  // module-scope-style `let` here) on every call instead of once. Read only
+  // by subagents/runner.ts's buildChildConfig; the core loop never calls it.
+  const telemetryPort = telemetry;
+  const subagentEventTap =
+    telemetryPort === null
+      ? undefined
+      : (spawn: { agentType: string; model?: string }) =>
+          buildSubagentTelemetryTap(telemetryPort, session.id, spawn);
 
 
   // per-workspace shadow GIT_DIR rooted OUTSIDE the workspace, beside the sqlite
@@ -1223,6 +1257,9 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         // loop never reports directly — its activity reaches the tap as the
         // parent's subagent_* events.
         ...(telemetryTap !== undefined ? { eventTap: telemetryTap } : {}),
+        // TASK.160 §2.2: the FACTORY only — buildChildConfig calls it once per
+        // spawn. The loop itself never reads this field.
+        ...(subagentEventTap !== undefined ? { subagentEventTap } : {}),
       },
       // Md-profile personas (design §2.5/§6): extra agent_type values the
       // Agent tool can spawn, additive to the built-in general-purpose/explore.
@@ -1239,6 +1276,19 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         env: systemPromptEnv,
         memorySection: ext.memorySection,
         ...(modelPortFactory !== undefined ? { resolveChildModelPort: modelPortFactory } : {}),
+        // TASK.162 (F6) + §0b adjudication: gated on the same factory as the
+        // port above — without a port there is no override spawn to resolve
+        // settings for. The tier handed to the resolver is `selectedReasoningEffort`
+        // read AT SPAWN TIME: the live USER-SELECTED tier, which `/reasoning`
+        // writes and `/model` deliberately leaves alone. Never
+        // `loopConfig.reasoningEffort`, whose `undefined` after a switch to a
+        // non-reasoning model would silently drop the child's effort even
+        // though the child's own model can honor the tier. Passing the tier
+        // verbatim is correct: resolveReasoningEffort treats "off" and
+        // undefined identically.
+        ...(modelPortFactory !== undefined
+          ? { resolveChildModelSettings: (id: string) => settingsForChild(id, selectedReasoningEffort) }
+          : {}),
       },
     ),
     ext.workflows,

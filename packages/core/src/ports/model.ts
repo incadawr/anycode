@@ -31,4 +31,20 @@ export interface ModelRequest {
 
 export interface ModelPort {
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent>;
+  /**
+   * Identity readback: the id this port was constructed for. Constructed-port
+   * identity, NOT execution identity — no production port canonicalizes ids.
+   */
+  readonly modelId?: string;
+  /**
+   * Provider-reported model id from the most recent raw response observed by
+   * this port (anthropic-messages `message_start.message.model`). `undefined`
+   * until a raw claim is seen and on transports/providers that expose none.
+   * NEVER populated from SDK response metadata, which falls back to the
+   * requested id and would fabricate a match. Meaningful for a single-consumer
+   * port (e.g. a fixed child port); on a shared port it reflects whichever call
+   * streamed last — consumers read it only immediately after a call they own
+   * completes.
+   */
+  readonly lastResponseModel?: string;
 }

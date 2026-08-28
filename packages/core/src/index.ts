@@ -19,7 +19,13 @@ export {
 export { LspManager, loadLspServerSpecs } from "./lsp/index.js";
 export { loadWebSearchConfig } from "./websearch/index.js";
 export type { ResolvedWebSearchBackend } from "./websearch/index.js";
-export { buildTelemetryTap, loadTelemetryConfig, telemetryRecordFor } from "./telemetry/index.js";
+export {
+  buildEngineTelemetryTap,
+  buildSubagentTelemetryTap,
+  buildTelemetryTap,
+  loadTelemetryConfig,
+  telemetryRecordFor,
+} from "./telemetry/index.js";
 export type { ResolvedTelemetryConfig } from "./telemetry/index.js";
 export { InProcessTaskManager } from "./tasks/index.js";
 // Per-workspace shadow-git checkpoint service (design slice-4.7-cut.md §2.9):

@@ -185,7 +185,18 @@ function decodeFinal(raw: unknown): SubagentCardSnapshotV1["final"] | null {
   }
   if (typeof raw.status !== "string" || !FINAL_STATUSES.has(raw.status as SubagentCardFinalStatus)) return null;
   if (typeof raw.durationMs !== "number" || !Number.isFinite(raw.durationMs) || raw.durationMs < 0) return null;
-  return { status: raw.status as SubagentCardFinalStatus, durationMs: raw.durationMs };
+  // responseModel is a best-effort provenance field, not a structural
+  // requirement of a legal `final`: a malformed or wrong-typed value is
+  // treated as absent rather than rejecting the whole snapshot (fail-soft,
+  // matching the module doc comment) — absence must render as absence, never
+  // as a reason to discard an otherwise-valid terminal record.
+  const responseModel =
+    typeof raw.responseModel === "string" ? capCodePoints(raw.responseModel, MODEL_MAX_CHARS) : undefined;
+  return {
+    status: raw.status as SubagentCardFinalStatus,
+    durationMs: raw.durationMs,
+    ...(responseModel !== undefined ? { responseModel } : {}),
+  };
 }
 
 /**

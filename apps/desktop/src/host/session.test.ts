@@ -47,10 +47,12 @@ import {
   SessionPermissionRules,
   bashTool,
   createDefaultToolRegistry,
+  buildChildModelSettingsResolver,
   matchCatalogEntryByBaseUrl,
   resolveEffortLevels,
   resolveReasoningEffort,
   summarizeChildToolCall,
+  withSubagents,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
@@ -70,6 +72,7 @@ import type {
   ModelRequest,
   ModelStreamEvent,
   PermissionMode,
+  ReasoningEffort,
   TelemetryStatus,
 } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
@@ -710,6 +713,160 @@ describe("Session — stream bridge", () => {
       consoleError.mockRestore();
       h.close();
     }
+  });
+});
+
+/**
+ * TASK.159: SessionOptions.eventTap — the ONLY telemetry seam a foreign-engine
+ * (codex/claude) boot has, since those engines never instantiate AgentLoop
+ * (whose own eventTap is unreachable for them). Direct `new Session(...)`
+ * construction (mirror of the "shell capability" describe block's own
+ * buildFakeEngine/buildTestSession pattern above — a fresh, small, LOCAL
+ * harness rather than test-harness.ts, which is shared by many other test
+ * files, per this file's own header note on child-mode's `createChildHarness`)
+ * lets a test pass `eventTap` directly, which `createHarness` (test-harness.ts)
+ * does not expose.
+ */
+describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
+  class FakeWirePort implements WirePort {
+    readonly received: unknown[] = [];
+    private messageCb: ((msg: unknown) => void) | null = null;
+
+    post(msg: unknown): void {
+      this.received.push(msg);
+    }
+
+    onMessage(cb: (msg: unknown) => void): void {
+      this.messageCb = cb;
+    }
+
+    onClose(): void {
+      // Unused by these tests.
+    }
+
+    send(message: UiToHostMessage): void {
+      this.messageCb?.(message);
+    }
+  }
+
+  /** A non-core external-engine shape (mirrors buildFakeEngine in the shell-capability describe above). */
+  function buildFakeEngine(overrides: Partial<SessionEngine> = {}): SessionEngine {
+    return {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+      ...overrides,
+    };
+  }
+
+  function buildSession(opts: { engine: SessionEngine; eventTap?: (event: AgentEvent) => void }): { port: FakeWirePort } {
+    const outbound = new Outbound();
+    const broker = new IpcPermissionBroker((message) => outbound.emit(message));
+    const session = new Session({
+      outbound,
+      engine: opts.engine,
+      broker,
+      fs: new MemFs(),
+      workspace: "/workspace",
+      model: "m1",
+      sessionId: "s1",
+      rules: new SessionPermissionRules(),
+      ...(opts.eventTap !== undefined ? { eventTap: opts.eventTap } : {}),
+    });
+    const port = new FakeWirePort();
+    session.bindPort(port);
+    return { port };
+  }
+
+  it("sees every event runTurn observes, in order — covers tool_result/turn_end/finish/loop_end", async () => {
+    const seen: AgentEvent[] = [];
+    const engine = buildFakeEngine({
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        yield {
+          type: "tool_result",
+          outcome: { toolCallId: "c1", toolName: "Bash", status: "success", modelText: "ok", durationMs: 5 },
+        };
+        yield { type: "turn_end", turn: 1, finishReason: "stop" };
+        yield { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+    });
+    const { port } = buildSession({ engine, eventTap: (event) => seen.push(event) });
+    port.send({ type: "ui_ready" });
+    port.send({ type: "user_message", requestId: "r1", text: "go" });
+    await vi.waitFor(() =>
+      expect(seen.map((event) => event.type)).toEqual(["tool_result", "turn_end", "finish", "loop_end"]),
+    );
+  });
+
+  it("a throwing tap is caught and logged — the turn completes exactly as without one", async () => {
+    const engine = buildFakeEngine({
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { port } = buildSession({
+        engine,
+        eventTap: () => {
+          throw new Error("tap boom");
+        },
+      });
+      port.send({ type: "ui_ready" });
+      port.send({ type: "user_message", requestId: "r1", text: "go" });
+      await vi.waitFor(() =>
+        expect(port.received).toContainEqual({
+          type: "agent_event",
+          turnId: expect.any(String),
+          event: { type: "loop_end", reason: "completed", turns: 1 },
+        }),
+      );
+      expect(
+        consoleError.mock.calls.some(
+          (call) => typeof call[0] === "string" && call[0].includes("[host] eventTap failed:") && call[0].includes("tap boom"),
+        ),
+      ).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("no eventTap configured — the turn is byte-identical to a legacy/core-path Session (no crash, same events on the wire)", async () => {
+    const engine = buildFakeEngine({
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+    });
+    const { port } = buildSession({ engine });
+    port.send({ type: "ui_ready" });
+    port.send({ type: "user_message", requestId: "r1", text: "go" });
+    await vi.waitFor(() =>
+      expect(port.received).toContainEqual({
+        type: "agent_event",
+        turnId: expect.any(String),
+        event: { type: "loop_end", reason: "completed", turns: 1 },
+      }),
+    );
   });
 });
 
@@ -4745,6 +4902,233 @@ describe("Session — TASK.145 срез 2: pendingChildReports seam + origin plu
       expect(sessionHistory.items[1]).not.toHaveProperty("origin");
     } finally {
       h.close();
+    }
+  });
+});
+
+// ── TASK.162 slice B1 — the desktop half of the adjudicated tier seam (§0b) ──
+//
+// The child's capability settings must be re-resolved against the live
+// USER-SELECTED reasoning tier, never against the parent's model-EFFECTIVE
+// effort. This mirrors host/index.ts's wiring exactly — a host-owned
+// `selectedEffort` cell fed by CoreEngine's `onReasoningEffortSet` callback AND
+// by `switchModelImpl`'s `selectedTier` argument — and drives it through the
+// REAL Session message path. `session.ts` itself is deliberately untouched by
+// this slice: it already preserves the selected tier across a model switch, and
+// the whole point of the amended design is that no change was needed there.
+//
+// The discriminator: with the parent on a NON-reasoning model, the rejected
+// design (reading `parent.reasoningEffort` at spawn time) delivers `undefined`,
+// because the parent's effective effort is suppressed by its own model. The
+// cell delivers the tier the user actually chose.
+
+interface TierSeamWiring {
+  harness: ReturnType<typeof createHarness>;
+  /** Every (modelId, tier) pair the child-settings resolver was handed, in order. */
+  resolverCalls: { modelId: string; tier: ReasoningEffort | undefined }[];
+  /** The ports the child-port factory built, keyed by requested model id. */
+  childPorts: Map<string, ScriptedModelPort>;
+  /** The ONE runner/config the whole test drives — never rebuilt between rounds. */
+  spawnChild: (model: string) => Promise<unknown>;
+}
+
+function createTierSeamWiring(bootModel: string): TierSeamWiring {
+  const entry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), "https://api.z.ai/api/anthropic");
+  // The host cell: seeded from the boot tier, then kept current by the two
+  // writers below and read at spawn time by the resolver closure.
+  let selectedEffort: ReasoningEffort = "off";
+  let currentModel = bootModel;
+
+  const settingsForChild = buildChildModelSettingsResolver({
+    catalogEntry: entry,
+    envMaxOutputTokens: undefined,
+    envContextWindow: undefined,
+  });
+  const resolverCalls: { modelId: string; tier: ReasoningEffort | undefined }[] = [];
+
+  const childPorts = new Map<string, ScriptedModelPort>();
+  const childPortFactory = (modelId: string): ScriptedModelPort => {
+    const port = new ScriptedModelPort([textStep(`child-from-${modelId}`)]);
+    childPorts.set(modelId, port);
+    return port;
+  };
+
+  const config: AgentLoopConfig = {
+    modelPort: new ScriptedModelPort([]),
+    registry: createDefaultToolRegistry(),
+    hooks: new InMemoryHookRunner(),
+    permissionEngine: new RuleAwarePermissionEngine(new ModePermissionEngine(), new SessionPermissionRules()),
+    permissionBroker: new IpcPermissionBroker(() => {}),
+    mode: "build",
+    ports: {
+      fs: new MemFs(),
+      exec: {} as AgentLoopConfig["ports"]["exec"],
+      http: new NodeHttpAdapter(),
+      todos: new InMemoryTodoStore(),
+    },
+    cwd: "/workspace",
+    reasoningEffort: resolveReasoningEffort(bootModel, entry, selectedEffort),
+  };
+  // ONE runner for the whole test: the seam is only meaningful if nothing is
+  // reconstructed between rounds (a rebuilt closure would trivially observe a
+  // fresh tier and prove nothing).
+  withSubagents(config, {
+    resolveChildModelPort: childPortFactory,
+    resolveChildModelSettings: (modelId: string) => {
+      resolverCalls.push({ modelId, tier: selectedEffort });
+      return settingsForChild(modelId, selectedEffort);
+    },
+  });
+
+  const loop = new AgentLoop(config);
+  // Mirror of host/index.ts's switchModelImpl: the tier assignment first, then
+  // the re-budget recipe against the NEW model.
+  const switchModelImpl = (
+    id: string,
+    selectedTier: ReasoningEffort,
+  ): { model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] } => {
+    selectedEffort = selectedTier;
+    currentModel = id;
+    const resolvedEffort = resolveReasoningEffort(id, entry, selectedTier);
+    config.reasoningEffort = resolvedEffort;
+    const availableEffortLevels = resolveEffortLevels(id, entry);
+    return {
+      model: id,
+      reasoningEffort: resolvedEffort ?? "off",
+      ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
+    };
+  };
+  const engine = new CoreEngine({
+    loop,
+    config,
+    switchModelImpl,
+    onReasoningEffortSet: (effort) => {
+      selectedEffort = effort ?? "off";
+    },
+  });
+
+  const harness = createHarness({
+    steps: [],
+    engine,
+    reasoningSupported: true,
+    availableEffortLevels: resolveEffortLevels(bootModel, entry),
+    selectedEffort,
+  });
+
+  return {
+    harness,
+    resolverCalls,
+    childPorts,
+    spawnChild: (model: string) =>
+      config.subagents!.run(
+        { agentType: "general-purpose", description: `child on ${model}`, prompt: "do it", model },
+        {},
+      ),
+  };
+}
+
+describe("Session -> CoreEngine -> child-settings seam (TASK.162 §0b: live SELECTED tier)", () => {
+  it("carries the user-selected tier to an override child across a switch to a NON-reasoning parent, twice, on one runner", async () => {
+    // Boot on glm-5.2 (z-ai catalog: reasoning, levels off/high/max).
+    const w = createTierSeamWiring("glm-5.2");
+    try {
+      w.harness.send({ type: "ui_ready" });
+      await w.harness.waitFor(isHostReady);
+
+      // ── round 1: "high" ────────────────────────────────────────────────
+      w.harness.send({ type: "set_reasoning_effort", effort: "high" });
+      await w.harness.waitFor(
+        (m): m is Of<"reasoning_effort_changed"> => m.type === "reasoning_effort_changed",
+      );
+
+      // Switch the PARENT to a non-reasoning model. Session keeps its own
+      // selected tier; the parent's effective effort collapses.
+      w.harness.send({ type: "set_model", model: "glm-4.6" });
+      const collapsed = await w.harness.waitFor(isModelChanged);
+      expect(collapsed.reasoningEffort).toBe("off");
+      expect(collapsed.availableEffortLevels).toBeUndefined();
+
+      await w.spawnChild("glm-5.3-flash");
+
+      expect(w.resolverCalls).toEqual([{ modelId: "glm-5.3-flash", tier: "high" }]);
+      const firstChild = w.childPorts.get("glm-5.3-flash");
+      expect(firstChild!.requests).toHaveLength(1);
+      expect(firstChild!.requests[0]!.reasoningEffort).toBe("high");
+
+      // ── round 2: "low", WITHOUT rebuilding the runner or its closure ───
+      // The tier can only be selected while a model that declares it is live:
+      // glm-5.3's levels are low/high/max.
+      w.harness.send({ type: "set_model", model: "glm-5.3" });
+      await w.harness.waitUntil(() => w.harness.received.filter(isModelChanged).length === 2);
+      w.harness.send({ type: "set_reasoning_effort", effort: "low" });
+      await w.harness.waitUntil(
+        () => w.harness.received.filter((m) => m.type === "reasoning_effort_changed").length === 2,
+      );
+      w.harness.send({ type: "set_model", model: "glm-4.6" });
+      await w.harness.waitUntil(() => w.harness.received.filter(isModelChanged).length === 3);
+
+      await w.spawnChild("glm-5.3-flash");
+
+      expect(w.resolverCalls).toEqual([
+        { modelId: "glm-5.3-flash", tier: "high" },
+        { modelId: "glm-5.3-flash", tier: "low" },
+      ]);
+      const secondChild = w.childPorts.get("glm-5.3-flash");
+      expect(secondChild!.requests).toHaveLength(1);
+      expect(secondChild!.requests[0]!.reasoningEffort).toBe("low");
+    } finally {
+      w.harness.close();
+    }
+  });
+
+  it("a tier selected with NO model switch after it still reaches the child (the CoreEngine callback is the only writer here)", async () => {
+    // Isolates `CoreEngine.onReasoningEffortSet`: without a subsequent
+    // `set_model` there is no second writer, so the cell can only be current if
+    // the callback fired. The boot seed is "off", which is what a missing
+    // callback would leave behind.
+    const w = createTierSeamWiring("glm-5.2");
+    try {
+      w.harness.send({ type: "ui_ready" });
+      await w.harness.waitFor(isHostReady);
+
+      w.harness.send({ type: "set_reasoning_effort", effort: "max" });
+      await w.harness.waitFor(
+        (m): m is Of<"reasoning_effort_changed"> => m.type === "reasoning_effort_changed",
+      );
+
+      await w.spawnChild("glm-5.3-flash");
+
+      expect(w.resolverCalls).toEqual([{ modelId: "glm-5.3-flash", tier: "max" }]);
+      expect(w.childPorts.get("glm-5.3-flash")!.requests[0]!.reasoningEffort).toBe("max");
+    } finally {
+      w.harness.close();
+    }
+  });
+
+  it("a user-selected 'off' reaches the resolver as 'off' — the cell never guesses a tier back", async () => {
+    const w = createTierSeamWiring("glm-5.2");
+    try {
+      w.harness.send({ type: "ui_ready" });
+      await w.harness.waitFor(isHostReady);
+
+      w.harness.send({ type: "set_reasoning_effort", effort: "high" });
+      await w.harness.waitFor(
+        (m): m is Of<"reasoning_effort_changed"> => m.type === "reasoning_effort_changed",
+      );
+      // Session maps "off" to undefined before calling the engine; the cell
+      // stores "off", which resolveReasoningEffort treats as "no effort".
+      w.harness.send({ type: "set_reasoning_effort", effort: "off" });
+      await w.harness.waitUntil(
+        () => w.harness.received.filter((m) => m.type === "reasoning_effort_changed").length === 2,
+      );
+
+      await w.spawnChild("glm-5.3-flash");
+
+      expect(w.resolverCalls).toEqual([{ modelId: "glm-5.3-flash", tier: "off" }]);
+      const child = w.childPorts.get("glm-5.3-flash");
+      expect(child!.requests[0]!.reasoningEffort).toBeUndefined();
+    } finally {
+      w.harness.close();
     }
   });
 });

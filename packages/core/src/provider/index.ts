@@ -49,3 +49,5 @@ export {
   resolveReasoningEffort,
 } from "./capabilities.js";
 export type { ImageInputOverride } from "./capabilities.js";
+export { buildChildModelSettingsResolver } from "./child-model-settings.js";
+export type { ChildModelSettings } from "./child-model-settings.js";

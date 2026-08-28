@@ -254,6 +254,21 @@ interface ScanResult {
   /** True when the byte-accurate budget (real `lstat` sizes, PROFILE_STATS_MAX_SCAN_BYTES)
    *  stopped the scan before every *.jsonl entry was read (W5-FIX finding 1). */
   truncated: boolean;
+  /**
+   * `mtimeMs` of the OLDEST file actually included in `files`, when the scan
+   * was truncated (TASK.158 slice 0). `null` when the scan was NOT truncated
+   * (full coverage — no honest lower bound to report) or when truncation hit
+   * before a single file could be included (the newest entry alone already
+   * exceeded the budget — no "oldest included file" exists).
+   */
+  coverageStartTs: number | null;
+}
+
+interface StatedJsonlFile {
+  name: string;
+  fullPath: string;
+  size: number;
+  mtimeMs: number;
 }
 
 /**
@@ -264,18 +279,27 @@ interface ScanResult {
  * A single entry's `lstat`/`readFile` failure (vanished mid-scan, permission
  * on one file) is skipped rather than failing the whole scan.
  *
- * BYTE-ACCURATE CAP (W5-FIX finding 1): entries are processed in a
- * deterministic (name-sorted) order, and each REAL file size (`lstat().size`,
+ * BYTE-ACCURATE CAP (W5-FIX finding 1): each REAL file size (`lstat().size`,
  * bytes, not UTF-16 code units) is checked against the running budget BEFORE
  * that file is read — so a single oversized file is never loaded into memory
  * at all, unlike the aggregator's own post-read char-based cap (which stays
  * as a secondary in-memory guard, not the primary defense).
+ *
+ * TRUNCATION ORDER (TASK.158 slice 0): filenames are UUIDs, so the OLD
+ * name-lexicographic scan order was random relative to time — a byte-budget
+ * cut in that order silently dropped an arbitrary slice of history. That is
+ * not merely a smaller total; for a period filter it is a LIE ("Today" could
+ * show zero on a day the owner demonstrably worked, purely because today's
+ * file happened to sort late alphabetically). Entries are lstat'd up front,
+ * then sorted NEWEST-mtime-first, so the budget cut always removes the
+ * OLDEST entries first and the surviving set is a single contiguous, recent
+ * segment — never a random scatter.
  */
 async function listJsonlFiles(fs: ProfileFs, dir: string): Promise<ScanResult | { ok: false }> {
   let names: string[];
   try {
     if (!(await fs.exists(dir))) {
-      return { ok: true, files: [], truncated: false };
+      return { ok: true, files: [], truncated: false, coverageStartTs: null };
     }
     names = await fs.readdir(dir);
   } catch (error) {
@@ -283,11 +307,11 @@ async function listJsonlFiles(fs: ProfileFs, dir: string): Promise<ScanResult | 
     return { ok: false };
   }
 
-  const jsonlNames = names.filter((name) => name.endsWith(".jsonl")).sort();
+  const jsonlNames = names.filter((name) => name.endsWith(".jsonl"));
 
-  const files: ProfileStatsFile[] = [];
-  let accumulatedBytes = 0;
-  let truncated = false;
+  // Phase 1: lstat every candidate up front (same symlink/non-file skip rules
+  // as before), collecting real size + mtime so phase 2 can order by TIME.
+  const stated: StatedJsonlFile[] = [];
   for (const name of jsonlNames) {
     const fullPath = `${stripTrailingSep(dir)}/${name}`;
     let st: ProfileFileStat;
@@ -298,24 +322,54 @@ async function listJsonlFiles(fs: ProfileFs, dir: string): Promise<ScanResult | 
     }
     if (st.isSymbolicLink === true) continue;
     if (!st.isFile) continue;
+    stated.push({ name, fullPath, size: st.size, mtimeMs: st.mtimeMs });
+  }
 
-    if (accumulatedBytes + st.size > PROFILE_STATS_MAX_SCAN_BYTES) {
+  // Phase 2: NEWEST-mtime-first. Equal mtimes tie-break by name only for
+  // determinism (never expected as a real collision, but the result must not
+  // depend on readdir's unspecified order).
+  stated.sort((a, b) =>
+    b.mtimeMs !== a.mtimeMs ? b.mtimeMs - a.mtimeMs : a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+
+  // Phase 3: byte budget + read loop, walking the newest-first order from
+  // phase 2. BREAK (not continue) on the first file that doesn't fit: every
+  // remaining entry is OLDER than this one by construction, so stopping here
+  // is exactly what keeps the kept set a CONTIGUOUS newest segment with no
+  // temporal holes — `continue`-ing past an oversized file would let an
+  // even-older file sneak back in under budget and reintroduce the same
+  // randomness this fixes.
+  //
+  // NOTE: the aggregator (stats.ts ~:137) re-sorts `files` by NAME before
+  // walking their lines. That resort only decides PROCESSING order within
+  // the set already selected here — SELECTION (which files make the cut) is
+  // fully decided in this loop, so the resort cannot undo the newest-first
+  // guarantee. It also cannot re-trip the byte cap on this path: the
+  // aggregator's own cap is a UTF-16 character count, and UTF-16 length is
+  // always <= the UTF-8 byte size already checked below.
+  const files: ProfileStatsFile[] = [];
+  let accumulatedBytes = 0;
+  let truncated = false;
+  let coverageStartTs: number | null = null;
+  for (const entry of stated) {
+    if (accumulatedBytes + entry.size > PROFILE_STATS_MAX_SCAN_BYTES) {
       truncated = true;
       break;
     }
 
     let raw: string;
     try {
-      raw = await fs.readFileNoFollow(fullPath);
+      raw = await fs.readFileNoFollow(entry.fullPath);
     } catch {
       // A symlink swapped in after the lstat pre-check (TOCTOU) fails ELOOP
       // here and is skipped, same fail-soft ethic as any other read error.
       continue;
     }
-    accumulatedBytes += st.size;
-    files.push({ name, lines: raw.split("\n") });
+    accumulatedBytes += entry.size;
+    files.push({ name: entry.name, lines: raw.split("\n") });
+    coverageStartTs = entry.mtimeMs;
   }
-  return { ok: true, files, truncated };
+  return { ok: true, files, truncated, coverageStartTs: truncated ? coverageStartTs : null };
 }
 
 
@@ -324,12 +378,13 @@ const telemetrySetSchema = z.object({ enabled: z.boolean() });
 
 // ── handlers (exported for unit tests) ──
 
-function toView(stats: ProfileStats, status: ResolvedProfileDir): ProfileStatsView {
+function toView(stats: ProfileStats, status: ResolvedProfileDir, coverageStartTs: number | null): ProfileStatsView {
   return {
     ...stats,
     telemetryEnabled: status.telemetryEnabled,
     killSwitchActive: status.killSwitchActive,
     dir: status.dir,
+    coverageStartTs,
   };
 }
 
@@ -360,7 +415,7 @@ export async function handleProfileStatsGet(deps: ProfileIpcDeps): Promise<Profi
     return { ok: false, reason: "io_error" };
   }
 
-  const view = toView(stats, status);
+  const view = toView(stats, status, scanned.coverageStartTs);
   // Byte-accurate scan-level truncation (real file sizes) OR the aggregator's
   // own char-based in-memory cap — either signal means the view is partial.
   view.truncated = stats.truncated || scanned.truncated;

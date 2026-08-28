@@ -24,6 +24,22 @@ export interface CoreEngineOptions {
    * failure is logged and swallowed here rather than propagated.
    */
   onBeforeTurn?: () => Promise<void>;
+  /**
+   * TASK.162 (§0b adjudication): notifies the host that the USER selected a
+   * reasoning tier, so the host can keep its own `selectedEffort` cell current
+   * for anything that must re-resolve against the selected tier later — the
+   * child-model settings resolver at subagent spawn, above all.
+   *
+   * At THIS seam `undefined` unambiguously means the user selected "off":
+   * Session maps off -> undefined before calling `setReasoningEffort`, and a
+   * tier merely suppressed by the current model's capabilities never travels
+   * through this method (the model switch re-resolves that separately, from
+   * the preserved tier). That is precisely why the cell it feeds stays a
+   * faithful SELECTED tier rather than model-effective state.
+   *
+   * Additive-optional: no subscriber => behavior byte-identical.
+   */
+  onReasoningEffortSet?: (effort: ReasoningEffort | undefined) => void;
 }
 
 /**
@@ -61,6 +77,7 @@ export class CoreEngine implements SessionEngine {
 
   setReasoningEffort(effort: ReasoningEffort | undefined): void {
     this.options.config.reasoningEffort = effort;
+    this.options.onReasoningEffortSet?.(effort);
   }
 
   async *runTurn(input: string, options: RunTurnOptions): AsyncGenerator<AgentEvent> {

@@ -41,6 +41,7 @@ import {
   PROMPT_STRIP_LINES,
   PROMPT_STRIP_MAX_CHARS,
   shouldAutoCollapse,
+  subagentResponseModelNote,
   substatusKind,
   summarizeInput,
   SUMMARY_MAX_CHARS,
@@ -247,6 +248,34 @@ describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)"
     expect(formatSubagentCounters(subagent)).toBe("Completed · 4.2s");
     expect(formatSubagentCounters(subagent)).not.toContain("turn");
     expect(formatSubagentCounters(subagent)).not.toContain("codex");
+  });
+});
+
+describe("subagentResponseModelNote (TASK.161 slice C1)", () => {
+  it("no responseModel at all => null (absence must render as absence, never a fallback)", () => {
+    expect(subagentResponseModelNote({ model: "glm-5.3", final: {} })).toBeNull();
+    expect(subagentResponseModelNote({ model: "glm-5.3", final: null })).toBeNull();
+  });
+
+  it("requested model matches the provider's claim => mismatch: false (a match proves acceptance only, never styled as a confirmation)", () => {
+    expect(subagentResponseModelNote({ model: "glm-5.3", final: { responseModel: "glm-5.3" } })).toEqual({
+      text: "provider reported: glm-5.3",
+      mismatch: false,
+    });
+  });
+
+  it("requested model differs from the provider's claim => mismatch: true (the informative case)", () => {
+    expect(subagentResponseModelNote({ model: "glm-5.3-flash", final: { responseModel: "glm-5.3" } })).toEqual({
+      text: "provider reported: glm-5.3",
+      mismatch: true,
+    });
+  });
+
+  it("no requested model (inherited the parent's) but a claim is present => informational only, mismatch: false", () => {
+    expect(subagentResponseModelNote({ model: null, final: { responseModel: "glm-5.3" } })).toEqual({
+      text: "provider reported: glm-5.3",
+      mismatch: false,
+    });
   });
 });
 
@@ -1000,6 +1029,48 @@ describe("AgentCardBody (SSR component render)", () => {
     expect(html).toContain("tool-call-agent-result");
     expect(html).toContain("Agent: the subagent failed.");
     expect(html).not.toContain('class="tool-call-result"');
+  });
+
+  // TASK.161 slice C1: the provider-reported model pill mounts in the
+  // expanded meta row, next to the requested-model pill, and gets the
+  // mismatch styling only when the provider's claim differs from what was
+  // requested. Copy must say "provider reported", never "served".
+  it("mismatch: renders the response-model pill with the mismatch class and never the word 'served'", () => {
+    const block = mkAgentBlock({
+      status: "success",
+      subagent: mkSubagent({
+        model: "glm-5.3-flash",
+        final: { status: "completed", durationMs: 500, responseModel: "glm-5.3" },
+      }),
+    });
+    const html = renderAgentBody(block, false);
+    expect(html).toContain("tool-call-subagent-response-model--mismatch");
+    expect(html).toContain("provider reported: glm-5.3");
+    expect(html.toLowerCase()).not.toContain("served");
+  });
+
+  it("match: renders the response-model pill WITHOUT the mismatch class (a match is not styled as a confirmation)", () => {
+    const block = mkAgentBlock({
+      status: "success",
+      subagent: mkSubagent({
+        model: "glm-5.3",
+        final: { status: "completed", durationMs: 500, responseModel: "glm-5.3" },
+      }),
+    });
+    const html = renderAgentBody(block, false);
+    expect(html).toContain("tool-call-subagent-response-model");
+    expect(html).not.toContain("tool-call-subagent-response-model--mismatch");
+    expect(html).toContain("provider reported: glm-5.3");
+  });
+
+  it("no responseModel: the pill is absent entirely", () => {
+    const block = mkAgentBlock({
+      status: "success",
+      subagent: mkSubagent({ model: "glm-5.3", final: { status: "completed", durationMs: 500 } }),
+    });
+    const html = renderAgentBody(block, false);
+    expect(html).not.toContain("tool-call-subagent-response-model");
+    expect(html).not.toContain("provider reported");
   });
 
   // TASK.44: max_turns is an incomplete outcome. The external card status is

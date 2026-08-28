@@ -1748,6 +1748,123 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
   });
 });
 
+// subagent_end.responseModel forwarding seam (TASK.161 slice C1): the ONLY
+// consumer edit the wire needed on the desktop side (an inline subagent_end is
+// a structured-clone passthrough) is this enumeration — patchSubagentEnd
+// reading the field off the event and writing it onto SubagentSubStatus.final.
+describe("desktop store — subagent_end.responseModel forwarding (TASK.161 slice C1)", () => {
+  function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+  }
+
+  const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
+    store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
+
+  it("subagent_end carrying responseModel sets final.responseModel", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "d" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_end",
+        toolCallId: "call-1",
+        status: "completed",
+        turns: 1,
+        durationMs: 100,
+        responseModel: "glm-5.3",
+      },
+    });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: { status: "completed", durationMs: 100, responseModel: "glm-5.3" } } });
+  });
+
+  it("subagent_end without responseModel leaves the key absent — never a fallback to the requested model", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "d" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 1, durationMs: 100 },
+    });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(
+      block !== undefined &&
+        block.kind === "tool_call" &&
+        block.subagent !== null &&
+        block.subagent.final !== null &&
+        "responseModel" in block.subagent.final,
+    ).toBe(false);
+  });
+
+  it("a duplicate subagent_end after settle stays a no-op, including for responseModel", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "d" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_end",
+        toolCallId: "call-1",
+        status: "completed",
+        turns: 1,
+        durationMs: 100,
+        responseModel: "glm-5.3",
+      },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_end",
+        toolCallId: "call-1",
+        status: "error",
+        turns: 9,
+        durationMs: 999,
+        responseModel: "glm-nonexistent",
+      },
+    });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: { status: "completed", durationMs: 100, responseModel: "glm-5.3" } } });
+  });
+});
+
 // subagent_attention → SubagentSubStatus.waiting (TASK.102 CUT-S2 §2.5; the
 // store case was pulled forward into S2a by CUT-S2 §10.1 — the variant is
 // A4's, and the sequence contract is frozen in §2.5, so the case closes with

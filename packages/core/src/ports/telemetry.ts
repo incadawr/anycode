@@ -9,6 +9,20 @@
  * this union. Written by adapters/node/node-telemetry.ts (JsonlTelemetrySink);
  * consumed only by CLI/host wiring — CorePorts does NOT carry this port, so
  * tool handlers can never see or write to it.
+ *
+ * Telemetry track (TASK.158/159/160) additions: `session_start.engine` /
+ * `.parentSession`, `subagent_start.model` / `.engine`, and the envelope's
+ * `sub` are all names/enums/ids by type — the privacy theorem above still
+ * holds, no free-text field was added.
+ *
+ * S9 addendum: `session_start.enginePreset` — an id from a closed,
+ * host-validated preset table (same shape as `engine`: a name, never free
+ * text). WARNING for any future reader of `mode`: the short window between
+ * S5 landing and this fix shipped `session_start` records that carried an
+ * engine preset id INSIDE `mode` (via an `as PermissionMode` cast) on
+ * codex/claude boots. A reader of `mode` MUST check membership in
+ * `PERMISSION_MODES` and treat any non-member value as absent rather than
+ * trusting the type.
  */
 
 import type { FinishReason, LoopEndReason } from "../types/events.js";
@@ -27,7 +41,7 @@ export type TelemetryEventRecord =
   | { t: "compaction_end"; ok: boolean; preTokens: number; postTokens?: number; durationMs: number }
   | { t: "microcompact"; clearedToolResults: number; savedTokens: number }
   | { t: "context_usage"; estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" }
-  | { t: "subagent_start"; agentType: string }
+  | { t: "subagent_start"; agentType: string; model?: string; engine?: string }
   | { t: "subagent_end"; status: "completed" | "max_turns" | "cancelled" | "error"; turns: number; durationMs: number }
   | { t: "workflow_end"; status: "completed" | "failed" | "cancelled"; completedSteps: number; totalSteps: number; durationMs: number }
   | { t: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number }
@@ -36,10 +50,37 @@ export type TelemetryEventRecord =
   | { t: "checkpoint_failed" };
 
 export type TelemetryLifecycleRecord =
-  | { t: "session_start"; model: string; provider: string; mode: PermissionMode; appVersion?: string }
+  | {
+      t: "session_start";
+      model: string;
+      provider: string;
+      /** Core's own permission mode. Present exactly when `engine` is
+       *  absent — a codex/claude engine session has no core PermissionMode
+       *  by construction (`supportsCorePermissions` is false for both), so
+       *  the field is never written on an engine boot. */
+      mode?: PermissionMode;
+      appVersion?: string;
+      /** Which runtime produced this session. Absent = core (the AgentLoop
+       *  path) — correct by construction for every pre-existing file, since
+       *  codex/claude engine boots wrote no records before this field
+       *  existed (TASK.159). */
+      engine?: "codex" | "claude";
+      /** Present exactly when `engine` is present: the engine's own
+       *  permission-preset id (codex: `ask|approve-for-me|full-access|
+       *  read-only`; claude: `read-only|ask|workspace`) — a name from a
+       *  closed, host-validated preset table, never free text. Deliberately
+       *  its own field rather than being smuggled through `mode`: the two
+       *  vocabularies overlap on some ids with different semantics and must
+       *  not be conflated in the type system. Precedent:
+       *  `apps/desktop/src/host/session.ts`'s `SessionPersistence.touch`. */
+      enginePreset?: string;
+      /** Set only when this boot is a session-tier child (TASK.102/145):
+       *  the parent session's id, ties the child file back to its parent. */
+      parentSession?: string;
+    }
   | { t: "session_end" };
 
-export type TelemetryRecord = { v: 1; ts: number; session: string } & (
+export type TelemetryRecord = { v: 1; ts: number; session: string; sub?: { agentType: string; model?: string } } & (
   | TelemetryEventRecord
   | TelemetryLifecycleRecord
 );
