@@ -138,7 +138,13 @@ function extractMessage(error: unknown): string {
   return "Unknown provider error";
 }
 
-function extractStatusCode(error: unknown): number | undefined {
+/**
+ * Exported so callers that need the raw HTTP status ahead of a full
+ * classification (e.g. the model port's include_usage probe, TASK.168) reuse
+ * this exact extraction instead of duplicating the `APICallError`/plain-object
+ * fallback logic.
+ */
+export function extractStatusCode(error: unknown): number | undefined {
   if (APICallError.isInstance(error)) return error.statusCode;
   if (!error || typeof error !== "object") return undefined;
   const candidate = error as { statusCode?: unknown; status?: unknown };

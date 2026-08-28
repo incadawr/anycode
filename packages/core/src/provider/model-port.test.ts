@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRequest } from "../ports/model.js";
 import type { DiagnosticEvent } from "../types/diagnostics.js";
 import type { AnthropicEndpointConfig } from "./anthropic.js";
+import type { EndpointConfig } from "./endpoint.js";
 
 const mockStreamText = vi.fn();
 
@@ -19,6 +20,25 @@ vi.mock("ai", async (importOriginal) => {
   return {
     ...actual,
     streamText: (...args: unknown[]) => mockStreamText(...args),
+  };
+});
+
+// TASK.168: records every `createLanguageModel` call while still DELEGATING
+// to the real implementation (no behaviour change for any existing test in
+// this file) — the include_usage probe's whole effect is baked into the
+// EndpointConfig passed to this call, not into `streamText`'s own args, so
+// this is the only seam that can observe whether a given attempt actually
+// asked for the flag.
+const mockCreateLanguageModel = vi.fn();
+
+vi.mock("./language-model.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./language-model.js")>();
+  return {
+    ...actual,
+    createLanguageModel: (...args: Parameters<typeof actual.createLanguageModel>) => {
+      mockCreateLanguageModel(...args);
+      return actual.createLanguageModel(...args);
+    },
   };
 });
 
@@ -163,6 +183,7 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 
 beforeEach(() => {
   mockStreamText.mockReset();
+  mockCreateLanguageModel.mockReset();
 });
 
 afterEach(() => {
@@ -981,5 +1002,179 @@ describe("AiSdkModelPort — response-model provenance and identity readback", (
     );
     const responsesOptions = mockStreamText.mock.calls[1]![0] as Record<string, unknown>;
     expect("includeRawChunks" in responsesOptions).toBe(false);
+  });
+});
+
+describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completions)", () => {
+  function chatConfig(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
+    return {
+      transport: "openai-chat-completions",
+      baseUrl: "https://gw.example.com/v1",
+      apiKey: "test-key",
+      model: "gpt-oss",
+      includeUsage: true,
+      retry: { baseDelayMs: 1, maxDelayMs: 1, maxRetries: 3 },
+      ...overrides,
+    };
+  }
+
+  /** A strict server's rejection of the unrecognized `stream_options` field — always a plain pre-content 400. */
+  function streamOptions400(message = "Unrecognized request argument supplied: stream_options"): APICallError {
+    return new APICallError({
+      message,
+      url: "https://gw.example.com/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode: 400,
+      isRetryable: false,
+    });
+  }
+
+  it("(a) retries once without include_usage on a pre-content 400, warns exactly once, and a later request on the same port does not re-probe", async () => {
+    const firstError = streamOptions400();
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error: firstError })]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort(chatConfig(), (event) => diagnostics.push(event));
+    const events = await collect(port.streamText(baseRequest));
+
+    // No stream_retry wire event for the probe: it is a silent, budget-exempt swap.
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    expect(events).toEqual([
+      { type: "start" },
+      { type: "start" },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ]);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(1, expect.objectContaining({ includeUsage: true }));
+    expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ includeUsage: false }));
+    expect(diagnostics).toEqual([
+      { kind: "include_usage_disabled", baseUrl: "https://gw.example.com/v1", model: "gpt-oss" },
+    ]);
+
+    // A second, independent request on the SAME port instance: the endpoint
+    // is already confirmed disabled, so it must build with the flag off from
+    // attempt zero — no error, no second mockStreamText call, no new warning.
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    const events2 = await collect(port.streamText(baseRequest));
+
+    expect(events2).toEqual([
+      { type: "start" },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ]);
+    expect(mockStreamText).toHaveBeenCalledTimes(3); // 2 above + this 1 — no re-probe attempt
+    expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(3, expect.objectContaining({ includeUsage: false }));
+    expect(diagnostics).toHaveLength(1); // still exactly once
+  });
+
+  it("(a-thrown) also retries a pre-content 400 that arrives as a THROWN exception rather than a stream error part", async () => {
+    const error = streamOptions400();
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(error)]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort(chatConfig(), (event) => diagnostics.push(event));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events).toEqual([
+      { type: "start" },
+      { type: "start" },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ]);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ includeUsage: false }));
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("(b) propagates the ORIGINAL 400 unchanged when the retry also 400s — the flag was not the cause", async () => {
+    const firstError = streamOptions400("stream_options rejected — attempt 1");
+    const secondError = streamOptions400("stream_options rejected — attempt 2");
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error: firstError })]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error: secondError })]));
+
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort(chatConfig(), (event) => diagnostics.push(event));
+    const events = await collect(port.streamText(baseRequest));
+
+    // The FIRST error, byte-identical — never the retry's own (second) error.
+    expect(events).toEqual([{ type: "start" }, { type: "start" }, { type: "error", error: firstError }]);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ includeUsage: false }));
+    expect(diagnostics).toEqual([]); // never confirmed as the cause — no warning
+
+    // The optimistic disable was rolled back: a LATER, independent request on
+    // the same port probes again from includeUsage: true.
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    await collect(port.streamText(baseRequest));
+    expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(3, expect.objectContaining({ includeUsage: true }));
+  });
+
+  it("(b-thrown) propagates the ORIGINAL thrown 400 unchanged when the retry also throws a 400", async () => {
+    const firstError = streamOptions400("attempt 1");
+    const secondError = streamOptions400("attempt 2");
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(firstError)]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(secondError)]));
+
+    const port = new AiSdkModelPort(chatConfig());
+    await expect(collect(port.streamText(baseRequest))).rejects.toBe(firstError);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it("(c) does not engage the probe for a non-400 failure, even pre-content on chat-completions with the flag on", async () => {
+    const error = new APICallError({
+      message: "forbidden",
+      url: "https://gw.example.com/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode: 403,
+      isRetryable: false,
+    });
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error })]));
+
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort(chatConfig(), (event) => diagnostics.push(event));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events).toEqual([{ type: "start" }, { type: "error", error }]);
+    expect(mockStreamText).toHaveBeenCalledTimes(1); // no probe retry, no generic retry either
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("(d) ANYCODE_INCLUDE_USAGE=0 (includeUsage already false): a 400 propagates immediately, no probe attempted", async () => {
+    const error = streamOptions400("some other 400, unrelated to stream_options");
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error })]));
+
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort(chatConfig({ includeUsage: false }), (event) => diagnostics.push(event));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events).toEqual([{ type: "start" }, { type: "error", error }]);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    expect(mockCreateLanguageModel).toHaveBeenCalledWith(expect.objectContaining({ includeUsage: false }));
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("confirms the probe and hands off to the NORMAL retry mechanism when the retry pass hits a DIFFERENT (retryable) failure instead of another 400", async () => {
+    const first400 = streamOptions400();
+    const overloaded = retryableError(); // 529, existing retryable-error fixture
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error: first400 })]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "error", error: overloaded })]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort(chatConfig(), (event) => diagnostics.push(event));
+    const events = await collect(port.streamText(baseRequest));
+
+    // The probe is confirmed (warned once) even though the retry pass itself
+    // then hit an UNRELATED failure, which goes through the ordinary
+    // stream_retry/backoff mechanism exactly as it would without TASK.168.
+    expect(diagnostics).toHaveLength(1);
+    expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
+    expect(events.find((e) => e.type === "finish")).toMatchObject({ type: "finish" });
+    expect(mockStreamText).toHaveBeenCalledTimes(3);
   });
 });
