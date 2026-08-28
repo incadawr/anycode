@@ -49,10 +49,10 @@ export interface CodexSupportManifest {
  * evidence behind it — deliberately NOT split into two entries, since nothing
  * reads `status` while `manifestSupportedRange` joins entries with `||` into
  * the string the Codex doctor shows a user, and ">=0.144.0 <0.145.0 ||
- * >=0.145.0 <0.150.0" is noise where ">=0.144.0 <0.150.0" is the same fact. Kept
+ * >=0.145.0 <0.151.0" is noise where ">=0.144.0 <0.151.0" is the same fact. Kept
  * apart in the note: 0.144.x carries the `codex-fixes` track's live 10/10 smoke,
- * while 0.145–0.149 is contract-verified only — the consumed app-server
- * subset was regenerated from the real 0.147.0 and 0.149.0 binaries and found
+ * while 0.145–0.150 is contract-verified only — the consumed app-server
+ * subset was regenerated from the real 0.147.0, 0.149.0 and 0.150.1 binaries and found
  * byte-identical in methods and decision enums (see
  * host/engines/codex/contract/README.md). `recommended` therefore stays on the
  * live-smoked patch: the range says which Codex a user may bring, `recommended`
@@ -61,8 +61,8 @@ export interface CodexSupportManifest {
  */
 export const BUNDLED_CODEX_MANIFEST: CodexSupportManifest = {
   schemaVersion: "anycode.codex-support.v1",
-  updatedAt: "2026-08-22T18:00:00Z",
-  supported: [{ range: ">=0.144.0 <0.150.0", status: "tested-and-contract-verified", note: "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.149: contract-verified against the real 0.147.0 and 0.149.0 binaries — consumed methods and decision enums byte-identical, no union variant removed" }],
+  updatedAt: "2026-08-28T07:47:00Z",
+  supported: [{ range: ">=0.144.0 <0.151.0", status: "tested-and-contract-verified", note: "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.150: contract-verified against the real 0.147.0, 0.149.0 and 0.150.1 binaries — consumed methods and decision enums byte-identical, no union variant removed" }],
   recommended: "0.144.3",
   minimum: CODEX_MIN_FLOOR,
 };

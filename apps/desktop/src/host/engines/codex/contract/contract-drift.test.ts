@@ -75,7 +75,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     // Deliberately a LITERAL, not a re-derivation: widening the range must trip
     // this test, so that admitting a version is always a reviewed edit here
     // rather than a constant quietly drifting upward.
-    expect(SUPPORTED_CODEX_VERSION).toBe(">=0.144.0 <0.150.0");
+    expect(SUPPORTED_CODEX_VERSION).toBe(">=0.144.0 <0.151.0");
     expect(pinned.generatedFrom.startsWith("codex-cli 0.144")).toBe(true);
   });
 

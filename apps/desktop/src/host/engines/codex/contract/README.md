@@ -36,7 +36,7 @@ protocol AnyCode's Codex adapter is built against (design
 
 ## Supported version range
 
-`>=0.144.0 <0.150.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`>=0.144.0 <0.151.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). The Codex CLI's TypeScript bindings are
 byte-identical across the observed 0.144.x patch releases; the generated
 JSON-schema differs only in property insertion order, which is why
@@ -44,9 +44,9 @@ JSON-schema differs only in property insertion order, which is why
 before comparing.
 
 The pin itself stays on 0.144.x — it is the baseline the adapter was written
-and live-smoked against, not a moving target. `0.145.0 .. 0.149.x` was admitted
-on the weaker evidence layer 2 now checks: regenerated from the real 0.147.0 and
-0.149.0 binaries, `methods` and `decisionEnums` came back byte-identical and no
+and live-smoked against, not a moving target. `0.145.0 .. 0.150.x` was admitted
+on the weaker evidence layer 2 now checks: regenerated from the real 0.147.0,
+0.149.0 and 0.150.1 binaries, `methods` and `decisionEnums` came back byte-identical and no
 union variant disappeared, and the handful of removed fields
 (`Account.amazonBedrock.credentialSource`, `McpToolCallAppContext.templateId`)
 are unconsumed and named in the test's `REVIEWED_REMOVALS`. `codex-support.json`

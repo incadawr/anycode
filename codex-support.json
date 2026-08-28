@@ -1,7 +1,7 @@
 {
   "schemaVersion": "anycode.codex-support.v1",
-  "updatedAt": "2026-08-22T18:00:00Z",
-  "supported": [{ "range": ">=0.144.0 <0.150.0", "status": "tested-and-contract-verified", "note": "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.149: contract-verified against the real 0.147.0 and 0.149.0 binaries — consumed methods and decision enums byte-identical, no union variant removed" }],
+  "updatedAt": "2026-08-28T07:47:00Z",
+  "supported": [{ "range": ">=0.144.0 <0.151.0", "status": "tested-and-contract-verified", "note": "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.150: contract-verified against the real 0.147.0, 0.149.0 and 0.150.1 binaries — consumed methods and decision enums byte-identical, no union variant removed" }],
   "recommended": "0.144.3",
   "minimum": "0.144.0"
 }
