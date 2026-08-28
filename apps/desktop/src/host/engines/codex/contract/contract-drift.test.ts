@@ -72,33 +72,35 @@ describe("contract-drift layer 1 (always-on)", () => {
     const version = parseCodexVersion("codex-cli 0.144.1");
     expect(version).not.toBeNull();
     expect(isSupportedCodexVersion(version!)).toBe(true);
-    // Deliberately a LITERAL, not a re-derivation: widening the range must trip
-    // this test, so that admitting a version is always a reviewed edit here
-    // rather than a constant quietly drifting upward.
-    expect(SUPPORTED_CODEX_VERSION).toBe(">=0.144.0 <0.151.0");
+    // Deliberately a LITERAL, not a re-derivation: raising the ceiling must
+    // trip this test, so that admitting a version is always a reviewed edit
+    // here rather than a constant quietly drifting upward.
+    expect(SUPPORTED_CODEX_VERSION).toBe("<0.151.0");
     expect(pinned.generatedFrom.startsWith("codex-cli 0.144")).toBe(true);
   });
 
-  it("isSupportedCodexVersion agrees with SUPPORTED_CODEX_VERSION at both bounds", () => {
+  it("isSupportedCodexVersion agrees with SUPPORTED_CODEX_VERSION at the ceiling", () => {
     // The predicate was once hardcoded (`minor === 144`) while the constant was
-    // a display string: widening the string alone advertised a range the code
-    // still refused, and the codex-support manifest would have promised users a
-    // version the transport rejected on sight. These four probes are the joint.
+    // a display string: widening the string alone advertised a version the
+    // code still refused, and the codex-support manifest would have promised
+    // users a version the transport rejected on sight.
+    //
+    // TASK.173 (owner decision, 2026-08-29): the floor is gone, so there is
+    // only one boundary left to prove — the ceiling. An arbitrarily old
+    // version is accepted by version number alone (it may still fail later,
+    // on the wire, for reasons unrelated to this check).
     const at = (text: string): boolean => {
       const version = parseCodexVersion(`codex-cli ${text}`);
       expect(version, `unparsable probe version ${text}`).not.toBeNull();
       return isSupportedCodexVersion(version!);
     };
-    const bounds = /^>=(\S+) <(\S+)$/.exec(SUPPORTED_CODEX_VERSION);
-    expect(bounds, `SUPPORTED_CODEX_VERSION is not a ">=min <max" range: ${SUPPORTED_CODEX_VERSION}`).not.toBeNull();
-    const min = bounds![1]!;
-    const max = bounds![2]!;
+    const bounds = /^<(\S+)$/.exec(SUPPORTED_CODEX_VERSION);
+    expect(bounds, `SUPPORTED_CODEX_VERSION is not a "<max" ceiling: ${SUPPORTED_CODEX_VERSION}`).not.toBeNull();
+    const max = bounds![1]!;
 
-    expect(at(min), `${min} is the inclusive lower bound and must be supported`).toBe(true);
-    expect(at(max), `${max} is the EXCLUSIVE upper bound and must not be supported`).toBe(false);
-    // One patch inside each end, so a range collapsed to a single point fails too.
+    expect(at(max), `${max} is the EXCLUSIVE ceiling and must not be supported`).toBe(false);
     expect(at("0.144.1")).toBe(true);
-    expect(at("0.100.0"), "below the floor is never supported").toBe(false);
+    expect(at("0.0.1"), "there is no floor: an arbitrarily old version is not rejected by version number").toBe(true);
   });
 
   it("protocol.ts's observed approval methods are pinned server-request methods", () => {
@@ -436,16 +438,17 @@ describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (e
   it("the live binary's version is within SUPPORTED_CODEX_VERSION, and its freshly-generated schema structurally matches the pinned contract", () => {
     const bin = process.env.ANYCODE_CODEX_DRIFT_BIN!;
     // Version comes from the REAL binary (cut §2(h) harden), never a stamped
-    // literal: a binary outside SUPPORTED_CODEX_VERSION now fails this test
-    // explicitly instead of silently deep-equaling on type shape alone (a
-    // binary that happens to keep our CONSUMED subset's shape unchanged
-    // while being genuinely outside the reviewed range must not pass).
+    // literal: a binary AT OR ABOVE the ceiling now fails this test explicitly
+    // instead of silently deep-equaling on type shape alone (a binary that
+    // happens to keep our CONSUMED subset's shape unchanged while being
+    // genuinely above the reviewed ceiling must not pass). There is no floor
+    // (TASK.173) to fail this probe from the other side.
     const rawVersion = execFileSync(bin, ["--version"], { timeout: 10_000, stdio: "pipe" }).toString("utf8").trim();
     const version = parseCodexVersion(rawVersion);
     expect(version, `unrecognized \`${bin} --version\` output: ${JSON.stringify(rawVersion)}`).not.toBeNull();
     expect(
       isSupportedCodexVersion(version!),
-      `${rawVersion} is outside SUPPORTED_CODEX_VERSION (${SUPPORTED_CODEX_VERSION}) — widen the range deliberately ` +
+      `${rawVersion} is outside SUPPORTED_CODEX_VERSION (${SUPPORTED_CODEX_VERSION}) — raise the ceiling deliberately ` +
         `(contract/README.md) before trusting this binary's schema`,
     ).toBe(true);
 
@@ -471,10 +474,11 @@ describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (e
       expect(fresh.methods).toEqual(pinned.methods);
       expect(fresh.decisionEnums).toEqual(pinned.decisionEnums);
       // The SHAPES are checked as a compatible superset instead. The pin is one
-      // version's snapshot while SUPPORTED_CODEX_VERSION is a range, so a later
-      // in-range binary that only ADDS optional fields is compatible and must
-      // not fail — deep equality here would make every range wider than a single
-      // patch unverifiable by this instrument.
+      // version's snapshot while SUPPORTED_CODEX_VERSION is a ceiling covering
+      // many versions, so a later binary under that ceiling that only ADDS
+      // optional fields is compatible and must not fail — deep equality here
+      // would make every ceiling wider than a single patch unverifiable by
+      // this instrument.
       expect(shapeRegressions(pinned.definitions, fresh.definitions)).toEqual([]);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
