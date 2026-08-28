@@ -44,7 +44,6 @@ import { backgroundCapableBashTool, bashKillTool, bashOutputTool, createDefaultT
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
 import type { ImageAttachment } from "../types/images.js";
-import { DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
 
 describe("parseAllowCommand", () => {
   it("treats empty/whitespace-only text as a listing request", () => {
@@ -4249,6 +4248,69 @@ describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// TASK.170: the DEFAULT_MAX_OUTPUT_TOKENS stub at boot is not silent either —
+// a model on a provider whose catalog carries no per-model hints at all
+// (OpenRouter's `models: []`, by construction) prints one `[warn]` line
+// naming the model, the number applied, and the reason (same diagnostics
+// channel as the TASK.159 clamp warning above).
+// ─────────────────────────────────────────────────────────────────────────
+describe("CLI boot stub-fallback warning (TASK.170 onStubFallback wiring)", () => {
+  it("a model on a models:[] catalog provider prints one [warn] stub line at boot", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const output = new PassThrough();
+    const errorOutput = new PassThrough();
+    const getText = collectOutput(output);
+    const getErr = collectOutput(errorOutput);
+    // OpenRouter's catalog entry declares models: [] by construction — any
+    // model id on it matches nothing, so resolveMaxOutputTokens falls back
+    // to the DEFAULT_MAX_OUTPUT_TOKENS stub instead of a real ceiling.
+    const exitCode = await runCli({
+      argv: ["-p", "probe the stub-fallback warning"],
+      env: {
+        ...makeTitleTestEnv(dbPath),
+        ANYCODE_BASE_URL: "https://openrouter.ai/api/v1",
+        ANYCODE_MODEL: "vendor/some-model",
+      },
+      input: new PassThrough(),
+      output,
+      errorOutput,
+      modelPort: new CountingModelPort(),
+      cwd: workspace,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(getErr()).toContain(
+      "[warn] vendor/some-model max output tokens: no ceiling declared for this model in the provider catalog, using default 32768",
+    );
+    // Exactly one line, on the diagnostics channel only.
+    expect(getErr().match(/no ceiling declared/g)).toHaveLength(1);
+    expect(getText()).not.toContain("no ceiling declared");
+  });
+
+  it("a claude- model prints no stub-fallback line (its undefined ceiling is intentional, not a stub)", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const output = new PassThrough();
+    const errorOutput = new PassThrough();
+    const getErr = collectOutput(errorOutput);
+    const exitCode = await runCli({
+      argv: ["-p", "probe the claude no-stub path"],
+      env: {
+        ...makeTitleTestEnv(dbPath),
+        ANYCODE_MODEL: "claude-opus-4-20250514",
+      },
+      input: new PassThrough(),
+      output,
+      errorOutput,
+      modelPort: new CountingModelPort(),
+      cwd: workspace,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(getErr()).not.toContain("no ceiling declared");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // TASK.162 slice B1 — the CLI half of the adjudicated tier seam (§0b item 2).
 //
@@ -4304,7 +4366,7 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     ]);
     const childPorts = new Map<string, RecordingTextModelPort>();
     const modelPortFactory = (id: string): ModelPort => {
-      if (id === "glm-4.6") {
+      if (id === "glm-4.5") {
         return parentAfterSwitch;
       }
       const port = new RecordingTextModelPort(`child-from-${id}`);
@@ -4320,9 +4382,12 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
       argv: [],
       env: {
         ANYCODE_API_KEY: "test-key",
-        // Real z-ai catalog entry: glm-5.2 accepts off/high/max, glm-4.6 is not
-        // reasoning-capable at all, glm-5.3-flash accepts low/high/max and
-        // declares NO output ceiling.
+        // Real z-ai catalog entry: glm-5.2 accepts off/high/max, glm-4.5 is not
+        // reasoning-capable at all and declares a 32_768 ceiling, glm-5.3-flash
+        // accepts low/high/max and declares its OWN 131_072 ceiling (TASK.170)
+        // — deliberately different from glm-4.5's, so the F6 check below still
+        // discriminates "resolved against the child's own model" from
+        // "copied from the parent" instead of the two coinciding by accident.
         ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
         ANYCODE_MODEL: "glm-5.2",
         ANYCODE_DB_PATH: ":memory:",
@@ -4338,7 +4403,7 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     // The tier is chosen while a reasoning-capable model is live (the CLI
     // refuses a non-"off" tier otherwise), THEN the parent switches away.
     input.write("/reasoning high\n");
-    input.write("/model glm-4.6\n");
+    input.write("/model glm-4.5\n");
     input.write("delegate a task\n");
     input.write("/quit\n");
 
@@ -4352,8 +4417,13 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     // The seam under test: the tier survived the switch to a non-reasoning
     // parent and was re-resolved against the CHILD's model.
     expect(childPort!.requests[0]!.reasoningEffort).toBe("high");
-    // F6 in the same request: flash declares no ceiling, so the child gets the
-    // honest DEFAULT — not the 131 072 the parent's glm-4.6 row resolves to.
-    expect(childPort!.requests[0]!.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+    // F6 in the same request: the child re-resolves maxOutputTokens against
+    // its OWN model (glm-5.3-flash's declared 131_072, TASK.170) — not the
+    // parent's already-resolved 32_768 (glm-4.5's row). Before the F6 fix
+    // (child-model-settings.ts) this would have been the parent's 32_768,
+    // copied verbatim; the two ceilings are deliberately different catalog
+    // values here so equality below can only pass by genuinely re-resolving
+    // against the child's model, not by coincidence.
+    expect(childPort!.requests[0]!.maxOutputTokens).toBe(131_072);
   });
 });

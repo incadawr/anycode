@@ -39,12 +39,13 @@ export function buildChildModelSettingsResolver(deps: {
   envMaxOutputTokens: number | undefined;
   envContextWindow: number | undefined;
   onClamp?: (requested: number, clamped: number, modelId: string) => void;
+  onStubFallback?: (modelId: string, applied: number) => void;
 }): (modelId: string, selectedTier: ReasoningEffort | undefined) => ChildModelSettings {
-  const { catalogEntry, envMaxOutputTokens, envContextWindow, onClamp } = deps;
+  const { catalogEntry, envMaxOutputTokens, envContextWindow, onClamp, onStubFallback } = deps;
   return (modelId, selectedTier) => {
     try {
       return {
-        maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp),
+        maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
         reasoningEffort: resolveReasoningEffort(modelId, catalogEntry, selectedTier),
         contextWindowTokens: resolveContextWindow(modelId, catalogEntry, envContextWindow) ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
       };
@@ -52,9 +53,11 @@ export function buildChildModelSettingsResolver(deps: {
       // Degrades to the same conservative unknown-model shape a catalog-miss
       // produces below — never to anything derived from the parent's already-
       // resolved settings, which would reinstate the defect this module
-      // exists to remove.
+      // exists to remove. entry is undefined here, so onStubFallback can still
+      // fire (no override ⇒ the DEFAULT stub applies) even though onClamp
+      // structurally cannot (no ceiling to clamp against).
       return {
-        maxOutputTokens: resolveMaxOutputTokens(modelId, undefined, envMaxOutputTokens),
+        maxOutputTokens: resolveMaxOutputTokens(modelId, undefined, envMaxOutputTokens, undefined, onStubFallback),
         reasoningEffort: undefined,
         contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
       };

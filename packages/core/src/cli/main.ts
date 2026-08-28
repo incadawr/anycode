@@ -501,6 +501,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
       bootWrite(
         `[warn] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}\n`,
       ),
+    (modelId, applied) =>
+      bootWrite(
+        `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
+      ),
   );
   let selectedReasoningEffort = envConfig.reasoningEffort ?? "off";
   const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, selectedReasoningEffort);
@@ -517,6 +521,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     onClamp: (requested, clamped, modelId) =>
       bootWrite(
         `[warn] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}\n`,
+      ),
+    onStubFallback: (modelId, applied) =>
+      bootWrite(
+        `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
       ),
   });
   let liveContextWindow = bootContextWindow ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
@@ -1563,6 +1571,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
                 (requested, clamped, modelId) =>
                   bootWrite(
                     `[warn] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}\n`,
+                  ),
+                (modelId, applied) =>
+                  bootWrite(
+                    `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
                   ),
               );
               loopConfig.reasoningEffort = resolveReasoningEffort(id, catalogEntry, selectedReasoningEffort);

@@ -1743,6 +1743,8 @@ async function boot(): Promise<void> {
       envConfig.maxOutputTokens,
       (requested, clamped, modelId) =>
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
+      (modelId, applied) =>
+        console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     );
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry);
@@ -1758,6 +1760,8 @@ async function boot(): Promise<void> {
       envContextWindow: envConfig.contextWindowTokens,
       onClamp: (requested, clamped, modelId) =>
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
+      onStubFallback: (modelId, applied) =>
+        console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     });
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
 
@@ -2382,6 +2386,8 @@ async function boot(): Promise<void> {
           envConfig.maxOutputTokens,
           (requested, clamped, modelId) =>
             console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
+          (modelId, applied) =>
+            console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
         );
         const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier);
         config.reasoningEffort = resolvedEffort;

@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CatalogProviderEntry } from "./catalog.js";
+import { findCatalogEntry } from "./catalog-data.js";
 import {
   resolveContextWindow,
   resolveEffortLevels,
@@ -12,6 +13,7 @@ import {
   resolveMaxOutputTokens,
   resolveReasoningEffort,
 } from "./capabilities.js";
+import { DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
 
 const VISION_ENTRY: CatalogProviderEntry = {
   id: "anthropic",
@@ -207,5 +209,74 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
 
   it("an id from a different entry does not match (entry-scoped, R4)", () => {
     expect(resolveContextWindow("claude-opus-4-20250514", Z_AI_ENTRY, undefined)).toBeUndefined();
+  });
+});
+
+// ── TASK.170: a child spawned on a catalog-known non-claude model must resolve ──
+// ── ITS OWN declared ceiling, never the DEFAULT_MAX_OUTPUT_TOKENS stub. ──
+
+describe("resolveMaxOutputTokens catalog completeness (TASK.170, real catalog)", () => {
+  it("glm-5.3-flash resolves its own declared ceiling, not the DEFAULT stub", () => {
+    const zAiEntry = findCatalogEntry("z-ai");
+    expect(zAiEntry).toBeDefined();
+    // Parent: glm-5.3 explicitly declares 131_072 in the catalog.
+    expect(resolveMaxOutputTokens("glm-5.3", zAiEntry, undefined)).toBe(131_072);
+    // Child: before TASK.170, glm-5.3-flash had no maxOutputTokens row, so a
+    // subagent spawned on the flash model silently fell to
+    // DEFAULT_MAX_OUTPUT_TOKENS (32_768) here — a ~4x drop from the parent's
+    // 131_072 for no reason other than a missing catalog row. It must now
+    // resolve to its OWN catalog ceiling instead.
+    expect(resolveMaxOutputTokens("glm-5.3-flash", zAiEntry, undefined)).toBe(131_072);
+    expect(resolveMaxOutputTokens("glm-5.3-flash", zAiEntry, undefined)).not.toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+  });
+});
+
+// ── TASK.170: the DEFAULT_MAX_OUTPUT_TOKENS stub must no longer be silent — ──
+// ── an optional onStubFallback callback fires exactly when the catalog truly ──
+// ── knows nothing (mirrors onClamp's shape/contract, TASK.159). ──
+
+describe("resolveMaxOutputTokens stub-fallback notice (TASK.170)", () => {
+  const entry: CatalogProviderEntry = {
+    id: "z-ai",
+    name: "Z.AI",
+    baseUrl: "https://api.z.ai/api/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: [
+      { id: "glm-basic", contextWindow: 128_000, maxOutputTokens: 16_384 },
+      { id: "claude-test", contextWindow: 200_000, reasoning: true },
+    ],
+  };
+
+  it("fires onStubFallback exactly once when the catalog has no ceiling and none is overridden", () => {
+    const stubs: Array<{ modelId: string; applied: number }> = [];
+    const result = resolveMaxOutputTokens("ghost-model", entry, undefined, undefined, (modelId, applied) =>
+      stubs.push({ modelId, applied }),
+    );
+    expect(result).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+    expect(stubs).toEqual([{ modelId: "ghost-model", applied: DEFAULT_MAX_OUTPUT_TOKENS }]);
+  });
+
+  it("stays silent when the catalog declares a ceiling (nothing was defaulted)", () => {
+    const stubs: number[] = [];
+    expect(resolveMaxOutputTokens("glm-basic", entry, undefined, undefined, () => stubs.push(1))).toBe(16_384);
+    expect(stubs).toEqual([]);
+  });
+
+  it("stays silent for claude- models (undefined native ceiling is intentional, not a stub)", () => {
+    const stubs: number[] = [];
+    expect(resolveMaxOutputTokens("claude-test", entry, undefined, undefined, () => stubs.push(1))).toBeUndefined();
+    expect(stubs).toEqual([]);
+  });
+
+  it("stays silent when an explicit override is supplied (nothing was defaulted)", () => {
+    const stubs: number[] = [];
+    expect(resolveMaxOutputTokens("ghost-model", entry, 12_000, undefined, () => stubs.push(1))).toBe(12_000);
+    expect(stubs).toEqual([]);
+  });
+
+  it("without an onStubFallback argument the stub still resolves correctly (callers unchanged)", () => {
+    expect(resolveMaxOutputTokens("ghost-model", entry, undefined)).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
   });
 });

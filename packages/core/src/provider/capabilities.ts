@@ -54,25 +54,38 @@ export function resolveContextWindow(
 }
 
 /**
- * Output-token resolution (TASK.150 → TASK.159): precedence is an explicit
- * override clamped by the matched catalog model's `maxOutputTokens` ceiling,
- * else the catalog hint, else the DEFAULT / Claude-native fallbacks. A
+ * Output-token resolution (TASK.150 → TASK.159 → TASK.170): precedence is an
+ * explicit override clamped by the matched catalog model's `maxOutputTokens`
+ * ceiling, else the catalog hint, else the DEFAULT / Claude-native fallbacks. A
  * below-catalog override is legal (deliberate economy) and passes through
  * untouched; an above-catalog one is clamped to the ceiling — a request the
  * provider will 400 is worth nothing. When there is no catalog entry, no model
  * match, or no declared ceiling there is nothing to clamp against and the
  * override wins as-is (TASK.151: an on-prem endpoint whose model the catalog
  * does not know must not gain a say). The claude- special case sits AFTER the
- * lookup, as before. Clamping is never silent: `onClamp`, when provided, fires
- * exactly once, only on an actual clamp — env handle and connection field
- * arrive here indistinguishably, so a stale catalog pinning a model low would
- * otherwise quietly swallow even the escape hatch, undiagnosable.
+ * lookup, as before: a Claude model's undefined ceiling is intentional (the
+ * anthropic-messages SDK carries its own accurate per-model default, measured
+ * TASK.170) and is never treated as a stub.
+ *
+ * Neither fallback is silent. `onClamp`, when provided, fires exactly once,
+ * only on an actual clamp — env handle and connection field arrive here
+ * indistinguishably, so a stale catalog pinning a model low would otherwise
+ * quietly swallow even the escape hatch, undiagnosable. `onStubFallback`
+ * (TASK.170), when provided, fires exactly once when the DEFAULT_MAX_OUTPUT_TOKENS
+ * stub is what actually gets applied — i.e. the model matched no catalog
+ * ceiling (or matched nothing at all, e.g. every model on `vllm`/`custom`/
+ * `openrouter`, whose `models: []` by construction) and no override was given
+ * to fall back to instead. Without this, a subagent spawned on a
+ * catalog-incomplete model silently got a ~4x-narrower ceiling than a sibling
+ * the catalog does know (glm-5.3 131_072 vs. glm-5.3-flash's old gap), with no
+ * log line or facade field anywhere naming the model or the number applied.
  */
 export function resolveMaxOutputTokens(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   override: number | undefined,
   onClamp?: (requested: number, clamped: number, modelId: string) => void,
+  onStubFallback?: (modelId: string, applied: number) => void,
 ): number | undefined {
   const matched = entry?.models.find((candidate) => candidate.id === modelId);
   const ceiling = matched?.maxOutputTokens;
@@ -82,7 +95,9 @@ export function resolveMaxOutputTokens(
     return ceiling;
   }
   if (ceiling !== undefined) return ceiling;
-  return modelId.startsWith("claude-") ? undefined : DEFAULT_MAX_OUTPUT_TOKENS;
+  if (modelId.startsWith("claude-")) return undefined;
+  onStubFallback?.(modelId, DEFAULT_MAX_OUTPUT_TOKENS);
+  return DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
 export function resolveReasoningEffort(
