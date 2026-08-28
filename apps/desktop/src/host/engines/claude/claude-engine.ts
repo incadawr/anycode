@@ -441,6 +441,26 @@ export class ClaudeEngine implements SessionEngine {
   private quota: ClaudeQuotaSnapshot | null = null;
   /** Cumulative `result.total_cost_usd` for this session (capability `costAccounting`). */
   private totalCostUsd = 0;
+  /**
+   * TASK.159: session-cumulative token counters fed by `onResult` below, the
+   * source `engine_session_tokens` (host/index.ts's engine-boot telemetry tap,
+   * `records.ts`'s `buildEngineTelemetryTap`) converts to additive delta
+   * records. Per-process, like `totalCostUsd` — never persisted, never
+   * summed with a prior boot's value (a resume starts both at 0; codex's own
+   * resume-baseline problem does not apply here, cut §2.3 comment).
+   */
+  private cumulativeInputTokens = 0;
+  private cumulativeOutputTokens = 0;
+  /**
+   * Set by `onResult` ONLY when the just-finished turn's `result.usage`
+   * decoded to two finite numbers; reset to `null` at the top of every
+   * `runTurn` call so a turn whose `result` never arrived (or carried no
+   * usable `usage`) cannot silently replay the previous turn's numbers. Read
+   * once, right after the post-terminal `readContextUsage` read below —
+   * `null` there means this turn emits no `engine_session_tokens` event at
+   * all (fail-soft: an undercount, never an invented one, per TASK.159 §DoD).
+   */
+  private lastTurnTokenUsage: { input: number; output: number } | null = null;
 
   constructor(
     private readonly client: ClaudeTransport,
@@ -642,6 +662,8 @@ export class ClaudeEngine implements SessionEngine {
     });
     this.interruptSent = false;
     this.turnActive = true;
+    // TASK.159: turn-scoped reset — see lastTurnTokenUsage's own doc comment.
+    this.resetTurnTokenUsage();
     let abortObserved = false;
     let settle: SettleDeadline | null = null;
     let terminal = false;
@@ -710,6 +732,24 @@ export class ClaudeEngine implements SessionEngine {
       // after loop_end still reaches the UI.
       const usage = await this.readContextUsage();
       if (usage !== null) yield usage;
+      // TASK.159: session-cumulative token accounting, next to the context
+      // meter read above. `lastTurnTokenUsage` is null when this turn's
+      // `result.usage` was absent/malformed — no event this turn (fail-soft,
+      // never invents a number). CUMULATIVE by contract (events.ts's own
+      // `engine_session_tokens` doc): the telemetry tap (records.ts,
+      // `buildEngineTelemetryTap`) is the ONLY code allowed to diff this
+      // against a previous snapshot.
+      const turnTokens = this.consumeLastTurnTokenUsage();
+      if (turnTokens !== null) {
+        this.cumulativeInputTokens += turnTokens.input;
+        this.cumulativeOutputTokens += turnTokens.output;
+        yield {
+          type: "engine_session_tokens",
+          input: this.cumulativeInputTokens,
+          output: this.cumulativeOutputTokens,
+          total: this.cumulativeInputTokens + this.cumulativeOutputTokens,
+        };
+      }
     } catch (error) {
       const terminalError = this.terminalError ?? (error instanceof Error ? error : new Error(String(error)));
       this.terminalError = terminalError;
@@ -835,9 +875,47 @@ export class ClaudeEngine implements SessionEngine {
     this.firstInitListeners.add(listener);
   }
 
+  /**
+   * TASK.159: turn-scoped reset for `lastTurnTokenUsage`, called at the top
+   * of `runTurn`. Factored into its own method rather than a direct
+   * `this.lastTurnTokenUsage = null` inline in `runTurn` — with the direct
+   * form, this TypeScript toolchain's flow analysis anchors the field's
+   * narrowed type on that literal reset and never widens it back across the
+   * turn's later `await`s/`yield`s (even though `onResult` below reassigns
+   * it in between), so the later read sees a bogus `never`. Routing the
+   * write and the read (`consumeLastTurnTokenUsage` below) through their own
+   * methods keeps `runTurn`'s own body free of any direct assignment to this
+   * field, which sidesteps the false narrowing (verified: the same
+   * class-shape repro type-checks with this split, not with the inline form).
+   */
+  private resetTurnTokenUsage(): void {
+    this.lastTurnTokenUsage = null;
+  }
+
+  /** TASK.159: reads AND clears `lastTurnTokenUsage` — see resetTurnTokenUsage's doc comment for why this is a method, not an inline `this.lastTurnTokenUsage` read. */
+  private consumeLastTurnTokenUsage(): { input: number; output: number } | null {
+    const value = this.lastTurnTokenUsage;
+    this.lastTurnTokenUsage = null;
+    return value;
+  }
+
   private onResult(result: ClaudeResultMessage): void {
     if (typeof result.total_cost_usd === "number" && Number.isFinite(result.total_cost_usd)) {
       this.totalCostUsd += result.total_cost_usd;
+    }
+    // TASK.159: `result.usage` is untyped wire data (protocol.ts's own
+    // `Record<string, unknown>`), never guaranteed present — a tolerant read
+    // of exactly the two fields this session's lifetime-token accounting
+    // needs. Cached/creation token fields on this object are deliberately
+    // NOT read (TASK.111 stays out of scope, both engines and core equally).
+    const usage = result.usage;
+    const inputTokens = usage !== undefined ? usage.input_tokens : undefined;
+    const outputTokens = usage !== undefined ? usage.output_tokens : undefined;
+    if (
+      typeof inputTokens === "number" && Number.isFinite(inputTokens) &&
+      typeof outputTokens === "number" && Number.isFinite(outputTokens)
+    ) {
+      this.lastTurnTokenUsage = { input: inputTokens, output: outputTokens };
     }
   }
 

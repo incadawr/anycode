@@ -9,7 +9,7 @@
  * a missing dir resolving to a zeroed (not failed) stats view.
  */
 
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -105,7 +105,14 @@ describe("handleProfileStatsGet", () => {
     const home = await tmp();
     const telemetryDir = join(home, ".anycode/telemetry");
     await seedTelemetryDir(telemetryDir);
-    await seed(join(home, ".anycode/config.json"), JSON.stringify({ telemetry: { enabled: true } }));
+    // Explicit `dir` (TASK.121's fail-closed VITEST gate in core/telemetry/
+    // config.ts refuses to resolve an `enabled:true` section onto the DEFAULT
+    // dir under a test runner — a test must always name its sink explicitly,
+    // even though it happens to equal the default here).
+    await seed(
+      join(home, ".anycode/config.json"),
+      JSON.stringify({ telemetry: { enabled: true, dir: telemetryDir } }),
+    );
 
     const result = await handleProfileStatsGet(makeDeps(home));
     expect(result.ok).toBe(true);
@@ -116,19 +123,27 @@ describe("handleProfileStatsGet", () => {
     expect(result.view.totalRuns).toBe(2);
     expect(result.view.toolCalls).toBe(3);
     expect(result.view.subagentRuns).toBe(1);
-    expect(result.view.topTools).toEqual([
-      { name: "bash", count: 2 },
-      { name: "read", count: 1 },
-    ]);
-    expect(result.view.topModels).toEqual([
-      { model: "gpt-5", tokens: 100 },
-      { model: "claude-opus", tokens: 50 },
+    // Equivalent of the removed `topTools`/`topModels` top-N fields (S10):
+    // the SAME per-tool/per-model totals are now only reachable via the full
+    // `days`/`models` aggregates — sum tool calls across every day bucket.
+    const toolTotals: Record<string, number> = {};
+    for (const dayStats of Object.values(result.view.days)) {
+      for (const [name, count] of Object.entries(dayStats.tools)) {
+        toolTotals[name] = (toolTotals[name] ?? 0) + count;
+      }
+    }
+    expect(toolTotals).toEqual({ bash: 2, read: 1 });
+    expect(result.view.models).toEqual([
+      { model: "gpt-5", tokens: 100, sessions: 1 },
+      { model: "claude-opus", tokens: 50, sessions: 1 },
     ]);
     expect(result.view.peakDay?.tokens).toBe(100);
     expect(result.view.telemetryEnabled).toBe(true);
     expect(result.view.killSwitchActive).toBe(false);
     expect(result.view.dir).toBe(telemetryDir);
     expect(result.view.truncated).toBe(false);
+    // No cut was ever made — there is no honest lower bound to report.
+    expect(result.view.coverageStartTs).toBeNull();
   });
 
   it("shows historical stats when telemetry is disabled (data + disabled empty-state branch)", async () => {
@@ -217,10 +232,6 @@ describe("handleProfileStatsGet", () => {
       const telemetryDir = join(home, ".anycode/telemetry");
       await seedTelemetryDir(telemetryDir);
 
-      // Sorts after "session-a"/"session-b" (name-sorted scan order) so the
-      // small valid fixture files are counted first, and only the oversized
-      // file trips the cap. A sparse `truncate` sets a real size > the cap
-      // cheaply, without actually writing 64MiB+ of content.
       const hugePath = join(telemetryDir, "zzz-huge.jsonl");
       await seed(
         hugePath,
@@ -229,6 +240,15 @@ describe("handleProfileStatsGet", () => {
       await truncate(hugePath, PROFILE_STATS_MAX_SCAN_BYTES + 1);
       const hugeStat = await stat(hugePath);
       expect(hugeStat.size).toBeGreaterThan(PROFILE_STATS_MAX_SCAN_BYTES);
+
+      // Oldest mtime of the three, despite its name sorting LAST — proves the
+      // cut is decided by TIME, not by name (a bare name-sort would have put
+      // "zzz-huge.jsonl" last in scan order and let both small files count
+      // first, same as before TASK.158 slice 0).
+      const base = Date.now() - 60_000;
+      await utimes(hugePath, base / 1000, base / 1000);
+      await utimes(join(telemetryDir, "session-a.jsonl"), (base + 1000) / 1000, (base + 1000) / 1000);
+      await utimes(join(telemetryDir, "session-b.jsonl"), (base + 2000) / 1000, (base + 2000) / 1000);
 
       const result = await handleProfileStatsGet(makeDeps(home));
       expect(result.ok).toBe(true);
@@ -239,6 +259,95 @@ describe("handleProfileStatsGet", () => {
       expect(result.view.truncated).toBe(true);
     },
   );
+
+  it(
+    "keeps the newest files (by mtime, not by name) and drops the oldest when the total " +
+      "exceeds PROFILE_STATS_MAX_SCAN_BYTES (TASK.158 slice 0 — the old scan order was " +
+      "name-lexicographic, i.e. random relative to time, since filenames are UUIDs)",
+    async () => {
+      const home = await tmp();
+      const telemetryDir = join(home, ".anycode/telemetry");
+      await seedTelemetryDir(telemetryDir);
+
+      // Named "aaa-huge" so it sorts FIRST alphabetically: under the OLD
+      // (buggy) name-sorted order it would have been read FIRST too, breaking
+      // the scan before session-a/session-b were ever reached and yielding
+      // lifetimeTokens 0. Giving it the OLDEST mtime instead must produce the
+      // opposite result: session-a/session-b (both newer) are tried first and
+      // survive; this file is the one dropped.
+      const hugePath = join(telemetryDir, "aaa-huge.jsonl");
+      await seed(
+        hugePath,
+        jsonl([{ v: 1, ts: DAY1, session: "huge", t: "usage", totalTokens: 999_999 }]),
+      );
+      await truncate(hugePath, PROFILE_STATS_MAX_SCAN_BYTES + 1);
+
+      const base = Date.now() - 60_000;
+      await utimes(hugePath, base / 1000, base / 1000); // oldest
+      await utimes(join(telemetryDir, "session-a.jsonl"), (base + 1000) / 1000, (base + 1000) / 1000); // middle
+      await utimes(join(telemetryDir, "session-b.jsonl"), (base + 2000) / 1000, (base + 2000) / 1000); // newest
+
+      const result = await handleProfileStatsGet(makeDeps(home));
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.view.lifetimeTokens).toBe(150);
+      expect(result.view.totalSessions).toBe(2);
+      expect(result.view.truncated).toBe(true);
+      // coverageStartTs is the oldest INCLUDED file's real mtime — session-a,
+      // not the dropped (older still) aaa-huge.jsonl.
+      const aStat = await stat(join(telemetryDir, "session-a.jsonl"));
+      expect(result.view.coverageStartTs).toBe(aStat.mtimeMs);
+    },
+  );
+
+  it("tie-breaks equal mtimes deterministically by name, not by readdir order", async () => {
+    const home = await tmp();
+    const telemetryDir = join(home, ".anycode/telemetry");
+    await mkdir(telemetryDir, { recursive: true });
+
+    // Two files, individually under the byte budget but together over it —
+    // an exact mtime tie must still pick a stable winner.
+    const sizeEach = Math.floor(PROFILE_STATS_MAX_SCAN_BYTES / 2) + 1000;
+    const pathA = join(telemetryDir, "aaa.jsonl");
+    const pathB = join(telemetryDir, "bbb.jsonl");
+    await seed(pathA, jsonl([{ v: 1, ts: DAY1, session: "a", t: "usage", totalTokens: 11 }]));
+    await seed(pathB, jsonl([{ v: 1, ts: DAY1, session: "b", t: "usage", totalTokens: 22 }]));
+    await truncate(pathA, sizeEach);
+    await truncate(pathB, sizeEach);
+
+    const sameMtime = Date.now() / 1000;
+    await utimes(pathA, sameMtime, sameMtime);
+    await utimes(pathB, sameMtime, sameMtime);
+
+    const result = await handleProfileStatsGet(makeDeps(home));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // On an exact mtime tie, name-ascending order makes "aaa.jsonl" the one
+    // tried (and kept) first; "bbb.jsonl" is the one that doesn't fit.
+    expect(result.view.lifetimeTokens).toBe(11);
+    expect(result.view.totalSessions).toBe(1);
+    expect(result.view.truncated).toBe(true);
+  });
+
+  it("reports coverageStartTs as null when truncation cuts before any file could be included", async () => {
+    const home = await tmp();
+    const telemetryDir = join(home, ".anycode/telemetry");
+    await mkdir(telemetryDir, { recursive: true });
+
+    // A single file, alone larger than the whole budget: it is the newest
+    // (only) candidate, doesn't fit, and nothing is ever included.
+    const hugePath = join(telemetryDir, "only.jsonl");
+    await seed(hugePath, jsonl([{ v: 1, ts: DAY1, session: "huge", t: "usage", totalTokens: 999_999 }]));
+    await truncate(hugePath, PROFILE_STATS_MAX_SCAN_BYTES + 1);
+
+    const result = await handleProfileStatsGet(makeDeps(home));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.view.truncated).toBe(true);
+    expect(result.view.lifetimeTokens).toBe(0);
+    expect(result.view.totalSessions).toBe(0);
+    expect(result.view.coverageStartTs).toBeNull();
+  });
 
   it(
     "closes the lstat->readFile TOCTOU: an O_NOFOLLOW read refuses to follow a symlink even when the " +

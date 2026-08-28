@@ -534,6 +534,7 @@ function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): Sub
         turns: progress.turns,
         durationMs: progress.durationMs,
         ...(progress.activitySuppressed !== undefined ? { activitySuppressed: progress.activitySuppressed } : {}),
+        ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
       };
     case "attention":
       return {

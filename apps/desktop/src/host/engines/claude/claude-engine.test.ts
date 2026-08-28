@@ -653,3 +653,98 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
     expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan" }]);
   });
 });
+
+/**
+ * TASK.159: claude emits NO token event through the core `finish`->`usage`
+ * path (the context meter is deliberately `get_context_usage`, never a
+ * `result.usage` sum — the describe block above). This is the OTHER half:
+ * `result.usage` DOES feed a session-cumulative `engine_session_tokens`
+ * event, which host/index.ts's telemetry tap (records.ts's
+ * `buildEngineTelemetryTap`) converts to additive deltas. The double-count
+ * pin mirrors records.test.ts's own engine-tap pin, one layer down the
+ * stack: the ENGINE must hand the tap a truly cumulative session total, or
+ * that shim's delta math is fed a lie from the start.
+ */
+describe("ClaudeEngine — session-cumulative token accounting (TASK.159)", () => {
+  const INIT: ClaudeStreamMessage = {
+    type: "system",
+    subtype: "init",
+    session_id: "native-session-1",
+    model: "model-x",
+    permissionMode: "plan",
+    cwd: "/work",
+    tools: [],
+    mcp_servers: [],
+    slash_commands: [],
+    skills: [],
+    capabilities: ["interrupt_receipt_v1"],
+    claude_code_version: "2.1.212",
+  } as unknown as ClaudeStreamMessage;
+
+  function resultFrame(usage?: Record<string, unknown>): ClaudeStreamMessage {
+    return {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      num_turns: 1,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      total_cost_usd: 0,
+      ...(usage !== undefined ? { usage } : {}),
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  it("two turns with usage 10/5 each -> engine_session_tokens is CUMULATIVE (15, then 30), never per-turn (double-count pin)", async () => {
+    const transport = new FakeTransport({ frames: [INIT, resultFrame({ input_tokens: 10, output_tokens: 5 })] });
+    const engine = engineWith(transport);
+
+    const first = await collect(engine.runTurn("one", { signal: new AbortController().signal }));
+    expect(first.find((event) => event.type === "engine_session_tokens")).toEqual({
+      type: "engine_session_tokens",
+      input: 10,
+      output: 5,
+      total: 15,
+    });
+    // Yielded after the turn's own loop_end (same ordering discipline as the
+    // context-meter read it sits beside in runTurn).
+    expect(types(first).indexOf("engine_session_tokens")).toBeGreaterThan(types(first).indexOf("loop_end"));
+
+    transport.push(INIT);
+    transport.push(resultFrame({ input_tokens: 10, output_tokens: 5 }));
+    const second = await collect(engine.runTurn("two", { signal: new AbortController().signal }));
+    expect(second.find((event) => event.type === "engine_session_tokens")).toEqual({
+      type: "engine_session_tokens",
+      input: 20,
+      output: 10,
+      total: 30,
+    });
+  });
+
+  it("a turn whose result carries no usage emits no engine_session_tokens event (fail-soft, never invents a number)", async () => {
+    const transport = new FakeTransport({ frames: [INIT, resultFrame()] });
+    const engine = engineWith(transport);
+    const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    expect(events.find((event) => event.type === "engine_session_tokens")).toBeUndefined();
+
+    // The skipped turn must leave the SAME engine's cumulative accumulator
+    // untouched: the next turn's real usage starts from 0, not from a phantom
+    // partial sum the skip could have left behind.
+    transport.push(INIT);
+    transport.push(resultFrame({ input_tokens: 3, output_tokens: 1 }));
+    const next = await collect(engine.runTurn("hi again", { signal: new AbortController().signal }));
+    expect(next.find((event) => event.type === "engine_session_tokens")).toEqual({
+      type: "engine_session_tokens",
+      input: 3,
+      output: 1,
+      total: 4,
+    });
+  });
+
+  it("non-numeric usage fields are treated as absent, never coerced into a garbage total", async () => {
+    const transport = new FakeTransport({
+      frames: [INIT, resultFrame({ input_tokens: "ten", output_tokens: 5 })],
+    });
+    const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
+    expect(events.find((event) => event.type === "engine_session_tokens")).toBeUndefined();
+  });
+});

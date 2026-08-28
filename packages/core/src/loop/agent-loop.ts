@@ -299,6 +299,21 @@ export interface AgentLoopConfig {
    */
   eventTap?: (event: AgentEvent) => void;
   /**
+   * Telemetry track (TASK.160 §2.2): factory for an inline subagent's child
+   * eventTap, keyed by the spawn about to run. NEVER called by AgentLoop
+   * itself — read only by subagents/runner.ts's buildChildConfig, which
+   * composes the returned closure into the CHILD config's own `eventTap`.
+   * Handing a FACTORY (not a TelemetryPort) into core preserves the
+   * ports/telemetry.ts custody invariant: CorePorts still does not carry
+   * telemetry, so tool handlers cannot write arbitrary records — only the
+   * wiring layer (cli/main.ts, desktop host) that built this closure can.
+   * Attached by the CLI/host wiring only, same as eventTap; absent => a
+   * child loop gets no eventTap at all, byte-identical to pre-TASK.160
+   * behaviour (its activity still reaches the parent's own tap as
+   * subagent_start/subagent_end events, exactly as before).
+   */
+  subagentEventTap?: (spawn: { agentType: string; model?: string }) => (event: AgentEvent) => void;
+  /**
    * Accounting-only section boundaries of `systemPrompt` (design
    * slice-P7.17-cut.md §2.1, ctx-breakdown). NEVER used to build the prompt
    * itself — `systemPrompt` remains the single string passed to the model

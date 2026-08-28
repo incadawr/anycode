@@ -201,6 +201,14 @@ export type AgentEvent =
        * reducer's own ring/byte-cap evictions (card-snapshot.ts).
        */
       activitySuppressed?: number;
+      /**
+       * Provider-reported model id observed on the child's port after its
+       * final model call (including the wrap-up rescue call). Absent for
+       * engine children, session-tier children, children that inherited the
+       * parent's port, and providers that expose no raw claim. This is the
+       * provider's CLAIM, not proof of serving.
+       */
+      responseModel?: string;
     }
   /**
    * Permission-broker gate crossing for a session-tier subagent (TASK.102

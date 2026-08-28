@@ -84,6 +84,37 @@ describe("decodeSubagentCardSnapshot — valid payload", () => {
     const withAttention: SubagentCardSnapshotV1 = { ...VALID_SNAPSHOT, attention: "waiting_permission" };
     expect(decodeSubagentCardSnapshot(withAttention, CTX)).toEqual(withAttention);
   });
+
+  it("round-trips final.responseModel when present (TASK.161 slice C1)", () => {
+    const withResponseModel: SubagentCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      final: { ...VALID_SNAPSHOT.final, responseModel: "glm-5.3" },
+    };
+    expect(decodeSubagentCardSnapshot(withResponseModel, CTX)).toEqual(withResponseModel);
+  });
+
+  it("a valid final with no responseModel decodes with the key absent — never a fabricated fallback (TASK.161 slice C1)", () => {
+    const decoded = decodeSubagentCardSnapshot(VALID_SNAPSHOT, CTX);
+    expect(decoded !== null && "responseModel" in decoded.final).toBe(false);
+  });
+});
+
+describe("decodeSubagentCardSnapshot — final.responseModel is best-effort, never a rejection reason (TASK.161 slice C1)", () => {
+  it("a wrong-typed final.responseModel is treated as absent without rejecting the otherwise-valid snapshot", () => {
+    const malformed = { ...VALID_SNAPSHOT, final: { ...VALID_SNAPSHOT.final, responseModel: 12345 } };
+    const decoded = decodeSubagentCardSnapshot(malformed, CTX);
+    expect(decoded).not.toBeNull();
+    expect(decoded !== null && "responseModel" in decoded.final).toBe(false);
+  });
+
+  it("caps an oversized final.responseModel at MODEL_MAX_CHARS instead of rejecting the payload", () => {
+    const overlong = "y".repeat(MODEL_MAX_CHARS + 25);
+    const decoded = decodeSubagentCardSnapshot(
+      { ...VALID_SNAPSHOT, final: { ...VALID_SNAPSHOT.final, responseModel: overlong } },
+      CTX,
+    );
+    expect(decoded?.final.responseModel).toBe("y".repeat(MODEL_MAX_CHARS));
+  });
 });
 
 describe("decodeSubagentCardSnapshot — structural gates", () => {
@@ -266,6 +297,18 @@ describe("projectSubagentCard", () => {
 
   it("maps a non-null model/engine identity through unchanged", () => {
     expect(projectSubagentCard(VALID_SNAPSHOT)).toMatchObject({ model: "claude-sonnet", engine: "claude" });
+  });
+
+  it("copies final.responseModel through the projection unchanged (TASK.161 slice C1)", () => {
+    const withResponseModel: SubagentCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      final: { ...VALID_SNAPSHOT.final, responseModel: "glm-5.3" },
+    };
+    expect(projectSubagentCard(withResponseModel).final).toEqual({
+      status: "completed",
+      durationMs: 4200,
+      responseModel: "glm-5.3",
+    });
   });
 });
 

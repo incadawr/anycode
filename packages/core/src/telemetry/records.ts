@@ -57,7 +57,12 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         source: event.source,
       };
     case "subagent_start":
-      return { t: "subagent_start", agentType: event.agentType };
+      return {
+        t: "subagent_start",
+        agentType: event.agentType,
+        ...(event.model !== undefined ? { model: event.model } : {}),
+        ...(event.engine !== undefined ? { engine: event.engine } : {}),
+      };
     case "subagent_end":
       return {
         t: "subagent_end",
@@ -98,6 +103,120 @@ export function buildTelemetryTap(
   session: string,
 ): (event: AgentEvent) => void {
   return (event) => {
+    const rec = telemetryRecordFor(event);
+    if (rec !== null) {
+      port.record({ v: 1, ts: Date.now(), session, ...rec });
+    }
+  };
+}
+
+/**
+ * Telemetry track (TASK.160): the tap an inline subagent's child AgentLoop
+ * gets, so its usage/tool/turn_end records land in the PARENT's sink
+ * (decision §2.2 option а — same file, marked by tier) with the child's
+ * `agentType`/`model` stamped as the envelope's `sub`. Same whitelist as
+ * buildTelemetryTap (telemetryRecordFor) — a null-mapped event is never
+ * stamped or recorded.
+ */
+export function buildSubagentTelemetryTap(
+  port: TelemetryPort,
+  session: string,
+  spawn: { agentType: string; model?: string },
+): (event: AgentEvent) => void {
+  const sub = {
+    agentType: spawn.agentType,
+    ...(spawn.model !== undefined ? { model: spawn.model } : {}),
+  };
+  return (event) => {
+    const rec = telemetryRecordFor(event);
+    if (rec !== null) {
+      port.record({ v: 1, ts: Date.now(), session, sub, ...rec });
+    }
+  };
+}
+
+/** `d = cur >= prev ? cur - prev : cur` — shared by all three engine-tap
+ *  counters (total/input/output): a drop means THAT counter's own reset, so
+ *  the lower value becomes its next baseline rather than going negative. */
+function deltaSince(current: number, previous: number): number {
+  return current >= previous ? current - previous : current;
+}
+
+/**
+ * Telemetry track (TASK.159 §2.3): the tap a codex/claude engine boot passes
+ * as its Session.eventTap. `engine_session_tokens` is NOT in
+ * telemetryRecordFor's whitelist (it is CUMULATIVE — replace, not
+ * accumulate, per events.ts ~:283-302) and is intercepted here BEFORE the
+ * whitelist: this stateful shim converts it to a standard additive
+ * `t:"usage"` record holding only the delta since the previous snapshot.
+ * `total`/`input`/`output` are three INDEPENDENT cumulative counters on the
+ * wire — each gets its own baseline and its own `deltaSince` (a reset of
+ * `total` alone does not reset `input`/`output`, and vice versa) — matching
+ * the core path (`finish` -> `usage`, ~:20-26) which always carries both
+ * halves when present. `inputTokens`/`outputTokens` are set on the record
+ * only when the source event actually carried that part (key absent, never
+ * `undefined`, when it didn't); `totalTokens` is always present. Record
+ * emission is gated ONLY on the `total` delta being nonzero (a no-op turn
+ * emits nothing) — the input/output deltas ride along whatever that decision
+ * is, even a zero per-field delta, as long as the field was present. Every
+ * other event passes through telemetryRecordFor unchanged, so
+ * engine_quota/preview_console/etc. still fail-closed to null exactly as
+ * buildTelemetryTap does.
+ *
+ * `opts.baselineFromFirstEvent` (default false): a codex RESUME boot's first
+ * `engine_session_tokens` snapshot already includes pre-restart history that
+ * was recorded in this same file on the earlier boot — pass `true` so that
+ * first snapshot only SETS the baseline for ALL THREE counters (emits
+ * nothing) instead of being recorded as a fresh delta. Fresh boots (and
+ * claude, whose accumulator is per-process) pass `false`/omit — the implicit
+ * baseline is 0 for all three, so the first snapshot's deltas equal their
+ * totals.
+ */
+export function buildEngineTelemetryTap(
+  port: TelemetryPort,
+  session: string,
+  opts?: { baselineFromFirstEvent?: boolean },
+): (event: AgentEvent) => void {
+  let prevTotal = 0;
+  let prevInput = 0;
+  let prevOutput = 0;
+  let awaitingBaseline = opts?.baselineFromFirstEvent === true;
+  return (event) => {
+    if (event.type === "engine_session_tokens") {
+      const total = event.total;
+      const input = event.input;
+      const output = event.output;
+      if (awaitingBaseline) {
+        prevTotal = total;
+        if (typeof input === "number") prevInput = input;
+        if (typeof output === "number") prevOutput = output;
+        awaitingBaseline = false;
+        return;
+      }
+      const totalDelta = deltaSince(total, prevTotal);
+      prevTotal = total;
+      if (totalDelta === 0) return;
+      let inputDelta: number | undefined;
+      if (typeof input === "number") {
+        inputDelta = deltaSince(input, prevInput);
+        prevInput = input;
+      }
+      let outputDelta: number | undefined;
+      if (typeof output === "number") {
+        outputDelta = deltaSince(output, prevOutput);
+        prevOutput = output;
+      }
+      port.record({
+        v: 1,
+        ts: Date.now(),
+        session,
+        t: "usage",
+        ...(inputDelta !== undefined ? { inputTokens: inputDelta } : {}),
+        ...(outputDelta !== undefined ? { outputTokens: outputDelta } : {}),
+        totalTokens: totalDelta,
+      });
+      return;
+    }
     const rec = telemetryRecordFor(event);
     if (rec !== null) {
       port.record({ v: 1, ts: Date.now(), session, ...rec });

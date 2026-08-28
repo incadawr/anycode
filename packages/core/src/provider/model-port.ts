@@ -203,12 +203,20 @@ export function reasoningRequestOptions(
     return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
   }
 
-  // GLM via z.ai: effort enum ("high"|"max") + thinking budget (16k/32k). The
-  // proxy honors `effort` (output_config.effort) as the tier selector; the
-  // budget must be large enough to hold the thinking output for that tier.
+  // GLM via z.ai: effort enum ("low"|"high"|"max") + thinking budget
+  // (16k/16k/32k). The proxy honors `effort` (output_config.effort) as the
+  // tier selector; the budget must be large enough to hold the thinking
+  // output for that tier.
   if (providerName === "Z.AI (GLM)") {
     const glmBudget = effort === "max" ? GLM_BUDGET_TOKENS.max : GLM_BUDGET_TOKENS.high;
-    const glmEffort = effort === "max" ? "max" : "high"; // low/medium collapse to high
+    // docs.z.ai/guides/llm/glm-5.3 (accessed 2026-08-28) documents `low` as a
+    // real, distinct tier — passing it through to the wire instead of
+    // silently upgrading it to `high` (TASK.163). z.ai documents no separate
+    // budget for `low`; `budget_tokens` is a ceiling on thinking output, not a
+    // floor, so reusing `high`'s 16_000 as `low`'s cap is conservative and
+    // cannot under-serve `low`'s lighter reasoning. `medium` has no documented
+    // GLM equivalent and still collapses to `high`.
+    const glmEffort = effort === "max" ? "max" : effort === "low" ? "low" : "high";
     // @ai-sdk/anthropic serializes enabled thinking as
     // `max_tokens = maxOutputTokens + thinking.budget_tokens`. The catalog's
     // 128K value is the provider's final wire ceiling, not a safe text-only
@@ -364,11 +372,58 @@ function describeRetryReason(error: unknown): string {
   return classifyProviderFailure(error).safe.message;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Narrows an unknown `fullStream` part to the anthropic-messages raw
+ * `message_start` chunk and returns the model id the PROVIDER claimed for the
+ * response. Returns undefined for every other part, and for a `message_start`
+ * whose `message` carries no `model` string: absence on the wire is preserved
+ * as absence. Deliberately the ONLY provenance source — the SDK's own
+ * `response.modelId` is initialized from the REQUESTED id and merely overridden
+ * by provider metadata when present (ai@7.0.14 dist :9394-9398 / :9470-9475),
+ * so reading it would fabricate a provider claim that never arrived.
+ */
+function rawResponseModelOf(part: unknown): string | undefined {
+  if (!isRecord(part) || part.type !== "raw") {
+    return undefined;
+  }
+  const rawValue = part.rawValue;
+  if (!isRecord(rawValue) || rawValue.type !== "message_start") {
+    return undefined;
+  }
+  const message = rawValue.message;
+  if (!isRecord(message)) {
+    return undefined;
+  }
+  const model = message.model;
+  return typeof model === "string" && model !== "" ? model : undefined;
+}
+
 export class AiSdkModelPort implements ModelPort {
+  /** Provider's model claim from the most recent raw `message_start` seen by this port. */
+  #lastResponseModel: string | undefined;
+
   constructor(
     private readonly config: EndpointConfig,
     private readonly onDiagnostic: DiagnosticSink = consoleDiagnosticSink,
   ) {}
+
+  /** Identity readback: the id this port was constructed for (never canonicalized). */
+  get modelId(): string {
+    return this.config.model;
+  }
+
+  /**
+   * The provider's own model claim from the last raw response this port
+   * observed, or undefined when none has been seen. Never derived from SDK
+   * response metadata (see `rawResponseModelOf`).
+   */
+  get lastResponseModel(): string | undefined {
+    return this.#lastResponseModel;
+  }
 
   /**
    * Builds this attempt's LanguageModel (slice 2.5 §3.3) through the transport
@@ -430,6 +485,11 @@ export class AiSdkModelPort implements ModelPort {
           // Retries are this adapter's responsibility (Phase 1); none in Phase 0.
           maxRetries: 0,
           abortSignal: attemptController.signal,
+          // Raw provider chunks are the only trustworthy source of the
+          // response-side model claim, and only the anthropic-messages
+          // transport carries one (`message_start.message.model`); the flag
+          // stays off elsewhere so no other transport pays for duplicate parts.
+          ...(this.config.transport === "anthropic-messages" ? { includeRawChunks: true } : {}),
           ...reasoningRequestOptions(request, this.config.providerName, this.config.transport),
           temperature: request.temperature,
         });
@@ -453,6 +513,17 @@ export class AiSdkModelPort implements ModelPort {
 
           if (outcome.done) {
             break;
+          }
+
+          // Provenance capture runs before translation because `raw` parts
+          // have no core-vocabulary counterpart and are dropped by
+          // `translateStreamPart` (its default arm). Last write wins: across a
+          // retried step the replayed attempt's claim supersedes the abandoned
+          // attempt's, which is the claim belonging to the response the caller
+          // actually receives.
+          const rawResponseModel = rawResponseModelOf(outcome.value);
+          if (rawResponseModel !== undefined) {
+            this.#lastResponseModel = rawResponseModel;
           }
 
           const event = translateStreamPart(outcome.value);

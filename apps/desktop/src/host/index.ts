@@ -196,7 +196,10 @@ import {
   bashKillTool,
   bashOutputTool,
   buildSystemPrompt,
+  buildEngineTelemetryTap,
+  buildChildModelSettingsResolver,
   buildRepoMapPromptSection,
+  buildSubagentTelemetryTap,
   buildTelemetryTap,
   createCommandHook,
   createDefaultTokenizer,
@@ -954,6 +957,35 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     await sink.flushChecked();
   };
 
+  // TASK.159: telemetry sink for a codex boot (mirror of the core path's own
+  // block, host boot() ~:2022-2029 — same fail-soft config load, same
+  // module-level `telemetry` assignment so the existing shutdown block
+  // (~:2606-2609) writes session_end + dispose for this session too, for
+  // free). `provider` is the engine id (a codex/claude session has no
+  // catalog connect name); `enginePreset` (S9: own field, not `mode` — a
+  // codex/claude session has no core PermissionMode) reuses `connected.presetId`,
+  // which is correct on BOTH branches (fresh: identical to `created.presetId`;
+  // resume: the settled `resumed.presetId`, never the possibly-stale
+  // `existing.mode` a drifted resume left behind — see the resume branch's
+  // own `patch` above, which is the DB-row `mode` COLUMN, an unrelated seam).
+  let codexTelemetryConfig: ResolvedTelemetryConfig | null = null;
+  try {
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env);
+    codexTelemetryConfig = loadedTelemetry.telemetry;
+    for (const issue of loadedTelemetry.issues) console.warn(`[host] telemetry config: ${issue}`);
+  } catch (error) {
+    console.error(`[host] failed to load telemetry config; continuing without telemetry: ${describeError(error)}`);
+  }
+  if (codexTelemetryConfig !== null) {
+    const port = new JsonlTelemetrySink({ dir: codexTelemetryConfig.dir, fileName: `${connected.sessionMeta.id}.jsonl` });
+    port.record({
+      v: 1, ts: Date.now(), session: connected.sessionMeta.id, t: "session_start",
+      model: connected.model, provider: "codex", enginePreset: connected.presetId, engine: "codex",
+      ...(args.child !== undefined ? { parentSession: args.child.parentSessionId } : {}),
+    });
+    telemetry = { port, session: connected.sessionMeta.id };
+  }
+
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -998,6 +1030,16 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
       },
     },
     postPreviewArtifacts: sendPreviewArtifacts,
+    // TASK.159 INVARIANT: this is a foreign-engine boot — CodexEngine never
+    // instantiates AgentLoop, so there is no AgentLoopConfig.eventTap anywhere
+    // in this branch to double up against (see SessionOptions.eventTap's own
+    // doc). `baselineFromFirstEvent: args.resume` — see records.ts §2.3: a
+    // resumed codex thread's first `engine_session_tokens` snapshot already
+    // includes pre-restart history recorded earlier in this SAME file; without
+    // this the resume would double-count that history's tokens.
+    ...(telemetry !== null
+      ? { eventTap: buildEngineTelemetryTap(telemetry.port, telemetry.session, { baselineFromFirstEvent: args.resume }) }
+      : {}),
     ...(args.child !== undefined ? { child: buildChildSessionOptions(codexFlushHistory) } : {}),
   });
   console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
@@ -1244,6 +1286,38 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     await sink.flushChecked();
   };
 
+  // TASK.159: telemetry sink for a claude boot — structurally identical to
+  // the codex block above (same fail-soft config load, same module-level
+  // `telemetry` assignment for the shared shutdown block). `provider`/
+  // `enginePreset` (S9: own field, not `mode` — see the codex block's
+  // comment above) use `connected.model`/`connected.presetId` — the
+  // connect-time values
+  // (server-validated against the live `initialize` catalog on a FRESH boot;
+  // provisional-until-first-`system/init` on a resume, same caveat the
+  // session ROW itself carries until `onFirstSystemInit`'s `materialize`
+  // above settles it — session_start is a boot-time fact, not a claim about
+  // the eventually-confirmed posture). `baselineFromFirstEvent` is never
+  // passed: unlike codex's server-persisted cumulative counter, Claude's
+  // accumulator (claude-engine.ts's `cumulativeInputTokens`/`cumulativeOutputTokens`)
+  // is per-PROCESS, so it is always 0 at the start of this boot, resume or not.
+  let claudeTelemetryConfig: ResolvedTelemetryConfig | null = null;
+  try {
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env);
+    claudeTelemetryConfig = loadedTelemetry.telemetry;
+    for (const issue of loadedTelemetry.issues) console.warn(`[host] telemetry config: ${issue}`);
+  } catch (error) {
+    console.error(`[host] failed to load telemetry config; continuing without telemetry: ${describeError(error)}`);
+  }
+  if (claudeTelemetryConfig !== null) {
+    const port = new JsonlTelemetrySink({ dir: claudeTelemetryConfig.dir, fileName: `${rowId}.jsonl` });
+    port.record({
+      v: 1, ts: Date.now(), session: rowId, t: "session_start",
+      model: connected.model, provider: "claude", enginePreset: connected.presetId, engine: "claude",
+      ...(args.child !== undefined ? { parentSession: args.child.parentSessionId } : {}),
+    });
+    telemetry = { port, session: rowId };
+  }
+
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -1282,6 +1356,11 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       },
     },
     postPreviewArtifacts: sendPreviewArtifacts,
+    // TASK.159 INVARIANT: same as the codex branch above — a foreign-engine
+    // boot never instantiates AgentLoop, so there is no core eventTap here to
+    // double up against. No `baselineFromFirstEvent` — see the telemetry
+    // block's own comment above (Claude's counter is per-process).
+    ...(telemetry !== null ? { eventTap: buildEngineTelemetryTap(telemetry.port, telemetry.session) } : {}),
     ...(args.child !== undefined ? { child: buildChildSessionOptions(claudeFlushHistory) } : {}),
   });
   // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated (or
@@ -1667,6 +1746,19 @@ async function boot(): Promise<void> {
     );
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry);
+    // TASK.162 (F6): the same catalog + env overrides the three boot
+    // resolutions above read, packaged once so an Agent-tool `model` override
+    // re-resolves the child's ceiling/effort/window for ITS model instead of
+    // inheriting the parent's. Every input here is boot-fixed; the one live
+    // input — the user-selected reasoning tier — is supplied at spawn time by
+    // the wiring closure at the withSubagents call below.
+    const settingsForChild = buildChildModelSettingsResolver({
+      catalogEntry,
+      envMaxOutputTokens: envConfig.maxOutputTokens,
+      envContextWindow: envConfig.contextWindowTokens,
+      onClamp: (requested, clamped, modelId) =>
+        console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
+    });
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
 
 
@@ -2024,9 +2116,18 @@ async function boot(): Promise<void> {
       port.record({
         v: 1, ts: Date.now(), session: sessionMeta.id, t: "session_start",
         model: envConfig.model, provider: catalogEntry?.name ?? "custom", mode,
+        // TASK.159 §2.1: session-tier child back-reference (TASK.102/145),
+        // the same field the codex/claude boots stamp at their own
+        // session_start above — the core path just never had it wired.
+        ...(args.child !== undefined ? { parentSession: args.child.parentSessionId } : {}),
       });
       telemetry = { port, session: sessionMeta.id };
     }
+    // TASK.160 §2.2: const capture of `telemetry` right after its only
+    // reassignment in this boot, so the subagentEventTap closure below
+    // (built inside the AgentLoopConfig literal, read later by a child spawn)
+    // sees a fixed value instead of chasing the module-level `let`.
+    const subagentTelemetry = telemetry;
 
     // Boot section components computed once (design P7.17/W2): renderRepoMap()'s
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
@@ -2100,6 +2201,18 @@ async function boot(): Promise<void> {
       // handler fails closed and plan mode has no model-driven exit at all.
       ...planExit,
       ...(telemetry !== null ? { eventTap: buildTelemetryTap(telemetry.port, telemetry.session) } : {}),
+      // TASK.160 §2.2: factory for an inline subagent's child eventTap (core
+      // path ONLY — this is the AgentLoop boot, not a codex/claude engine
+      // boot). `subagentTelemetry` is captured into a local const because TS
+      // does not carry a `let`-narrowing (module-level `telemetry`) across a
+      // closure boundary. The loop never calls this itself; only
+      // subagents/runner.ts's buildChildConfig reads it, once per spawn.
+      ...(subagentTelemetry !== null
+        ? {
+            subagentEventTap: (spawn: { agentType: string; model?: string }) =>
+              buildSubagentTelemetryTap(subagentTelemetry.port, subagentTelemetry.session, spawn),
+          }
+        : {}),
       // Context window (design §2.5 + slice 6.4): resolved above — mirrors cli/main.ts.
       ...(bootContextWindow !== undefined
         ? { context: { contextWindowTokens: bootContextWindow } }
@@ -2196,6 +2309,15 @@ async function boot(): Promise<void> {
           env: systemPromptEnv,
           memorySection: ext.memorySection,
           resolveChildModelPort: modelPortFactory,
+          // TASK.162 (F6) + §0b adjudication: unconditional, exactly like the
+          // port factory above (the desktop always has both). The tier handed
+          // to the resolver is the host-owned `selectedEffort` cell read AT
+          // SPAWN TIME — the live USER-SELECTED tier, kept current by
+          // CoreEngine's onReasoningEffortSet callback and by switchModelImpl
+          // below. Never `config.reasoningEffort`, whose `undefined` after a
+          // switch to a non-reasoning parent would silently drop the child's
+          // effort even though the child's own model can honor the tier.
+          resolveChildModelSettings: (id: string) => settingsForChild(id, selectedEffort),
         }),
         ext.workflows,
       ),
@@ -2235,6 +2357,11 @@ async function boot(): Promise<void> {
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
     const switchModelImpl = (id: string, selectedTier: ReasoningEffort) => {
+        // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
+        // here, so this is the second (and only other) writer that keeps the
+        // host cell faithful — without it a tier selected before a switch
+        // would still be live in Session while the cell held a stale value.
+        selectedEffort = selectedTier;
         const previous = currentModel;
         modelPort.setPort(modelPortFactory(id));
         currentModel = id;
@@ -2280,7 +2407,19 @@ async function boot(): Promise<void> {
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
       };
-    const engine = new CoreEngine({ loop, config, switchModelImpl, onBeforeTurn: refreshExtensionProfiles });
+    const engine = new CoreEngine({
+      loop,
+      config,
+      switchModelImpl,
+      onBeforeTurn: refreshExtensionProfiles,
+      // TASK.162 (§0b): keeps the host's `selectedEffort` cell equal to the
+      // tier the USER selected. Session maps its own "off" to undefined before
+      // calling, so the cell stores "off" for that case — the same value
+      // resolveReasoningEffort treats as "no effort".
+      onReasoningEffortSet: (effort) => {
+        selectedEffort = effort ?? "off";
+      },
+    });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     session = new Session({
       outbound,

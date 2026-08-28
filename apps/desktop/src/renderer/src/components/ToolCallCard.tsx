@@ -400,6 +400,27 @@ function useChildSessionAction(
   };
 }
 
+/**
+ * Pure projection of the provider's response-model claim onto a display note
+ * (TASK.161 slice C1). `null` when no claim was ever observed — absence
+ * renders as absence, never a fallback to the requested model (a filled
+ * field that is really a guess would look sighted). `mismatch: true` is the
+ * only informative case: the provider echoed an id different from what was
+ * requested. A MATCH proves nothing beyond "the provider accepted the id" —
+ * it is deliberately not styled as a success/confirmation. The word "served"
+ * never appears: this is the provider's CLAIM, not proof of serving.
+ */
+export function subagentResponseModelNote(sub: {
+  model: string | null;
+  final: { responseModel?: string } | null;
+}): { text: string; mismatch: boolean } | null {
+  const responseModel = sub.final?.responseModel;
+  if (responseModel === undefined) {
+    return null;
+  }
+  return { text: `provider reported: ${responseModel}`, mismatch: sub.model !== null && sub.model !== responseModel };
+}
+
 /** Sub-status region mounted below the input summary when `block.subagent` is
  *  set (Agent tool only). A flat two-line panel sharing the row atoms: glyph ·
  *  persona (mono anchor) · model (only when the child ran on its own) ·
@@ -418,6 +439,7 @@ function SubagentStatus({
   child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
 }) {
   const kind = substatusKind(subagent.final);
+  const responseModelNote = subagentResponseModelNote(subagent);
   return (
     <div className="tool-call-subagent">
       <div className={`tool-call-subagent-line substatus-${kind}`}>
@@ -429,6 +451,18 @@ function SubagentStatus({
         {subagent.model !== null && (
           <span className="tool-call-subagent-model" title={`Child model: ${subagent.model}`}>
             {subagent.model}
+          </span>
+        )}
+        {responseModelNote !== null && (
+          <span
+            className={`tool-call-subagent-response-model${responseModelNote.mismatch ? " tool-call-subagent-response-model--mismatch" : ""}`}
+            title={
+              responseModelNote.mismatch
+                ? "The provider's response claimed a different model than requested — a claim, not proof of serving."
+                : "Provider-reported model on the raw wire response — a claim, not proof of serving."
+            }
+          >
+            {responseModelNote.text}
           </span>
         )}
         <span className="tool-call-subagent-desc">{subagent.description}</span>

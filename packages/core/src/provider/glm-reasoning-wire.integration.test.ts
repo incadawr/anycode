@@ -102,7 +102,7 @@ describe("GLM (Z.AI) reasoning-effort mapping over the real @ai-sdk/anthropic wi
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   });
 
-  function portFor(reasoningEffort: "high" | "max"): { port: AiSdkModelPort; request: ModelRequest } {
+  function portFor(reasoningEffort: "low" | "high" | "max"): { port: AiSdkModelPort; request: ModelRequest } {
     const config: AnthropicEndpointConfig = {
       transport: "anthropic-messages",
       baseUrl,
@@ -157,6 +157,27 @@ describe("GLM (Z.AI) reasoning-effort mapping over the real @ai-sdk/anthropic wi
     expect(captured!.body).toMatchObject({
       thinking: { type: "enabled", budget_tokens: 32_000 },
       output_config: { effort: "max" },
+    });
+    expect(captured!.body["effort"]).toBeUndefined();
+  });
+
+  // TASK.163 (2026-08-28): docs.z.ai/guides/llm/glm-5.3 documents `low` as a
+  // real reasoning tier, distinct from `high`/`max`. Before this slice the
+  // mapping silently collapsed `low` into `high` on the wire; this pins that
+  // it now reaches output_config.effort as 'low' verbatim, reusing the same
+  // 16000 thinking budget as `high` (z.ai documents no lower per-tier budget).
+  it("low: posts with max_tokens=131072 (ceiling), thinking.budget_tokens=16000, output_config.effort='low'", async () => {
+    const { port, request } = portFor("low");
+
+    const events = await drain(port.streamText(request));
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(captured).toBeDefined();
+    expect(captured!.url).toBe("/v1/messages");
+    expect(captured!.body["max_tokens"]).toBe(131_072);
+    expect(captured!.body).toMatchObject({
+      thinking: { type: "enabled", budget_tokens: 16_000 },
+      output_config: { effort: "low" },
     });
     expect(captured!.body["effort"]).toBeUndefined();
   });

@@ -682,6 +682,25 @@ export interface SessionOptions {
    * both silent no-ops for this concern, byte-identical to pre-срез-2.
    */
   pendingChildReports?: PendingChildReportsOptions;
+  /**
+   * TASK.159: the ONLY telemetry seam a foreign-engine (codex/claude) boot
+   * has — those engines wrap their own CLI protocol and never instantiate
+   * AgentLoop, so `AgentLoopConfig.eventTap` (the core path's telemetry
+   * attachment point, records.ts's `buildTelemetryTap`) is physically
+   * unreachable for them. Called for EVERY event `runTurn` observes,
+   * including a `continueTurn` resumption (same for-await loop below) —
+   * wrapped in try/catch so a throwing tap can never break a turn, mirroring
+   * the observer contract AgentLoop's own eventTap already holds
+   * (agent-loop.ts ~:455).
+   *
+   * INVARIANT — never pass this on the core-path boot: `boot()`'s core
+   * branch (host/index.ts) already taps AgentLoopConfig.eventTap for every
+   * AgentEvent the loop produces; passing BOTH here and there would record
+   * every event twice into the same session file. Only `bootCodexSession`/
+   * `bootClaudeSession` may wire this option — see the comment at their two
+   * `new Session({...})` call sites.
+   */
+  eventTap?: (event: AgentEvent) => void;
 }
 
 /**
@@ -811,6 +830,8 @@ export class Session {
   private lspUnsubscribe: (() => void) | undefined;
   /** TASK.145 срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
   private readonly pendingChildReports: PendingChildReportsOptions | undefined;
+  /** TASK.159: see SessionOptions.eventTap's own doc — undefined for core (byte-identical to pre-159). */
+  private readonly eventTap: SessionOptions["eventTap"];
   /** TASK.145 срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
   private backgroundChildrenUnsubscribe: (() => void) | undefined;
 
@@ -898,6 +919,7 @@ export class Session {
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
     this.child = options.child;
     this.pendingChildReports = options.pendingChildReports;
+    this.eventTap = options.eventTap;
     this.now = options.child?.now ?? Date.now;
     this.titleSet = options.hasTitle ?? false;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? []);
@@ -2231,6 +2253,16 @@ export class Session {
       }
       let noticeConsumeAttempted = false;
       for await (const event of stream) {
+        // TASK.159: the foreign-engine telemetry seam — see SessionOptions.
+        // eventTap's own doc/invariant comment. Fires for every event this
+        // loop observes (covers continueTurn too, since it drives the same
+        // for-await), before any other per-event handling below, and never
+        // allowed to affect the turn.
+        try {
+          this.eventTap?.(event);
+        } catch (error) {
+          console.error(`[host] eventTap failed: ${describeError(error)}`);
+        }
         if (
           carriesWorktreeExitNotice &&
           !noticeConsumeAttempted &&

@@ -180,7 +180,17 @@ export interface SubagentSubStatus {
   activity: { toolName: string; summary: string }[];
   /** Count of activity rows dropped from the front of the ring once the cap was exceeded (honest overflow counter, not a wire field). */
   activityDropped: number;
-  final: { status: "completed" | "max_turns" | "cancelled" | "error"; durationMs: number } | null;
+  final: {
+    status: "completed" | "max_turns" | "cancelled" | "error";
+    durationMs: number;
+    /**
+     * Provider-reported model id read off the child's port after its final
+     * model call (raw wire claim — TASK.161). Absent for engine children,
+     * session-tier children, inherited-port children, and providers exposing
+     * no raw claim. This is the provider's CLAIM, not proof of serving.
+     */
+    responseModel?: string;
+  } | null;
   /**
    * PRESENCE, not value, is the signal: `true` while a session-tier child
    * session is blocked on a permission ask, and the key is ABSENT — never
@@ -1616,6 +1626,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       turns: number,
       durationMs: number,
       activitySuppressed?: number,
+      responseModel?: string,
     ): void {
       flushDeltas();
       set((state) => {
@@ -1629,7 +1640,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             ...block.subagent,
             turns,
             activityDropped: block.subagent.activityDropped + (activitySuppressed ?? 0),
-            final: { status, durationMs },
+            final: { status, durationMs, ...(responseModel !== undefined ? { responseModel } : {}) },
           };
           // The settle strips any stale permission-wait flag in the SAME
           // atomic update (TASK.102 CUT-S2 §2.5/§10.1): a child cancelled or
@@ -2161,7 +2172,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           patchSubagentProgress(event.toolCallId, event.turns, event.toolCalls, event.lastTool ?? null);
           return;
         case "subagent_end":
-          patchSubagentEnd(event.toolCallId, event.status, event.turns, event.durationMs, event.activitySuppressed);
+          patchSubagentEnd(
+            event.toolCallId,
+            event.status,
+            event.turns,
+            event.durationMs,
+            event.activitySuppressed,
+            event.responseModel,
+          );
           return;
         // Per-child-tool activity (slice P7.18/F16b, design §4 W2): additive
         // AgentEvent variant riding the same agent_event envelope, appended to

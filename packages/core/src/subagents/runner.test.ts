@@ -49,6 +49,8 @@ import type { ToolContext } from "../types/tools.js";
 import { SPAWN_TOOLS, buildChildConfig, createSubagentRunner, withSubagents } from "./runner.js";
 import { PERSONAS, getPersona, type PersonaDefinition } from "./personas.js";
 import { discoverAgentProfiles, type AgentProfileRoot } from "./profiles.js";
+import { buildSubagentTelemetryTap } from "../telemetry/records.js";
+import type { TelemetryPort, TelemetryRecord } from "../ports/telemetry.js";
 
 // ---------------------------------------------------------------------------
 // ScriptedModelPort: replays a step per streamText call. The script is a pure
@@ -175,6 +177,22 @@ function makePorts(exec?: ExecutionPort): CorePorts {
     http: {} as HttpPort,
     todos: new InMemoryTodoStore(),
   };
+}
+
+/** TASK.160 §2.2 wiring tests: a bare recording TelemetryPort (mirror of
+ *  telemetry/records.test.ts's own fixture) so a test can assert exactly what
+ *  buildSubagentTelemetryTap wrote through the parent's subagentEventTap. */
+function makeRecordingPort(): { port: TelemetryPort; records: TelemetryRecord[] } {
+  const records: TelemetryRecord[] = [];
+  const port: TelemetryPort = {
+    record: (record) => {
+      records.push(record);
+    },
+    status: () => ({ filePath: "/tmp/x.jsonl", written: records.length, dropped: 0 }),
+    flush: async () => {},
+    dispose: async () => {},
+  };
+  return { port, records };
 }
 
 function makeParent(overrides: Partial<AgentLoopConfig> = {}): AgentLoopConfig {
@@ -368,6 +386,99 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(declared).not.toContain("Agent");
     for (const name of declared) {
       expect(child.registry.getMetadata(name)?.readOnly, `${name} must be readOnly`).toBe(true);
+    }
+  });
+});
+
+// TASK.160 §2.2: the inline subagent tap. Decision (а) — child records land in
+// the PARENT's own telemetry file, marked with `sub`. `buildSubagentTelemetryTap`
+// itself (whitelist mapping, sub stamping, model omission) is pinned exhaustively
+// in telemetry/records.test.ts; these tests pin the WIRING — buildChildConfig
+// installs the closure the parent's factory returns as the child's own eventTap.
+describe("subagentEventTap wiring (TASK.160 §2.2)", () => {
+  it("builds the child's eventTap from parent.subagentEventTap, stamped with the child's agentType", () => {
+    const { port, records } = makeRecordingPort();
+    const parent = makeParent({
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(port, "parent-session-id", spawn),
+    });
+
+    const child = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(child.eventTap).toBeDefined();
+    child.eventTap?.({ type: "turn_end", turn: 1, finishReason: "stop" });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      session: "parent-session-id",
+      sub: { agentType: "general-purpose" },
+      t: "turn_end",
+      turn: 1,
+    });
+    // No model override anywhere in this spawn -> sub carries no model key at all.
+    expect(records[0]?.sub).not.toHaveProperty("model");
+  });
+
+  it("stamps sub.model from an Agent-tool model override, which outranks the persona's own default", () => {
+    const { port, records } = makeRecordingPort();
+    const parent = makeParent({
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(port, "parent-session-id", spawn),
+    });
+    const roleModeled: PersonaDefinition = { ...getPersona("explore"), model: "role-model" };
+
+    // Persona default, no request override.
+    const childA = buildChildConfig(parent, roleModeled, REQ);
+    childA.eventTap?.({ type: "turn_end", turn: 1, finishReason: "stop" });
+    expect(records[0]).toMatchObject({ sub: { agentType: "explore", model: "role-model" } });
+
+    // An explicit Agent-tool request override outranks the persona default
+    // (same precedence as run()'s own requestedModel resolution).
+    const childB = buildChildConfig(parent, roleModeled, { ...REQ, model: "override-model" });
+    childB.eventTap?.({ type: "turn_end", turn: 2, finishReason: "stop" });
+    expect(records[1]).toMatchObject({ sub: { agentType: "explore", model: "override-model" } });
+  });
+
+  it("child config has NO eventTap when the parent carries no subagentEventTap factory (byte-identical legacy behaviour)", () => {
+    const parent = makeParent();
+    expect(parent.subagentEventTap).toBeUndefined();
+    const child = buildChildConfig(parent, getPersona("explore"), REQ);
+    expect(child.eventTap).toBeUndefined();
+    expect("eventTap" in child).toBe(false);
+  });
+
+  it("structural non-recursion: the child config never carries subagentEventTap itself", () => {
+    const { port } = makeRecordingPort();
+    const parent = makeParent({
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(port, "parent-session-id", spawn),
+    });
+    const child = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(child.subagentEventTap).toBeUndefined();
+    expect("subagentEventTap" in child).toBe(false);
+  });
+
+  it("an end-to-end child run through createSubagentRunner writes usage/tool/turn_end into the parent's file, all stamped sub with the parent's session id", async () => {
+    const { port, records } = makeRecordingPort();
+    const model = new ScriptedModelPort((req) => {
+      if (isChildRequest(req)) {
+        return lastRole(req) === "user" ? toolStep("c1", "TodoRead", {}) : textStep("child done");
+      }
+      return textStep("should never run");
+    });
+    const parent = makeParent({
+      modelPort: model,
+      mode: "yolo",
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(port, "parent-session-id", spawn),
+    });
+    const runner = createSubagentRunner(parent);
+
+    const outcome = await runner.run(REQ, {});
+    expect(outcome.status).toBe("completed");
+
+    const kinds = records.map((r) => r.t);
+    expect(kinds).toContain("tool");
+    expect(kinds).toContain("turn_end");
+    expect(kinds).toContain("usage");
+    for (const record of records) {
+      expect(record.session).toBe("parent-session-id");
+      expect(record.sub).toEqual({ agentType: "general-purpose" });
     }
   });
 });
@@ -2338,5 +2449,337 @@ describe("hand-built maxTurns guard (TASK.74 §2.4, F10)", () => {
     // Nothing ran: no model call and no lifecycle hook for a rejected request.
     expect(model.calls).toBe(0);
     expect(calls.filter((c) => c.event === "SubagentStop")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.161 + TASK.162 (slice B1): the child-spawn seam.
+//   * capabilities re-resolved for the CHILD's own model (defect F6);
+//   * the start card reports the CONSTRUCTED port's identity, not an echo;
+//   * the provider's own model CLAIM travels out on subagent_end.
+//
+// The tier the settings resolver re-resolves against never reaches this module
+// — it is applied inside each host's wiring closure — so these tests supply
+// resolvers directly, exactly as a host would.
+
+/**
+ * A child-only ModelPort carrying A1's two readback members. `claims` are the
+ * provider-reported ids, one per streamText call in order (the last entry
+ * repeats), assigned as the stream starts — mirroring the real port, which
+ * captures the id off the raw `message_start` chunk.
+ */
+function makeChildPort(opts: {
+  modelId?: string;
+  claims?: readonly (string | undefined)[];
+  /** Per-request claim, for scripts whose call count is not fixed. Wins over `claims`. */
+  claimFor?: (req: ModelRequest) => string | undefined;
+  script?: (req: ModelRequest) => ModelStreamEvent[];
+}): ModelPort & { readonly requests: ModelRequest[] } {
+  const requests: ModelRequest[] = [];
+  let lastResponseModel: string | undefined;
+  const script = opts.script ?? ((): ModelStreamEvent[] => textStep("child report"));
+  const port = {
+    ...(opts.modelId !== undefined ? { modelId: opts.modelId } : {}),
+    get lastResponseModel(): string | undefined {
+      return lastResponseModel;
+    },
+    requests,
+    streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+      const index = requests.length;
+      requests.push(request);
+      const events = script(request);
+      const { claims, claimFor } = opts;
+      return (async function* () {
+        if (claimFor !== undefined) {
+          lastResponseModel = claimFor(request);
+        } else if (claims !== undefined && claims.length > 0) {
+          lastResponseModel = index < claims.length ? claims[index] : claims[claims.length - 1];
+        }
+        for (const event of events) {
+          yield event;
+        }
+      })();
+    },
+  };
+  return port;
+}
+
+const endOf = (progress: SubagentProgress[]): Extract<SubagentProgress, { kind: "end" }> => {
+  const ends = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+  expect(ends).toHaveLength(1);
+  return ends[0]!;
+};
+
+const startOf = (progress: SubagentProgress[]): Extract<SubagentProgress, { kind: "start" }> => {
+  const starts = progress.filter((p): p is Extract<SubagentProgress, { kind: "start" }> => p.kind === "start");
+  expect(starts).toHaveLength(1);
+  return starts[0]!;
+};
+
+describe("buildChildConfig — child-model settings (TASK.162, defect F6)", () => {
+  const PARENT_CONTEXT = { contextWindowTokens: 200_000, keepRecentMessages: 7 };
+
+  it("replaces the ceiling and effort wholesale and overlays ONLY contextWindowTokens", () => {
+    const parent = makeParent({
+      maxOutputTokens: 8_192,
+      reasoningEffort: "medium",
+      context: PARENT_CONTEXT,
+    });
+
+    const child = buildChildConfig(parent, getPersona("explore"), REQ, {
+      modelSettings: { maxOutputTokens: 131_072, reasoningEffort: "high", contextWindowTokens: 1_000_000 },
+    });
+
+    expect(child.maxOutputTokens).toBe(131_072);
+    expect(child.reasoningEffort).toBe("high");
+    // Only the window moved; every other budget knob the resolver knows
+    // nothing about survives the overlay, and the parent's object is not
+    // mutated.
+    expect(child.context).toEqual({ contextWindowTokens: 1_000_000, keepRecentMessages: 7 });
+    expect(child.context).not.toBe(parent.context);
+    expect(parent.context).toEqual(PARENT_CONTEXT);
+  });
+
+  it("an `undefined` INSIDE the settings is that model's resolution, never patched from the parent", () => {
+    const parent = makeParent({ maxOutputTokens: 8_192, reasoningEffort: "medium", context: PARENT_CONTEXT });
+
+    const child = buildChildConfig(parent, getPersona("explore"), REQ, {
+      // The honest shape for a claude-* child: no declared ceiling, no effort.
+      modelSettings: { contextWindowTokens: 200_000 },
+    });
+
+    expect(child.maxOutputTokens).toBeUndefined();
+    expect(child.reasoningEffort).toBeUndefined();
+  });
+
+  it("without modelSettings the three rows stay the parent's, by reference where they were (legacy path)", () => {
+    const parent = makeParent({ maxOutputTokens: 8_192, reasoningEffort: "medium", context: PARENT_CONTEXT });
+
+    const child = buildChildConfig(parent, getPersona("explore"), REQ);
+
+    expect(child.maxOutputTokens).toBe(8_192);
+    expect(child.reasoningEffort).toBe("medium");
+    expect(child.context).toBe(parent.context);
+  });
+});
+
+describe("run() — child capabilities resolved for the child's own model (TASK.162)", () => {
+  it("the child's ModelRequest carries the SETTINGS' ceiling and effort, not the parent's", async () => {
+    const parentPort = new ScriptedModelPort(() => textStep("parent never runs here"));
+    const childPort = makeChildPort({ modelId: "glm-5.3-flash" });
+    const resolvedFor: string[] = [];
+    const runner = createSubagentRunner(
+      makeParent({
+        modelPort: parentPort,
+        maxOutputTokens: 4_096,
+        reasoningEffort: "medium",
+        context: { contextWindowTokens: 200_000 },
+      }),
+      {
+        resolveChildModelPort: () => childPort,
+        resolveChildModelSettings: (modelId) => {
+          resolvedFor.push(modelId);
+          return { maxOutputTokens: 131_072, reasoningEffort: "high", contextWindowTokens: 1_000_000 };
+        },
+      },
+    );
+
+    const outcome = await runner.run({ ...REQ, model: "glm-5.3-flash" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(resolvedFor).toEqual(["glm-5.3-flash"]);
+    expect(childPort.requests).toHaveLength(1);
+    expect(childPort.requests[0]!.maxOutputTokens).toBe(131_072);
+    expect(childPort.requests[0]!.reasoningEffort).toBe("high");
+    expect(parentPort.calls).toBe(0);
+  });
+
+  it("a spawn WITHOUT a model override never calls the settings resolver (legacy path untouched)", async () => {
+    const parentPort = new ScriptedModelPort((req) =>
+      isChildRequest(req) ? textStep("inherited-port child") : textStep("n/a"),
+    );
+    const runner = createSubagentRunner(
+      makeParent({ modelPort: parentPort, maxOutputTokens: 4_096, reasoningEffort: "medium" }),
+      {
+        resolveChildModelSettings: () => {
+          throw new Error("resolveChildModelSettings must not be called when req.model is absent");
+        },
+      },
+    );
+
+    const outcome = await runner.run(REQ, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("inherited-port child");
+    expect(parentPort.requests.at(-1)!.maxOutputTokens).toBe(4_096);
+    expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("medium");
+  });
+
+  it("a THROWING settings resolver is an error-outcome naming the model — never a fallback to parent values", async () => {
+    const parentPort = new ScriptedModelPort(() => textStep("should never run"));
+    const childPort = makeChildPort({ modelId: "glm-5.3-flash" });
+    const runner = createSubagentRunner(
+      makeParent({ modelPort: parentPort, maxOutputTokens: 4_096, reasoningEffort: "medium" }),
+      {
+        resolveChildModelPort: () => childPort,
+        resolveChildModelSettings: () => {
+          throw new Error("catalog exploded");
+        },
+      },
+    );
+
+    const outcome = await runner.run({ ...REQ, model: "glm-5.3-flash" }, {});
+
+    expect(outcome).toEqual({
+      status: "error",
+      finalText:
+        'Agent: model "glm-5.3-flash" settings could not be resolved in this host: catalog exploded',
+      truncated: false,
+      turns: 0,
+      toolCalls: 0,
+      durationMs: expect.any(Number),
+    });
+    // No child loop was ever built on the parent's capabilities behind our back.
+    expect(childPort.requests).toHaveLength(0);
+    expect(parentPort.calls).toBe(0);
+  });
+});
+
+describe("start progress — constructed-port identity readback (TASK.161)", () => {
+  it("reports the CONSTRUCTED port's modelId when it differs from the requested string", async () => {
+    // Contract coverage of constructed-port identity ONLY: no production port
+    // canonicalizes ids, so this divergence cannot happen live today. The point
+    // is that the card reports what the host BUILT rather than echoing the
+    // request — it is not, and must never be read as, execution identity.
+    const childPort = makeChildPort({ modelId: "glm-5.3-flash-canonical" });
+    const runner = createSubagentRunner(makeParent(), {
+      resolveChildModelPort: () => childPort,
+    });
+    const progress: SubagentProgress[] = [];
+
+    await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
+
+    expect(startOf(progress).model).toBe("glm-5.3-flash-canonical");
+  });
+
+  it("a port exposing no modelId falls back to the requested string", async () => {
+    const childPort = makeChildPort({});
+    const runner = createSubagentRunner(makeParent(), {
+      resolveChildModelPort: () => childPort,
+    });
+    const progress: SubagentProgress[] = [];
+
+    await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
+
+    expect(startOf(progress).model).toBe("glm-5.3-flash");
+  });
+
+  it("a spawn with no override still carries no model key at all (inherited stays inherited)", async () => {
+    const parentPort = new ScriptedModelPort((req) =>
+      isChildRequest(req) ? textStep("child") : textStep("n/a"),
+    );
+    const runner = createSubagentRunner(makeParent({ modelPort: parentPort }));
+    const progress: SubagentProgress[] = [];
+
+    await runner.run(REQ, { onProgress: (p) => progress.push(p) });
+
+    expect("model" in startOf(progress)).toBe(false);
+  });
+});
+
+describe("responseModel — the provider's own claim reaches subagent_end (TASK.161)", () => {
+  it("end progress carries the claim the child's port observed", async () => {
+    const childPort = makeChildPort({ modelId: "glm-5.3-flash", claims: ["glm-5.3"] });
+    const runner = createSubagentRunner(makeParent(), {
+      resolveChildModelPort: () => childPort,
+    });
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, model: "glm-5.3-flash" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    expect(endOf(progress).responseModel).toBe("glm-5.3");
+  });
+
+  it("a port that never saw a claim leaves the key ABSENT (absence preserved as absence)", async () => {
+    const childPort = makeChildPort({ modelId: "glm-5.3-flash" });
+    const runner = createSubagentRunner(makeParent(), {
+      resolveChildModelPort: () => childPort,
+    });
+    const progress: SubagentProgress[] = [];
+
+    await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
+
+    expect("responseModel" in endOf(progress)).toBe(false);
+  });
+
+  it("an inherited-port child reports nothing: a shared port's last claim is not attributable to it", async () => {
+    const parentPort = new ScriptedModelPort((req) =>
+      isChildRequest(req) ? textStep("child") : textStep("n/a"),
+    );
+    const runner = createSubagentRunner(makeParent({ modelPort: parentPort }));
+    const progress: SubagentProgress[] = [];
+
+    await runner.run(REQ, { onProgress: (p) => progress.push(p) });
+
+    expect("responseModel" in endOf(progress)).toBe(false);
+  });
+
+  it("bridges through parent-loop -> agentTool -> runner onto the subagent_end AgentEvent", async () => {
+    const childPort = makeChildPort({ modelId: "glm-5.3-flash", claims: ["glm-5.3"] });
+    const parentPort = new ScriptedModelPort((req) =>
+      lastRole(req) === "user"
+        ? toolStep("agent-1", "Agent", {
+            description: "child work",
+            prompt: "do child work",
+            agent_type: "general-purpose",
+            model: "glm-5.3-flash",
+          })
+        : textStep("parent done"),
+    );
+    const loop = new AgentLoop(
+      withSubagents(makeParent({ modelPort: parentPort, mode: "yolo" }), {
+        resolveChildModelPort: () => childPort,
+      }),
+    );
+
+    const events = await collect(loop.runTurn("spawn a child on flash"));
+
+    const end = events.find((e) => e.type === "subagent_end");
+    expect(end?.type === "subagent_end" && end.responseModel).toBe("glm-5.3");
+    const start = events.find((e) => e.type === "subagent_start");
+    expect(start?.type === "subagent_start" && start.model).toBe("glm-5.3-flash");
+  });
+});
+
+describe("responseModel after the wrap-up rescue (codex blocking 4)", () => {
+  it("reports the WRAP-UP call's claim, not the loop turn's — the property is read after the rescue", async () => {
+    // A budget-1 child that keeps proposing a tool call exhausts its turns and
+    // is rescued. The port claims "model-A" on every loop-side call and
+    // "model-B" only on the wrap-up call, so an accumulator that froze the
+    // loop's claim would report "model-A" here.
+    const childPort = makeChildPort({
+      modelId: "requested-model",
+      claimFor: (req) => (isWrapUpRequest(req) ? "model-B" : "model-A"),
+      script: (req) => (isWrapUpRequest(req) ? textStep("REPORT: partial") : toolStep("k", "TodoRead", {})),
+    });
+    const runner = createSubagentRunner(makeParent({ mode: "yolo" }), {
+      resolveChildModelPort: () => childPort,
+    });
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run(
+      { ...REQ, agentType: "general-purpose", model: "requested-model", maxTurns: 1 },
+      { onProgress: (p) => progress.push(p) },
+    );
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("REPORT: partial");
+    // Every call went through the SAME port object, and the rescue was last.
+    expect(isWrapUpRequest(childPort.requests.at(-1)!)).toBe(true);
+    expect(childPort.requests.filter(isWrapUpRequest)).toHaveLength(1);
+    expect(endOf(progress).responseModel).toBe("model-B");
   });
 });

@@ -14,6 +14,15 @@
  * with zero issues (an automation/CI "turn off what's mounted" knob). There is
  * deliberately no force-ON env value: the only way to enable telemetry is a
 
+ *
+ * TASK.121: `ANYCODE_TELEMETRY_DIR` (checked right after the kill-switch, on
+ * the injected env) is an explicit sink-dir override that wins over any file
+ * config; a relative/empty value fails closed. Independently, a fail-closed
+ * test gate keyed off the AMBIENT `VITEST` env (not the injected `env`
+ * argument) stops a test process from ever resolving telemetry against the
+ * real home directory: it skips the home-scope source when workspace !== home,
+ * and refuses any resolution that would land on the default dir. See
+ * loadTelemetryConfig for the exact rules.
  */
 
 import { z } from "zod";
@@ -65,16 +74,23 @@ function isAbsolutePath(path: string): boolean {
   return /^\//.test(path) || /^[A-Za-z]:[\\/]/.test(path);
 }
 
-/** Resolves a schema-valid section into a directory, or records a business-rule issue and returns null. */
+/** Resolves a schema-valid section into a directory, or records a business-rule issue and returns null.
+ *  `underTestGate` (TASK.121): when set, a section without an explicit `dir` never falls back to the
+ *  default `<home>/.anycode/telemetry` — a test process must always name its sink explicitly. */
 function resolveSection(
   config: TelemetryConfigEntry,
   path: string,
   home: string,
   issues: string[],
+  underTestGate: boolean,
 ): ResolvedTelemetryConfig | null {
   if (!config.enabled) return null;
 
   if (config.dir === undefined) {
+    if (underTestGate) {
+      issues.push(`Telemetry config ${path}: telemetry under a test runner requires an explicit dir`);
+      return null;
+    }
     return { dir: defaultTelemetryDir(home) };
   }
   if (!isAbsolutePath(config.dir)) {
@@ -100,6 +116,7 @@ async function loadSource(
   path: string,
   home: string,
   issues: string[],
+  underTestGate: boolean,
 ): Promise<{ telemetry: ResolvedTelemetryConfig | null } | undefined> {
   if (!(await fs.exists(path))) return undefined;
 
@@ -129,7 +146,7 @@ async function loadSource(
     return { telemetry: null };
   }
 
-  return { telemetry: resolveSection(parsed.data, path, home, issues) };
+  return { telemetry: resolveSection(parsed.data, path, home, issues, underTestGate) };
 }
 
 /**
@@ -152,14 +169,41 @@ export async function loadTelemetryConfig(
     return { telemetry: null, issues: [] };
   }
 
+  // TASK.121: explicit dir override on the INJECTED env, checked right after the
+  // kill-switch. Wins over any file config (absolute path); a relative or empty
+  // value fails closed rather than silently falling back to file resolution.
+  // Works in every mode — this is the escape hatch tests are expected to use.
+  const dirOverride = env.ANYCODE_TELEMETRY_DIR;
+  if (dirOverride !== undefined) {
+    if (dirOverride !== "" && isAbsolutePath(dirOverride)) {
+      return { telemetry: { dir: dirOverride }, issues: [] };
+    }
+    return {
+      telemetry: null,
+      issues: [`ANYCODE_TELEMETRY_DIR must be an absolute path, got "${dirOverride}"; telemetry disabled`],
+    };
+  }
+
+  // TASK.121 fail-closed test gate: keyed off the AMBIENT runner env, never the
+  // injected `env` argument above — tests inject synthetic env objects, which is
+  // exactly the hole that let ~54k gate-fixture files accumulate in the owner's
+  // real ~/.anycode/telemetry. Under the gate (unless the override above fired):
+  //  - the home-scope source is skipped entirely when workspace !== home (the
+  //    CLI-test leak path: tmp cwd + the owner's real ~/.anycode/config.json);
+  //  - any resolution landing on the DEFAULT dir is refused (see resolveSection).
+  // workspace === home (single-source dedup, e.g. desktop profile-ipc) still
+  // consults that one path via the existing seenPaths dedup below.
+  const underTestGate = globalThis.process?.env?.VITEST !== undefined;
+
   const issues: string[] = [];
   const seenPaths = new Set<string>();
-  for (const baseDir of [workspace, home]) {
+  const baseDirs = underTestGate && workspace !== home ? [workspace] : [workspace, home];
+  for (const baseDir of baseDirs) {
     const path = projectOrUserConfigPath(baseDir);
     if (seenPaths.has(path)) continue;
     seenPaths.add(path);
 
-    const claimed = await loadSource(fs, path, home, issues);
+    const claimed = await loadSource(fs, path, home, issues, underTestGate);
     if (claimed !== undefined) {
       return { telemetry: claimed.telemetry, issues };
     }

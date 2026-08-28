@@ -649,3 +649,87 @@ describe.each(KITS)("cross-transport contract: $transport", (kit) => {
     }
   });
 });
+// ---------------------------------------------------------------------------
+// response-model provenance (anthropic-messages only) + request-body wire pin
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs the REAL `@ai-sdk/anthropic` stack against a loopback SSE server to pin
+ * the provenance contract end to end: the port's `lastResponseModel` comes from
+ * the raw `message_start.message.model` frame and from nowhere else. The SDK's
+ * own `response.modelId` is initialized from the REQUESTED id (ai@7.0.14 dist
+ * :9394-9398), so a fixture whose frame carries no model is the decisive case —
+ * it must yield NOTHING, not the requested id.
+ */
+describe("anthropic-messages: response-model provenance", () => {
+  let server: Server;
+  let baseUrl: string;
+  let captured: CapturedRequest | undefined;
+  let responseChunks: ReadonlyArray<Record<string, unknown>> = [];
+
+  beforeEach(async () => {
+    captured = undefined;
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        captured = { url: req.url, headers: req.headers, body: raw === "" ? {} : (JSON.parse(raw) as Record<string, unknown>) };
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        res.end(anthropicKit.serialize(responseChunks));
+      });
+    });
+    baseUrl = `${await listen(server)}/v1`;
+  });
+
+  afterEach(async () => {
+    await closeServer(server);
+  });
+
+  /** Text-only frames whose `message_start.message` is supplied verbatim by the caller. */
+  function framesWithMessage(message: Record<string, unknown>): ReadonlyArray<Record<string, unknown>> {
+    return [
+      { type: "message_start", message },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+      { type: "message_stop" },
+    ];
+  }
+
+  it("reports the model the provider claimed, not the one the request asked for", async () => {
+    responseChunks = framesWithMessage({ id: "msg_1", model: "glm-5.3", role: "assistant", usage: { input_tokens: 10 } });
+    const port = new AiSdkModelPort(anthropicKit.buildConfig(baseUrl, { model: "glm-5.3-flash" }));
+    const events = await collect(port.streamText(anthropicKit.buildRequest()));
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(textOf(events)).toBe("ok");
+    expect(port.modelId).toBe("glm-5.3-flash");
+    expect(port.lastResponseModel).toBe("glm-5.3");
+  });
+
+  it("reports NOTHING when the provider's message_start carries no model (absence stays absence)", async () => {
+    responseChunks = framesWithMessage({ id: "msg_1", role: "assistant", usage: { input_tokens: 10 } });
+    const port = new AiSdkModelPort(anthropicKit.buildConfig(baseUrl, { model: "glm-5.3-flash" }));
+    const events = await collect(port.streamText(anthropicKit.buildRequest()));
+
+    // The frame itself is accepted (the SDK schema marks `model` nullish), so
+    // the absent claim is genuine wire absence, not a rejected frame.
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(textOf(events)).toBe("ok");
+    // The SDK would happily hand back "glm-5.3-flash" here from its own
+    // response metadata; the port must not.
+    expect(port.lastResponseModel).toBeUndefined();
+  });
+
+  it("sends the requested model id verbatim in the request body (wire pin, characterization)", async () => {
+    responseChunks = framesWithMessage({ id: "msg_1", model: "glm-5.3", role: "assistant", usage: { input_tokens: 10 } });
+    await collect(
+      new AiSdkModelPort(anthropicKit.buildConfig(baseUrl, { model: "glm-5.3-flash" })).streamText(anthropicKit.buildRequest()),
+    );
+
+    expect(captured).toBeDefined();
+    expect(captured!.body.model).toBe("glm-5.3-flash");
+  });
+});

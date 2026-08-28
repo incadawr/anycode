@@ -2,4 +2,4 @@
 
 export { loadTelemetryConfig, telemetryConfigSchema } from "./config.js";
 export type { LoadedTelemetryConfig, ResolvedTelemetryConfig, TelemetryConfigEntry } from "./config.js";
-export { buildTelemetryTap, telemetryRecordFor } from "./records.js";
+export { buildEngineTelemetryTap, buildSubagentTelemetryTap, buildTelemetryTap, telemetryRecordFor } from "./records.js";

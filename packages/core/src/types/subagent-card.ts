@@ -50,7 +50,18 @@ export interface SubagentCardSnapshotV1 {
    * would be a contradiction. Nullable `final` lives only in the internal
    * accumulator (SubagentCardAccumulator), never in this persisted shape.
    */
-  final: { status: SubagentCardFinalStatus; durationMs: number };
+  final: {
+    status: SubagentCardFinalStatus;
+    durationMs: number;
+    /**
+     * Provider-reported model id observed on the child's port (raw wire
+     * claim, not SDK-derived echo). Absent on legacy snapshots, engine
+     * children, session-tier children, inherited-port children, and
+     * providers exposing no raw claim. This is the provider's CLAIM,
+     * not proof of serving.
+     */
+    responseModel?: string;
+  };
   /** Reserved for S2 (the "waiting for permission" badge). S1 never writes or reads this. */
   attention?: "waiting_permission";
 }

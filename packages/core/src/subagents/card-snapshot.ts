@@ -40,6 +40,8 @@ export interface SubagentCardAccumulator {
     turns: number;
     durationMs: number;
     activitySuppressed?: number;
+    /** Provider-reported model id, capped at SUBAGENT_CARD_MODEL_MAX_CHARS. The provider's CLAIM, not proof of serving. */
+    responseModel?: string;
   } | null;
 }
 
@@ -139,6 +141,9 @@ export function reduceSubagentCardEvent(
           turns: ev.turns,
           durationMs: ev.durationMs,
           ...(ev.activitySuppressed !== undefined ? { activitySuppressed: ev.activitySuppressed } : {}),
+          ...(ev.responseModel !== undefined
+            ? { responseModel: capCodePoints(ev.responseModel, SUBAGENT_CARD_MODEL_MAX_CHARS) }
+            : {}),
         },
       };
     }
@@ -177,7 +182,14 @@ export function finalizeSubagentCard(
   if (!acc.started || acc.identity === null) {
     return null;
   }
-  const final = acc.end !== null ? { status: acc.end.status, durationMs: acc.end.durationMs } : fallback;
+  const final =
+    acc.end !== null
+      ? {
+          status: acc.end.status,
+          durationMs: acc.end.durationMs,
+          ...(acc.end.responseModel !== undefined ? { responseModel: acc.end.responseModel } : {}),
+        }
+      : fallback;
   return {
     kind: "subagent",
     version: 1,

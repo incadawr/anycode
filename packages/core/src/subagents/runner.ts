@@ -37,6 +37,7 @@ import {
   SUBAGENT_OUTPUT_MAX_BYTES,
   SUBAGENT_WRAPUP_MIN_WINDOW_MS,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
+  type ReasoningEffort,
 } from "../types/config.js";
 import type {
   EngineChildSpec,
@@ -61,6 +62,21 @@ import { SPAWN_TOOLS } from "./spawn-tools.js";
 // above for internal use and re-exported here byte-compatibly for existing
 // importers (subagents/index.ts, runner tests).
 export { SPAWN_TOOLS };
+
+/**
+ * Capability settings a child spawned on its OWN model gets (TASK.162).
+ * Declared STRUCTURALLY here — a deliberate mirror of
+ * `provider/child-model-settings.ts`'s `ChildModelSettings`, not an import of
+ * it: the runner must keep zero catalog/provider dependencies, and the shape
+ * is the whole contract. `maxOutputTokens: undefined` is a legal resolution
+ * (claude-* models declare no ceiling), so the field's absence is an answer,
+ * not a gap.
+ */
+export interface ResolvedChildModelSettings {
+  maxOutputTokens?: number;
+  reasoningEffort?: ReasoningEffort;
+  contextWindowTokens: number;
+}
 
 /**
  * Extra runner inputs (slice 3.3, design §2.5). `profiles` are md-profile
@@ -97,6 +113,25 @@ export interface SubagentRunnerOptions {
    * of silently spawning the child on the parent's model.
    */
   resolveChildModelPort?: (modelId: string) => ModelPort;
+  /**
+   * Resolves the CHILD model's own capability settings for one spawn
+   * (TASK.162, defect F6): without it `buildChildConfig` hands the child the
+   * output ceiling, reasoning effort and context window that were resolved for
+   * the PARENT's model. Additive-optional, exactly like
+   * `resolveChildModelPort` above: a host that omits it keeps the legacy
+   * inherit-the-parent path byte-identical.
+   *
+   * SINGLE-ARG by design (adjudicated 2026-08-28). The reasoning tier a child
+   * is re-resolved against is the live USER-SELECTED tier, and it is applied
+   * inside each HOST's own wiring closure — never handed to the runner. That
+   * keeps this module structurally incapable of reaching for
+   * `parent.reasoningEffort`, which is model-EFFECTIVE state: its `undefined`
+   * cannot distinguish "the user selected off" from "a remembered tier the
+   * parent model cannot honor", and hosts deliberately preserve the selected
+   * tier across model switches. The runner therefore carries no effort
+   * knowledge at all.
+   */
+  resolveChildModelSettings?: (modelId: string) => ResolvedChildModelSettings;
   /**
    * Runs ONE engine persona's child as a one-shot foreign CLI run (md-profile
    * `engine:` frontmatter) instead of an in-process AgentLoop. `run()` builds the
@@ -137,6 +172,16 @@ export function buildChildConfig(
     memorySection?: string;
     modelPort?: ModelPort;
     /**
+     * Capability settings resolved for the CHILD's own model (TASK.162).
+     * Present => WHOLESALE replacement of the three parent-derived rows below
+     * (maxOutputTokens / reasoningEffort / context window): an `undefined`
+     * INSIDE the settings is that model's resolution, not a gap to patch from
+     * the parent — patching would reinstate defect F6 for exactly the models
+     * whose honest answer is "no declared ceiling" / "no effort".
+     * Absent => the legacy inherit-from-parent path, byte-identical.
+     */
+    modelSettings?: ResolvedChildModelSettings;
+    /**
      * Absolute epoch-ms wall-clock budget for the child loop (TASK.74 §3). The
      * runner anchors it at SubagentPort.run entry — pre-semaphore — so a child
      * that queued behind siblings inherits only the remaining time. Absent =>
@@ -157,6 +202,10 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(persona);
+  // TASK.160 §2.2: same precedence as the model-override resolution in run()
+  // (request > persona default) — the spawn identity stamped onto every
+  // telemetry record this child produces, when the parent wired a tap factory.
+  const spawnModel = req.model ?? persona.model;
   return {
 
     // `model` override (slice 4.6, §2.5) resolves to a fixed child-only port
@@ -207,20 +256,47 @@ export function buildChildConfig(
       env: extras?.env,
       memorySection: extras?.memorySection,
     }),
-    maxOutputTokens: parent.maxOutputTokens,
-    reasoningEffort: parent.reasoningEffort,
+    // TASK.162 (F6): with settings resolved for the child's OWN model, all
+    // three capability rows come from there wholesale; without them the child
+    // inherits the parent's already-resolved values, exactly as before.
+    maxOutputTokens:
+      extras?.modelSettings !== undefined ? extras.modelSettings.maxOutputTokens : parent.maxOutputTokens,
+    reasoningEffort:
+      extras?.modelSettings !== undefined ? extras.modelSettings.reasoningEffort : parent.reasoningEffort,
     // NEW empty history WITHOUT a sink: children are ephemeral, never written to
 
     // per-item estimates stay consistent.
     history: new ConversationHistory({ tokenizer }),
     tokenizer,
-    context: parent.context,
+    // Only the window is re-resolved for the child's model; every other field
+    // the parent's context object carries (budget knobs the resolver knows
+    // nothing about) is preserved by the overlay.
+    context:
+      extras?.modelSettings !== undefined
+        ? { ...parent.context, contextWindowTokens: extras.modelSettings.contextWindowTokens }
+        : parent.context,
     // Artifact store INHERITED (TASK.94) — one of the few parent facilities a
     // child gets, because it is not a capability the child can act with: it
     // only decides whether the child's own oversized tool output is recoverable
     // or destroyed. Artifacts land in the parent session's directory, which the
     // parent's own cleanup then collects.
     artifacts: parent.artifacts,
+    // TASK.160 §2.2: the child's own eventTap, built from the parent's tap
+    // FACTORY (never the factory itself — structural non-recursion: this
+    // object literal does not list `subagentEventTap`, so a grandchild
+    // spawned by THIS child cannot inherit a tap of its own; the
+    // grandchild's activity reaches telemetry only as this child's
+    // subagent_start/subagent_end events, same as today). Absent factory
+    // (telemetry disabled, or a caller — e.g. the workflow engine — that
+    // never wires one) => no eventTap, byte-identical to pre-TASK.160.
+    ...(parent.subagentEventTap !== undefined
+      ? {
+          eventTap: parent.subagentEventTap({
+            agentType: persona.name,
+            ...(spawnModel !== undefined ? { model: spawnModel } : {}),
+          }),
+        }
+      : {}),
     // toolConcurrency: default (omitted).
     // subagents/workflows/tasks/lsp/media: intentionally UNSET (undefined) — lock
     // #2, defense in depth. tasks stays unset so a child never opens a background
@@ -483,6 +559,7 @@ export function createSubagentRunner(
       // the semaphore: a host that cannot honor req.model must fail without
 
       let childModelPort: ModelPort | undefined;
+      let childSettings: ResolvedChildModelSettings | undefined;
       if (requestedModel !== undefined) {
         const resolve = opts?.resolveChildModelPort;
         if (resolve === undefined) {
@@ -513,6 +590,30 @@ export function createSubagentRunner(
             durationMs: Date.now() - startedAt,
           };
         }
+
+        // TASK.162 (F6): capabilities re-resolved for the child's OWN model.
+        // The host's closure — not this module — supplies the live
+        // USER-SELECTED reasoning tier it re-resolves against (adjudicated
+        // 2026-08-28: `parent.reasoningEffort` is banned as the tier source,
+        // its `undefined` conflating a selected "off" with a tier the parent
+        // model merely cannot honor, which is why hosts preserve the selected
+        // tier across a model switch).
+        //
+        // A throw is an error-outcome, same posture as the port resolver
+        // right above: falling back to the parent's already-resolved values
+        // would silently reinstate the very defect this resolver removes.
+        try {
+          childSettings = opts?.resolveChildModelSettings?.(requestedModel);
+        } catch (error) {
+          return {
+            status: "error",
+            finalText: `Agent: model "${requestedModel}" settings could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
+            truncated: false,
+            turns: 0,
+            toolCalls: 0,
+            durationMs: Date.now() - startedAt,
+          };
+        }
       }
 
       // Abort-aware semaphore wait: a queued child that is cancelled returns
@@ -528,7 +629,15 @@ export function createSubagentRunner(
           kind: "start",
           agentType: persona.name,
           description: req.description,
-          ...(requestedModel !== undefined ? { model: requestedModel } : {}),
+          // TASK.161: read the id back off the CONSTRUCTED port instead of
+          // echoing the request, so the card reports what the host actually
+          // built (and a port that exposes no identity still degrades to the
+          // requested string). Constructed-port identity only — no production
+          // port canonicalizes ids, and this proves nothing about execution.
+          // Absent still means "inherited the parent's port".
+          ...(requestedModel !== undefined
+            ? { model: childModelPort?.modelId ?? requestedModel }
+            : {}),
         });
 
         // The config is held in a variable rather than inlined: the wrap-up call
@@ -545,6 +654,7 @@ export function createSubagentRunner(
           // ladder may spend on a decision is what is left of the parent's wait.
           outcomeDeadlineAt: startedAt + SUBAGENT_OUTCOME_DEADLINE_MS,
           ...(childModelPort !== undefined ? { modelPort: childModelPort } : {}),
+          ...(childSettings !== undefined ? { modelSettings: childSettings } : {}),
         });
         const loop = new AgentLoop(childConfig);
 
@@ -685,6 +795,18 @@ export function createSubagentRunner(
           }
         }
 
+        // TASK.161: the provider's own model CLAIM, read as a PROPERTY off the
+        // child's dedicated port — deliberately here, AFTER the wrap-up block
+        // above, because the rescue call streams through this same port object
+        // (runWrapUp -> config.modelPort.streamText) and its claim is the last
+        // one this child produced. No per-event accumulation: an accumulator
+        // would freeze the loop's claim and miss the wrap-up's.
+        //
+        // The inherited-port case (no override => childModelPort undefined)
+        // reports nothing on purpose: the parent's shared port carries
+        // whichever call streamed last, which is not attributable to this child.
+        const responseModel = childModelPort?.lastResponseModel;
+
         const capped = capUtf8Bytes(finalText, SUBAGENT_OUTPUT_MAX_BYTES);
         const outcome: SubagentOutcome = {
           status,
@@ -701,6 +823,7 @@ export function createSubagentRunner(
           turns,
           durationMs: outcome.durationMs,
           ...(activitySuppressed > 0 ? { activitySuppressed } : {}),
+          ...(responseModel !== undefined ? { responseModel } : {}),
         });
 
         // Fire SubagentStop observers INSIDE the permit (semaphore still held,
@@ -733,6 +856,12 @@ export function createSubagentRunner(
  * other failure. Returns the report, or `fallback` (the raw last-turn text)
  * whenever the call throws, aborts, times out or produces nothing but
  * whitespace — the rescue can only improve the outcome, never worsen it.
+ *
+ * TASK.160 (known accepted gap, not fixed here): because this call runs
+ * OUTSIDE the AgentLoop it never reaches `config.eventTap` (the very tap
+ * buildChildConfig installs from `parent.subagentEventTap`) — its tokens go
+ * unrecorded even when the parent's telemetry is fully wired. A wrap-up call
+ * is one model call per rescued child, so the undercount is small and bounded.
  */
 async function runWrapUp(
   config: AgentLoopConfig,
