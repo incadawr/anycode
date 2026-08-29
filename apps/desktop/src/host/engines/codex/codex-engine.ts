@@ -697,6 +697,43 @@ export class CodexEngine implements SessionEngine {
   }
 
   /**
+   * Re-runs the SAME resume-history projection `historyItems()` returns a
+   * frozen boot snapshot of, but on demand and against a FRESH `thread/read`
+   * (TASK.143). Unlike `historyItems()`, this reflects every turn this
+   * launch has actually run since boot — the sole authoritative source for a
+   * child session's flush-time transcript: the host keeps no durable mirror
+   * of a Codex conversation of its own (unlike Claude's shadow-transcript
+   * table), so a flush that read only the boot snapshot would persist an
+   * empty/stale transcript forever, no matter how much the child actually did.
+   *
+   * Fails loudly rather than degrading to an empty transcript: a disposed
+   * engine (client already closed) throws immediately instead of issuing an
+   * RPC on a dead transport, and a `thread/read` failure propagates as-is —
+   * the caller (`codexFlushHistory`, host/index.ts) must never catch this
+   * into a silent "flushed nothing", since that is exactly the failure mode
+   * that made codex engine children unsupported before this method existed.
+   */
+  async readTranscript(): Promise<readonly HistoryItem[]> {
+    if (this.disposed) {
+      throw new Error("Codex engine is disposed; cannot read a live transcript");
+    }
+    const rawRead = await this.client.request<unknown>(
+      "thread/read",
+      { threadId: this.threadId, includeTurns: true },
+      { timeoutMs: this.bounds.bootRpcMs },
+    );
+    const threadRead = asThreadRead(rawRead, this.threadId);
+    const shadow = this.shadowLog !== undefined ? await this.shadowLog.list(this.threadId) : [];
+    return projectCodexHistory(threadRead, shadow, {
+      maxItems: CODEX_HISTORY_MAX_ITEMS,
+      // Same degradation rule the boot projection uses (cut §2(e)): a thread
+      // with turns but zero shadow rows for THIS read is honestly marked,
+      // rather than silently presented as command-output-complete.
+      shadowMissing: shadow.length === 0 && (threadRead.thread.turns?.length ?? 0) > 0,
+    });
+  }
+
+  /**
    * The latest merged quota snapshot (codex-profiles cut §6.1): the boot pull
    * plus every live push folded in. Session reads this into
    * `EnginePresentation.quota` on each `ui_ready`, so a renderer reload gets

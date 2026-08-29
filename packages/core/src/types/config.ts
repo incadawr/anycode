@@ -22,6 +22,14 @@ export interface CoreEnvConfig {
   maxTurns?: number;
   /** Turn budget override for subagent child loops (ANYCODE_SUBAGENT_MAX_TURNS). */
   subagentMaxTurns?: number;
+  /**
+   * Subagent stall-detector silence threshold override in ms (TASK.148 slice 1,
+   * ANYCODE_SUBAGENT_STALL_MS). NOT the per-attempt stream watchdog
+   * (`stallTimeoutMs` below, ANYCODE_STALL_TIMEOUT_MS) — this one bounds how
+   * long a whole child run may go without a progress signal before a
+   * subagent_stalled report (never a kill) is emitted.
+   */
+  subagentStallTimeoutMs?: number;
   /** Output-token override (ANYCODE_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
   /** Opt-in reasoning budget (ANYCODE_REASONING_EFFORT). */
@@ -280,6 +288,24 @@ export const SUBAGENT_OUTCOME_DEADLINE_MS = 21_590_000;
 
 /** Below this remaining window the wrap-up call is skipped entirely. */
 export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
+
+/**
+ * Silence threshold for the subagent STALL detector (TASK.148 slice 1,
+ * subagents/stall-clock.ts). Distinct from — and never confused with —
+ * ANYCODE_STALL_TIMEOUT_MS/DEFAULT_STREAM_STALL_TIMEOUT_MS above: that one
+ * watches a single provider HTTP stream; this one watches a whole child RUN
+ * for the absence of any progress signal (a model step finishing, a tool
+ * result landing), never total work time, and never the wall-clock walls
+ * above (SUBAGENT_TIME_BUDGET_MS and friends stay the untouched backstop).
+ *
+ * 10 minutes — 36x shorter than the 6h SUBAGENT_TIME_BUDGET_MS backstop — so a
+ * genuinely hung child is noticed in minutes instead of at nightfall, while a
+ * legitimately long single tool call merely produces one honest "silent for
+ * 10 minutes, currently running X" report rather than a kill: the detector
+ * REPORTS, it never aborts the run (design owner's framing, TASK.148: "разве
+ * это агент должен килять?"). Configurable via ANYCODE_SUBAGENT_STALL_MS.
+ */
+export const SUBAGENT_STALL_TIMEOUT_MS = 600_000;
 
 // ---------------------------------------------------------------------------
 // TASK.124 constants (turn-ceiling decision ladder)

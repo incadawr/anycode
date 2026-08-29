@@ -150,3 +150,85 @@ export function formatChildReportCapNotice(droppedCount: number): string {
     "outcome never reached this turn chain — check the session list for children that may still need review."
   );
 }
+
+/**
+ * TASK.148 slice 2: a detached child's STALL notice — delivered through the
+ * SAME channel as `formatChildTaskNotification` (the desktop host's
+ * `ChildReportQueue`) but for a fundamentally different event: the child has
+ * gone quiet past its silence threshold, not finished. Deliberately NOT a
+ * `<task-notification>`: that tag's own `<status>` field is exactly the
+ * three TERMINAL values `completed|failed|cancelled` (mapChildRunStatusToNotification's
+ * whole range) — reusing it here would let a model read a stall as a finish.
+ * A distinct root tag (`<task-stall-notice>`) plus an explicit "has NOT
+ * finished" sentence are BOTH required so this can never be mistaken for the
+ * terminal report by a model skimming past the shared anti-spoofing header.
+ */
+export interface ChildStallNoticeInput {
+  /** Identity of "the task" from the parent's own point of view — the spawning Agent tool_call id (same field mapping as formatChildTaskNotification). */
+  taskId: string;
+  toolUseId: string;
+  /**
+   * Identity of the child session that actually ran the task, when already
+   * known. Absent only in the (practically unreachable, since the silence
+   * threshold vastly exceeds admission latency) case a stall somehow fires
+   * before the child's "accepted" event ever arrived — the field is simply
+   * omitted rather than carrying a fabricated placeholder.
+   */
+  agentId?: string;
+  /** The agent_type the child ran as (e.g. "general-purpose"). */
+  subagentType: string;
+  /** The 3-5 word task label the child was spawned with. */
+  description: string;
+  /** Wall-clock ms since the child's last confirmed sign of life (SubagentStallReport.silentMs). */
+  silentMs: number;
+  /** Last tool name / activity label observed before the silence began, if any. */
+  lastActivity?: string;
+  /** Always false as produced by SubagentStallClock (a report never fires while paused) — rides the field anyway so a consumer never special-cases its absence. */
+  waitingForApproval: boolean;
+}
+
+/**
+ * Renders a silence duration for a human/model reader: whole seconds under a
+ * minute, else whole minutes (rounded) — the default SUBAGENT_STALL_TIMEOUT_MS
+ * (10 minutes) and any custom override both read naturally either way.
+ */
+function formatSilenceDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  return `${Math.round(totalSeconds / 60)}m`;
+}
+
+/**
+ * Builds the full stall-notice text: the SAME verbatim anti-spoofing header
+ * as a real task notification, an explicit non-terminal framing sentence,
+ * then the `<task-stall-notice>` block — a distinct shape from
+ * `formatChildTaskNotification`'s `<task-notification>` at every level (root
+ * tag, no `<status>` enum, an extra framing sentence) so the two are never
+ * textually confusable.
+ */
+export function formatChildStallNotice(input: ChildStallNoticeInput): string {
+  const body = [
+    "<task-stall-notice>",
+    `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,
+    `  <tool-use-id>${escapeXmlText(input.toolUseId)}</tool-use-id>`,
+    "  <task-type>subagent_child</task-type>",
+    ...(input.agentId !== undefined ? [`  <agent-id>${escapeXmlText(input.agentId)}</agent-id>`] : []),
+    `  <subagent-type>${escapeXmlText(input.subagentType)}</subagent-type>`,
+    `  <description>${escapeXmlText(input.description)}</description>`,
+    `  <silent-for>${escapeXmlText(formatSilenceDuration(input.silentMs))}</silent-for>`,
+    ...(input.lastActivity !== undefined
+      ? [`  <last-activity>${escapeXmlText(input.lastActivity)}</last-activity>`]
+      : []),
+    `  <waiting-for-approval>${input.waitingForApproval ? "true" : "false"}</waiting-for-approval>`,
+    "</task-stall-notice>",
+  ].join("\n");
+  return (
+    `${NOTIFICATION_HEADER}\n\n` +
+    "This child session has NOT finished — it is still running in the background and has simply " +
+    "produced no sign of activity for a while. This is a progress notice, not a completion report; " +
+    "no action is required unless the silence itself is a concern.\n\n" +
+    body
+  );
+}

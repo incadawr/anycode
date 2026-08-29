@@ -42,3 +42,9 @@ export { SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS } from "./summarize-tool.js";
 // subpath, so this additive reexport is the only way it can reach a
 // summarize-tool.ts function (§10.7 п.7 explicitly authorizes this).
 export { summarizeChildToolCall } from "./summarize-tool.js";
+// TASK.148 slice 1: the shared stall detector, re-exported so the desktop
+// session-tier host (host/child-session-port.ts) can drive one against its
+// own ChildRunEvent stream — the host never imports a core subpath, only the
+// root barrel, same discipline as summarizeChildToolCall above.
+export { SubagentStallClock } from "./stall-clock.js";
+export type { SubagentStallReport, SubagentStallClockOptions } from "./stall-clock.js";

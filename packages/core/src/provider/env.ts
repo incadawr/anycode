@@ -9,6 +9,13 @@ export const ENV_BASE_URL = "ANYCODE_BASE_URL";
 export const ENV_MODEL = "ANYCODE_MODEL";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
+/**
+ * Subagent stall-detector silence threshold (TASK.148 slice 1). Deliberately a
+ * DIFFERENT name from ENV_STALL_TIMEOUT_MS below (ANYCODE_STALL_TIMEOUT_MS) —
+ * that one is the per-attempt HTTP stream watchdog; this one bounds silence
+ * across a whole subagent run.
+ */
+export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
 export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
@@ -32,7 +39,9 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
  * Reads ANYCODE_API_KEY, ANYCODE_BASE_URL (default: native Anthropic),
  * ANYCODE_MODEL (required), and the optional integers ANYCODE_MAX_TURNS /
  * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
- * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS plus ANYCODE_DB_PATH.
+ * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
+ * (TASK.148 slice 1 — the subagent silence detector, distinct from the stream
+ * watchdog) plus ANYCODE_DB_PATH.
  * ANYCODE_REASONING_EFFORT is an optional off|low|medium|high|max selector
  * (per-model levels are gated downstream by the catalog; unsupported → off).
  * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol (TASK.43 §0.4); an
@@ -65,6 +74,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
 
   const maxTurns = readOptionalInteger(env, ENV_MAX_TURNS);
   const subagentMaxTurns = readOptionalInteger(env, ENV_SUBAGENT_MAX_TURNS);
+  const subagentStallTimeoutMs = readOptionalInteger(env, ENV_SUBAGENT_STALL_MS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
   const contextWindowTokens = readOptionalInteger(env, ENV_CONTEXT_WINDOW);
   const maxRetries = readOptionalInteger(env, ENV_MAX_RETRIES);
@@ -84,6 +94,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
     model,
     maxTurns,
     subagentMaxTurns,
+    subagentStallTimeoutMs,
     maxOutputTokens,
     reasoningEffort,
     contextWindowTokens,

@@ -53,12 +53,24 @@ import {
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   SqlitePersistenceAdapter,
   WriteBehindHistorySink,
+  writeTool,
 } from "@anycode/core";
-import type { AgentEvent, HistoryItem, PermissionMode, ResolvedTelemetryConfig, ResolvedWebSearchBackend, TelemetryPort } from "@anycode/core";
+import type {
+  AgentEvent,
+  HistoryItem,
+  PermissionMode,
+  PermissionRequest,
+  ResolvedTelemetryConfig,
+  ResolvedWebSearchBackend,
+  SessionMeta,
+  TelemetryPort,
+} from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ShellCapabilitiesProjection } from "../shared/protocol.js";
 import { parseCodexProfileArgs } from "./engines/codex/codex-home.js";
 import { TerminalManager } from "./terminal.js";
+import { isChildSessionBoot } from "./boot.js";
+import { IpcPermissionBroker } from "./permission-broker.js";
 
 describe("host shutdown order (design slice-3.2-cut.md §6/§9-R1, task 3.2.4)", () => {
   /**
@@ -835,6 +847,85 @@ describe("host boot reasoning-effort support shape", () => {
     expect(bootReasoningOptions("https://api.z.ai/api/anthropic", "glm-4.6")).toEqual({
       reasoningSupported: false,
     });
+  });
+});
+
+describe("host boot ceiling-supervision wiring shape (TASK.124 remainder, owner rule 2026-08-22)", () => {
+  /**
+   * Reproduces the SHAPE of index.ts's `ceiling` spread inside the core
+   * AgentLoopConfig literal (index.ts, right after `permissionBroker: broker,`):
+   * install `{ ceiling: { supervisedRoot } }` ONLY for a root boot — a child
+   * session (session-tier subagent) must ALWAYS keep the turn-ceiling ladder.
+   * `isChildSessionBoot` is imported for real (not reproduced) — it is lock
+   * #2's own discriminator (boot.ts), the OR of the argv authority
+   * (`args.child`) and the durable authority (`sessionMeta.parentSessionId`),
+   * deliberately MORE INCLUSIVE than `args.child` alone so it can never
+   * mistake a genuine child for a root. `IpcPermissionBroker` is real too, so
+   * `supervisedRoot()` is proven against the ACTUAL TASK.138 latch mechanics,
+   * not a stand-in.
+   */
+  function bootCeilingSpread(
+    args: { resume: boolean; child?: { parentSessionId: string; spawnToolCallId: string; initialMode: PermissionMode } },
+    meta: SessionMeta,
+    broker: IpcPermissionBroker,
+  ): { ceiling: { supervisedRoot: () => boolean } } | Record<string, never> {
+    return !isChildSessionBoot(args, meta)
+      ? { ceiling: { supervisedRoot: () => broker.isUnattended !== true } }
+      : {};
+  }
+
+  function meta(overrides: Partial<SessionMeta> = {}): SessionMeta {
+    return { id: "s1", workspace: "/ws", model: "m1", mode: "build", createdAt: 0, updatedAt: 0, ...overrides };
+  }
+
+  const rootArgs = { resume: false } as const;
+  const childArgs = {
+    resume: false,
+    child: { parentSessionId: "parent-1", spawnToolCallId: "call-1", initialMode: "build" as const },
+  };
+
+  const request: PermissionRequest = {
+    toolName: "Write",
+    input: { file_path: "/workspace/a.txt", content: "hi" },
+    metadata: writeTool.metadata,
+    mode: "build",
+  };
+
+  it("a root boot (argv-root + root-meta) gets a ceiling.supervisedRoot predicate", () => {
+    const broker = new IpcPermissionBroker(() => {});
+    const spread = bootCeilingSpread(rootArgs, meta(), broker);
+    expect("ceiling" in spread).toBe(true);
+  });
+
+  it("a child-session boot (argv child flags) gets NO ceiling field — the ladder stays wired", () => {
+    const broker = new IpcPermissionBroker(() => {});
+    expect(bootCeilingSpread(childArgs, meta(), broker)).toEqual({});
+  });
+
+  it("a child-session boot signalled ONLY by durable sessionMeta.parentSessionId also gets NO ceiling field (OR-semantics, lock #2)", () => {
+    const broker = new IpcPermissionBroker(() => {});
+    expect(bootCeilingSpread(rootArgs, meta({ parentSessionId: "parent-9" }), broker)).toEqual({});
+  });
+
+  it("the root predicate tracks the broker's LIVE isUnattended latch: true while attended, false once the TASK.138 latch arms", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new IpcPermissionBroker(() => {}, 120_000);
+      const spread = bootCeilingSpread(rootArgs, meta(), broker) as { ceiling: { supervisedRoot: () => boolean } };
+
+      expect(spread.ceiling.supervisedRoot()).toBe(true);
+
+      // Arm the real TASK.138 latch the way it arms in production: one
+      // unanswered ask expires. Same recipe as permission-broker.test.ts's
+      // own "unattended latch" suite.
+      const pending = broker.requestPermission(request);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await pending;
+
+      expect(spread.ceiling.supervisedRoot()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1639,6 +1730,124 @@ describe("Claude engine-child history flush write primitive (TASK.102 S4, cut §
 
       const persisted = await persistence.loadHistory("child-1");
       expect(persisted).toEqual(secondSnapshot);
+    } finally {
+      await persistence.close();
+    }
+  });
+});
+
+describe("Codex engine-child history flush write primitive (TASK.143)", () => {
+  /**
+   * TASK.143 lifts TASK.102 S4-codex-cut: `codexFlushHistory` (index.ts, next
+   * to `claudeFlushHistory` above) now reads `connected.engine.
+   * readTranscript()` — a FRESH `thread/read` re-run through the resume
+   * projection, on demand — instead of the frozen `historyItems()` boot
+   * snapshot the old refused-before-spawn design never actually had to feed
+   * a sink with. index.ts is not importable in a test (see the claude
+   * describe block above) — this mirrors `codexFlushHistory`'s write step
+   * verbatim: `await engine.readTranscript()`, a FRESH
+   * `WriteBehindHistorySink` per call, `replaceAll` (not `append` — the
+   * projection is always the WHOLE transcript from turn 0, so a second flush
+   * must overwrite, never concatenate onto, the first).
+   */
+  let dbDir: string;
+
+  beforeEach(async () => {
+    dbDir = await mkdtemp(join(tmpdir(), "anycode-codex-flush-history-"));
+  });
+
+  afterEach(async () => {
+    await rm(dbDir, { recursive: true, force: true });
+  });
+
+  function historyItem(id: string, text: string, createdAt: number): HistoryItem {
+    return { id, createdAt, message: { role: "user", content: text }, kind: "normal" };
+  }
+
+  interface FakeCodexEngine {
+    /** Frozen at construction — the TASK.102 S4-codex-cut defect: a flush that read THIS instead of readTranscript() would persist a stale/empty transcript forever. */
+    historyItems(): readonly HistoryItem[];
+    readTranscript(): Promise<readonly HistoryItem[]>;
+  }
+
+  /** Mirrors codexFlushHistory's write step verbatim (index.ts, TASK.143). */
+  async function codexFlushHistoryShape(
+    engine: FakeCodexEngine,
+    persistence: SqlitePersistenceAdapter,
+    sessionId: string,
+  ): Promise<void> {
+    const items = await engine.readTranscript();
+    const sink = new WriteBehindHistorySink(persistence, sessionId);
+    sink.replaceAll(items);
+    await sink.flushChecked();
+  }
+
+  it("persists what readTranscript() returns, NOT the frozen boot-time historyItems() — the exact TASK.102 S4-codex-cut defect this closes", async () => {
+    const dbPath = join(dbDir, "anycode.sqlite");
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    try {
+      await persistence.createSession({ id: "child-codex-1", workspace: "/ws", model: "m1", mode: "build" });
+
+      const bootSnapshot = [historyItem("boot-only", "stale boot snapshot", 0)];
+      const liveTranscript = [
+        historyItem("u1", "post-boot question", 1),
+        historyItem("a1", "post-boot answer", 2),
+      ];
+      const engine: FakeCodexEngine = {
+        historyItems: () => bootSnapshot,
+        readTranscript: async () => liveTranscript,
+      };
+
+      await codexFlushHistoryShape(engine, persistence, "child-codex-1");
+
+      const persisted = await persistence.loadHistory("child-codex-1");
+      expect(persisted).toEqual(liveTranscript);
+      expect(persisted).not.toEqual(bootSnapshot);
+    } finally {
+      await persistence.close();
+    }
+  });
+
+  it("a second flush (e.g. a steer turn landing between two finalize attempts) overwrites rather than duplicates — replaceAll, not append", async () => {
+    const dbPath = join(dbDir, "anycode.sqlite");
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    try {
+      await persistence.createSession({ id: "child-codex-2", workspace: "/ws", model: "m1", mode: "build" });
+
+      const firstRead = [historyItem("u1", "first", 1), historyItem("a1", "reply", 2)];
+      const engine1: FakeCodexEngine = { historyItems: () => [], readTranscript: async () => firstRead };
+      await codexFlushHistoryShape(engine1, persistence, "child-codex-2");
+
+      const secondRead = [...firstRead, historyItem("u2", "steer", 3), historyItem("a2", "steer reply", 4)];
+      const engine2: FakeCodexEngine = { historyItems: () => [], readTranscript: async () => secondRead };
+      await codexFlushHistoryShape(engine2, persistence, "child-codex-2");
+
+      const persisted = await persistence.loadHistory("child-codex-2");
+      expect(persisted).toEqual(secondRead);
+    } finally {
+      await persistence.close();
+    }
+  });
+
+  it("fails loudly — rejects, never silently persists an empty transcript — when readTranscript() itself fails (disposed engine / dead RPC)", async () => {
+    const dbPath = join(dbDir, "anycode.sqlite");
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    try {
+      await persistence.createSession({ id: "child-codex-3", workspace: "/ws", model: "m1", mode: "build" });
+
+      const engine: FakeCodexEngine = {
+        historyItems: () => [],
+        readTranscript: async () => {
+          throw new Error("Codex engine is disposed; cannot read a live transcript");
+        },
+      };
+
+      await expect(codexFlushHistoryShape(engine, persistence, "child-codex-3")).rejects.toThrow(/disposed/);
+
+      // The honest failure path: nothing was ever written for this session —
+      // never an empty-array "success" masquerading as a completed flush.
+      const persisted = await persistence.loadHistory("child-codex-3");
+      expect(persisted).toEqual([]);
     } finally {
       await persistence.close();
     }

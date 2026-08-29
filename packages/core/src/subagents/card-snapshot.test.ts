@@ -238,6 +238,41 @@ describe("reduceSubagentCardEvent — subagent_attention (TASK.102 CUT-S2 §2.2/
   });
 });
 
+describe("reduceSubagentCardEvent — subagent_stalled (TASK.148 slice 1)", () => {
+  const fallback = { status: "error" as const, durationMs: 42 };
+
+  function stalled(): Extract<SubagentCardEvent, { type: "subagent_stalled" }> {
+    return {
+      type: "subagent_stalled",
+      toolCallId: "call-1",
+      agentType: "general-purpose",
+      description: "child task",
+      silentMs: 600_000,
+      lastActivity: "Bash",
+      waitingForApproval: false,
+    };
+  }
+
+  it("is a no-op for the persisted snapshot — a stall report is transient live-only state, not part of the terminal record", () => {
+    let withStall = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    withStall = reduceSubagentCardEvent(withStall, stalled());
+    withStall = reduceSubagentCardEvent(withStall, end());
+
+    let withoutStall = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    withoutStall = reduceSubagentCardEvent(withoutStall, end());
+
+    expect(finalizeSubagentCard(withStall, fallback)).toEqual(finalizeSubagentCard(withoutStall, fallback));
+  });
+
+  it("leaves the accumulator itself unchanged, before or after start", () => {
+    const beforeStart = createSubagentCardAccumulator();
+    expect(reduceSubagentCardEvent(beforeStart, stalled())).toEqual(beforeStart);
+
+    const afterStart = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    expect(reduceSubagentCardEvent(afterStart, stalled())).toEqual(afterStart);
+  });
+});
+
 describe("finalizeSubagentCard", () => {
   const fallback = { status: "error" as const, durationMs: 42 };
 

@@ -113,7 +113,25 @@ export type SubagentProgress =
   // permission" badge. The in-process inline runner never emits it (an inline
   // child's tool calls flow through the SAME broker as the parent, so there
   // is no separate wait to surface).
-  | { kind: "attention"; waiting: boolean };
+  | { kind: "attention"; waiting: boolean }
+  /**
+   * Stall report (TASK.148 slice 1) — see the matching `subagent_stalled`
+   * AgentEvent (types/events.ts) for the full contract: reports only, never
+   * kills, fires at most once per unbroken silent stretch, and
+   * `waitingForApproval` is always false here since SubagentStallClock never
+   * reports while paused. Produced by BOTH tiers: the inline runner drives a
+   * clock directly against its own AgentLoop progress; the desktop session
+   * tier drives one against the `progress`/`activity`/`attention`
+   * ChildRunEvent stream it already receives (host/child-session-port.ts).
+   */
+  | {
+      kind: "stalled";
+      agentType: string;
+      description: string;
+      silentMs: number;
+      lastActivity?: string;
+      waitingForApproval: boolean;
+    };
 
 export interface SubagentRunOptions {
   /** Linked to the Agent tool call's abort so parent-stop cascades into the child. */
@@ -122,8 +140,18 @@ export interface SubagentRunOptions {
   onProgress?: (progress: SubagentProgress) => void;
 }
 
-/** Return shape of `SubagentPort.engineProfile` (TASK.102 CUT-S4 §2.1). */
-export type EngineProfileInfo = { engine: "claude" | "codex"; systemPrompt: string };
+/**
+ * Return shape of `SubagentPort.engineProfile` (TASK.102 CUT-S4 §2.1).
+ *
+ * `model` (model plumbing fix, TASK.102 follow-up) carries the profile's own
+ * `model:` frontmatter (PersonaDefinition.model) through to tools/agent.ts's
+ * session-tier request as a DEFAULT, never an override: an explicit
+ * `Agent(model: …)` argument still wins, mirroring the precedence the
+ * inline/one-shot path already established (subagents/runner.ts —
+ * `req.model ?? persona.model`). Absent when the profile declares no model,
+ * same as PersonaDefinition.model itself.
+ */
+export type EngineProfileInfo = { engine: "claude" | "codex"; systemPrompt: string; model?: string };
 
 export interface SubagentPort {
   run(req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome>;

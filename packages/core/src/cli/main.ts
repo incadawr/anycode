@@ -1179,6 +1179,22 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         history,
         tokenizer,
 
+        // TASK.124 remainder (owner rule 2026-08-22): a supervised interactive
+        // root has no turn ceiling at all. The CLI has no unattended latch
+        // (that is a desktop-only, TASK.138 concept) so the predicate is the
+        // constant `() => true` — installed ONLY on the genuinely interactive
+        // REPL path (`interactive`, computed above from
+        // `inputIsTTY && outputIsTTY && !parsedArgs.print`, test-overridable
+        // via CliOptions.interactive). This loopConfig is the SAME object used
+        // for both `--print`/`-p` and the REPL (the print branch runs this
+        // loop headlessly further down, see `parsedArgs.print` below) — never
+        // widen this to `!parsedArgs.print` alone, which would also cover a
+        // piped/non-TTY invocation that never has a human watching either.
+        // Headless print stays on the ladder by omission, which is the safe
+        // default: a missed exemption is recoverable, a wrongly-unbounded
+        // headless run is not.
+        ...(interactive ? { ceiling: { supervisedRoot: () => true } } : {}),
+
         // — unlike checkpoints/tasks/lsp below, images carry no lifecycle to
 
         media,
@@ -1198,6 +1214,8 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         toolConcurrency: envConfig.toolConcurrency,
         maxTurns: envConfig.maxTurns,
         subagentMaxTurns: envConfig.subagentMaxTurns,
+        // TASK.148 slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS.
+        subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
         maxOutputTokens: bootMaxOutputTokens,
         reasoningEffort: bootReasoningEffort,
         // Base prompt (identity/conventions/safety/tool-discipline/env, design

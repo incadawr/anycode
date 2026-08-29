@@ -139,6 +139,15 @@ export interface AgentLoopConfig {
    * is never inherited by children.
    */
   subagentMaxTurns?: number;
+  /**
+   * Silence threshold handed to an inline child's SubagentStallClock
+   * (ANYCODE_SUBAGENT_STALL_MS / `tools.subagentStallTimeoutMs`, TASK.148
+   * slice 1). SUBAGENT_STALL_TIMEOUT_MS when omitted. Read by
+   * subagents/runner.ts, exactly parallel to `subagentMaxTurns` above — this
+   * loop's own config carries the field only so the wiring layer has one
+   * place to set it; AgentLoop itself never reads it.
+   */
+  subagentStallTimeoutMs?: number;
 
   /**
    * Absolute epoch-ms after which runTurnInner must not start another model
@@ -670,10 +679,19 @@ export class AgentLoop {
         // produced before the slice.
         const effectiveMaxTurns = maxTurns + this.ceilingGrantedTurns;
         if (turn > effectiveMaxTurns) {
-          const granted = yield* this.tryCeilingGrant(maxTurns, signal);
-          if (!granted) {
-            yield* this.emitLoopEnd("max_turns", turn - 1, signal);
-            return;
+          // TASK.124 remainder (owner rule 2026-08-22): a supervised root has
+          // NO turn ceiling at all — checked live on every trip, never cached,
+          // so a session that starts supervised and goes quiet mid-run falls
+          // under the ladder from that point on. No decision call, no grant,
+          // no event, no termination: the loop simply continues as if the cap
+          // were never reached. Children never receive this predicate
+          // (buildChildConfig omits it), so they always keep the ladder.
+          if (this.config.ceiling?.supervisedRoot?.() !== true) {
+            const granted = yield* this.tryCeilingGrant(maxTurns, signal);
+            if (!granted) {
+              yield* this.emitLoopEnd("max_turns", turn - 1, signal);
+              return;
+            }
           }
         }
 

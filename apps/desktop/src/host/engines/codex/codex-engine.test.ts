@@ -1673,6 +1673,88 @@ describe("CodexEngine — resume-history hydration (TASK.42)", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK.143 — readTranscript(): the live, on-demand counterpart to the frozen
+// historyItems() boot snapshot. This is the whole point of the fix: a child
+// session's flush must see turns that ran AFTER boot, which historyItems()
+// (built once, at construction) can never reflect.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("CodexEngine — readTranscript() live flush-time re-read (TASK.143)", () => {
+  it("reflects a turn that landed AFTER boot — unlike historyItems(), which stays frozen at the boot snapshot", async () => {
+    const server = new FakeAppServer();
+    // Boot: a fresh thread has nothing to hydrate (createNativeCodexSession
+    // never even calls thread/read — see codex-engine.ts's fresh-thread path).
+    const created = await createNativeCodexSession(server, "/work");
+    expect(created.engine.historyItems()).toEqual([]);
+
+    // Simulate what the real app-server would now report after a live turn
+    // ran on this launch: thread/read's SAME endpoint, a DIFFERENT answer.
+    server.threadReadResult = {
+      thread: {
+        id: "fresh-thread",
+        turns: [
+          {
+            id: "turn-a",
+            startedAt: 200,
+            items: [
+              { type: "userMessage", id: "u1", content: [{ type: "text", text: "post-boot question" }] },
+              { type: "agentMessage", id: "a1", text: "post-boot answer" },
+            ],
+          },
+        ],
+      },
+    };
+
+    const live = await created.engine.readTranscript();
+    // historyItems() is UNCHANGED — the frozen boot snapshot never moves.
+    expect(created.engine.historyItems()).toEqual([]);
+    const items = live.filter((item) => item.kind !== "compact_summary");
+    expect(items).toEqual([
+      { id: "turn-a:u1", createdAt: 200000, message: { role: "user", content: "post-boot question" } },
+      { id: "turn-a:a1", createdAt: 200001, message: { role: "assistant", content: [{ type: "text", text: "post-boot answer" }] } },
+    ]);
+  });
+
+  it("merges the shadow log's CURRENT rows too, not just whatever was there at boot", async () => {
+    const server = new FakeAppServer();
+    server.threadReadResult = { thread: { id: "persisted-thread", turns: [{ id: "turn-a", startedAt: 0, items: [] }] } };
+    const shadowLog = new RecordingShadowLog();
+    // Boot sees zero shadow rows.
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog);
+    expect(connected.engine.historyItems().some((item) => item.message.content !== undefined && JSON.stringify(item).includes("echo shadow"))).toBe(false);
+
+    // A command completes live during the launch; the shadow log now has a row.
+    shadowLog.listResult = [{ turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo shadow", exitCode: 0, outputHead: "shadow\n" }];
+
+    const items = await connected.engine.readTranscript();
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ message: { content: [{ type: "tool_call", toolName: "Bash", input: { command: "echo shadow" } }] } });
+    expect(items[1]).toMatchObject({ message: { role: "tool", content: [{ status: "success", text: "shadow\n" }] } });
+  });
+
+  it("fails loudly (rejects) instead of silently returning an empty transcript when the engine is already disposed", async () => {
+    const server = new FakeAppServer();
+    const created = await createNativeCodexSession(server, "/work");
+    await created.engine.dispose("session-close");
+    await expect(created.engine.readTranscript()).rejects.toThrow(/disposed/i);
+    // The dispose-guard fires BEFORE any RPC — thread/read must never even be attempted on a dead transport.
+    expect(server.calls.some((call) => call.method === "thread/read")).toBe(false);
+  });
+
+  it("fails loudly (rejects, does not swallow) when the live thread/read RPC itself fails", async () => {
+    const server = new FakeAppServer();
+    const created = await createNativeCodexSession(server, "/work");
+    const realRequest = server.request.bind(server);
+    server.request = (<T,>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> => {
+      if (method === "thread/read") return Promise.reject(new Error("app-server request failed: transport closed"));
+      return realRequest<T>(method, params, opts);
+    }) as typeof server.request;
+
+    await expect(created.engine.readTranscript()).rejects.toThrow(/transport closed/);
+  });
+});
+
 describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
   it("writes a shadow row for a completed commandExecution, with the correct turnOrdinal/positionInTurn", async () => {
     const server = new FakeAppServer();

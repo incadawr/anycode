@@ -160,3 +160,72 @@ describe("ChildReportQueue (TASK.145 срез 2 §4 point 1)", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("ChildReportQueue.upsert (TASK.148 slice 2 — coalesces repeat notices for the SAME id into one pending slot)", () => {
+  it("upsert() of a brand-new id behaves like add(): admits and sends immediately", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+
+    queue.upsert("stall:child-1", "first stall notice");
+
+    expect(outbound.sent).toEqual([{ type: "child_report", id: "stall:child-1", text: "first stall notice" }]);
+  });
+
+  it("a second upsert() for the SAME id, still unacked, REPLACES the pending entry in place rather than growing the queue", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    queue.upsert("stall:child-1", "first stall notice");
+    queue.upsert("stall:child-1", "second stall notice (child still silent)");
+
+    outbound.sent.length = 0;
+    queue.resendAll();
+
+    expect(outbound.sent).toEqual([
+      { type: "child_report", id: "stall:child-1", text: "second stall notice (child still silent)" },
+    ]);
+  });
+
+  it("many repeated upsert() calls for ONE id never consume more than ONE pending slot — a flapping child cannot exhaust the queue cap", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+
+    for (let i = 0; i < CHILD_REPORT_QUEUE_MAX_PENDING * 5; i += 1) {
+      queue.upsert("stall:flapping-child", `silence report #${i}`);
+    }
+
+    outbound.sent.length = 0;
+    queue.resendAll();
+    expect(outbound.sent).toHaveLength(1);
+    expect(outbound.sent[0]!.text).toBe(`silence report #${CHILD_REPORT_QUEUE_MAX_PENDING * 5 - 1}`);
+  });
+
+  it("upsert() for a brand-new id once the cap is already full still goes through the normal overflow/cap-notice path — the coalescing fast path only applies to an id ALREADY pending", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    for (let i = 0; i < CHILD_REPORT_QUEUE_MAX_PENDING; i += 1) {
+      queue.add(`report-${i}`, `text-${i}`);
+    }
+    outbound.sent.length = 0;
+    queue.upsert("stall:new-child", "brand new notice");
+
+    expect(outbound.sent.some((m) => m.id === "stall:new-child")).toBe(false);
+    const notice = outbound.sent.find((m) => m.id !== "stall:new-child");
+    expect(notice).toBeDefined();
+    expect(notice!.text).toContain("could not be delivered");
+    warn.mockRestore();
+  });
+
+  it("ack() of an upserted id works exactly like a normal report — a later resendAll() no longer includes it", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    queue.upsert("stall:child-2", "notice");
+
+    queue.ack("stall:child-2");
+    outbound.sent.length = 0;
+    queue.resendAll();
+
+    expect(outbound.sent).toEqual([]);
+  });
+});

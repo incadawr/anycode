@@ -214,6 +214,7 @@ import {
   enterWorktreeTool,
   exitWorktreeTool,
   discoverExtensions,
+  formatChildStallNotice,
   formatChildTaskNotification,
   generateSessionTitle,
   loadEnvConfig,
@@ -258,6 +259,7 @@ import type {
   RepoMapConfig,
   SessionSubagentOutcome,
   SessionSubagentRequest,
+  SubagentStallReport,
   SystemPromptEnv,
   TelemetryPort,
   WorktreeControlPort,
@@ -486,6 +488,53 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     summary: outcome.finalText,
   });
   childReportQueue.add(outcome.spawnToolCallId, text);
+}
+
+/**
+ * TASK.148 slice 2: builds and delivers a detached child's STALL notice to
+ * its parent tab — the mid-run counterpart to `deliverDetachedChildReport`
+ * above, which only ever fires once, at the child's TERMINAL event. Wired as
+ * `createChildSessionPort`'s `onDetachedStall` seam below, invoked from the
+ * detached child's own `SubagentStallClock` (child-session-port.ts) each
+ * time it fires — at most once per unbroken silent stretch, but potentially
+ * many times over one long-running child (silence -> sign of life ->
+ * silence again re-arms it, stall-clock.ts's own contract).
+ *
+ * Delivered through `childReportQueue.upsert`, NOT `.add` (the method
+ * `deliverDetachedChildReport` above uses): a repeat stall notice for the
+ * SAME child REPLACES its own still-pending predecessor in place instead of
+ * pushing a new pending row, so a child that stalls and recovers many times
+ * before the renderer ever acks can consume at most ONE of the queue's
+ * `CHILD_REPORT_QUEUE_MAX_PENDING` pending slots, never more — the bound
+ * that keeps a flapping child from being able to exhaust the cap (see
+ * `upsert`'s own doc, `child-report-queue.ts`). The id is namespaced
+ * `stall:<spawnToolCallId>` — deliberately DIFFERENT from the terminal
+ * report's bare `spawnToolCallId` id above, so a stall notice and this same
+ * child's eventual terminal report are two distinct, independently-tracked
+ * pending entries (both informative on their own) rather than one
+ * overwriting the other.
+ *
+ * `childSessionId` is `""` only in the practically unreachable case a stall
+ * fires before the child's own "accepted" event ever arrived (the silence
+ * threshold vastly exceeds admission latency) — `formatChildStallNotice`
+ * simply omits `<agent-id>` rather than being handed a fabricated value.
+ */
+function deliverDetachedChildStall(
+  report: SubagentStallReport,
+  req: SessionSubagentRequest,
+  childSessionId: string,
+): void {
+  const text = formatChildStallNotice({
+    taskId: req.spawnToolCallId,
+    toolUseId: req.spawnToolCallId,
+    ...(childSessionId !== "" ? { agentId: childSessionId } : {}),
+    subagentType: report.agentType,
+    description: report.description,
+    silentMs: report.silentMs,
+    ...(report.lastActivity !== undefined ? { lastActivity: report.lastActivity } : {}),
+    waitingForApproval: report.waitingForApproval,
+  });
+  childReportQueue.upsert(`stall:${req.spawnToolCallId}`, text);
 }
 
 // Preview RPC broker (night-track wave-1 cut §2.3): PreviewResponseMessage
@@ -930,30 +979,34 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   };
 
   /**
-   * TASK.102 CUT-S4 §4.4: the universal-snapshot write an engine child's
-   * `flushHistory` performs — a SINGLE write of `connected.engine.
-   * historyItems()` into the SAME universal `history_items` table a core
-   * child's history lives in, through the existing
+   * TASK.102 CUT-S4 §4.4 / TASK.143: the universal-snapshot write an engine
+   * child's `flushHistory` performs — a write of the FULL current transcript
+   * into the SAME universal `history_items` table a core child's history
+   * lives in, through the existing
    * `WriteBehindHistorySink(persistence, childSessionId)` port (no new
    * persistence method). This is what lets a completed child's "Open" read a
    * non-empty transcript (Sol §3's diagnosis) instead of the native-only
    * shadow tables core's universal Open path never reads.
    *
-   * Unreachable for a child session as of TASK.102 S4-codex-cut: the Agent
-   * tool's engine-profile routing (packages/core/src/tools/agent.ts) refuses
-   * every `engine:"codex"` md-profile before a child session is ever
-   * spawned, so `args.child` never carries a codex engine child in practice.
-   * The refusal exists because this flush's only source, `historyItems()`,
-   * is not a trustworthy transcript at flush time — the authoritative
-   * source, `client.request("thread/read")`, sits behind a private field on
-   * CodexEngine (frozen). Do not re-enable codex children at the Agent-tool
-   * layer without first giving this flush a real flush-time transcript
-   * source; this function, the posture map, and the rest of the child boot
-   * plumbing below are left in place for that unfreeze, not deleted.
+   * UNLIKE `connected.engine.historyItems()` (frozen at boot), this calls
+   * `readTranscript()` — a fresh `thread/read` re-run through the same
+   * resume projection, on demand (TASK.143) — so a completed child's
+   * snapshot is the FULL transcript including every turn this launch ran,
+   * not the empty/stale pre-turn one. `replaceAll` (not `append`, mirroring
+   * `claudeFlushHistory` below): `readTranscript()` always returns the WHOLE
+   * transcript from turn 0, so a second flush (e.g. a steer turn landing
+   * between two finalize attempts) must overwrite, not concatenate onto, the
+   * first flush's rows. A `readTranscript()` rejection (disposed engine,
+   * failed RPC) is left to propagate — `finalizeChildTerminal` (session.ts)
+   * turns an unresolved `flushHistory()` into an honest error terminal; this
+   * function must never catch it into a silent "flushed nothing", which is
+   * exactly the failure mode that made codex engine children unsupported
+   * before `readTranscript()` existed.
    */
   const codexFlushHistory = async (): Promise<void> => {
+    const items = await connected.engine.readTranscript();
     const sink = new WriteBehindHistorySink(persistence!, connected.sessionMeta.id);
-    sink.append(connected.engine.historyItems());
+    sink.replaceAll(items);
     await sink.flushChecked();
   };
 
@@ -2158,6 +2211,23 @@ async function boot(): Promise<void> {
       ),
       permissionBroker: broker,
       mode,
+      // TASK.124 remainder (owner rule 2026-08-22): "присмотр есть ⇒ корневая
+      // сессия вообще без потолка" — a supervised interactive ROOT has no turn
+      // ceiling at all; a child session (session-tier subagent) ALWAYS keeps
+      // the ladder regardless. `isChildSessionBoot` — lock #2's own
+      // discriminator, the OR of the argv authority (`args.child`) and the
+      // durable authority (`sessionMeta.parentSessionId`) — is used here
+      // rather than the narrower `args.child` alone (lock #1, above): it is
+      // the MORE INCLUSIVE "is this a child" test, so it can never mistake a
+      // genuine child for a root and hand it the no-ceiling predicate — the
+      // one mistake this wiring must never make (a false "root" verdict only
+      // ever costs a root session its exemption, never the reverse).
+      // `broker.isUnattended` is the TASK.138 latch, read LIVE on every call
+      // (never snapshotted): a run that starts supervised and goes quiet
+      // mid-session falls under the ladder from that point on.
+      ...(!isChildSessionBoot(args, sessionMeta)
+        ? { ceiling: { supervisedRoot: () => broker.isUnattended !== true } }
+        : {}),
       ports: {
         fs: fsAdapter,
         exec: execAdapter,
@@ -2170,6 +2240,10 @@ async function boot(): Promise<void> {
       cwd: workspace,
       maxTurns: envConfig.maxTurns,
       subagentMaxTurns: envConfig.subagentMaxTurns,
+      // TASK.148 slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS
+      // / settings tools.subagentStallTimeoutMs (main/host-env.ts fills the env var
+      // from the setting; envConfig re-reads it here exactly like subagentMaxTurns).
+      subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
       maxOutputTokens: bootMaxOutputTokens,
       reasoningEffort: bootReasoningEffort,
       // Base prompt (identity/conventions/safety/tool-discipline/env, design
@@ -2264,6 +2338,17 @@ async function boot(): Promise<void> {
         // the spawning Agent tool call already returned at admit — see
         // deliverDetachedChildReport's own comment for the full picture.
         onDetachedTerminal: deliverDetachedChildReport,
+        // TASK.148 slice 2: the detached-stall delivery seam — fires
+        // mid-run, zero or more times, independently of onDetachedTerminal
+        // above. See deliverDetachedChildStall's own comment for the full
+        // picture (queue coalescing, id namespacing).
+        onDetachedStall: deliverDetachedChildStall,
+        // TASK.148 slice 1/2: same knob as the inline tier just above
+        // (config.subagentStallTimeoutMs) so both tiers share one resolved
+        // value; the port's own default (SUBAGENT_STALL_TIMEOUT_MS) applies
+        // when the env/setting is unset. Now governs BOTH the sync and
+        // detached stall clocks (slice 2 wires the detached one too).
+        stallTimeoutMs: envConfig.subagentStallTimeoutMs,
       });
       config.sessionSubagents = childSessionPortHandle;
     }

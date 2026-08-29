@@ -79,22 +79,19 @@ const ENGINE_DISPLAY_NAME: Record<"codex" | "claude", string> = {
 };
 
 /**
- * What each engine's proxy actually covers — deliberately NOT the same string
- * for both engines (TASK.139-F3, migrated verbatim from the deleted
- * EngineProxyField). Claude subagents run under the engine proxy same as the
- * top-level session. Codex engine children are refused before spawn
- * (`packages/core/src/tools/agent.ts:251` errors on any agent profile with
- * `engine: "codex"` — "codex engine children are not supported — their
- * transcript is unreachable at flush time"), and the legacy
- * `engine-children.ts` route that would otherwise run them is unwired
- * (`apps/desktop/src/host/index.ts:2036-2043`). So a Codex "subagent" never
- * exists to be proxied — claiming the Codex proxy covers "subagents" would be
- * a promise about traffic that never happens. This is a fact about the
- * product's current engine-child support, not wording drift — do not "unify"
- * it back to match the Claude string.
+ * What each engine's proxy actually covers (TASK.139-F3, migrated verbatim
+ * from the deleted EngineProxyField; TASK.143 lifted the codex carve-out).
+ * Both engines' subagents now run under the engine proxy same as the
+ * top-level session: a codex-engine child routes through
+ * `runSessionTier`/`ctx.sessionSubagents` exactly like a claude one (the
+ * refusal in `packages/core/src/tools/agent.ts` is gone — its flush now
+ * reads a live `thread/read` via `CodexEngine.readTranscript()` instead of
+ * the frozen boot snapshot that made a codex child's transcript
+ * untrustworthy). Kept as a per-engine map (not a shared constant) so a
+ * future asymmetry has an obvious place to land again.
  */
 const ENGINE_PROXY_COVERAGE: Record<"codex" | "claude", string> = {
-  codex: "",
+  codex: " — sessions and subagents —",
   claude: " — sessions and subagents —",
 };
 

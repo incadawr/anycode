@@ -165,6 +165,36 @@ describe("IpcPermissionBroker matrix", () => {
   });
 });
 
+/**
+ * TASK.148 slice 1: the "an ask is currently pending" live reader the INLINE
+ * subagent stall clock polls (an inline child shares the parent's own broker
+ * instance and has no push event for permission wait, unlike a session-tier
+ * child). Widens the core PermissionBroker port with an optional
+ * `isAwaitingApproval` property; this is its one concrete implementation.
+ */
+describe("IpcPermissionBroker.isAwaitingApproval (TASK.148 slice 1)", () => {
+  it("is false with nothing pending, true while an ask is parked (shown or queued), and false again once every ask settles", async () => {
+    const { broker, emitted } = makeBroker();
+    expect(broker.isAwaitingApproval).toBe(false);
+
+    const first = broker.requestPermission({ ...request, toolName: "First" });
+    const second = broker.requestPermission({ ...request, toolName: "Second" });
+    // Second is queued (pendingCount 2), not yet shown — still counts as "awaiting".
+    expect(broker.pendingCount).toBe(2);
+    expect(broker.isAwaitingApproval).toBe(true);
+
+    broker.handleResponse(requestId(emitted), "allow");
+    await first;
+    expect(broker.isAwaitingApproval).toBe(true);
+
+    const secondId = emitted.filter((m) => m.type === "permission_request")[1]!.requestId;
+    broker.handleResponse(secondId, "allow");
+    await second;
+    expect(broker.pendingCount).toBe(0);
+    expect(broker.isAwaitingApproval).toBe(false);
+  });
+});
+
 describe("IpcPermissionBroker FIFO presentation queue (design §2.12, R7)", () => {
   function requestsOf(emitted: HostToUiMessage[]): Extract<HostToUiMessage, { type: "permission_request" }>[] {
     return emitted.filter(

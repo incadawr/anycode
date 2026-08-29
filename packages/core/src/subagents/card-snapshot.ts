@@ -153,6 +153,13 @@ export function reduceSubagentCardEvent(
       // the terminal record (TASK.102 CUT-S2 §2.2/§0.8, CUT-S1 §2.1).
       return acc;
     }
+    case "subagent_stalled": {
+      // No-op for the PERSISTED snapshot (TASK.148 slice 1): a stall report is
+      // transient live-only state, exactly like subagent_attention above — a
+      // finished card's terminal record never carries "was silent for a
+      // while, then kept going" as part of the result.
+      return acc;
+    }
     default: {
       const _exhaustive: never = ev;
       return _exhaustive;

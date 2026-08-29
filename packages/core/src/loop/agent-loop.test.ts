@@ -951,6 +951,188 @@ describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () =>
   });
 });
 
+describe("AgentLoop.runTurn — supervised root has no turn ceiling (TASK.124 remainder, owner rule 2026-08-22)", () => {
+  /** One successful `Mock` tool-call turn — the loop's normal per-turn step. */
+  function toolTurnStep(id: string): ModelStreamEvent[] {
+    return [
+      { type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /** A tool-free completion turn — ends the loop with reason "completed". */
+  function completionStep(): ModelStreamEvent[] {
+    return [
+      { type: "text_delta", id: "t", text: "done" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+  }
+
+  /** One clean `ceiling_verdict` call — the ONLY way a grant can be produced. */
+  function verdictStep(remaining: string[]): ModelStreamEvent[] {
+    return [
+      {
+        type: "tool_call",
+        toolCall: { id: `v${Math.random()}`, name: "ceiling_verdict", input: { done: false, remaining } },
+      },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  const registry = makeRegistry({ Mock: makeTool() });
+
+  const grantEvents = (events: AgentEvent[]) =>
+    events.filter((e): e is Extract<AgentEvent, { type: "ceiling_grant" }> => e.type === "ceiling_grant");
+  const decisionCalls = (port: MockModelPort) =>
+    port.requests.filter((r) => r.tools.length === 1 && r.tools[0]!.name === "ceiling_verdict");
+
+  it("supervised root: the loop runs PAST maxTurns with no decision call and no ceiling_grant event", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"), // turn 1
+      toolTurnStep("c2"), // turn 2
+      toolTurnStep("c3"), // turn 3 — past maxTurns(2), must run UNTOUCHED under supervision
+      completionStep(), // turn 4 — ends the loop naturally
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry,
+      ceiling: { supervisedRoot: () => true },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
+    expect(grantEvents(events)).toHaveLength(0);
+    expect(decisionCalls(modelPort)).toHaveLength(0);
+    expect(modelPort.requests).toHaveLength(4);
+  });
+
+  it("unsupervised root (predicate false): the ladder behaves exactly as it does today, and the predicate IS consulted", async () => {
+    let calls = 0;
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      verdictStep(["finish the thing"]),
+      completionStep(),
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry,
+      ceiling: {
+        supervisedRoot: () => {
+          calls += 1;
+          return false;
+        },
+      },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    // The predicate is consulted exactly at the point the ceiling would trip —
+    // proves the false path still reads it, rather than short-circuiting on
+    // its mere presence.
+    expect(calls).toBeGreaterThan(0);
+    expect(grantEvents(events)).toEqual([
+      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["finish the thing"] },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
+  });
+
+  it("no predicate at all (plain child-style config): ladder applies, unchanged", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      toolTurnStep("c3"), // consumed as the (refused) decision call — a normal tool_call is not a verdict
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toHaveLength(0);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 2 });
+  });
+
+  it("the predicate is re-evaluated live: supervised, then unsupervised mid-run, gets the ladder from that point on", async () => {
+    let supervised = true;
+    const flipTool = makeTool({
+      handler: async () => {
+        supervised = false;
+        return { ok: true, output: { result: "flip" } };
+      },
+    });
+    const liveRegistry = makeRegistry({ Mock: makeTool(), Flip: flipTool });
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"), // turn 1
+      toolTurnStep("c2"), // turn 2
+      [
+        { type: "tool_call", toolCall: { id: "c3", name: "Flip", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ], // turn 3 — past maxTurns(2) but STILL supervised at the check: runs
+      // untouched, and its own dispatch flips the latch as a side effect.
+      verdictStep(["keep going"]), // turn 4's ceiling check: now unsupervised — the ladder applies
+      completionStep(), // turn 4's own dispatch, resumed after the grant
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry: liveRegistry,
+      ceiling: { supervisedRoot: () => supervised },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toEqual([
+      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["keep going"] },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
+    expect(events.filter((e) => e.type === "turn_start")).toHaveLength(4);
+    expect(decisionCalls(modelPort)).toHaveLength(1);
+  });
+
+  it("deadlineAt still ends a supervised loop — supervision removes the turn ceiling, not the wall clock", async () => {
+    class ClockAdvancingPort implements ModelPort {
+      calls = 0;
+      constructor(
+        private readonly afterCalls: number,
+        private readonly advanceTo: number,
+      ) {}
+      streamText(): AsyncIterable<ModelStreamEvent> {
+        this.calls += 1;
+        if (this.calls === this.afterCalls) {
+          vi.setSystemTime(this.advanceTo);
+        }
+        return (async function* () {
+          yield { type: "tool_call", toolCall: { id: "c", name: "Mock", input: { value: "x" } } } as ModelStreamEvent;
+          yield { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent;
+        })();
+      }
+    }
+    const BASE = 1_700_000_000_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(BASE);
+    try {
+      const modelPort = new ClockAdvancingPort(3, BASE + 60_000);
+      const loop = makeLoop({
+        modelPort,
+        maxTurns: 10,
+        registry,
+        deadlineAt: BASE + 30_000,
+        ceiling: { supervisedRoot: () => true },
+      });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 3 });
+      expect(modelPort.calls).toBe(3);
+      expect(grantEvents(events)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("AgentLoop.runTurn — cancellation", () => {
   it("cancels mid-stream and preserves already-emitted events", async () => {
     const modelPort = new MockModelPort([

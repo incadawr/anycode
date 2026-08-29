@@ -242,6 +242,31 @@ export type AgentEvent =
    * state, not part of the terminal record (CUT-S1 §2.1).
    */
   | { type: "subagent_attention"; toolCallId: string; waiting: boolean }
+  /**
+   * Stall report (TASK.148 slice 1, subagents/stall-clock.ts). REPORTS ONLY —
+   * the child keeps running; nothing about this event ever kills, aborts or
+   * ends the loop. Fired at most once per unbroken silent stretch past
+   * SUBAGENT_STALL_TIMEOUT_MS (re-armed only by a genuine later sign of life),
+   * for either subagent tier. `agentType`/`description` ride the event itself
+   * (not just correlated via toolCallId) so a consumer never has to join back
+   * to an earlier subagent_start record to read what stalled — same
+   * self-describing precedent as `subagent_end.model` (TASK.171).
+   * `waitingForApproval` is always false as produced by SubagentStallClock: a
+   * report is only ever emitted while UNPAUSED (an unanswered permission ask
+   * pauses the detector rather than ever producing a report for it) — the
+   * field still rides the wire so a consumer never special-cases its absence.
+   */
+  | {
+      type: "subagent_stalled";
+      toolCallId: string;
+      agentType: string;
+      description: string;
+      /** Ms since the child's last confirmed sign of life (excludes any paused/waiting-for-human interval). */
+      silentMs: number;
+      /** Last tool name / activity label observed before the silence began, if any. */
+      lastActivity?: string;
+      waitingForApproval: boolean;
+    }
   // Per-child-tool activity (Phase 7 slice P7.18/F16b). Additive: rides the same
   // agent_event envelope on the desktop wire with no protocol change (protocol.ts
   // projects new AgentEvent variants automatically). One bounded one-liner per

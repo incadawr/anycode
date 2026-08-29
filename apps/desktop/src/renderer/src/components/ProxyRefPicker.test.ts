@@ -274,13 +274,13 @@ describe("proxyScopeHint (TASK.141; migrates TASK.139's per-engine hint invarian
     expect(proxyScopeHint(CLAUDE)).toContain("Claude Code CLI");
   });
 
-  // TASK.139-F3 (MEDIUM): codex engine children are refused before spawn
-  // (packages/core/src/tools/agent.ts:251) and the legacy engine-children.ts
-  // route is unwired (apps/desktop/src/host/index.ts:2036-2043) — no Codex
-  // "subagent" traffic exists to route through this proxy, so the hint must
-  // not promise one.
-  it("does not claim the Codex proxy covers subagents", () => {
-    expect(proxyScopeHint(CODEX)).not.toContain("subagents");
+  // TASK.143: a codex-engine child now runs for real (routes through
+  // runSessionTier/ctx.sessionSubagents exactly like a claude one, and its
+  // flush reads a live thread/read via CodexEngine.readTranscript() instead
+  // of a frozen boot snapshot) — real Codex "subagent" traffic now exists to
+  // route through this proxy, so the hint must claim it, same as Claude's.
+  it("claims the Codex proxy covers subagents (TASK.143 — codex subagents now run)", () => {
+    expect(proxyScopeHint(CODEX)).toContain("subagents");
   });
 
   // Claude subagents DO run and DO get the engine proxy — the claim stays true
@@ -289,9 +289,9 @@ describe("proxyScopeHint (TASK.141; migrates TASK.139's per-engine hint invarian
     expect(proxyScopeHint(CLAUDE)).toContain("subagents");
   });
 
-  it("pins the codex hint's wording exactly", () => {
+  it("pins the codex hint's wording exactly (TASK.143 — now matches Claude's subagent coverage)", () => {
     expect(proxyScopeHint(CODEX)).toBe(
-      "Requests from the Codex CLI go through the proxy profile selected here. " +
+      "Requests from the Codex CLI — sessions and subagents — go through the proxy profile selected here. " +
         "It overrides the connection-level proxy for Codex; a proxy exported by your shell overrides both.",
     );
   });

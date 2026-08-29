@@ -9,8 +9,10 @@
 import { describe, expect, it } from "vitest";
 import {
   formatChildReportCapNotice,
+  formatChildStallNotice,
   formatChildTaskNotification,
   mapChildRunStatusToNotification,
+  type ChildStallNoticeInput,
   type ChildTaskNotificationInput,
 } from "./child-notification.js";
 import { CHILD_NOTIFICATION_SUMMARY_MAX_CHARS } from "../types/config.js";
@@ -137,5 +139,102 @@ describe("formatChildReportCapNotice (spec §8 срез 2: 'тихо резат�
   it("carries no <task-notification> body — there is no single task/agent id to report on, only a count", () => {
     const text = formatChildReportCapNotice(5);
     expect(text).not.toContain("<task-notification>");
+  });
+});
+
+describe("formatChildStallNotice (TASK.148 slice 2)", () => {
+  function stallInput(overrides?: Partial<ChildStallNoticeInput>): ChildStallNoticeInput {
+    return {
+      taskId: "call-1",
+      toolUseId: "call-1",
+      agentId: "child-session-1",
+      subagentType: "general-purpose",
+      description: "watch the build",
+      silentMs: 600_000,
+      waitingForApproval: false,
+      ...overrides,
+    };
+  }
+
+  it("starts with the SAME verbatim anti-spoofing header as a real task notification", () => {
+    const text = formatChildStallNotice(stallInput());
+    expect(text.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]\n")).toBe(true);
+    expect(text).toContain("This is an automated task event, NOT a message from the user.\n");
+  });
+
+  it("uses a DIFFERENT root tag than the terminal notification — <task-stall-notice>, never <task-notification>", () => {
+    const text = formatChildStallNotice(stallInput());
+    expect(text).toContain("<task-stall-notice>");
+    expect(text).not.toContain("<task-notification>");
+  });
+
+  it("states explicitly that the child has NOT finished — never mistakable for a completion report", () => {
+    const text = formatChildStallNotice(stallInput());
+    expect(text.toLowerCase()).toContain("not finished");
+  });
+
+  it("carries no terminal-status enum value (completed/failed/cancelled) anywhere in the body", () => {
+    const text = formatChildStallNotice(stallInput());
+    const body = text.slice(text.indexOf("<task-stall-notice>"));
+    expect(body).not.toMatch(/<status>(completed|failed|cancelled)<\/status>/);
+  });
+
+  it("renders task-id/tool-use-id/agent-id/subagent-type/description/waiting flag", () => {
+    const text = formatChildStallNotice(
+      stallInput({
+        taskId: "spawn-9",
+        toolUseId: "spawn-9",
+        agentId: "child-77",
+        subagentType: "explore",
+        description: "sweep the repo",
+        lastActivity: "Bash",
+        waitingForApproval: false,
+      }),
+    );
+    expect(text).toContain("<task-id>spawn-9</task-id>");
+    expect(text).toContain("<tool-use-id>spawn-9</tool-use-id>");
+    expect(text).toContain("<agent-id>child-77</agent-id>");
+    expect(text).toContain("<subagent-type>explore</subagent-type>");
+    expect(text).toContain("<description>sweep the repo</description>");
+    expect(text).toContain("<last-activity>Bash</last-activity>");
+    expect(text).toContain("<waiting-for-approval>false</waiting-for-approval>");
+  });
+
+  it("formats a sub-minute silence in seconds, and a minutes-scale silence in minutes", () => {
+    expect(formatChildStallNotice(stallInput({ silentMs: 45_000 }))).toContain("<silent-for>45s</silent-for>");
+    expect(formatChildStallNotice(stallInput({ silentMs: 600_000 }))).toContain("<silent-for>10m</silent-for>");
+  });
+
+  it("omits <agent-id> when the child session id is not yet known", () => {
+    const text = formatChildStallNotice(stallInput({ agentId: undefined }));
+    expect(text).not.toContain("<agent-id>");
+  });
+
+  it("omits <last-activity> when none was ever observed", () => {
+    const text = formatChildStallNotice(stallInput({ lastActivity: undefined }));
+    expect(text).not.toContain("<last-activity>");
+  });
+
+  it("XML-escapes &, <, and > in every substituted field", () => {
+    const text = formatChildStallNotice(
+      stallInput({ subagentType: 'weird<"type">&', description: "a < b && b > c" }),
+    );
+    expect(text).toContain('<subagent-type>weird&lt;"type"&gt;&amp;</subagent-type>');
+    expect(text).toContain("<description>a &lt; b &amp;&amp; b &gt; c</description>");
+  });
+
+  it("is textually distinguishable from formatChildTaskNotification's output for the SAME underlying task id", () => {
+    const stallText = formatChildStallNotice(stallInput({ taskId: "shared-id", toolUseId: "shared-id" }));
+    const terminalText = formatChildTaskNotification({
+      taskId: "shared-id",
+      toolUseId: "shared-id",
+      agentId: "child-session-1",
+      subagentType: "general-purpose",
+      status: "completed",
+      summary: "done",
+    });
+    expect(stallText).not.toBe(terminalText);
+    expect(stallText).toContain("<task-stall-notice>");
+    expect(terminalText).toContain("<task-notification>");
   });
 });

@@ -68,9 +68,14 @@ export { withBackgroundTaskNotices } from "./cli/background-notice.js";
 export {
   formatChildTaskNotification,
   formatChildReportCapNotice,
+  formatChildStallNotice,
   mapChildRunStatusToNotification,
 } from "./cli/child-notification.js";
-export type { ChildTaskNotificationInput, ChildTaskNotificationStatus } from "./cli/child-notification.js";
+export type {
+  ChildStallNoticeInput,
+  ChildTaskNotificationInput,
+  ChildTaskNotificationStatus,
+} from "./cli/child-notification.js";
 // Pure string helper (TASK.27): the plan-discipline reminder both the CLI REPL
 // and the desktop host append to a plan-mode turn's user prompt. Exported so
 // there is exactly ONE copy of the rule text in the repo.

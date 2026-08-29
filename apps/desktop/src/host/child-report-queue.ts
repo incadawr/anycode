@@ -74,6 +74,29 @@ export class ChildReportQueue {
   }
 
   /**
+   * Enqueues or refreshes a report identified by `id`, coalescing repeat
+   * calls for the SAME id into the ONE pending slot they already occupy
+   * instead of growing the queue (TASK.148 slice 2: a detached child's stall
+   * clock can re-arm and report again many times over one long run — see
+   * `stall-clock.ts`'s own re-arm contract — and every stall notice for one
+   * child shares a single stable id, so a long flapping run consumes at most
+   * ONE pending slot here, no matter how many times it stalls and recovers).
+   * When `id` is not already pending, this is exactly `add()` — same
+   * admission/overflow/cap-notice discipline, including the honest drop when
+   * the queue is genuinely full; the in-place replace above is purely a
+   * fast path ahead of that for an id this queue already knows about.
+   */
+  upsert(id: string, text: string): void {
+    const existing = this.pending.find((report) => report.id === id);
+    if (existing) {
+      existing.text = text;
+      this.outbound.sendDirect({ type: "child_report", id, text });
+      return;
+    }
+    this.add(id, text);
+  }
+
+  /**
    * Clears one report the renderer confirmed it enqueued. Chosen removal
    * point over "the corresponding turn actually went out" (spec §4 point 1's
    * open choice): an enqueue ack fires unconditionally and immediately

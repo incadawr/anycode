@@ -35,10 +35,12 @@ import {
   SUBAGENT_LOOP_DEADLINE_MS,
   SUBAGENT_OUTCOME_DEADLINE_MS,
   SUBAGENT_OUTPUT_MAX_BYTES,
+  SUBAGENT_STALL_TIMEOUT_MS,
   SUBAGENT_WRAPUP_MIN_WINDOW_MS,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
   type ReasoningEffort,
 } from "../types/config.js";
+import { SubagentStallClock } from "./stall-clock.js";
 import type {
   EngineChildSpec,
   EngineProfileInfo,
@@ -62,6 +64,18 @@ import { SPAWN_TOOLS } from "./spawn-tools.js";
 // above for internal use and re-exported here byte-compatibly for existing
 // importers (subagents/index.ts, runner tests).
 export { SPAWN_TOOLS };
+
+/**
+ * How often the inline stall clock polls the shared broker's live
+ * `isAwaitingApproval` reader (TASK.148 slice 1). An inline child has no
+ * `permission_request`/`permission_settled` EVENT stream of its own to hook a
+ * pause on (it shares the parent's broker — ports/subagent.ts), so this is a
+ * plain point-in-time read, not a push. Cheap relative to
+ * SUBAGENT_STALL_TIMEOUT_MS (300x smaller at the default) and gives pause/
+ * resume detection latency on the order of one tick, which is negligible next
+ * to a multi-minute silence threshold.
+ */
+const INLINE_STALL_POLL_INTERVAL_MS = 2_000;
 
 /**
  * Capability settings a child spawned on its OWN model gets (TASK.162).
@@ -447,7 +461,15 @@ export function createSubagentRunner(
       if (!persona || persona.engine === undefined) {
         return null;
       }
-      return { engine: persona.engine, systemPrompt: persona.systemPrompt };
+      // persona.model rides through as the session-tier DEFAULT (model
+      // plumbing fix) — omitted entirely when absent, never a present-but-
+      // undefined key, matching the discipline every other optional field on
+      // this wire already follows.
+      return {
+        engine: persona.engine,
+        systemPrompt: persona.systemPrompt,
+        ...(persona.model !== undefined ? { model: persona.model } : {}),
+      };
     },
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {
       const startedAt = Date.now();
@@ -638,6 +660,13 @@ export function createSubagentRunner(
         return cancelledOutcome(startedAt);
       }
 
+      // TASK.148 slice 1: declared outside the try below so the `finally`
+      // (semaphore release) can always dispose them, on every exit path —
+      // including a throw from buildChildConfig/AgentLoop construction that
+      // never reaches the loop at all.
+      let stallClock: SubagentStallClock | undefined;
+      let stallPollTimer: ReturnType<typeof setInterval> | undefined;
+
       try {
         onProgress?.({
           kind: "start",
@@ -657,6 +686,40 @@ export function createSubagentRunner(
           // it is deliberately NOT merged into this field.
           ...(requestedModel !== undefined ? { model: requestedModel } : {}),
         });
+
+        // TASK.148 slice 1: measures SILENCE (time since the child's last
+        // sign of life), never total run time — the three wall constants
+        // above stay the untouched last-resort backstop. Reports, never
+        // kills: onStall only ever bridges into a subagent_stalled progress
+        // (mapProgressToEvent, tools/agent.ts); nothing here can end the run.
+        const stallTimeoutMs = parent.subagentStallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
+        stallClock = new SubagentStallClock({
+          agentType: persona.name,
+          description: req.description,
+          timeoutMs: stallTimeoutMs,
+          onStall: (report) => {
+            onProgress?.({
+              kind: "stalled",
+              agentType: report.agentType,
+              description: report.description,
+              silentMs: report.silentMs,
+              ...(report.lastActivity !== undefined ? { lastActivity: report.lastActivity } : {}),
+              waitingForApproval: report.waitingForApproval,
+            });
+          },
+        });
+        // Poll-driven pause/resume (see INLINE_STALL_POLL_INTERVAL_MS above):
+        // a broker that never implements `isAwaitingApproval` (older/fake/CLI
+        // broker) always reads `undefined !== true` here, so this degrades to
+        // "never pauses" rather than ever mistakenly freezing the clock.
+        stallPollTimer = setInterval(() => {
+          if (parent.permissionBroker.isAwaitingApproval === true) {
+            stallClock?.pause();
+          } else {
+            stallClock?.resume();
+          }
+        }, INLINE_STALL_POLL_INTERVAL_MS);
+        stallPollTimer.unref?.();
 
         // The config is held in a variable rather than inlined: the wrap-up call
         // below must reach the model through the SAME port/system prompt/output
@@ -730,6 +793,10 @@ export function createSubagentRunner(
               case "tool_result": {
                 toolCalls += 1;
                 lastTool = event.outcome.toolName;
+                // Sign of life (TASK.148 slice 1): a completed tool call resets
+                // the silence window, once per event — the "tool" activity
+                // branch below shares this same boundary, not a second reset.
+                stallClock?.noteProgress(lastTool);
                 onProgress?.({ kind: "progress", turns: turnEndCount, toolCalls, lastTool });
                 // Activity emission rides the SAME stable boundary as the toolCalls
                 // counter directly above (design §4 W1-FIX, was the "tool_call"
@@ -764,6 +831,9 @@ export function createSubagentRunner(
                 // (max_turns) or an error before turn_end cannot overwrite it.
                 finalText = currentTurnText;
                 turnEndCount += 1;
+                // Sign of life (TASK.148 slice 1): a turn boundary is progress
+                // even on a turn that made no tool calls at all.
+                stallClock?.noteProgress();
                 onProgress?.({ kind: "progress", turns: turnEndCount, toolCalls, lastTool });
                 break;
               case "loop_end":
@@ -873,6 +943,14 @@ export function createSubagentRunner(
         return outcome;
       } finally {
         semaphore.release();
+        // TASK.148 slice 1: stop the clock/poll on EVERY exit from the try
+        // above (normal return, an early return this function doesn't have,
+        // or a throw before either was ever constructed — both are still
+        // `undefined` then, and the optional calls below are no-ops).
+        stallClock?.dispose();
+        if (stallPollTimer !== undefined) {
+          clearInterval(stallPollTimer);
+        }
       }
     },
   };
