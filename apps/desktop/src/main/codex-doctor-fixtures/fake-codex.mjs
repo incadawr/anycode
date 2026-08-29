@@ -61,10 +61,17 @@ if (args[0] === "--version") {
     // A LIVE app-server that closes fd 0 under us (W2-review High): the next
     // write to it raises an asynchronous EPIPE on the parent's stdin socket.
     // With no `error` listener installed there, Node turns that into an
-    // unhandled stream error and kills the OWNING process. The marker line is
-    // written first so the test knows the read end is gone before it writes.
-    process.stdout.write(`${JSON.stringify({ method: "test/stdin-closed" })}\n`);
+    // unhandled stream error and kills the OWNING process.
+    //
+    // Order matters and is load-bearing: fd 0 is closed BEFORE the marker is
+    // announced. libuv completes a small pipe write synchronously, so
+    // announcing first lets the parent receive the marker and write while the
+    // read end is still open — those bytes then sit in the pipe buffer, no
+    // EPIPE is ever raised, and the parent's own request deadline fires
+    // instead. Measured: announce-first missed the EPIPE in 4 of 30 runs on
+    // Linux (Node 22) and 8 of 20 on macOS; close-first missed none.
     closeSync(0);
+    process.stdout.write(`${JSON.stringify({ method: "test/stdin-closed" })}\n`);
     setInterval(() => {}, 1_000);
   } else {
     const signedOut = flag("--signed-out");
