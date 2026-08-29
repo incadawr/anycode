@@ -19,8 +19,11 @@ import {
   filterSidebarGroups,
   formatAge,
   isRowDeletable,
+  limitGroupRows,
   parseOlderThanDays,
   singleDeleteConfirm,
+  SIDEBAR_GROUP_ROW_LIMIT,
+  type FilteredSidebarRow,
   type SidebarGroup,
   type SidebarRow,
 } from "./Sidebar.js";
@@ -298,6 +301,62 @@ describe("filterSidebarGroups", () => {
 
     expect(out).toHaveLength(1);
     expect(out[0]!.rows.map((r) => r.row.title)).toEqual(["has space"]);
+  });
+});
+
+describe("limitGroupRows (TASK.125)", () => {
+  function rows(spec: readonly ("open" | "resumable")[]): FilteredSidebarRow[] {
+    return spec.map((kind, i) => ({
+      row:
+        kind === "open"
+          ? { kind, key: `t${i}`, title: `task ${i}`, age: null, tabId: `t${i}` }
+          : { kind, key: `s${i}`, title: `task ${i}`, age: "1h", sessionId: `s${i}` },
+      ranges: [],
+    }));
+  }
+  const resumables = (n: number) => rows(Array.from({ length: n }, () => "resumable" as const));
+
+  it("passes a group at the limit through untouched", () => {
+    const input = resumables(SIDEBAR_GROUP_ROW_LIMIT);
+
+    expect(limitGroupRows(input)).toEqual({ shown: input, hidden: 0 });
+  });
+
+  it("cuts a long group to the limit and reports the hidden count", () => {
+    const input = resumables(18);
+    const { shown, hidden } = limitGroupRows(input);
+
+    expect(hidden).toBe(13);
+    // A prefix, in order — the cut hides the tail, it never re-ranks.
+    expect(shown).toEqual(input.slice(0, SIDEBAR_GROUP_ROW_LIMIT));
+  });
+
+  it("does not take a cut that would hide a single row (the toggle costs that row's space)", () => {
+    const input = resumables(SIDEBAR_GROUP_ROW_LIMIT + 1);
+
+    expect(limitGroupRows(input)).toEqual({ shown: input, hidden: 0 });
+  });
+
+  it("never hides an open row — the cut moves down past the last live tab", () => {
+    const input = rows([...Array.from({ length: 8 }, () => "open" as const), "resumable", "resumable", "resumable"]);
+    const { shown, hidden } = limitGroupRows(input);
+
+    expect(hidden).toBe(3);
+    expect(shown).toHaveLength(8);
+    expect(shown.every((r) => r.row.kind === "open")).toBe(true);
+  });
+
+  it("keeps an open row past the limit even when the tail is too short to cut", () => {
+    const input = rows(["resumable", "resumable", "resumable", "resumable", "resumable", "open"]);
+
+    expect(limitGroupRows(input)).toEqual({ shown: input, hidden: 0 });
+  });
+
+  it("honours an explicit limit (the constant is a default, not a hard-coded law)", () => {
+    const { shown, hidden } = limitGroupRows(resumables(10), 2);
+
+    expect(shown).toHaveLength(2);
+    expect(hidden).toBe(8);
   });
 });
 

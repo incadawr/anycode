@@ -283,6 +283,36 @@ export function filterSidebarGroups(groups: readonly SidebarGroup[], query: stri
   return out;
 }
 
+/** Rows a group draws before the "Show N more" cut (TASK.125). */
+export const SIDEBAR_GROUP_ROW_LIMIT = 5;
+
+/**
+ * Per-group render cut (TASK.125). The limit is on DRAWING, never on the query:
+ * the full row list stays in memory and the filter still sees every row, so a
+ * row cut from view is one keystroke away rather than unreachable (and, through
+ * TASK.114's live-tab guard, undeletable).
+ *
+ * Two rules shape the cut:
+ *  - open rows are never hidden — they are live work carrying status
+ *    indicators, so the cut moves down past the last one;
+ *  - a cut that would hide a single row is not taken — the toggle button costs
+ *    the same vertical space as the row it would hide.
+ */
+export function limitGroupRows(
+  rows: readonly FilteredSidebarRow[],
+  limit: number = SIDEBAR_GROUP_ROW_LIMIT,
+): { shown: readonly FilteredSidebarRow[]; hidden: number } {
+  let cut = Math.max(limit, 0);
+  for (let i = rows.length - 1; i >= cut; i--) {
+    if (rows[i]!.row.kind === "open") {
+      cut = i + 1;
+      break;
+    }
+  }
+  const hidden = rows.length - cut;
+  return hidden < 2 ? { shown: rows, hidden: 0 } : { shown: rows.slice(0, cut), hidden };
+}
+
 /**
  * Drops user-hidden projects from the sidebar groups (design slice-GUI-P1 §2F.2).
  * A group is removed iff its `workspace` is in `hidden` AND it has zero
@@ -477,6 +507,10 @@ export function Sidebar({
   // chevrons hide, zero-match empty state arms Enter-to-create.
   const [query, setQuery] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(readCollapsedGroups);
+  // TASK.125: groups the user expanded past the row limit. Deliberately NOT
+  // persisted — the cut is the default view every launch; an expansion is a
+  // look, not a preference.
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Hidden-project set lives in the tabs-store (two consumers: this Sidebar +
@@ -748,6 +782,18 @@ export function Sidebar({
     });
   }, []);
 
+  const toggleGroupExpanded = useCallback((workspace: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(workspace)) {
+        next.delete(workspace);
+      } else {
+        next.add(workspace);
+      }
+      return next;
+    });
+  }, []);
+
   // Compose the hidden-project filter BETWEEN grouping and the search filter
 
   const visibleGroups = applyHiddenProjects(buildSidebarGroups(tabs, sessions), hiddenWorkspaces);
@@ -920,6 +966,12 @@ export function Sidebar({
           // Active filter force-expands (matches must be visible); the
           // persisted set is untouched and reasserts when the filter clears.
           const expanded = filtering || !collapsedGroups.has(group.workspace);
+          // TASK.125: an active filter also lifts the row cut — a query must be
+          // able to reach every row it matched, exactly as it force-expands
+          // collapsed groups.
+          const cut = limitGroupRows(group.rows);
+          const showingAll = filtering || expandedGroups.has(group.workspace);
+          const rows = showingAll ? group.rows : cut.shown;
           return (
             <section key={group.workspace} className="sidebar-group" aria-labelledby={headingId}>
               <h2 id={headingId} className="sidebar-group-label" title={group.workspace}>
@@ -954,7 +1006,7 @@ export function Sidebar({
               </h2>
 
               {expanded &&
-                group.rows.map(({ row, ranges }) => {
+                rows.map(({ row, ranges }) => {
                   if (row.kind === "open") {
                     // R10: mirror read by tabId — survives filterSidebarGroups
                     // because open rows carry tabId through the wrapper.
@@ -1029,6 +1081,21 @@ export function Sidebar({
                     </div>
                   );
                 })}
+
+              {/* TASK.125: the cut's toggle. Never carries `.sidebar-row` — R9
+                  arrow-nav queries that class and would treat this as a task
+                  row. Hidden while filtering, like the group chevron: the cut
+                  itself is lifted there, so the button has nothing to toggle. */}
+              {expanded && !filtering && cut.hidden > 0 && (
+                <button
+                  type="button"
+                  className="sidebar-group-more"
+                  aria-expanded={showingAll}
+                  onClick={() => toggleGroupExpanded(group.workspace)}
+                >
+                  {showingAll ? "Show less" : `Show ${cut.hidden} more`}
+                </button>
+              )}
             </section>
           );
         })}

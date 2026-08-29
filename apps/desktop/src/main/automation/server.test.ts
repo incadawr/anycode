@@ -3725,3 +3725,77 @@ describe("preview probes/driver routes (night-track wave-1 cut §2.8, 96-E)", ()
     expect(res.status).toBe(401);
   });
 });
+
+describe("sidebar row-cut routes (TASK.125)", () => {
+  it("401s the probe and both drivers without a token", async () => {
+    const h = await boot();
+    expect((await fetch(url(h, "/sidebar/groups"))).status).toBe(401);
+    for (const [path, body] of [
+      ["/sidebar/groups/more", { workspace: "/ws/a" }],
+      ["/sidebar/filter", { query: "x" }],
+    ] as const) {
+      const res = await fetch(url(h, path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(res.status, `${path} should 401 without a token`).toBe(401);
+    }
+  });
+
+  it("GET /sidebar/groups -> sidebarGroups", async () => {
+    const facadeResult = [
+      { workspace: "/ws/a", label: "a", expanded: true, rowTitles: ["one"], more: null },
+    ];
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/sidebar/groups"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"sidebarGroups"');
+    expect(calls[0]).toContain("[]");
+  });
+
+  it("POST /sidebar/groups/more -> sidebarShowMore with the workspace", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/sidebar/groups/more"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ workspace: "/ws/a" }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"sidebarShowMore"');
+    expect(calls[0]).toContain("/ws/a");
+  });
+
+  it("POST /sidebar/filter accepts the EMPTY query — clearing the filter is the other half of the driver", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/sidebar/filter"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ query: "" }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"sidebarFilter"');
+  });
+
+  describe("zod fail-closed — callFacade never reached", () => {
+    it("POST /sidebar/groups/more without a workspace -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/sidebar/groups/more"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /sidebar/filter with a non-string query -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/sidebar/filter"), { method: "POST", headers: auth(), body: JSON.stringify({ query: 7 }) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+  });
+});

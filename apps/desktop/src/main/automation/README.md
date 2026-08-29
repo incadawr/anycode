@@ -96,6 +96,7 @@ missing/bad token → `401`.
 | `GET /transcript/scroll?tabId=` | `{ok:true, scrollTop, scrollHeight, clientHeight, atBottom, jumpVisible}` \| `{ok:false, reason}` — see below |
 | `GET /tabs/:tabId/todo-panel` | `{ok:true, visible, header, panelCollapsed, completedRow, items:[{glyph, content}]}` \| `{ok:false, reason}` — see below |
 | `GET /tabs/:tabId/agent-card/:toolCallId` | `{ok:true, expanded, promptCollapsed, feedRowCount, resultRendered}` \| `{ok:false, reason}` — see below |
+| `GET /sidebar/groups` | `[{workspace, label, expanded, rowTitles:[…], more:{label, expanded}\|null}]` — the sidebar as DRAWN (TASK.125). `rowTitles` lists only mounted rows, so a group under its row cut reports the short list; `more` is the cut's toggle (`null` when the group takes no cut) |
 
 ### Action plane
 
@@ -114,6 +115,8 @@ missing/bad token → `401`.
 | `POST /tabs` | `{kind:"new", workspace}` | `{ok:true, tabId, sessionId, workspace}` (bypasses the native open dialog) |
 | `POST /tabs` | `{kind:"resume", sessionId}` | `{ok:true, tabId, workspace}` |
 | `POST /wait` | `{tabId, until:{connection?, turnStatus?, permissionPending?, transcriptIncludes?, gitStatusKnown?, gitPendingEmpty?}, timeoutMs?}` | `{matched, elapsedMs, state}` — polls every 150 ms; default 60 s, cap 300 s |
+| `POST /sidebar/groups/more` | `{workspace}` | `{ok:true}` \| `{ok:false, reason:"unknown_workspace"\|"no_cut"\|"did_not_commit"}` — a real `.click()` on that group's row-cut toggle (TASK.125); returns only after the drawn row count actually moves |
+| `POST /sidebar/filter` | `{query}` | `{ok:true}` \| `{ok:false, reason:"no_search_input"\|"did_not_commit"}` — types into the real filter input (`""` clears it). An active filter LIFTS the row cut, which is why the driver exists |
 | `POST /quit` | `{}` | `{ok:true}` — graceful shutdown (kills hosts, unlinks discovery file) |
 
 ### Git routes (slice 5.8-R8)

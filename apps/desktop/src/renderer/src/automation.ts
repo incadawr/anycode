@@ -1998,6 +1998,33 @@ export interface CodexImportDialogDom {
   clickImport(): boolean;
 }
 
+/** One sidebar project group as the DOM shows it (TASK.125 probe). */
+export interface SidebarGroupDomFacts {
+  /** Full workspace path — the heading's `title=`, which is the group's identity. */
+  workspace: string;
+  /** Displayed basename. */
+  label: string;
+  /** `aria-expanded` of the group chevron — false = whole group folded away. */
+  expanded: boolean;
+  /** Titles of the rows actually DRAWN, in DOM order. Rows past the cut are unmounted, so this is the truth on screen. */
+  rowTitles: string[];
+  /** The row-cut toggle (`.sidebar-group-more`), `null` when the group takes no cut. */
+  more: { label: string; expanded: boolean } | null;
+}
+
+/**
+ * Sidebar accessor (TASK.125). Reads the rendered list rather than any store:
+ * the row cut is a RENDER decision, so a probe that consulted state instead of
+ * the DOM could not tell a cut list from a full one.
+ */
+export interface SidebarDom {
+  groups(): SidebarGroupDomFacts[];
+  /** A real `.click()` on the group's cut toggle; `false` when that group draws none. */
+  clickMore(workspace: string): boolean;
+  filterQuery(): string;
+  setFilter(query: string): boolean;
+}
+
 /* */
 export interface AnycodeBridge {
   createTab(request: CreateTabRequest): Promise<CreateTabResult>;
@@ -2122,6 +2149,13 @@ export interface AutomationFacade {
   // in every status (design/slice-P7.4-cut.md §3.2), so a live smoke has no
   // other path to reach the expanded body agentCardState reads.
   agentCardExpand(tabId: string, toolCallId: string): Promise<FacadeResult>;
+  // ── sidebar row-cut probe/driver (TASK.125) — the cut is a render decision
+  // with no store to inspect, so the probe reads the DOM and the driver clicks
+  // the real toggle. `sidebarFilter` is here because the filter LIFTS the cut:
+  // without it that rule has no live witness. ──
+  sidebarGroups(): SidebarGroupDomFacts[];
+  sidebarShowMore(workspace: string): Promise<FacadeResult>;
+  sidebarFilter(query: string): Promise<FacadeResult>;
   // ── settings probe/driver (design/slice-P7.16-cut.md §5 W4) ──
   settingsState(): SettingsStateResult;
   settingsOpen(): Promise<FacadeResult>;
@@ -4660,6 +4694,62 @@ function realCodexImportDialogDom(): CodexImportDialogDom {
 }
 
 /**
+ * The real sidebar accessor (TASK.125). Queries live at call time, same
+ * laziness discipline as `realSettingsDom`. Rows are read through
+ * `.sidebar-row-title` INSIDE each `.sidebar-group` section — the cut toggle
+ * deliberately does not carry `.sidebar-row`, so it can never be miscounted as
+ * a task row here either.
+ */
+function realSidebarDom(): SidebarDom {
+  function sections(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>(".sidebar-group"));
+  }
+  function sectionFor(workspace: string): HTMLElement | null {
+    return sections().find((s) => s.querySelector(".sidebar-group-label")?.getAttribute("title") === workspace) ?? null;
+  }
+  function searchInput(): HTMLInputElement | null {
+    return document.querySelector<HTMLInputElement>(".sidebar-search-input");
+  }
+  return {
+    groups: () =>
+      sections().map((section) => {
+        const heading = section.querySelector(".sidebar-group-label");
+        const toggle = section.querySelector<HTMLButtonElement>(".sidebar-group-toggle");
+        const more = section.querySelector<HTMLButtonElement>(".sidebar-group-more");
+        return {
+          workspace: heading?.getAttribute("title") ?? "",
+          label: section.querySelector(".sidebar-group-name")?.textContent?.trim() ?? "",
+          expanded: toggle?.getAttribute("aria-expanded") === "true",
+          rowTitles: Array.from(section.querySelectorAll<HTMLElement>(".sidebar-row .sidebar-row-title")).map(
+            (el) => el.textContent?.trim() ?? "",
+          ),
+          more:
+            more === null
+              ? null
+              : { label: more.textContent?.trim() ?? "", expanded: more.getAttribute("aria-expanded") === "true" },
+        };
+      }),
+    clickMore: (workspace) => {
+      const button = sectionFor(workspace)?.querySelector<HTMLButtonElement>(".sidebar-group-more") ?? null;
+      if (!button) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+    filterQuery: () => searchInput()?.value ?? "",
+    setFilter: (query) => {
+      const input = searchInput();
+      if (!input) {
+        return false;
+      }
+      setNativeInputValue(input, query);
+      return true;
+    },
+  };
+}
+
+/**
  * Builds an `AutomationFacade` over the given registry/tabs-store/bridge.
  * `createAutomationFacade()` with no arguments (what `installAutomation`
  * uses) wires the app's real singletons; tests pass fakes built the same way
@@ -4707,6 +4797,9 @@ export function createAutomationFacade(
   // positional call; `childLayoutStore` has no positional call site and so
   // follows them at 29 rather than displacing them.
   childLayoutStore: ChildLayoutStoreApi = defaultChildLayoutStore,
+  // TASK.125: appended at the END for the reason spelled out at positions
+  // 27-28 above — every existing positional call site would shift otherwise.
+  sidebarDom: SidebarDom = realSidebarDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -5701,6 +5794,38 @@ export function createAutomationFacade(
         searchQuery: settingsDom.searchQuery(),
         permissions: { groups },
       };
+    },
+
+    sidebarGroups(): SidebarGroupDomFacts[] {
+      return sidebarDom.groups();
+    },
+
+    async sidebarShowMore(workspace: string): Promise<FacadeResult> {
+      const before = sidebarDom.groups().find((g) => g.workspace === workspace);
+      if (!before) {
+        return { ok: false, reason: "unknown_workspace" };
+      }
+      if (before.more === null) {
+        return { ok: false, reason: "no_cut" };
+      }
+      if (!sidebarDom.clickMore(workspace)) {
+        return { ok: false, reason: "no_cut" };
+      }
+      // React commits the re-render asynchronously; wait for the row count to
+      // actually move rather than reporting the click as the outcome.
+      const committed = await waitUntil(() => {
+        const after = sidebarDom.groups().find((g) => g.workspace === workspace);
+        return after !== undefined && after.rowTitles.length !== before.rowTitles.length;
+      }, SETTINGS_COMMIT_DEADLINE_MS);
+      return committed ? { ok: true } : { ok: false, reason: "did_not_commit" };
+    },
+
+    async sidebarFilter(query: string): Promise<FacadeResult> {
+      if (!sidebarDom.setFilter(query)) {
+        return { ok: false, reason: "no_search_input" };
+      }
+      const committed = await waitUntil(() => sidebarDom.filterQuery() === query, SETTINGS_COMMIT_DEADLINE_MS);
+      return committed ? { ok: true } : { ok: false, reason: "did_not_commit" };
     },
 
     async settingsOpen(): Promise<FacadeResult> {

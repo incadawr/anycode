@@ -863,6 +863,29 @@ body {
   background: var(--bg-hover);
 }
 
+/* TASK.125: the group's row-cut toggle. Deliberately quieter than a task row
+   (secondary text, no hover fill until pointed at) — it is navigation about the
+   list, not an item in it. */
+.sidebar-group-more {
+  display: block;
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-group-more:hover,
+.sidebar-group-more:focus-visible {
+  color: var(--text-2);
+  background: var(--bg-hover);
+}
+
 .sidebar-row-wrap {
   position: relative;
   display: flex;

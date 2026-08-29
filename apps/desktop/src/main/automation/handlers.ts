@@ -827,6 +827,22 @@ export function tryAgainButtonClick(deps: HandlerDeps, tabId: string, blockId: s
 // add_disabled / rule_not_found / etc.), this layer only forwards method +
 // args. Global (app-level) commands: no `:tabId` — Settings is not per-tab. ---
 
+// --- Sidebar row-cut probe/driver (TASK.125): same thin-forward discipline as
+// the settings wrappers below; the facade owns the guards
+// (unknown_workspace / no_cut / did_not_commit). ---
+
+export function sidebarGroups(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("sidebarGroups", []);
+}
+
+export function sidebarShowMore(deps: HandlerDeps, workspace: string): Promise<unknown> {
+  return deps.callFacade("sidebarShowMore", [workspace]);
+}
+
+export function sidebarFilter(deps: HandlerDeps, query: string): Promise<unknown> {
+  return deps.callFacade("sidebarFilter", [query]);
+}
+
 export function settingsState(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("settingsState", []);
 }

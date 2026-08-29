@@ -85,6 +85,9 @@ import {
   tryAgainButtonState,
   tryAgainButtonClick,
   settingsState,
+  sidebarFilter,
+  sidebarGroups,
+  sidebarShowMore,
   settingsOpen,
   settingsClose,
   settingsSelectPane,
@@ -342,6 +345,10 @@ const childOpenBody = z.object({ spawnToolCallId: z.string().min(1) }).strict();
 // prompt-queue/start-screen bodies above, minus their `tabId` field). `pattern`
 // mirrors `AlwaysAllowRule`'s optional field (shared/settings.ts) — absent
 // means "all uses", never coerced to an empty string at this boundary. ──
+const sidebarMoreBody = z.object({ workspace: z.string().min(1).max(4096) });
+// The empty query is the "clear the filter" case — `min(1)` would make the
+// route one-way.
+const sidebarFilterBody = z.object({ query: z.string().max(1024) });
 const settingsPaneBody = z.object({ paneId: z.string().min(1).max(64) });
 const settingsPermissionAddBody = z.object({
   toolName: z.string().min(1).max(128),
@@ -814,6 +821,11 @@ async function route(
   if (method === "GET" && pathname === "/start-screen/model-menu") {
     return startScreenModelMenuState(deps);
   }
+  // Sidebar row-cut probe (TASK.125): a DEDICATED route, global (app-level) —
+  // the sidebar's rendered rows appear on no existing snapshot.
+  if (method === "GET" && pathname === "/sidebar/groups") {
+    return sidebarGroups(deps);
+  }
   // Settings probe (slice-P7.16-cut.md §5 W4): global (app-level), no
   // `:tabId` segment — same GET-with-no-body shape as GET /start-screen above.
   if (method === "GET" && pathname === "/settings") {
@@ -976,6 +988,16 @@ async function route(
   if (method === "POST" && pathname === "/start-screen/submit") {
     parseBody(rawBody, emptyBody);
     return startScreenSubmit(deps);
+  }
+  // Sidebar row-cut drivers (TASK.125): real clicks/typing on the rendered
+  // affordances (`.sidebar-group-more`, the filter input) — no second path.
+  if (method === "POST" && pathname === "/sidebar/groups/more") {
+    const body = parseBody(rawBody, sidebarMoreBody);
+    return sidebarShowMore(deps, body.workspace);
+  }
+  if (method === "POST" && pathname === "/sidebar/filter") {
+    const body = parseBody(rawBody, sidebarFilterBody);
+    return sidebarFilter(deps, body.query);
   }
   // Settings routes (slice-P7.16-cut.md §5 W4): global (app-level), no
   // `:tabId` segment — mirror the SAME DOM paths SettingsScreen/

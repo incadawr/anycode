@@ -58,6 +58,8 @@ import {
   type BinaryTrustDialogDom,
   type BinaryTrustDialogState,
   type TrustedBinariesSectionDom,
+  type SidebarDom,
+  type SidebarGroupDomFacts,
 } from "./automation.js";
 import { dispatchTryAgain } from "./App.js";
 import type { SkillScope } from "../../shared/skills-config.js";
@@ -7131,5 +7133,131 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
 
     const disabledDom = fakeImportDom({ importButton: { label: "Import & open", disabled: true } });
     await expect(buildImportFacade(disabledDom).codexImportApply()).resolves.toEqual({ ok: false, reason: "import_disabled" });
+  });
+});
+
+describe("automation facade — sidebar row-cut probe/driver (TASK.125)", () => {
+  /** Builds a facade wired ONLY for the sidebar methods — every other DOM/store slot keeps its real default (never exercised here). The padding is positional by necessity; `tsc` red-lines a miscount because `SidebarDom` fits no earlier slot. */
+  function buildFacade(sidebarDom: SidebarDom) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sidebarDom,
+    );
+  }
+
+  function group(overrides: Partial<SidebarGroupDomFacts> = {}): SidebarGroupDomFacts {
+    return {
+      workspace: "/ws/alpha",
+      label: "alpha",
+      expanded: true,
+      rowTitles: ["one", "two", "three", "four", "five"],
+      more: { label: "Show 7 more", expanded: false },
+      ...overrides,
+    };
+  }
+
+  /** A fake whose `groups()` reads mutable cell state, so a driver test can make the click actually change the rendered list — the thing the facade waits on. */
+  function fakeSidebarDom(initial: SidebarGroupDomFacts[], onClick?: (cell: { groups: SidebarGroupDomFacts[] }) => void): SidebarDom & {
+    cell: { groups: SidebarGroupDomFacts[]; query: string };
+  } {
+    const cell = { groups: initial, query: "" };
+    return {
+      cell,
+      groups: () => cell.groups,
+      clickMore: vi.fn<(workspace: string) => boolean>((workspace) => {
+        const target = cell.groups.find((g) => g.workspace === workspace);
+        if (!target || target.more === null) {
+          return false;
+        }
+        onClick?.(cell);
+        return true;
+      }),
+      filterQuery: () => cell.query,
+      setFilter: vi.fn<(query: string) => boolean>((query) => {
+        cell.query = query;
+        return true;
+      }),
+    };
+  }
+
+  it("sidebarGroups forwards the drawn facts verbatim — the probe adds no interpretation of its own", () => {
+    const groups = [group(), group({ workspace: "/ws/beta", label: "beta", rowTitles: ["solo"], more: null })];
+    expect(buildFacade(fakeSidebarDom(groups)).sidebarGroups()).toEqual(groups);
+  });
+
+  it("refuses a workspace that draws no group (unknown_workspace) without clicking anything", async () => {
+    const dom = fakeSidebarDom([group()]);
+    await expect(buildFacade(dom).sidebarShowMore("/ws/missing")).resolves.toEqual({
+      ok: false,
+      reason: "unknown_workspace",
+    });
+    expect(dom.clickMore).not.toHaveBeenCalled();
+  });
+
+  it("refuses a group that takes no cut (no_cut) — never offers what the UI doesn't render", async () => {
+    const dom = fakeSidebarDom([group({ more: null })]);
+    await expect(buildFacade(dom).sidebarShowMore("/ws/alpha")).resolves.toEqual({ ok: false, reason: "no_cut" });
+    expect(dom.clickMore).not.toHaveBeenCalled();
+  });
+
+  it("clicks the real toggle and resolves only once the drawn row count actually moves", async () => {
+    const dom = fakeSidebarDom([group()], (cell) => {
+      cell.groups = [group({ rowTitles: [...group().rowTitles, "six", "seven"], more: { label: "Show less", expanded: true } })];
+    });
+    await expect(buildFacade(dom).sidebarShowMore("/ws/alpha")).resolves.toEqual({ ok: true });
+    expect(dom.clickMore).toHaveBeenCalledWith("/ws/alpha");
+  });
+
+  it("reports did_not_commit when the click leaves the drawn list unchanged — a click is not an outcome", async () => {
+    const dom = fakeSidebarDom([group()]);
+    await expect(buildFacade(dom).sidebarShowMore("/ws/alpha")).resolves.toEqual({
+      ok: false,
+      reason: "did_not_commit",
+    });
+  });
+
+  it("sidebarFilter types into the real input (the empty query clears it)", async () => {
+    const dom = fakeSidebarDom([group()]);
+    const facade = buildFacade(dom);
+    await expect(facade.sidebarFilter("borg")).resolves.toEqual({ ok: true });
+    expect(dom.cell.query).toBe("borg");
+    await expect(facade.sidebarFilter("")).resolves.toEqual({ ok: true });
+    expect(dom.cell.query).toBe("");
+  });
+
+  it("reports no_search_input when the sidebar isn't on screen", async () => {
+    const dom = fakeSidebarDom([]);
+    dom.setFilter = vi.fn<(query: string) => boolean>(() => false);
+    await expect(buildFacade(dom).sidebarFilter("x")).resolves.toEqual({ ok: false, reason: "no_search_input" });
   });
 });
