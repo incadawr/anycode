@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import type { PermissionMode, SessionSubagentOutcome, SubagentProgress } from "@anycode/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SUBAGENT_STALL_TIMEOUT_MS } from "@anycode/core";
+import type {
+  PermissionMode,
+  SessionSubagentOutcome,
+  SessionSubagentRequest,
+  SubagentProgress,
+  SubagentStallReport,
+} from "@anycode/core";
 import {
   CHILD_AGENT_TYPE_MAX_CHARS,
   CHILD_DESCRIPTION_MAX_CHARS,
@@ -945,5 +952,387 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       expect(outcome.finalText).toBe("done");
       expect(detachedTerminals).toHaveLength(0);
     });
+  });
+});
+
+/**
+ * Stall clock wiring — session tier (TASK.148 slice 1). This client owns the
+ * PARENT side of the wire, so it is where the shared SubagentStallClock is
+ * driven for a session-tier child: silence is measured against the cadence of
+ * `progress`/`activity` ChildRunEvents already arriving from main (no new
+ * wire message), and `attention` (the child's OWN permission-broker wait,
+ * already pushed end to end today) pauses/resumes it — a real event, unlike
+ * the inline tier's poll-based broker read (permission-broker.test.ts).
+ * FULL fake timers (Date + setTimeout), same rationale as runner.test.ts's
+ * mirror suite: the detector needs a firing timer, not a Date-boundary check.
+ */
+describe("stall clock wiring — session tier (TASK.148 slice 1)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function stallHarness(stallTimeoutMs?: number) {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      ...(stallTimeoutMs !== undefined ? { stallTimeoutMs } : {}),
+    });
+    return { port, sent, emit: (event: ChildRunEvent) => listener?.(event) };
+  }
+
+  function stalledOf(onProgress: ReturnType<typeof vi.fn>): SubagentProgress[] {
+    return onProgress.mock.calls
+      .map((args: unknown[]) => args[0] as SubagentProgress)
+      .filter((p: SubagentProgress) => p.kind === "stalled");
+  }
+
+  it("silence past SUBAGENT_STALL_TIMEOUT_MS after accepted emits exactly one stalled progress; the run() promise stays pending until terminal", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit } = stallHarness();
+    const onProgress = vi.fn();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "build X", prompt: "...", spawnToolCallId: "spawn-stall-1" },
+      { onProgress },
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c1", childTabId: "t1", model: "claude-x" });
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS - 1);
+    expect(stalledOf(onProgress)).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const stalls = stalledOf(onProgress);
+    expect(stalls).toHaveLength(1);
+    expect(stalls[0]).toMatchObject({
+      kind: "stalled",
+      agentType: "general-purpose",
+      description: "build X",
+      waitingForApproval: false,
+    });
+
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+
+    emit(terminalEvent(requestId, { childSessionId: "c1" }));
+    const outcome = await pending;
+    expect(outcome.status).toBe("completed");
+    // The eventual completion did not add a second notice.
+    expect(stalledOf(onProgress)).toHaveLength(1);
+  });
+
+  it("progress/activity ChildRunEvents reset the clock — a child producing them across a span far longer than the threshold never stalls", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit } = stallHarness();
+    const onProgress = vi.fn();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-stall-2" },
+      { onProgress },
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c1", childTabId: "t1", model: "m" });
+
+    const step = Math.floor(SUBAGENT_STALL_TIMEOUT_MS * 0.6);
+    for (let i = 0; i < 5; i += 1) {
+      await vi.advanceTimersByTimeAsync(step);
+      // Alternate progress/activity so both reset paths are exercised.
+      if (i % 2 === 0) {
+        emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "progress", turns: i + 1, toolCalls: i + 1 });
+      } else {
+        emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "activity", toolName: "Bash", summary: "ran a command" });
+      }
+    }
+    expect(stalledOf(onProgress)).toHaveLength(0);
+
+    emit(terminalEvent(requestId, { childSessionId: "c1" }));
+    await pending;
+  });
+
+  it("attention pauses the clock — blocked past the threshold emits no notice; resume continues from where it paused, not from a fresh cycle", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit } = stallHarness();
+    const onProgress = vi.fn();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-stall-3" },
+      { onProgress },
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c1", childTabId: "t1", model: "m" });
+
+    await vi.advanceTimersByTimeAsync(200_000);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true });
+
+    // Blocked far longer than the whole threshold — never counted as silence.
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + 50_000);
+    expect(stalledOf(onProgress)).toHaveLength(0);
+
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false });
+    // ~400_000ms of budget remained when it paused; a fresh cycle would need
+    // another SUBAGENT_STALL_TIMEOUT_MS from here.
+    await vi.advanceTimersByTimeAsync(450_000);
+    expect(stalledOf(onProgress)).toHaveLength(1);
+
+    emit(terminalEvent(requestId, { childSessionId: "c1" }));
+    await pending;
+  });
+
+  it("re-arms: notice -> sign of life -> silence again -> a second notice; still-silent after the first notice produces no second one", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit } = stallHarness();
+    const onProgress = vi.fn();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-stall-4" },
+      { onProgress },
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c1", childTabId: "t1", model: "m" });
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS);
+    expect(stalledOf(onProgress)).toHaveLength(1);
+
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "activity", toolName: "Bash", summary: "ran a command" });
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS - 1);
+    expect(stalledOf(onProgress)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stalledOf(onProgress)).toHaveLength(2);
+
+    emit(terminalEvent(requestId, { childSessionId: "c1" }));
+    await pending;
+  });
+
+  it("a detached run STILL constructs and drives a stall clock (TASK.148 slice 2 reverses slice 1's scope boundary — delivery now goes through onDetachedStall, see the dedicated describe block below); onProgress is still never called for it, and a host that wires no onDetachedStall at all sees a harmless no-op, never a throw", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit } = stallHarness(); // no onDetachedStall wired
+    const onProgress = vi.fn();
+    port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-stall-5", detach: true },
+      { onProgress },
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c1", childTabId: "t1", model: "m" });
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS * 3);
+    // Never bridged to onProgress — the detached call's own tool call already
+    // returned at admit, exactly as before slice 2.
+    expect(stalledOf(onProgress)).toHaveLength(0);
+
+    emit(terminalEvent(requestId, { childSessionId: "c1" }));
+  });
+
+  it("honors an injected stallTimeoutMs override instead of the SUBAGENT_STALL_TIMEOUT_MS default", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit } = stallHarness(10_000);
+    const onProgress = vi.fn();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-stall-6" },
+      { onProgress },
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c1", childTabId: "t1", model: "m" });
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(stalledOf(onProgress)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stalledOf(onProgress)).toHaveLength(1);
+
+    emit(terminalEvent(requestId, { childSessionId: "c1" }));
+    await pending;
+  });
+});
+
+/**
+ * Detached stall notice delivery (TASK.148 slice 2). Slice 1 deliberately
+ * left `req.detach === true` without a stall clock at all — the ONE case
+ * where a stall report matters most (the parent is not blocked waiting on
+ * the child, so it can actually read and act on a notice) had no clock. This
+ * suite pins the reversal: a detached run's `SubagentStallClock` is now fed
+ * by the SAME `progress`/`activity`/`attention` cadence as the sync path
+ * (never bridged to `opts.onProgress`, whose owning call already returned at
+ * admit — that half is unchanged), and `onStall` routes through the NEW
+ * `onDetachedStall` seam on `CreateChildSessionPortOptions` — mirroring
+ * `onDetachedTerminal`'s existing shape (outcome/report + the original
+ * request), plus the child's `childSessionId` once known (captured at
+ * "accepted", exactly like the background-children registry does).
+ */
+describe("detached stall notice delivery (TASK.148 slice 2)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function detachedStallHarness(stallTimeoutMs?: number) {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const stalls: Array<{ report: SubagentStallReport; req: SessionSubagentRequest; childSessionId: string }> = [];
+    const detachedTerminals: Array<{ outcome: SessionSubagentOutcome; req: SessionSubagentRequest }> = [];
+
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      onDetachedTerminal: (outcome, req) => {
+        detachedTerminals.push({ outcome, req });
+      },
+      onDetachedStall: (report, req, childSessionId) => {
+        stalls.push({ report, req, childSessionId });
+      },
+      ...(stallTimeoutMs !== undefined ? { stallTimeoutMs } : {}),
+    });
+
+    return { port, sent, emit: (event: ChildRunEvent) => listener?.(event), stalls, detachedTerminals };
+  }
+
+  it("a detached child silent past the threshold delivers exactly one stall notice via onDetachedStall; the child is NEVER terminated (no ChildRunCancel sent)", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit, stalls } = detachedStallHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "watch logs", prompt: "p", spawnToolCallId: "spawn-dstall-1", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-dstall-1", childTabId: "t1", model: "m" });
+    await pending; // detach settles at admit — unaffected by this slice
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS - 1);
+    expect(stalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stalls).toHaveLength(1);
+    expect(stalls[0]!.report).toMatchObject({
+      agentType: "general-purpose",
+      description: "watch logs",
+      waitingForApproval: false,
+    });
+    expect(stalls[0]!.childSessionId).toBe("child-dstall-1");
+    expect(stalls[0]!.req.spawnToolCallId).toBe("spawn-dstall-1");
+    // A stall report is information, never a verdict — nothing about it cancels the child.
+    expect(cancels(sent)).toHaveLength(0);
+
+    // The child can still finish normally afterward.
+    emit(terminalEvent(requestId, { childSessionId: "child-dstall-1" }));
+  });
+
+  it("a detached child showing progress/activity before the threshold produces no stall notice", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit, stalls } = detachedStallHarness();
+    port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-dstall-2", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-dstall-2", childTabId: "t1", model: "m" });
+
+    const step = Math.floor(SUBAGENT_STALL_TIMEOUT_MS * 0.6);
+    for (let i = 0; i < 5; i += 1) {
+      await vi.advanceTimersByTimeAsync(step);
+      if (i % 2 === 0) {
+        emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "progress", turns: i + 1, toolCalls: i + 1 });
+      } else {
+        emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "activity", toolName: "Bash", summary: "ran a command" });
+      }
+    }
+    expect(stalls).toHaveLength(0);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-dstall-2" }));
+  });
+
+  it("a detached child blocked on an unanswered permission ask (attention waiting=true) produces no notice while blocked; resume continues from the remaining budget, not a fresh cycle", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit, stalls } = detachedStallHarness();
+    port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-dstall-3", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-dstall-3", childTabId: "t1", model: "m" });
+
+    await vi.advanceTimersByTimeAsync(200_000);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true });
+
+    // Blocked far longer than the whole threshold — never counted as silence.
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + 50_000);
+    expect(stalls).toHaveLength(0);
+
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false });
+    // ~400_000ms of budget remained when it paused; a fresh cycle would need
+    // another SUBAGENT_STALL_TIMEOUT_MS from here.
+    await vi.advanceTimersByTimeAsync(450_000);
+    expect(stalls).toHaveLength(1);
+    expect(stalls[0]!.report.waitingForApproval).toBe(false);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-dstall-3" }));
+  });
+
+  it("a stall notice never triggers onDetachedTerminal, and a terminal event never triggers onDetachedStall — the two are delivered through separate, distinguishable callbacks", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit, stalls, detachedTerminals } = detachedStallHarness();
+    port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-dstall-4", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-dstall-4", childTabId: "t1", model: "m" });
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS);
+    expect(stalls).toHaveLength(1);
+    expect(detachedTerminals).toHaveLength(0);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-dstall-4" }));
+    expect(detachedTerminals).toHaveLength(1);
+    expect(stalls).toHaveLength(1); // the terminal did not also register as a stall
+  });
+
+  it("re-arm: repeated stall/recover cycles for the SAME child call onDetachedStall once per cycle, always for the SAME spawnToolCallId — the caller (host/index.ts) can coalesce these into ONE pending queue slot (see ChildReportQueue.upsert)", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit, stalls } = detachedStallHarness();
+    port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-dstall-5", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-dstall-5", childTabId: "t1", model: "m" });
+
+    for (let i = 0; i < 4; i += 1) {
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS);
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "activity", toolName: "Bash", summary: `cycle ${i}` });
+    }
+    expect(stalls).toHaveLength(4);
+    expect(stalls.every((s) => s.req.spawnToolCallId === "spawn-dstall-5")).toBe(true);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-dstall-5" }));
+  });
+
+  it("honors an injected stallTimeoutMs override for a detached run too", async () => {
+    vi.useFakeTimers();
+    const { port, sent, emit, stalls } = detachedStallHarness(10_000);
+    port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-dstall-6", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-dstall-6", childTabId: "t1", model: "m" });
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(stalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stalls).toHaveLength(1);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-dstall-6" }));
   });
 });

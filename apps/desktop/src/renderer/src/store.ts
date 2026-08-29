@@ -2197,6 +2197,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         case "subagent_attention":
           patchSubagentAttention(event.toolCallId, event.waiting);
           return;
+        // Stall report (TASK.148 slice 1): additive AgentEvent variant — the
+        // detector REPORTS only, it never kills, so there is no run-ending
+        // state for the transcript to reflect. A live presentation (a badge,
+        // a toast) is a follow-up desktop slice; this no-op keeps
+        // exhaustiveness satisfied without fabricating UI ahead of that
+        // slice's own design.
+        case "subagent_stalled":
+          return;
 
         // ── Phase 3 workflow coarse-progress (design §2.3/§6, task 3.4.5):
         // additive AgentEvent variants riding the existing agent_event

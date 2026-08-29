@@ -409,6 +409,9 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       stallTimeoutMs: z.number().optional(),
       maxTurns: z.number().optional(),
       subagentMaxTurns: z.number().optional(),
+      // TASK.148 slice 1: subagent stall-detector silence threshold override
+      // (ANYCODE_SUBAGENT_STALL_MS). Distinct from `stallTimeoutMs` above.
+      subagentStallTimeoutMs: z.number().optional(),
     }),
     permissions: z.object({
       alwaysAllow: z.array(alwaysAllowRuleSchema),

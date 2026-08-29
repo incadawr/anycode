@@ -103,13 +103,16 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type {
-  PermissionMode,
-  SessionSubagentOutcome,
-  SessionSubagentPort,
-  SessionSubagentRequest,
-  SubagentProgress,
-  SubagentRunOptions,
+import {
+  SUBAGENT_STALL_TIMEOUT_MS,
+  SubagentStallClock,
+  type PermissionMode,
+  type SessionSubagentOutcome,
+  type SessionSubagentPort,
+  type SessionSubagentRequest,
+  type SubagentProgress,
+  type SubagentRunOptions,
+  type SubagentStallReport,
 } from "@anycode/core";
 import {
   CHILD_AGENT_TYPE_MAX_CHARS,
@@ -281,6 +284,32 @@ export interface CreateChildSessionPortOptions {
    * for a non-detached run, whose terminal still settles `run()` directly.
    */
   onDetachedTerminal?: (outcome: SessionSubagentOutcome, req: SessionSubagentRequest) => void;
+  /**
+   * TASK.148 slice 2: invoked when a DETACHED run's stall clock fires — the
+   * ONE case slice 1 deliberately left uncovered (the parent is not blocked
+   * waiting on this child, so it can actually read and act on a notice,
+   * unlike the sync tier where a stall report only ever reaches the caller's
+   * own `opts.onProgress`, which nothing reads until the call itself
+   * settles). `req` is the ORIGINAL request, same rationale as
+   * `onDetachedTerminal` above: the report alone carries no
+   * `agentType`/`description`/`spawnToolCallId`. `childSessionId` is the
+   * child's id once known ("" in the practically unreachable case a stall
+   * fires before "accepted" ever arrived — see ChildStallNoticeInput's own
+   * doc). Formatting stays entirely the caller's job (host/index.ts wires
+   * this to `formatChildStallNotice` + `ChildReportQueue.upsert`); this port
+   * never touches notification text. Absent => a detached run's stall clock
+   * still runs (see below) but its notice is a harmless no-op, same posture
+   * as `onDetachedTerminal` being optional.
+   */
+  onDetachedStall?: (report: SubagentStallReport, req: SessionSubagentRequest, childSessionId: string) => void;
+  /**
+   * Silence threshold for this port's stall clock (TASK.148 slice 1/2).
+   * SUBAGENT_STALL_TIMEOUT_MS when omitted — same resolution precedence as
+   * the inline tier's `parent.subagentStallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS`
+   * (subagents/runner.ts). Shared by BOTH the sync and detached paths (slice
+   * 2 wires the detached one too — see `run()`'s own comment).
+   */
+  stallTimeoutMs?: number;
 }
 
 /**
@@ -333,6 +362,7 @@ interface BackgroundChildEntry {
  */
 export function createChildSessionPort(options: CreateChildSessionPortOptions): ChildSessionPort {
   const createRequestId = options.createRequestId ?? randomUUID;
+  const stallTimeoutMs = options.stallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
   const waiters = new Map<string, Waiter>();
   // TASK.145 срез 3: registry of live detached children, keyed by
   // childSessionId (the id `cancelBackgroundChild`/the renderer's future list
@@ -401,10 +431,46 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
 
     const requestId = createRequestId();
 
+    // TASK.145 срез 1: the child's own id, known only once "accepted"
+    // arrives (the detach branch below sets it). Read by a DETACHED run's
+    // onStall closure (TASK.148 slice 2) — declared here, ahead of both the
+    // clock and the promise executor, so the same mutable binding is visible
+    // to whichever of the two assigns/reads it first.
+    let detachedChildSessionId: string | undefined;
+
+    // TASK.148 slice 1/2: constructed for BOTH tiers now. A non-detached
+    // run's notice still bridges to opts.onProgress (unchanged from slice
+    // 1). A DETACHED run's notice can no longer reach opts.onProgress (that
+    // call's own closure already returned at admit, same reason
+    // progress/activity/attention never bridge to it past admit below) — it
+    // is routed to options.onDetachedStall instead, mirroring exactly how a
+    // detached run's TERMINAL event routes to options.onDetachedTerminal
+    // rather than resolving an already-settled promise.
+    const stallClock = new SubagentStallClock({
+      agentType: req.agentType,
+      description: req.description,
+      timeoutMs: stallTimeoutMs,
+      onStall: (report) => {
+        if (req.detach === true) {
+          options.onDetachedStall?.(report, req, detachedChildSessionId ?? "");
+          return;
+        }
+        opts.onProgress?.({
+          kind: "stalled",
+          agentType: report.agentType,
+          description: report.description,
+          silentMs: report.silentMs,
+          ...(report.lastActivity !== undefined ? { lastActivity: report.lastActivity } : {}),
+          waitingForApproval: report.waitingForApproval,
+        });
+      },
+    });
+
     return new Promise<SessionSubagentOutcome>((resolve) => {
       let cancelSent = false;
 
       const finish = (outcome: SessionSubagentOutcome): void => {
+        stallClock.dispose();
         waiters.delete(requestId);
         opts.signal?.removeEventListener("abort", onAbort);
         resolve(outcome);
@@ -447,6 +513,11 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // disarmed.
               if (req.detach === true) {
                 opts.signal?.removeEventListener("abort", onAbort);
+                // TASK.148 slice 2: the id a later stall notice's
+                // onDetachedStall call carries — set exactly once, the
+                // moment it becomes known, mirroring the registry entry
+                // built in the same step below.
+                detachedChildSessionId = event.childSessionId;
                 backgroundChildren.set(event.childSessionId, {
                   requestId,
                   snapshot: {
@@ -504,9 +575,15 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "progress": {
-              // TASK.145 срез 1: a detached run's own tool call already
-              // returned at admit (above) — no live card exists for
-              // opts.onProgress to update (file header).
+              // Sign of life (TASK.148 slice 1/2): silence is measured
+              // against the cadence of these coarse events, exactly like the
+              // inline tier's tool_result/turn_end boundary — no new wire
+              // message. Fed BEFORE the detach early-return below: a
+              // detached run's clock still needs to see this, even though
+              // (TASK.145 срез 1, unchanged) its own tool call already
+              // returned at admit, so no live card exists for opts.onProgress
+              // to update.
+              stallClock.noteProgress(event.lastTool);
               if (req.detach === true) {
                 return;
               }
@@ -520,6 +597,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "activity": {
+              stallClock.noteProgress(event.toolName);
               if (req.detach === true) {
                 return;
               }
@@ -528,6 +606,18 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "attention": {
+              // Waiting for a human is NOT silence (TASK.148 slice 1/2): this
+              // is the real PUSHED event the session tier has that the inline
+              // tier does not (the child's own broker, tapChildPermissions) —
+              // no polling needed here, unlike runner.ts. Fed BEFORE the
+              // detach early-return below, same rationale as progress/
+              // activity above — a detached child's ask still freezes ITS
+              // clock even though no live card exists to show the badge.
+              if (event.waiting) {
+                stallClock.pause();
+              } else {
+                stallClock.resume();
+              }
               if (req.detach === true) {
                 return;
               }
@@ -564,6 +654,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // harmless for a request that somehow never reached "accepted"'s
               // detach branch (defense in depth, not a reachable path today).
               if (req.detach === true) {
+                // TASK.148 slice 2: this waiter's own stall clock stops here
+                // too — the true end of its life for a detached run, same as
+                // every other teardown step on this branch (`finish()` never
+                // runs for a detached waiter, so nothing else would ever
+                // dispose it).
+                stallClock.dispose();
                 waiters.delete(requestId);
                 opts.signal?.removeEventListener("abort", onAbort);
                 backgroundChildren.delete(event.childSessionId);

@@ -51,6 +51,12 @@ export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
 /** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
+ * Subagent stall-detector silence threshold (TASK.148 slice 1); literal
+ * mirror of core's `provider/env.ts` ENV_SUBAGENT_STALL_MS. NOT
+ * ENV_STALL_TIMEOUT_MS above — that one is the per-attempt stream watchdog.
+ */
+export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
+/**
  * Reasoning-effort inheritance rung (F14, slice-P7.15-cut.md §2.4). Literal
  * mirrors core's `provider/env.ts:11` (host already reads this into
  * `envConfig.reasoningEffort` on every fork boot — zero host/core delta here).
@@ -330,6 +336,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_STALL_TIMEOUT_MS,
   ENV_MAX_TURNS,
   ENV_SUBAGENT_MAX_TURNS,
+  ENV_SUBAGENT_STALL_MS,
   ENV_REASONING_EFFORT,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
@@ -972,6 +979,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_STALL_TIMEOUT_MS, numToStr(settings.tools.stallTimeoutMs));
   fillFromSettings(env, ENV_MAX_TURNS, numToStr(settings.tools.maxTurns));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
+  fillFromSettings(env, ENV_SUBAGENT_STALL_MS, numToStr(settings.tools.subagentStallTimeoutMs));
   // Reasoning-effort inheritance rung (F14 §2.4): a new host boot inherits the
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).

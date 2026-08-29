@@ -755,6 +755,74 @@ describe("agentTool — mapProgressToEvent's attention case (TASK.102 CUT-S2 §2
 });
 
 // ---------------------------------------------------------------------------
+// mapProgressToEvent's stalled case (TASK.148 slice 1): a { kind:"stalled" }
+// SubagentProgress maps 1:1 onto a subagent_stalled AgentEvent stamped with
+// the Agent tool call's id. Bridge-only, same scope discipline as the
+// attention tests above — this proves the SHARED mapping function, not that
+// any real port (runner.ts / child-session-port.ts) ever produces one; that
+// is each of those modules' own job.
+describe("agentTool — mapProgressToEvent's stalled case (TASK.148 slice 1, bridge-only)", () => {
+  it("maps a stalled progress onto a subagent_stalled event stamped with toolCallId", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
+        opts.onProgress?.({
+          kind: "stalled",
+          agentType: "explore",
+          description: "d",
+          silentMs: 600_000,
+          lastActivity: "Bash",
+          waitingForApproval: false,
+        });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-stall", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const stalled = emitted.filter((e) => e.type === "subagent_stalled");
+    expect(stalled).toHaveLength(1);
+    expect(stalled[0]).toEqual({
+      type: "subagent_stalled",
+      toolCallId: "call-stall",
+      agentType: "explore",
+      description: "d",
+      silentMs: 600_000,
+      lastActivity: "Bash",
+      waitingForApproval: false,
+    });
+  });
+
+  it("omits lastActivity when the progress never carried one", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({
+          kind: "stalled",
+          agentType: "explore",
+          description: "d",
+          silentMs: 600_000,
+          waitingForApproval: false,
+        });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-stall-2", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const stalled = emitted.find((e) => e.type === "subagent_stalled");
+    expect(stalled && "lastActivity" in stalled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Presentation attach (TASK.102 slice S1 W3, CUT-S1 §3 W3): the handler
 // accumulates every bridged progress event into a card-snapshot accumulator
 // (ALWAYS, regardless of whether ctx.emit is wired) and attaches the

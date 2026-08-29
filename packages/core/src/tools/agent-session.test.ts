@@ -22,7 +22,7 @@ import type {
   SessionSubagentPort,
   SessionSubagentRequest,
 } from "../ports/session-subagent.js";
-import type { SubagentPort, SubagentRunOptions } from "../ports/subagent.js";
+import type { EngineProfileInfo, SubagentPort, SubagentRunOptions } from "../ports/subagent.js";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -606,10 +606,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
 // ctx.sessionSubagents fails closed with an honest "unavailable" error (the
 // one-shot foreign-CLI fallback is removed, not substituted).
 
-function enginePort(
-  agentType: string,
-  profile: { engine: "claude" | "codex"; systemPrompt: string } | null,
-): SubagentPort {
+function enginePort(agentType: string, profile: EngineProfileInfo | null): SubagentPort {
   return {
     listAgentTypes: () => [agentType],
     engineProfile: (t) => (t === agentType ? profile : null),
@@ -621,13 +618,14 @@ function enginePort(
 
 describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)", () => {
   const full = createAgentTool({ sessionTier: true });
-  // "claude", not "codex" (TASK.102 S4-codex-cut): this describe block
-  // exercises the GENERAL engine-profile routing mechanism (provider
-  // rejection, availability fail-closed, request composition, tier upgrade)
-  // — orthogonal to which engine is behind the profile. Codex now has its
-  // own carve-out (unsupported, see the "codex engine profile is
-  // unsupported" describe block below), so it is no longer a safe stand-in
-  // for "some engine" here.
+  // "claude", not "codex": this describe block exercises the GENERAL
+  // engine-profile routing mechanism (provider rejection, availability
+  // fail-closed, request composition, tier upgrade) — orthogonal to which
+  // engine is behind the profile. Pinned to claude rather than parameterized
+  // over both so the byte-identical-composition assertion (I3 below) has one
+  // unambiguous `systemPrompt`/`prompt` pair to compare against; the "codex
+  // engine profile now routes like claude (TASK.143)" describe block below
+  // separately proves codex reaches the SAME port with the SAME composition.
   const ENGINE_PROFILE = { engine: "claude" as const, systemPrompt: "PERSONA BODY" };
 
   it('engine profile + provider (tier "session") => invalid_input with the engine-specific message (§2.2 p.1)', async () => {
@@ -735,23 +733,144 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
 });
 
 // ---------------------------------------------------------------------------
-// Codex engine profiles are UNSUPPORTED (TASK.102 S4-codex-cut): a Codex
-// child's native transcript is unreachable at flush time (the only source,
-// `client.request("thread/read")`, lives behind a private field on a frozen
-// CodexEngine — see agent.ts's routing branch for the full rationale), so a
-// codex-profile Agent call must fail honestly and immediately INSTEAD of
-// reaching runSessionTier/ctx.sessionSubagents — booting a session whose
-// transcript would silently come back empty is exactly what this refuses.
-// The negative assertion (spawn never called) is the discriminating part:
-// a handler that let the call fall through to runSessionTier would still
-// "pass" a naive ok:false check if the port itself happened to error, so the
-// spy is what actually proves the routing branch fired before the port.
+// Model plumbing fix: an engine profile's own `model:` frontmatter is parsed
+// and validated (profiles.ts) and stored on PersonaDefinition/EngineProfileInfo,
+// but was silently dropped between engineProfile() and the session request —
+// the child booted on the engine CLI's own default instead of the model the
+// profile author declared. The carried model is a DEFAULT, not an override:
+// an explicit `Agent(model: …)` argument still wins (mirrors the precedence
+// already established for inline/one-shot profiles, subagents/runner.ts
+// `requestedModel = req.model ?? persona.model`).
 
-describe("agentTool handler — codex engine profile is unsupported (TASK.102 S4-codex-cut)", () => {
+describe("agentTool handler — engine-profile model default (model plumbing fix)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  it("a codex profile declaring model: spawns a child session carrying that model", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "codex-worker" },
+      makeCtx({
+        subagents: enginePort("codex-worker", {
+          engine: "codex",
+          systemPrompt: "PERSONA BODY",
+          model: "profile-model",
+        }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(seen?.model).toBe("profile-model");
+  });
+
+  it("an explicit model argument beats the profile's frontmatter model", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "codex-worker", model: "explicit-model" },
+      makeCtx({
+        subagents: enginePort("codex-worker", {
+          engine: "codex",
+          systemPrompt: "PERSONA BODY",
+          model: "profile-model",
+        }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen?.model).toBe("explicit-model");
+  });
+
+  it("a profile with no model: omits the model key entirely (no undefined riding the wire)", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY" }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen && "model" in seen).toBe(false);
+  });
+
+  it("engine: claude profile declaring model: also carries that model onto the request (fix is engine-agnostic)", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        subagents: enginePort("claude-worker", {
+          engine: "claude",
+          systemPrompt: "PERSONA BODY",
+          model: "claude-profile-model",
+        }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen?.model).toBe("claude-profile-model");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Codex engine profiles now run for real (TASK.143 lifts TASK.102
+// S4-codex-cut): the refusal existed only because a codex child's flush had
+// no trustworthy transcript source (`historyItems()` is a boot-time
+// snapshot, frozen). `CodexEngine.readTranscript()` now re-runs the resume
+// projection against a fresh `thread/read` on demand, so `codexFlushHistory`
+// (host/index.ts) persists an honest, live transcript — the routing branch
+// in agent.ts no longer needs to refuse before ever reaching
+// runSessionTier/ctx.sessionSubagents. This describe block replaces the old
+// "unsupported" pin: it proves codex now reaches the port exactly like
+// claude does (see "engine-profile routing" above), rather than being
+// special-cased into an immediate error.
+
+describe("agentTool handler — codex engine profile now routes like claude (TASK.143)", () => {
   const full = createAgentTool({ sessionTier: true });
   const CODEX_PROFILE = { engine: "codex" as const, systemPrompt: "PERSONA BODY" };
 
-  it("engine:\"codex\" => immediate fail-closed tool error, and ctx.sessionSubagents.run is NEVER called", async () => {
+  it('engine:"codex" reaches ctx.sessionSubagents.run — the request carries engine:"codex" — instead of an immediate refusal', async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "do the task", agent_type: "codex-worker" },
+      makeCtx({
+        toolCallId: "call-codex-1",
+        subagents: enginePort("codex-worker", CODEX_PROFILE),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen?.engine).toBe("codex");
+    expect(seen?.spawnToolCallId).toBe("call-codex-1");
+    expect(seen?.prompt).toBe("PERSONA BODY\n\n---\n\ndo the task");
+    expect(result.ok).toBe(true);
+  });
+
+  it('engine:"codex" + provider => the SAME invalid_input rejection claude gets, before ever reaching the port', async () => {
     let spawned = false;
     const port: SessionSubagentPort = {
       run: async () => {
@@ -760,7 +879,7 @@ describe("agentTool handler — codex engine profile is unsupported (TASK.102 S4
       },
     };
     const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: "codex-worker" },
+      { description: "d", prompt: "p", agent_type: "codex-worker", tier: "session", provider: "anthropic-2" },
       makeCtx({
         subagents: enginePort("codex-worker", CODEX_PROFILE),
         sessionSubagents: port,
@@ -768,11 +887,21 @@ describe("agentTool handler — codex engine profile is unsupported (TASK.102 S4
     );
     expect(spawned).toBe(false);
     expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("invalid_input");
+    expect(result.error).toBe(
+      'Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account.',
+    );
+  });
+
+  it('engine:"codex" + no ctx.sessionSubagents => the SAME honest fail-closed error naming the engine claude gets', async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "codex-worker" },
+      makeCtx({ subagents: enginePort("codex-worker", CODEX_PROFILE) }), // no sessionSubagents
+    );
+    expect(result.ok).toBe(false);
     expect(result.errorKind).toBeUndefined();
     expect(result.error).toBe(
-      'Agent: agent type "codex-worker" runs on the "codex" engine; codex engine children are not supported ' +
-        "— their transcript is unreachable at flush time, so a session would boot with no way to persist what " +
-        "the child did.",
+      'Agent: agent type "codex-worker" runs on the "codex" engine; engine agents run as child sessions and are unavailable in this host.',
     );
   });
 });

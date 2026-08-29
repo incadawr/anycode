@@ -52,6 +52,15 @@ export interface CeilingConfig {
    * CEILING_MIN_WINDOW_MS the call is not made at all.
    */
   outcomeDeadlineAt?: number;
+  /**
+   * Evaluated when the ceiling would trip: `true` = a human is supervising
+   * this root session, so no ceiling applies at all (TASK.124, owner rule
+   * 2026-08-22). Absent for children, which always keep the ladder. A LIVE
+   * predicate rather than a snapshot: the supervision signal (e.g. the
+   * desktop's TASK.138 unattended latch) can flip mid-session, so a value
+   * captured at construction time would go stale within minutes.
+   */
+  supervisedRoot?: () => boolean;
 }
 
 /** The structured verdict, exactly as the model called it. */

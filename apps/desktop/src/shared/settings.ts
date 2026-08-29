@@ -314,8 +314,19 @@ export interface AnycodeSettings {
    * it through `activeProviderView`.
    */
   provider: ProviderSettingsV2;
-  /** Mirrors of the ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS env (env > settings). */
-  tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number; subagentMaxTurns?: number };
+  /**
+   * Mirrors of the ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS env
+   * (env > settings). `subagentStallTimeoutMs` (TASK.148 slice 1) mirrors
+   * ANYCODE_SUBAGENT_STALL_MS — the subagent silence-detector threshold, NOT
+   * `stallTimeoutMs` above (the per-attempt stream watchdog).
+   */
+  tools: {
+    concurrency?: number;
+    stallTimeoutMs?: number;
+    maxTurns?: number;
+    subagentMaxTurns?: number;
+    subagentStallTimeoutMs?: number;
+  };
   /** Persisted always-allow rules seeded into every new host session (§5). */
   permissions: { alwaysAllow: AlwaysAllowRule[] };
   ui: { theme: "system" | "light" | "dark" };

@@ -284,6 +284,19 @@ export class IpcPermissionBroker implements PermissionBroker {
   }
 
   /**
+   * Core PermissionBroker.isAwaitingApproval (TASK.148 slice 1): true while at
+   * least one ask is parked, shown or queued. The INLINE subagent stall clock
+   * (subagents/runner.ts) polls this to know whether a child sharing THIS
+   * broker instance is currently blocked on a human — there is no push event
+   * for that on the inline tier (a session-tier child has its own broker and
+   * gets a pushed `attention` event instead; this getter exists for the
+   * inline case, which has no such event to hook a pause on).
+   */
+  get isAwaitingApproval(): boolean {
+    return this.pending.size > 0;
+  }
+
+  /**
    * Read-only accessor for the `toolName` of a still-pending ask (slice 2.2.3,
    * design §5): Session reads this to resolve the toolName for a `remember`
    * rule BEFORE calling `handleResponse` (which settles and removes the entry).

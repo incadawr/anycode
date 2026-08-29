@@ -80,6 +80,25 @@ export interface PermissionBroker {
     request: PermissionRequest,
     options?: { signal?: AbortSignal },
   ): Promise<PermissionDecision>;
+
+  /** True once an unanswered ask concluded nobody is at the screen (TASK.138 latch). Absent on brokers that cannot tell. */
+  readonly isUnattended?: boolean;
+  /**
+   * True while at least one ask is parked awaiting a decision — shown to the
+   * user or still queued behind another (TASK.148 slice 1). Optional, like
+   * `isUnattended` above, so every existing implementation/test double keeps
+   * compiling unchanged; a broker that omits it reads as "never waiting".
+   *
+   * Consumed by the INLINE subagent stall clock (subagents/runner.ts): an
+   * inline child shares the PARENT's own broker instance (no separate
+   * broker of its own, unlike a session-tier child), so there is no
+   * `permission_request`/`permission_settled` EVENT stream to hook a pause
+   * on — this live-read property is the only way to know a child's tool call
+   * is currently blocked on a human. The session tier does not need it: a
+   * child session has its own broker, and the parent already receives a
+   * pushed `attention` progress event for it (ports/subagent.ts).
+   */
+  readonly isAwaitingApproval?: boolean;
 }
 
 /**

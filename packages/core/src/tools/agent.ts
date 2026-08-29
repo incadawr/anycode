@@ -279,29 +279,6 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             error: 'Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account.',
           };
         }
-        // Codex engine children are UNSUPPORTED (TASK.102 S4-codex-cut), not
-        // merely unavailable: a Codex child's native transcript cannot be
-        // read at flush time. The only source is `client.request(
-        // "thread/read")`, but the `AppServerClient` that method lives on is
-        // created inside startCodexEngine/resumeCodexEngine and never
-        // returned (`ConnectedCodexEngine` = {engine, threadId, model,
-        // presetId}), and is `private readonly client` on CodexEngine itself
-        // (apps/desktop/src/host/engines/codex/codex-engine.ts, frozen) — so
-        // no caller outside that file can ever reach it. The shadow log is no
-        // substitute: it holds only commandExecution completions, never the
-        // conversation. Refusing here, before runSessionTier ever touches
-        // ctx.sessionSubagents, is the only honest option — the alternative
-        // is a card that reads "done" with an "Open" that is silently empty.
-        if (engineProfile.engine === "codex") {
-          return {
-            ok: false,
-            error:
-              `Agent: agent type "${agentType}" runs on the "codex" engine; codex engine children are not ` +
-              `supported — their transcript is unreachable at flush time, so a session would boot with no way ` +
-              `to persist what the child did.`,
-          };
-        }
-
         // Fail-closed: without a SessionSubagentPort an engine profile cannot
         // run at all — the one-shot in-process fallback no longer exists.
         if (!ctx.sessionSubagents) {
@@ -416,6 +393,13 @@ async function runSessionTier(
   // Agent tool_call's own ctx.toolCallId, minted by the dispatcher before
   // this handler ever ran. Stamped verbatim — never a freshly-generated id,
   // never left to the host to invent.
+  //
+  // Model precedence (model plumbing fix): an explicit `Agent(model: …)`
+  // argument outranks the profile's own `model:` frontmatter, which is only
+  // a DEFAULT — same precedence the inline/one-shot path already established
+  // (subagents/runner.ts — `req.model ?? persona.model`). Absent both, no
+  // model key rides the request at all.
+  const resolvedModel = input.model ?? engineProfile?.model;
   const request: SessionSubagentRequest = {
     agentType,
     description: input.description,
@@ -423,7 +407,7 @@ async function runSessionTier(
       engineProfile !== undefined ? `${engineProfile.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
     spawnToolCallId: ctx.toolCallId,
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
-    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
     ...(engineProfile !== undefined ? { engine: engineProfile.engine } : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above
     // already refused `detach:true` on any tier but "session", and `false`/
@@ -545,6 +529,19 @@ function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): Sub
         type: "subagent_attention",
         toolCallId,
         waiting: progress.waiting,
+      };
+    case "stalled":
+      // TASK.148 slice 1: reports only — this bridge never alters the run,
+      // never cancels it, and the switch above (tool_result/turn_end) keeps
+      // firing normally afterward.
+      return {
+        type: "subagent_stalled",
+        toolCallId,
+        agentType: progress.agentType,
+        description: progress.description,
+        silentMs: progress.silentMs,
+        ...(progress.lastActivity !== undefined ? { lastActivity: progress.lastActivity } : {}),
+        waitingForApproval: progress.waitingForApproval,
       };
   }
 }

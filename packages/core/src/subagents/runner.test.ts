@@ -39,6 +39,7 @@ import {
   SUBAGENT_MAX_TURNS_CEILING,
   SUBAGENT_LOOP_DEADLINE_MS,
   SUBAGENT_OUTCOME_DEADLINE_MS,
+  SUBAGENT_STALL_TIMEOUT_MS,
   SUBAGENT_TIME_BUDGET_MS,
   SUBAGENT_WRAPUP_MIN_WINDOW_MS,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
@@ -1940,6 +1941,27 @@ describe("engineProfile() (TASK.102 CUT-S4 §2.1)", () => {
 
     expect(runner.engineProfile?.("codex-worker")).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
   });
+
+  // TASK.102 CUT-S4 model plumbing fix: a profile's own `model:` frontmatter
+  // was parsed and validated (profiles.ts) and stored on PersonaDefinition,
+  // but engineProfile() dropped it before it ever reached tools/agent.ts's
+  // session-tier request — the child booted on the engine CLI's own default
+  // instead of the model the profile author declared.
+  it("carries persona.model onto the returned EngineProfileInfo when the profile declares one", () => {
+    const withModel: PersonaDefinition = { ...codexPersona, model: "profile-model" };
+    const runner = createSubagentRunner(makeParent(), { profiles: [withModel] });
+    expect(runner.engineProfile?.("codex-worker")).toEqual({
+      engine: "codex",
+      systemPrompt: "PERSONA BODY",
+      model: "profile-model",
+    });
+  });
+
+  it("omits the model key entirely when the profile declares none (no undefined riding the result)", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    const info = runner.engineProfile?.("codex-worker");
+    expect(info && "model" in info).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2798,5 +2820,218 @@ describe("responseModel after the wrap-up rescue (codex blocking 4)", () => {
     expect(isWrapUpRequest(childPort.requests.at(-1)!)).toBe(true);
     expect(childPort.requests.filter(isWrapUpRequest)).toHaveLength(1);
     expect(endOf(progress).responseModel).toBe("model-B");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stall clock wiring — inline tier (TASK.148 slice 1). A stall detector that
+// REPORTS, never kills: silence past SUBAGENT_STALL_TIMEOUT_MS must produce
+// exactly one "stalled" progress while the run keeps going; a sign of life
+// resets it; a broker.isAwaitingApproval wait must never be counted as
+// silence. Uses FULL fake timers (Date AND setTimeout/setInterval) —
+// deliberately unlike this file's `toFake:["Date"]}`-only convention for the
+// deadline tests above, because the detector genuinely needs a firing timer,
+// not a synchronous Date-boundary check.
+
+/**
+ * A ModelPort whose one stream can be held open indefinitely at a
+ * caller-chosen point, released on demand — simulates "the child's own single
+ * model call is taking a long time" (genuine silence) without spending any
+ * real wall-clock time under fake timers.
+ */
+function gatedModelPort(): { port: ModelPort; release: () => void } {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const port: ModelPort = {
+    streamText: () =>
+      (async function* () {
+        yield { type: "start" };
+        await gate;
+        yield { type: "text_delta", id: "t", text: "done" };
+        yield { type: "finish", finishReason: "stop", usage: {} };
+      })(),
+  };
+  return { port, release };
+}
+
+/** Same replay-a-script contract as ScriptedModelPort, but each call first waits `delayMs` of (fake) time before yielding — lets a multi-turn script consume real elapsed time between turns. */
+function pacedScriptModelPort(script: ModelScript, delayMs: number): ModelPort {
+  return {
+    streamText: (request) => {
+      const events = script(request);
+      const signal = request.abortSignal;
+      return (async function* () {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        for (const event of events) {
+          if (signal?.aborted) {
+            throw new DOMException("Aborted", "AbortError");
+          }
+          yield event;
+        }
+      })();
+    },
+  };
+}
+
+/** A PermissionBroker whose `isAwaitingApproval` reader the test toggles directly — isolates the poll->pause/resume wiring from any real permission round-trip. */
+class TogglableBroker implements PermissionBroker {
+  waiting = false;
+  get isAwaitingApproval(): boolean {
+    return this.waiting;
+  }
+  requestPermission(): Promise<PermissionDecision> {
+    return Promise.resolve({ behavior: "deny", reason: "unused in this test" });
+  }
+}
+
+function stalledReports(calls: SubagentProgress[]): Extract<SubagentProgress, { kind: "stalled" }>[] {
+  return calls.filter((p): p is Extract<SubagentProgress, { kind: "stalled" }> => p.kind === "stalled");
+}
+
+describe("stall clock wiring — inline tier (TASK.148 slice 1)", () => {
+  it("silence past SUBAGENT_STALL_TIMEOUT_MS emits exactly one stalled progress, and the child is still running afterward (no end, no loop_end)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port, release } = gatedModelPort();
+      const progress: SubagentProgress[] = [];
+      const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+
+      const started = runner.run({ ...REQ }, { onProgress: (p) => progress.push(p) });
+
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS - 1);
+      expect(stalledReports(progress)).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const stalls = stalledReports(progress);
+      expect(stalls).toHaveLength(1);
+      expect(stalls[0]).toMatchObject({
+        agentType: "general-purpose",
+        description: REQ.description,
+        waitingForApproval: false,
+      });
+      expect(stalls[0]!.silentMs).toBeGreaterThanOrEqual(SUBAGENT_STALL_TIMEOUT_MS);
+
+      // Nothing was killed: no end-progress yet, and the run() promise is
+      // still pending — the child keeps running past the notice.
+      expect(progress.some((p) => p.kind === "end")).toBe(false);
+
+      release();
+      await vi.runAllTimersAsync();
+      const outcome = await started;
+      expect(outcome.status).toBe("completed");
+      expect(progress.some((p) => p.kind === "end")).toBe(true);
+      // Still exactly one notice — the eventual completion did not add another.
+      expect(stalledReports(progress)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a sign of life resets the clock — a child that keeps producing turns across a span far longer than the threshold never stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      let step = 0;
+      const totalSteps = 5;
+      const model = pacedScriptModelPort((req) => {
+        if (!isChildRequest(req)) return textStep("");
+        step += 1;
+        if (step > totalSteps) return textStep(`final-${step}`);
+        return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+      }, Math.floor(SUBAGENT_STALL_TIMEOUT_MS * 0.6));
+      const progress: SubagentProgress[] = [];
+      const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+      const outcomePromise = runner.run(
+        { ...REQ, maxTurns: totalSteps + 2 },
+        { onProgress: (p) => progress.push(p) },
+      );
+      await vi.runAllTimersAsync();
+      const outcome = await outcomePromise;
+
+      expect(outcome.status).toBe("completed");
+      expect(stalledReports(progress)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pause: an unanswered permission ask (broker.isAwaitingApproval) suppresses the notice for a wait longer than the threshold; resume continues from where it paused, not from a fresh cycle", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port } = gatedModelPort();
+      const broker = new TogglableBroker();
+      const progress: SubagentProgress[] = [];
+      const runner = createSubagentRunner(
+        makeParent({ modelPort: port, mode: "yolo", permissionBroker: broker }),
+      );
+
+      const started = runner.run({ ...REQ }, { onProgress: (p) => progress.push(p) });
+      void started.catch(() => {});
+
+      // Some genuine silence accrues before the ask starts.
+      await vi.advanceTimersByTimeAsync(200_000);
+      broker.waiting = true;
+
+      // Blocked far longer than the whole threshold — proves the wait is
+      // never counted as silence (the exact defect TASK.148 removes).
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + 50_000);
+      expect(stalledReports(progress)).toHaveLength(0);
+
+      broker.waiting = false;
+      // Only ~400_000ms of budget remained (600_000 - 200_000) when it
+      // paused; a FRESH cycle would need another SUBAGENT_STALL_TIMEOUT_MS
+      // from here. Prove it is not a fresh cycle: fire well before that.
+      await vi.advanceTimersByTimeAsync(450_000);
+      expect(stalledReports(progress)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-arms: silence -> notice -> sign of life -> silence again -> a second notice; still-silent after the first notice produces no second one", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port, release } = gatedModelPort();
+      const progress: SubagentProgress[] = [];
+      const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+      const started = runner.run({ ...REQ }, { onProgress: (p) => progress.push(p) });
+      void started.catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS);
+      expect(stalledReports(progress)).toHaveLength(1);
+
+      // Still silent, well past a second threshold — must not double-report.
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS);
+      expect(stalledReports(progress)).toHaveLength(1);
+
+      release();
+      await vi.runAllTimersAsync();
+      await started;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a broker without isAwaitingApproval (e.g. DenyPermissionBroker) never pauses — the plain silence detector still fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port, release } = gatedModelPort();
+      const progress: SubagentProgress[] = [];
+      // makeParent's default broker is DenyPermissionBroker, which does not
+      // implement isAwaitingApproval at all.
+      const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+      const started = runner.run({ ...REQ }, { onProgress: (p) => progress.push(p) });
+
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS);
+      expect(stalledReports(progress)).toHaveLength(1);
+
+      release();
+      await vi.runAllTimersAsync();
+      await started;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
