@@ -5,6 +5,24 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.21] — 2026-08-29
+
+### Changed
+
+- The sidebar no longer draws a project's entire session history. Each project
+  group stops after five rows and ends with a "Show N more" line that expands
+  it in place; "Show less" folds it back again. A project you have worked in
+  for weeks no longer pushes every other project off the screen.
+
+  Three things about the cut are deliberate. Typing in the search box lifts it
+  everywhere at once, so a session you can find is a session you can reach —
+  and, because a row has to be reachable before it can be deleted, one you can
+  still remove. Open tabs are never hidden: the cut moves down past the last of
+  them, since those rows carry live status. And a cut that would hide a single
+  row is not taken at all, because the toggle costs the same vertical space as
+  the row it would hide. The expansion is not remembered between launches — the
+  short list is what you get each time you open AnyCode.
+
 ## [0.0.20] — 2026-08-29
 
 ### Added
