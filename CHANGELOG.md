@@ -5,6 +5,45 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.20] — 2026-08-29
+
+### Added
+
+- Subagents can now run on the Codex engine. Choosing an agent profile whose
+  engine is `codex` previously failed outright with a refusal: a Codex child's
+  transcript could not be read at the moment its run finished, so a completed
+  child would have shown "done" next to an Open that led to an empty screen.
+  AnyCode now reads the child's live transcript from Codex at that moment, so
+  the card opens onto what the child actually did. One thing worth knowing
+  before you use it: a Codex subagent is governed by Codex's own sandbox, not
+  by AnyCode's permission rules — it reads and writes inside the workspace and
+  the system temporary directory without asking, and it has no network access.
+- A subagent that goes quiet now says so, instead of being noticed only when
+  its six-hour wall runs out. AnyCode watches for silence — the time since the
+  child last showed a sign of life — rather than for how long the child has
+  been running, and the countdown pauses while the child is waiting for you to
+  answer a permission prompt, so a child no longer spends its whole budget
+  sitting at a dialog nobody saw. The notice is only a notice: nothing is
+  cancelled, killed, or interrupted. Background subagents are covered too, and
+  repeated notices from one child that keeps going quiet and waking up collapse
+  into a single entry instead of filling the queue.
+
+### Changed
+
+- A session you are watching is no longer stopped by the turn limit. That limit
+  exists so an unattended session cannot run away; while you are at the screen
+  it now steps aside entirely for the top-level session — no decision point, no
+  shrinking grant, no stop. Subagents keep the limit in every case, and the
+  six-hour wall-clock deadline is unchanged: being present lifts the turn
+  count, not the clock.
+
+### Fixed
+
+- A subagent profile's `model:` line was silently ignored for subagents running
+  on the Claude or Codex engines — the child booted on the engine's own default
+  model instead, with nothing said. The profile's model is now honoured, and a
+  model named explicitly in the call still overrides it.
+
 ## [0.0.19] — 2026-08-29
 
 ### Added
