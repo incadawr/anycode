@@ -19,6 +19,8 @@
 
 import { z } from "zod";
 import {
+  IMAGE_MAX_BYTES,
+  IMAGE_MAX_PER_MESSAGE,
   MCP_CALL_TIMEOUT_MS,
   MCP_DECL_BUDGET_BYTES_PER_SERVER,
   MCP_MAX_TOOLS_PER_SERVER,
@@ -26,12 +28,14 @@ import {
   MCP_RESULT_MAX_MODEL_BYTES,
   MCP_TOOL_DESCRIPTION_MAX_BYTES,
 } from "../types/config.js";
+import type { ImageAttachment } from "../types/images.js";
 import type {
   ToolContext,
   ToolDefinition,
   ToolMetadata,
   ToolResult,
 } from "../types/tools.js";
+import { sniffImageMediaType } from "../util/images.js";
 
 /** One content block of a CallToolResult, read structurally (SDK `ContentBlock`). */
 export interface McpContentBlock {
@@ -159,6 +163,72 @@ function bridgedMetadata(input: BridgeMcpToolInput): ToolMetadata {
   };
 }
 
+/** Strict base64 charset + padding + length%4===0 check, run BEFORE any decode attempt. */
+const BASE64_STRICT_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/** True for a non-empty, syntactically valid base64 string (Node's decoder is lenient and would silently ignore garbage otherwise). */
+function isValidBase64(value: string): boolean {
+  return value.length > 0 && value.length % 4 === 0 && BASE64_STRICT_RE.test(value);
+}
+
+/**
+ * Upper bound on the decoded byte length implied by an encoded string's length
+ * alone (base64 packs 3 raw bytes into 4 characters). Used to reject an
+ * over-cap payload BEFORE decoding it — a hostile/misconfigured MCP server
+ * must not be able to force a multi-megabyte base64 decode just to have the
+ * result thrown away.
+ */
+function maxDecodedBytesFor(encodedLength: number): number {
+  return Math.floor((encodedLength / 4) * 3);
+}
+
+/** Outcome of validating one `type:"image"` content block against the acceptance gates. */
+interface ImageBlockVerdict {
+  /** Present only when every gate passed. */
+  attachment?: ImageAttachment;
+  /** Model-visible note: the acceptance marker on success, the drop reason otherwise. */
+  note: string;
+}
+
+/**
+ * Validates one image content block against, in order: the per-message cap
+ * (`alreadyAccepted` counts only blocks already accepted, so interleaved
+ * rejects never consume a cap slot), base64 well-formedness, the encoded-length
+ * precheck, the decoded-size cap, and a sniff-vs-claimed mimeType match (an MCP
+ * server is not a trusted source — a mismatch is treated as a hostile or
+ * corrupt block, not a warning). Never throws; every failure returns an
+ * explicit, specific note instead of the generic non-text placeholder.
+ */
+function acceptImageBlock(block: McpContentBlock, alreadyAccepted: number): ImageBlockVerdict {
+  if (alreadyAccepted >= IMAGE_MAX_PER_MESSAGE) {
+    return { note: `[image dropped: over the ${IMAGE_MAX_PER_MESSAGE}-image per-message cap]` };
+  }
+  const data = block.data;
+  if (typeof data !== "string" || !isValidBase64(data)) {
+    return { note: "[image dropped: data is missing or not valid base64]" };
+  }
+  if (maxDecodedBytesFor(data.length) > IMAGE_MAX_BYTES) {
+    return { note: `[image dropped: over the ${IMAGE_MAX_BYTES}-byte per-image limit]` };
+  }
+  const bytes = Buffer.from(data, "base64");
+  if (bytes.length > IMAGE_MAX_BYTES) {
+    return { note: `[image dropped: over the ${IMAGE_MAX_BYTES}-byte per-image limit]` };
+  }
+  const sniffed = sniffImageMediaType(bytes);
+  if (sniffed === null) {
+    return { note: "[image dropped: not a supported image format (png/jpeg/gif/webp)]" };
+  }
+  const claimed = typeof block.mimeType === "string" ? block.mimeType : undefined;
+  if (claimed !== sniffed) {
+    // The server's declared mimeType is advisory only; the sniff is authoritative
+    // (mirrors read-image.ts). A mismatch is surfaced, never silently corrected.
+    return {
+      note: `[image dropped: declared mimeType "${claimed ?? "(none)"}" does not match the sniffed format "${sniffed}"]`,
+    };
+  }
+  return { attachment: { mediaType: sniffed, data }, note: "[image attached]" };
+}
+
 /** Maps a normalized call outcome into a model-visible ToolResult (never throws). */
 function mapOutcomeToResult(outcome: McpCallOutcome): ToolResult<string> {
   switch (outcome.kind) {
@@ -170,19 +240,30 @@ function mapOutcomeToResult(outcome: McpCallOutcome): ToolResult<string> {
       return { ok: false, error: outcome.error };
     case "result": {
       const pieces: string[] = [];
+      const images: ImageAttachment[] = [];
+      let hasMarker = false;
       for (const block of outcome.content) {
         if (block.type === "text") {
           pieces.push(typeof block.text === "string" ? block.text : "");
+        } else if (block.type === "image" && !outcome.isError) {
+          // ToolResult.images rides only alongside ok:true (types/tools.ts):
+          // an isError result never attaches, so an image block on an error
+          // outcome falls through to the generic non-text placeholder below.
+          const verdict = acceptImageBlock(block, images.length);
+          if (verdict.attachment) images.push(verdict.attachment);
+          pieces.push(verdict.note);
+          hasMarker = true;
         } else {
           pieces.push(`[non-text content: ${block.type}]`);
+          hasMarker = true;
         }
       }
-      const joined = pieces.join(pieces.some((p) => p.startsWith("[non-text content:")) ? "\n" : "");
+      const joined = pieces.join(hasMarker ? "\n" : "");
       const { text } = capUtf8Bytes(joined, MCP_RESULT_MAX_BYTES);
       if (outcome.isError) {
         return { ok: false, error: text || "MCP tool reported an error with no message." };
       }
-      return { ok: true, output: text };
+      return images.length > 0 ? { ok: true, output: text, images } : { ok: true, output: text };
     }
   }
 }

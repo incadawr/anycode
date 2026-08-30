@@ -344,8 +344,9 @@ export function createTabRegistry(
     text: string,
     images: readonly QueuedPromptImage[],
     imageInput: boolean | undefined,
+    imageFallback: boolean | undefined,
   ): void {
-    const blocked = isSendBlockedByModelImages(imageInput, images.length);
+    const blocked = isSendBlockedByModelImages(imageInput, imageFallback, images.length);
     const deliveredImages = blocked ? [] : images;
     if (blocked) {
       entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
@@ -481,7 +482,7 @@ export function createTabRegistry(
             },
             pending.reasoningEffort,
           );
-          dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput);
+          dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput, message.imageFallback);
         }
       }
       if (message.type === "agent_event" && message.event.type === "error") {
@@ -787,7 +788,7 @@ export function createTabRegistry(
           },
           reasoningEffort,
         );
-        dispatchInitialPrompt(entry, text, images ?? [], state.imageInput);
+        dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback);
         return;
       }
       pendingInitialPrompts.set(tabId, { text, model, mode, effort, images, reasoningEffort });

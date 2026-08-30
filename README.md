@@ -1,5 +1,7 @@
 # AnyCode
 
+![license](https://img.shields.io/badge/license-Apache--2.0-green) ![platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-lightgrey)
+
 **One desktop workspace over several AI coding agents.** Run a session on the
 Claude Code CLI, on the Codex CLI, or on AnyCode's own multi-provider agent
 loop — and get the same workspace either way: transcript, tool calls,
@@ -12,6 +14,18 @@ AnyCode is not another agent — it is the shell around the agents you already r
 and are entitled to use, under your own account and your own provider's terms.
 AnyCode neither stores nor proxies its credentials — the process runs on your
 machine.
+
+**How it differs from other agent desktops** (Conductor, Superset, vendor
+GUIs): one shell over *several* engines rather than one vendor's runtime;
+subagents can run on a different engine than their parent session; the CLI
+adapters are pinned against recorded protocol fixtures, so engine drift fails
+the build instead of your session; and a sandboxed preview window the agent
+drives itself (open a page, read its console, take a screenshot).
+
+**Your keys stay yours.** Provider credentials live in the OS keychain through
+Electron's `safeStorage`, never in plaintext on disk — on Linux without a
+keychain, weak storage is refused unless you explicitly opt in. Decrypted
+values never leave the main process.
 
 ![AnyCode showing an agent exploring and summarizing a codebase](docs/assets/anycode-demo.png)
 
@@ -47,7 +61,7 @@ opt-in run against the real binary, not part of the default suite.
 
 ## Status
 
-AnyCode is **0.0.9, alpha**. Storage, APIs, and UI may change without
+AnyCode is **0.0.22, alpha**. Storage, APIs, and UI may change without
 backward-compatibility guarantees, and alpha builds are unsigned — signing
 arrives with the beta.
 
@@ -55,6 +69,10 @@ How far validation has gone: the Codex and Claude Code profiles are covered by
 protocol fixtures and live smoke runs. On the Native profile, end-to-end use has
 covered Z.AI (GLM) and Kimi; the remaining providers are supported by the
 configuration model but have seen less practical use.
+
+Right now the most valuable contribution is a bug report from real use: a
+broken session, a workflow that doesn't fit, a provider that misbehaves —
+[open an issue](https://github.com/incadawr/anycode/issues).
 
 ## Download
 
@@ -113,3 +131,6 @@ For security vulnerabilities, use the private reporting process in
 ## License
 
 AnyCode is licensed under the [Apache License 2.0](LICENSE).
+
+«AnyCode» and the AnyCode logo are trademarks of Evgenii Dubov. The Apache 2.0
+license covers the code, not the name — forks must use a different name.

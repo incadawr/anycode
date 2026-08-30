@@ -261,7 +261,7 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
 
   it("paints workflow_* progress lines with the progress/dim role", () => {
     const text = collect(
-      [{ type: "workflow_start", toolCallId: "call-1", workflow: "release-notes", totalSteps: 1 }],
+      [{ type: "workflow_start", toolCallId: "call-1", workflow: "release-notes", totalSteps: 1, steps: [] }],
       COLOR,
     );
     expect(text).toBe("\x1b[2m\n[workflow call-1] start: release-notes (1 step(s))\n\x1b[0m");
